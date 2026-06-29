@@ -207,6 +207,19 @@ zero UI.
 - **v1 connection discovery = discovering & reviewing links only.** Broader agent-maintained
   structure (MOCs, deduplication, tag suggestions) is explicitly post-v1.
 
+## Decisions locked (2026-06-29)
+
+- **Link format & identity.** Authored links are wikilinks of the form **`[[path|title]]`** — a
+  vault-relative `path` target plus a `title` display alias — so the vault stays clickable, portable,
+  and fully usable in Obsidian with **no B2 running** (principle #1). The durable identity is a
+  frontmatter **`id`** (ULID-style); the typed graph keys every edge by `id`, never by path or title.
+  The inline `path` is a **repairable convenience copy** of the edge's true (`id`) target: the kernel
+  keeps `title ↔ id ↔ path` in sync and rewrites inbound `path` text on move. Net: people and
+  Obsidian see `[[path|title]]`; the graph sees an `id → id` edge — so reorganizes/splits/merges never
+  lose a connection. Mechanics and scenarios in [user-stories.md](user-stories.md) ("Link format &
+  identity"); this settles the authored-reference half of the data-model "central question"
+  ([tasks.md](tasks.md)).
+
 ## Inspiration — not a copy
 
 We take *ideas*, not implementations:

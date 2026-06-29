@@ -3,7 +3,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-06-28
+updated: 2026-06-29
 status: active
 ---
 
@@ -27,16 +27,25 @@ Engine-independent — this is the yardstick the index-engine evaluation will us
 
 **Deliverable:** `data-model.md`.
 
-**Must resolve:**
-- **Identity** — stable `id` in frontmatter (e.g. ULID) vs. path-as-identity. Current lean: durable
-  id so an agent can reorganize / split / merge without breaking backlinks; keep human `[[Title]]`
-  wikilinks as the authored layer; the index maintains title↔id↔path resolution and repairs links
-  on rename.
+**Decided so far (2026-06-29) — link format & identity:**
+- **Identity = durable frontmatter `id`** (ULID-style); the typed graph keys every edge by `id`, not
+  by path or title — so an agent can reorganize / split / merge without breaking backlinks.
+- **Authored links = `[[path|title]]`** — vault-relative `path` target + `title` display alias; an
+  ordinary Obsidian wikilink, clickable and portable with no B2 (principle #1). Chosen over
+  `[[id|title]]` because an id target isn't clickable in vanilla Obsidian during the deferred-UI era.
+- **The inline `path` is a repairable convenience copy**, not identity: the kernel keeps
+  `title ↔ id ↔ path` in sync and rewrites inbound `path` text on move. People see `[[path|title]]`;
+  the graph sees an `id → id` edge.
+- Full rationale + scenarios: [user-stories.md](user-stories.md) ("Link format & identity"); mirrored
+  in [vision-and-scope.md](vision-and-scope.md) ("Decisions locked, 2026-06-29").
+
+**Still to resolve:**
 - **Frontmatter schema** — `id`, `type` (required; OKF-compatible), `title`, `description`, `tags`,
   `created` / `updated`, `provenance`. Tolerate unknown keys.
-- **Typed relations in Markdown** — how a typed link is expressed so it round-trips losslessly:
-  inline (`- contradicts [[Target]]`, Basic-Memory style) vs. a frontmatter `relations:` block vs. a
-  hybrid. *This is the central question.*
+- **Typed relations in Markdown** — the *reference encoding* is now settled (`[[path|title]]` + `id`,
+  above); what remains is how a relation's **type** is expressed so it round-trips losslessly: inline
+  (`- contradicts [[path|title]]`, Basic-Memory style) vs. a frontmatter `relations:` block vs. a
+  hybrid. *This is the remaining central question.*
 - **Connection / edge model** — `src`, `dst`, `type`, `status`, `provenance`, `explanation`,
   `origin` (inline | frontmatter | suggested).
 - **Provenance & trust** — `by` (human | agent:&lt;model&gt;), `source`, `confidence`; and the
