@@ -19,55 +19,42 @@ v1 scope, locked decisions).
 - [x] **Vision & scope** — [vision-and-scope.md](vision-and-scope.md), including v1 scope and the
   three locked decisions (2026-06-28: semantic is engine-gated, full CRUD in CLI, v1 discovery =
   links only).
+- [x] **Data model** — [data-model.md](data-model.md): note + edge as the Markdown source of truth,
+  `[[path|title]]` links keyed by `b2id`, inline typed relations, the three-tier model (Markdown /
+  disposable index / durable `.b2/` event log), provenance + suggestion lifecycle, OKF compatibility,
+  and a golden-vault fixture. All judgment calls resolved 2026-06-29: edge-provenance → event log
+  (accepted edges stay pristine); `b2id` is B2's one always-allowed write; bare links = directed
+  `references`; a 10-verb relation core + tolerated tail. Identity key in
+  [index-engine.md](index-engine.md) realigned to `b2id`.
 
-## Next up — Data model sketch
+## Next up — Index-engine build
 
-**Goal:** define *what a note is* and *what a connection is*, as the plain-Markdown source of truth.
-Engine-independent — this is the yardstick the index-engine evaluation will use right after.
+Unblocked now the data model is locked. The evaluation is already drafted in
+[index-engine.md](index-engine.md): **build our own SQLite store** (FTS5 + `sqlite-vec`) rather than
+depend on `qmd` — which also settles the engine-gated decision: **semantic search is in v1**
+(brute-force KNN; see "Decisions locked" in [vision-and-scope.md](vision-and-scope.md)).
+[index-engine.md](index-engine.md) is reconciled with the three-tier / event-log model (§3 = disposable
+index + durable `.b2/` event log, `index = projection of (Markdown ∪ log)`).
 
-**Deliverable:** `data-model.md`.
+**Immediate gate — pick the stack first.** The single-binary goal favours **Rust or Go**
+([index-engine.md](index-engine.md) §7); the embedding-in-a-binary question (§6) can stay open behind the
+embedder seam. Decide the language before writing engine code (this is the "Tech-stack / language
+decision" from the backlog, pulled forward).
 
-**Decided so far (2026-06-29) — link format & identity:**
-- **Identity = durable frontmatter `id`** (ULID-style); the typed graph keys every edge by `id`, not
-  by path or title — so an agent can reorganize / split / merge without breaking backlinks.
-- **Authored links = `[[path|title]]`** — vault-relative `path` target + `title` display alias; an
-  ordinary Obsidian wikilink, clickable and portable with no B2 (principle #1). Chosen over
-  `[[id|title]]` because an id target isn't clickable in vanilla Obsidian during the deferred-UI era.
-- **The inline `path` is a repairable convenience copy**, not identity: the kernel keeps
-  `title ↔ id ↔ path` in sync and rewrites inbound `path` text on move. People see `[[path|title]]`;
-  the graph sees an `id → id` edge.
-- Full rationale + scenarios: [user-stories.md](user-stories.md) ("Link format & identity"); mirrored
-  in [vision-and-scope.md](vision-and-scope.md) ("Decisions locked, 2026-06-29").
-
-**Still to resolve:**
-- **Frontmatter schema** — `id`, `type` (required; OKF-compatible), `title`, `description`, `tags`,
-  `created` / `updated`, `provenance`. Tolerate unknown keys.
-- **Typed relations in Markdown** — the *reference encoding* is now settled (`[[path|title]]` + `id`,
-  above); what remains is how a relation's **type** is expressed so it round-trips losslessly: inline
-  (`- contradicts [[path|title]]`, Basic-Memory style) vs. a frontmatter `relations:` block vs. a
-  hybrid. *This is the remaining central question.*
-- **Connection / edge model** — `src`, `dst`, `type`, `status`, `provenance`, `explanation`,
-  `origin` (inline | frontmatter | suggested).
-- **Provenance & trust** — `by` (human | agent:&lt;model&gt;), `source`, `confidence`; and the
-  **suggestion lifecycle** (suggested → accepted / rejected) that keeps agent proposals *inert until
-  accepted* (see "Review & trust" in [vision-and-scope.md](vision-and-scope.md)).
-- **OKF-compatibility checks** — keep `type`, `resource` URIs, and an `index.md` so "export to OKF"
-  stays a no-op (build *like* OKF — see "Inspiration" in [notes.md](notes.md)).
-
-**Ties to scope:** anchors capability areas 1–3 and 5–6 in
-[vision-and-scope.md](vision-and-scope.md) (vault, CRUD, typed links, connection discovery, review
-& trust).
-
-## Then — Index-engine evaluation
-
-Gated by the data model. Evaluate `qmd` vs. SQLite (FTS + `sqlite-vec`) vs. alternatives against the
-note / edge / provenance shape above. **Decides whether semantic search is in v1 or a fast follow**
-(see "Decisions locked" in [vision-and-scope.md](vision-and-scope.md)).
+**Then build, in order (each step asserts the locked invariants + the golden-vault fixture,
+[data-model.md](data-model.md) §8):**
+1. **Vault parse/serialize** — lossless MD + YAML round-trip (`parse → serialize → parse` byte-identical);
+   `b2id` stamp-on-ingest; the `path ↔ b2id` resolver.
+2. **Markdown-derived tables** — `notes`, `chunks` (+ FTS5), and `edges` (inline `references` + typed
+   relations) per [data-model.md](data-model.md) §2–3.
+3. **`sqlite-vec` + embedder seam** — deterministic fake embedder first; real local model later (§6).
+4. **The `.b2/` event log** — `append(event)` / `replay()` sink (JSONL); review-queue replay so
+   `index = projection of (Markdown ∪ log)` holds.
+5. **Hybrid retrieval** — BM25 + vector → RRF fusion (reranker is a fast-follow, §5).
 
 ## Backlog (later, not now)
 
 - Core API surface — the typed contract every adapter calls.
 - CLI command surface — `b2 add / search / link / suggest / neighbors / reindex / explain`.
 - Connection-discovery pipeline — candidate generation → typed, explained suggestions → review loop.
-- Tech-stack / language decision — constrained by the single-binary goal.
 - Test harness — golden vaults, property tests, deterministic AI seams.

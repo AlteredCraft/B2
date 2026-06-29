@@ -212,13 +212,20 @@ zero UI.
 - **Link format & identity.** Authored links are wikilinks of the form **`[[path|title]]`** — a
   vault-relative `path` target plus a `title` display alias — so the vault stays clickable, portable,
   and fully usable in Obsidian with **no B2 running** (principle #1). The durable identity is a
-  frontmatter **`id`** (ULID-style); the typed graph keys every edge by `id`, never by path or title.
-  The inline `path` is a **repairable convenience copy** of the edge's true (`id`) target: the kernel
-  keeps `title ↔ id ↔ path` in sync and rewrites inbound `path` text on move. Net: people and
-  Obsidian see `[[path|title]]`; the graph sees an `id → id` edge — so reorganizes/splits/merges never
-  lose a connection. Mechanics and scenarios in [user-stories.md](user-stories.md) ("Link format &
-  identity"); this settles the authored-reference half of the data-model "central question"
-  ([tasks.md](tasks.md)).
+  frontmatter **`b2id`** (ULID-style, namespaced so it never collides with a user/OKF/tool `id`); the
+  typed graph keys every edge by `b2id`, never by path or title. The inline `path` is a **repairable
+  convenience copy** of the edge's true (`b2id`) target: the kernel keeps `title ↔ b2id ↔ path` in sync
+  and rewrites inbound `path` text on move. Net: people and Obsidian see `[[path|title]]`; the graph
+  sees a `b2id → b2id` edge — so reorganizes/splits/merges never lose a connection. Mechanics and
+  scenarios in [user-stories.md](user-stories.md) ("Link format & identity").
+- **Data model.** [data-model.md](data-model.md) is locked. Two source-of-truth objects (note, edge) in
+  plain Markdown over **three storage tiers**: pristine Markdown (knowledge) · a disposable SQLite index ·
+  a durable, append-only in-vault `.b2/` event log — with `index = projection of (Markdown ∪ log)`. Typed
+  relations are authored **inline** (`- contradicts [[path|title]]`), keyed by `b2id`; agent
+  **suggestions stay in the review layer, inert until accepted**, and acceptance writes the inline link.
+  Edge provenance lives in the **event log, not the note** (accepted edges stay pristine); `b2id` is B2's
+  single always-allowed write. A bare link is a **directed `references`** edge; the typed vocabulary is a
+  **10-verb core + tolerated tail**. Settles the data-model "central question" ([tasks.md](tasks.md)).
 
 ## Inspiration — not a copy
 

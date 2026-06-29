@@ -33,26 +33,26 @@ The decision the stories below rest on. It resolves the central "how is a link w
   display **alias**. This is an ordinary Obsidian wikilink: clickable, portable, and human-readable
   with **no B2 running** (honors principle #1 — "fully usable without B2"). It renders as *title* in
   any UI that supports alias wikilinks.
-- **Identity is a durable frontmatter `id`** (ULID-style), not the path or the title. The typed
-  graph keys **every edge by `id`**. Parsing a link resolves `path → id` and stores the edge by id.
+- **Identity is a durable frontmatter `b2id`** (ULID-style), not the path or the title. The typed
+  graph keys **every edge by `b2id`**. Parsing a link resolves `path → b2id` and stores the edge by `b2id`.
 - **The inline `path` is a repairable convenience copy**, not the identity. The kernel maintains a
-  derived `title ↔ id ↔ path` resolution and rewrites inbound `path` text when a target moves. The
+  derived `title ↔ b2id ↔ path` resolution and rewrites inbound `path` text when a target moves. The
   *graph* never depends on the path being current — only the human-facing link text does.
 - **Consequence for moves:** moving a file changes its path, so inbound `[[oldpath|title]]` text is
   now stale and the kernel **rewrites it to `[[newpath|title]]`**. This is bounded, mechanical work
-  (the id-keyed edges name exactly which files/links to fix) and is the same model Obsidian uses —
+  (the b2id-keyed edges name exactly which files/links to fix) and is the same model Obsidian uses —
   but here it is automated and covered by the locked invariants `rename keeps every backlink
   resolving` and `full-reindex ≡ incremental-update`.
 - **Consequence for title renames:** the `path` still resolves, so the link is **never broken**;
   only the `title` alias is stale, and repairing it is *cosmetic* (optional, display-only).
-- **Why `path` inline and not `id` inline (`[[id|title]]`):** an id target is opaque and **not
+- **Why `path` inline and not `b2id` inline (`[[b2id|title]]`):** a `b2id` target is opaque and **not
   clickable in vanilla Obsidian** (nothing on disk is named `<id>`), which would tax the entire
   deferred-UI period. We spend a bounded rewrite-on-move cost — already a committed, tested kernel
   capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
   the graph regardless.
 
-> **How `id` is incorporated, in one line:** humans and Obsidian see `[[path|title]]`; the kernel
-> sees an `id → id` edge. Path is for people, `id` is for the graph, and the kernel keeps the two in
+> **How `b2id` is incorporated, in one line:** humans and Obsidian see `[[path|title]]`; the kernel
+> sees a `b2id → b2id` edge. Path is for people, `b2id` is for the graph, and the kernel keeps the two in
 > sync.
 
 ---
@@ -68,31 +68,31 @@ The decision the stories below rest on. It resolves the central "how is a link w
 Two distinct operations, both covered:
 
 1. **Path rename / move** — the file moves on disk (`ideas/foo.md` → `archive/foo.md`, or
-   `foo.md` → `bar.md`). The note's *content* and `id` are unchanged, but the **inline `path` in
+   `foo.md` → `bar.md`). The note's *content* and `b2id` are unchanged, but the **inline `path` in
    inbound links is now stale**.
 2. **Title rename** — the note's human title (frontmatter `title`, hence the natural alias) changes.
    The `path` is unchanged, so inbound links still **resolve**; only their display alias is stale.
 
-(See **Link format & identity** above for the `[[path|title]]` / id model these cases follow.)
+(See **Link format & identity** above for the `[[path|title]]` / `b2id` model these cases follow.)
 
 ### Behavior — how the kernel updates inbound links
 
-- **The graph never breaks, because edges key on `id`.** Both a move and a title change leave the
-  target's `id` untouched, so every id-keyed edge stays valid the instant the kernel learns the new
+- **The graph never breaks, because edges key on `b2id`.** Both a move and a title change leave the
+  target's `b2id` untouched, so every b2id-keyed edge stays valid the instant the kernel learns the new
   path/title. Resolution is robust *before* any file is rewritten.
 - **Preferred entry point: an explicit kernel operation.** A move/rename through the core API / CLI
-  (`b2 mv`) is transactional: the kernel updates its `title ↔ id ↔ path` resolution and repairs the
+  (`b2 mv`) is transactional: the kernel updates its `title ↔ b2id ↔ path` resolution and repairs the
   authored layer in one step.
 - **Move → rewrite inbound `path` text.** Because the inline target is a `path`, a move makes every
   inbound `[[oldpath|title]]` stale, so the kernel **rewrites each to `[[newpath|title]]`** —
-  Markdown written first (source of truth), index updated after. The id-keyed edges name *exactly*
+  Markdown written first (source of truth), index updated after. The b2id-keyed edges name *exactly*
   which inbound files and links to touch, so the rewrite is complete and bounded.
 - **Title rename → cosmetic alias repair only.** The `path` still resolves, so links are never
   broken. The kernel may refresh the stale `title` alias in inbound links for readability, but this
   is display-only and optional — no link depends on it.
 - **Out-of-band moves are tolerated.** If a file is moved outside B2 (Finder, `git mv`), a reindex
-  re-reads its frontmatter `id` and re-establishes `id → newpath`; with index continuity the now-
-  dangling inbound `[[oldpath|title]]` links are matched back to that `id` and repaired. *Caveat:* a
+  re-reads its frontmatter `b2id` and re-establishes `b2id → newpath`; with index continuity the now-
+  dangling inbound `[[oldpath|title]]` links are matched back to that `b2id` and repaired. *Caveat:* a
   cold reindex with no prior index state can only repair a dangling path heuristically (e.g. via the
   alias) — the same failure surface as moving files with Obsidian closed; such links are flagged for
   repair rather than silently dropped.
@@ -134,7 +134,7 @@ File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **
 - **Only the `A → B` edge is removed.** The kernel reconciles A's derived edges from A's new
   content (incremental update, equivalent to a full reindex of A): A's outbound set loses `→ B`, so
   B's **inbound** set loses the edge *from A*. That is the whole update.
-- **C's and D's links to B are untouched.** B still exists at the same `id`/path, so every *other*
+- **C's and D's links to B are untouched.** B still exists at the same `b2id`/path, so every *other*
   inbound link to B continues to resolve unchanged. There is **no cascade** — deleting a link is not
   a rename or a delete of B. The honest answer to "how are the inbound links to B updated" is:
   **they aren't, except for the one that was deleted.**
