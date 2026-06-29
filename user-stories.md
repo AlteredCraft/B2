@@ -17,12 +17,43 @@ decisions) and [tasks.md](tasks.md) (data-model leans).
 > over it. "Inbound link" / "backlink" = a link *from* some other vault file *to* the file in
 > question.
 
-> **Resting on a data-model lean, not a final decision.** The data model
-> ([data-model.md](data-model.md), still *Next up* in [tasks.md](tasks.md)) is not yet locked. These
-> stories assume the current lean: a **durable `id`** in frontmatter is the real identity; human
-> `[[Title]]` wikilinks are the *authored* layer; the kernel keeps a derived `title ↔ id ↔ path`
-> resolution and **repairs authored links on rename**. Where behavior depends on a still-open
-> decision, it is called out as **Open**.
+> **Link format & identity are now decided** (2026-06-29) — see the section below; mirrored in
+> [vision-and-scope.md](vision-and-scope.md) ("Decisions locked") and [tasks.md](tasks.md)
+> (data-model). The broader data model ([data-model.md](data-model.md), still *Next up*) is not yet
+> fully locked; where a story still depends on an open decision it is called out as **Open**.
+
+---
+
+## Link format & identity (decided 2026-06-29)
+
+The decision the stories below rest on. It resolves the central "how is a link written" question
+([tasks.md](tasks.md), "Typed relations in Markdown") for the *authored reference* layer.
+
+- **Authored links are `[[path|title]]`.** The target is a **vault-relative `path`**; `title` is a
+  display **alias**. This is an ordinary Obsidian wikilink: clickable, portable, and human-readable
+  with **no B2 running** (honors principle #1 — "fully usable without B2"). It renders as *title* in
+  any UI that supports alias wikilinks.
+- **Identity is a durable frontmatter `id`** (ULID-style), not the path or the title. The typed
+  graph keys **every edge by `id`**. Parsing a link resolves `path → id` and stores the edge by id.
+- **The inline `path` is a repairable convenience copy**, not the identity. The kernel maintains a
+  derived `title ↔ id ↔ path` resolution and rewrites inbound `path` text when a target moves. The
+  *graph* never depends on the path being current — only the human-facing link text does.
+- **Consequence for moves:** moving a file changes its path, so inbound `[[oldpath|title]]` text is
+  now stale and the kernel **rewrites it to `[[newpath|title]]`**. This is bounded, mechanical work
+  (the id-keyed edges name exactly which files/links to fix) and is the same model Obsidian uses —
+  but here it is automated and covered by the locked invariants `rename keeps every backlink
+  resolving` and `full-reindex ≡ incremental-update`.
+- **Consequence for title renames:** the `path` still resolves, so the link is **never broken**;
+  only the `title` alias is stale, and repairing it is *cosmetic* (optional, display-only).
+- **Why `path` inline and not `id` inline (`[[id|title]]`):** an id target is opaque and **not
+  clickable in vanilla Obsidian** (nothing on disk is named `<id>`), which would tax the entire
+  deferred-UI period. We spend a bounded rewrite-on-move cost — already a committed, tested kernel
+  capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
+  the graph regardless.
+
+> **How `id` is incorporated, in one line:** humans and Obsidian see `[[path|title]]`; the kernel
+> sees an `id → id` edge. Path is for people, `id` is for the graph, and the kernel keeps the two in
+> sync.
 
 ---
 
@@ -37,53 +68,52 @@ decisions) and [tasks.md](tasks.md) (data-model leans).
 Two distinct operations, both covered:
 
 1. **Path rename / move** — the file moves on disk (`ideas/foo.md` → `archive/foo.md`, or
-   `foo.md` → `bar.md`). The note's *content* and `id` are unchanged.
-2. **Title rename** — the note's human title (frontmatter `title`, and thus the natural `[[Title]]`
-   the note is referenced by) changes.
+   `foo.md` → `bar.md`). The note's *content* and `id` are unchanged, but the **inline `path` in
+   inbound links is now stale**.
+2. **Title rename** — the note's human title (frontmatter `title`, hence the natural alias) changes.
+   The `path` is unchanged, so inbound links still **resolve**; only their display alias is stale.
+
+(See **Link format & identity** above for the `[[path|title]]` / id model these cases follow.)
 
 ### Behavior — how the kernel updates inbound links
 
-- **Identity is the `id`, not the path or the title.** Because the typed graph stores edges by the
-  target's durable `id`, a path move or title change does **not** invalidate any edge. The graph is
-  correct the instant the kernel learns the note's new path/title — no edge rewriting required.
-- **Preferred entry point: an explicit kernel operation.** Renames driven through the core API /
-  CLI (`b2 mv` / a rename op) are transactional: the kernel knows the `id`, updates its
-  `title ↔ id ↔ path` resolution, and repairs the *authored* layer in one step.
-- **Repairing the authored layer.** The `[[Title]]`/path text inside the inbound files is
-  human-facing, so on a **title** rename (or a path rename when links are path-based) the kernel
-  **rewrites the link text in each inbound file's Markdown** so it both resolves *and* reads
-  correctly — Markdown written first (source of truth), index updated after. On a pure **path** move
-  with title-based wikilinks, no inbound file needs editing at all.
-- **Out-of-band renames are tolerated.** If a file is moved/renamed outside B2 (Finder, `git mv`),
-  a reindex re-establishes `id → path`; because edges key on `id`, backlinks resolve again after
-  reindex even though no inbound file was touched. (Catch: a title rename done by hand-editing
-  frontmatter leaves stale authored `[[OldTitle]]` text until a repair pass runs.)
-- **Provenance is respected.** Mechanical link-text repairs are kernel-authored edits; they are not
-  agent *suggestions* and don't enter the suggested→accepted review loop. They do not silently
-  alter the *meaning* of any link (type/explanation are untouched).
+- **The graph never breaks, because edges key on `id`.** Both a move and a title change leave the
+  target's `id` untouched, so every id-keyed edge stays valid the instant the kernel learns the new
+  path/title. Resolution is robust *before* any file is rewritten.
+- **Preferred entry point: an explicit kernel operation.** A move/rename through the core API / CLI
+  (`b2 mv`) is transactional: the kernel updates its `title ↔ id ↔ path` resolution and repairs the
+  authored layer in one step.
+- **Move → rewrite inbound `path` text.** Because the inline target is a `path`, a move makes every
+  inbound `[[oldpath|title]]` stale, so the kernel **rewrites each to `[[newpath|title]]`** —
+  Markdown written first (source of truth), index updated after. The id-keyed edges name *exactly*
+  which inbound files and links to touch, so the rewrite is complete and bounded.
+- **Title rename → cosmetic alias repair only.** The `path` still resolves, so links are never
+  broken. The kernel may refresh the stale `title` alias in inbound links for readability, but this
+  is display-only and optional — no link depends on it.
+- **Out-of-band moves are tolerated.** If a file is moved outside B2 (Finder, `git mv`), a reindex
+  re-reads its frontmatter `id` and re-establishes `id → newpath`; with index continuity the now-
+  dangling inbound `[[oldpath|title]]` links are matched back to that `id` and repaired. *Caveat:* a
+  cold reindex with no prior index state can only repair a dangling path heuristically (e.g. via the
+  alias) — the same failure surface as moving files with Obsidian closed; such links are flagged for
+  repair rather than silently dropped.
+- **Provenance is respected.** Mechanical path/alias repairs are kernel-authored edits, not agent
+  *suggestions*; they skip the suggested→accepted review loop and never alter a link's *meaning*
+  (type/explanation untouched).
 
 ### Acceptance criteria (testable scenarios)
 
-- **Given** a vault where files B and C both link to A, **when** A is renamed (path and/or title)
-  through the kernel, **then** every backlink from B and C still resolves to A, and `b2 neighbors A`
-  / `b2 explain A` shows the same inbound set as before.
-- **Given** title-based wikilinks, **when** A's title changes, **then** the `[[…]]` text in B and C
-  is rewritten to the new title and the files round-trip losslessly (`parse → serialize → parse`).
-- **Given** a pure path move with title-based links, **then** **no** inbound file is modified, yet
-  all backlinks still resolve.
-- **Given** A is renamed out-of-band and the vault is reindexed, **then** backlinks resolve again
+- **Given** a vault where files B and C both link to A, **when** A is moved through the kernel,
+  **then** every backlink from B and C still resolves to A, the inline `path` in B and C is rewritten
+  to A's new path, and `b2 neighbors A` / `b2 explain A` shows the same inbound set as before.
+- **Given** A is moved, **then** B and C round-trip losslessly (`parse → serialize → parse`) and
+  only their link `path` changed — every other byte is identical.
+- **Given** A's *title* is renamed (path unchanged), **then** all backlinks still resolve with **no
+  rewrite required**; any alias refresh is cosmetic and the link target is untouched.
+- **Given** A is moved out-of-band and the vault is reindexed, **then** backlinks resolve again
   (directly realizing the locked invariant **"rename keeps every backlink resolving"**,
   [vision-and-scope.md](vision-and-scope.md)).
-- The rename touches **only** inbound files that genuinely embed A's name; unrelated files are byte-
+- The operation touches **only** inbound files that actually link to A; unrelated files are byte-
   identical afterward.
-
-### Open
-
-- **Do we rewrite link text at all, or decouple it?** If authored links carry the `id`
-  (e.g. `[[id|Alias]]`), a title rename needs **zero** inbound edits and the alias is cosmetic. If
-  links are bare `[[Title]]`, we must rewrite. This is the central data-model question
-  ([tasks.md](tasks.md), "Typed relations in Markdown") and decides how much of this story is
-  "update the index" vs. "rewrite N files."
 
 ---
 
@@ -96,8 +126,8 @@ the same target.
 
 ### Setup
 
-File **A** contains a link to file **B**. Files **C** and **D** also link to **B**. The user edits
-**A** and deletes its `[[B]]` link. B is *not* renamed, moved, or deleted.
+File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **D** also link to
+**B**. The user edits **A** and deletes its link to B. B is *not* renamed, moved, or deleted.
 
 ### Behavior — how the inbound links to B are updated
 
