@@ -221,7 +221,9 @@ The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-
 - This is a **separate decision** ([tasks.md](tasks.md) backlog) — flagged here only because "rebuild on
   SQLite" quietly closes off "just use qmd's Node stack" and tilts toward a compiled language.
 
-## 8. Risks & open questions
+## 8. Risks, open questions & operational burden
+
+### Engine risks & open questions
 
 - **`sqlite-vec` is pre-v1.** Mitigate: pin a version, wrap vector ops behind our own small interface so
   a future swap (or ANN upgrade) is contained.
@@ -235,6 +237,39 @@ The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-
 - **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
   Keep `chunks.note_id` as the join and resolve search hits up to notes for graph operations — already
   reflected in §3.
+
+### Operational burden — the bill for an `id`-keyed graph under `[[path|title]]` links
+
+The graph buys B2 its reason to exist (typed, provenanced, `id`-stable edges — §2), but the decision to
+keep links written as human-clickable `[[path|title]]` while the graph keys on `id`
+([user-stories.md](user-stories.md), "Link format & identity") has standing operational costs. These are
+*the trade working as designed*, not defects — but they must be budgeted, tested, and watched.
+
+- **Write amplification on move.** The inline `path` is a repairable convenience copy, so moving one note
+  rewrites the inbound link text in **every** file that points at it — an N-file write, not a one-file
+  write. It's bounded and mechanical (the `id`-keyed edges name exactly which files/links to touch,
+  Markdown-first then index), but moving a heavily-linked note is proportional to its backlink count, not
+  O(1). Watch the cost on hub notes; keep the rewrite transactional so a partial move never half-updates
+  the vault.
+- **Out-of-band moves degrade gracefully, not perfectly.** A `git mv`/Finder move + reindex re-reads the
+  frontmatter `id` and re-establishes `id → newpath`, repairing dangling inbound links — **if** there is
+  prior index continuity. A **cold reindex with no prior state** can only repair a dangling `[[oldpath]]`
+  heuristically (e.g. via the alias); those links are **flagged for repair, not silently dropped**. This
+  is the same failure surface as moving files with Obsidian closed — acceptable, but it means the index is
+  load-bearing for full repair fidelity.
+- **Derived-index consistency is a permanent invariant, not a one-time build.** The graph is a derived
+  projection of the Markdown and must never drift from disk. Three locked invariants are the tripwires
+  ([vision-and-scope.md](vision-and-scope.md)): round-trip losslessness (`parse → serialize → parse`),
+  `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
+  (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
+  diverges from the source of truth.
+- **Suggestion lifecycle carries a review cost.** Every machine-derived/agent edge is **inert until
+  accepted** and lives in the review layer; provenance (`by`, `source`, `confidence`) must travel with the
+  edge. Editing the vault can invalidate a suggestion's *evidence basis* — e.g. deleting an authored
+  `A→B` link that a suggestion cited ([user-stories.md](user-stories.md), Story 2) — which must be
+  re-evaluated/retracted **in the review layer only**, never by silently rewriting an inbound file or an
+  accepted edge. Orphans (a deleted last-backlink) are *surfaced*, never auto-deleted — files are touched
+  only when asked.
 
 ## 9. Recommendation & next steps
 
