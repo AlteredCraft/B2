@@ -9,13 +9,14 @@ status: active
 
 # B2 — Tasks
 
-Working task queue for B2. Context lives in [notes.md](notes.md) (motivations, principles,
-headless-first approach) and [vision-and-scope.md](vision-and-scope.md) (vision, capability areas,
-v1 scope, locked decisions).
+Working task queue for B2. Start at [README.md](../README.md) for the map; context lives in
+[vision-and-scope.md](vision-and-scope.md) (motivations, principles, design philosophy, capability
+areas, v1 scope, locked decisions).
 
 ## Done
 
-- [x] **Motivations & problem** — [notes.md](notes.md).
+- [x] **Motivations & problem** — folded into [vision-and-scope.md](vision-and-scope.md)
+  ("Why I'm building it").
 - [x] **Vision & scope** — [vision-and-scope.md](vision-and-scope.md), including v1 scope and the
   three locked decisions (2026-06-28: semantic is engine-gated, full CRUD in CLI, v1 discovery =
   links only).

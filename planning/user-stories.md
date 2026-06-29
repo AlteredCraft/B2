@@ -172,5 +172,3 @@ File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **
 
 - **Orphan handling policy** — surface-only, vs. an opt-in agent suggestion ("B is now orphaned;
   link or archive?"). Either way it stays inert until accepted; the default is likely surface-only.
-</content>
-</invoke>

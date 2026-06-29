@@ -354,7 +354,9 @@ Net: "export to OKF" is selecting and re-shaping fields that already exist — a
 ## 6. Invariants & serialization discipline
 
 The model exists to make the three locked invariants
-([vision-and-scope.md](vision-and-scope.md)) hold by construction:
+([vision-and-scope.md](vision-and-scope.md)) hold by construction — they are the **"volatile vault over
+a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)) made
+mechanical:
 
 - **Round-trip losslessness** (`parse → serialize → parse` is byte-identical). B2 preserves unknown
   frontmatter keys *and their order*, body text, whitespace, and comment tokens. The **only** bytes B2

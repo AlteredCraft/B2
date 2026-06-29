@@ -98,8 +98,10 @@ agent-output discipline, and the MCP surface idea. **What we discard:** the npm/
 
 ## 3. The storage architecture (SQLite index + `.b2/` event log)
 
-Two artifacts, per the three-tier model ([data-model.md](data-model.md)): a **disposable** SQLite index
-holding every queryable concern transactionally, and a **durable** append-only `.b2/` event log. The
+Two artifacts, per the three-tier model ([data-model.md](data-model.md)) and realizing the **"volatile
+vault over a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)): a
+**disposable** SQLite index holding every queryable concern transactionally, and a **durable**
+append-only `.b2/` event log. The
 whole index is **rebuildable from `(Markdown ∪ log)`** — drop `b2.sqlite`, re-scan the vault and replay
 the log, get back an identical index (the locked `full-reindex ≡ incremental-update` invariant). Markdown
 is the source of truth for *knowledge* (notes + accepted edges); the log is the source of truth for
@@ -221,9 +223,11 @@ friendliness:
    embedder swappable (deterministic fake for tests). Ship local-by-default; allow an API embedder for
    users who opt in. Keeps the binary tiny; preserves local-first as the default.
 
-**Recommendation:** make the **embedder a seam** (we need it for tests regardless), ship a **local
-model as the default** (option 1 or 2), and decide model-download-on-first-run vs. bundled-in-binary as
-a packaging detail later. Crucially, **none of this blocks the engine work**: build the SQLite store +
+**Recommendation:** make the **embedder a seam** (we need it for tests regardless — and a swappable
+model seam *is* the **"build for tomorrow's model"** tenet in practice,
+[vision-and-scope.md](vision-and-scope.md#design-philosophy)), ship a **local model as the default**
+(option 1 or 2), and decide model-download-on-first-run vs. bundled-in-binary as a packaging detail
+later. Crucially, **none of this blocks the engine work**: build the SQLite store +
 FTS5 + `sqlite-vec` + the typed graph now against the deterministic fake embedder; drop the real
 embedder into the seam when the packaging path is chosen.
 

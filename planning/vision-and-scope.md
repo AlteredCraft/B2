@@ -80,6 +80,34 @@ proposes — and I stay in control of what it commits.
    can download and run — no toolchain, no install ritual. *(This constrains the tech stack;
    see open questions.)*
 
+## Design philosophy
+
+The principles above are *what B2 must always be* for its user. These two tenets are *how we build* to
+keep them true over time — the architectural stance the rest of the design serves. The invariants in
+[data-model.md](data-model.md) (§6) and the disposable index in [index-engine.md](index-engine.md) (§3)
+are these tenets made mechanical; this is their canonical statement.
+
+- **A volatile vault over a disposable index.** Your notes are meant to churn — move, split, merge,
+  compress, trim orphans, big refactors — and B2 must *welcome* that, never penalize it. We guarantee
+  it by keeping almost nothing that isn't re-derivable from your Markdown: the index is a pure
+  projection (`index = projection of (Markdown ∪ log)`), and dropping it and rebuilding yields an
+  identical one (the locked `full-reindex ≡ incremental-update` invariant). The one durable thing B2
+  keeps that your notes *can't* reconstruct is a thin append-only event log
+  ([data-model.md](data-model.md) §4), whose single load-bearing job is remembering what you've
+  **rejected** so it isn't re-proposed — everything else in it is prunable. An index that is never a
+  source of truth can't drift into a liability; so we spend complexity to keep it *derivable*, not to
+  keep it *correct under edit*. Idempotency is the mechanism; a vault you can rewrite fearlessly is the
+  point.
+- **Build for tomorrow's model (the Bitter Lesson).** Model capability is rising faster than any
+  scaffolding we could write to compensate for today's limits, so we refuse to freeze those limits
+  into B2's structure. Every AI part sits behind a **swappable seam** — embedder, relator, reranker —
+  so a better model is a drop-in, not a rewrite. Model-compensating machinery (query expansion, heavy
+  prompt orchestration) is deferred or off by default. Where we *do* hand-engineer structure for
+  tractability — the closed relation vocabulary that makes discovery scoreable and queries reliable
+  ([data-model.md](data-model.md) §2) — we keep it a **policy we can relax**, never a structural
+  assumption, so a more capable model can be let off the leash without a redesign. Orchestrate the
+  minimum today's model needs, and no more.
+
 ## What B2 is (and is not)
 
 - **Is:** an *intelligence engine over a folder of Markdown* — derived index, typed graph, hybrid
@@ -255,5 +283,3 @@ We take *ideas*, not implementations:
 
 With motivation, problem, vision, and scope pinned here, move to the **data model** — *what a note
 is and what a connection is* — before any code.
-</content>
-</invoke>
