@@ -134,7 +134,16 @@ fn migrate(conn: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS edges_src_idx      ON edges(src_id);
          CREATE INDEX IF NOT EXISTS edges_dst_type_idx ON edges(dst_id, type);
          CREATE INDEX IF NOT EXISTS edges_status_idx   ON edges(status);
-         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;",
+         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;
+
+         CREATE TABLE IF NOT EXISTS edge_provenance (
+           edge_id    TEXT PRIMARY KEY REFERENCES edges(id) ON DELETE CASCADE,
+           by         TEXT NOT NULL,
+           source     TEXT,
+           confidence REAL,
+           created    TEXT NOT NULL,
+           decided    TEXT
+         );",
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
@@ -405,4 +414,89 @@ pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<
         return Ok(Some(id));
     }
     resolve_path_to_b2id(conn, &format!("{link_path}.md"))
+}
+
+// ---------------------------------------------------------------------------
+// review state: suggested/rejected edges + edge_provenance
+// (projected from the log by suggest/replay — never authored here)
+// ---------------------------------------------------------------------------
+
+/// Whether any edge already exists for `(src_id, dst_id, type)` — in any status.
+/// Generation uses this to refuse re-proposing an already-active, pending, or
+/// rejected (tombstoned) connection (data-model.md §4).
+pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &str) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM edges WHERE src_id = ?1 AND dst_id = ?2 AND type = ?3 LIMIT 1",
+            params![src_id, dst_id, edge_type],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+/// Insert a suggested edge (`origin='suggested'`, `status='suggested'`,
+/// `occurrence_index=0`). The companion provenance row is inserted separately.
+pub fn insert_suggested_edge(
+    conn: &Connection,
+    edge_id: &str,
+    src_id: &str,
+    dst_id: Option<&str>,
+    dst_path_raw: &str,
+    edge_type: &str,
+    explanation: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO edges
+           (id, src_id, dst_id, dst_path_raw, type, origin, status, explanation, occurrence_index)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'suggested', 'suggested', ?6, 0)",
+        params![
+            edge_id,
+            src_id,
+            dst_id,
+            dst_path_raw,
+            edge_type,
+            explanation
+        ],
+    )?;
+    Ok(())
+}
+
+/// Insert the provenance row for a suggested/rejected edge.
+pub fn insert_edge_provenance(
+    conn: &Connection,
+    edge_id: &str,
+    by: &str,
+    source: Option<&str>,
+    confidence: Option<f64>,
+    created: &str,
+    decided: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO edge_provenance(edge_id, by, source, confidence, created, decided)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![edge_id, by, source, confidence, created, decided],
+    )?;
+    Ok(())
+}
+
+/// Tombstone a suggestion: flip the edge to `status='rejected'` and stamp the
+/// provenance `decided` time. The row stays as rejection memory (never re-proposed).
+pub fn mark_edge_rejected(conn: &Connection, edge_id: &str, decided: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE edges SET status = 'rejected' WHERE id = ?1",
+        [edge_id],
+    )?;
+    conn.execute(
+        "UPDATE edge_provenance SET decided = ?2 WHERE edge_id = ?1",
+        params![edge_id, decided],
+    )?;
+    Ok(())
+}
+
+/// Delete an edge (its `edge_provenance` row cascades). Used when an accepted
+/// suggestion leaves the queue on replay — its active edge comes from Markdown.
+pub fn delete_edge(conn: &Connection, edge_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM edges WHERE id = ?1", [edge_id])?;
+    Ok(())
 }

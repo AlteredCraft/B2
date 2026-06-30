@@ -16,6 +16,8 @@ pub mod ingest;
 pub mod link;
 pub mod note;
 pub mod relation;
+pub mod replay;
+pub mod suggest;
 
 pub use db::{open, SCHEMA_VERSION};
 pub use error::{Error, Result};

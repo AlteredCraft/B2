@@ -13,11 +13,15 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// Test double for the step-4 event log — just collects what was appended.
+/// Test double for the event log — collects what was appended and replays it.
 struct CollectingSink(Mutex<Vec<Event>>);
 impl EventSink for CollectingSink {
-    fn append(&self, event: Event) {
-        self.0.lock().unwrap().push(event);
+    fn append(&self, event: &Event) -> b2_core::Result<()> {
+        self.0.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+    fn read_all(&self) -> b2_core::Result<Vec<Event>> {
+        Ok(self.0.lock().unwrap().clone())
     }
 }
 impl CollectingSink {

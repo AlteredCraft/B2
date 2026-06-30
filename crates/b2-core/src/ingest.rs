@@ -50,10 +50,10 @@ fn project_note_and_chunks(
             let id = idgen.new_id();
             parsed.stamp_b2id(&id);
             fs::write(&abs, parsed.as_str())?;
-            sink.append(Event::B2idStamped {
+            sink.append(&Event::B2idStamped {
                 b2id: id.clone(),
                 path: rel_path.to_string(),
-            });
+            })?;
             stamped = true;
             id
         }

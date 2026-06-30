@@ -8,6 +8,8 @@ description = "B2 index engine — the SQLite-backed disposable projection of (M
 [dependencies]
 blake3 = "1.8.5"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
 sqlite-vec = "0.1.9"
 thiserror = "2.0.18"
 ulid = "1.2.1"
