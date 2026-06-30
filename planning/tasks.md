@@ -60,6 +60,15 @@ decision" from the backlog, pulled forward).
 
 ## Backlog (later, not now)
 
+- **Accept operation (Flow ③)** — the suggestion-accept *write path*: write the inline
+  `- <type> [[path|title]] — <explanation>` into the source note (**Markdown first**), then re-project
+  so the `suggested` row leaves the queue and the edge re-materializes as `origin=inline`/`status=active`
+  (acceptance is a re-projection, not an in-place flip), and append a `suggestion.accepted` event.
+  *Status:* the build's step 4 already implemented replay's **handling** of an `accepted` event
+  (queue row deleted; active edge comes from Markdown) and tested it; the **operation that produces**
+  that event — the note write + re-projection — is not yet built. This is the one place the suggestion
+  lifecycle isn't yet end-to-end. ([data-model.md](data-model.md) §4, [index-engine.md](index-engine.md) §3,
+  build spec Flow ③.)
 - Core API surface — the typed contract every adapter calls.
 - CLI command surface — `b2 add / search / link / suggest / neighbors / reindex / explain`.
 - Connection-discovery pipeline — candidate generation → typed, explained suggestions → review loop.
