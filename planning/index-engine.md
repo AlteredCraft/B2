@@ -107,6 +107,10 @@ the log, get back an identical index (the locked `full-reindex ≡ incremental-u
 is the source of truth for *knowledge* (notes + accepted edges); the log is the source of truth for
 *history* (provenance + the suggestion/rejection lifecycle); the index is a cache of both.
 
+> The precise DDL, the relations between these tables, the read/write data flows, and the build order
+> are specified in **[specs/index-engine-build.md](specs/index-engine-build.md)**. The sketch below is
+> the orientation; that doc is the buildable contract.
+
 ```
 b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown ∪ log; drop & rebuild any time)
 ├── MIRROR OF MARKDOWN (source of truth for *knowledge*; lets us diff vs. disk)
@@ -145,8 +149,10 @@ Why this shape fits B2 specifically:
 - **Suggestions are `edges` rows with `status='suggested'`, replayed from the log** — *inert until
   accepted* is a `WHERE status='active'` clause. They are never written to a note; their durable home is
   the `.b2/` event log and the index is just the live queue. Accepting one writes the inline Markdown
-  link, flips the row to `active`, and appends a `suggestion.accepted` event. The review layer is data,
-  not a side-system.
+  link (Markdown first); the `suggested` row then **leaves the queue** and the edge **re-materializes as
+  an `origin='inline'`/`status='active'` edge derived from that Markdown** — acceptance is a
+  re-projection, not an in-place status flip — and a `suggestion.accepted` event is appended. The review
+  layer is data, not a side-system.
 - **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose
   note is within 2 typed hops of note X" is a join across `chunks_vec`, `chunks`, and `edges`. This is
   the substrate **connection discovery** (candidate generation) runs on, and it's the thing a
@@ -158,6 +164,37 @@ Why this shape fits B2 specifically:
 - **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `chunks_vec`;
   a scripted relator writes `status='suggested'` rows. The whole pipeline is assertable with no live
   model (testability stack, points 4–5).
+
+### Why materialize the graph at all — vs. resolving links at runtime
+
+A note's *outbound* links (and their type + explanation) are parseable from that one file on demand, so
+it's fair to ask why the index carries an `edges` table at all rather than resolving links at read time.
+The answer separates two things the question tends to bundle. **Edge metadata is *not* the reason:** a
+typed line `- supersedes [[path|title]] — because X` yields its verb and explanation to a runtime parse
+just as well, *for that note's outbound edges*. **Inversion and composition are the reason.** Materializing
+edges is what turns the following from full-vault scans (or impossibilities) into indexed lookups:
+
+- **Backlinks / inversion.** "Who points at X" cannot be read from X — only from every *other* note.
+  The runtime answer is O(vault) per query; the table makes it one lookup. This is also what services
+  *"rename keeps every backlink resolving"* ([user-stories.md](user-stories.md), Story 1): the edges name
+  the exact N inbound files to rewrite on a move instead of scanning the vault to find them (§8).
+- **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`refutes`" is a scan *per hop*
+  at runtime; over `edges` it is one SQL traversal.
+- **The discovery join.** Candidate generation — "semantic-nearest chunks whose note is within k typed
+  hops of X" — is a single join `chunks_vec ⨝ chunks ⨝ edges`. It is not expressible as a per-note parse;
+  it is the substrate area-5 connection discovery runs on, and the reason the graph and the search indexes
+  must live in **one** store (§2).
+- **The suggestion queue.** Suggested edges are *inert until accepted* and so are deliberately **absent
+  from the Markdown** ([data-model.md](data-model.md) §4). There is nothing on disk to parse — the live
+  queue can only be a materialized structure (replayed from the log).
+
+The reframe that keeps this cheap: **runtime outbound-parsing is the correctness *definition*
+(`index = projection of Markdown`); the `edges` table is its *cache*, kept so the inverse and compositional
+queries are fast.** It is therefore not a third subsystem beside FTS5 and `sqlite-vec` — it is one more
+**disposable** table in the same store, populated by the **same parse pass** that already walks each body
+for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. qmd (§2); the typed,
+traversable graph is the value-add, not the search. The standing cost of carrying it is the
+`b2id`-under-`[[path]]` write-amplification budgeted in §8.
 
 FTS5 is built into SQLite (BM25 ranking included). `sqlite-vec` is a small loadable C extension we
 statically link. Both are battle-tested at personal-vault scale.

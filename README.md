@@ -49,5 +49,6 @@ lock-in · AI-native (not bolted-on) · single binary
 | [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
 | [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the three storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + `sqlite-vec`) as a disposable projection. The canonical *how*. |
+| [specs/index-engine-build.md](planning/specs/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
 | [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |
 | [tasks.md](planning/tasks.md) | The working queue — what's done, what's next. |

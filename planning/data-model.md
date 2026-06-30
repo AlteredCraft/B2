@@ -251,12 +251,25 @@ this is the index.
 | `explanation` | free text, optional | trailing text after `—`/`:`, or the agent's rationale |
 | *(provenance, joined)* | see §4 | — |
 
-- **`origin` vs `status` are orthogonal.** `origin` records *where it came from and lives*; `status`
-  records *where it is in the review lifecycle*. An `inline` edge is always `active`; a `suggested` edge
-  is `suggested` until it becomes `active` (accepted, and rewritten `inline`) or `rejected`.
+- **`origin` vs `status` are orthogonal, within limits.** `origin` records *where it came from and
+  lives*; `status` records *where it is in the review lifecycle*. The legal combinations are
+  constrained: an `inline`/`frontmatter` edge is always `active`; a `suggested` edge is `suggested`
+  until it is **rejected** or **accepted**. Acceptance is **not an in-place flip**: B2 writes the inline
+  link, the `suggested` row **leaves the review queue**, and the connection **re-materializes as an
+  `origin='inline'`, `status='active'` edge derived from the Markdown**. So an `active` edge always
+  traces to a body link, never to a mutated queue row — which is exactly what keeps `index = projection
+  of (Markdown ∪ log)` exact (§4, §6).
 - **`src`/`dst` resolve path → `b2id` at parse time** and the edge stores only `b2id`s. This is why
   "rename keeps every backlink resolving" is a foreign-key truth, not a fix-up pass: a move rewrites `notes.path`
   and inbound `[[path|title]]` *text*, but no `edges` row changes ([index-engine.md](index-engine.md) §3).
+
+> **Why this projection is materialized, not computed on read.** A note's *outbound* edges are
+> re-derivable by parsing that one file — which is exactly why this table is **disposable**. It is kept
+> materialized so the queries parsing *can't* serve cheaply are fast: **backlinks** (inversion needs every
+> *other* note), **typed multi-hop traversal**, the **semantic⨝graph discovery join**, and the
+> **suggestion queue** (suggested edges are inert and never on disk — §4 — so there is nothing to parse).
+> Runtime parsing is the correctness spec; the table is its cache, not a third subsystem. Full rationale in
+> [index-engine.md](index-engine.md) §3; the standing cost in §8.
 
 ---
 
@@ -279,12 +292,14 @@ decide, their job is done and they become history.
 ### Lifecycle: `suggested → active | rejected`
 
 ```
-              agent proposes                  human accepts
-   (none) ───────────────────▶ suggested ───────────────────▶ active
-                                   │                         (inline link written)
-                                   │ human rejects
-                                   ▼
-                                rejected   (remembered, never re-surfaced, never in body)
+            agent proposes              human accepts
+   (none) ──────────────▶ suggested ──────────────────▶ active
+                              │       write inline link → (origin=inline,
+                              │       row leaves queue,    re-derived
+                              │       edge re-derives      from Markdown)
+                              │ human rejects
+                              ▼
+                           rejected   (remembered, never re-surfaced, never in body)
 ```
 
 - **`suggested`** — lives in the **review layer**: the *live* queue in the index, durably recorded as a
@@ -292,9 +307,12 @@ decide, their job is done and they become history.
   type, explanation, and the full decision fuel. The vault on disk is byte-unchanged — the literal
   meaning of *inert until accepted*.
 - **`active` (accept)** — B2 writes the inline `- <type> [[path|title]] — <explanation>` into the
-  **source note's body** (Markdown first), reconciles the index, and appends a `suggestion.accepted`
-  event. The accepted edge in Markdown is **pristine** — no provenance breadcrumb, no fingerprint. Once
-  you've vetted it, it's an ordinary typed link; the *history* of how it got there lives in the log.
+  **source note's body** (Markdown first), then reconciles the index: the `suggested` row **leaves the
+  review queue** and the edge **re-materializes from the Markdown** as an `origin='inline'`,
+  `status='active'` edge (acceptance is a re-projection, not an in-place status flip). B2 appends a
+  `suggestion.accepted` event. The accepted edge in Markdown is **pristine** — no provenance breadcrumb,
+  no fingerprint; its `edge_provenance` row is gone. Once you've vetted it, it's an ordinary typed link;
+  the *history* of how it got there lives in the log.
 - **`rejected`** — a `suggestion.rejected` event; the identity tuple (`src,dst,type`) is remembered so
   the same pair+type isn't proposed again. Never written to the body.
 
@@ -325,8 +343,11 @@ provenance after a decision is history, and history belongs in the log, not stap
   maintenance.
 - **Replay = review-state recovery.** The pending queue and rejection tombstones are the one part of the
   index that *isn't* derivable from Markdown (suggestions are never written to notes). Replaying the log
-  reconstructs them, so "drop the index, rebuild identical" stays literally true (§6). `replay(log) ⇒
-  review state` is a pure function — a clean deterministic seam for tests.
+  reconstructs them, so "drop the index, rebuild identical" stays literally true (§6). An **accepted**
+  suggestion contributes **no** live queue row on replay — its connection re-derives from the inline
+  Markdown link and the `suggestion.accepted` event is pure history — so it is never double-counted as
+  both a queue row and an `active` edge. `replay(log) ⇒ review state` is a pure function — a clean
+  deterministic seam for tests.
 - **Compaction:** append-only logs grow; a later compaction step snapshots current review state and
   truncates superseded events. Trivial at personal-vault scale — **flagged for later, not v1.**
 - **Bonus:** this is the same event stream `b2 explain` reads to answer "how did this edge come to be?"

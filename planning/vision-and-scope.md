@@ -254,6 +254,14 @@ zero UI.
   Edge provenance lives in the **event log, not the note** (accepted edges stay pristine); `b2id` is B2's
   single always-allowed write. A bare link is a **directed `references`** edge; the typed vocabulary is a
   **10-verb core + tolerated tail**. Settles the data-model "central question" ([tasks.md](tasks.md)).
+- **Graph is materialized, not parsed on read.** The typed graph is kept as a **disposable `edges` table
+  in the index**, not resolved from the Markdown at query time. A note's *outbound* links are re-derivable
+  by parsing it (which is why the table is disposable), but **backlinks, typed multi-hop traversal, the
+  semantic⨝graph discovery join, and the inert suggestion queue** (suggestions are never on disk) are
+  full-vault scans or impossibilities at read time, and indexed lookups once materialized. Runtime parsing
+  is the correctness spec; the table is its cache — one more table in the store, not a third subsystem.
+  Without it B2 is just vector + keyword search over Markdown; the traversable typed graph is the value-add
+  (capability areas 3, 5). Rationale in [index-engine.md](index-engine.md) §3, cost in §8.
 
 ## Inspiration — not a copy
 

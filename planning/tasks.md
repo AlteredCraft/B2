@@ -30,6 +30,11 @@ areas, v1 scope, locked decisions).
 
 ## Next up — Index-engine build
 
+> **Build spec:** [specs/index-engine-build.md](specs/index-engine-build.md) — the precise table
+> definitions, relations, data flows, and the step 0→5 build order. The schema there is locked
+> (2026-06-29): the `index-engine.md` §3 sketch made buildable, reconciled with the acceptance =
+> re-projection refinement now mirrored in [data-model.md](data-model.md).
+
 Unblocked now the data model is locked. The evaluation is already drafted in
 [index-engine.md](index-engine.md): **build our own SQLite store** (FTS5 + `sqlite-vec`) rather than
 depend on `qmd` — which also settles the engine-gated decision: **semantic search is in v1**
