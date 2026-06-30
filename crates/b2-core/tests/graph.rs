@@ -3,6 +3,7 @@
 
 mod common;
 
+use b2_core::embed::FakeEmbedder;
 use b2_core::event::NullSink;
 use b2_core::graph::{neighbors, Direction};
 use b2_core::id::UlidGen;
@@ -54,7 +55,7 @@ fn ingest_golden(dir: &std::path::Path) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
     conn
 }
 
@@ -131,7 +132,7 @@ fn one_note_reindex_equals_full() {
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
     let after_full = edge_snapshot(&conn);
 
     // Re-project a single note against the already-complete index.
@@ -141,6 +142,7 @@ fn one_note_reindex_equals_full() {
         "notes/spaced-repetition.md",
         &UlidGen,
         &NullSink,
+        &FakeEmbedder::default(),
     )
     .unwrap();
     let after_incremental = edge_snapshot(&conn);
@@ -151,7 +153,7 @@ fn one_note_reindex_equals_full() {
     );
 
     // And a second full reindex is identical too (idempotent).
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         after_full,
         edge_snapshot(&conn),

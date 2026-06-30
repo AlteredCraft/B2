@@ -8,6 +8,7 @@
 //! is a derived projection of `(Markdown ∪ log)` — nothing is a source of truth.
 
 use crate::chunk::Chunk;
+use crate::embed::pack_f32;
 use crate::error::Result;
 use rusqlite::{ffi, params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
@@ -205,11 +206,25 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 // chunks (FTS kept in lockstep by the triggers in migrate())
 // ---------------------------------------------------------------------------
 
-/// Replace a note's chunks (delete + reinsert). The FTS triggers emit the
-/// `'delete'` sentinel for the removed rows, so the index never drifts — this is
-/// what makes an incremental re-index equal a full rebuild.
-pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> Result<()> {
+/// Replace a note's chunks (delete + reinsert) and return the new chunk ids in
+/// `seq` order. The FTS triggers emit the `'delete'` sentinel for the removed
+/// rows; `chunks_vec` has no FK/trigger back to `chunks`, so its stale rows are
+/// cleared here explicitly. Together this is what makes an incremental re-index
+/// equal a full rebuild. The caller embeds the returned ids (Flow ①).
+pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> Result<Vec<i64>> {
+    if embedding_space_exists(conn)? {
+        let old_ids: Vec<i64> = {
+            let mut stmt = conn.prepare("SELECT id FROM chunks WHERE note_b2id = ?1")?;
+            let rows = stmt.query_map([note_b2id], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<i64>>>()?
+        };
+        for id in old_ids {
+            conn.execute("DELETE FROM chunks_vec WHERE chunk_id = ?1", [id])?;
+        }
+    }
     conn.execute("DELETE FROM chunks WHERE note_b2id = ?1", [note_b2id])?;
+
+    let mut new_ids = Vec::with_capacity(chunks.len());
     for c in chunks {
         conn.execute(
             "INSERT INTO chunks(note_b2id, seq, char_start, char_end, token_count, heading_path, text)
@@ -223,8 +238,94 @@ pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> R
                 c.text,
             ],
         )?;
+        new_ids.push(conn.last_insert_rowid());
     }
+    Ok(new_ids)
+}
+
+// ---------------------------------------------------------------------------
+// embeddings — chunks_vec is created at the embedder's dim (not in migrate()),
+// because the vec0 dimension is a DDL literal pinned to meta.embed_dim (§1.0).
+// ---------------------------------------------------------------------------
+
+/// Whether the `chunks_vec` virtual table currently exists.
+pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Ensure `chunks_vec` exists at `dim`, recording `(embed_model_id, embed_dim)`
+/// in `meta`. If either differs from what is recorded — a model swap — the table
+/// is dropped and recreated empty, so a full re-embed follows (index-engine.md
+/// §8). `meta` is the only place a swap can be detected, so vectors never go
+/// silently stale.
+pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> Result<()> {
+    let cur_model: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'embed_model_id'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let cur_dim: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'embed_dim'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+
+    let unchanged = cur_model.as_deref() == Some(model_id)
+        && cur_dim.as_deref() == Some(dim.to_string().as_str());
+    if unchanged && embedding_space_exists(conn)? {
+        return Ok(());
+    }
+
+    // dim is an integer we control (never user input) → safe to interpolate.
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS chunks_vec;
+         CREATE VIRTUAL TABLE chunks_vec USING vec0(
+           chunk_id  INTEGER PRIMARY KEY,
+           embedding FLOAT[{dim}]
+         );"
+    ))?;
+    upsert_meta(conn, "embed_model_id", model_id)?;
+    upsert_meta(conn, "embed_dim", &dim.to_string())?;
     Ok(())
+}
+
+fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// Store a chunk's embedding (chunk ids are fresh on each reindex, so a plain
+/// insert never conflicts).
+pub fn set_chunk_vector(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> Result<()> {
+    conn.execute(
+        "INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
+        params![chunk_id, pack_f32(embedding)],
+    )?;
+    Ok(())
+}
+
+/// Brute-force KNN over `chunks_vec`: the `k` nearest chunk ids to `query`, with
+/// their distances, nearest first (build spec §1.2 / Flow ②).
+pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT chunk_id, distance FROM chunks_vec
+         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pack_f32(query), k as i64], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 // ---------------------------------------------------------------------------

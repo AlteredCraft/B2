@@ -1,0 +1,126 @@
+//! Step 3 — `sqlite-vec` + the embedder seam
+//! (planning/specs/index-engine-build.md step 3): a deterministic fake embedder
+//! produces reproducible KNN; `embed_model_id`/`embed_dim` are recorded; a
+//! model/dim swap recreates the vector space.
+
+mod common;
+
+use b2_core::db;
+use b2_core::embed::{Embedder, FakeEmbedder};
+use b2_core::event::NullSink;
+use b2_core::id::UlidGen;
+use b2_core::ingest::ingest_vault;
+use b2_core::open;
+use common::{golden_vault_copy, SRS_ID};
+use rusqlite::Connection;
+
+fn ingest_golden(dir: &std::path::Path, embedder: &FakeEmbedder) -> Connection {
+    let vault = dir.join("vault");
+    golden_vault_copy(&vault);
+    let conn = open(&dir.join("b2.sqlite")).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, embedder).unwrap();
+    conn
+}
+
+fn meta(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        .ok()
+}
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn fake_embedder_is_deterministic() {
+    let e = FakeEmbedder::new(16);
+    assert_eq!(e.embed("hello world"), e.embed("hello world"));
+    assert_ne!(e.embed("hello world"), e.embed("a different chunk"));
+    assert_eq!(e.embed("x").len(), 16);
+}
+
+#[test]
+fn ingest_populates_chunks_vec_and_records_meta() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    // one vector per chunk
+    assert!(count(&conn, "chunks") > 0);
+    assert_eq!(count(&conn, "chunks"), count(&conn, "chunks_vec"));
+
+    assert_eq!(
+        meta(&conn, "embed_model_id").as_deref(),
+        Some("fake-deterministic-v1")
+    );
+    assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
+}
+
+#[test]
+fn knn_finds_the_chunk_whose_text_we_query() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let embedder = FakeEmbedder::new(64);
+    let conn = ingest_golden(tmp.path(), &embedder);
+
+    // pick a known chunk, query with the embedding of its own text
+    let (id, text): (i64, String) = conn
+        .query_row(
+            "SELECT id, text FROM chunks WHERE note_b2id = ?1 ORDER BY seq LIMIT 1",
+            [SRS_ID],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    let hits = db::vector_search(&conn, &embedder.embed(&text), 3).unwrap();
+    assert!(!hits.is_empty());
+    assert_eq!(hits[0].0, id, "nearest chunk is the one we embedded");
+    assert!(
+        hits[0].1 < 1e-6,
+        "exact match has ~zero distance, got {}",
+        hits[0].1
+    );
+}
+
+#[test]
+fn reindex_yields_identical_vectors() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    golden_vault_copy(&vault);
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    let embedder = FakeEmbedder::new(64);
+
+    let vec_for_srs_seq0 = |c: &Connection| -> Vec<u8> {
+        c.query_row(
+            "SELECT v.embedding FROM chunks_vec v
+             JOIN chunks c ON c.id = v.chunk_id
+             WHERE c.note_b2id = ?1 AND c.seq = 0",
+            [SRS_ID],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &embedder).unwrap();
+    let before = vec_for_srs_seq0(&conn);
+
+    // A full re-index re-embeds deterministically → byte-identical vectors.
+    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &embedder).unwrap();
+    assert_eq!(before, vec_for_srs_seq0(&conn));
+}
+
+#[test]
+fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+    assert!(count(&conn, "chunks_vec") > 0);
+
+    // A model/dim swap: the only place it can be detected is meta. Vectors are
+    // dropped (a full re-embed is required) and the dim is updated.
+    db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128).unwrap();
+    assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
+    assert_eq!(
+        count(&conn, "chunks_vec"),
+        0,
+        "swap drops vectors; re-embed needed"
+    );
+}

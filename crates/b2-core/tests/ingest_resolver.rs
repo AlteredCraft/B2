@@ -68,7 +68,14 @@ fn ingests_golden_vault_and_resolves_b2id_path_both_ways() {
     let sink = CollectingSink::new();
     let idgen = FixedId("01JSHOULDNEVERBEUSED000000");
 
-    ingest_vault(&conn, &vault, &idgen, &sink).unwrap();
+    ingest_vault(
+        &conn,
+        &vault,
+        &idgen,
+        &sink,
+        &b2_core::embed::FakeEmbedder::default(),
+    )
+    .unwrap();
 
     // resolver, both directions, for concepts/memory.md
     let b2id = db::resolve_path_to_b2id(&conn, "concepts/memory.md")
@@ -107,7 +114,14 @@ fn stamps_and_logs_b2id_for_a_note_missing_one_and_persists_it_to_disk() {
     let sink = CollectingSink::new();
     let idgen = FixedId("01JSTAMPED0000000000000000");
 
-    ingest_vault(&conn, &vault, &idgen, &sink).unwrap();
+    ingest_vault(
+        &conn,
+        &vault,
+        &idgen,
+        &sink,
+        &b2_core::embed::FakeEmbedder::default(),
+    )
+    .unwrap();
 
     // the always-allowed write actually hit the file
     let on_disk = fs::read_to_string(&note_path).unwrap();
@@ -151,6 +165,7 @@ fn aliases_are_projected_and_searchable() {
         &vault,
         &b2_core::id::UlidGen,
         &b2_core::event::NullSink,
+        &b2_core::embed::FakeEmbedder::default(),
     )
     .unwrap();
 

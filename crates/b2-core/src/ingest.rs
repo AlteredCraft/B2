@@ -10,6 +10,7 @@
 
 use crate::chunk::chunk_body;
 use crate::db::{self, EdgeRow, NoteRow};
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::event::{Event, EventSink};
 use crate::id::IdGen;
@@ -35,6 +36,7 @@ fn project_note_and_chunks(
     rel_path: &str,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
+    embedder: &dyn Embedder,
 ) -> Result<(String, bool, String)> {
     let abs = vault_root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
@@ -84,7 +86,12 @@ fn project_note_and_chunks(
         },
     )?;
 
-    db::replace_chunks(conn, &b2id, &chunk_body(&body))?;
+    // Chunk → project → embed each chunk into chunks_vec via the seam (Flow ①).
+    let chunks = chunk_body(&body);
+    let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
+    for (id, chunk) in chunk_ids.iter().zip(&chunks) {
+        db::set_chunk_vector(conn, *id, &embedder.embed(&chunk.text))?;
+    }
 
     Ok((b2id, stamped, body))
 }
@@ -142,8 +149,11 @@ pub fn ingest_file(
     rel_path: &str,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
+    embedder: &dyn Embedder,
 ) -> Result<Ingested> {
-    let (b2id, stamped, body) = project_note_and_chunks(conn, vault_root, rel_path, idgen, sink)?;
+    db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
+    let (b2id, stamped, body) =
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink, embedder)?;
     project_edges(conn, &b2id, &body)?;
     Ok(Ingested { b2id, stamped })
 }
@@ -155,7 +165,10 @@ pub fn ingest_vault(
     vault_root: &Path,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
+    embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
+    db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
+
     let mut rel_paths = Vec::new();
     collect_md_files(vault_root, vault_root, &mut rel_paths)?;
     rel_paths.sort();
@@ -163,7 +176,8 @@ pub fn ingest_vault(
     // Phase 1: notes + chunks (fills the resolver for every note).
     let mut staged = Vec::with_capacity(rel_paths.len());
     for rel in &rel_paths {
-        let (b2id, stamped, body) = project_note_and_chunks(conn, vault_root, rel, idgen, sink)?;
+        let (b2id, stamped, body) =
+            project_note_and_chunks(conn, vault_root, rel, idgen, sink, embedder)?;
         staged.push((b2id, stamped, body));
     }
 

@@ -7,6 +7,7 @@
 
 pub mod chunk;
 pub mod db;
+pub mod embed;
 mod error;
 pub mod event;
 pub mod graph;
