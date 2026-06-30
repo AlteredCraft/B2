@@ -16,7 +16,7 @@ use crate::event::{Event, EventSink};
 use crate::id::IdGen;
 use crate::note;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -37,7 +37,7 @@ fn project_note_and_chunks(
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
     embedder: &dyn Embedder,
-) -> Result<(String, bool, String)> {
+) -> Result<(String, bool, String, Vec<String>)> {
     let abs = vault_root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
     let mut parsed = note::parse(&raw);
@@ -86,6 +86,8 @@ fn project_note_and_chunks(
         },
     )?;
 
+    let relations = parsed.fields().relations.clone();
+
     // Chunk → project → embed each chunk into chunks_vec via the seam (Flow ①).
     let chunks = chunk_body(&body);
     let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
@@ -93,22 +95,46 @@ fn project_note_and_chunks(
         db::set_chunk_vector(conn, *id, &embedder.embed(&chunk.text))?;
     }
 
-    Ok((b2id, stamped, body))
+    Ok((b2id, stamped, body, relations))
 }
 
-/// Derive a note's authored edges from its body and project them, resolving each
-/// link target against the current resolver.
-fn project_edges(conn: &Connection, src_id: &str, body: &str) -> Result<()> {
-    let links = crate::link::parse_links(body);
-    let mut occ: HashMap<(String, String), i64> = HashMap::new();
-    let mut rows = Vec::with_capacity(links.len());
+/// Derive a note's authored edges and project them — the union of **body** links
+/// (`origin=inline`) and frontmatter **`relations:`** (`origin=frontmatter`),
+/// resolving each target against the current resolver. On overlap (the same
+/// `(target, type)` authored in both homes) the **body wins** and the redundant
+/// frontmatter entry is dropped (data-model §0/§3). Occurrence is assigned per
+/// `(target, type)` over the kept set.
+fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[String]) -> Result<()> {
+    // Gather authored links: body first (inline), then frontmatter (frontmatter).
+    let mut staged: Vec<(crate::link::ParsedLink, &'static str)> = Vec::new();
+    for link in crate::link::parse_links(body) {
+        staged.push((link, "inline"));
+    }
+    for spec in relations {
+        if let Some(link) = crate::link::parse_relation(spec) {
+            staged.push((link, "frontmatter"));
+        }
+    }
 
-    for link in &links {
+    // Resolve targets; record which (target, type) the body already authors.
+    let mut body_keys: HashSet<(String, String)> = HashSet::new();
+    let mut resolved = Vec::with_capacity(staged.len());
+    for (link, origin) in staged {
         let dst_id = db::resolve_link_target(conn, &link.target_path)?;
-        // Occurrence is keyed by the resolved target (or the raw path while
-        // dangling) + type, so the same target+verb twice gets index 0,1,…
         let target_key = dst_id.clone().unwrap_or_else(|| link.target_path.clone());
+        if origin == "inline" {
+            body_keys.insert((target_key.clone(), link.edge_type.clone()));
+        }
+        resolved.push((link, origin, dst_id, target_key));
+    }
+
+    let mut occ: HashMap<(String, String), i64> = HashMap::new();
+    let mut rows = Vec::with_capacity(resolved.len());
+    for (link, origin, dst_id, target_key) in resolved {
         let key = (target_key.clone(), link.edge_type.clone());
+        if origin == "frontmatter" && body_keys.contains(&key) {
+            continue; // inline wins — drop the redundant frontmatter dup
+        }
         let occurrence_index = *occ.get(&key).unwrap_or(&0);
         occ.insert(key, occurrence_index + 1);
 
@@ -118,7 +144,7 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str) -> Result<()> {
             dst_id,
             dst_path_raw: link.target_path.clone(),
             r#type: link.edge_type.clone(),
-            origin: "inline".to_string(),
+            origin: origin.to_string(),
             status: "active".to_string(),
             explanation: link.explanation.clone(),
             occurrence_index,
@@ -152,9 +178,9 @@ pub fn ingest_file(
     embedder: &dyn Embedder,
 ) -> Result<Ingested> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
-    let (b2id, stamped, body) =
+    let (b2id, stamped, body, relations) =
         project_note_and_chunks(conn, vault_root, rel_path, idgen, sink, embedder)?;
-    project_edges(conn, &b2id, &body)?;
+    project_edges(conn, &b2id, &body, &relations)?;
     Ok(Ingested { b2id, stamped })
 }
 
@@ -176,15 +202,15 @@ pub fn ingest_vault(
     // Phase 1: notes + chunks (fills the resolver for every note).
     let mut staged = Vec::with_capacity(rel_paths.len());
     for rel in &rel_paths {
-        let (b2id, stamped, body) =
+        let (b2id, stamped, body, relations) =
             project_note_and_chunks(conn, vault_root, rel, idgen, sink, embedder)?;
-        staged.push((b2id, stamped, body));
+        staged.push((b2id, stamped, body, relations));
     }
 
     // Phase 2: edges (resolve links against the now-complete resolver).
     let mut out = Vec::with_capacity(staged.len());
-    for (b2id, stamped, body) in &staged {
-        project_edges(conn, b2id, body)?;
+    for (b2id, stamped, body, relations) in &staged {
+        project_edges(conn, b2id, body, relations)?;
         out.push(Ingested {
             b2id: b2id.clone(),
             stamped: *stamped,

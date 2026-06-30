@@ -13,6 +13,9 @@ pub enum Error {
 
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+
+    #[error("frontmatter edit unsupported: {0}")]
+    Frontmatter(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -40,7 +40,11 @@ pub fn apply_event(conn: &Connection, event: &Event) -> Result<()> {
             confidence,
             created,
         } => {
-            db::insert_suggested_edge(
+            // INSERT OR IGNORE: if this suggestion was later accepted, Flow ① has
+            // already materialized its edge from frontmatter, so the generated
+            // event is absorbed (no row inserted) → skip provenance to avoid a
+            // dangling FK. The accepted event below is then a no-op delete.
+            let inserted = db::insert_suggested_edge(
                 conn,
                 edge_id,
                 src_id,
@@ -49,15 +53,17 @@ pub fn apply_event(conn: &Connection, event: &Event) -> Result<()> {
                 edge_type,
                 explanation.as_deref(),
             )?;
-            db::insert_edge_provenance(
-                conn,
-                edge_id,
-                by,
-                source.as_deref(),
-                *confidence,
-                created,
-                None,
-            )?;
+            if inserted {
+                db::insert_edge_provenance(
+                    conn,
+                    edge_id,
+                    by,
+                    source.as_deref(),
+                    *confidence,
+                    created,
+                    None,
+                )?;
+            }
         }
         Event::SuggestionRejected { edge_id, decided } => {
             db::mark_edge_rejected(conn, edge_id, decided)?;

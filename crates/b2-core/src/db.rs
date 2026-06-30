@@ -335,6 +335,17 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
+/// A note's `title` (None if the note is absent or has no title) — the alias for a
+/// `[[path|title]]` link written on accept.
+pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT title FROM notes WHERE b2id = ?1", [b2id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten())
+}
+
 /// Total chunk count (used to size a full KNN pool for graph-filtered search).
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)
@@ -452,7 +463,12 @@ pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &st
 }
 
 /// Insert a suggested edge (`origin='suggested'`, `status='suggested'`,
-/// `occurrence_index=0`). The companion provenance row is inserted separately.
+/// `occurrence_index=0`). Returns whether a row was inserted: `false` means the
+/// `(src, dst, type, 0)` tuple is already taken — which on **replay** happens when
+/// an accepted suggestion's edge was already materialized from frontmatter by
+/// Flow ①, so the `generated` event is harmlessly absorbed (the caller then skips
+/// the provenance row to avoid a dangling FK). The companion provenance row is
+/// inserted separately.
 pub fn insert_suggested_edge(
     conn: &Connection,
     edge_id: &str,
@@ -461,9 +477,9 @@ pub fn insert_suggested_edge(
     dst_path_raw: &str,
     edge_type: &str,
     explanation: Option<&str>,
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO edges
+) -> Result<bool> {
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO edges
            (id, src_id, dst_id, dst_path_raw, type, origin, status, explanation, occurrence_index)
          VALUES (?1, ?2, ?3, ?4, ?5, 'suggested', 'suggested', ?6, 0)",
         params![
@@ -475,7 +491,7 @@ pub fn insert_suggested_edge(
             explanation
         ],
     )?;
-    Ok(())
+    Ok(n == 1)
 }
 
 /// Insert the provenance row for a suggested/rejected edge.

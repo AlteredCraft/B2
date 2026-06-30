@@ -1,14 +1,20 @@
 //! The suggestion lifecycle (planning/data-model.md §4): generate → list →
-//! reject, with the durable record in the `.b2/` log and the live queue in the
-//! index. Suggestions are **inert** — generating one writes the log + the index
-//! queue, never a note on disk. Acceptance (the Markdown write, Flow ③) is a
-//! later slice; replay's handling of accepted is in [`crate::replay`].
+//! accept / reject, with the durable record in the `.b2/` log and the live queue
+//! in the index. Suggestions are **inert** — generating one writes the log + the
+//! index queue, never a note on disk. **Accept** appends the typed edge to the
+//! source note's frontmatter `relations:` (Markdown first, never the body — §0)
+//! and re-projects it as `origin='frontmatter'`/`status='active'`; replay's
+//! handling of an accepted event is in [`crate::replay`].
 
 use crate::db;
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::event::{Event, EventSink};
 use crate::id::IdGen;
+use crate::note;
 use rusqlite::{Connection, OptionalExtension};
+use std::fs;
+use std::path::Path;
 
 /// A pending suggestion as shown by `b2 suggest` — the typed edge plus its full
 /// decision fuel (data-model.md §4).
@@ -72,7 +78,7 @@ pub fn generate_suggestion(
         confidence,
         created: created.to_string(),
     })?;
-    db::insert_suggested_edge(
+    if db::insert_suggested_edge(
         conn,
         &edge_id,
         src_id,
@@ -80,10 +86,76 @@ pub fn generate_suggestion(
         &dst_path_raw,
         edge_type,
         explanation,
-    )?;
-    db::insert_edge_provenance(conn, &edge_id, by, source, confidence, created, None)?;
+    )? {
+        db::insert_edge_provenance(conn, &edge_id, by, source, confidence, created, None)?;
+    }
 
     Ok(Some(edge_id))
+}
+
+/// Accept a pending suggestion (Flow ③): append its typed-link string to the
+/// source note's **frontmatter `relations:`** (Markdown first — **never the
+/// body**, data-model §0), log `suggestion.accepted`, then reconcile the index so
+/// the edge re-materializes as `origin='frontmatter'`/`status='active'` and the
+/// queue row leaves. Returns `false` if `edge_id` is not a pending suggestion (or
+/// is dangling, with no concrete target to link).
+pub fn accept_suggestion(
+    conn: &Connection,
+    sink: &dyn EventSink,
+    embedder: &dyn Embedder,
+    vault_root: &Path,
+    edge_id: &str,
+    decided: &str,
+) -> Result<bool> {
+    let Some(s) = get_suggestion(conn, edge_id)? else {
+        return Ok(false);
+    };
+    let (Some(dst_id), Some(src_path)) =
+        (s.dst_id.clone(), db::resolve_b2id_to_path(conn, &s.src_id)?)
+    else {
+        return Ok(false); // dangling target, or src not in the index
+    };
+
+    // Build the typed-link spec from the dst's CURRENT path + title (it may have
+    // moved since the suggestion was generated).
+    let dst_path = match db::resolve_b2id_to_path(conn, &dst_id)? {
+        Some(p) => p.strip_suffix(".md").unwrap_or(&p).to_string(),
+        None => s.dst_path_raw.clone(),
+    };
+    let link = match db::note_title(conn, &dst_id)? {
+        Some(title) => format!("[[{dst_path}|{title}]]"),
+        None => format!("[[{dst_path}]]"),
+    };
+    let spec = match &s.explanation {
+        Some(e) => format!("{} {} — {}", s.edge_type, link, e),
+        None => format!("{} {}", s.edge_type, link),
+    };
+
+    // 1. Markdown first: append to frontmatter relations:.
+    let abs = vault_root.join(&src_path);
+    let mut parsed = note::parse(&fs::read_to_string(&abs)?);
+    parsed.add_relation(&spec)?;
+    fs::write(&abs, parsed.as_str())?;
+
+    // 2. Log the acceptance.
+    sink.append(&Event::SuggestionAccepted {
+        edge_id: edge_id.to_string(),
+        decided: decided.to_string(),
+    })?;
+
+    // 3. Reconcile: drop the suggested row first (it shares the (src,dst,type,occ)
+    //    UNIQUE tuple), then re-project so the edge re-derives from the frontmatter.
+    db::delete_edge(conn, edge_id)?;
+    crate::ingest::ingest_file(
+        conn,
+        vault_root,
+        &src_path,
+        &crate::id::UlidGen,
+        &crate::event::NullSink,
+        embedder,
+    )?;
+
+    Ok(true)
 }
 
 /// Reject a pending suggestion: append `suggestion.rejected` and tombstone the

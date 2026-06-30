@@ -47,12 +47,17 @@ pub fn parse_links(body: &str) -> Vec<ParsedLink> {
 /// bare links).
 fn parse_typed_line(line: &str) -> Option<ParsedLink> {
     let after_marker = strip_list_marker(line.trim_start())?;
-    let rest = after_marker.trim_start();
+    parse_typed_spec(after_marker.trim_start())
+}
 
+/// Parse a marker-less typed spec `<verb> [[path|alias]] [— explanation]`. This is
+/// the shared core of a body typed-line and a frontmatter `relations:` entry — one
+/// syntax, two homes (data-model §2). `None` if it isn't `<verb> <wikilink>`.
+pub fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
     // The verb: a lowercase-kebab token immediately before the wikilink.
     let verb_end = rest.find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
     let verb_end = match verb_end {
-        Some(0) | None => return None, // no verb (e.g. "- [[..]]") or no following token
+        Some(0) | None => return None, // no verb (e.g. "[[..]]") or no following token
         Some(n) => n,
     };
     let verb = &rest[..verb_end];
@@ -78,6 +83,21 @@ fn parse_typed_line(line: &str) -> Option<ParsedLink> {
         explanation: extract_explanation(tail),
         typed: true,
     })
+}
+
+/// Parse one frontmatter `relations:` entry (the string value, no `-` marker): a
+/// typed spec `<verb> [[path|alias]] — …`, or a bare `[[path|alias]]` ⇒
+/// `references`. `None` if it holds no wikilink. The caller assigns
+/// `origin=frontmatter`.
+pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
+    let spec = spec.trim();
+    if let Some(link) = parse_typed_spec(spec) {
+        return Some(link);
+    }
+    // bare wikilink fallback → references
+    let mut tmp = Vec::new();
+    scan_bare_links(spec, &mut tmp);
+    tmp.into_iter().next()
 }
 
 /// Strip a single leading list marker (`-`, `*`, `+`) that is followed by

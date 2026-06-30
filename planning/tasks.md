@@ -3,7 +3,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-06-29
+updated: 2026-06-30
 status: active
 ---
 
@@ -26,53 +26,42 @@ areas, v1 scope, locked decisions).
   and a golden-vault fixture. All judgment calls resolved 2026-06-29: edge-provenance → event log
   (accepted edges stay pristine); `b2id` is B2's one always-allowed write; bare links = directed
   `references`; a 10-verb relation core + tolerated tail. Identity key in
-  [index-engine.md](index-engine.md) realigned to `b2id`.
+  [index-engine.md](index-engine.md) realigned to `b2id`. **§0 revised 2026-06-30** (Decision 1–3): B2
+  never authors the body; accepted edges live in frontmatter `relations:` (Format A); graph = union of
+  body ∪ frontmatter ∪ log, inline-wins dedup.
+- [x] **Language gate** — **Rust** (`crates/b2-core`), per the single-binary goal
+  ([index-engine.md](index-engine.md) §7). rusqlite (bundled SQLite + FTS5) + `sqlite-vec`.
+- [x] **Index-engine build, steps 0→5** — [specs/index-engine-build.md](specs/index-engine-build.md), all
+  green against the golden-vault fixture: (0) DB substrate proving FTS5 + `sqlite-vec` coexist; (1)
+  lossless parse/serialize, `b2id` stamping, `b2id ⇄ path` resolver; (2) `chunks` (+FTS5) + the typed
+  `edges` graph + `neighbors` (minimal paragraph chunker; qmd heuristic deferred to a real-embedder eval);
+  (3) `chunks_vec` + the embedder seam (deterministic fake; real model deferred); (4) the `.b2/` JSONL
+  event log + replay (suggestions inert; drop→replay reproduces the queue; rejection tombstones); (5)
+  hybrid retrieval — BM25 ⊕ vector → RRF (k=60) + the graph⨝vector join.
+- [x] **Suggestion lifecycle, end-to-end** — generate → list → **accept** (append to frontmatter
+  `relations:`, Markdown-first, re-project as `origin=frontmatter`) / reject (tombstone). Frontmatter
+  `relations:` reader + inline-wins dedup. Survives drop→rebuild→replay; accepted edges stay pristine.
 
-## Next up — Index-engine build
+## Next up
 
-> **Build spec:** [specs/index-engine-build.md](specs/index-engine-build.md) — the precise table
-> definitions, relations, data flows, and the step 0→5 build order. The schema there is locked
-> (2026-06-29): the `index-engine.md` §3 sketch made buildable, reconciled with the acceptance =
-> re-projection refinement now mirrored in [data-model.md](data-model.md).
+The index engine + suggestion lifecycle are built and green (test-first throughout). Natural next steps,
+roughly in order:
 
-Unblocked now the data model is locked. The evaluation is already drafted in
-[index-engine.md](index-engine.md): **build our own SQLite store** (FTS5 + `sqlite-vec`) rather than
-depend on `qmd` — which also settles the engine-gated decision: **semantic search is in v1**
-(brute-force KNN; see "Decisions locked" in [vision-and-scope.md](vision-and-scope.md)).
-[index-engine.md](index-engine.md) is reconciled with the three-tier / event-log model (§3 = disposable
-index + durable `.b2/` event log, `index = projection of (Markdown ∪ log)`).
-
-**Immediate gate — pick the stack first.** The single-binary goal favours **Rust or Go**
-([index-engine.md](index-engine.md) §7); the embedding-in-a-binary question (§6) can stay open behind the
-embedder seam. Decide the language before writing engine code (this is the "Tech-stack / language
-decision" from the backlog, pulled forward).
-
-**Then build, in order (each step asserts the locked invariants + the golden-vault fixture,
-[data-model.md](data-model.md) §8):**
-1. **Vault parse/serialize** — lossless MD + YAML round-trip (`parse → serialize → parse` byte-identical);
-   `b2id` stamp-on-ingest; the `path ↔ b2id` resolver.
-2. **Markdown-derived tables** — `notes`, `chunks` (+ FTS5), and `edges` (inline `references` + typed
-   relations) per [data-model.md](data-model.md) §2–3.
-3. **`sqlite-vec` + embedder seam** — deterministic fake embedder first; real local model later (§6).
-4. **The `.b2/` event log** — `append(event)` / `replay()` sink (JSONL); review-queue replay so
-   `index = projection of (Markdown ∪ log)` holds.
-5. **Hybrid retrieval** — BM25 + vector → RRF fusion (reranker is a fast-follow, §5).
+- **Core API surface** — a typed facade over the `b2-core` modules (the contract the CLI and tests call;
+  testability-stack point 1). Today the "API" is the module functions directly.
+- **CLI** — `b2 add / search / link / suggest / neighbors / reindex / explain` — the first real adapter
+  and the single-binary artifact (vision-and-scope, headless-first).
+- **Real embedder + eval suite** — drop a local model into the embedder seam, then the eval that scores
+  semantic + suggestion quality (the deferred half of steps 3 & 5; also unlocks the qmd chunker upgrade).
+- **Connection-discovery pipeline** — candidate generation (the graph⨝vector join is ready) → typed,
+  explained suggestions → the review loop.
 
 ## Backlog (later, not now)
 
-- **Frontmatter `relations:` reader** — parse a note's frontmatter `relations:` list (Format A typed-link
-  strings) into `origin=frontmatter` edges, unified with body-link projection under one occurrence counter
-  and the **inline-wins** dedup (data-model §0, §3; build spec Flow ①). Prerequisite for accept.
-- **Accept operation (Flow ③)** — the suggestion-accept *write path*: **append** the typed-link string
-  `- "<type> [[path|title]] — <explanation>"` to the source note's **frontmatter `relations:`**
-  (**Markdown first; never the body** — Decision 1), then reconcile: delete the `suggested` queue row and
-  re-project so the edge re-materializes as `origin=frontmatter`/`status=active`, and append a
-  `suggestion.accepted` event. *Status:* step 4 already implemented + tested replay's **handling** of an
-  `accepted` event (queue row deleted; active edge comes from Markdown); the **operation that produces**
-  it — the frontmatter write + re-projection — is not yet built (needs the relations reader above). This
-  is the one place the suggestion lifecycle isn't yet end-to-end. ([data-model.md](data-model.md) §0/§4,
-  [index-engine.md](index-engine.md) §3, build spec Flow ③.)
-- Core API surface — the typed contract every adapter calls.
-- CLI command surface — `b2 add / search / link / suggest / neighbors / reindex / explain`.
-- Connection-discovery pipeline — candidate generation → typed, explained suggestions → review loop.
-- Test harness — golden vaults, property tests, deterministic AI seams.
+- Move operation (`b2 mv`) — the kernel rename/move + inbound wikilink-path rewrite (the lone body
+  write), per [user-stories.md](user-stories.md) Story 1. Not yet built.
+- Property tests for the invariants — round-trip, `full-reindex ≡ incremental`, rename-keeps-backlinks as
+  property tests over generated vaults (golden-vault scenarios exist; property coverage is the gap).
+- qmd chunker upgrade — replace the minimal paragraph chunker once a real embedder + eval can score it
+  (build spec §1.2).
+- GUI — deferred per the headless-first approach ([vision-and-scope.md](vision-and-scope.md)).
