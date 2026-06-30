@@ -324,6 +324,22 @@ pub fn set_chunk_vector(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
     Ok(())
 }
 
+/// The note a chunk belongs to (the search-hit → note resolution).
+pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT note_b2id FROM chunks WHERE id = ?1",
+            [chunk_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Total chunk count (used to size a full KNN pool for graph-filtered search).
+pub fn chunk_count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)
+}
+
 /// Brute-force KNN over `chunks_vec`: the `k` nearest chunk ids to `query`, with
 /// their distances, nearest first (build spec §1.2 / Flow ②).
 pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {

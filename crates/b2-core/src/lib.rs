@@ -17,6 +17,7 @@ pub mod link;
 pub mod note;
 pub mod relation;
 pub mod replay;
+pub mod search;
 pub mod suggest;
 
 pub use db::{open, SCHEMA_VERSION};

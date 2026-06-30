@@ -6,6 +6,7 @@
 use crate::error::Result;
 use crate::relation;
 use rusqlite::Connection;
+use std::collections::HashSet;
 
 /// Which way an edge points relative to the note being asked about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,4 +85,28 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
     }
 
     Ok(out)
+}
+
+/// The set of notes within `hops` typed hops of `anchor` (inclusive of `anchor`),
+/// traversing `active` edges **undirected** — a note related to the anchor either
+/// way is reachable. This is the hop set the graph-filtered discovery join uses
+/// (index-engine.md §3). `hops = 0` is just the anchor.
+pub fn reachable_within(conn: &Connection, anchor: &str, hops: usize) -> Result<HashSet<String>> {
+    let mut seen = HashSet::from([anchor.to_string()]);
+    let mut frontier = vec![anchor.to_string()];
+    for _ in 0..hops {
+        let mut next = Vec::new();
+        for node in &frontier {
+            for nb in neighbors(conn, node)? {
+                if seen.insert(nb.other.clone()) {
+                    next.push(nb.other);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    Ok(seen)
 }
