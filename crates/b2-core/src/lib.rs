@@ -5,12 +5,16 @@
 //! reverse. Step 0 is the substrate: open the DB with the locked pragmas and prove
 //! FTS5 (BM25) and `sqlite-vec` (KNN) coexist in one statically-linked connection.
 
+pub mod chunk;
 pub mod db;
 mod error;
 pub mod event;
+pub mod graph;
 pub mod id;
 pub mod ingest;
+pub mod link;
 pub mod note;
+pub mod relation;
 
 pub use db::{open, SCHEMA_VERSION};
 pub use error::{Error, Result};

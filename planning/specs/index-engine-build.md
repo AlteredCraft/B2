@@ -113,6 +113,12 @@ CREATE INDEX chunks_note_idx ON chunks(note_b2id);
 -- Chunking heuristic is borrowed wholesale from qmd (index-engine.md §1): ~900-token chunks, ~15%
 -- overlap, Markdown-aware boundary scoring. Chunk ids are NOT stable across a re-index (a note's chunks
 -- are deleted + reinserted); that is fine because its FTS and vec rows are deleted with them.
+--
+-- BUILD NOTE (step 2 ships a MINIMAL chunker): the first cut is a paragraph splitter (maximal runs of
+-- non-blank lines), token_count = whitespace word count, heading_path left NULL. It populates this exact
+-- schema and exercises the FTS triggers; the qmd heuristic above is folded in at STEP 5, when hybrid
+-- retrieval quality is first measured and a better chunker can actually be scored. Swapping it is a pure
+-- re-projection (drop & rebuild) — no schema or invariant change — so deferring it costs nothing.
 
 -- FTS5 over chunk text. external-content (content='chunks') stores the text once; BM25 ranking is built in.
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
@@ -347,10 +353,10 @@ code, but the schema and flows above are language-neutral and can be locked now.
 |---|------|-----------------|------|------------------|
 | **0** | DB skeleton & migrations | `meta` | — | open→reopen stable; WAL + `foreign_keys=ON`; `sqlite-vec` links; `schema_version` gate seeded |
 | **1** | Vault parse/serialize + resolver | `notes`, `note_aliases` | — | golden vault round-trips byte-identical; a missing `b2id` is stamped + logged; resolver maps `memory ⇄ path` both ways |
-| **2** | Markdown-derived tables | `chunks` (+`chunks_fts`), `edges` | — | golden graph: `references` + `elaborates` spaced-rep→memory (inline/active); a bare link ⇒ `references`; `neighbors memory` = {referenced-by, elaborated-by}; one-note re-index ≡ full |
+| **2** | Markdown-derived tables (**minimal paragraph chunker**, §1.2 build note) | `chunks` (+`chunks_fts`), `edges` | — | golden graph: `references` + `elaborates` spaced-rep→memory (inline/active); a bare link ⇒ `references`; `neighbors memory` = {referenced-by, elaborated-by}; one-note re-index ≡ full |
 | **3** | sqlite-vec + embedder seam | `chunks_vec` | **embedder** (fake→real) | deterministic fake vectors → reproducible KNN; `embed_model_id`/`embed_dim` recorded; real local model deferred behind the seam (§6 of index-engine.md) |
 | **4** | `.b2/` event log + replay | `edges` (suggested/rejected), `edge_provenance` | log sink | the inert suggestion shows in `b2 suggest`, absent from every file on disk; drop→replay reproduces the queue (Flow ⑤); a rejection tombstone blocks re-proposal |
-| **5** | Hybrid retrieval | reads fts+vec; `llm_cache` | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
+| **5** | Hybrid retrieval **+ upgrade chunker to the qmd heuristic** (§1.2) | reads fts+vec; `llm_cache` | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
 
 Steps 1–2 establish the Markdown-derived tiers; step 4 layers the log-derived review queue on top; the
 two together are what `index = projection of (Markdown ∪ log)` asserts. The embedder (step 3) and

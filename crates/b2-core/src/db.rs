@@ -1,11 +1,13 @@
-//! Opening the index, the schema migration, and the `notes`/`note_aliases`
-//! projection + the `b2id ⇄ path` resolver.
+//! Opening the index, the schema migration, and the projection helpers for the
+//! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), and the
+//! typed `edges` graph, plus the `b2id ⇄ path` resolver.
 //!
 //! `sqlite-vec` is registered as a SQLite *auto-extension* (statically linked, no
 //! runtime `load_extension`), and every connection is opened `WAL` +
 //! `foreign_keys=ON` per planning/specs/index-engine-build.md §0. Every table here
 //! is a derived projection of `(Markdown ∪ log)` — nothing is a source of truth.
 
+use crate::chunk::Chunk;
 use crate::error::Result;
 use rusqlite::{ffi, params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
@@ -54,6 +56,8 @@ pub fn open(path: &Path) -> Result<Connection> {
 
 /// Create the schema and seed `schema_version` once. `IF NOT EXISTS` +
 /// `INSERT OR IGNORE` keep this a no-op on reopen, so `open()` stays idempotent.
+/// The DDL mirrors planning/specs/index-engine-build.md §1 (chunks_vec lands in
+/// step 3; suggested-edge provenance in step 4).
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS meta (
@@ -80,7 +84,56 @@ fn migrate(conn: &Connection) -> Result<()> {
            alias     TEXT NOT NULL,
            PRIMARY KEY (note_b2id, alias)
          );
-         CREATE INDEX IF NOT EXISTS note_aliases_alias_idx ON note_aliases(alias);",
+         CREATE INDEX IF NOT EXISTS note_aliases_alias_idx ON note_aliases(alias);
+
+         CREATE TABLE IF NOT EXISTS chunks (
+           id           INTEGER PRIMARY KEY,
+           note_b2id    TEXT NOT NULL REFERENCES notes(b2id) ON DELETE CASCADE,
+           seq          INTEGER NOT NULL,
+           char_start   INTEGER NOT NULL,
+           char_end     INTEGER NOT NULL,
+           token_count  INTEGER NOT NULL,
+           heading_path TEXT,
+           text         TEXT NOT NULL,
+           UNIQUE (note_b2id, seq)
+         );
+         CREATE INDEX IF NOT EXISTS chunks_note_idx ON chunks(note_b2id);
+
+         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+           text,
+           content       = 'chunks',
+           content_rowid = 'id',
+           tokenize      = 'unicode61'
+         );
+         CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+           INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+         END;
+         CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+           INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+         END;
+         CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+           INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+           INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+         END;
+
+         CREATE TABLE IF NOT EXISTS edges (
+           id               TEXT PRIMARY KEY,
+           src_id           TEXT NOT NULL REFERENCES notes(b2id) ON DELETE CASCADE,
+           dst_id           TEXT,
+           dst_path_raw     TEXT NOT NULL,
+           type             TEXT NOT NULL,
+           origin           TEXT NOT NULL CHECK (origin IN ('inline','frontmatter','suggested')),
+           status           TEXT NOT NULL CHECK (status IN ('active','suggested','rejected')),
+           explanation      TEXT,
+           occurrence_index INTEGER NOT NULL DEFAULT 0,
+           CHECK ( (origin = 'suggested'               AND status IN ('suggested','rejected'))
+                OR (origin IN ('inline','frontmatter') AND status = 'active') ),
+           UNIQUE (src_id, dst_id, type, occurrence_index)
+         );
+         CREATE INDEX IF NOT EXISTS edges_src_idx      ON edges(src_id);
+         CREATE INDEX IF NOT EXISTS edges_dst_type_idx ON edges(dst_id, type);
+         CREATE INDEX IF NOT EXISTS edges_status_idx   ON edges(status);
+         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;",
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
@@ -88,6 +141,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     )?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// notes + aliases
+// ---------------------------------------------------------------------------
 
 /// One note's projection into `notes` (+ its `aliases`). Borrowed view so callers
 /// pass slices of an already-parsed note without extra allocation.
@@ -144,8 +201,84 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
     Ok(())
 }
 
-/// `path → b2id` half of the resolver (data-model.md §1; the resolver *is* the
-/// `notes(b2id PK, path UNIQUE)` pair, not a separate table).
+// ---------------------------------------------------------------------------
+// chunks (FTS kept in lockstep by the triggers in migrate())
+// ---------------------------------------------------------------------------
+
+/// Replace a note's chunks (delete + reinsert). The FTS triggers emit the
+/// `'delete'` sentinel for the removed rows, so the index never drifts — this is
+/// what makes an incremental re-index equal a full rebuild.
+pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> Result<()> {
+    conn.execute("DELETE FROM chunks WHERE note_b2id = ?1", [note_b2id])?;
+    for c in chunks {
+        conn.execute(
+            "INSERT INTO chunks(note_b2id, seq, char_start, char_end, token_count, heading_path, text)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                note_b2id,
+                c.seq as i64,
+                c.char_start as i64,
+                c.char_end as i64,
+                c.token_count as i64,
+                c.text,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// edges
+// ---------------------------------------------------------------------------
+
+/// One authored edge row, ready to project. Owns its data (built from resolved
+/// links during ingest).
+pub struct EdgeRow {
+    pub id: String,
+    pub src_id: String,
+    pub dst_id: Option<String>,
+    pub dst_path_raw: String,
+    pub r#type: String,
+    pub origin: String,
+    pub status: String,
+    pub explanation: Option<String>,
+    pub occurrence_index: i64,
+}
+
+/// Replace a note's authored (`inline`/`frontmatter`) edges. Log-derived
+/// `suggested`/`rejected` rows are left untouched, so a Markdown re-parse never
+/// clobbers the review queue (Flow ①).
+pub fn replace_authored_edges(conn: &Connection, src_id: &str, edges: &[EdgeRow]) -> Result<()> {
+    conn.execute(
+        "DELETE FROM edges WHERE src_id = ?1 AND origin IN ('inline','frontmatter')",
+        [src_id],
+    )?;
+    for e in edges {
+        conn.execute(
+            "INSERT INTO edges
+               (id, src_id, dst_id, dst_path_raw, type, origin, status, explanation, occurrence_index)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                e.id,
+                e.src_id,
+                e.dst_id,
+                e.dst_path_raw,
+                e.r#type,
+                e.origin,
+                e.status,
+                e.explanation,
+                e.occurrence_index,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// resolver: b2id ⇄ path  (the resolver *is* notes(b2id PK, path UNIQUE))
+// ---------------------------------------------------------------------------
+
+/// `path → b2id` (data-model.md §1).
 pub fn resolve_path_to_b2id(conn: &Connection, path: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT b2id FROM notes WHERE path = ?1", [path], |r| {
@@ -154,11 +287,21 @@ pub fn resolve_path_to_b2id(conn: &Connection, path: &str) -> Result<Option<Stri
         .optional()?)
 }
 
-/// `b2id → path` half of the resolver.
+/// `b2id → path`.
 pub fn resolve_b2id_to_path(conn: &Connection, b2id: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT path FROM notes WHERE b2id = ?1", [b2id], |r| {
             r.get(0)
         })
         .optional()?)
+}
+
+/// Resolve a wikilink target (`dst_path_raw`, written without the `.md`
+/// extension in Obsidian) to a `b2id`. Tries the literal path, then with `.md`
+/// appended. `None` means the link is dangling.
+pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<String>> {
+    if let Some(id) = resolve_path_to_b2id(conn, link_path)? {
+        return Ok(Some(id));
+    }
+    resolve_path_to_b2id(conn, &format!("{link_path}.md"))
 }
