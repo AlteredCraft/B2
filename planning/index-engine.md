@@ -123,8 +123,8 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown ∪ log; drop & rebuil
 │   └── chunks_vec                                -- sqlite-vec vec0(embedding float[768])
 │
 ├── DERIVED: TYPED GRAPH
-│   └── edges(id, src_id, dst_id, type, origin,   -- status='active' rows ← Markdown
-│             status, explanation, …)             -- status='suggested'|'rejected' rows ← log replay
+│   └── edges(id, src_id, dst_id, type, origin,   -- 'active' rows ← Markdown (body links + FM relations:)
+│             status, explanation, …)             -- 'suggested'|'rejected' rows ← log replay
 │
 ├── DERIVED FROM THE LOG: REVIEW QUEUE (replayed, never authored here)
 │   └── edge_provenance(edge_id, by, source, confidence, created, decided)  -- pending suggestions' decision fuel
@@ -148,9 +148,10 @@ Why this shape fits B2 specifically:
   foreign-key truth, not a fix-up pass.
 - **Suggestions are `edges` rows with `status='suggested'`, replayed from the log** — *inert until
   accepted* is a `WHERE status='active'` clause. They are never written to a note; their durable home is
-  the `.b2/` event log and the index is just the live queue. Accepting one writes the inline Markdown
-  link (Markdown first); the `suggested` row then **leaves the queue** and the edge **re-materializes as
-  an `origin='inline'`/`status='active'` edge derived from that Markdown** — acceptance is a
+  the `.b2/` event log and the index is just the live queue. Accepting one **appends a typed-link string
+  to the source note's frontmatter `relations:`** (Markdown first; never the body — [data-model.md](data-model.md) §0);
+  the `suggested` row then **leaves the queue** and the edge **re-materializes as an
+  `origin='frontmatter'`/`status='active'` edge derived from that Markdown** — acceptance is a
   re-projection, not an in-place status flip — and a `suggestion.accepted` event is appended. The review
   layer is data, not a side-system.
 - **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose

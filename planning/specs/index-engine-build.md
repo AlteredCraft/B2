@@ -168,8 +168,10 @@ CREATE TABLE edges (
 
   -- origin/status coupling (data-model §3, refined): authored edges are always active; a suggested edge
   -- is only ever suggested or rejected. There is NO 'suggested + active' row — acceptance re-projects the
-  -- edge as origin='inline' from the Markdown (see Flow ③). This CHECK makes that a hard guarantee, so a
-  -- bug can never leak an un-accepted edge into the live (status='active') graph.
+  -- edge as origin='frontmatter' from the note's relations: block (see Flow ③). This CHECK makes that a
+  -- hard guarantee, so a bug can never leak an un-accepted edge into the live (status='active') graph.
+  -- origin: 'inline' = body link/typed-line (human); 'frontmatter' = relations: entry (B2-accepted or
+  -- human/importer); 'suggested' = log-replayed review row (data-model §0).
   CHECK ( (origin = 'suggested'                AND status IN ('suggested','rejected'))
        OR (origin IN ('inline','frontmatter')  AND status = 'active') ),
 
@@ -201,9 +203,10 @@ CREATE TABLE edge_provenance (
   created    TEXT NOT NULL,            -- when the suggestion was generated
   decided    TEXT                      -- when accepted/rejected; NULL while pending
 );
--- Exists ONLY for edges with status IN ('suggested','rejected'). An accepted edge is inline + pristine
--- in Markdown and carries NO row here — its history (who proposed it, confidence, when) lives in the log
--- alone (data-model §4). This table is rebuilt purely by replaying .b2/log; it is never written directly.
+-- Exists ONLY for edges with status IN ('suggested','rejected'). An accepted edge lives in frontmatter
+-- relations: and is pristine — it carries NO row here; its history (who proposed it, confidence, when)
+-- lives in the log alone (data-model §4). This table is rebuilt purely by replaying .b2/log; never
+-- written directly.
 ```
 
 ### 1.5 Caches — purely disposable
@@ -255,7 +258,7 @@ CREATE TABLE llm_cache (
   consistent under incremental edits.
 - **`edges.dst_id`** is intentionally *not* a hard FK — that is what lets a target be deleted and a link
   dangle (re-projected to `NULL`) instead of blocking the delete.
-- **`edge_provenance`** hangs off only the suggested/rejected edges; accepted (inline) edges have none.
+- **`edge_provenance`** hangs off only the suggested/rejected edges; accepted (frontmatter) edges have none.
 
 ---
 
@@ -264,19 +267,22 @@ CREATE TABLE llm_cache (
 ### ① Ingest / re-index one note — asserts *round-trip losslessness* + *incremental ≡ full*
 
 ```
-file.md → parse → (frontmatter, body, links)
+file.md → parse → (frontmatter, body)
   ├─ b2id missing? → stamp → WRITE file (the one always-allowed write) → log: b2id.stamped
   ├─ upsert notes + replace note_aliases        [dirty-check: mtime then body_hash; unchanged ⇒ skip]
   ├─ body → md-aware chunk → chunks(seq, offsets, text)        (FTS auto-synced by triggers)
   │                              └→ embedder SEAM → chunks_vec[chunk_id]   (deterministic fake in tests)
-  └─ links → resolve path→b2id → upsert edges(origin=inline|frontmatter, status=active)
-                       └─ unresolved → dst_id = NULL, keep dst_path_raw   (flagged for repair)
+  └─ authored edges → resolve path→b2id → upsert edges(status=active):
+        ├─ BODY links/typed-lines      → origin=inline
+        └─ FRONTMATTER relations:       → origin=frontmatter
+        unresolved → dst_id = NULL, keep dst_path_raw   (flagged for repair)
+        dedup: same (src,dst,type) in both homes → inline wins, drop the FM dup (data-model §0, §3)
 ```
 
 Re-projecting one note refreshes **only its `origin IN ('inline','frontmatter')` edges** (delete those
-for `src_id`, re-derive from the current Markdown) and its chunks. **`suggested`/`rejected` rows are
-log-derived and are left untouched by a Markdown re-parse** — that separation is what makes
-"incremental ≡ full" hold without a re-parse clobbering the review queue.
+for `src_id`, re-derive from the current Markdown — both body and `relations:`) and its chunks.
+**`suggested`/`rejected` rows are log-derived and are left untouched by a Markdown re-parse** — that
+separation is what makes "incremental ≡ full" hold without a re-parse clobbering the review queue.
 
 ### ② Hybrid retrieval — reranker is a clean post-fusion seam (fast-follow)
 
@@ -293,20 +299,26 @@ RRF formula/`k`, the position-aware blend, and the EmbeddingGemma prompt format 
 ([index-engine.md](../index-engine.md) §1, §5). The reranker and query expansion are deferred behind
 seams — they change *ordering*, not the store or the candidate set.
 
-### ③ Accept a suggestion — makes *inert-until-accepted* literal (the #5 refinement)
+### ③ Accept a suggestion — makes *inert-until-accepted* literal (B2 never authors the body)
 
 ```
 b2 link --accept <edge_id>
-  1. WRITE "- <type> [[path|title]] — <explanation>" into the SRC note body     (Markdown FIRST)
-  2. log: suggestion.accepted {edge_id, by, confidence, evidence}
-  3. reconcile index: re-project the SRC note (Flow ①)
-        → the suggested row LEAVES the queue; the edge re-materializes as origin='inline'/status='active'
-          straight from the Markdown just written — NOT an in-place status flip.
+  1. re-resolve dst's CURRENT path + title from dst_id → [[path|title]]   (dst may have moved)
+  2. APPEND  - "<type> [[path|title]] — <explanation>"  to the SRC note's
+     frontmatter relations:   (Markdown FIRST; NEVER the body — data-model §0)
+  3. log: suggestion.accepted {edge_id, by, confidence, evidence}
+  4. reconcile index:
+        → delete the suggested queue row FIRST (it shares the (src,dst,type,occ) UNIQUE tuple)
+        → re-project the SRC note (Flow ①); the edge re-materializes as
+          origin='frontmatter'/status='active' straight from the relations: entry just written
+          — NOT an in-place status flip.
         → its edge_provenance row is gone; the accepted edge is pristine, history lives only in the log.
 ```
 
-This is why an `active` edge always traces to a body link, never to a mutated queue row — keeping
-`index = projection of (Markdown ∪ log)` exact (the CHECK in §1.3 enforces it).
+This is why an `active` edge always traces to an authored line in the file (body or frontmatter), never
+to a mutated queue row — keeping `index = projection of (Markdown ∪ log)` exact (the CHECK in §1.3
+enforces it). The suggestion's `explanation` carries over as the relation's trailing text; its
+provenance (`by`/`confidence`/`source`) does **not** — that stays in the log.
 
 ### ④ Move / rename — *rename keeps every backlink resolving*
 
@@ -330,11 +342,12 @@ the cold-no-prior-state caveat from [user-stories.md](../user-stories.md) Story 
 
 ```
 rm b2.sqlite
-  ├─ scan vault: each .md → Flow ①              (rebuilds notes/aliases/chunks/fts/vec + inline edges)
+  ├─ scan vault: each .md → Flow ①         (rebuilds notes/aliases/chunks/fts/vec + active edges:
+  │                                          inline from body, frontmatter from relations:)
   └─ replay .b2/log from seq 0:
         suggestion.generated → edges(origin=suggested, status=suggested) + edge_provenance
         suggestion.rejected  → edges(status=rejected)        (tombstone: same src,dst,type never re-proposed)
-        suggestion.accepted  → NO-OP for the queue (its inline edge already came from Markdown in Flow ①)
+        suggestion.accepted  → NO-OP for the queue (its frontmatter edge already came from Markdown in Flow ①)
         b2id.stamped / note.* / link.rewritten_on_move → history only; not replayed into queryable state
   ⇒ a byte-for-byte identical index.
 ```
@@ -365,12 +378,15 @@ provable with no live model ([vision-and-scope.md](../vision-and-scope.md), test
 
 ---
 
-## 5. Decisions baked into this schema (resolved 2026-06-29)
+## 5. Decisions baked into this schema (resolved 2026-06-29; acceptance home revised 2026-06-30)
 
-- **Acceptance is a re-projection, not an in-place flip (#5).** A `suggested` row leaves the queue and
-  the edge re-materializes as `origin='inline'`/`status='active'` from the Markdown (Flow ③); the
-  origin/status `CHECK` (§1.3) forbids a `suggested + active` row. Mirrored into
-  [data-model.md](../data-model.md) §3–§4 and [index-engine.md](../index-engine.md) §3.
+- **Acceptance is a re-projection, not an in-place flip (#5), and writes frontmatter — not the body
+  (Decision 1, 2026-06-30).** B2 never authors the body; an accepted suggestion is appended to the source
+  note's frontmatter `relations:`, the `suggested` row leaves the queue, and the edge re-materializes as
+  `origin='frontmatter'`/`status='active'` from the Markdown (Flow ③). The origin/status `CHECK` (§1.3)
+  forbids a `suggested + active` row. The graph is the **union** of body (`inline`) + frontmatter
+  relations (`frontmatter`) + log (`suggested`), deduped **inline-wins** on overlap (Flow ①). Mirrored
+  into [data-model.md](../data-model.md) §0, §2–§4, §7 and [index-engine.md](../index-engine.md) §3.
 - **Schema additions over [index-engine.md](../index-engine.md) §3's sketch (#2), adopted:** `meta`
   (model/dim/replay/version), `note_aliases` (resolution + cold repair), `occurrence_index` (the
   data-model §2 identity tuple), `dst_path_raw` (the move-rewrite + dangling-repair anchor), and the

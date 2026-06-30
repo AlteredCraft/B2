@@ -18,7 +18,8 @@ status: draft
 The model has exactly **two source-of-truth objects**, both plain Markdown:
 
 1. **A note** — one `.md` file: YAML frontmatter + a Markdown body.
-2. **A connection (edge)** — a typed, directed link from one note to another, *authored in the body*.
+2. **A connection (edge)** — a typed, directed link from one note to another, written by a human in the
+   body, or by B2 in frontmatter `relations:` on accept (§0).
 
 ### Three storage tiers
 
@@ -26,9 +27,11 @@ These two objects are the *knowledge*. B2 keeps three storage tiers with sharply
 contracts — getting this split right is what keeps the vault pristine and the index honestly disposable:
 
 1. **Markdown — source of truth for *knowledge*.** Notes + accepted edges, on your disk, fully usable
-   with no B2. Stays **pristine**: B2 writes no bookkeeping, fingerprints, or audit metadata into your
-   notes beyond what a human would — the **sole exception is stamping a missing `b2id`** (§1), the
-   durable identity every note needs and B2's one always-allowed write.
+   with no B2. Stays **pristine**, and the **body is 100% the human's** — B2 never authors prose or
+   structure into it. B2's only writes to a note are three, all minimal: stamping a missing `b2id` (§1),
+   appending an accepted edge to frontmatter `relations:` (§2, §4), and the mechanical rewrite of an
+   inbound wikilink's *path text* when its target moves (§6). The body is never authored by B2 — the one
+   body write is that move-repair, which fixes a link the human already wrote rather than adding one.
 2. **Index (`b2.sqlite`) — disposable cache.** The search indexes, the keyed graph, and the *live*
    review queue — everything the product reads on hot paths. Holds nothing that can't be reconstructed.
 3. **Event log (`.b2/log/`) — durable, append-only history.** Every consequential operation B2 or an
@@ -46,34 +49,50 @@ The crucial relationship between them:
 
 ---
 
-## 0. The central decision — how a relation's *type* is encoded
+## 0. The central decision — where a connection lives
 
-This closes the "remaining central question" in [tasks.md](tasks.md). Two already-locked decisions
-collide to settle it, so the answer is *forced*, not chosen freely:
+This closes the "remaining central question" in [tasks.md](tasks.md). It is settled by one principle
+plus the already-locked "inert until accepted":
 
-- **Authored links must be clickable `[[path|title]]` in vanilla Obsidian** ([user-stories.md](user-stories.md)).
-  A wikilink buried in a nested YAML `relations:` object is **not** clickable in Obsidian — only a bare
-  body link is. ⇒ **frontmatter cannot be the primary encoding.**
-- **Agent suggestions are inert until accepted and must never silently pollute the vault**
-  ([vision-and-scope.md](vision-and-scope.md), "Review & trust"). The body *is* source-of-truth, so an
-  inline suggested link would render as a real connection in Obsidian. ⇒ **the body cannot hold
-  un-accepted suggestions.**
+- **The body is the human's document — B2 never authors it.** The body is what renders, exports, and
+  prints; structure B2 injected there (a `## Relations` section appearing in a `resume.md`) would
+  corrupt the document. So B2 writes **no** connections into the body. *(The lone body write is the
+  mechanical repair of an inbound wikilink's path on move — fixing a link the human already wrote, never
+  adding one.)*
+- **Agent suggestions are inert until accepted** ([vision-and-scope.md](vision-and-scope.md), "Review &
+  trust"), so a pending suggestion lives in the review layer and never touches the file at all.
 
-Neither pure option works. The model splits **by origin**:
+So a connection lives in exactly one of three homes, **by origin**:
 
-| Origin of the edge | Where it lives | What it buys |
+| Origin of the edge | Where it lives | SSOT |
 |---|---|---|
-| Human-authored, or **accepted** suggestion | **Inline in the body** — `- contradicts [[path\|title]] — because X` | clickable · portable · Obsidian-native · source-of-truth |
-| Agent-**suggested**, not yet accepted | **Review layer** (index queue + `.b2/` log) — never the file | inert until accepted · zero pollution · full provenance |
+| Human-authored | **Body** — a bare `[[path\|title]]`, or `- <verb> [[path\|title]] — …`, where the human wrote it | the body; B2 **reads**, never writes it |
+| B2-**accepted** suggestion (also any human/importer-written relation) | **Frontmatter `relations:`** — a typed-link string `- "<verb> [[path\|title]] — …"` (§2) | frontmatter; B2's managed metadata zone |
+| Agent-**suggested**, not yet accepted | **Review layer** (index queue + `.b2/` log) — never the file | the log |
 
-**Acceptance is the bridge.** Promoting a suggestion is the act that *writes* the inline body link
-(Markdown first, index reconciled after). That is what makes "inert until accepted" literally true:
-the user's file is byte-untouched until they accept, at which point exactly one line is added. This
-keeps the inline, Basic-Memory-style authoring the task notes leaned toward, while giving suggestions
-and provenance the structure they need — without either fighting the locked constraints.
+**Acceptance is the bridge — and it writes frontmatter, not body.** Promoting a suggestion appends one
+typed-link string to the source note's `relations:` (Markdown first, index reconciled after). The user's
+body is byte-untouched at every step; the only change is one line in the frontmatter metadata. The edge
+then re-materializes as an `origin='frontmatter'`, `status='active'` edge derived from that Markdown —
+acceptance is a re-projection, not an in-place flip (§3, §4).
 
-> One line: **the body holds connections people commit; the review layer holds connections the agent
-> proposes; accept moves one from the review layer into the body.**
+> One line: **the body holds connections the human writes; frontmatter `relations:` holds connections B2
+> commits on your behalf; the review layer holds connections the agent proposes; accept moves one from
+> the review layer into frontmatter.**
+
+**The graph is the union of the three homes** ([index-engine.md](index-engine.md) §3): the `edges` table
+is a projection of body links (`origin=inline`) ∪ frontmatter relations (`origin=frontmatter`) ∪ the log
+(`origin=suggested`). Each edge has exactly **one** home and B2 never copies between them — so there is
+nothing to keep "in sync," only a one-way projection to rebuild. The single overlap case — a human
+manually re-authoring in the body a connection already accepted in frontmatter — is resolved at
+projection time by **inline-wins** dedup: the body row is kept, the redundant frontmatter row is ignored
+(and surfaced by `b2 explain`), never auto-removed.
+
+**The trade we accept:** a B2-accepted edge is metadata, so it is *not* guaranteed clickable in vanilla
+Obsidian's reading view (frontmatter, not prose). Human body links are untouched and stay clickable, and
+Obsidian's untyped graph could never show an edge's *type* anyway — so keeping accepted edges out of the
+body costs little and keeps the document pristine. Frontmatter relations are also the more OKF-native
+shape (§5).
 
 ---
 
@@ -91,16 +110,21 @@ tags: [learning, memory]
 created: 2026-06-20
 updated: 2026-06-29
 aliases: [SRS]                          # optional Obsidian-native extra titles
+relations:                              # B2's managed zone: accepted typed edges (§2). origin=frontmatter
+  - "contradicts [[notes/cramming-works|Cramming works]] — short-term recall only"
 provenance:                             # optional; defaults to {by: human}
   by: human
 ---
 
 Spaced repetition schedules reviews at expanding intervals…
 
-## Relations
-- elaborates [[concepts/memory|Human memory]]
-- contradicts [[notes/cramming-works|Cramming works]] — short-term recall only
+It elaborates [[concepts/memory|Human memory]] — applies the forgetting curve.
 ```
+
+The body link above is **human-authored** (`origin=inline`); the `relations:` entry is one B2 wrote on
+**accept** (`origin=frontmatter`). Both are typed edges in the same syntax (§2) — they differ only in
+*home*, which is exactly the body-vs-metadata line §0 draws. A human may also write typed lines in the
+body, and B2 reads them; B2 just never writes there.
 
 ### Frontmatter schema
 
@@ -131,18 +155,23 @@ Spaced repetition schedules reviews at expanding intervals…
   source?, confidence?}`. Absent ⇒ treated as `{by: human}`. By default B2 records note authorship as a
   `note.created` **log** event (§4), keeping notes pristine; write this field only when you want a
   note's own authorship durably visible in its frontmatter. (Edge-level provenance is separate; see §4.)
-- **`relations`** — *optional, tolerated, not primary.* A structured block B2 round-trips losslessly
-  if a user/importer writes one, but B2's own authored edges use the **inline** form (§2). See §7.
+- **`relations`** — **B2's managed zone for accepted typed edges** (§2). A YAML list of typed-link
+  strings — `- "<verb> [[path|title]] — explanation"`, the *same* syntax as a body typed line (§2), just
+  located in frontmatter so it is metadata, not document content. B2 appends here on **accept** (never
+  the body); humans and importers may write it too. Round-tripped losslessly; edges from it are
+  `origin=frontmatter` (§3).
 
 **Unknown keys** — preserved verbatim and byte-for-byte on round-trip (§6). B2 never strips frontmatter
 it doesn't understand; the vault stays the user's, plus whatever other tools wrote.
 
 ---
 
-## 2. Authored links & typed relations (the body)
+## 2. Authored links & typed relations
 
-Two body constructs produce edges. Both are ordinary Obsidian Markdown — clickable and meaningful with
-**no B2 running**.
+A connection is written in one of two places, with **one shared syntax**: the **body** (by a human) or
+frontmatter **`relations:`** (by B2 on accept, or by a human/importer). The verb-and-wikilink form is
+identical in both; only the *home* differs (§0). Body constructs are ordinary Obsidian Markdown —
+clickable and meaningful with **no B2 running**; B2 *reads* them and never writes them.
 
 ### Bare wikilink ⇒ an untyped `references` edge
 
@@ -167,10 +196,28 @@ text after an em-dash (or `:`) is the edge's **`explanation`**.
 - example-of [[concepts/forgetting-curve|Forgetting curve]]
 ```
 
-- A conventional `## Relations` section keeps them tidy and is the form B2 writes, but a typed line is
-  recognized **anywhere** in the body (Basic-Memory-style), so prose-embedded relations round-trip too.
+- A human may keep these under a `## Relations` heading or embed them anywhere in prose
+  (Basic-Memory-style); a typed line is recognized **anywhere** in the body, so both round-trip. B2
+  **reads** body typed lines but never writes them — its own edges go to frontmatter (below).
 - The verb is plain text before a normal clickable wikilink, so Obsidian renders a clean list of links;
   the type is invisible structure to Obsidian and first-class structure to B2.
+
+### Frontmatter `relations:` ⇒ a *typed* edge (`origin=frontmatter`)
+
+The same `<verb> [[path|title]] — explanation` syntax, as a **quoted string** in a frontmatter
+`relations:` list. This is where B2 writes an **accepted** suggestion (§4) and the only structured place
+B2 authors edges — it is metadata, so it never appears in the rendered/exported document (§0).
+
+```yaml
+relations:
+  - "supersedes [[notes/old-plan|Old plan]] — replaced after the 2026-Q2 review"
+  - "example-of [[concepts/forgetting-curve|Forgetting curve]]"
+```
+
+- **Quoted** so `[[`, `|`, and `:` are always YAML-safe; the reader accepts quoted or unquoted.
+- Parsed by the *same* verb/wikilink/explanation parser as a body typed line — one syntax, two homes.
+- Humans and importers may write this block too (it supersedes the old "tolerated, not primary"
+  framing); B2 appends to it on accept and never authors the body.
 
 ### Relation vocabulary — a tight, orthogonal core + a tolerated tail
 
@@ -226,12 +273,12 @@ type.
 - B2 **never** writes a reciprocal link into the target file — that would be write-amplification and
   pollute a note the user didn't edit.
 
-### Edge identity is *derived*, so the body stays clean
+### Edge identity is *derived*, so the file stays clean
 
-An authored edge is identified by the tuple **(src `b2id`, dst `b2id`, `type`, occurrence-index)** — all
-recoverable from the Markdown alone. No edge-id is written into the body; `- contradicts [[path|title]]`
-is the whole syntax. Edge provenance is never stapled to the body either; its history lives in the
-event log (§4).
+An authored edge — body **or** frontmatter — is identified by the tuple
+**(src `b2id`, dst `b2id`, `type`, occurrence-index)**, all recoverable from the Markdown alone. No
+edge-id is ever written into the file; `<verb> [[path|title]]` is the whole syntax in both homes. Edge
+provenance is never stapled to the note either; its history lives in the event log (§4).
 
 ---
 
@@ -243,25 +290,32 @@ this is the index.
 
 | Field | Values | Source |
 |---|---|---|
-| `id` | ULID (suggested) / derived tuple (authored) | edge identity: minted for suggestions, derived for inline |
-| `src_id`, `dst_id` | note `b2id`s — **never path** | resolved from the inline `[[path]]` at parse time |
-| `type` | relation verb (§2) | the inline verb; `references` for a bare link |
-| `origin` | `inline` \| `frontmatter` \| `suggested` | how the edge entered the graph |
+| `id` | ULID (suggested) / derived tuple (authored) | edge identity: minted for suggestions, derived for authored |
+| `src_id`, `dst_id` | note `b2id`s — **never path** | resolved from the `[[path]]` at parse time |
+| `type` | relation verb (§2) | the verb; `references` for a bare link |
+| `origin` | `inline` (body) \| `frontmatter` (`relations:`) \| `suggested` (log) | which of the three homes (§0) the edge came from |
 | `status` | `active` \| `suggested` \| `rejected` | lifecycle (§4) |
 | `explanation` | free text, optional | trailing text after `—`/`:`, or the agent's rationale |
 | *(provenance, joined)* | see §4 | — |
 
-- **`origin` vs `status` are orthogonal, within limits.** `origin` records *where it came from and
-  lives*; `status` records *where it is in the review lifecycle*. The legal combinations are
-  constrained: an `inline`/`frontmatter` edge is always `active`; a `suggested` edge is `suggested`
-  until it is **rejected** or **accepted**. Acceptance is **not an in-place flip**: B2 writes the inline
-  link, the `suggested` row **leaves the review queue**, and the connection **re-materializes as an
-  `origin='inline'`, `status='active'` edge derived from the Markdown**. So an `active` edge always
-  traces to a body link, never to a mutated queue row — which is exactly what keeps `index = projection
-  of (Markdown ∪ log)` exact (§4, §6).
+- **`origin` vs `status` are orthogonal, within limits.** `origin` records *which home it came from*
+  (§0); `status` records *where it is in the review lifecycle*. The legal combinations are constrained:
+  an `inline`/`frontmatter` edge is always `active`; a `suggested` edge is `suggested` until it is
+  **rejected** or **accepted**. Acceptance is **not an in-place flip**: B2 appends the typed-link string
+  to the source note's frontmatter `relations:`, the `suggested` row **leaves the review queue**, and the
+  connection **re-materializes as an `origin='frontmatter'`, `status='active'` edge derived from the
+  Markdown**. So an `active` edge always traces to an authored line in the file (body or frontmatter),
+  never to a mutated queue row — which is exactly what keeps `index = projection of (Markdown ∪ log)`
+  exact (§4, §6).
 - **`src`/`dst` resolve path → `b2id` at parse time** and the edge stores only `b2id`s. This is why
   "rename keeps every backlink resolving" is a foreign-key truth, not a fix-up pass: a move rewrites `notes.path`
   and inbound `[[path|title]]` *text*, but no `edges` row changes ([index-engine.md](index-engine.md) §3).
+- **The edge set is the union of the three homes, deduped.** `edges` projects body links
+  (`origin=inline`) ∪ frontmatter `relations:` (`origin=frontmatter`) ∪ replayed log
+  (`origin=suggested`). Each edge has exactly one home; if the *same* `(src, dst, type)` is authored in
+  **both** the body and frontmatter (a human re-typing an accepted edge), projection keeps the body row
+  and drops the redundant frontmatter row — **inline-wins** — surfacing it via `b2 explain`, never
+  auto-editing the file.
 
 > **Why this projection is materialized, not computed on read.** A note's *outbound* edges are
 > re-derivable by parsing that one file — which is exactly why this table is **disposable**. It is kept
@@ -294,40 +348,41 @@ decide, their job is done and they become history.
 ```
             agent proposes              human accepts
    (none) ──────────────▶ suggested ──────────────────▶ active
-                              │       write inline link → (origin=inline,
-                              │       row leaves queue,    re-derived
-                              │       edge re-derives      from Markdown)
+                              │   append to frontmatter → (origin=frontmatter,
+                              │   relations:, row leaves    re-derived
+                              │   queue, edge re-derives     from Markdown)
                               │ human rejects
                               ▼
-                           rejected   (remembered, never re-surfaced, never in body)
+                           rejected   (remembered, never re-surfaced, never in the file)
 ```
 
 - **`suggested`** — lives in the **review layer**: the *live* queue in the index, durably recorded as a
   `suggestion.generated` event in the log. **Never in the file.** `b2 suggest <note>` lists them with
   type, explanation, and the full decision fuel. The vault on disk is byte-unchanged — the literal
   meaning of *inert until accepted*.
-- **`active` (accept)** — B2 writes the inline `- <type> [[path|title]] — <explanation>` into the
-  **source note's body** (Markdown first), then reconciles the index: the `suggested` row **leaves the
-  review queue** and the edge **re-materializes from the Markdown** as an `origin='inline'`,
-  `status='active'` edge (acceptance is a re-projection, not an in-place status flip). B2 appends a
-  `suggestion.accepted` event. The accepted edge in Markdown is **pristine** — no provenance breadcrumb,
-  no fingerprint; its `edge_provenance` row is gone. Once you've vetted it, it's an ordinary typed link;
-  the *history* of how it got there lives in the log.
+- **`active` (accept)** — B2 appends `- "<type> [[path|title]] — <explanation>"` to the **source note's
+  frontmatter `relations:`** (Markdown first; **never the body**), then reconciles the index: the
+  `suggested` row **leaves the review queue** and the edge **re-materializes from the Markdown** as an
+  `origin='frontmatter'`, `status='active'` edge (acceptance is a re-projection, not an in-place status
+  flip). B2 appends a `suggestion.accepted` event. The accepted edge is **pristine** — no provenance
+  breadcrumb, no fingerprint; its `edge_provenance` row is gone. Once you've vetted it, it's an ordinary
+  typed edge; the *history* of how it got there lives in the log.
 - **`rejected`** — a `suggestion.rejected` event; the identity tuple (`src,dst,type`) is remembered so
-  the same pair+type isn't proposed again. Never written to the body.
+  the same pair+type isn't proposed again. Never written to the file.
 
 ### Where each piece of provenance lives — resolved
 
 | Stage | Lives in | Durability |
 |---|---|---|
 | Pending suggestion (full provenance) | index (live queue) + log (`suggestion.generated`) | log is durable; index replayable from it |
-| Accepted edge — the *connection* | **Markdown** (inline link), pristine | source of truth |
+| Accepted edge — the *connection* | **Markdown** (frontmatter `relations:`), pristine | source of truth |
 | Accepted edge — the *history* (who proposed, confidence, when) | **log** only | durable; never touches the note |
 | Rejection memory | log (`suggestion.rejected`) + index tombstone | durable |
 
 This is what lets accepted edges stay pristine **and** nothing be forgotten. We deliberately do **not**
-persist edge provenance in Markdown — no HTML-comment breadcrumb, no frontmatter entry — because
-provenance after a decision is history, and history belongs in the log, not stapled to your notes.
+persist edge *provenance* in Markdown — no HTML-comment breadcrumb, no provenance fields beside the
+relation — because provenance after a decision is history, and history belongs in the log, not stapled to
+your notes. (The accepted *connection* itself does live in frontmatter; its *provenance* does not.)
 
 ### The event log
 
@@ -381,10 +436,12 @@ mechanical:
 
 - **Round-trip losslessness** (`parse → serialize → parse` is byte-identical). B2 preserves unknown
   frontmatter keys *and their order*, body text, whitespace, and comment tokens. The **only** bytes B2
-  ever changes are the specific mechanical edits it is asked to make: (a) stamping a missing `b2id` (B2's one always-allowed write),
-  (b) rewriting an inbound `[[oldpath|title]]` → `[[newpath|title]]` on a move, (c) inserting one inline
-  link on suggestion-accept, (d) optional cosmetic alias refresh. Every other byte is untouched —
-  directly satisfying the Story-1/Story-2 acceptance criteria ([user-stories.md](user-stories.md)).
+  ever changes are the specific mechanical edits it is asked to make: (a) stamping a missing `b2id`,
+  (b) rewriting an inbound `[[oldpath|title]]` → `[[newpath|title]]` on a move (**the lone body write**),
+  (c) appending one typed-link string to frontmatter `relations:` on suggestion-accept, (d) optional
+  cosmetic alias refresh. **The body is never authored by B2** — (a), (c), (d) are frontmatter, and (b)
+  only repairs a link the human already wrote. Every other byte is untouched — directly satisfying the
+  Story-1/Story-2 acceptance criteria ([user-stories.md](user-stories.md)).
 - **`full-reindex ≡ incremental-update`.** The **index = projection of (Markdown ∪ log)**: the edge set
   is a pure function of a note's Markdown plus the `path → b2id` resolution table, and the review queue is
   a pure function of the log (`replay(log) ⇒ review state`). Re-deriving one note ≡ re-deriving the
@@ -400,20 +457,25 @@ defined, that doc is where they're enforced in the store.
 
 ## 7. Rejected / deferred alternatives
 
-- **Frontmatter `relations:` as the *primary* encoding — rejected.** Wikilinks inside nested YAML
-  objects aren't clickable in vanilla Obsidian, breaking the locked clickable-link decision. B2 *tolerates
-  and round-trips* a `relations:` block if another tool writes one (mapping it to `origin=frontmatter`
-  edges), but never authors edges that way.
+- **B2 authoring the body — rejected (Decision 1, 2026-06-30).** The body is the rendered/exported
+  document and must stay 100% the human's; B2 injecting a `## Relations` section (or any prose) would
+  corrupt it (imagine a `resume.md`). So B2's accepted edges go to **frontmatter `relations:`** instead
+  (§0, §2). The *only* body write B2 makes is the mechanical move-repair of an inbound wikilink's path —
+  fixing a link the human already wrote, never adding one. **This reverses the earlier "accepted edges go
+  inline in the body" decision.**
+- **Inline-in-body as the home for accepted edges — superseded.** The trade: a frontmatter edge is *not*
+  guaranteed clickable in vanilla Obsidian's reading view. Accepted because the body-pristine guarantee
+  outweighs it — human body links stay clickable, and Obsidian can't render edge *types* regardless (§0).
 - **Inline suggestions in the body — rejected.** Would render as real connections and pollute the vault
-  before acceptance, violating "inert until accepted."
+  before acceptance, violating "inert until accepted." (Suggestions stay in the review layer entirely.)
 - **Stored reciprocal links — rejected.** Inverse edges are derived at query time; writing them back
   amplifies writes and edits notes the user didn't touch.
-- **Per-edge ULIDs in the body — rejected.** Authored edge identity is derived from
-  (`src`,`dst`,`type`,occurrence); explicit ids would clutter the body for no gain.
-- **Edge provenance in Markdown (HTML comment or frontmatter) — rejected** in favor of the event log
-  (§4). Provenance is decision fuel while a suggestion is pending and history once it's decided; history
-  belongs in the in-vault `.b2/` log, not stapled to your notes. This keeps accepted edges pristine and
-  the index honestly disposable.
+- **Per-edge ULIDs in the file — rejected.** Authored edge identity is derived from
+  (`src`,`dst`,`type`,occurrence); explicit ids would clutter the note for no gain.
+- **Edge provenance in Markdown (HTML comment or frontmatter field) — rejected** in favor of the event
+  log (§4). The accepted *connection* lives in frontmatter `relations:`, but its *provenance* (who
+  proposed it, confidence, when) does not — that is history, and history belongs in the in-vault `.b2/`
+  log. This keeps accepted edges pristine and the index honestly disposable.
 
 ---
 
@@ -447,6 +509,10 @@ Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.
 - elaborates [[concepts/memory|Human memory]] — applies the forgetting curve
 ```
 
+Here the `## Relations` block is **human-authored** in the body (so `origin=inline`); B2 reads it but
+never writes there. Had the agent's `contradicts` suggestion been **accepted**, B2 would append it to
+spaced-repetition's frontmatter `relations:` (`origin=frontmatter`) — never to this body section (§0).
+
 Derived graph (no live model needed to assert):
 
 - `references`: spaced-repetition → memory (origin=inline, status=active) — from the prose wikilink.
@@ -460,12 +526,19 @@ files round-trip byte-identical; dropping and rebuilding the index reproduces th
 
 ---
 
-## 9. Judgment calls — resolved (2026-06-29)
+## 9. Judgment calls — resolved (2026-06-29; §0 revised 2026-06-30)
 
-- **Edge-provenance durability** — accepted edges stay **pristine** in Markdown; provenance lives in the
-  index while a suggestion is pending and in the in-vault `.b2/` event log as history thereafter (§4).
-  The three-tier model (Markdown / disposable index / durable log) and `index = projection of
-  (Markdown ∪ log)` fall out of this.
+- **Where a connection lives (Decision 1–3, 2026-06-30)** — **B2 never authors the body.** Human
+  connections live in the body (B2 reads, never writes); **B2-accepted edges live in frontmatter
+  `relations:`** as typed-link strings (Format A — the same `<verb> [[path|title]] — …` syntax as a body
+  line); pending/rejected suggestions live in the review layer. The graph is the **union** of the three
+  homes, deduped **inline-wins** on overlap, never auto-editing the file. The body write B2 makes is the
+  move-repair only. This **reverses** the earlier "accepted edges go inline in the body" call (§0, §2,
+  §7).
+- **Edge-provenance durability** — accepted edges stay **pristine** (in frontmatter `relations:`);
+  provenance lives in the index while a suggestion is pending and in the in-vault `.b2/` event log as
+  history thereafter (§4). The three-tier model (Markdown / disposable index / durable log) and
+  `index = projection of (Markdown ∪ log)` fall out of this.
 - **`b2id` backfill on ingest** — identity is **namespaced to `b2id`**, and stamping a missing one is
   **B2's single always-allowed edit** to the vault, done as needed on first sight (no `b2 init` gate, no
   refusing to index), logged as `b2id.stamped` (§1).

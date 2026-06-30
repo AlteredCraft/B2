@@ -249,11 +249,11 @@ zero UI.
 - **Data model.** [data-model.md](data-model.md) is locked. Two source-of-truth objects (note, edge) in
   plain Markdown over **three storage tiers**: pristine Markdown (knowledge) · a disposable SQLite index ·
   a durable, append-only in-vault `.b2/` event log — with `index = projection of (Markdown ∪ log)`. Typed
-  relations are authored **inline** (`- contradicts [[path|title]]`), keyed by `b2id`; agent
-  **suggestions stay in the review layer, inert until accepted**, and acceptance writes the inline link.
+  relations are keyed by `b2id`; agent **suggestions stay in the review layer, inert until accepted**.
   Edge provenance lives in the **event log, not the note** (accepted edges stay pristine); `b2id` is B2's
-  single always-allowed write. A bare link is a **directed `references`** edge; the typed vocabulary is a
-  **10-verb core + tolerated tail**. Settles the data-model "central question" ([tasks.md](tasks.md)).
+  one always-allowed frontmatter write. A bare link is a **directed `references`** edge; the typed
+  vocabulary is a **10-verb core + tolerated tail**. Settles the data-model "central question"
+  ([tasks.md](tasks.md)). *(Where accepted edges are written was revised 2026-06-30 — see below.)*
 - **Graph is materialized, not parsed on read.** The typed graph is kept as a **disposable `edges` table
   in the index**, not resolved from the Markdown at query time. A note's *outbound* links are re-derivable
   by parsing it (which is why the table is disposable), but **backlinks, typed multi-hop traversal, the
@@ -262,6 +262,28 @@ zero UI.
   is the correctness spec; the table is its cache — one more table in the store, not a third subsystem.
   Without it B2 is just vector + keyword search over Markdown; the traversable typed graph is the value-add
   (capability areas 3, 5). Rationale in [index-engine.md](index-engine.md) §3, cost in §8.
+
+## Decisions locked (2026-06-30)
+
+- **B2 never authors the body; accepted edges live in frontmatter (revises the data-model §0 "central
+  decision").** The body is the rendered/exported document and stays **100% the human's** — B2 must never
+  inject prose or structure into it (a `## Relations` section appearing in a `resume.md` is the
+  anti-example). So **B2-accepted typed edges are written to frontmatter `relations:`**, not the body, as
+  typed-link strings — `- "<verb> [[path|title]] — explanation"`, the *same* syntax a human would write
+  in the body, just located in metadata (**Format A**). Human-authored connections stay where the human
+  wrote them in the body; B2 **reads** those and never rewrites them. Pending suggestions remain in the
+  review layer. **B2's only body write is the mechanical wikilink-path rewrite on move** — repairing a
+  link the human already made, never adding one.
+- **The graph is the union of three homes, one home per edge, no two-way sync.** `edges` is a one-way
+  projection of body links (`origin=inline`) ∪ frontmatter `relations:` (`origin=frontmatter`) ∪ the log
+  (`origin=suggested`). Nothing is mirrored between homes, so there is nothing to keep in sync — drop the
+  index and rebuild. The lone overlap (a human re-authoring in the body an edge already accepted in
+  frontmatter) resolves at projection time **inline-wins**: keep the body row, ignore the redundant
+  frontmatter row, surface it via `b2 explain`, never auto-edit the file.
+- **The trade.** A frontmatter edge is not guaranteed clickable in vanilla Obsidian's reading view.
+  Accepted deliberately: human body links stay clickable, Obsidian can't render edge *types* anyway, and
+  frontmatter relations are the more OKF-native shape — a small cost for a pristine document. Full
+  re-derivation in [data-model.md](data-model.md) §0, §2, §7, §9.
 
 ## Inspiration — not a copy
 

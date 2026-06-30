@@ -50,6 +50,12 @@ The decision the stories below rest on. It resolves the central "how is a link w
   deferred-UI period. We spend a bounded rewrite-on-move cost — already a committed, tested kernel
   capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
   the graph regardless.
+- **B2 never authors the body** *(refined 2026-06-30)*. The kernel **reads** the links a human writes in
+  the body but never writes there. B2-discovered edges, once **accepted**, are written to frontmatter
+  **`relations:`** as typed-link strings (`- "<verb> [[path|title]] — …"`) — metadata, not document
+  content, so a note like `resume.md` never gains a `## Relations` section. The **only** body write the
+  kernel makes is the move-rewrite above, repairing an inbound `[[path]]` the human already wrote. See
+  [data-model.md](data-model.md) §0.
 
 > **How `b2id` is incorporated, in one line:** humans and Obsidian see `[[path|title]]`; the kernel
 > sees a `b2id → b2id` edge. Path is for people, `b2id` is for the graph, and the kernel keeps the two in
