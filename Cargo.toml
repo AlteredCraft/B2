@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/b2-core"]
+
+# B2 — local-first Markdown PKM with AI connection discovery.
+# Design lives in planning/; this workspace is the index engine
+# (planning/specs/index-engine-build.md), built step 0→5 against the
+# golden-vault fixtures in fixtures/golden-vault/ (planning/data-model.md §8).

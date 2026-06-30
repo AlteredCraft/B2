@@ -1,0 +1,10 @@
+//! B2 index engine (`b2.sqlite`) — a **disposable** projection of `(Markdown ∪ log)`.
+//!
+//! Built step 0→5 per `planning/specs/index-engine-build.md`; the schema is a
+//! derived projection of `planning/data-model.md` and must satisfy it, never the
+//! reverse. Step 0 is the substrate: open the DB with the locked pragmas and prove
+//! FTS5 (BM25) and `sqlite-vec` (KNN) coexist in one statically-linked connection.
+
+mod db;
+
+pub use db::{open, SCHEMA_VERSION};

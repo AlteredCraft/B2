@@ -1,0 +1,12 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# SQLite scratch / WAL sidecars from ad-hoc runs
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# macOS
+.DS_Store
