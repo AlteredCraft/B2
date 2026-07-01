@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B2 — a local-first Markdown vault with AI-native connection discovery</title>
+<meta name="description" content="B2 is a personal, local-first Markdown knowledge vault with an AI layer that discovers typed, explained connections between your notes.">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
+    --pink:#f778ba; --cyan:#39c5cf; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  .wrap{max-width:820px;margin:0 auto;padding:0 24px}
+  /* top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--line)}
+  .topbar .brand{font-weight:700;letter-spacing:.3px}
+  .topbar .brand span{color:var(--muted);font-weight:400}
+  .topbar a.gh{color:var(--muted);font-size:13.5px}
+  /* hero */
+  header.hero{padding:54px 0 8px}
+  .kicker{font-size:11.5px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted);margin-bottom:14px}
+  h1.word{font-size:58px;line-height:1;margin:0 0 18px;letter-spacing:-1px}
+  p.lead{font-size:18px;color:var(--ink);max-width:680px;margin:0 0 8px}
+  p.lead em{color:var(--purple);font-style:normal}
+  p.sublead{font-size:15px;color:var(--muted);max-width:660px;margin:10px 0 0}
+  /* equation */
+  .eqcard{margin:34px 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px}
+  .eq{font-family:var(--mono);font-size:18px;text-align:center;color:var(--ink);margin:2px 0 10px}
+  .eqcard p{color:var(--muted);font-size:13.5px;margin:0;text-align:center;max-width:640px;margin:0 auto}
+  /* badges */
+  .badges{display:flex;flex-wrap:wrap;gap:10px;margin:26px 0 0}
+  .badge{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:6px 13px;font-size:12.5px;color:var(--muted)}
+  .badge b{color:var(--ink)} .badge.green b{color:var(--green)}
+  .badge .pip{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);margin-right:7px;vertical-align:middle}
+  /* primary CTA */
+  a.cta{display:block;margin:32px 0;background:linear-gradient(180deg,rgba(88,166,255,.10),rgba(88,166,255,.03));border:1px solid var(--accent);border-radius:14px;padding:22px 24px;color:var(--ink)}
+  a.cta:hover{text-decoration:none;background:linear-gradient(180deg,rgba(88,166,255,.16),rgba(88,166,255,.05))}
+  a.cta .row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+  a.cta h2{font-size:20px;margin:0;letter-spacing:-.2px}
+  a.cta .arrow{color:var(--accent);font-size:22px;flex:none}
+  a.cta p{color:var(--muted);font-size:13.5px;margin:8px 0 0;max-width:640px}
+  /* value grid */
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:30px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card .h{font-size:14px;font-weight:600;margin:0 0 6px}
+  .card p{font-size:13px;color:var(--muted);margin:0;line-height:1.55}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  /* links row */
+  .more{display:flex;flex-wrap:wrap;gap:22px;margin:30px 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:14px}
+  .more a{display:flex;align-items:center;gap:8px}
+  .more .m{color:var(--muted);font-size:12.5px}
+  footer{color:var(--muted);font-size:12.5px;padding:26px 0 60px}
+  @media(max-width:760px){.grid3{grid-template-columns:1fr}h1.word{font-size:46px}a.cta .row{flex-direction:column;align-items:flex-start;gap:6px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">B2 <span>· docs</span></div>
+    <a class="gh" href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
+  </div>
+
+  <header class="hero">
+    <div class="kicker">Local-first Markdown vault · AI-native connection discovery</div>
+    <h1 class="word">B2</h1>
+    <p class="lead">A personal, local-first Markdown knowledge vault with an AI layer that discovers
+    <em>typed, explained</em> connections between your notes.</p>
+    <p class="sublead">The Markdown stays plain and yours — B2 is the intelligence layer <em>over</em> your
+    notes, not a container around them. This repository is the index engine + <code>b2</code> CLI.</p>
+
+    <div class="eqcard">
+      <div class="eq">index = projection of ( Markdown ∪ log )</div>
+      <p>Drop the index, rebuild it from your Markdown and a small append-only event log — and it comes back
+      identical. The vault is the only source of truth; everything B2 derives is a disposable cache.</p>
+    </div>
+
+    <div class="badges">
+      <span class="badge green"><span class="pip"></span><b>85</b>&nbsp;tests passing</span>
+      <span class="badge"><b>Rust</b>&nbsp;· one static binary</span>
+      <span class="badge"><b>3</b> crates · SQLite (FTS5 + sqlite-vec)</span>
+      <span class="badge">status: <b>index engine + CLI</b> · discovery in progress</span>
+    </div>
+  </header>
+
+  <a class="cta" href="architecture.html">
+    <div class="row">
+      <h2>Read the system architecture →</h2>
+      <span class="arrow">↗</span>
+    </div>
+    <p>The full build tour: the three storage tiers, the ingest / retrieval / <strong>connection-discovery</strong>
+    pipelines, the deterministic AI seams, and the invariants that hold it together — every claim
+    ground-truthed against the test suite.</p>
+  </a>
+
+  <div class="grid3">
+    <div class="card">
+      <div class="h"><span class="dot" style="background:var(--amber)"></span>Typed, explained links</div>
+      <p>Not just "related." B2 proposes typed connections — <em>supersedes</em>, <em>elaborates</em>,
+      <em>refutes</em> — each with a why, and inert until you accept it.</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="dot" style="background:var(--green)"></span>Your Markdown, untouched</div>
+      <p>Plain <code>.md</code> files, fully usable in Obsidian with no B2 running. B2's only writes are
+      surgical and in frontmatter — it never authors your body.</p>
+    </div>
+    <div class="card">
+      <div class="h"><span class="dot" style="background:var(--purple)"></span>Built for tomorrow's model</div>
+      <p>Every AI part sits behind a swappable seam, tested against a deterministic fake; a real local model
+      drops in with no schema or flow change.</p>
+    </div>
+  </div>
+
+  <div class="more">
+    <a href="architecture.html">📐 <span>System architecture</span></a>
+    <a href="https://github.com/AlteredCraft/B2">⌂ <span>Source on GitHub</span></a>
+    <a href="https://github.com/AlteredCraft/B2/tree/main/planning">📄 <span>Design docs (<span class="mono">planning/</span>)</span></a>
+  </div>
+
+  <footer>
+    B2 · index engine + CLI · Rust. The design docs in <code>planning/</code> are the source of truth; the
+    code is a projection of the spec. Built in the open.
+  </footer>
+
+</div>
+</body>
+</html>
