@@ -347,6 +347,14 @@ pub fn set_chunk_vector(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
     Ok(())
 }
 
+/// A note's chunk ids in `seq` order — the note's own vectors/text, e.g. the queries
+/// discovery candidate generation runs from (each chunk KNN-searches `chunks_vec`).
+pub fn chunks_for_note(conn: &Connection, note_b2id: &str) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare("SELECT id FROM chunks WHERE note_b2id = ?1 ORDER BY seq")?;
+    let rows = stmt.query_map([note_b2id], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// The note a chunk belongs to (the search-hit → note resolution).
 pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
     Ok(conn
@@ -382,6 +390,22 @@ pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
 /// Total chunk count (used to size a full KNN pool for graph-filtered search).
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)
+}
+
+/// A chunk's stored embedding, unpacked from `chunks_vec` (`None` if the chunk has
+/// no vector row). Reading a note's own vectors back is what lets discovery KNN from
+/// them without re-embedding — passage↔passage, no `embed_query` (tasks.md ①). Call
+/// only when the embedding space exists (`embedding_space_exists`), else the read
+/// hits a missing table.
+pub fn chunk_vector(conn: &Connection, chunk_id: i64) -> Result<Option<Vec<f32>>> {
+    let blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT embedding FROM chunks_vec WHERE chunk_id = ?1",
+            [chunk_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(blob.map(|b| crate::embed::unpack_f32(&b)))
 }
 
 /// Brute-force KNN over `chunks_vec`: the `k` nearest chunk ids to `query`, with

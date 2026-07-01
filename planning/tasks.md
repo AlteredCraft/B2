@@ -73,33 +73,62 @@ areas, v1 scope, locked decisions).
   to exercise the prune path) so the pipeline is provable with no LLM. The real LLM-backed relator is
   deferred to its own crate (the `LocalEmbedder`/`b2-embed` precedent), keeping `b2-core` model-free. 5
   relator tests; **78** workspace tests green.
+- [x] **Connection-discovery ① + candidate generation** — the first discovery stage now exists. **① resolved
+  2026-07-01**, mirrored to [index-engine.md](index-engine.md) §3 + [docs/architecture.html](../docs/architecture.html)
+  (new Connection-discovery section + relator seam): a candidate is the graph's *complement* — **near ∖
+  connected** — not the intersection ([`graph_filtered_search`](../crates/b2-core/src/search.rs) is a
+  scoped-traversal primitive, the wrong tool). Mechanism: per anchor chunk, KNN its **stored** `chunks_vec`
+  vector (vector-only, **no re-embed**, passage↔passage — `embed_query`'s asymmetric prefix is the wrong
+  side); score each other note by its **best** chunk-pair (**max-sim**); subtract
+  [`reachable_within`](../crates/b2-core/src/graph.rs)`(anchor, 1)` (distance is **exclusion-only** — 2-hop
+  triadic-closure candidates survive unboosted; distance-weighting is a backlog eval experiment); rank →
+  top-N. Anchor text is **per-chunk**, not whole-note. Built
+  [`discover::candidates`](../crates/b2-core/src/discover.rs) (+ db readers `chunks_for_note` / `chunk_vector`,
+  `embed::unpack_f32`); 7 discover tests, **85** workspace tests green.
 
-## Next up — connection-discovery pipeline
+## Next up — wire the discovery pipeline (② → ③)
 
-> **Pick this up fresh.** The three ingredients now exist: semantic `search` is honest (real embedder on
-> `main`), the **`Relator` seam** is built ([relate.rs](../crates/b2-core/src/relate.rs); `FakeRelator` for
-> tests), and the **accept / reject / list engine ops** are built (suggestion-lifecycle slice). What's
-> missing is the **glue that generates suggestions** — candidate generation → `relate` → `generate_suggestion`
-> — plus the CLI. **Nothing generates suggestions yet**; this slice is what finally does. This is B2's
-> reason to exist.
+> **Pick this up fresh.** ① is resolved and **candidate generation is built**
+> ([`discover::candidates`](../crates/b2-core/src/discover.rs)); the **`Relator` seam** exists
+> ([relate.rs](../crates/b2-core/src/relate.rs); `FakeRelator` for tests); the **accept / reject / list
+> engine ops** exist ([suggest.rs](../crates/b2-core/src/suggest.rs)). The one missing piece is the **glue
+> that turns candidates into suggestions**, then the CLI. **Nothing generates suggestions yet** — ② is the
+> slice that finally does. This is B2's reason to exist.
 
-- **① First decision — what *is* a candidate? (resolve first-principles, before coding.)** Discovery
-  proposes connections you *haven't* made, so a candidate is a note **semantically near the anchor but not
-  already connected** — the *complement* of the graph, not the intersection. Watch the trap:
-  [`graph_filtered_search`](../crates/b2-core/src/search.rs) returns the **intersection** (nearest chunks
-  *within* k hops — already-related notes), so it is the wrong primitive as-is. The natural build is
-  `hybrid_search(anchor text)` **minus** [`reachable_within`](../crates/b2-core/src/graph.rs)`(anchor, 1)`
-  (drop self + existing neighbors). Settle the open sub-questions here: is "near-but-graph-distant" *also* a
-  signal worth keeping? how is the anchor's query text formed — whole note, or per-chunk?
-- **② Wire the pipeline** — for each note as anchor: generate candidates (①) → `Relator::relate` each →
-  feed every `Some(Proposal)` into [`generate_suggestion`](../crates/b2-core/src/suggest.rs), validating
-  `edge_type` is core via [`relation::is_core`](../crates/b2-core/src/relation.rs) (the gate deferred from
-  the seam slice — a real relator's output isn't trusted blindly). Runs on `FakeRelator`, provable with no
-  LLM. Extend the **eval suite**'s scaffolded **suggestion-quality** half here (precision/recall over a
-  hand-labelled candidate set), still out of CI.
-- **③ CLI + façade** — surface `suggest` / `accept` / `reject` on the
+- **② Wire the generate pipeline** — the orchestration that runs the three built pieces end-to-end. Home: a
+  new fn in [discover.rs](../crates/b2-core/src/discover.rs) (e.g. `generate_for_anchor` + a `generate_all`
+  over the vault), **deterministic** like the rest of the core — timestamp (`created`) and ids (`IdGen`)
+  passed in, notes iterated in **sorted b2id order** so suggestion ids are assertable under `FixedId`. Per
+  note as anchor:
+  1. [`discover::candidates`](../crates/b2-core/src/discover.rs)`(conn, anchor, top_n)` → the `CandidateNote`s
+     (already built).
+  2. Assemble the relator's inputs: anchor [`relate::NoteCtx`](../crates/b2-core/src/relate.rs)`{ b2id, title,
+     text }` and, per candidate, a `relate::Candidate { note, evidence_chunk, signal, score }` —
+     `evidence_chunk` = [`db::chunk_text`](../crates/b2-core/src/db.rs)`(cand.evidence_chunk_id)`; `signal` =
+     the candidate-gen provenance string (e.g. `"semantic:maxsim"`), which flows to the suggestion's `source`.
+  3. [`Relator::relate`](../crates/b2-core/src/relate.rs)`(&anchor, &cand)?` → on `Some(proposal)`,
+     **validate [`relation::is_core`](../crates/b2-core/src/relation.rs)`(&proposal.edge_type)`** (the gate
+     deferred from the seam slice — a real relator's output isn't trusted blindly; skip + count a non-core
+     verb). `None` is a decline → drop.
+  4. [`suggest::generate_suggestion`](../crates/b2-core/src/suggest.rs)`(conn, sink, idgen, anchor,
+     cand.note_b2id, proposal.edge_type, Some(explanation), by = "agent:<relator.model_id()>", Some(signal),
+     Some(proposal.confidence), created)`. It already guards on `edge_exists`, so re-running never re-proposes
+     an active/pending/rejected pair — **the whole op is idempotent.**
+
+  **Settle one small sub-decision first:** how the anchor's / candidate's `NoteCtx.text` is assembled for a
+  *real* relator — join the note's chunks (`chunks_for_note` → `chunk_text`), add a `db::note_text` helper,
+  or pass only the evidence chunk. Irrelevant to `FakeRelator` (content-addressed on b2ids), so pick the
+  cheapest correct option and note it. Also likely needs a `db::all_note_ids` reader (list every note b2id,
+  sorted). Runs fully on `FakeRelator`, provable with no LLM. **Tests:** suggestions appear for complement
+  candidates; the `is_core` gate drops a non-core proposal (needs a tail-verb *stub* relator, since
+  `FakeRelator` only ever emits core); a decline yields no suggestion; determinism under `FixedId`; and the
+  queue survives drop→rebuild→replay. Then extend the **eval suite**'s scaffolded **suggestion-quality** half
+  (precision/recall over a hand-labelled candidate set), still out of CI.
+- **③ CLI + façade** — surface `suggest` (generate + list) / `accept` / `reject` on the
   [`Vault`](../crates/b2-core/src/vault.rs) façade (add ops as the commands need them — keep the surface
-  minimal), then the `b2 suggest` / `accept` / `reject` commands with `--json` for agents, like the others.
+  minimal; `list_suggestions` / `accept_suggestion` / `reject_suggestion` already exist in
+  [suggest.rs](../crates/b2-core/src/suggest.rs), and ② adds the generate op). Then the `b2 suggest` /
+  `accept` / `reject` commands with `--json` for agents, like the others.
 - **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
   [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
   the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).
@@ -116,4 +145,8 @@ measure (e.g. the keyword-half stopword noise the first eval pass surfaced).
   property tests over generated vaults (golden-vault scenarios exist; property coverage is the gap).
 - qmd chunker upgrade — replace the minimal paragraph chunker once a real embedder + eval can score it
   (build spec §1.2).
+- Distance-weighting for candidate ranking — v1 ranks candidates by semantic max-sim alone (graph distance
+  is exclusion-only, ① resolved 2026-07-01). Once the suggestion-quality eval exists (②), measure whether
+  boosting graph-*close* (triadic closure) or graph-*distant* (serendipity/bridging) candidates lifts
+  accept-precision — and only add the knob if the eval says so.
 - GUI — deferred per the headless-first approach ([vision-and-scope.md](vision-and-scope.md)).

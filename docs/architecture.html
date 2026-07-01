@@ -109,6 +109,8 @@
   <a href="#vocab"><span class="dot" style="background:var(--t2)"></span>The relation vocabulary</a>
   <a href="#embed"><span class="dot" style="background:var(--t3)"></span>The embedder seam</a>
   <a href="#retrieval"><span class="dot" style="background:var(--t3)"></span>② Hybrid retrieval</a>
+  <a href="#relator"><span class="dot" style="background:var(--amber)"></span>The relator seam</a>
+  <a href="#discovery"><span class="dot" style="background:var(--amber)"></span>★ Connection discovery</a>
   <a href="#lifecycle"><span class="dot" style="background:var(--pink)"></span>③ Suggestion lifecycle</a>
   <a href="#log"><span class="dot" style="background:var(--pink)"></span>Event log &amp; replay</a>
   <a href="#adapter"><span class="dot" style="background:var(--cyan)"></span>The Vault façade &amp; CLI</a>
@@ -133,11 +135,11 @@
   specification of how the engine actually behaves.</p>
 
   <div class="badges">
-    <span class="badge green"><span class="pip"></span> <b>73&nbsp;/&nbsp;73</b>&nbsp;tests passing</span>
+    <span class="badge green"><span class="pip"></span> <b>85&nbsp;/&nbsp;85</b>&nbsp;tests passing</span>
     <span class="badge"><b>3</b>&nbsp;crates&nbsp;·&nbsp;<b>b2-core</b>&nbsp;·&nbsp;<b>b2-embed</b>&nbsp;·&nbsp;<b>b2-cli</b></span>
-    <span class="badge">engine&nbsp;<b>~2,480</b>&nbsp;lines&nbsp;·&nbsp;16&nbsp;modules</span>
+    <span class="badge">engine&nbsp;<b>~2,770</b>&nbsp;lines&nbsp;·&nbsp;17&nbsp;modules</span>
     <span class="badge">Rust&nbsp;<b>1.96.0</b>&nbsp;·&nbsp;edition&nbsp;2021</span>
-    <span class="badge">step 0&nbsp;→&nbsp;5&nbsp;<b>+ accept + real embedder + CLI</b></span>
+    <span class="badge">step 0&nbsp;→&nbsp;5&nbsp;<b>+ accept + real embedder + CLI + relator + candidate-gen</b></span>
   </div>
   <p class="sub" style="margin-top:14px">Verified by <code>cargo test</code> on the toolchain above.
   The suite is <em>integration-first</em>: most tests open a real SQLite database, ingest a real vault on
@@ -284,7 +286,7 @@
   <div class="grid3">
     <div class="card tight">
       <div class="kicker" style="color:var(--accent)">b2-core · the engine</div>
-      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">~2,480 lines · 16 modules. Turns a
+      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">~2,770 lines · 17 modules. Turns a
       folder of Markdown into a queryable index and keeps it a pure function of disk + log.</p>
       <ul class="tidy" style="font-size:12.5px;margin:0">
         <li><code>db</code> — schema, projection helpers, resolver</li>
@@ -292,8 +294,9 @@
         <li><code>ingest</code> — vault → tables (two-phase)</li>
         <li><code>chunk</code> · <code>link</code> · <code>relation</code></li>
         <li><code>graph</code> — neighbors / reachability</li>
-        <li><code>embed</code> — the embedder seam + fake</li>
+        <li><code>embed</code> · <code>relate</code> — the two AI seams + fakes</li>
         <li><code>search</code> — BM25 ⊕ vector → RRF</li>
+        <li><code>discover</code> — candidate generation</li>
         <li><code>event</code> · <code>replay</code> · <code>suggest</code></li>
         <li><code>vault</code> — the typed façade</li>
         <li><code>id</code> · <code>error</code></li>
@@ -322,10 +325,11 @@
     </div>
   </div>
   <div class="ground"><b>Ground truth:</b> the layering is enforced by where the tests live. The engine's
-  73-test suite runs entirely against <code>b2-core</code> with the deterministic fake embedder; the CLI
-  is exercised end-to-end by driving the <em>built binary</em> (<span class="mono">b2-cli/tests/cli.rs</span>),
-  and the config resolution is unit-tested in <span class="mono">b2-embed</span>. No test needs a live
-  model — which is only possible because the seam is real.</div>
+  <b>73-test <code>b2-core</code> suite</b> runs entirely against the deterministic fakes; the CLI is
+  exercised end-to-end by driving the <em>built binary</em> (8 tests,
+  <span class="mono">b2-cli/tests/cli.rs</span>), and config resolution is unit-tested in
+  <span class="mono">b2-embed</span> (4) — <b>85 in all</b>. No test needs a live model or a live LLM —
+  which is only possible because both AI seams are real.</div>
 </section>
 
 <!-- ============ SUBSTRATE ============ -->
@@ -563,8 +567,9 @@
         <em>other</em> note. The table makes it one indexed lookup, not an O(vault) scan.</li>
         <li><b>Typed multi-hop traversal.</b> "Notes within k hops of X" is one SQL traversal, not a scan
         per hop.</li>
-        <li><b>The discovery join &amp; the suggestion queue.</b> The semantic⨝graph join (below) and the
-        review queue (whose suggested edges are deliberately <em>never</em> on disk) can only exist over a
+        <li><b>Connection discovery &amp; the suggestion queue.</b> Both the graph <em>subtraction</em>
+        that <a href="#discovery">candidate generation</a> runs (near-but-not-connected) and the review
+        queue (whose suggested edges are deliberately <em>never</em> on disk) can only exist over a
         materialized structure.</li>
       </ul>
       <p style="font-size:13px;color:var(--muted);margin:10px 0 0"><code>neighbors</code> reads outbound
@@ -698,9 +703,11 @@
       <li>The keyword half <b>sanitizes</b> arbitrary natural-language text into a safe FTS5 expression —
       alphanumeric terms, each double-quoted so nothing is read as an FTS5 operator, OR-joined for recall.
       A query with no usable terms yields no keyword hits (the vector half still runs).</li>
-      <li>The <b>graph-filtered</b> variant is B2's reason to exist: "nearest chunks whose note is within
-      k typed hops of note X" — the <code>chunks_vec ⨝ chunks ⨝ edges</code> discovery join that
-      candidate generation will run on.</li>
+      <li>The <b>graph-filtered</b> variant — "nearest chunks whose note is within k typed hops of note X"
+      — is the <code>chunks_vec ⨝ chunks ⨝ edges</code> join: a <em>scoped-traversal</em> primitive that
+      searches <em>within</em> an already-related neighborhood (the intersection of near and connected).
+      It is <b>not</b> candidate generation — <a href="#discovery">connection discovery</a> is its
+      <em>complement</em> (near but <em>not</em> connected), and is the reason B2 exists.</li>
       <li>The <code>Vault</code> façade resolves hits to <b>note level</b>: it pulls a wider chunk pool
       than the limit, dedups to the highest-scoring chunk per note, and attaches a one-line snippet.</li>
     </ul>
@@ -717,6 +724,176 @@
     eval (<code>cargo run -p b2-embed --example eval</code>), never in CI.</div>
   </div>
 </div>
+
+<!-- ============ RELATOR SEAM ============ -->
+<div class="layer" id="relator">
+  <div class="bar" style="background:var(--amber)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--amber)">SEAM</span> The relator — the precision gate, behind a swappable trait</h4>
+    <div class="files">crates/b2-core/src/relate.rs (seam + fake) · a real LLM relator: a future crate</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">Connection discovery is a three-stage pipeline
+    — <b>candidate generation → classify/explain → review</b> — and only the middle stage needs a model.
+    Candidate generation is deterministic (next section); the review loop is deterministic (Flow ③).
+    Turning a candidate <em>pair</em> into a <em>typed, explained</em> connection — or declining it — is the
+    one judgment that needs an LLM, so it sits behind this trait exactly as embeddings sit behind
+    <code>Embedder</code>. This is the second AI seam, mirroring the first.</p>
+    <div class="grid2">
+      <div class="seam">
+        <div class="kicker" style="color:var(--purple)">The trait — <code>relate::Relator</code></div>
+        <p style="font-size:13px;margin:6px 0">One method,
+        <code>relate(anchor, candidate) → Result&lt;Option&lt;Proposal&gt;&gt;</code>, <b>pairwise</b>.
+        <code>Ok(None)</code> is a first-class <b>decline</b> — candidate generation over-produces, and the
+        relator is what prunes non-connections down to what's worth a human's review. A fired
+        <code>Proposal { edge_type, explanation, confidence }</code> maps 1:1 onto
+        <code>generate_suggestion</code>: the relator owns type / explanation / confidence and names itself
+        via <code>model_id</code> (recorded in provenance <code>by</code>), while candidate generation owns
+        src / dst / source.</p>
+      </div>
+      <div class="seam" style="border-color:var(--amber)">
+        <div class="kicker" style="color:var(--amber)">The fake — <code>FakeRelator</code> (CI default)</div>
+        <p style="font-size:13px;margin:6px 0">Content-addressed on the ordered <code>b2id</code> pair (like
+        <code>FakeEmbedder</code>): same pair → same verdict, so a discovery run is reproducible and
+        drop-&amp;-rebuild yields the same suggestions. It always emits a <b>core</b> verb when it fires and
+        <b>declines one pair in four</b> to exercise the prune path — it never reads note text, so nothing
+        here is mistaken for real judgment. The real LLM relator drops in through the same seam later, in its
+        own crate, keeping <code>b2-core</code> model-free.</p>
+      </div>
+    </div>
+    <div class="invariant"><b>The type gate is not trusted to the model.</b> Discovery only ever emits the
+    closed <a href="#vocab">core vocabulary</a>; before persisting, the pipeline validates a proposal's
+    <code>edge_type</code> against <code>relation::is_core</code> — a real relator's output is checked, not
+    taken on faith.</div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">relate.rs</span> (5 tests) — same pair →
+    identical verdict, <em>direction matters</em> (A→B is a distinct judgment from B→A), every fired
+    proposal is a core verb carrying an explanation and a confidence in the documented [0.5, 1.0] band, and
+    the decline path is reachable across a spread of pairs.</div>
+  </div>
+</div>
+
+<!-- ============ CONNECTION DISCOVERY ============ -->
+<section id="discovery">
+  <h3>★ Connection discovery — the candidate engine</h3>
+  <p class="sub">The reason B2 exists: proposing <em>typed, explained</em> connections you never made. It is
+  a three-stage pipeline — <b>candidate generation → the <a href="#relator">relator</a> → the
+  <a href="#lifecycle">review loop</a></b>. This section documents the first stage, the one piece that is
+  unique to discovery and the only one that reads the graph. <span class="mono" style="color:var(--muted)">crates/b2-core/src/discover.rs</span></p>
+
+  <div class="card">
+    <div class="kicker" style="color:var(--amber)">The one idea — a candidate is the graph's <em>complement</em>, not its intersection</div>
+    <p style="font-size:13.5px;margin:6px 0 8px">Discovery proposes links you <em>haven't</em> made, so a
+    candidate is a note <b>semantically near the anchor but not already connected</b> — the set difference
+    <span class="eq">near&nbsp;∖&nbsp;connected</span>. That is the exact opposite of the graph-filtered join
+    (<a href="#retrieval"><code>graph_filtered_search</code></a>), which returns the <em>intersection</em>
+    (near <b>and</b> connected — a scoped traversal). Confusing the two is the trap the whole engine turns on
+    avoiding.</p>
+    <div class="diagram" style="margin:8px 0 0">
+      <svg viewBox="0 0 1040 300" xmlns="http://www.w3.org/2000/svg">
+        <!-- near (vector) -->
+        <circle cx="420" cy="150" r="150" fill="var(--purple)" fill-opacity="0.10" stroke="var(--purple)" stroke-width="1.6"/>
+        <!-- connected (graph, ≤1 hop) -->
+        <circle cx="650" cy="150" r="128" fill="var(--green)" fill-opacity="0.10" stroke="var(--green)" stroke-width="1.6"/>
+
+        <text class="lbl" x="300" y="40" text-anchor="middle" style="fill:var(--purple)">semantically near — vector KNN</text>
+        <text class="lbl" x="770" y="40" text-anchor="middle" style="fill:var(--green)">already connected — ≤ 1 hop</text>
+
+        <!-- candidates: near-only crescent -->
+        <text class="title" x="300" y="150" text-anchor="middle" style="fill:var(--amber);font-size:16px">CANDIDATES</text>
+        <text class="sub" x="300" y="172" text-anchor="middle" style="fill:var(--amber)">near ∖ connected</text>
+        <circle cx="250" cy="110" r="4" fill="var(--amber)"/><circle cx="330" cy="205" r="4" fill="var(--amber)"/>
+        <circle cx="245" cy="195" r="4" fill="var(--amber)"/><circle cx="345" cy="105" r="4" fill="var(--amber)"/>
+
+        <!-- intersection -->
+        <text class="sub mono-t" x="548" y="146" text-anchor="middle">∩ scoped</text>
+        <text class="sub mono-t" x="548" y="162" text-anchor="middle">traversal</text>
+
+        <!-- anchor + connected-only -->
+        <circle cx="690" cy="150" r="6" fill="var(--ink)"/>
+        <text class="sub" x="690" y="134" text-anchor="middle">anchor</text>
+        <text class="sub" x="712" y="205" text-anchor="middle">connected,</text>
+        <text class="sub" x="712" y="221" text-anchor="middle">not near</text>
+
+        <!-- captions -->
+        <text class="lbl" x="300" y="284" text-anchor="middle" style="fill:var(--amber)">→ ranked, handed to the relator</text>
+        <text class="lbl" x="548" y="284" text-anchor="middle"><tspan class="mono-t">graph_filtered_search</tspan> — the wrong tool for discovery</text>
+      </svg>
+      <div class="legend">
+        <span style="color:var(--purple)">■ semantically near (vector)</span>
+        <span style="color:var(--green)">■ already connected (graph, ≤1 hop)</span>
+        <span style="color:var(--amber)">■ candidates = near ∖ connected</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="kicker">The mechanism — <code>discover::candidates(anchor, limit)</code></div>
+    <div class="flow" style="margin:6px 0 4px">
+      <span class="box">anchor's stored chunk vectors</span>
+      <span class="arrow">→</span>
+      <span class="box">KNN over chunks_vec</span>
+      <span class="arrow">→</span>
+      <span class="box">max-sim → per candidate note</span>
+      <span class="arrow">−</span>
+      <span class="box" style="border-color:var(--green)">reachable_within(anchor, 1)</span>
+      <span class="arrow">→</span>
+      <span class="box" style="border-color:var(--amber)">rank → top-N</span>
+      <span class="arrow">→</span>
+      <span class="box" style="border-color:var(--purple)">Relator</span>
+    </div>
+    <ul class="tidy" style="font-size:13.5px;margin:12px 0 0">
+      <li><b>Per-chunk, passage↔passage — no re-embedding.</b> For each of the anchor's chunks, its
+      <em>already-stored</em> vector (read straight back out of <code>chunks_vec</code>) is the KNN query.
+      Discovery is document-to-document, so the anchor is represented by the vectors already in the index —
+      never by an <code>embed_query</code> of its text, whose asymmetric query prefix is the wrong side.</li>
+      <li><b>Max-sim to the note.</b> Every other note is scored by its single <em>best</em> chunk-pair
+      similarity across the anchor's chunks × that note's chunks — so a multi-topic note surfaces on
+      whichever of its topics actually matches, carrying the winning chunk as evidence for the relator.</li>
+      <li><b>Subtract the graph — the one graph read.</b> <code>reachable_within(anchor, 1)</code> (the
+      anchor plus its direct neighbors) is removed. That is the <em>only</em> use of the graph in
+      generation: subtract what's already linked. Everything else near in vector space is a candidate,
+      ranked by score, truncated to top-N.</li>
+      <li><b>Deliberately permissive.</b> Generation <em>over-produces</em>; precision is the
+      <a href="#relator">relator</a>'s job (its <code>Ok(None)</code> decline + the <code>is_core</code>
+      gate) and the human's. Candidate generation never tries to be the filter.</li>
+    </ul>
+  </div>
+
+  <div class="grid2">
+    <div class="card tight" style="margin:0">
+      <div class="kicker" style="color:var(--amber)">Decision ① · graph distance is exclusion-only, not a ranking signal</div>
+      <p style="font-size:13px;margin:4px 0 0">A note <b>two hops away</b> — triadic closure, "you linked
+      A–B and B–E but never A–E" — is <em>kept</em>, ranked purely by semantic score; a note in a far
+      cluster (a "bridge") rides along <em>unboosted</em>. Whether to boost closure vs. serendipity is a
+      deferred, <b>eval-gated</b> experiment: hop-count is a noisy proxy for "non-obvious," and the relator
+      judges that far better. This is why the exclusion radius is exactly <b>1</b> — subtract only what is
+      <em>directly</em> linked.</p>
+    </div>
+    <div class="card tight" style="margin:0">
+      <div class="kicker" style="color:var(--amber)">Decision ② · per-chunk, never whole-note</div>
+      <p style="font-size:13px;margin:4px 0 0">Searching from the <em>whole</em> note would truncate it at
+      the model's ~512-token cap and blur a multi-topic note into one centroid vector — the exact failure
+      the chunk-granular store exists to avoid. So the anchor is searched <b>chunk-by-chunk</b> and merged
+      by max-sim. Under the fake embedder this makes no visible difference (nearness is content-addressed),
+      so the choice is made on architectural correctness, not on what CI can see.</p>
+    </div>
+  </div>
+
+  <div class="invariant"><b>Status — the pipeline, half-built.</b> Candidate generation
+  (<code>discover::candidates</code>) and the <a href="#relator">relator seam</a> (<code>FakeRelator</code>)
+  now exist and are tested. What remains is the <em>orchestration glue</em> — for each note as anchor:
+  <span class="mono">candidates → relate → is_core gate → generate_suggestion</span> — and the
+  <code>b2 suggest</code> / <code>accept</code> / <code>reject</code> commands on the <a href="#adapter">Vault
+  façade</a>. The accept / reject / list engine ops are already built (Flow ③); only the generate-loop and
+  the command surface are left. <b>Nothing generates suggestions yet</b> — this is the slice that will.</div>
+
+  <div class="ground"><b>Ground truth:</b> <span class="mono">discover.rs</span> (7 tests) pins the
+  complement — the anchor and its direct (1-hop) neighbor are excluded while a disconnected near note is
+  kept; a <b>2-hop note survives the 1-hop exclusion</b> (triadic closure is retained, the concrete payoff
+  of Decision ①); candidates are ranked best-first; <code>limit</code> keeps the best-ranked prefix; each
+  candidate's evidence chunk belongs to its note; generation is deterministic; and a directly-connected pair
+  (the golden vault) yields <em>no</em> candidates. <b>Honest scope:</b> under the fake embedder nearness is
+  content-addressed, not semantic, so these prove the <em>plumbing</em> — the exclusion set, the max-sim
+  ranking, determinism — not ranking quality, which is the deferred suggestion-quality eval.</div>
+</section>
 
 <!-- ============ SUGGESTION LIFECYCLE (FLOW 3) ============ -->
 <div class="layer" id="lifecycle">
@@ -858,12 +1035,18 @@
   and no random ids. That is deliberate: every non-deterministic part sits behind a trait so a
   deterministic double can be swapped in. This is what makes the system testable at all — and it is the
   same "build for tomorrow's model" seam a more capable model drops into later.</p>
-  <div class="grid3">
+  <div class="grid2">
     <div class="seam">
       <div class="kicker" style="color:var(--purple)">Embedder — <code>embed::Embedder</code></div>
       <p style="font-size:12.5px;margin:6px 0 0"><code>FakeEmbedder</code> hashes text into a reproducible
       vector; the real candle model swaps in behind the identical trait. Tests get deterministic KNN; users
       get semantics.</p>
+    </div>
+    <div class="seam" style="border-color:var(--amber)">
+      <div class="kicker" style="color:var(--amber)">Relator — <code>relate::Relator</code></div>
+      <p style="font-size:12.5px;margin:6px 0 0"><code>FakeRelator</code> hashes the note pair into a
+      reproducible verdict (a core verb, or a decline); the real LLM relator swaps in behind the identical
+      trait. The precision gate of <a href="#discovery">connection discovery</a>, deterministic in CI.</p>
     </div>
     <div class="seam">
       <div class="kicker" style="color:var(--purple)">Event sink — <code>event::EventSink</code></div>
@@ -922,7 +1105,7 @@ memory]] retrieval curve.
   reads them, never writes them. So a single ingest yields a known-good graph the tests can match whole.</p>
 
   <div class="card">
-    <div class="kicker">Coverage at a glance — 73 tests, all green</div>
+    <div class="kicker">Coverage at a glance — 85 tests, all green</div>
     <table>
       <tr><th>Architectural property</th><th>Pinned by</th><th class="mono" style="text-align:right">tests</th></tr>
       <tr><td>Substrate — FTS5 + sqlite-vec coexist; pragmas persist</td><td class="mono">substrate.rs</td><td class="mono" style="text-align:right">2</td></tr>
@@ -931,13 +1114,15 @@ memory]] retrieval curve.
       <tr><td>Vectors &amp; the embedder seam</td><td class="mono">embed.rs</td><td class="mono" style="text-align:right">5</td></tr>
       <tr><td>Event log &amp; replay (disposable index)</td><td class="mono">suggestions.rs</td><td class="mono" style="text-align:right">4</td></tr>
       <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">8</td></tr>
+      <tr><td>The relator seam — classify / explain / decline</td><td class="mono">relate.rs</td><td class="mono" style="text-align:right">5</td></tr>
+      <tr><td><b>Connection discovery — candidate generation</b></td><td class="mono">discover.rs</td><td class="mono" style="text-align:right">7</td></tr>
       <tr><td>Accept &amp; frontmatter relations (the lifecycle)</td><td class="mono">frontmatter · accept</td><td class="mono" style="text-align:right">9</td></tr>
       <tr><td>The <code>Vault</code> façade</td><td class="mono">vault.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>The <code>b2</code> CLI (drives the built binary)</td><td class="mono">cli.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>Embedder config &amp; source resolution</td><td class="mono">b2-embed/config.rs</td><td class="mono" style="text-align:right">4</td></tr>
     </table>
     <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Verified by <code>cargo test</code> on
-    rustc 1.96.0 — <b style="color:var(--green)">73 passed, 0 failed</b> across the three crates. To read
+    rustc 1.96.0 — <b style="color:var(--green)">85 passed, 0 failed</b> across the three crates. To read
     how any property actually behaves, open the file in the right-hand column; it is the ground truth this
     page paraphrases.</p>
   </div>
@@ -960,9 +1145,12 @@ memory]] retrieval curve.
       <code>neighbors</code> / <code>search</code> exist; <code>add</code>, <code>mv</code>,
       <code>suggest</code> / <code>accept</code> / <code>reject</code>, and <code>explain</code> are still
       backlog (their <em>engine</em> substrate is built and tested — only the command surface is missing).</li>
-      <li><b>The discovery pipeline.</b> Candidate generation → typed/explained suggestions → review loop
-      exists only as its substrate (the graph⨝vector join + the suggestion lifecycle), not yet as an
-      orchestrated pipeline.</li>
+      <li><b>The discovery pipeline's last mile.</b> Candidate generation
+      (<a href="#discovery"><code>discover.rs</code></a>) and the <a href="#relator">relator seam</a>
+      (<code>FakeRelator</code>) are now built and tested — but nothing runs them yet. Still missing: the
+      orchestration loop that walks each note as an anchor and feeds every proposal into
+      <code>generate_suggestion</code>, plus the <code>b2 suggest</code> / <code>accept</code> /
+      <code>reject</code> commands over the façade (the accept/reject <em>engine</em> ops already exist).</li>
     </ul>
   </div>
 </section>
@@ -970,7 +1158,7 @@ memory]] retrieval curve.
 <div class="foot">
   <p>Describes the repository as built on 2026-07-01. Source of truth for every claim:
   <code>crates/b2-core/src/</code>, <code>crates/b2-embed/src/</code>, <code>crates/b2-cli/src/</code>,
-  and the test suite under each crate's <code>tests/</code> — <b style="color:var(--green)">73 passed,
+  and the test suite under each crate's <code>tests/</code> — <b style="color:var(--green)">85 passed,
   0 failed</b> on rustc 1.96.0. Design rationale lives in <code>planning/</code>
   (<code>data-model.md</code> · <code>index-engine.md</code> · <code>specs/index-engine-build.md</code>).</p>
 </div>

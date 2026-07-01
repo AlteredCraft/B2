@@ -93,3 +93,15 @@ pub fn pack_f32(v: &[f32]) -> Vec<u8> {
     }
     out
 }
+
+/// Inverse of [`pack_f32`]: read a `sqlite-vec` `vec0` BLOB (little-endian float32,
+/// no header) back into a vector. Used to reuse a note's *stored* chunk vectors as
+/// KNN queries without re-embedding (connection-discovery candidate generation,
+/// tasks.md ①). A trailing partial group can't occur for a `FLOAT[N]` column, so a
+/// non-multiple-of-4 length is simply truncated rather than treated as an error.
+pub fn unpack_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect()
+}

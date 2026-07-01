@@ -182,10 +182,12 @@ edges is what turns the following from full-vault scans (or impossibilities) int
   the exact N inbound files to rewrite on a move instead of scanning the vault to find them (§8).
 - **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`refutes`" is a scan *per hop*
   at runtime; over `edges` it is one SQL traversal.
-- **The discovery join.** Candidate generation — "semantic-nearest chunks whose note is within k typed
-  hops of X" — is a single join `chunks_vec ⨝ chunks ⨝ edges`. It is not expressible as a per-note parse;
-  it is the substrate area-5 connection discovery runs on, and the reason the graph and the search indexes
-  must live in **one** store (§2).
+- **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a single
+  join `chunks_vec ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
+  primitive (search *within* an already-related neighborhood). **Connection-discovery candidate generation
+  is its *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links
+  you *haven't* made (resolved 2026-07-01, see [tasks.md](tasks.md) ①). Both stand on the same reason the
+  graph and search indexes must live in **one** store (§2): area-5 discovery is the substrate this enables.
 - **The suggestion queue.** Suggested edges are *inert until accepted* and so are deliberately **absent
   from the Markdown** ([data-model.md](data-model.md) §4). There is nothing on disk to parse — the live
   queue can only be a materialized structure (replayed from the log).
