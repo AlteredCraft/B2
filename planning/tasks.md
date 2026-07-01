@@ -57,43 +57,49 @@ areas, v1 scope, locked decisions).
 > (indexed in ~10s, search fast). But the shipped embedder is the deterministic **fake**, so `search`'s
 > vector half — and, later, discovery candidate generation — is **not yet semantic**. This is the
 > deferred quality half of build-spec steps 3 & 5, and the one place the architecture meets real
-> friction ([index-engine.md](index-engine.md) §6).
+> friction ([index-engine.md](index-engine.md) §6). **The gating decisions are now locked (below) — go
+> straight to the build order.**
 
-**⛳ Start here — the gating decision (make it with Sam before coding).** Like the language gate, this
-opens with a *choice*, not a keystroke: **which local embedding model · which Rust runtime · how it
-ships.** Shortlist from [index-engine.md](index-engine.md) §6/§8, now filtered to Rust (language is
-locked):
-- **Model + dim:** EmbeddingGemma-300M or Qwen3-Embedding-0.6B (~300–600 MB). Pick the **dim
-  deliberately — likely 768** (§8); it becomes the `chunks_vec` `FLOAT[N]` column type. Note the
-  EmbeddingGemma prompt format (`task:… | query:` / `title:… | text:`, §5).
-- **Runtime:** ONNX via `ort`/`fastembed`-rs (cleaner than carrying a whole LLM runtime just to embed)
-  vs. a `llama.cpp`/GGUF binding vs. `candle` — favour whatever static-links into one binary.
-- **Packaging:** bundle-in-binary vs. **download-on-first-run** (a one-time ritual, not per-use) — the
-  genuine open question; can be deferred as a packaging detail but nudges the runtime choice.
-- Record the decision in [index-engine.md](index-engine.md) §6 + [vision-and-scope.md](vision-and-scope.md)
-  "Decisions locked", the way earlier gates were captured.
+**Decisions locked (2026-06-30).** Mirrored in [index-engine.md](index-engine.md) §6/§8 and
+[vision-and-scope.md](vision-and-scope.md):
+- **Runtime = `candle` + `hf-hub`.** Pure-Rust inference compiled *into* the binary — no external ONNX
+  Runtime lib to ship (best fit for the single-binary goal, principle #5); `hf-hub` is the download seam.
+- **Model = EmbeddingGemma-300M @ dim 768.** 768 becomes the `chunks_vec` `FLOAT[N]` type; fine for
+  brute-force KNN at vault scale (§8). Apply its prompt prefixes — `title:… | text:` for documents,
+  `task:… | query:` for the query (§5). *Fallback:* if EmbeddingGemma is fiddly in candle, a known-good
+  candle embedding model (bge / gte / nomic-embed) — confirm in the spike before committing.
+- **Not bundled → explicit `b2 init` download.** The binary never carries the model and never
+  surprise-downloads mid-command. `b2 init` fetches + verifies the model; `reindex`/`search` **fail fast**
+  with "run `b2 init`" if the files are absent (the fail-fast config rule).
+- **Model source is configurable.** Default = an HF repo id; overridable to a mirror (`HF_ENDPOINT`), a
+  different repo, or a **local path** (fully-offline install). Lives in a global TOML at
+  `$XDG_CONFIG_HOME/b2/config.toml` → `[embedder] model / source / cache_dir`.
+- **Model cached in a shared XDG dir** (e.g. `~/.local/share/b2/models/`), **not** per-vault `.b2/` —
+  it's a machine-level runtime dep, one copy per machine. (The vault still records which model built its
+  vectors in `meta`, which is how a swap triggers a re-embed.)
+- **Fix the `open()`-time drop.** `ensure_embedding_space` currently runs in `Vault::open` and would
+  silently drop `chunks_vec` on a model/dim mismatch — so a config change could wipe vectors on the next
+  `search`. Move it: `open` never mutates; a read that sees `meta.model ≠ config.model` **fails fast**
+  ("index built with model X; run `b2 reindex`"); re-embed happens only on `reindex`.
 
-**Goal (once decided):** a real `Embedder` impl behind the existing seam, wired as the **Vault/CLI
-default**. Almost everything already accommodates it — this is a *drop-in*, not a redesign:
-- Seam: [`embed::Embedder`](../crates/b2-core/src/embed.rs) (`model_id` / `dim` / `embed`).
-- One wiring point: `crates/b2-core/src/vault.rs` — today `const EMBED_DIM = 64` +
-  `FakeEmbedder::new(EMBED_DIM)`. Swap the field to the real impl (likely `Box<dyn Embedder>`) at the
-  real dim; the CLI/façade inherit it.
-- Self-healing swap: `db::ensure_embedding_space` detects a model/dim change via `meta`, drops
-  `chunks_vec`, and forces a full re-embed on the next `reindex`. **No migration to write** — the first
-  real reindex just re-vectors the vault.
-- **Keep `FakeEmbedder` for the tests** — every existing test constructs it directly for determinism;
-  the real model must not leak into the fast plumbing suite (testability stack, points 4–5).
-- Then relax the CLI `search` caveat (stderr) once the vector half is genuinely semantic.
+**Build order (spike/test-first, like every slice before it):**
+1. **Spike** — prove `candle` + `hf-hub` can download EmbeddingGemma-300M, embed a string, and KNN it at
+   the expected dim. Cheapest way to de-risk the one uncertain part; pick the fallback model here if needed.
+2. **Real `Embedder` impl** behind the existing seam ([`embed::Embedder`](../crates/b2-core/src/embed.rs)):
+   tokenizer + mean-pool + normalize + the prompt prefixes. Plus the TOML config loader.
+3. **`b2 init`** — download + verify into the XDG cache; friendly progress; idempotent (skip if present).
+4. **Wire as the Vault/CLI default** — one point: `crates/b2-core/src/vault.rs` (`EMBED_DIM = 64` +
+   `FakeEmbedder::new(…)` → the real impl, likely `Box<dyn Embedder>`, at dim 768). Apply the `open()`
+   fail-fast fix. **Keep `FakeEmbedder` for all existing tests** (determinism — the real model must never
+   enter the fast CI suite, testability points 4–5). Then relax the CLI `search` semantic caveat.
+5. **Eval suite** — a separate, occasional pass scoring **semantic + suggestion quality**
+   (precision/recall) against a small hand-labelled set, kept **out of the deterministic CI tests so
+   model quality never flakes CI** ([vision-and-scope.md](vision-and-scope.md), testability point 5).
 
-**Then the eval suite:** the separate, occasional pass scoring **semantic + suggestion quality**
-(precision/recall) against a small hand-labelled set, kept **out of the deterministic CI tests so model
-quality never flakes CI** ([vision-and-scope.md](vision-and-scope.md), testability stack point 5).
-
-**Out of scope (keep it thin):** query expansion (qmd's 1.7B third model — off-by-default, later); a
-reranker; and the packaging/distribution build itself (decide the strategy here, ship the installer
-later). **Unlocks:** the qmd chunker upgrade (a real embedder can finally score paragraph vs. qmd
-chunking — build spec §1.2) and honest semantic `search`.
+**Not in scope (keep it thin):** query expansion (qmd's 1.7B third model — off-by-default, later); a
+reranker; the actual packaging/distribution build (strategy is decided here; ship the installer later).
+**Unlocks:** the qmd chunker upgrade (a real embedder can finally score paragraph vs. qmd chunking —
+build spec §1.2) and honest semantic `search`.
 
 ### After that (ordered)
 

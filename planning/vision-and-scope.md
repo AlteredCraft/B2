@@ -285,6 +285,21 @@ zero UI.
   frontmatter relations are the more OKF-native shape — a small cost for a pristine document. Full
   re-derivation in [data-model.md](data-model.md) §0, §2, §7, §9.
 
+## Decisions locked (2026-06-30) — embedder & distribution
+
+Settles "the index-engine choice is a gating decision" for semantic search
+([index-engine.md](index-engine.md) §6/§8); build/execution plan in [tasks.md](tasks.md) "Next up".
+
+- **Local embedder = `candle` + `hf-hub`, EmbeddingGemma-300M @ dim 768.** Pure-Rust inference compiled
+  into the binary (no external ONNX Runtime), behind the existing swappable `Embedder` seam — the "build
+  for tomorrow's model" tenet in practice. 768 sets the `chunks_vec` column type; a model/dim change is a
+  full re-embed.
+- **The model is not bundled; it's an explicit `b2 init` download.** Keeps the single binary small
+  (principle #5) and never surprise-downloads mid-command — `reindex`/`search` fail fast until `b2 init`
+  has run. The download **source is configurable** (default HF repo; overridable to a mirror, another
+  repo, or a local path for fully-offline installs), set in a global TOML config; the model is cached in a
+  shared XDG dir, not per-vault.
+
 ## Inspiration — not a copy
 
 We take *ideas*, not implementations:

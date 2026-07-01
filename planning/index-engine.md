@@ -269,6 +269,15 @@ later. Crucially, **none of this blocks the engine work**: build the SQLite stor
 FTS5 + `sqlite-vec` + the typed graph now against the deterministic fake embedder; drop the real
 embedder into the seam when the packaging path is chosen.
 
+**Decided (2026-06-30).** Runtime = **`candle` + `hf-hub`** (pure-Rust inference compiled into the
+binary — no external ONNX Runtime to ship; `hf-hub` is the download seam). Model =
+**EmbeddingGemma-300M @ dim 768** (fallback to a known-good candle embedding model if it proves fiddly).
+**Not bundled** — an explicit **`b2 init`** downloads + verifies the model into a shared **XDG cache**
+(`~/.local/share/b2/models/`), never a surprise mid-command download; `reindex`/`search` fail fast with
+"run `b2 init`" if it's absent. **The model source is configurable** (default = an HF repo id;
+overridable to a mirror, another repo, or a local path for offline installs) via a global TOML at
+`$XDG_CONFIG_HOME/b2/config.toml`. Build/execution plan in [tasks.md](tasks.md) "Next up".
+
 ## 7. Tech-stack implications (noted, not decided)
 
 The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-engine choice nudges it:
@@ -288,11 +297,12 @@ The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-
 
 - **`sqlite-vec` is pre-v1.** Mitigate: pin a version, wrap vector ops behind our own small interface so
   a future swap (or ANN upgrade) is contained.
-- **Embedding model size vs. single binary** (§6) — the genuine open question; decide bundle vs.
-  first-run download during packaging.
+- **Embedding model size vs. single binary** (§6) — **resolved (2026-06-30):** not bundled; an explicit
+  `b2 init` downloads a configurable model (candle + hf-hub) into a shared XDG cache. The binary stays small.
 - **Embedding dimension & model lock-in.** Changing the embed model means re-embedding the whole vault
   (qmd's `embed -f`). Store the model id + dim in the DB; treat a model change as a full re-embed.
-  Pick the default dim (e.g. 768) deliberately since it sets the `vec0` column type.
+  **Locked (2026-06-30):** EmbeddingGemma-300M at **dim 768** sets the `vec0` column type; a model/dim
+  change is a full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
 - **Loadable-extension friction.** `sqlite-vec` must be loaded at runtime (qmd notes macOS needs a
   SQLite that allows extensions). Static-linking it into our binary removes this for end users.
 - **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
