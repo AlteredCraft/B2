@@ -52,15 +52,38 @@ pub fn rrf_fuse(ranked_lists: &[Vec<i64>], k: usize) -> Vec<(i64, f64)> {
 
 /// BM25 keyword search over chunk text → chunk ids, best first.
 ///
-/// The query is passed to FTS5 `MATCH` as written; robust query parsing/escaping
-/// is a later concern (callers currently use plain terms).
+/// The raw query is sanitized into a safe FTS5 expression first (see
+/// [`fts5_query`]): with real semantic search, callers pass natural-language
+/// queries — apostrophes, punctuation, quotes — which are FTS5 *syntax* and would
+/// otherwise raise a parse error. A query with no usable terms yields no hits (the
+/// vector half still runs).
 pub fn keyword_search(conn: &rusqlite::Connection, query: &str, limit: usize) -> Result<Vec<i64>> {
+    let match_expr = fts5_query(query);
+    if match_expr.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn
         .prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2")?;
-    let rows = stmt.query_map(rusqlite::params![query, limit as i64], |r| {
+    let rows = stmt.query_map(rusqlite::params![match_expr, limit as i64], |r| {
         r.get::<_, i64>(0)
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Turn arbitrary user text into a safe FTS5 `MATCH` expression: extract
+/// alphanumeric terms, wrap each as a double-quoted string literal (so nothing in
+/// the input is interpreted as FTS5 operators), and OR them for keyword recall —
+/// the vector half supplies semantics, so the keyword half should be forgiving.
+/// Returns an empty string when the query has no usable terms.
+pub fn fts5_query(raw: &str) -> String {
+    let terms: Vec<String> = raw
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        // A double-quoted FTS5 string is a literal term; internal quotes can't
+        // occur here (split drops them), but double them defensively regardless.
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    terms.join(" OR ")
 }
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
@@ -77,7 +100,7 @@ pub fn hybrid_search(
 ) -> Result<Vec<Hit>> {
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
-    let vector: Vec<i64> = db::vector_search(conn, &embedder.embed(query), pool)?
+    let vector: Vec<i64> = db::vector_search(conn, &embedder.embed_query(query)?, pool)?
         .into_iter()
         .map(|(id, _)| id)
         .collect();
@@ -114,7 +137,7 @@ pub fn graph_filtered_search(
     let pool = db::chunk_count(conn)?.max(1) as usize;
 
     let mut hits = Vec::new();
-    for (chunk_id, distance) in db::vector_search(conn, &embedder.embed(query), pool)? {
+    for (chunk_id, distance) in db::vector_search(conn, &embedder.embed_query(query)?, pool)? {
         let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? else {
             continue;
         };

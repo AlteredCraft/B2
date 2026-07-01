@@ -290,10 +290,14 @@ zero UI.
 Settles "the index-engine choice is a gating decision" for semantic search
 ([index-engine.md](index-engine.md) §6/§8); build/execution plan in [tasks.md](tasks.md) "Next up".
 
-- **Local embedder = `candle` + `hf-hub`, EmbeddingGemma-300M @ dim 768.** Pure-Rust inference compiled
-  into the binary (no external ONNX Runtime), behind the existing swappable `Embedder` seam — the "build
-  for tomorrow's model" tenet in practice. 768 sets the `chunks_vec` column type; a model/dim change is a
-  full re-embed.
+- **Local embedder = `candle` + `hf-hub`, dim 768.** Pure-Rust inference compiled into the binary (no
+  external ONNX Runtime), behind the existing swappable `Embedder` seam — the "build for tomorrow's model"
+  tenet in practice. 768 sets the `chunks_vec` column type; a model/dim change is a full re-embed.
+  **Built 2026-07-01** in `crates/b2-embed` (`LocalEmbedder`). The default model changed from
+  EmbeddingGemma-300M to **`BAAI/bge-base-en-v1.5`** (BERT, 768-dim, ungated): EmbeddingGemma is *gated* on
+  Hugging Face (needs a token + license click), which defeats a friction-free `b2 init`; bge was the
+  pre-authorized fallback and is validated. EmbeddingGemma stays selectable via config for anyone with a
+  token.
 - **The model is not bundled; it's an explicit `b2 init` download.** Keeps the single binary small
   (principle #5) and never surprise-downloads mid-command — `reindex`/`search` fail fast until `b2 init`
   has run. The download **source is configurable** (default HF repo; overridable to a mirror, another

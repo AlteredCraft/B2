@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/b2-core", "crates/b2-cli"]
+members = ["crates/b2-core", "crates/b2-embed", "crates/b2-cli"]
 
 # B2 — local-first Markdown PKM with AI connection discovery.
 # Design lives in planning/; this workspace is the index engine

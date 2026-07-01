@@ -8,9 +8,12 @@
 //!
 //! A vault is one portable folder: the index and log live under `<root>/.b2/`
 //! (data-model.md §4), so pointing B2 at a folder of Markdown is the whole setup.
-//! The embedder is the deterministic [`FakeEmbedder`] for now — `search`'s BM25
-//! (keyword) half is real; the vector half is *not yet semantic* until the local
-//! model drops into the seam (index-engine.md §6), and callers must not overstate it.
+//! The embedder is injected ([`open_with_embedder`](Vault::open_with_embedder)):
+//! the `b2` CLI wires the candle-backed `LocalEmbedder` (real semantics), while
+//! [`open`](Vault::open) defaults to the deterministic [`FakeEmbedder`] so the core
+//! test suite stays fast and model-free (testability points 4–5). `search`'s BM25
+//! (keyword) half is always real; the vector half is only semantic under a real
+//! embedder — callers must not overstate the fake.
 
 use crate::db;
 use crate::embed::{Embedder, FakeEmbedder};
@@ -24,9 +27,9 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The embedding dimension the fake embedder runs at. Small and fixed; the real
-/// model will bring its own `dim` when it lands (and a model swap re-embeds — see
-/// [`db::ensure_embedding_space`]).
+/// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
+/// without an injected model (tests/dev). The real model brings its own `dim` (768)
+/// through [`Vault::open_with_embedder`]; a model/dim swap re-embeds on `reindex`.
 const EMBED_DIM: usize = 64;
 
 /// Longest snippet (in chars) shown for a search hit, so a result stays one line.
@@ -38,10 +41,10 @@ pub struct Vault {
     root: PathBuf,
     conn: Connection,
     sink: JsonlSink,
-    // Concrete for now; every engine fn already takes `&dyn Embedder`, so swapping
-    // in the real local model is a one-line change here (the "build for tomorrow's
-    // model" seam, vision-and-scope).
-    embedder: FakeEmbedder,
+    // Injected through the seam: the CLI wires the real candle model; `open`
+    // defaults to `FakeEmbedder` so the core tests stay deterministic and model-free
+    // (the "build for tomorrow's model" seam, vision-and-scope).
+    embedder: Box<dyn Embedder>,
     idgen: UlidGen,
 }
 
@@ -85,19 +88,26 @@ pub struct SearchResult {
 }
 
 impl Vault {
-    /// Open the vault rooted at `vault_root`, creating `<root>/.b2/` (index + log)
-    /// if absent. Idempotent: safe on a fresh folder or an already-built vault.
+    /// Open the vault rooted at `vault_root` with the deterministic [`FakeEmbedder`]
+    /// — the default for tests/dev. Creating `<root>/.b2/` if absent; idempotent.
     pub fn open(vault_root: &Path) -> Result<Self> {
+        Self::open_with_embedder(vault_root, Box::new(FakeEmbedder::new(EMBED_DIM)))
+    }
+
+    /// Open the vault with a caller-supplied embedder — the seam the `b2` CLI uses
+    /// to inject the real candle model while tests keep the fake.
+    ///
+    /// `open` **never mutates the embedding space** (the `open()`-time-drop fix,
+    /// tasks.md / index-engine.md §8): shaping `chunks_vec` and any re-embed happen
+    /// only on `reindex`. That way changing the configured model can never silently
+    /// wipe vectors on the next command — a mismatch is caught, and fixed, at
+    /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
+    pub fn open_with_embedder(vault_root: &Path, embedder: Box<dyn Embedder>) -> Result<Self> {
         // `Connection::open` creates the DB file but not its parent, and the log
         // sink creates `.b2/log/`; make `.b2/` first so both land in one place.
         fs::create_dir_all(vault_root.join(".b2"))?;
         let sink = JsonlSink::in_vault(vault_root)?;
         let conn = db::open(&vault_root.join(".b2").join("b2.sqlite"))?;
-        let embedder = FakeEmbedder::new(EMBED_DIM);
-        // Shape the embedding space now (idempotent; ingest does the same), so a
-        // `search` on a freshly opened, not-yet-reindexed vault returns empty
-        // rather than tripping over a missing `chunks_vec`.
-        db::ensure_embedding_space(&conn, embedder.model_id(), embedder.dim())?;
         Ok(Self {
             root: vault_root.to_path_buf(),
             conn,
@@ -115,7 +125,7 @@ impl Vault {
             &self.root,
             &self.idgen,
             &self.sink,
-            &self.embedder,
+            self.embedder.as_ref(),
         )?;
         Ok(ReindexReport {
             indexed: ingested.len(),
@@ -154,11 +164,28 @@ impl Vault {
     /// `limit` *notes*. Results are note-level: chunk hits are deduped to the
     /// highest-scoring chunk per note, so one note never appears twice.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        // A never-reindexed vault has no vector space yet → no hits, no error
+        // (open() no longer shapes it). This keeps `search` honest before the first
+        // `reindex` instead of tripping over a missing `chunks_vec`.
+        if !db::embedding_space_exists(&self.conn)? {
+            return Ok(Vec::new());
+        }
+        // Fail fast if the index was built with a different model than the active
+        // one: its vectors are incomparable with the query vector we'd produce, so
+        // returning results would be silently wrong. The fix is a `reindex`.
+        if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
+            if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
+                return Err(Error::ModelMismatch {
+                    indexed: format!("{indexed_model} (dim {indexed_dim})"),
+                    active: format!("{} (dim {})", self.embedder.model_id(), self.embedder.dim()),
+                });
+            }
+        }
         // Pull a wider chunk pool than `limit` so dedup can still fill `limit`
         // distinct notes when several top chunks share a note.
         let pool = limit.saturating_mul(3).max(limit);
         let mut out: Vec<SearchResult> = Vec::new();
-        for hit in search::hybrid_search(&self.conn, &self.embedder, query, pool)? {
+        for hit in search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)? {
             if out.iter().any(|r| r.b2id == hit.note_b2id) {
                 continue; // note already represented by a higher-scoring chunk
             }

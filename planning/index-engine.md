@@ -278,6 +278,17 @@ binary — no external ONNX Runtime to ship; `hf-hub` is the download seam). Mod
 overridable to a mirror, another repo, or a local path for offline installs) via a global TOML at
 `$XDG_CONFIG_HOME/b2/config.toml`. Build/execution plan in [tasks.md](tasks.md) "Next up".
 
+**Built (2026-07-01).** Shipped in the **`b2-embed`** crate (`LocalEmbedder` behind the `b2-core`
+`Embedder` seam; candle + `hf-hub`; CLS-pool + L2-normalize; asymmetric query prefix). **Model default
+changed to `BAAI/bge-base-en-v1.5`** (BERT-family, **768-dim**, ungated): EmbeddingGemma-300M is *gated*
+on Hugging Face (HTTP 401 without a token + license acceptance), which defeats a friction-free `b2 init`
+— so B2 ships the pre-authorized bge fallback by default, validated in the spike (cat↔feline 0.83; NL
+queries retrieve by meaning, not keyword). EmbeddingGemma remains selectable via config for anyone who
+provides a token. The dim is read authoritatively from the model's own `config.json` (`hidden_size`), so
+config can't lie about it. `open()` no longer shapes/drops the vector space (the mismatch fails fast on
+`search`, re-embeds on `reindex`); the fake embedder stays the CI default so model quality never enters
+the fast suite. Eval is a `cargo run -p b2-embed --example eval` pass (precision/MRR), out of CI.
+
 ## 7. Tech-stack implications (noted, not decided)
 
 The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-engine choice nudges it:

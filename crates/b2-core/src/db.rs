@@ -305,6 +305,29 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
     Ok(())
 }
 
+/// The `(embed_model_id, embed_dim)` a prior ingest recorded in `meta`, if any.
+/// `None` means the vault has never been embedded (no `chunks_vec` yet). This is
+/// the only place a model swap is detectable, so a read compares it to the active
+/// embedder and fails fast on a mismatch (index-engine.md §8).
+pub fn recorded_embedder(conn: &Connection) -> Result<Option<(String, usize)>> {
+    let model: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'embed_model_id'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let dim: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'embed_dim'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    match (model, dim) {
+        (Some(m), Some(d)) => Ok(Some((m, d.parse().unwrap_or(0)))),
+        _ => Ok(None),
+    }
+}
+
 fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO meta(key, value) VALUES (?1, ?2)

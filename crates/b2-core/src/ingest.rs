@@ -92,7 +92,7 @@ fn project_note_and_chunks(
     let chunks = chunk_body(&body);
     let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
     for (id, chunk) in chunk_ids.iter().zip(&chunks) {
-        db::set_chunk_vector(conn, *id, &embedder.embed(&chunk.text))?;
+        db::set_chunk_vector(conn, *id, &embedder.embed(&chunk.text)?)?;
     }
 
     Ok((b2id, stamped, body, relations))

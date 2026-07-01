@@ -21,6 +21,18 @@ pub enum Error {
     /// the one domain error the façade distinguishes from "found, no results".
     #[error("note not found: {0}")]
     NoteNotFound(String),
+
+    /// The embedder failed to produce a vector (real-model tensor/runtime error).
+    /// Kept as a message so `b2-core` stays free of the embedding runtime's types.
+    #[error("embedding failed: {0}")]
+    Embed(String),
+
+    /// The index's recorded embedding model/dim differs from the active embedder,
+    /// so its vectors are incomparable with new query vectors. A read (search)
+    /// fails fast with this rather than returning silently wrong results; the fix
+    /// is a `reindex` (which re-embeds). See index-engine.md §8 and tasks.md.
+    #[error("index built with embedding model {indexed}, but the active model is {active}; run `b2 reindex`")]
+    ModelMismatch { indexed: String, active: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

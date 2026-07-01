@@ -73,6 +73,39 @@ fn keyword_search_finds_chunks_by_term() {
 }
 
 #[test]
+fn keyword_search_tolerates_natural_language_punctuation() {
+    // Real semantic search invites NL queries: apostrophes, quotes, punctuation are
+    // FTS5 *syntax* and would raise a parse error if passed raw (the bug the eval
+    // surfaced). They must be sanitized to a safe MATCH, still matching real terms.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path());
+
+    for q in [
+        "why can't I remember? the \"forgetting\" curve!",
+        "forgetting...",
+        "-- forgetting --",
+    ] {
+        let ids = search::keyword_search(&conn, q, 10).unwrap();
+        assert!(!ids.is_empty(), "query {q:?} should still find the term");
+    }
+
+    // A query with no usable terms is empty, not an error (vector half still runs).
+    assert!(search::keyword_search(&conn, "!!! ??? ...", 10)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn fts5_query_sanitizes_to_ored_literals() {
+    assert_eq!(
+        search::fts5_query("can't sleep"),
+        "\"can\" OR \"t\" OR \"sleep\""
+    );
+    assert_eq!(search::fts5_query("  !!! "), "");
+    assert_eq!(search::fts5_query("forgetting"), "\"forgetting\"");
+}
+
+#[test]
 fn hybrid_search_combines_signals_and_resolves_to_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());

@@ -13,11 +13,13 @@ AI agent that discovers **typed, explained connections** between your notes that
 by hand.
 
 > **Status:** the design is **locked**, the **index engine is built** (`crates/b2-core`: steps 0→5 of
-> the [build spec](planning/specs/index-engine-build.md) + the suggestion **accept** operation), and the
-> **first adapter is live** — a **`b2` CLI over a typed core API** (`crates/b2-cli`): point B2 at a folder
-> and `reindex` / `neighbors` / `search` it from the terminal, with `--json` for agents. All green (67
-> tests). **Next up:** the real embedder + eval suite ([tasks.md](planning/tasks.md)). A guided tour of
-> the harness + system under test: [docs/test-harness-tour.html](docs/test-harness-tour.html).
+> the [build spec](planning/specs/index-engine-build.md) + the suggestion **accept** operation), the
+> **`b2` CLI over a typed core API** is live (`crates/b2-cli`): point B2 at a folder and `reindex` /
+> `neighbors` / `search` it from the terminal, with `--json` for agents — and **semantic search is now
+> real** (`crates/b2-embed`: a candle-backed local embedder behind the seam; `b2 init` downloads the
+> model into a shared cache; the fake stays the CI default). All green (73 tests). **Next up:** the
+> connection-discovery pipeline ([tasks.md](planning/tasks.md)). A guided tour of the harness + system
+> under test: [docs/test-harness-tour.html](docs/test-harness-tour.html).
 
 ## What B2 is (the north star)
 
