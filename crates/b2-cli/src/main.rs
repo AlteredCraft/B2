@@ -54,6 +54,16 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+    /// Generate connection suggestions (idempotent) and list the pending queue.
+    Suggest {
+        /// Candidates considered per note — the breadth of discovery.
+        #[arg(long, default_value_t = 5)]
+        top: usize,
+    },
+    /// Accept a pending suggestion by ID: write its typed link into the source note.
+    Accept { id: String },
+    /// Reject a pending suggestion by ID: it will never be proposed again.
+    Reject { id: String },
 }
 
 fn main() -> ExitCode {
@@ -153,6 +163,67 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 }
             }
         }
+        Command::Suggest { top } => {
+            // Candidate generation reads the stored vectors (no re-embed) and the
+            // relator is a deterministic stub, so `suggest` needs no model — like
+            // `neighbors`. A prior `reindex` supplies the vectors it reads.
+            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            let tally = vault.generate_suggestions(*top)?;
+            let queue = vault.list_suggestions()?;
+            if cli.json {
+                // Pure data on stdout: the pending queue (agents act on `edge_id`).
+                println!("{}", serde_json::to_string_pretty(&queue)?);
+            } else {
+                if queue.is_empty() {
+                    println!("No suggestions.");
+                } else {
+                    for s in &queue {
+                        let src = s.src_title.as_deref().unwrap_or(&s.src_path);
+                        let dst = s.dst_title.as_deref().unwrap_or(&s.dst_path);
+                        let conf = s
+                            .confidence
+                            .map(|c| format!("  ({c:.2})"))
+                            .unwrap_or_default();
+                        println!("[{}]  {src}  {}→  {dst}{conf}", s.edge_id, s.relation);
+                        if let Some(e) = &s.explanation {
+                            println!("    {e}");
+                        }
+                    }
+                }
+                // Feedback + honesty on stderr, so stdout stays pure results.
+                eprintln!("Generated {} new suggestion(s).", tally.generated);
+                eprintln!(
+                    "note: suggestions come from a stub relator (no judgment model yet) — treat them as placeholders, not real connections."
+                );
+            }
+        }
+        Command::Accept { id } => {
+            // Accept re-projects (re-embeds) the source note, so it must use the same
+            // embedder the index was built with → load the real model, like reindex.
+            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            if !vault.accept_suggestion(id)? {
+                return Err(CliError::SuggestionNotFound(id.clone()));
+            }
+            if cli.json {
+                let out = serde_json::json!({ "accepted": true, "edge_id": id });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("Accepted. Wrote the typed link into the source note's frontmatter.");
+            }
+        }
+        Command::Reject { id } => {
+            // Reject only appends a tombstone event + flips status — no embedding.
+            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            if !vault.reject_suggestion(id)? {
+                return Err(CliError::SuggestionNotFound(id.clone()));
+            }
+            if cli.json {
+                let out = serde_json::json!({ "rejected": true, "edge_id": id });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("Rejected. This pair won't be suggested again.");
+            }
+        }
     }
     Ok(())
 }
@@ -194,6 +265,11 @@ enum CliError {
     Embed(#[from] EmbedError),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
+    /// A CLI-level domain error: `accept`/`reject` were given an id that is not a
+    /// pending suggestion. Owned here (not in `b2-core`) because it is purely about
+    /// the command's UX — the façade just returns `false`.
+    #[error("suggestion not found: {0}")]
+    SuggestionNotFound(String),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -212,6 +288,9 @@ fn user_message(err: &CliError) -> String {
         CliError::Embed(EmbedError::Download(_)) => {
             "Could not download the embedding model. Check your network and try `b2 init` again.".to_string()
         }
+        CliError::SuggestionNotFound(id) => format!(
+            "No pending suggestion with id '{id}'. Run `b2 suggest` to see the current queue and its ids."
+        ),
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
@@ -219,6 +298,7 @@ fn user_message(err: &CliError) -> String {
             CliError::Core(e) => e.to_string(),
             CliError::Embed(e) => e.to_string(),
             CliError::Serde(e) => e.to_string(),
+            CliError::SuggestionNotFound(id) => format!("suggestion not found: {id}"),
         };
         format!("{msg}\n(debug: {detail})")
     } else {

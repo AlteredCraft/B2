@@ -3,8 +3,10 @@
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! durable `JsonlSink`, the embedder, and the id generator, and exposes *only what
-//! this slice needs* — `open` / `reindex` / `neighbors` / `search`. Add operations
-//! when a command needs them; do not pre-build a sprawling surface.
+//! the shipped commands need* — `open` / `reindex` / `neighbors` / `search`, plus
+//! the suggestion lifecycle (`generate_suggestions` / `list_suggestions` /
+//! `accept_suggestion` / `reject_suggestion`). Add operations when a command needs
+//! them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index and log live under `<root>/.b2/`
 //! (data-model.md §4), so pointing B2 at a folder of Markdown is the whole setup.
@@ -16,12 +18,14 @@
 //! embedder — callers must not overstate the fake.
 
 use crate::db;
+use crate::discover::{self, GenerateOutcome};
 use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
 use crate::event::JsonlSink;
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
-use crate::{ingest, search};
+use crate::relate::FakeRelator;
+use crate::{ingest, search, suggest};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::fs;
@@ -85,6 +89,29 @@ pub struct SearchResult {
     pub score: f64,
     /// A one-line excerpt of the matched chunk.
     pub snippet: String,
+}
+
+/// One pending suggestion, resolved for display: the typed edge with both ends'
+/// paths + titles and its decision fuel. `edge_id` is the handle `accept`/`reject`
+/// take (so the CLI stays a dumb printer).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SuggestionView {
+    pub edge_id: String,
+    /// The source note (the anchor the edge points *from*).
+    pub src_path: String,
+    pub src_title: Option<String>,
+    /// The target note (`dst_path` falls back to the raw link path if the target is
+    /// dangling — no indexed note).
+    pub dst_path: String,
+    pub dst_title: Option<String>,
+    /// The proposed relation verb (data-model.md §2 core set).
+    pub relation: String,
+    /// The relator's "why".
+    pub explanation: Option<String>,
+    /// `0.0–1.0` triage prior, if the relator gave one.
+    pub confidence: Option<f64>,
+    /// Provenance `by` — `agent:<model_id>` (data-model.md §4).
+    pub by: String,
 }
 
 impl Vault {
@@ -206,6 +233,106 @@ impl Vault {
             }
         }
         Ok(out)
+    }
+
+    /// Generate connection-discovery suggestions across the whole vault (Flow ③
+    /// generate): every note as an anchor, its complement candidates judged by the
+    /// relator, each fired-and-core proposal written to the queue + durable log.
+    /// **Idempotent** — a pair already active, pending, or rejected is never
+    /// re-proposed — so it is safe to run repeatedly. `top_n` bounds the candidates
+    /// considered per anchor. Returns the run tally.
+    ///
+    /// The relator is the deterministic [`FakeRelator`] for now; the real
+    /// LLM-backed relator drops in through the same seam later (its own crate,
+    /// mirroring the embedder). So these are **stub** proposals, not real
+    /// judgments — the CLI must say so and never overstate them. Candidate
+    /// generation reads the *stored* vectors, so this needs no live embedder (a
+    /// prior `reindex` is enough).
+    pub fn generate_suggestions(&self, top_n: usize) -> Result<GenerateOutcome> {
+        let now = self.now()?;
+        discover::generate_all(
+            &self.conn,
+            &self.sink,
+            &self.idgen,
+            &FakeRelator::new(),
+            top_n,
+            &now,
+        )
+    }
+
+    /// The live review queue: every pending suggestion, each resolved to both ends'
+    /// paths + titles for display, ordered oldest-evidence-first (as
+    /// [`suggest::list_suggestions`] returns them).
+    pub fn list_suggestions(&self) -> Result<Vec<SuggestionView>> {
+        let mut out = Vec::new();
+        for s in suggest::list_suggestions(&self.conn)? {
+            let src_path = db::resolve_b2id_to_path(&self.conn, &s.src_id)?.unwrap_or_default();
+            let src_title = db::note_title(&self.conn, &s.src_id)?;
+            let (dst_path, dst_title) = match &s.dst_id {
+                Some(d) => (
+                    db::resolve_b2id_to_path(&self.conn, d)?
+                        .unwrap_or_else(|| s.dst_path_raw.clone()),
+                    db::note_title(&self.conn, d)?,
+                ),
+                None => (s.dst_path_raw.clone(), None),
+            };
+            out.push(SuggestionView {
+                edge_id: s.edge_id,
+                src_path,
+                src_title,
+                dst_path,
+                dst_title,
+                relation: s.edge_type,
+                explanation: s.explanation,
+                confidence: s.confidence,
+                by: s.by,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Accept the pending suggestion `edge_id` (Flow ③): append its typed link to
+    /// the source note's frontmatter `relations:` and re-project it as an active,
+    /// authored edge. Returns `false` if `edge_id` is not a pending suggestion (or
+    /// is dangling, with no concrete target to link).
+    ///
+    /// Re-projection **re-embeds the source note**, so the caller must have opened
+    /// the vault with the same embedder the index was built with (the CLI loads the
+    /// real model for `accept`, as for `reindex`).
+    pub fn accept_suggestion(&self, edge_id: &str) -> Result<bool> {
+        let now = self.now()?;
+        suggest::accept_suggestion(
+            &self.conn,
+            &self.sink,
+            self.embedder.as_ref(),
+            &self.root,
+            edge_id,
+            &now,
+        )
+    }
+
+    /// Reject the pending suggestion `edge_id`: tombstone it so the same pair+type
+    /// is never proposed again. Returns `false` if `edge_id` is not a pending
+    /// suggestion (nothing to reject). Touches no vectors — needs no embedder.
+    pub fn reject_suggestion(&self, edge_id: &str) -> Result<bool> {
+        if suggest::get_suggestion(&self.conn, edge_id)?.is_none() {
+            return Ok(false);
+        }
+        let now = self.now()?;
+        suggest::reject_suggestion(&self.conn, &self.sink, edge_id, &now)?;
+        Ok(true)
+    }
+
+    /// The current UTC time as an ISO-8601 string, taken from **SQLite** — the same
+    /// clock that stamps `indexed_at` — so `b2-core` needs no wall-clock crate and
+    /// the engine ops still take the timestamp as a param (the façade is the
+    /// determinism boundary, exactly as it is for `idgen`).
+    fn now(&self) -> Result<String> {
+        Ok(self
+            .conn
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |r| {
+                r.get(0)
+            })?)
     }
 
     /// Resolve a note reference to a `b2id`: try it as a `b2id` first (exact PK

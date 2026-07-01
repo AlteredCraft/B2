@@ -195,3 +195,164 @@ fn search_before_reindex_is_empty_but_succeeds() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v.as_array().unwrap().is_empty());
 }
+
+// --- suggestion lifecycle (③): suggest / accept / reject ---------------------
+
+/// A reindexed vault of mutually **unconnected** notes, so connection discovery has
+/// candidates to surface (the golden vault's two notes are directly linked → none).
+/// With the fake embedder the KNN pool is the whole vault, so every other note is a
+/// candidate and the `FakeRelator` fires on most — a reliably non-empty queue.
+fn suggestable_vault() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
+        std::fs::write(
+            root.join(format!("{name}.md")),
+            format!("---\ntype: note\ntitle: {name}\n---\nA short note about {name}.\n"),
+        )
+        .unwrap();
+    }
+    let out = run_in(&root, &["reindex"]);
+    assert!(out.status.success(), "reindex: {}", stderr(&out));
+    (tmp, root)
+}
+
+/// The pending queue as JSON (re-runs generation, which is idempotent).
+fn queue(root: &Path) -> Vec<Value> {
+    let out = run_in(root, &["--json", "suggest"]);
+    assert!(out.status.success(), "suggest: {}", stderr(&out));
+    serde_json::from_slice::<Value>(&out.stdout)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn suggest_generates_and_lists_json_and_human() {
+    let (_g, root) = suggestable_vault();
+
+    // JSON: a non-empty array of fully-resolved suggestions with a usable handle.
+    let q = queue(&root);
+    assert!(!q.is_empty(), "unconnected notes must yield candidates");
+    for s in &q {
+        assert!(s["edge_id"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(s["src_path"].as_str().is_some());
+        assert!(s["dst_path"].as_str().is_some());
+        assert!(s["relation"].as_str().is_some());
+        assert_eq!(s["by"], "agent:fake-relator-v1");
+    }
+
+    // Human: each suggestion prints its id handle; the stub-relator caveat and the
+    // generation summary live on stderr (stdout stays pure results).
+    let human = run_in(&root, &["suggest"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let first_id = q[0]["edge_id"].as_str().unwrap();
+    assert!(
+        stdout(&human).contains(first_id),
+        "human list should show the id handle: {:?}",
+        stdout(&human)
+    );
+    let err = stderr(&human).to_lowercase();
+    assert!(
+        err.contains("stub relator"),
+        "expected honesty caveat: {err}"
+    );
+    assert!(
+        err.contains("generated"),
+        "expected a generation summary: {err}"
+    );
+}
+
+#[test]
+fn suggest_before_reindex_is_empty_but_succeeds() {
+    let (_g, root) = golden_vault();
+    // never reindexed → no vector space → no candidates, but a clean exit.
+    let out = run_in(&root, &["--json", "suggest"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.as_array().unwrap().is_empty());
+}
+
+#[test]
+fn accept_writes_the_link_and_removes_it_from_the_queue() {
+    let (_g, root) = suggestable_vault();
+    let q = queue(&root);
+    let s = &q[0];
+    let id = s["edge_id"].as_str().unwrap();
+    let src_path = s["src_path"].as_str().unwrap();
+
+    // The source note carries no authored relations yet.
+    let src_file = root.join(src_path);
+    assert!(!std::fs::read_to_string(&src_file)
+        .unwrap()
+        .contains("relations:"));
+
+    let out = run_in(&root, &["accept", id]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).to_lowercase().contains("accepted"));
+
+    // Markdown-first: the typed link now lives in the note's frontmatter…
+    assert!(
+        std::fs::read_to_string(&src_file)
+            .unwrap()
+            .contains("relations:"),
+        "accept must append the link to the source note's frontmatter"
+    );
+    // …and the accepted suggestion has left the pending queue (it is now active).
+    assert!(
+        queue(&root).iter().all(|s| s["edge_id"] != id),
+        "an accepted suggestion must not remain pending"
+    );
+}
+
+#[test]
+fn reject_tombstones_and_removes_it_from_the_queue() {
+    let (_g, root) = suggestable_vault();
+    let id = {
+        let q = queue(&root);
+        q[0]["edge_id"].as_str().unwrap().to_string()
+    };
+
+    let out = run_in(&root, &["reject", &id]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).to_lowercase().contains("rejected"));
+
+    // Tombstoned → gone from the queue and never re-proposed on a later `suggest`.
+    assert!(
+        queue(&root).iter().all(|s| s["edge_id"] != id.as_str()),
+        "a rejected pair must not be re-proposed"
+    );
+}
+
+#[test]
+fn accept_reject_json_shape() {
+    let (_g, root) = suggestable_vault();
+    let q = queue(&root);
+    // reject the first, accept the second, both in --json mode.
+    let reject_id = q[0]["edge_id"].as_str().unwrap();
+    let accept_id = q[1]["edge_id"].as_str().unwrap();
+
+    let r = run_in(&root, &["--json", "reject", reject_id]);
+    assert!(r.status.success(), "{}", stderr(&r));
+    let rv: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(rv["rejected"], true);
+    assert_eq!(rv["edge_id"], reject_id);
+
+    let a = run_in(&root, &["--json", "accept", accept_id]);
+    assert!(a.status.success(), "{}", stderr(&a));
+    let av: Value = serde_json::from_slice(&a.stdout).unwrap();
+    assert_eq!(av["accepted"], true);
+    assert_eq!(av["edge_id"], accept_id);
+}
+
+#[test]
+fn accept_unknown_id_fails_cleanly() {
+    let (_g, root) = suggestable_vault();
+    let out = run_in(&root, &["accept", "01JNOTASUGGESTION00000000000"]);
+    assert!(!out.status.success(), "unknown id must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("suggestion"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}

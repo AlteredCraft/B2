@@ -107,24 +107,37 @@ areas, v1 scope, locked decisions).
   tail-verb exactly; `FakeRelator` proves the seam runs through; determinism across rebuild; idempotent
   re-run; queue survives drop→rebuild→replay); **92** workspace tests green.
 
-## Next up — surface discovery in the CLI (③)
+- [x] **Connection-discovery ③ — the CLI + façade surface** — `suggest` / `accept` / `reject` now ship, so
+  the review queue is reachable from the terminal. Four ops on the [`Vault`](../crates/b2-core/src/vault.rs)
+  façade (`generate_suggestions` wrapping [`discover::generate_all`](../crates/b2-core/src/discover.rs) on the
+  `FakeRelator`; `list_suggestions` resolving both ends to path+title as `SuggestionView`;
+  `accept_suggestion` / `reject_suggestion`), and the `b2 suggest` (generate-then-list, idempotent) /
+  `b2 accept <id>` / `b2 reject <id>` commands with `--json`. Wiring decisions: `suggest` needs **no model**
+  (candidate-gen reads stored vectors, the relator is a stub) so it opens with the fake like `neighbors`;
+  `accept` re-projects (re-embeds) the source note so it loads the **same embedder the index was built with**
+  (real model, like `reindex`); `reject` touches no vectors. Timestamps come from **SQLite** (the
+  `indexed_at` clock) via a façade `now()`, keeping `b2-core` wall-clock-free (engine ops still take
+  `created`/`decided`). Honest to the user: `suggest` prints a loud **stub-relator caveat** + a generation
+  summary on stderr (stdout stays pure results); a bad `accept`/`reject` id is a clean nonzero exit
+  (`CliError::SuggestionNotFound`), no internals leaked. **6 CLI tests** (generate+list human/JSON,
+  empty-before-reindex, accept writes the frontmatter link + leaves the queue, reject tombstones,
+  accept/reject JSON shapes, unknown-id fails cleanly); **98** workspace tests green.
 
-> **Pick this up fresh.** ① (candidate generation) and ② (the generate pipeline) are **built and green** —
-> [`discover::generate_all`](../crates/b2-core/src/discover.rs) turns a vault into suggestions on the
-> `FakeRelator`, deterministic and idempotent, and the **accept / reject / list engine ops** exist
-> ([suggest.rs](../crates/b2-core/src/suggest.rs)). The missing piece is now purely **surface**: a
-> [`Vault`](../crates/b2-core/src/vault.rs) façade + `b2` commands so a human can see and act on the queue.
-> The engine finally generates suggestions — ③ makes them reachable from the terminal.
+## Next up — make the suggestions real (the LLM relator), then kernel CRUD
 
-- **③ CLI + façade** — surface `suggest` (generate + list) / `accept` / `reject` on the
-  [`Vault`](../crates/b2-core/src/vault.rs) façade (add ops as the commands need them — keep the surface
-  minimal; `list_suggestions` / `accept_suggestion` / `reject_suggestion` already exist in
-  [suggest.rs](../crates/b2-core/src/suggest.rs), and ② built the generate op —
-  [`discover::generate_all`](../crates/b2-core/src/discover.rs)). Then the `b2 suggest` / `accept` / `reject`
-  commands with `--json` for agents, like the others.
-- **Suggestion-quality eval** — now unblocked by ②: extend the eval suite's scaffolded **suggestion-quality**
-  half (precision/recall over a hand-labelled candidate set), still out of CI (needs a real relator, as the
-  retrieval eval needs a real embedder).
+> **Pick this up fresh.** The discovery pipeline is **end-to-end and reachable** — `b2 suggest` / `accept` /
+> `reject` work — but the intelligence is a **stub**: [`FakeRelator`](../crates/b2-core/src/relate.rs) hashes
+> the note pair, it never reads the notes (the CLI says so loudly). Two fronts remain: make the suggestions
+> *real* (the LLM relator behind the existing seam), and the note-authoring kernel ops (`add` / `mv`) B2 still
+> can't do.
+
+- **The real relator** — the LLM-backed relator in its **own crate** (the `b2-embed` / `LocalEmbedder`
+  precedent — keep `b2-core` model-free), dropped in behind the existing
+  [`Relator`](../crates/b2-core/src/relate.rs) seam. `Vault::generate_suggestions` swaps the fake for it
+  (mirror the embedder's `open_with_embedder` injection — the façade already reads `NoteCtx.text` from
+  [`db::note_text`](../crates/b2-core/src/db.rs)), and the CLI's stub-relator caveat comes off. Then the
+  **suggestion-quality eval** — extend the eval suite's scaffolded half (precision/recall over a
+  hand-labelled candidate set), out of CI, exactly as the retrieval eval needs a real embedder.
 - **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
   [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
   the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).
