@@ -18,8 +18,8 @@ by hand.
 > `neighbors` / `search` it from the terminal, with `--json` for agents — and **semantic search is now
 > real** (`crates/b2-embed`: a candle-backed local embedder behind the seam; `b2 init` downloads the
 > model into a shared cache; the fake stays the CI default). All green (73 tests). **Next up:** the
-> connection-discovery pipeline ([tasks.md](planning/tasks.md)). A guided tour of the harness + system
-> under test: [docs/test-harness-tour.html](docs/test-harness-tour.html).
+> connection-discovery pipeline ([tasks.md](planning/tasks.md)). A tour of how the system is
+> constructed — grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 
 ## What B2 is (the north star)
 

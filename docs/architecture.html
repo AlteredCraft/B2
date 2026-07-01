@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B2 — System Architecture</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
+    --pink:#f778ba; --cyan:#39c5cf; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --t0:#6e7681; --t1:#58a6ff; --t2:#3fb950; --t3:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  .layout{display:grid;grid-template-columns:258px 1fr;max-width:1320px;margin:0 auto}
+  /* Sidebar */
+  nav{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line);background:#0b0f15}
+  nav h1{font-size:15px;margin:0 0 2px;letter-spacing:.3px}
+  nav .tag{color:var(--muted);font-size:12px;margin-bottom:18px}
+  nav a{display:block;color:var(--muted);padding:5px 10px;border-radius:6px;font-size:13.5px}
+  nav a:hover{background:var(--panel);color:var(--ink);text-decoration:none}
+  nav .grp{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5b6672;margin:16px 10px 4px}
+  nav .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  main{padding:40px 48px 120px;min-width:0}
+  header.hero{margin-bottom:8px}
+  .hero h2{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  .hero p.lead{color:var(--muted);font-size:16px;max-width:780px;margin:0 0 18px}
+  .badges{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 8px}
+  .badge{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:6px 14px;font-size:13px;display:flex;align-items:center;gap:8px}
+  .badge b{color:var(--ink)} .badge.green b{color:var(--green)}
+  .badge .pip{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+  section{margin:46px 0;scroll-margin-top:24px}
+  section h3{font-size:21px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  section .sub{color:var(--muted);margin:0 0 18px;max-width:840px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:14px 0}
+  .card.tight{padding:16px 18px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}nav{display:none}.grid2,.grid3{grid-template-columns:1fr}}
+  .kicker{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;border:1px solid var(--line)}
+  pre{background:#0a0e14;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#c9d4e0}
+  pre .c{color:#6b7682} pre .k{color:#ff7b72} pre .s{color:#a5d6ff} pre .f{color:#d2a8ff} pre .n{color:#79c0ff}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  td.mono{font-family:var(--mono);font-size:12px;color:#c9d4e0}
+  .tick{color:var(--green);font-weight:700}
+  /* Layer cards */
+  .layer{position:relative;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:16px 0;overflow:hidden}
+  .layer .bar{height:4px;width:100%}
+  .layer .body{padding:18px 22px}
+  .layer h4{margin:0 0 3px;font-size:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .layer .files{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin:4px 0 12px}
+  .tagnum{font-family:var(--mono);font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;color:#0d1117}
+  .ground{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--green);border-radius:8px;padding:11px 14px;font-size:13px}
+  .ground b{color:var(--ink)}
+  .ground .mono{color:#8fe3a6}
+  .invariant{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:13.5px}
+  .invariant b{color:var(--ink)}
+  .seam{border:1px dashed var(--purple);border-radius:10px;padding:14px 16px;background:rgba(188,140,255,.05)}
+  .twocol{columns:2;column-gap:28px} .twocol li{break-inside:avoid}
+  ul.tidy{margin:6px 0;padding-left:20px} ul.tidy li{margin:4px 0}
+  .note-fixture{font-family:var(--mono);font-size:12px;white-space:pre-wrap;color:#c9d4e0;background:#0a0e14;border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:4px 0}
+  .flow .box{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 11px;color:var(--ink);font-family:var(--mono);font-size:12px}
+  .arrow{color:var(--t1)}
+  .foot{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);margin-top:60px;padding-top:18px}
+  .warn{border-left-color:var(--amber)!important}
+  .eq{font-family:var(--mono);color:var(--ink)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted);margin-top:10px}
+  .legend span{display:flex;align-items:center;gap:7px}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <h1>B2 · Architecture</h1>
+  <div class="tag">how the index engine is built</div>
+  <div class="grp">Orientation</div>
+  <a href="#overview">Overview</a>
+  <a href="#equation">The governing equation</a>
+  <a href="#tiers">Three storage tiers</a>
+  <div class="grp">Architecture</div>
+  <a href="#crates">Crates &amp; modules</a>
+  <a href="#substrate">The substrate bet</a>
+  <a href="#schema">The schema</a>
+  <div class="grp">The pipelines</div>
+  <a href="#ingest"><span class="dot" style="background:var(--t1)"></span>① Ingest: vault → index</a>
+  <a href="#notes"><span class="dot" style="background:var(--t1)"></span>Notes &amp; the write discipline</a>
+  <a href="#graph"><span class="dot" style="background:var(--t2)"></span>Chunks, links &amp; the graph</a>
+  <a href="#vocab"><span class="dot" style="background:var(--t2)"></span>The relation vocabulary</a>
+  <a href="#embed"><span class="dot" style="background:var(--t3)"></span>The embedder seam</a>
+  <a href="#retrieval"><span class="dot" style="background:var(--t3)"></span>② Hybrid retrieval</a>
+  <a href="#lifecycle"><span class="dot" style="background:var(--pink)"></span>③ Suggestion lifecycle</a>
+  <a href="#log"><span class="dot" style="background:var(--pink)"></span>Event log &amp; replay</a>
+  <a href="#adapter"><span class="dot" style="background:var(--cyan)"></span>The Vault façade &amp; CLI</a>
+  <div class="grp">Foundations</div>
+  <a href="#invariants">The invariants</a>
+  <a href="#seams">The deterministic seams</a>
+  <a href="#ground">Grounded in the tests</a>
+  <a href="#edges">Not yet built</a>
+</nav>
+
+<main>
+<header class="hero" id="overview">
+  <div class="kicker">System architecture · updated 2026-07-01</div>
+  <h2>B2 — how the system is built</h2>
+  <p class="lead">B2 is a local-first Markdown knowledge vault with an AI layer that discovers
+  <em>typed, explained</em> connections between notes. The code that exists today is the
+  <strong>index engine</strong> — a SQLite store treated as a <em>disposable projection</em> of your
+  Markdown plus a thin event log — its <strong>real local embedder</strong>, and the <strong>typed
+  <code>Vault</code> API</strong> the <code>b2</code> CLI drives. This page describes how those pieces are
+  constructed: the layers, the data flows through them, and the invariants that hold them together. Every
+  claim here is <em>ground truth</em> — checked against the test suite, which is the executable
+  specification of how the engine actually behaves.</p>
+
+  <div class="badges">
+    <span class="badge green"><span class="pip"></span> <b>73&nbsp;/&nbsp;73</b>&nbsp;tests passing</span>
+    <span class="badge"><b>3</b>&nbsp;crates&nbsp;·&nbsp;<b>b2-core</b>&nbsp;·&nbsp;<b>b2-embed</b>&nbsp;·&nbsp;<b>b2-cli</b></span>
+    <span class="badge">engine&nbsp;<b>~2,480</b>&nbsp;lines&nbsp;·&nbsp;16&nbsp;modules</span>
+    <span class="badge">Rust&nbsp;<b>1.96.0</b>&nbsp;·&nbsp;edition&nbsp;2021</span>
+    <span class="badge">step 0&nbsp;→&nbsp;5&nbsp;<b>+ accept + real embedder + CLI</b></span>
+  </div>
+  <p class="sub" style="margin-top:14px">Verified by <code>cargo test</code> on the toolchain above.
+  The suite is <em>integration-first</em>: most tests open a real SQLite database, ingest a real vault on
+  disk, and assert on the resulting projection — so it describes the built system, not mocks of it.</p>
+</header>
+
+<!-- ============ THE GOVERNING EQUATION ============ -->
+<section id="equation">
+  <h3>The governing equation</h3>
+  <p class="sub">One equation shapes every design decision in the engine. If you keep only one thing from
+  this page, keep this:</p>
+  <div class="card">
+    <div style="font-size:19px;text-align:center;margin:6px 0 12px" class="eq">index = projection of ( Markdown ∪ log )</div>
+    <div class="flow" style="justify-content:center">
+      <span class="box">Markdown vault</span>
+      <span class="arrow">+</span>
+      <span class="box">.b2/log/events.jsonl</span>
+      <span class="arrow">→ ingest / replay →</span>
+      <span class="box">b2.sqlite&nbsp;(disposable)</span>
+      <span class="arrow">→</span>
+      <span class="box">neighbors · search · suggest · accept</span>
+    </div>
+    <p style="margin:14px 0 0;color:var(--muted);font-size:13.5px">Delete <code>b2.sqlite</code>, rebuild
+    it from the Markdown, replay the log — and it must come back <em>identical</em>. Only two things are
+    durable and un-derivable: the Markdown itself (the source of truth for <em>knowledge</em>) and the
+    append-only event log (the source of truth for <em>history</em> and review state). The index is a
+    pure, disposable cache of both. Everything downstream — how writes are constrained, why the graph is
+    materialized, how acceptance works — is this equation defended.</p>
+  </div>
+</section>
+
+<!-- ============ THREE TIERS ============ -->
+<section id="tiers">
+  <h3>Three storage tiers</h3>
+  <p class="sub">The system splits state into three tiers with sharply different durability contracts.
+  Getting this split right is what keeps the vault pristine and the index honestly disposable.</p>
+  <div class="grid3">
+    <div class="card tight">
+      <div class="kicker" style="color:var(--green)">Tier 1 · Markdown</div>
+      <p style="font-size:13.5px;margin:4px 0 8px"><b>Source of truth for knowledge.</b> Notes + accepted
+      edges, plain <code>.md</code> on your disk, fully usable with no B2.</p>
+      <p style="font-size:12.5px;color:var(--muted);margin:0">Stays <b>pristine</b>. The body is 100% the
+      human's — B2 authors none of it. Its only writes are surgical (see <a href="#notes">the write
+      discipline</a>).</p>
+    </div>
+    <div class="card tight">
+      <div class="kicker" style="color:var(--accent)">Tier 2 · Index <span class="mono">b2.sqlite</span></div>
+      <p style="font-size:13.5px;margin:4px 0 8px"><b>Disposable cache.</b> Search indexes, the keyed
+      graph, and the live review queue — everything the product reads on hot paths.</p>
+      <p style="font-size:12.5px;color:var(--muted);margin:0">Holds nothing that can't be reconstructed
+      from tiers 1 &amp; 3. Drop it any time.</p>
+    </div>
+    <div class="card tight">
+      <div class="kicker" style="color:var(--pink)">Tier 3 · Log <span class="mono">.b2/log/</span></div>
+      <p style="font-size:13.5px;margin:4px 0 8px"><b>Durable, append-only history.</b> Every
+      consequential operation, with verbose payloads (model id, confidence, evidence).</p>
+      <p style="font-size:12.5px;color:var(--muted);margin:0">Lose it and you lose only <em>history</em>
+      and rejection memory — never a committed connection.</p>
+    </div>
+  </div>
+  <div class="invariant">A whole vault is <b>one portable folder</b>: the index and log live under
+  <code>&lt;root&gt;/.b2/</code>, a dotfolder Obsidian and the vault scanner both ignore. Point B2 at a
+  folder of Markdown and that is the entire setup.</div>
+</section>
+
+<!-- ============ CRATES & MODULES ============ -->
+<section id="crates">
+  <h3>Crates &amp; modules</h3>
+  <p class="sub">Three crates, cleanly layered: the engine owes nothing to the adapter above it or the
+  model beside it, and the AI-heavy embedder is quarantined behind a trait so the engine never sees a
+  tensor.</p>
+  <div class="grid3">
+    <div class="card tight">
+      <div class="kicker" style="color:var(--accent)">b2-core · the engine</div>
+      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">~2,480 lines · 16 modules. Turns a
+      folder of Markdown into a queryable index and keeps it a pure function of disk + log.</p>
+      <ul class="tidy" style="font-size:12.5px;margin:0">
+        <li><code>db</code> — schema, projection helpers, resolver</li>
+        <li><code>note</code> — lossless parse / surgical write</li>
+        <li><code>ingest</code> — vault → tables (two-phase)</li>
+        <li><code>chunk</code> · <code>link</code> · <code>relation</code></li>
+        <li><code>graph</code> — neighbors / reachability</li>
+        <li><code>embed</code> — the embedder seam + fake</li>
+        <li><code>search</code> — BM25 ⊕ vector → RRF</li>
+        <li><code>event</code> · <code>replay</code> · <code>suggest</code></li>
+        <li><code>vault</code> — the typed façade</li>
+        <li><code>id</code> · <code>error</code></li>
+      </ul>
+    </div>
+    <div class="card tight">
+      <div class="kicker" style="color:var(--purple)">b2-embed · the real embedder</div>
+      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">The one place the architecture meets
+      real friction: producing embeddings in a single binary. Sits <b>behind</b> the <code>b2-core</code>
+      seam, so the engine and its whole test suite never import it.</p>
+      <ul class="tidy" style="font-size:12.5px;margin:0">
+        <li><code>model</code> — <code>LocalEmbedder</code>: candle-backed BERT</li>
+        <li><code>config</code> — TOML + source resolution</li>
+        <li><code>provision</code> — the work behind <code>b2 init</code></li>
+      </ul>
+    </div>
+    <div class="card tight">
+      <div class="kicker" style="color:var(--cyan)">b2-cli · the adapter</div>
+      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">The <code>b2</code> binary. Holds
+      <b>no engine logic</b> — it parses args, picks + injects the embedder, calls the <code>Vault</code>
+      façade, and prints (human, or <code>--json</code> for agents).</p>
+      <ul class="tidy" style="font-size:12.5px;margin:0">
+        <li><code>main</code> — clap args → façade calls</li>
+        <li><code>init</code> / <code>reindex</code> / <code>neighbors</code> / <code>search</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="ground"><b>Ground truth:</b> the layering is enforced by where the tests live. The engine's
+  73-test suite runs entirely against <code>b2-core</code> with the deterministic fake embedder; the CLI
+  is exercised end-to-end by driving the <em>built binary</em> (<span class="mono">b2-cli/tests/cli.rs</span>),
+  and the config resolution is unit-tested in <span class="mono">b2-embed</span>. No test needs a live
+  model — which is only possible because the seam is real.</div>
+</section>
+
+<!-- ============ SUBSTRATE ============ -->
+<section id="substrate">
+  <h3>The substrate bet</h3>
+  <p class="sub">B2's central architectural wager: <b>one embedded store for every queryable concern at
+  once</b> — full-text (FTS5), vectors (<code>sqlite-vec</code>), the typed graph, and the live review
+  queue — so candidate generation can join all four in a single transaction. That only works if FTS5 and
+  <code>sqlite-vec</code> can share <em>one connection</em>.</p>
+  <div class="grid2">
+    <div class="card tight">
+      <div class="kicker">How coexistence is achieved — <code>db::open</code></div>
+      <p style="font-size:13.5px;margin:4px 0">FTS5 is built into SQLite. <code>sqlite-vec</code> is
+      registered as a <b>static auto-extension</b> (<code>sqlite3_auto_extension</code>, once per process)
+      so every later connection exposes the <code>vec0</code> virtual table with <b>no runtime
+      <code>load_extension</code></b> — the whole thing is one statically-linked binary. Every connection
+      opens <code>WAL</code> + <code>foreign_keys=ON</code>; an idempotent migration seeds
+      <code>schema_version</code> exactly once (<code>IF NOT EXISTS</code> + <code>INSERT OR IGNORE</code>,
+      so reopen is a no-op).</p>
+    </div>
+    <div class="card tight">
+      <div class="kicker" style="color:var(--amber)">Why it's the first thing built</div>
+      <p style="font-size:13.5px;margin:4px 0">If BM25 keyword ranking and brute-force vector KNN
+      <em>couldn't</em> live in one connection, the single-store premise of the entire design would be
+      false — and everything built on top would be wrong. So coexistence is proven before anything else
+      exists. <code>sqlite-vec</code> in practice today is brute-force KNN (a full scan), which is
+      single-digit milliseconds at personal-vault scale; ANN is deliberately <em>not</em> assumed.</p>
+    </div>
+  </div>
+  <div class="ground"><b>Ground truth:</b> <span class="mono">substrate.rs</span> proves exactly this bet —
+  <span class="mono">fts5_and_sqlite_vec_coexist_in_one_connection</span> runs a BM25 query and a
+  vector KNN against the same statically-linked connection, and
+  <span class="mono">pragmas_and_schema_version_persist_across_reopen</span> confirms WAL, foreign keys,
+  and the once-only migration hold across a close/reopen.</div>
+</section>
+
+<!-- ============ SCHEMA ============ -->
+<section id="schema">
+  <h3>The schema — a derived projection</h3>
+  <p class="sub">Every table is a projection of <code>(Markdown ∪ log)</code>; nothing here is a source of
+  truth. The schema is <em>derived from</em> the data model — it must satisfy the model, never the
+  reverse.</p>
+  <table>
+    <tr><th>Table</th><th>Holds</th><th>Derived from</th></tr>
+    <tr><td class="mono">meta</td><td>schema_version, embed_model_id, embed_dim</td><td>bookkeeping</td></tr>
+    <tr><td class="mono">notes</td><td>b2id (PK), path (UNIQUE), type, title, description, created/updated, body_hash, mtime — <em>the resolver <b>is</b> this table</em></td><td>Markdown</td></tr>
+    <tr><td class="mono">note_aliases</td><td>alias → note_b2id (searchable extra titles)</td><td>Markdown</td></tr>
+    <tr><td class="mono">chunks</td><td>per-note paragraph chunks with char offsets + token_count</td><td>Markdown</td></tr>
+    <tr><td class="mono">chunks_fts</td><td>FTS5 BM25 index, kept in lockstep by AI/AD/AU triggers</td><td>derived (FTS5)</td></tr>
+    <tr><td class="mono">chunks_vec</td><td><code>vec0</code> KNN table, created at the embedder's <code>dim</code> (not in the base migration)</td><td>derived (sqlite-vec)</td></tr>
+    <tr><td class="mono">edges</td><td>typed graph: src→dst, type, origin∈{inline,frontmatter,suggested}, status∈{active,suggested,rejected}, explanation, occurrence_index</td><td>Markdown + log</td></tr>
+    <tr><td class="mono">edge_provenance</td><td>by / source / confidence / created / decided — a pending suggestion's decision fuel</td><td>log</td></tr>
+  </table>
+  <p class="sub" style="margin-top:12px;font-size:13px">Two schema-level details do real load-bearing
+  work. A <code>CHECK</code> constraint <b>couples <code>origin</code> and <code>status</code></b> — an
+  authored (<code>inline</code>/<code>frontmatter</code>) edge is always <code>active</code>; a
+  <code>suggested</code> edge is always <code>suggested</code> or <code>rejected</code> — so the database
+  itself refuses an illegal review state. And <code>chunks_vec</code> is created <em>outside</em> the base
+  migration, because its <code>FLOAT[N]</code> dimension is a DDL literal pinned to
+  <code>meta.embed_dim</code>: the vector space can only be shaped once the embedder's <code>dim</code> is
+  known (see <a href="#embed">the embedder seam</a>).</p>
+</section>
+
+<!-- ============ INGEST (FLOW 1) ============ -->
+<div class="layer" id="ingest">
+  <div class="bar" style="background:var(--t1)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t1)">FLOW ①</span> Ingest — turning a vault into an index</h4>
+    <div class="files">crates/b2-core/src/ingest.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">Ingest is the write path that realizes the
+    governing equation. Its one subtlety: link resolution must not depend on file order — a note can link
+    to one the walker hasn't reached yet. So ingest runs in <b>two phases</b>.</p>
+    <div class="flow">
+      <span class="box">walk *.md (dotfolders skipped, sorted)</span>
+      <span class="arrow">→</span>
+      <span class="box" style="border-color:var(--t1)">Phase 1 · notes + chunks + vectors</span>
+      <span class="arrow">→ fills the resolver →</span>
+      <span class="box" style="border-color:var(--t1)">Phase 2 · edges</span>
+    </div>
+    <ul class="tidy" style="font-size:13.5px;margin-top:12px">
+      <li><b>Phase 1</b> projects every note's frontmatter (<code>upsert_note</code>) and chunks its body
+      (<code>replace_chunks</code>), embedding each chunk into <code>chunks_vec</code> through the seam.
+      This fills <code>notes(b2id, path)</code> — the <code>path → b2id</code> resolver — for the
+      <em>whole</em> vault.</li>
+      <li><b>Phase 2</b> derives each note's edges by parsing its body + frontmatter <code>relations:</code>
+      and resolving every <code>[[path]]</code> against the now-complete resolver. A link the walker hadn't
+      reached in phase 1 still resolves.</li>
+      <li>If a note has no <code>b2id</code>, phase 1 <b>stamps one</b> — mint a ULID, write the single
+      surgical line to the file, emit a <code>b2id.stamped</code> event. This is B2's <em>one
+      always-allowed write during ingest</em>.</li>
+    </ul>
+    <p style="font-size:13px;color:var(--muted);margin:10px 0 0">The incremental path,
+    <code>ingest_file</code>, re-projects a <em>single</em> note against an already-built index — and by
+    construction produces the same rows a full rebuild would for that note. Both replace rather than
+    accumulate: <code>replace_chunks</code> deletes a note's old chunks (the FTS triggers emit a
+    <code>'delete'</code> sentinel; stale <code>chunks_vec</code> rows are cleared explicitly, since that
+    virtual table has no trigger back to <code>chunks</code>), and <code>replace_authored_edges</code>
+    deletes only the note's <code>inline</code>/<code>frontmatter</code> edges — never the log-derived
+    <code>suggested</code> rows, so a re-parse can't clobber the review queue.</p>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">one_note_reindex_equals_full</span>
+    (graph.rs) asserts an incremental re-index of one note yields a byte-identical edge set to a full
+    rebuild, and that a second full reindex is identical again (idempotent);
+    <span class="mono">reindexing_a_note_does_not_leave_stale_fts_rows</span> (chunks.rs) proves the
+    replace-not-accumulate discipline;
+    <span class="mono">ingests_golden_vault_and_resolves_b2id_path_both_ways</span> (ingest_resolver.rs)
+    confirms the two-phase resolver works in both directions.</div>
+  </div>
+</div>
+
+<!-- ============ NOTES / WRITE DISCIPLINE ============ -->
+<div class="layer" id="notes">
+  <div class="bar" style="background:var(--t1)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t1)">MODULE</span> Notes &amp; the surgical-write discipline</h4>
+    <div class="files">crates/b2-core/src/note.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">The vault must stay the human's. So a parsed
+    note keeps the <b>raw text verbatim</b> and records only the byte spans of the frontmatter block;
+    serialization returns those raw bytes. Queryable fields are read out by a <em>read-only</em> YAML
+    parse and are never used to re-serialize. The result: <code>parse → serialize → parse</code> is
+    byte-identical — unknown keys, comment tokens, odd whitespace, a missing final newline, all survive.</p>
+    <p style="font-size:13.5px;margin:0 0 6px">Against that lossless backdrop, B2 makes exactly two kinds
+    of write, both surgical and both in <b>frontmatter</b>:</p>
+    <ul class="tidy" style="font-size:13.5px;margin:2px 0 0">
+      <li><code>stamp_b2id</code> — insert one <code>b2id:</code> line at the top of the frontmatter (or
+      synthesize a minimal frontmatter block if there is none). A strict no-op if an id is already
+      present: <b>never re-stamp</b>.</li>
+      <li><code>add_relation</code> — append one YAML-quoted typed-link string to the frontmatter
+      <code>relations:</code> list (creating the block, or the whole frontmatter, when absent). The item
+      is quoted so <code>[[</code>, <code>|</code>, and <code>:</code> are always YAML-safe; it errors
+      rather than risk corrupting a pre-existing flow-style <code>relations:</code>.</li>
+    </ul>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">roundtrip.rs</span> pins losslessness
+    (<span class="mono">round_trip_preserves_unknown_keys_comments_and_whitespace</span>);
+    <span class="mono">stamp.rs</span> pins the one-line, idempotent, never-re-stamp behavior;
+    <span class="mono">frontmatter.rs</span> pins block creation, append, safe quoting, and that every
+    other byte — including the whole body — is preserved.</div>
+  </div>
+</div>
+
+<!-- ============ CHUNKS / LINKS / GRAPH ============ -->
+<div class="layer" id="graph">
+  <div class="bar" style="background:var(--t2)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t2)">MODULES</span> Chunks, links &amp; the typed graph</h4>
+    <div class="files">crates/b2-core/src/chunk.rs · link.rs · graph.rs</div>
+    <p class="sub" style="margin:2px 0 14px;max-width:840px">Three modules turn a note body into the two
+    things the product queries: searchable <b>chunks</b> and a typed, traversable <b>graph</b>.</p>
+
+    <div class="grid2">
+      <div class="card tight" style="margin:0">
+        <div class="kicker" style="color:var(--t2)">Chunking — chunk.rs</div>
+        <p style="font-size:13px;margin:4px 0 0">A minimal paragraph splitter: maximal runs of non-blank
+        lines, one chunk each. <code>char_start..char_end</code> always addresses the exact body slice
+        that produced the text, so chunks stay anchored for later highlight/explain. The
+        <code>chunks</code> schema already carries <code>token_count</code> and <code>heading_path</code>
+        for a future qmd-style ~900-token, overlap-aware chunker — swapping it in is a pure re-projection
+        (drop &amp; rebuild), no schema or invariant change.</p>
+      </div>
+      <div class="card tight" style="margin:0">
+        <div class="kicker" style="color:var(--t2)">Link classification — link.rs</div>
+        <p style="font-size:13px;margin:4px 0 0">Two body constructs, both ordinary Obsidian Markdown: a
+        bare <code>[[path|alias]]</code> in prose ⇒ an untyped, directed <b><code>references</code></b>
+        edge; a list item <code>- &lt;verb&gt; [[path|alias]] — why</code> ⇒ a <b>typed</b> edge with an
+        explanation. A typed line <em>consumes</em> its wikilink, so it isn't also double-counted as a
+        bare reference. The verb must be lowercase-kebab, which keeps prose like <code>- See [[x]]</code>
+        from being misread as a type. One parser (<code>parse_typed_spec</code>) serves both a body typed
+        line and a frontmatter <code>relations:</code> entry — one syntax, two homes.</p>
+      </div>
+    </div>
+
+    <div class="card tight" style="margin:14px 0 0">
+      <div class="kicker" style="color:var(--t2)">The materialized graph — graph.rs</div>
+      <p style="font-size:13px;margin:4px 0 10px">A note's <em>outbound</em> links are parseable from that
+      one file on demand — which is exactly why the <code>edges</code> table is disposable. It is
+      materialized anyway, because three things a runtime parse <em>can't</em> serve cheaply are the whole
+      point of a graph:</p>
+      <ul class="tidy" style="font-size:13px;margin:0">
+        <li><b>Inversion (backlinks).</b> "Who points at X" can't be read from X — only from every
+        <em>other</em> note. The table makes it one indexed lookup, not an O(vault) scan.</li>
+        <li><b>Typed multi-hop traversal.</b> "Notes within k hops of X" is one SQL traversal, not a scan
+        per hop.</li>
+        <li><b>The discovery join &amp; the suggestion queue.</b> The semantic⨝graph join (below) and the
+        review queue (whose suggested edges are deliberately <em>never</em> on disk) can only exist over a
+        materialized structure.</li>
+      </ul>
+      <p style="font-size:13px;color:var(--muted);margin:10px 0 0"><code>neighbors</code> reads outbound
+      edges (labeled with the verb) then inbound edges (labeled with the verb's <em>inverse</em>), over
+      <code>status='active'</code> only — no reciprocal edge is ever stored. <code>reachable_within</code>
+      is an undirected BFS over active edges (a note related either way is reachable), the hop set the
+      discovery join filters on.</p>
+    </div>
+
+    <div class="ground"><b>Ground truth:</b> <span class="mono">links.rs</span> (8 tests) pins every
+    classification edge case — bare-vs-typed, the no-double-count rule, the lowercase-kebab guard, the
+    tolerated tail verb. <span class="mono">graph.rs</span>'s
+    <span class="mono">golden_graph_has_references_and_elaborates_inline_active</span> matches the whole
+    edge set as an exact ordered snapshot, and the <span class="mono">neighbors_*</span> tests confirm
+    inbound labels are the passive inverse forms with no reciprocal row.</div>
+  </div>
+</div>
+
+<!-- ============ VOCABULARY ============ -->
+<div class="layer" id="vocab">
+  <div class="bar" style="background:var(--t2)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t2)">MODULE</span> The relation vocabulary</h4>
+    <div class="files">crates/b2-core/src/relation.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">A closed <b>10-verb core</b> — what discovery
+    emits and queries rely on — plus a <b>tolerated tail</b> kept verbatim. Expressiveness lives in the
+    tail; reliability lives in the core. Each core verb ships a display-only inverse label and a symmetry
+    flag; adding a verb here is the whole change (a relaxable policy, not a structural assumption).</p>
+    <div class="grid2">
+      <div class="card tight" style="margin:0">
+        <div class="kicker">The closed core</div>
+        <ul class="tidy twocol" style="font-size:12.5px;margin:6px 0 0">
+          <li><code>references</code> → referenced-by</li>
+          <li><code>relates</code> ↔ (symmetric)</li>
+          <li><code>elaborates</code> → elaborated-by</li>
+          <li><code>supports</code> → supported-by</li>
+          <li><code>refutes</code> → refuted-by</li>
+          <li><code>contradicts</code> ↔ (symmetric)</li>
+          <li><code>example-of</code> → has-example</li>
+          <li><code>part-of</code> → has-part</li>
+          <li><code>supersedes</code> → superseded-by</li>
+          <li><code>derived-from</code> → source-of</li>
+        </ul>
+      </div>
+      <div class="card tight" style="margin:0">
+        <div class="kicker">Core vs. tail</div>
+        <p style="font-size:13px;margin:4px 0">A core verb maps to its inverse for inbound display;
+        symmetric verbs are their own inverse and traverse both ways. A <b>tail</b> verb (anything a human
+        writes, like <code>inspired-by</code>) is stored verbatim, never dropped, and treated as opaque —
+        no inverse label, no special traversal. A tail verb that proves common can graduate into the core
+        in a later version; stored data never changes.</p>
+      </div>
+    </div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">a_tail_verb_is_kept_verbatim</span>
+    (links.rs) proves an out-of-core verb survives intact, and the inbound-neighbor tests confirm core
+    verbs render as their inverse labels while directed edges store exactly one row.</div>
+  </div>
+</div>
+
+<!-- ============ EMBEDDER SEAM ============ -->
+<div class="layer" id="embed">
+  <div class="bar" style="background:var(--t3)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t3)">SEAM</span> The embedder — a fake for tests, a real model for users</h4>
+    <div class="files">crates/b2-core/src/embed.rs (seam + fake) · crates/b2-embed/ (real)</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">Producing embeddings inside a single binary
+    is the one genuinely hard part, and it is <em>orthogonal</em> to the store — so it lives behind a
+    trait. The engine is built and tested against a deterministic fake; the real local model drops in
+    through the same seam with no schema or flow change. This is the "build for tomorrow's model" tenet
+    made mechanical.</p>
+    <div class="grid2">
+      <div class="seam">
+        <div class="kicker" style="color:var(--purple)">The trait — <code>embed::Embedder</code></div>
+        <p style="font-size:13px;margin:6px 0">Four methods: <code>model_id</code>, <code>dim</code>,
+        <code>embed</code> (a document/passage), and <code>embed_query</code> (defaulting to symmetric).
+        <code>embed</code> is <b>fallible</b> — a real model runs tensor math that can fail, and the index
+        path must surface that, not panic. Retrieval is <b>asymmetric-ready</b>: models that prompt
+        queries and documents differently override <code>embed_query</code>.</p>
+        <p style="font-size:12.5px;color:var(--muted);margin:0"><b>FakeEmbedder</b> (the CI default):
+        blake3-hashes text into a vector, so identical text → identical vector, deterministically. KNN is
+        reproducible and drop-&amp;-rebuild yields byte-identical vectors. It is <em>not</em> semantic — it
+        stands in for the real model so the fast suite stays model-free.</p>
+      </div>
+      <div class="seam" style="border-color:var(--cyan)">
+        <div class="kicker" style="color:var(--cyan)">The real model — <code>b2-embed::LocalEmbedder</code></div>
+        <p style="font-size:13px;margin:6px 0">A candle-backed BERT sentence embedder
+        (<b>BAAI/bge-base-en-v1.5</b>, 768-dim, ungated), pure-Rust inference compiled into the binary —
+        no external ONNX runtime. CLS-pool + L2-normalize (so <code>sqlite-vec</code>'s L2 distance ranks
+        by cosine); an asymmetric query prefix. The <code>dim</code> is read authoritatively from the
+        model's own <code>config.json</code>, so config can't lie about it.</p>
+        <p style="font-size:12.5px;color:var(--muted);margin:0"><b>Not bundled.</b> <code>b2 init</code>
+        downloads + verifies it into a shared XDG cache; <code>LocalEmbedder::load</code> <b>fails fast</b>
+        if the files are absent. Source is configurable (mirror, alternate repo, or a local path for
+        offline installs) via a global TOML.</p>
+      </div>
+    </div>
+    <div class="invariant"><b>The swap is safe by construction.</b> <code>meta</code> records
+    <code>(embed_model_id, embed_dim)</code>; <code>ensure_embedding_space</code> shapes
+    <code>chunks_vec</code> at that dim and, on a model/dim change, <b>drops and recreates it empty</b> so a
+    full re-embed follows. Crucially, opening a vault <em>never</em> mutates the vector space — a mismatch
+    is caught and fixed at <code>reindex</code>, and a <code>search</code> against a stale index
+    <b>fails fast</b> with <code>ModelMismatch</code> rather than returning silently-wrong results.</div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">embed.rs</span> pins determinism, one
+    vector per chunk, KNN self-retrieval at ~zero distance, byte-identical re-embeds, and — critically —
+    <span class="mono">changing_dim_recreates_the_vector_space_and_clears_vectors</span>, so a swap can
+    never leave stale vectors. The 4 config unit tests in <span class="mono">b2-embed</span> pin source
+    resolution (default / mirror endpoint / alternate repo / path sanitizing).</div>
+  </div>
+</div>
+
+<!-- ============ RETRIEVAL (FLOW 2) ============ -->
+<div class="layer" id="retrieval">
+  <div class="bar" style="background:var(--t3)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--t3)">FLOW ②</span> Hybrid retrieval</h4>
+    <div class="files">crates/b2-core/src/search.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">BM25 keyword search and brute-force vector
+    KNN are retrieved in parallel and fused with <b>Reciprocal Rank Fusion</b>
+    (<code>Σ 1/(k + rank + 1)</code>, k=60, borrowed wholesale from qmd). Results resolve up from chunks
+    to notes.</p>
+    <div class="flow">
+      <span class="box">query</span>
+      <span class="arrow">→</span>
+      <span class="box">BM25 over chunks_fts</span>
+      <span class="arrow">⊕</span>
+      <span class="box">vector KNN over chunks_vec</span>
+      <span class="arrow">→ RRF (k=60) →</span>
+      <span class="box">top chunks → notes</span>
+    </div>
+    <ul class="tidy" style="font-size:13.5px;margin-top:12px">
+      <li>The keyword half <b>sanitizes</b> arbitrary natural-language text into a safe FTS5 expression —
+      alphanumeric terms, each double-quoted so nothing is read as an FTS5 operator, OR-joined for recall.
+      A query with no usable terms yields no keyword hits (the vector half still runs).</li>
+      <li>The <b>graph-filtered</b> variant is B2's reason to exist: "nearest chunks whose note is within
+      k typed hops of note X" — the <code>chunks_vec ⨝ chunks ⨝ edges</code> discovery join that
+      candidate generation will run on.</li>
+      <li>The <code>Vault</code> façade resolves hits to <b>note level</b>: it pulls a wider chunk pool
+      than the limit, dedups to the highest-scoring chunk per note, and attaches a one-line snippet.</li>
+    </ul>
+    <p style="font-size:13px;color:var(--muted);margin:10px 0 0">A reranker (a cross-encoder over the
+    fused top-N) and query expansion are deliberately deferred behind clean seams — they change
+    <em>ordering</em>, not the store or the candidate set.</p>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">search.rs</span> (8 tests) locks the
+    fusion constant at k=60, proves a doc present in both lists outranks single-list winners
+    (<span class="mono">rrf_ranks_a_doc_present_in_both_lists_above_single_list_winners</span>), and pins
+    the discovery join — <span class="mono">graph_filtered_search_restricts_to_reachable_notes</span>
+    excludes a text-matching note that is disconnected from the anchor.
+    <b>Honest scope:</b> under the fake embedder the vector half isn't semantic, so these prove the
+    <em>plumbing</em> (fusion math + the join), not model quality — which is a separate real-embedder
+    eval (<code>cargo run -p b2-embed --example eval</code>), never in CI.</div>
+  </div>
+</div>
+
+<!-- ============ SUGGESTION LIFECYCLE (FLOW 3) ============ -->
+<div class="layer" id="lifecycle">
+  <div class="bar" style="background:var(--pink)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--pink)">FLOW ③</span> The suggestion lifecycle — inert until accepted</h4>
+    <div class="files">crates/b2-core/src/suggest.rs · frontmatter home in note.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">A discovered connection is <b>inert</b>:
+    generating one writes the log + the index queue, and <em>not one byte</em> of any note. The three-state
+    lifecycle is where the "B2 never authors the body" decision becomes mechanical.</p>
+    <div class="flow" style="margin:2px 0 12px">
+      <span class="box">(none)</span>
+      <span class="arrow">agent proposes →</span>
+      <span class="box" style="border-color:var(--pink)">suggested</span>
+      <span class="arrow">accept →</span>
+      <span class="box" style="border-color:var(--green)">active (origin=frontmatter)</span>
+    </div>
+    <p style="font-size:12.5px;color:var(--muted);margin:-4px 0 12px">…or <b>reject →</b> a tombstone that
+    blocks the same (src, dst, type) from ever being re-proposed.</p>
+    <ul class="tidy" style="font-size:13.5px;margin:0">
+      <li><b>Generate.</b> Guarded by <code>edge_exists</code> — a connection already present in
+      <em>any</em> status (active, pending, rejected) is never re-proposed. Log first (durable), then
+      project the queue row + provenance. The timestamp is passed in by the caller, keeping this a
+      deterministic, testable function.</li>
+      <li><b>Accept.</b> The bridge, and the subtle part: B2 builds the typed-link string from the
+      target's <em>current</em> path + title, appends it to the source note's <b>frontmatter
+      <code>relations:</code></b> (Markdown first — never the body), logs <code>suggestion.accepted</code>,
+      drops the suggested row, and <b>re-ingests the file</b> so the edge re-materializes as
+      <code>origin='frontmatter'</code> / <code>status='active'</code>. Acceptance is a <em>re-projection,
+      not an in-place status flip</em> — which is exactly what keeps the accepted edge traceable to a real
+      line in the Markdown.</li>
+      <li><b>Reject.</b> Log <code>suggestion.rejected</code> and flip the row to <code>rejected</code> —
+      it stays as rejection memory.</li>
+    </ul>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">suggestions.rs</span> proves a generated
+    suggestion appears in the queue with full decision fuel while <em>both notes stay byte-for-byte
+    identical</em>, and that a rejection tombstone blocks re-proposal.
+    <span class="mono">accept.rs</span> proves accept writes frontmatter (body byte-unchanged), activates
+    the edge as <code>origin=frontmatter</code>, and logs it — and that accepting an unknown edge id is a
+    clean no-op.</div>
+  </div>
+</div>
+
+<!-- ============ EVENT LOG / REPLAY ============ -->
+<div class="layer" id="log">
+  <div class="bar" style="background:var(--pink)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--pink)">MODULES</span> The event log &amp; replay</h4>
+    <div class="files">crates/b2-core/src/event.rs · replay.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">The pending queue and rejection tombstones
+    are the <em>one</em> part of the index not derivable from Markdown — suggestions are never written to
+    notes. Replaying the durable log reconstructs them, which is what makes
+    <span class="eq">index = projection of (Markdown ∪ log)</span> literally true.</p>
+    <div class="grid2">
+      <div class="card tight" style="margin:0">
+        <div class="kicker" style="color:var(--pink)">The sink — <code>event::EventSink</code></div>
+        <p style="font-size:13px;margin:4px 0">A thin <code>append</code> / <code>read_all</code> trait
+        so the JSONL backing (one event per line at <code>.b2/log/events.jsonl</code>, line order = sequence
+        order) can later become an append-only SQLite log with no data-model change. Three sinks:
+        <code>JsonlSink</code> (durable), <code>NullSink</code> (drops events), and a test-local
+        <code>CollectingSink</code> that captures exactly what was appended. Events:
+        <code>b2id.stamped</code> and <code>suggestion.generated|accepted|rejected</code>.</p>
+      </div>
+      <div class="card tight" style="margin:0">
+        <div class="kicker" style="color:var(--pink)">Replay — <code>replay::replay_log</code></div>
+        <p style="font-size:13px;margin:4px 0">A pure function of the log. <code>generated</code> inserts
+        the suggested edge + provenance; <code>rejected</code> tombstones it; <code>accepted</code> is a
+        queue <b>no-op delete</b> — the active edge re-derives from Markdown via Flow ①, so it is never
+        double-counted as both a queue row and an active edge. Only <code>suggestion.*</code> events touch
+        queryable state; the rest are history. An <code>INSERT OR IGNORE</code> harmlessly absorbs a
+        generated event whose edge was already materialized from an accepted frontmatter relation.</p>
+      </div>
+    </div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">drop_and_replay_reproduces_the_queue</span>
+    (suggestions.rs) does the literal thing — <code>rm b2.sqlite</code> → rebuild from Markdown → replay
+    the log → the queue returns exactly; <span class="mono">replaying_an_accepted_suggestion_leaves_no_queue_row</span>
+    and <span class="mono">accepted_edge_survives_drop_rebuild_and_replay</span> (accept.rs) prove the
+    generate+accept pair nets to a single active edge, no phantom queue row.</div>
+  </div>
+</div>
+
+<!-- ============ ADAPTER ============ -->
+<div class="layer" id="adapter">
+  <div class="bar" style="background:var(--cyan)"></div>
+  <div class="body">
+    <h4><span class="tagnum" style="background:var(--cyan)">ADAPTER</span> The typed <code>Vault</code> façade &amp; the <code>b2</code> CLI</h4>
+    <div class="files">crates/b2-core/src/vault.rs · crates/b2-cli/src/main.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:840px">Everything above exists as modules the
+    integration tests call directly. The <b><code>Vault</code> façade</b> is the single typed entry point
+    the CLI (and any future GUI) is the sole client of — it owns the connection, the durable log, the
+    injected embedder, and the id generator, and exposes only what today's commands need:
+    <code>open</code> / <code>reindex</code> / <code>neighbors</code> / <code>search</code> (a note ref
+    resolves by <b>path or b2id</b>).</p>
+    <ul class="tidy" style="font-size:13.5px;margin:0">
+      <li>The façade returns display-ready view structs (<code>NeighborView</code>,
+      <code>SearchResult</code>, <code>ReindexReport</code>) and distinguishes a typed
+      <code>NoteNotFound</code> from "found, no results" — so the CLI stays a dumb printer.</li>
+      <li>The <b><code>b2</code> binary</b> holds no engine logic: it parses args, picks the embedder
+      (real <code>LocalEmbedder</code> by default; <code>B2_EMBEDDER=fake</code> for an offline/dev mode,
+      and what the CLI tests run under), injects it through <code>open_with_embedder</code>, calls the
+      façade, and prints — human, or <code>--json</code> for agents.</li>
+      <li>Commands that embed (<code>reindex</code>, <code>search</code>) fail fast with "run
+      <code>b2 init</code>" if the model is absent; <code>neighbors</code> is a pure graph query and needs
+      no model. Internal errors are translated to generic, actionable messages that never leak
+      sqlite/io/serde internals (<code>B2_DEBUG</code> adds the detail).</li>
+    </ul>
+    <div class="invariant"><b>Prove a behavior once at the façade, again at the command surface.</b> A
+    future GUI is a second adapter that inherits both layers. The CLI is <em>honest</em>: when the vector
+    half isn't semantic (fake embedder) it says so on <b>stderr</b>, keeping <code>--json</code> stdout
+    pure data.</div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">vault.rs</span> (8 tests) pins the façade —
+    open creates <code>.b2/</code>, reindex is idempotent and reports counts, all ref forms
+    (path, path-without-<code>.md</code>, b2id) resolve to the same set, search is note-level with a
+    snippet. <span class="mono">cli.rs</span> (8 tests) drives the <em>built binary</em> and checks both
+    human and <code>--json</code> output, the positional-vault form, clean non-zero exits on unknown notes,
+    and that the not-yet-semantic caveat rides stderr.</div>
+  </div>
+</div>
+
+<!-- ============ INVARIANTS ============ -->
+<section id="invariants">
+  <h3>The invariants that hold it together</h3>
+  <p class="sub">Almost every design choice above serves one of these five properties. They are the reason
+  the system is shaped the way it is — and each is pinned by the suite.</p>
+  <table>
+    <tr><th style="width:30%">Invariant</th><th>What it means · where it's defended</th></tr>
+    <tr><td><b>Lossless round-trip</b></td><td><code>parse → serialize → parse</code> is byte-identical: unknown YAML keys, comments, whitespace all survive. B2 only ever makes surgical edits. <span class="mono" style="color:var(--muted)">→ roundtrip.rs</span></td></tr>
+    <tr><td><b>B2 never authors the body</b></td><td>The body is the human's document. B2's writes are surgical and in <em>frontmatter</em>: the <code>b2id</code> stamp, and an accepted edge appended to <code>relations:</code>. <span class="mono" style="color:var(--muted)">→ stamp.rs, frontmatter.rs, accept.rs</span></td></tr>
+    <tr><td><b>Idempotent re-projection</b></td><td>Re-ingesting changes nothing; an incremental one-note re-index equals a full rebuild; no stale FTS/vector rows accumulate. <span class="mono" style="color:var(--muted)">→ chunks.rs, graph.rs, embed.rs</span></td></tr>
+    <tr><td><b>Disposable index</b></td><td>Drop the DB, rebuild from Markdown, replay the log → the review queue and accepted edges come back exactly. <span class="mono" style="color:var(--muted)">→ suggestions.rs, accept.rs</span></td></tr>
+    <tr><td><b>Inert until accepted</b></td><td>A generated suggestion lives only in the queue + log — not one byte of any note changes; accepting writes only frontmatter <code>relations:</code>. <span class="mono" style="color:var(--muted)">→ suggestions.rs, accept.rs</span></td></tr>
+  </table>
+</section>
+
+<!-- ============ SEAMS ============ -->
+<section id="seams">
+  <h3>The deterministic seams</h3>
+  <p class="sub">The engine is AI-adjacent, yet its whole suite runs with no live model, no wall clock,
+  and no random ids. That is deliberate: every non-deterministic part sits behind a trait so a
+  deterministic double can be swapped in. This is what makes the system testable at all — and it is the
+  same "build for tomorrow's model" seam a more capable model drops into later.</p>
+  <div class="grid3">
+    <div class="seam">
+      <div class="kicker" style="color:var(--purple)">Embedder — <code>embed::Embedder</code></div>
+      <p style="font-size:12.5px;margin:6px 0 0"><code>FakeEmbedder</code> hashes text into a reproducible
+      vector; the real candle model swaps in behind the identical trait. Tests get deterministic KNN; users
+      get semantics.</p>
+    </div>
+    <div class="seam">
+      <div class="kicker" style="color:var(--purple)">Event sink — <code>event::EventSink</code></div>
+      <p style="font-size:12.5px;margin:6px 0 0">Durable <code>JsonlSink</code>, drop-everything
+      <code>NullSink</code>, and a <code>CollectingSink</code> that lets a test assert the exact event
+      emitted.</p>
+    </div>
+    <div class="seam">
+      <div class="kicker" style="color:var(--purple)">Id generator — <code>id::IdGen</code></div>
+      <p style="font-size:12.5px;margin:6px 0 0">Production mints real ULIDs; <code>FixedId</code> stamps
+      deterministic ids, so b2ids and suggestion ids are assertable byte-for-byte. Timestamps are passed
+      in, never read from a clock.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ GROUNDED IN THE TESTS ============ -->
+<section id="ground">
+  <h3>Grounded in the tests</h3>
+  <p class="sub">This page is architecture-first, but nothing on it is aspirational: the test suite is the
+  <b>executable specification</b> of the engine, and every property described above is asserted somewhere
+  in it. The suite is <em>integration-first</em> — it opens real databases and ingests a real vault — so
+  it describes the system as built. Most tests share one tiny hand-authored fixture, the
+  <b>golden vault</b>: two notes with a known link structure, copied into a temp dir before every run so
+  ingest never mutates the committed fixtures, with two fixed b2ids so exact ids are assertable.</p>
+  <div class="grid2">
+    <div class="card tight">
+      <div class="kicker">The golden vault · <span class="mono">concepts/memory.md</span></div>
+      <div class="note-fixture">---
+b2id: 01JMEM0000000000000000000A
+type: concept
+title: "Human memory"
+created: 2026-06-20
+---
+The brain encodes, stores, and retrieves information…</div>
+    </div>
+    <div class="card tight">
+      <div class="kicker">…and <span class="mono">notes/spaced-repetition.md</span></div>
+      <div class="note-fixture">---
+b2id: 01JSRS0000000000000000000B
+type: concept
+title: "Spaced repetition"
+created: 2026-06-20
+---
+Spaced repetition exploits the [[concepts/memory|Human
+memory]] retrieval curve.
+
+## Relations
+- elaborates [[concepts/memory|Human memory]] — applies
+  the forgetting curve</div>
+    </div>
+  </div>
+  <p class="sub" style="margin:12px 0">This 2-note body is engineered to exercise two edge kinds at once:
+  the prose <code>[[…]]</code> is a bare <b>references</b> edge; the <code>- elaborates [[…]] — …</code>
+  line is a <b>typed</b> edge with an explanation. Both are human-authored (<code>origin=inline</code>) — B2
+  reads them, never writes them. So a single ingest yields a known-good graph the tests can match whole.</p>
+
+  <div class="card">
+    <div class="kicker">Coverage at a glance — 73 tests, all green</div>
+    <table>
+      <tr><th>Architectural property</th><th>Pinned by</th><th class="mono" style="text-align:right">tests</th></tr>
+      <tr><td>Substrate — FTS5 + sqlite-vec coexist; pragmas persist</td><td class="mono">substrate.rs</td><td class="mono" style="text-align:right">2</td></tr>
+      <tr><td>Lossless parse · b2id stamp · resolver</td><td class="mono">roundtrip · stamp · ingest_resolver</td><td class="mono" style="text-align:right">10</td></tr>
+      <tr><td>Chunks (+FTS) · link classification · typed graph</td><td class="mono">chunks · links · graph</td><td class="mono" style="text-align:right">15</td></tr>
+      <tr><td>Vectors &amp; the embedder seam</td><td class="mono">embed.rs</td><td class="mono" style="text-align:right">5</td></tr>
+      <tr><td>Event log &amp; replay (disposable index)</td><td class="mono">suggestions.rs</td><td class="mono" style="text-align:right">4</td></tr>
+      <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">8</td></tr>
+      <tr><td>Accept &amp; frontmatter relations (the lifecycle)</td><td class="mono">frontmatter · accept</td><td class="mono" style="text-align:right">9</td></tr>
+      <tr><td>The <code>Vault</code> façade</td><td class="mono">vault.rs</td><td class="mono" style="text-align:right">8</td></tr>
+      <tr><td>The <code>b2</code> CLI (drives the built binary)</td><td class="mono">cli.rs</td><td class="mono" style="text-align:right">8</td></tr>
+      <tr><td>Embedder config &amp; source resolution</td><td class="mono">b2-embed/config.rs</td><td class="mono" style="text-align:right">4</td></tr>
+    </table>
+    <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Verified by <code>cargo test</code> on
+    rustc 1.96.0 — <b style="color:var(--green)">73 passed, 0 failed</b> across the three crates. To read
+    how any property actually behaves, open the file in the right-hand column; it is the ground truth this
+    page paraphrases.</p>
+  </div>
+</section>
+
+<!-- ============ NOT YET BUILT ============ -->
+<section id="edges">
+  <h3>Not yet built</h3>
+  <p class="sub">An honest architecture names its boundaries. These are tracked in the planning backlog,
+  not gaps that slipped through.</p>
+  <div class="card warn" style="border-left:3px solid var(--amber)">
+    <ul class="tidy">
+      <li><b>The move operation (<code>b2 mv</code>).</b> The one body write B2 will make — rewriting an
+      inbound <code>[[oldpath]]</code> → <code>[[newpath]]</code> when a target moves — isn't wired yet.
+      The <code>b2id</code>-keyed edges already make it a bounded, foreign-key-true operation.</li>
+      <li><b>Semantic quality in CI.</b> The engine suite runs on the deterministic fake, so it proves
+      plumbing, not ranking quality. The real bge model is measured by a separate
+      <code>b2-embed</code> eval, deliberately out of CI.</li>
+      <li><b>Only four commands so far.</b> <code>init</code> / <code>reindex</code> /
+      <code>neighbors</code> / <code>search</code> exist; <code>add</code>, <code>mv</code>,
+      <code>suggest</code> / <code>accept</code> / <code>reject</code>, and <code>explain</code> are still
+      backlog (their <em>engine</em> substrate is built and tested — only the command surface is missing).</li>
+      <li><b>The discovery pipeline.</b> Candidate generation → typed/explained suggestions → review loop
+      exists only as its substrate (the graph⨝vector join + the suggestion lifecycle), not yet as an
+      orchestrated pipeline.</li>
+    </ul>
+  </div>
+</section>
+
+<div class="foot">
+  <p>Describes the repository as built on 2026-07-01. Source of truth for every claim:
+  <code>crates/b2-core/src/</code>, <code>crates/b2-embed/src/</code>, <code>crates/b2-cli/src/</code>,
+  and the test suite under each crate's <code>tests/</code> — <b style="color:var(--green)">73 passed,
+  0 failed</b> on rustc 1.96.0. Design rationale lives in <code>planning/</code>
+  (<code>data-model.md</code> · <code>index-engine.md</code> · <code>specs/index-engine-build.md</code>).</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>
