@@ -20,6 +20,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
+/// How many chunks to embed per forward pass. Batching lets the real model amortize
+/// one matmul over many texts (a large CPU win on the reindex hot path); the fake's
+/// default `embed_batch` maps 1:1 regardless. Sized to trade throughput against the
+/// padding waste of batching short chunks with long ones.
+const EMBED_BATCH: usize = 32;
+
 /// Outcome of ingesting one file.
 pub struct Ingested {
     pub b2id: String,
@@ -27,17 +33,37 @@ pub struct Ingested {
     pub stamped: bool,
 }
 
-/// Project one note's frontmatter + chunks (everything derivable without
-/// resolving links). Returns the note's `b2id`, whether it was stamped, and its
-/// body (kept so phase 2 can derive edges without re-reading).
+/// What [`project_note_and_chunks`] returns: the note's `b2id`, whether it was
+/// stamped, its body, its frontmatter relations, and the `(chunk_id, text)` pairs
+/// still needing a vector. A named alias so the 5-tuple stays readable.
+type ProjectedNote = (String, bool, String, Vec<String>, Vec<(i64, String)>);
+
+/// Progress during the embed phase of a full reindex, reported **per batch** so a
+/// large vault never looks frozen while it embeds (the one genuinely slow step
+/// under a real model). Purely observational — it changes nothing about the result.
+#[derive(Debug, Clone, Copy)]
+pub struct ReindexProgress {
+    /// The note currently being embedded (1-based)…
+    pub note_index: usize,
+    /// …out of this many notes.
+    pub notes_total: usize,
+    /// Chunks embedded so far, cumulative across all notes.
+    pub chunks_done: usize,
+}
+
+/// Project one note's frontmatter + chunks (everything derivable without resolving
+/// links). Returns the note's `b2id`, whether it was stamped, its body (kept so
+/// phase 2 can derive edges without re-reading), its frontmatter relations, and the
+/// `(chunk_id, text)` pairs still needing a vector — embedding is deferred to
+/// [`embed_pending`] so it can be **batched** (and, in a full reindex, report
+/// progress). No embedder here.
 fn project_note_and_chunks(
     conn: &Connection,
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
-    embedder: &dyn Embedder,
-) -> Result<(String, bool, String, Vec<String>)> {
+) -> Result<ProjectedNote> {
     let abs = vault_root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
     let mut parsed = note::parse(&raw);
@@ -88,14 +114,37 @@ fn project_note_and_chunks(
 
     let relations = parsed.fields().relations.clone();
 
-    // Chunk → project → embed each chunk into chunks_vec via the seam (Flow ①).
+    // Chunk → project rows; hand the (id, text) pairs back for a batched embed
+    // (Flow ①). replace_chunks also clears any stale vectors for this note.
     let chunks = chunk_body(&body);
     let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
-    for (id, chunk) in chunk_ids.iter().zip(&chunks) {
-        db::set_chunk_vector(conn, *id, &embedder.embed(&chunk.text)?)?;
-    }
+    let pending: Vec<(i64, String)> = chunk_ids
+        .into_iter()
+        .zip(chunks.into_iter().map(|c| c.text))
+        .collect();
 
-    Ok((b2id, stamped, body, relations))
+    Ok((b2id, stamped, body, relations, pending))
+}
+
+/// Embed a note's pending `(chunk_id, text)` pairs into `chunks_vec`, in batches of
+/// [`EMBED_BATCH`] via [`Embedder::embed_batch`], calling `on_batch` with each
+/// batch's size (so a full reindex can report cumulative progress). Chunk vectors
+/// are independent, so batch boundaries never change the result.
+fn embed_pending(
+    conn: &Connection,
+    embedder: &dyn Embedder,
+    pending: &[(i64, String)],
+    mut on_batch: impl FnMut(usize),
+) -> Result<()> {
+    for batch in pending.chunks(EMBED_BATCH) {
+        let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
+        let vectors = embedder.embed_batch(&texts)?;
+        for ((id, _), v) in batch.iter().zip(&vectors) {
+            db::set_chunk_vector(conn, *id, v)?;
+        }
+        on_batch(batch.len());
+    }
+    Ok(())
 }
 
 /// Derive a note's authored edges and project them — the union of **body** links
@@ -178,14 +227,15 @@ pub fn ingest_file(
     embedder: &dyn Embedder,
 ) -> Result<Ingested> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
-    let (b2id, stamped, body, relations) =
-        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink, embedder)?;
+    let (b2id, stamped, body, relations, pending) =
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink)?;
+    embed_pending(conn, embedder, &pending, |_| {})?;
     project_edges(conn, &b2id, &body, &relations)?;
     Ok(Ingested { b2id, stamped })
 }
 
-/// Ingest every `.md` file under `vault_root` (two-phase, deterministic order).
-/// Dotfolders (e.g. `.b2/`) are skipped.
+/// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
+/// with no progress reporting. Dotfolders (e.g. `.b2/`) are skipped.
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
@@ -193,17 +243,43 @@ pub fn ingest_vault(
     sink: &dyn EventSink,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
+    ingest_vault_with_progress(conn, vault_root, idgen, sink, embedder, &mut |_| {})
+}
+
+/// Like [`ingest_vault`], but calls `on_progress` after every embed batch so a slow
+/// full reindex (real model on CPU) never looks frozen. The embed phase is batched
+/// ([`embed_pending`]); everything else — two-phase order, idempotency,
+/// determinism — is unchanged.
+pub fn ingest_vault_with_progress(
+    conn: &Connection,
+    vault_root: &Path,
+    idgen: &dyn IdGen,
+    sink: &dyn EventSink,
+    embedder: &dyn Embedder,
+    on_progress: &mut dyn FnMut(ReindexProgress),
+) -> Result<Vec<Ingested>> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
 
     let mut rel_paths = Vec::new();
     collect_md_files(vault_root, vault_root, &mut rel_paths)?;
     rel_paths.sort();
+    let notes_total = rel_paths.len();
 
-    // Phase 1: notes + chunks (fills the resolver for every note).
-    let mut staged = Vec::with_capacity(rel_paths.len());
-    for rel in &rel_paths {
-        let (b2id, stamped, body, relations) =
-            project_note_and_chunks(conn, vault_root, rel, idgen, sink, embedder)?;
+    // Phase 1: notes + chunks (fills the resolver for every note), then a batched
+    // embed per note reporting cumulative progress.
+    let mut staged = Vec::with_capacity(notes_total);
+    let mut chunks_done = 0usize;
+    for (i, rel) in rel_paths.iter().enumerate() {
+        let (b2id, stamped, body, relations, pending) =
+            project_note_and_chunks(conn, vault_root, rel, idgen, sink)?;
+        embed_pending(conn, embedder, &pending, |n| {
+            chunks_done += n;
+            on_progress(ReindexProgress {
+                note_index: i + 1,
+                notes_total,
+                chunks_done,
+            });
+        })?;
         staged.push((b2id, stamped, body, relations));
     }
 

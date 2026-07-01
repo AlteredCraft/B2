@@ -47,6 +47,61 @@ fn fake_embedder_is_deterministic() {
 }
 
 #[test]
+fn embed_batch_matches_embed_per_element() {
+    // The default `embed_batch` (which the fake inherits) must be a faithful map of
+    // `embed` — that equivalence is what lets the reindex path batch freely.
+    let e = FakeEmbedder::new(32);
+    let texts = ["alpha", "beta", "", "gamma delta"];
+    let refs: Vec<&str> = texts.to_vec();
+    let batched = e.embed_batch(&refs).unwrap();
+    assert_eq!(batched.len(), texts.len());
+    for (t, v) in texts.iter().zip(&batched) {
+        assert_eq!(
+            *v,
+            e.embed(t).unwrap(),
+            "batched row must equal single {t:?}"
+        );
+    }
+}
+
+#[test]
+fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
+    use b2_core::ingest::{ingest_vault_with_progress, ReindexProgress};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    golden_vault_copy(&vault);
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+
+    let mut events: Vec<ReindexProgress> = Vec::new();
+    ingest_vault_with_progress(
+        &conn,
+        &vault,
+        &UlidGen,
+        &NullSink,
+        &FakeEmbedder::new(64),
+        &mut |p| events.push(p),
+    )
+    .unwrap();
+
+    // Batched embed still populates a vector for every chunk.
+    let total = count(&conn, "chunks");
+    assert!(total > 0);
+    assert_eq!(count(&conn, "chunks_vec"), total);
+
+    // Progress: reported, note_index in range, notes_total stable, chunks_done
+    // non-decreasing and ending exactly at the chunk total.
+    assert!(!events.is_empty(), "at least one batch is reported");
+    let notes = count(&conn, "notes") as usize;
+    assert!(events.iter().all(|e| e.notes_total == notes));
+    assert!(events.iter().all(|e| (1..=notes).contains(&e.note_index)));
+    for w in events.windows(2) {
+        assert!(w[1].chunks_done >= w[0].chunks_done, "cumulative");
+    }
+    assert_eq!(events.last().unwrap().chunks_done as i64, total);
+}
+
+#[test]
 fn ingest_populates_chunks_vec_and_records_meta() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));

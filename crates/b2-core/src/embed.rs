@@ -23,13 +23,21 @@ pub trait Embedder {
     fn model_id(&self) -> &str;
     /// Vector dimension; must equal the `FLOAT[N]` literal of `chunks_vec`.
     fn dim(&self) -> usize;
-    /// Embed one document/passage for indexing. (Batching is a later perf concern;
-    /// the real model can add it behind this same seam.)
+    /// Embed one document/passage for indexing.
     fn embed(&self, text: &str) -> Result<Vec<f32>>;
     /// Embed a search query. Default is symmetric (query == document); asymmetric
     /// models override this to apply their query-side prompt prefix.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         self.embed(text)
+    }
+    /// Embed a batch of documents/passages for indexing, one vector per input in
+    /// order. The default maps [`embed`](Self::embed) over the slice — always
+    /// correct; a real model overrides this to run **one batched forward pass**,
+    /// which is dramatically faster on CPU than N single passes (the reindex hot
+    /// path). Chunk vectors are independent, so batch boundaries never change a
+    /// result.
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        texts.iter().map(|t| self.embed(t)).collect()
     }
 }
 

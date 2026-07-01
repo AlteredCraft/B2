@@ -14,6 +14,7 @@ use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -99,7 +100,23 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             let root = vault.as_ref().unwrap_or(&cli.vault);
             // Reindex embeds every chunk → it needs the real model.
             let (vault, _semantic) = open_vault(root, true)?;
-            let report = vault.reindex()?;
+            // Embedding a large vault on CPU is slow; show a live progress line so it
+            // never looks frozen. Only on an interactive stderr (never in --json, and
+            // never when piped/captured) so machine output and tests stay clean.
+            let report = if cli.json || !std::io::stderr().is_terminal() {
+                vault.reindex()?
+            } else {
+                let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
+                    eprint!(
+                        "\r  embedding… note {}/{} ({} chunks)",
+                        p.note_index, p.notes_total, p.chunks_done
+                    );
+                    let _ = std::io::stderr().flush();
+                };
+                let report = vault.reindex_with_progress(&mut on_progress)?;
+                eprintln!(); // close the progress line
+                report
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {

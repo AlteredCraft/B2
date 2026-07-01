@@ -147,12 +147,24 @@ impl Vault {
     /// Re-project every `.md` note under the vault root into the index (Flow ①):
     /// notes, chunks (+embeddings), and the typed graph. Stamps any missing `b2id`.
     pub fn reindex(&self) -> Result<ReindexReport> {
-        let ingested = ingest::ingest_vault(
+        self.reindex_with_progress(&mut |_| {})
+    }
+
+    /// [`reindex`](Self::reindex), but calls `on_progress` after each embed batch —
+    /// the seam the CLI uses to show a live progress line, since embedding a large
+    /// vault under the real model is the one slow step and would otherwise look
+    /// frozen. The report is identical to `reindex`'s.
+    pub fn reindex_with_progress(
+        &self,
+        on_progress: &mut dyn FnMut(ingest::ReindexProgress),
+    ) -> Result<ReindexReport> {
+        let ingested = ingest::ingest_vault_with_progress(
             &self.conn,
             &self.root,
             &self.idgen,
             &self.sink,
             self.embedder.as_ref(),
+            on_progress,
         )?;
         Ok(ReindexReport {
             indexed: ingested.len(),

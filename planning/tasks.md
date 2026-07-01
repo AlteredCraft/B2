@@ -123,6 +123,17 @@ areas, v1 scope, locked decisions).
   empty-before-reindex, accept writes the frontmatter link + leaves the queue, reject tombstones,
   accept/reject JSON shapes, unknown-id fails cleanly); **98** workspace tests green.
 
+- [x] **Reindex performance + progress (fast-follow)** — dogfooding a ~1000-doc vault surfaced that
+  `reindex` *looked* frozen and was genuinely glacial. Three fixes: (1) a **live progress line** — the embed
+  phase reports per batch ([`ingest::ReindexProgress`](../crates/b2-core/src/ingest.rs) via
+  `ingest_vault_with_progress` / [`Vault::reindex_with_progress`](../crates/b2-core/src/vault.rs)); the CLI
+  prints `embedding… note i/N (k chunks)` on an interactive stderr (TTY-gated — off in `--json` and pipes, so
+  tests stay clean). (2) **Batched embedding** — a new [`Embedder::embed_batch`](../crates/b2-core/src/embed.rs)
+  (default maps `embed`; `LocalEmbedder` overrides with one padded forward pass — CLS + attention mask, so a
+  batched row equals the single embed, proven by an out-of-CI `--ignored` test). (3) **Apple Accelerate** for
+  candle's CPU matmuls (macOS-gated in `b2-embed`), the real multiplier: a 160-chunk reindex went **84s → 11s**
+  wall (~70× less CPU work) with retrieval-eval quality unchanged. **100** workspace tests green.
+
 ## Next up — make the suggestions real (the LLM relator), then kernel CRUD
 
 > **Pick this up fresh.** The discovery pipeline is **end-to-end and reachable** — `b2 suggest` / `accept` /

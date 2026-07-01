@@ -8,7 +8,10 @@ use b2_core::embed::Embedder;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
-use tokenizers::{Tokenizer, TruncationDirection, TruncationParams, TruncationStrategy};
+use tokenizers::{
+    PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection, TruncationParams,
+    TruncationStrategy,
+};
 
 /// The three files a BERT sentence model needs. Presence of all three in the flat
 /// model dir *is* the "installed" check (fail-fast surface).
@@ -52,7 +55,7 @@ impl LocalEmbedder {
 
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| EmbedError::Load(format!("tokenizer.json: {e}")))?;
-        // Truncate long chunks; batch size is 1 so no padding is needed.
+        // Truncate long chunks so position embeddings stay in range.
         tokenizer
             .with_truncation(Some(TruncationParams {
                 max_length: max_len,
@@ -61,6 +64,18 @@ impl LocalEmbedder {
                 direction: TruncationDirection::Right,
             }))
             .map_err(|e| EmbedError::Load(format!("truncation: {e}")))?;
+        // Pad a batch to its longest member so `embed_batch` can stack sequences of
+        // differing lengths into one tensor; the attention mask zeroes the pad
+        // positions, so a padded row's CLS vector equals its single-encode vector.
+        // `BatchLongest` leaves a single `encode` (batch of one) unpadded, so the
+        // `embed`/`embed_query` path is unchanged. bge/BERT's `[PAD]` id is 0.
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            pad_id: 0,
+            pad_type_id: 0,
+            pad_token: "[PAD]".to_string(),
+            ..Default::default()
+        }));
 
         let device = Device::Cpu;
         // SAFETY: memory-maps the safetensors weights. Sound as long as the file is
@@ -102,6 +117,40 @@ impl LocalEmbedder {
         let v: Vec<f32> = cls.to_vec1()?;
         Ok(l2_normalize(&v))
     }
+
+    /// Embed a batch in one forward pass: tokenize+pad to the batch's longest, run
+    /// `[B, L]` through BERT, take each row's CLS token (position 0, unaffected by
+    /// right-padding), and L2-normalize. One matmul over `B` texts is far cheaper on
+    /// CPU than `B` single passes — the reindex win. Equivalent, per row, to
+    /// [`embed_inner`](Self::embed_inner).
+    fn embed_batch_inner(&self, texts: &[&str]) -> candle_core::Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let encs = self
+            .tokenizer
+            .encode_batch(texts.to_vec(), true)
+            .map_err(|e| candle_core::Error::Msg(format!("tokenize: {e}")))?;
+        let batch = encs.len();
+        // Padding made every encoding the same length.
+        let seq = encs.first().map_or(0, |e| e.get_ids().len());
+        let mut ids = Vec::with_capacity(batch * seq);
+        let mut mask = Vec::with_capacity(batch * seq);
+        for e in &encs {
+            ids.extend_from_slice(e.get_ids());
+            mask.extend_from_slice(e.get_attention_mask());
+        }
+        let input_ids = Tensor::from_vec(ids, (batch, seq), &self.device)?;
+        let attention_mask = Tensor::from_vec(mask, (batch, seq), &self.device)?;
+        let token_type_ids = input_ids.zeros_like()?;
+        // [B, seq, hidden] → CLS column [B, hidden].
+        let hidden = self
+            .model
+            .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
+        let cls = hidden.i((.., 0))?;
+        let rows: Vec<Vec<f32>> = cls.to_vec2()?;
+        Ok(rows.iter().map(|r| l2_normalize(r)).collect())
+    }
 }
 
 impl Embedder for LocalEmbedder {
@@ -122,6 +171,11 @@ impl Embedder for LocalEmbedder {
         // Asymmetric: queries carry the retrieval instruction, documents don't.
         let prefixed = format!("{}{}", self.query_prefix, text);
         self.embed_inner(&prefixed)
+            .map_err(|e| b2_core::Error::Embed(e.to_string()))
+    }
+
+    fn embed_batch(&self, texts: &[&str]) -> b2_core::Result<Vec<Vec<f32>>> {
+        self.embed_batch_inner(texts)
             .map_err(|e| b2_core::Error::Embed(e.to_string()))
     }
 }

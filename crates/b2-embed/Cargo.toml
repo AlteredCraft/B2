@@ -22,5 +22,15 @@ toml = "0.8"
 dirs = "6.0"
 thiserror = "2.0.18"
 
+# On macOS, link Apple's Accelerate (vDSP/BLAS) for candle's CPU matmuls. Without
+# it candle falls back to a naive kernel that makes bge-base inference ~10-100×
+# slower — the real bottleneck behind a slow `b2 reindex`, far more than batching.
+# Cargo merges these features with the base deps above; on non-macOS the feature is
+# simply absent (candle stays portable), so a Linux build is unaffected.
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { version = "0.9", features = ["accelerate"] }
+candle-nn = { version = "0.9", features = ["accelerate"] }
+candle-transformers = { version = "0.9", features = ["accelerate"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"
