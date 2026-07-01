@@ -55,7 +55,7 @@ CREATE TABLE meta (
 -- Canonical keys:
 --   schema_version   migration gate — which B2 schema built this index
 --   b2_version       build that wrote it (debug)
---   embed_model_id   the embedder behind chunks_vec (e.g. 'embeddinggemma-300m')
+--   embed_model_id   the embedder behind chunks_vec (e.g. 'BAAI/bge-base-en-v1.5')
 --   embed_dim        vector dimension — MUST equal the FLOAT[N] literal in chunks_vec (§1.2)
 --   log_seq          last .b2/log sequence applied → enables incremental replay (Flow ⑤)
 --   created_at       when the index was first built
@@ -114,10 +114,11 @@ CREATE INDEX chunks_note_idx ON chunks(note_b2id);
 -- overlap, Markdown-aware boundary scoring. Chunk ids are NOT stable across a re-index (a note's chunks
 -- are deleted + reinserted); that is fine because its FTS and vec rows are deleted with them.
 --
--- BUILD NOTE (step 2 ships a MINIMAL chunker): the first cut is a paragraph splitter (maximal runs of
--- non-blank lines), token_count = whitespace word count, heading_path left NULL. It populates this exact
--- schema and exercises the FTS triggers; the qmd heuristic above is folded in at STEP 5, when hybrid
--- retrieval quality is first measured and a better chunker can actually be scored. Swapping it is a pure
+-- BUILD NOTE (step 2 ships a MINIMAL chunker — and it is STILL what ships): the first cut is a paragraph
+-- splitter (maximal runs of non-blank lines), token_count = whitespace word count, heading_path left NULL.
+-- It populates this exact schema and exercises the FTS triggers. Folding in the qmd heuristic above was
+-- planned for step 5 but DEFERRED past it: scoring paragraph-vs-qmd needs a real embedder + eval, which
+-- didn't land until 2026-07-01 (after step 5) — now unblocked (tasks.md backlog). Swapping it is a pure
 -- re-projection (drop & rebuild) — no schema or invariant change — so deferring it costs nothing.
 
 -- FTS5 over chunk text. external-content (content='chunks') stores the text once; BM25 ranking is built in.
@@ -144,7 +145,7 @@ END;
 -- The dimension is a DDL literal, so it is pinned to meta.embed_dim; a model change recreates this table.
 CREATE VIRTUAL TABLE chunks_vec USING vec0(
   chunk_id  INTEGER PRIMARY KEY,       -- = chunks.id
-  embedding FLOAT[768]                 -- 768 = EmbeddingGemma-300M / Qwen3-Embedding-0.6B default
+  embedding FLOAT[768]                 -- 768 = bge-base-en-v1.5 (default) / EmbeddingGemma-300M
 );
 -- Scale levers if brute force ever stops being instant (index-engine.md §4): int8/binary quantization,
 -- or a partition/auxiliary column on note_b2id for filtered KNN — both before reaching for ANN.
@@ -295,7 +296,8 @@ query ─ (opt) expansion SEAM ─┐ llm_cache
         → resolve chunk_id → note_b2id → results (+ --explain)
 ```
 
-RRF formula/`k`, the position-aware blend, and the EmbeddingGemma prompt format are borrowed from qmd
+RRF formula/`k`, the position-aware blend, and the asymmetric query/document prompt discipline (the
+concrete prefix is the model's own — B2 ships bge's) are borrowed from qmd
 ([index-engine.md](../index-engine.md) §1, §5). The reranker and query expansion are deferred behind
 seams — they change *ordering*, not the store or the candidate set.
 
@@ -369,7 +371,7 @@ code, but the schema and flows above are language-neutral and can be locked now.
 | **2** | Markdown-derived tables (**minimal paragraph chunker**, §1.2 build note) | `chunks` (+`chunks_fts`), `edges` | — | golden graph: `references` + `elaborates` spaced-rep→memory (inline/active); a bare link ⇒ `references`; `neighbors memory` = {referenced-by, elaborated-by}; one-note re-index ≡ full |
 | **3** | sqlite-vec + embedder seam | `chunks_vec` | **embedder** (fake→real) | deterministic fake vectors → reproducible KNN; `embed_model_id`/`embed_dim` recorded; real local model deferred behind the seam (§6 of index-engine.md) |
 | **4** | `.b2/` event log + replay | `edges` (suggested/rejected), `edge_provenance` | log sink | the inert suggestion shows in `b2 suggest`, absent from every file on disk; drop→replay reproduces the queue (Flow ⑤); a rejection tombstone blocks re-proposal |
-| **5** | Hybrid retrieval **+ upgrade chunker to the qmd heuristic** (§1.2) | reads fts+vec; `llm_cache` | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
+| **5** | Hybrid retrieval (on the **minimal** chunker; qmd-chunker upgrade **deferred** past step 5 — §1.2 build note) | reads fts+vec (no new tables; `llm_cache` defers with the reranker) | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
 
 Steps 1–2 establish the Markdown-derived tiers; step 4 layers the log-derived review queue on top; the
 two together are what `index = projection of (Markdown ∪ log)` asserts. The embedder (step 3) and

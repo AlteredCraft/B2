@@ -62,19 +62,44 @@ areas, v1 scope, locked decisions).
   the spike. Also fixed a real bug the eval surfaced: NL queries with punctuation crashed FTS5 —
   `keyword_search` now sanitizes to a safe `MATCH`. **73 tests** (all fake/deterministic in CI); the
   real model is exercised only by `b2 init` and the eval example.
+- [x] **Relator seam** — the classify/explain step of connection discovery now sits behind a swappable
+  **`Relator`** trait ([relate.rs](../crates/b2-core/src/relate.rs)), mirroring
+  [`Embedder`](../crates/b2-core/src/embed.rs): `relate(anchor, candidate) -> Result<Option<Proposal>>`,
+  **pairwise**, with `Ok(None)` as a first-class **decline** — candidate generation over-produces, and the
+  relator is the precision gate that prunes. `Proposal { edge_type, explanation, confidence }` maps 1:1 onto
+  [`generate_suggestion`](../crates/b2-core/src/suggest.rs) (relator owns type/explanation/confidence + `by`
+  via `model_id`; candidate-gen owns src/dst/`source`). Ships the deterministic **`FakeRelator`**
+  (content-addressed on the `b2id` pair like `FakeEmbedder`; always emits a **core** verb, declines 1-in-4
+  to exercise the prune path) so the pipeline is provable with no LLM. The real LLM-backed relator is
+  deferred to its own crate (the `LocalEmbedder`/`b2-embed` precedent), keeping `b2-core` model-free. 5
+  relator tests; **78** workspace tests green.
 
 ## Next up — connection-discovery pipeline
 
-> **Pick this up fresh.** The real embedder is done and on `main` — semantic `search` is honest, and the
-> **graph⨝vector join is ready** ([search.rs](../crates/b2-core/src/search.rs) `graph_filtered_search`).
-> The accept/reject engine ops are *built* (suggestion lifecycle slice), but **nothing generates
-> suggestions yet** — this slice is what finally does. This is B2's reason to exist.
+> **Pick this up fresh.** The three ingredients now exist: semantic `search` is honest (real embedder on
+> `main`), the **`Relator` seam** is built ([relate.rs](../crates/b2-core/src/relate.rs); `FakeRelator` for
+> tests), and the **accept / reject / list engine ops** are built (suggestion-lifecycle slice). What's
+> missing is the **glue that generates suggestions** — candidate generation → `relate` → `generate_suggestion`
+> — plus the CLI. **Nothing generates suggestions yet**; this slice is what finally does. This is B2's
+> reason to exist.
 
-- **Connection-discovery pipeline** — candidate generation (run `graph_filtered_search` off each note as
-  the anchor) → typed, **explained** suggestions → the review loop; then the `suggest` / `accept` /
-  `reject` CLI commands (the accept op is *built* in the engine; nothing **generates** suggestions until
-  this lands). Extend the **eval suite**'s scaffolded **suggestion-quality** half here (precision/recall
-  over a hand-labelled candidate set), still out of CI.
+- **① First decision — what *is* a candidate? (resolve first-principles, before coding.)** Discovery
+  proposes connections you *haven't* made, so a candidate is a note **semantically near the anchor but not
+  already connected** — the *complement* of the graph, not the intersection. Watch the trap:
+  [`graph_filtered_search`](../crates/b2-core/src/search.rs) returns the **intersection** (nearest chunks
+  *within* k hops — already-related notes), so it is the wrong primitive as-is. The natural build is
+  `hybrid_search(anchor text)` **minus** [`reachable_within`](../crates/b2-core/src/graph.rs)`(anchor, 1)`
+  (drop self + existing neighbors). Settle the open sub-questions here: is "near-but-graph-distant" *also* a
+  signal worth keeping? how is the anchor's query text formed — whole note, or per-chunk?
+- **② Wire the pipeline** — for each note as anchor: generate candidates (①) → `Relator::relate` each →
+  feed every `Some(Proposal)` into [`generate_suggestion`](../crates/b2-core/src/suggest.rs), validating
+  `edge_type` is core via [`relation::is_core`](../crates/b2-core/src/relation.rs) (the gate deferred from
+  the seam slice — a real relator's output isn't trusted blindly). Runs on `FakeRelator`, provable with no
+  LLM. Extend the **eval suite**'s scaffolded **suggestion-quality** half here (precision/recall over a
+  hand-labelled candidate set), still out of CI.
+- **③ CLI + façade** — surface `suggest` / `accept` / `reject` on the
+  [`Vault`](../crates/b2-core/src/vault.rs) façade (add ops as the commands need them — keep the surface
+  minimal), then the `b2 suggest` / `accept` / `reject` commands with `--json` for agents, like the others.
 - **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
   [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
   the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).

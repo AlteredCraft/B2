@@ -92,7 +92,8 @@ actually want is cheaper than that integration tax — and qmd's MIT license + p
 rebuild low-risk.
 
 **What we borrow wholesale:** the chunking heuristic, the RRF formula and k, the position-aware blend,
-the EmbeddingGemma prompt format (`task: ... | query:` / `title: ... | text:`), the JSON/`--explain`
+the asymmetric query/document prompt discipline (each model brings its own prefix — B2 ships bge's, §6;
+not EmbeddingGemma's `task:…|query:` / `title:…|text:`), the JSON/`--explain`
 agent-output discipline, and the MCP surface idea. **What we discard:** the npm/Node packaging and the
 "DB is the product" framing.
 
@@ -312,8 +313,9 @@ The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-
   `b2 init` downloads a configurable model (candle + hf-hub) into a shared XDG cache. The binary stays small.
 - **Embedding dimension & model lock-in.** Changing the embed model means re-embedding the whole vault
   (qmd's `embed -f`). Store the model id + dim in the DB; treat a model change as a full re-embed.
-  **Locked (2026-06-30):** EmbeddingGemma-300M at **dim 768** sets the `vec0` column type; a model/dim
-  change is a full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
+  **Locked:** the `vec0` column type is **dim 768** — the default **`BAAI/bge-base-en-v1.5`** and the
+  config-selectable EmbeddingGemma-300M are both 768-dim (§6, built 2026-07-01); a model/dim change is a
+  full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
 - **Loadable-extension friction.** `sqlite-vec` must be loaded at runtime (qmd notes macOS needs a
   SQLite that allows extensions). Static-linking it into our binary removes this for end users.
 - **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.

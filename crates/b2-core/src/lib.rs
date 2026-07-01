@@ -15,6 +15,7 @@ pub mod id;
 pub mod ingest;
 pub mod link;
 pub mod note;
+pub mod relate;
 pub mod relation;
 pub mod replay;
 pub mod search;

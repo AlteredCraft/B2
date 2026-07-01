@@ -74,6 +74,18 @@
   .eq{font-family:var(--mono);color:var(--ink)}
   .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted);margin-top:10px}
   .legend span{display:flex;align-items:center;gap:7px}
+  .legend .ln{display:inline-block;width:18px;height:0;border-top:2px solid var(--muted)}
+  .legend .ln.dash{border-top-style:dashed}
+  /* Diagrams */
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:16px 0}
+  .diagram svg{width:100%;height:auto;display:block}
+  .diagram text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--ink)}
+  .diagram .mono-t{font-family:var(--mono)}
+  .diagram .title{font-size:13.5px;font-weight:600;fill:var(--ink)}
+  .diagram .sub{font-size:11px;fill:var(--muted)}
+  .diagram .lbl{font-size:10.5px;fill:var(--muted)}
+  .diagram .node{fill:var(--panel2);stroke:var(--line);stroke-width:1.4}
+  .diagram .edge{fill:none;stroke-width:1.6}
 </style>
 </head>
 <body>
@@ -90,6 +102,7 @@
   <a href="#substrate">The substrate bet</a>
   <a href="#schema">The schema</a>
   <div class="grp">The pipelines</div>
+  <a href="#pipelines-overview">Pipelines, at a glance</a>
   <a href="#ingest"><span class="dot" style="background:var(--t1)"></span>① Ingest: vault → index</a>
   <a href="#notes"><span class="dot" style="background:var(--t1)"></span>Notes &amp; the write discipline</a>
   <a href="#graph"><span class="dot" style="background:var(--t2)"></span>Chunks, links &amp; the graph</a>
@@ -196,6 +209,78 @@
   <p class="sub">Three crates, cleanly layered: the engine owes nothing to the adapter above it or the
   model beside it, and the AI-heavy embedder is quarantined behind a trait so the engine never sees a
   tensor.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 1120 480" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ah-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        <marker id="ah-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--purple)"/></marker>
+        <marker id="ah-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--green)"/></marker>
+        <marker id="ah-pink"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--pink)"/></marker>
+        <marker id="ah-muted"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+      </defs>
+
+      <!-- CLI -->
+      <rect class="node" style="stroke:var(--cyan)" x="390" y="20" width="340" height="64" rx="10"/>
+      <text class="title" x="560" y="46" text-anchor="middle">b2-cli · the adapter</text>
+      <text class="sub mono-t" x="560" y="64" text-anchor="middle">args → façade calls → print</text>
+
+      <!-- edges CLI -> core / embed -->
+      <path class="edge" style="stroke:var(--accent)" marker-end="url(#ah-accent)" d="M470,84 L350,160"/>
+      <text class="lbl" x="352" y="122" text-anchor="middle">Vault façade calls</text>
+      <path class="edge" style="stroke:var(--purple)" marker-end="url(#ah-purple)" d="M650,84 L810,160"/>
+      <text class="lbl" x="768" y="122" text-anchor="middle">picks + injects</text>
+
+      <!-- core -->
+      <rect class="node" style="stroke:var(--accent)" x="120" y="160" width="460" height="160" rx="10"/>
+      <text class="title" x="350" y="186" text-anchor="middle">b2-core · the engine</text>
+      <text class="sub mono-t" x="142" y="210">Vault façade · ingest · graph</text>
+      <text class="sub mono-t" x="142" y="228">search (BM25 ⊕ vector) · suggest</text>
+      <text class="sub mono-t" x="142" y="246">event · replay · note (surgical writes)</text>
+      <text class="sub mono-t" x="142" y="264">embed::Embedder trait — the seam</text>
+
+      <!-- embed -->
+      <rect class="node" style="stroke:var(--purple)" x="640" y="160" width="340" height="160" rx="10"/>
+      <text class="title" x="810" y="186" text-anchor="middle">b2-embed · real embedder</text>
+      <text class="sub mono-t" x="662" y="210">LocalEmbedder — candle BERT</text>
+      <text class="sub mono-t" x="662" y="228">BAAI/bge-base-en-v1.5 · 768-dim</text>
+      <text class="sub mono-t" x="662" y="246">config — TOML source resolution</text>
+      <text class="sub mono-t" x="662" y="264">provision — b2 init download</text>
+
+      <!-- embed implements core's trait -->
+      <path class="edge" style="stroke:var(--purple);stroke-dasharray:5 4" marker-end="url(#ah-purple)" d="M640,305 L580,305"/>
+      <text class="lbl" x="610" y="298" text-anchor="middle">implements embed::Embedder</text>
+
+      <!-- tiers -->
+      <rect class="node" style="stroke:var(--green)" x="40" y="380" width="250" height="80" rx="10"/>
+      <text class="title" x="165" y="416" text-anchor="middle">Tier 1 · Markdown vault</text>
+      <text class="sub mono-t" x="165" y="434" text-anchor="middle">*.md + frontmatter</text>
+
+      <rect class="node" style="stroke:var(--accent)" x="340" y="380" width="280" height="80" rx="10"/>
+      <text class="title" x="480" y="416" text-anchor="middle">Tier 2 · b2.sqlite</text>
+      <text class="sub mono-t" x="480" y="434" text-anchor="middle">disposable projection</text>
+
+      <rect class="node" style="stroke:var(--pink)" x="670" y="380" width="250" height="80" rx="10"/>
+      <text class="title" x="795" y="416" text-anchor="middle">Tier 3 · event log</text>
+      <text class="sub mono-t" x="795" y="434" text-anchor="middle">.b2/log/events.jsonl</text>
+
+      <!-- core -> tiers -->
+      <path class="edge" style="stroke:var(--green)" marker-end="url(#ah-green)" d="M210,320 L180,380"/>
+      <path class="edge" style="stroke:var(--accent)" marker-end="url(#ah-accent)" d="M400,320 L470,380"/>
+      <path class="edge" style="stroke:var(--pink)" marker-end="url(#ah-pink)" d="M560,320 L740,380"/>
+      <text class="lbl" x="150" y="360" text-anchor="middle">reads / stamps</text>
+      <text class="lbl" x="480" y="360" text-anchor="middle">reads / writes</text>
+      <text class="lbl" x="700" y="360" text-anchor="middle">appends / replays</text>
+    </svg>
+    <div class="legend">
+      <span><span class="ln"></span> calls / owns</span>
+      <span><span class="ln dash"></span> implements a trait</span>
+      <span style="color:var(--green)">■ Tier 1</span>
+      <span style="color:var(--accent)">■ Tier 2</span>
+      <span style="color:var(--pink)">■ Tier 3</span>
+    </div>
+  </div>
+
   <div class="grid3">
     <div class="card tight">
       <div class="kicker" style="color:var(--accent)">b2-core · the engine</div>
@@ -302,6 +387,62 @@
   migration, because its <code>FLOAT[N]</code> dimension is a DDL literal pinned to
   <code>meta.embed_dim</code>: the vector space can only be shaped once the embedder's <code>dim</code> is
   known (see <a href="#embed">the embedder seam</a>).</p>
+</section>
+
+<!-- ============ PIPELINES OVERVIEW ============ -->
+<section id="pipelines-overview">
+  <h3>The three pipelines, at a glance</h3>
+  <p class="sub">Before the detail, the map: ingest fills the index, retrieval and the suggestion lifecycle
+  both read it, and the lifecycle's two write-backs — an accepted edge into frontmatter, every event into
+  the log — are what keep <a href="#equation">the governing equation</a> honest on the next rebuild.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 1080 400" xmlns="http://www.w3.org/2000/svg">
+      <!-- nodes -->
+      <rect class="node" style="stroke:var(--green)" x="30" y="30" width="230" height="80" rx="10"/>
+      <text class="title" x="145" y="64" text-anchor="middle">Markdown vault</text>
+      <text class="sub mono-t" x="145" y="82" text-anchor="middle">notes + frontmatter</text>
+
+      <rect class="node" style="stroke:var(--accent)" x="420" y="30" width="250" height="80" rx="10"/>
+      <text class="title" x="545" y="64" text-anchor="middle">b2.sqlite index</text>
+      <text class="sub mono-t" x="545" y="82" text-anchor="middle">chunks · edges · queue</text>
+
+      <rect class="node" style="stroke:var(--purple)" x="820" y="30" width="230" height="80" rx="10"/>
+      <text class="title" x="935" y="64" text-anchor="middle">② Retrieval</text>
+      <text class="sub mono-t" x="935" y="82" text-anchor="middle">neighbors · search</text>
+
+      <rect class="node" style="stroke:var(--pink)" x="30" y="280" width="230" height="80" rx="10"/>
+      <text class="title" x="145" y="314" text-anchor="middle">Event log</text>
+      <text class="sub mono-t" x="145" y="332" text-anchor="middle">events.jsonl</text>
+
+      <rect class="node" style="stroke:var(--pink)" x="420" y="280" width="250" height="80" rx="10"/>
+      <text class="title" x="545" y="314" text-anchor="middle">③ Suggestion lifecycle</text>
+      <text class="sub mono-t" x="545" y="332" text-anchor="middle">generate → accept / reject</text>
+
+      <!-- edges -->
+      <path class="edge" style="stroke:var(--t1)" marker-end="url(#ah-accent)" d="M260,70 L420,70"/>
+      <text class="lbl" x="340" y="58" text-anchor="middle">① ingest</text>
+
+      <path class="edge" style="stroke:var(--purple)" marker-end="url(#ah-purple)" d="M670,70 L820,70"/>
+      <text class="lbl" x="745" y="58" text-anchor="middle">BM25 ⊕ vector → RRF</text>
+
+      <path class="edge" style="stroke:var(--pink)" marker-end="url(#ah-pink)" d="M545,110 L545,280"/>
+      <text class="lbl" x="620" y="198" text-anchor="middle">generate suggestion</text>
+
+      <path class="edge" style="stroke:var(--pink)" marker-end="url(#ah-pink)" d="M420,320 L260,320"/>
+      <text class="lbl" x="340" y="308" text-anchor="middle">append (durable)</text>
+
+      <path class="edge" style="stroke:var(--muted);stroke-dasharray:5 4" marker-end="url(#ah-muted)" d="M145,280 L145,140 L470,140 L470,110"/>
+      <text class="lbl" x="230" y="132" text-anchor="middle">replay</text>
+
+      <path class="edge" style="stroke:var(--green);stroke-dasharray:5 4" marker-end="url(#ah-green)" d="M420,300 C300,300 200,200 155,112"/>
+      <text class="lbl" x="270" y="240" text-anchor="middle">accept → frontmatter write</text>
+    </svg>
+    <div class="legend">
+      <span><span class="ln"></span> reads / calls</span>
+      <span><span class="ln dash"></span> write-back into tier 1 or tier 3</span>
+    </div>
+  </div>
 </section>
 
 <!-- ============ INGEST (FLOW 1) ============ -->
