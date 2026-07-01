@@ -51,20 +51,49 @@ areas, v1 scope, locked decisions).
 
 ## Next up — real embedder + eval suite
 
-> **Pick this up fresh.** The walking skeleton is done: the `b2` CLI drives a typed `b2_core::Vault`
-> façade against a real vault, but the shipped embedder is the deterministic *fake* — so the vector
-> half of `search` (and, later, discovery candidate generation) is not yet semantic. This is the
-> deferred half of build-spec steps 3 & 5.
+> **Pick this up fresh — start a new session here.** The walking skeleton is done and on `main`
+> (commit `feat(cli): b2 CLI over a typed Vault core API`, 67 tests). The `b2` CLI drives a typed
+> `b2_core::Vault` façade against a real vault — smoke-tested on a ~1000-note copy of the primary vault
+> (indexed in ~10s, search fast). But the shipped embedder is the deterministic **fake**, so `search`'s
+> vector half — and, later, discovery candidate generation — is **not yet semantic**. This is the
+> deferred quality half of build-spec steps 3 & 5, and the one place the architecture meets real
+> friction ([index-engine.md](index-engine.md) §6).
 
-**Goal:** drop a local model into the embedder seam ([`embed::Embedder`](../crates/b2-core/src/embed.rs);
-[index-engine.md](index-engine.md) §6), replacing the `FakeEmbedder` the façade currently constructs —
-one localized swap, no schema or flow change (a model id/dim change re-embeds via
-`ensure_embedding_space`). Then the **eval suite** that scores semantic + suggestion quality against a
-hand-labeled set, kept **separate** from the deterministic plumbing tests so model quality never flakes
-CI ([vision-and-scope.md](vision-and-scope.md), testability stack point 5).
+**⛳ Start here — the gating decision (make it with Sam before coding).** Like the language gate, this
+opens with a *choice*, not a keystroke: **which local embedding model · which Rust runtime · how it
+ships.** Shortlist from [index-engine.md](index-engine.md) §6/§8, now filtered to Rust (language is
+locked):
+- **Model + dim:** EmbeddingGemma-300M or Qwen3-Embedding-0.6B (~300–600 MB). Pick the **dim
+  deliberately — likely 768** (§8); it becomes the `chunks_vec` `FLOAT[N]` column type. Note the
+  EmbeddingGemma prompt format (`task:… | query:` / `title:… | text:`, §5).
+- **Runtime:** ONNX via `ort`/`fastembed`-rs (cleaner than carrying a whole LLM runtime just to embed)
+  vs. a `llama.cpp`/GGUF binding vs. `candle` — favour whatever static-links into one binary.
+- **Packaging:** bundle-in-binary vs. **download-on-first-run** (a one-time ritual, not per-use) — the
+  genuine open question; can be deferred as a packaging detail but nudges the runtime choice.
+- Record the decision in [index-engine.md](index-engine.md) §6 + [vision-and-scope.md](vision-and-scope.md)
+  "Decisions locked", the way earlier gates were captured.
 
-**Unlocks / knock-on:** the qmd chunker upgrade (a real embedder can finally score it, build spec §1.2),
-and the CLI's `search` can stop caveating its vector half.
+**Goal (once decided):** a real `Embedder` impl behind the existing seam, wired as the **Vault/CLI
+default**. Almost everything already accommodates it — this is a *drop-in*, not a redesign:
+- Seam: [`embed::Embedder`](../crates/b2-core/src/embed.rs) (`model_id` / `dim` / `embed`).
+- One wiring point: `crates/b2-core/src/vault.rs` — today `const EMBED_DIM = 64` +
+  `FakeEmbedder::new(EMBED_DIM)`. Swap the field to the real impl (likely `Box<dyn Embedder>`) at the
+  real dim; the CLI/façade inherit it.
+- Self-healing swap: `db::ensure_embedding_space` detects a model/dim change via `meta`, drops
+  `chunks_vec`, and forces a full re-embed on the next `reindex`. **No migration to write** — the first
+  real reindex just re-vectors the vault.
+- **Keep `FakeEmbedder` for the tests** — every existing test constructs it directly for determinism;
+  the real model must not leak into the fast plumbing suite (testability stack, points 4–5).
+- Then relax the CLI `search` caveat (stderr) once the vector half is genuinely semantic.
+
+**Then the eval suite:** the separate, occasional pass scoring **semantic + suggestion quality**
+(precision/recall) against a small hand-labelled set, kept **out of the deterministic CI tests so model
+quality never flakes CI** ([vision-and-scope.md](vision-and-scope.md), testability stack point 5).
+
+**Out of scope (keep it thin):** query expansion (qmd's 1.7B third model — off-by-default, later); a
+reranker; and the packaging/distribution build itself (decide the strategy here, ship the installer
+later). **Unlocks:** the qmd chunker upgrade (a real embedder can finally score paragraph vs. qmd
+chunking — build spec §1.2) and honest semantic `search`.
 
 ### After that (ordered)
 
