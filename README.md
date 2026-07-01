@@ -12,8 +12,11 @@ A personal, **local-first** knowledge-management vault — plain Markdown you fu
 AI agent that discovers **typed, explained connections** between your notes that you'd never find
 by hand.
 
-> **Status:** this repo holds B2's **design**, not yet its code. The data model is **locked**; the
-> index-engine build is **next up** ([tasks.md](planning/tasks.md)).
+> **Status:** the design is **locked** and the **index engine is built** — a Rust crate
+> (`crates/b2-core`): steps 0→5 of the [build spec](planning/specs/index-engine-build.md) plus the
+> suggestion **accept** operation, all green (51 tests). **Next up:** a thin **`b2` CLI over a typed core
+> API** ([tasks.md](planning/tasks.md)). A guided tour of the harness + system under test:
+> [docs/test-harness-tour.html](docs/test-harness-tour.html).
 
 ## What B2 is (the north star)
 
