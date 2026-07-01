@@ -85,50 +85,46 @@ areas, v1 scope, locked decisions).
   top-N. Anchor text is **per-chunk**, not whole-note. Built
   [`discover::candidates`](../crates/b2-core/src/discover.rs) (+ db readers `chunks_for_note` / `chunk_vector`,
   `embed::unpack_f32`); 7 discover tests, **85** workspace tests green.
+- [x] **Connection-discovery ② — the generate pipeline, wired end-to-end** — the glue that finally turns the
+  three built pieces into suggestions now exists:
+  [`discover::generate_for_anchor`](../crates/b2-core/src/discover.rs) + a
+  [`generate_all`](../crates/b2-core/src/discover.rs) over the vault. Per anchor:
+  [`candidates`](../crates/b2-core/src/discover.rs) → assemble the relator's borrowed inputs (anchor +
+  per-candidate [`NoteCtx`](../crates/b2-core/src/relate.rs) / [`Candidate`](../crates/b2-core/src/relate.rs),
+  `evidence_chunk` = [`db::chunk_text`](../crates/b2-core/src/db.rs), `signal="semantic:maxsim"` → the
+  suggestion's `source`) → [`Relator::relate`](../crates/b2-core/src/relate.rs) → on `Some`, **validate
+  [`relation::is_core`](../crates/b2-core/src/relation.rs)** (a real relator's verb is checked, not trusted —
+  a non-core proposal is dropped + counted, never persisted) →
+  [`suggest::generate_suggestion`](../crates/b2-core/src/suggest.rs) (`by="agent:<model_id>"`). Deterministic
+  + idempotent like the rest of the core: `created`/`IdGen` passed in, anchors iterated in **sorted b2id
+  order** ([`db::all_note_ids`](../crates/b2-core/src/db.rs)), and `generate_suggestion`'s `edge_exists` guard
+  means a re-run proposes nothing new — every candidate lands in exactly one of
+  `{generated, declined, non_core, existing}` ([`GenerateOutcome`](../crates/b2-core/src/discover.rs)).
+  **Sub-decision resolved:** `NoteCtx.text` is the note's chunks joined
+  ([`db::note_text`](../crates/b2-core/src/db.rs)) — the body as the index already holds it, cheapest-correct
+  (a real relator reads it; `FakeRelator` ignores it, content-addressed on b2ids). Runs fully on
+  `FakeRelator`, no LLM. **7 pipeline tests** (purpose-built relator stubs drive fire-core / decline /
+  tail-verb exactly; `FakeRelator` proves the seam runs through; determinism across rebuild; idempotent
+  re-run; queue survives drop→rebuild→replay); **92** workspace tests green.
 
-## Next up — wire the discovery pipeline (② → ③)
+## Next up — surface discovery in the CLI (③)
 
-> **Pick this up fresh.** ① is resolved and **candidate generation is built**
-> ([`discover::candidates`](../crates/b2-core/src/discover.rs)); the **`Relator` seam** exists
-> ([relate.rs](../crates/b2-core/src/relate.rs); `FakeRelator` for tests); the **accept / reject / list
-> engine ops** exist ([suggest.rs](../crates/b2-core/src/suggest.rs)). The one missing piece is the **glue
-> that turns candidates into suggestions**, then the CLI. **Nothing generates suggestions yet** — ② is the
-> slice that finally does. This is B2's reason to exist.
+> **Pick this up fresh.** ① (candidate generation) and ② (the generate pipeline) are **built and green** —
+> [`discover::generate_all`](../crates/b2-core/src/discover.rs) turns a vault into suggestions on the
+> `FakeRelator`, deterministic and idempotent, and the **accept / reject / list engine ops** exist
+> ([suggest.rs](../crates/b2-core/src/suggest.rs)). The missing piece is now purely **surface**: a
+> [`Vault`](../crates/b2-core/src/vault.rs) façade + `b2` commands so a human can see and act on the queue.
+> The engine finally generates suggestions — ③ makes them reachable from the terminal.
 
-- **② Wire the generate pipeline** — the orchestration that runs the three built pieces end-to-end. Home: a
-  new fn in [discover.rs](../crates/b2-core/src/discover.rs) (e.g. `generate_for_anchor` + a `generate_all`
-  over the vault), **deterministic** like the rest of the core — timestamp (`created`) and ids (`IdGen`)
-  passed in, notes iterated in **sorted b2id order** so suggestion ids are assertable under `FixedId`. Per
-  note as anchor:
-  1. [`discover::candidates`](../crates/b2-core/src/discover.rs)`(conn, anchor, top_n)` → the `CandidateNote`s
-     (already built).
-  2. Assemble the relator's inputs: anchor [`relate::NoteCtx`](../crates/b2-core/src/relate.rs)`{ b2id, title,
-     text }` and, per candidate, a `relate::Candidate { note, evidence_chunk, signal, score }` —
-     `evidence_chunk` = [`db::chunk_text`](../crates/b2-core/src/db.rs)`(cand.evidence_chunk_id)`; `signal` =
-     the candidate-gen provenance string (e.g. `"semantic:maxsim"`), which flows to the suggestion's `source`.
-  3. [`Relator::relate`](../crates/b2-core/src/relate.rs)`(&anchor, &cand)?` → on `Some(proposal)`,
-     **validate [`relation::is_core`](../crates/b2-core/src/relation.rs)`(&proposal.edge_type)`** (the gate
-     deferred from the seam slice — a real relator's output isn't trusted blindly; skip + count a non-core
-     verb). `None` is a decline → drop.
-  4. [`suggest::generate_suggestion`](../crates/b2-core/src/suggest.rs)`(conn, sink, idgen, anchor,
-     cand.note_b2id, proposal.edge_type, Some(explanation), by = "agent:<relator.model_id()>", Some(signal),
-     Some(proposal.confidence), created)`. It already guards on `edge_exists`, so re-running never re-proposes
-     an active/pending/rejected pair — **the whole op is idempotent.**
-
-  **Settle one small sub-decision first:** how the anchor's / candidate's `NoteCtx.text` is assembled for a
-  *real* relator — join the note's chunks (`chunks_for_note` → `chunk_text`), add a `db::note_text` helper,
-  or pass only the evidence chunk. Irrelevant to `FakeRelator` (content-addressed on b2ids), so pick the
-  cheapest correct option and note it. Also likely needs a `db::all_note_ids` reader (list every note b2id,
-  sorted). Runs fully on `FakeRelator`, provable with no LLM. **Tests:** suggestions appear for complement
-  candidates; the `is_core` gate drops a non-core proposal (needs a tail-verb *stub* relator, since
-  `FakeRelator` only ever emits core); a decline yields no suggestion; determinism under `FixedId`; and the
-  queue survives drop→rebuild→replay. Then extend the **eval suite**'s scaffolded **suggestion-quality** half
-  (precision/recall over a hand-labelled candidate set), still out of CI.
 - **③ CLI + façade** — surface `suggest` (generate + list) / `accept` / `reject` on the
   [`Vault`](../crates/b2-core/src/vault.rs) façade (add ops as the commands need them — keep the surface
   minimal; `list_suggestions` / `accept_suggestion` / `reject_suggestion` already exist in
-  [suggest.rs](../crates/b2-core/src/suggest.rs), and ② adds the generate op). Then the `b2 suggest` /
-  `accept` / `reject` commands with `--json` for agents, like the others.
+  [suggest.rs](../crates/b2-core/src/suggest.rs), and ② built the generate op —
+  [`discover::generate_all`](../crates/b2-core/src/discover.rs)). Then the `b2 suggest` / `accept` / `reject`
+  commands with `--json` for agents, like the others.
+- **Suggestion-quality eval** — now unblocked by ②: extend the eval suite's scaffolded **suggestion-quality**
+  half (precision/recall over a hand-labelled candidate set), still out of CI (needs a real relator, as the
+  retrieval eval needs a real embedder).
 - **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
   [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
   the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).

@@ -22,7 +22,12 @@
 
 use crate::db;
 use crate::error::Result;
+use crate::event::EventSink;
 use crate::graph;
+use crate::id::IdGen;
+use crate::relate::{Candidate, NoteCtx, Relator};
+use crate::relation;
+use crate::suggest;
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -116,4 +121,148 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
     });
     out.truncate(limit);
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Stage ② — wire candidate generation → the Relator → the suggestion queue
+// (planning/tasks.md "Wire the generate pipeline"). Deterministic like the rest
+// of the core: `created` and ids are passed in, notes are anchored in sorted
+// b2id order, so a run is reproducible and idempotent.
+// ---------------------------------------------------------------------------
+
+/// The provenance tag stamped on every candidate this stage surfaces — it flows to
+/// the suggestion's `source` (data-model.md §4). Honest about the mechanism:
+/// passage↔passage max-similarity ([`candidates`]), with graph distance used only
+/// as an exclusion, never as a boost (① resolved 2026-07-01).
+const SIGNAL: &str = "semantic:maxsim";
+
+/// A tally of one discovery run. Every candidate the relator saw lands in exactly
+/// one bucket, so `generated + declined + non_core + existing` is the number of
+/// pairs considered — the accounting the CLI reports and the tests assert.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GenerateOutcome {
+    /// New suggestions written to the queue + log.
+    pub generated: usize,
+    /// Relator declines (`Ok(None)`) — the prune path.
+    pub declined: usize,
+    /// Proposals dropped because the verb was not core (a real relator's output is
+    /// validated against [`relation::is_core`], never trusted blindly — tasks.md ②).
+    pub non_core: usize,
+    /// Candidates whose `(src, dst, type)` already exists in any status, so
+    /// re-proposal is refused — what makes a re-run idempotent.
+    pub existing: usize,
+}
+
+impl GenerateOutcome {
+    fn merge(&mut self, other: &GenerateOutcome) {
+        self.generated += other.generated;
+        self.declined += other.declined;
+        self.non_core += other.non_core;
+        self.existing += other.existing;
+    }
+}
+
+/// Run the discovery pipeline for a single `anchor`: generate candidates
+/// ([`candidates`]), judge each with `relator` (the precision gate), and persist
+/// every fired-and-core proposal as a suggestion via
+/// [`generate_suggestion`](crate::suggest::generate_suggestion) (Flow ③ generate).
+/// This is the glue that finally turns the three built pieces — candidate
+/// generation, the [`Relator`] seam, and the suggestion lifecycle — into
+/// end-to-end connection discovery (tasks.md ②).
+///
+/// Deterministic: `created` (an ISO-8601 timestamp) and ids (`idgen`) are passed
+/// in, and candidates are already ranked, so a given `idgen` mints the same ids
+/// across runs. Idempotent: `generate_suggestion` refuses any pair already present
+/// in any status (active, pending, or rejected), so re-running proposes nothing new
+/// (counted in [`GenerateOutcome::existing`]).
+pub fn generate_for_anchor(
+    conn: &Connection,
+    sink: &dyn EventSink,
+    idgen: &dyn IdGen,
+    relator: &dyn Relator,
+    anchor: &str,
+    top_n: usize,
+    created: &str,
+) -> Result<GenerateOutcome> {
+    let cands = candidates(conn, anchor, top_n)?;
+    let mut outcome = GenerateOutcome::default();
+    if cands.is_empty() {
+        return Ok(outcome);
+    }
+
+    // The anchor's context is assembled once and reused across its candidates. Its
+    // `text` is the note's chunks joined (`db::note_text`) — the body as the index
+    // holds it; a real relator reads it, `FakeRelator` ignores it.
+    let anchor_title = db::note_title(conn, anchor)?;
+    let anchor_text = db::note_text(conn, anchor)?;
+    let anchor_ctx = NoteCtx {
+        b2id: anchor,
+        title: anchor_title.as_deref(),
+        text: &anchor_text,
+    };
+    let by = format!("agent:{}", relator.model_id());
+
+    for cand in cands {
+        let cand_title = db::note_title(conn, &cand.note_b2id)?;
+        let cand_text = db::note_text(conn, &cand.note_b2id)?;
+        let evidence = db::chunk_text(conn, cand.evidence_chunk_id)?.unwrap_or_default();
+        let candidate = Candidate {
+            note: NoteCtx {
+                b2id: &cand.note_b2id,
+                title: cand_title.as_deref(),
+                text: &cand_text,
+            },
+            evidence_chunk: &evidence,
+            signal: SIGNAL,
+            score: cand.score,
+        };
+
+        let Some(proposal) = relator.relate(&anchor_ctx, &candidate)? else {
+            outcome.declined += 1; // an explicit decline — the relator pruned it
+            continue;
+        };
+        // A real relator's verb is validated, not trusted: discovery only persists
+        // a core verb (data-model.md §2). The gate deferred from the seam slice.
+        if !relation::is_core(&proposal.edge_type) {
+            outcome.non_core += 1;
+            continue;
+        }
+        match suggest::generate_suggestion(
+            conn,
+            sink,
+            idgen,
+            anchor,
+            &cand.note_b2id,
+            &proposal.edge_type,
+            Some(proposal.explanation.as_str()),
+            &by,
+            Some(SIGNAL),
+            Some(proposal.confidence),
+            created,
+        )? {
+            Some(_) => outcome.generated += 1,
+            None => outcome.existing += 1, // already proposed/active/rejected
+        }
+    }
+    Ok(outcome)
+}
+
+/// Run [`generate_for_anchor`] over the whole vault, every note an anchor in sorted
+/// `b2id` order ([`db::all_note_ids`]) so the sequence of minted ids — and thus the
+/// review queue — is reproducible (tasks.md ②). Returns the summed
+/// [`GenerateOutcome`].
+pub fn generate_all(
+    conn: &Connection,
+    sink: &dyn EventSink,
+    idgen: &dyn IdGen,
+    relator: &dyn Relator,
+    top_n: usize,
+    created: &str,
+) -> Result<GenerateOutcome> {
+    let mut total = GenerateOutcome::default();
+    for anchor in db::all_note_ids(conn)? {
+        let one = generate_for_anchor(conn, sink, idgen, relator, &anchor, top_n, created)?;
+        total.merge(&one);
+    }
+    Ok(total)
 }

@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use b2_core::id::IdGen;
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
@@ -14,6 +15,28 @@ pub struct FixedId(pub &'static str);
 impl IdGen for FixedId {
     fn new_id(&self) -> String {
         self.0.to_string()
+    }
+}
+
+/// Sequential deterministic ids, for pipeline tests that mint several ids in one
+/// run (where `FixedId`'s single constant would collide on the edges primary key).
+/// ULID-shaped (26 chars) and monotonic, so a run's suggestion ids are assertable.
+pub struct SeqId(Cell<u32>);
+impl SeqId {
+    pub fn new() -> Self {
+        Self(Cell::new(0))
+    }
+}
+impl Default for SeqId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl IdGen for SeqId {
+    fn new_id(&self) -> String {
+        let n = self.0.get();
+        self.0.set(n + 1);
+        format!("01JSEQ{n:020}")
     }
 }
 
