@@ -63,6 +63,9 @@ impl LocalEmbedder {
             .map_err(|e| EmbedError::Load(format!("truncation: {e}")))?;
 
         let device = Device::Cpu;
+        // SAFETY: memory-maps the safetensors weights. Sound as long as the file is
+        // not mutated while mapped; it is a read-only file in our XDG cache, written
+        // once by `b2 init` (provision) and never touched again for the process's life.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[dir.join("model.safetensors")], DTYPE, &device)
                 .map_err(|e| EmbedError::Load(format!("weights: {e}")))?

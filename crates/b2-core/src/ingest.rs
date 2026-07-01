@@ -232,12 +232,11 @@ fn collect_md_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()
                 collect_md_files(root, &path, out)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            let rel = path
-                .strip_prefix(root)
-                .expect("walked path is under root")
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(rel);
+            // `path` was produced by walking `root`, so `strip_prefix` cannot fail;
+            // handle it gracefully anyway rather than panic on the invariant.
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
         }
     }
     Ok(())

@@ -86,9 +86,9 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         }
         Command::Reindex { vault } => {
             // Reindex's positional vault wins over the global flag.
-            let root = vault.clone().unwrap_or_else(|| cli.vault.clone());
+            let root = vault.as_ref().unwrap_or(&cli.vault);
             // Reindex embeds every chunk → it needs the real model.
-            let (vault, _semantic) = open_vault(&root, true)?;
+            let (vault, _semantic) = open_vault(root, true)?;
             let report = vault.reindex()?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -184,26 +184,16 @@ fn use_fake_embedder() -> bool {
 
 /// The CLI's error, composing the two crates it drives. Kept internal; `user_message`
 /// turns it into a generic, actionable, no-internals-leaked line (logging policy).
+/// `#[from]` supplies the `?` conversions; `transparent` defers `Display` to the
+/// inner error (only ever surfaced under `B2_DEBUG`).
+#[derive(Debug, thiserror::Error)]
 enum CliError {
-    Core(b2_core::Error),
-    Embed(EmbedError),
-    Serde(serde_json::Error),
-}
-
-impl From<b2_core::Error> for CliError {
-    fn from(e: b2_core::Error) -> Self {
-        CliError::Core(e)
-    }
-}
-impl From<EmbedError> for CliError {
-    fn from(e: EmbedError) -> Self {
-        CliError::Embed(e)
-    }
-}
-impl From<serde_json::Error> for CliError {
-    fn from(e: serde_json::Error) -> Self {
-        CliError::Serde(e)
-    }
+    #[error(transparent)]
+    Core(#[from] b2_core::Error),
+    #[error(transparent)]
+    Embed(#[from] EmbedError),
+    #[error(transparent)]
+    Serde(#[from] serde_json::Error),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —

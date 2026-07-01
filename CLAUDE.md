@@ -145,24 +145,24 @@ command).
 - Integration tests copy the committed `fixtures/golden-vault/` into a tempdir first, so ingest (which
   may stamp a `b2id`) never mutates the repo fixtures.
 
-## Ideomatic Rust
+## Idiomatic Rust
 
 ### Rust data modeling
 
 - Ownership forms a tree/DAG, never a cycle. One clear owner per value.
 - For references between values (or any logical cycle): use `slotmap` keys, or `Vec` indices only if nothing is ever removed. Do NOT default to `Rc<RefCell<T>>`; treat `Rc` / `Arc<Mutex<T>>` as last resorts after trying ownership + keys.
-- Prefer owned fields over borrowed (`&'a T`) fields. If a struct sprouts a lifetime parameter, reconsider — it usually wants owned data or a key.
+- Prefer owned fields over borrowed (`&'a T`) fields. If a struct sprouts a lifetime parameter, reconsider — it usually wants owned data or a key. Legitimate exception: a short-lived, `Copy`, read-only *view* struct passed into one call and never stored (e.g. `NoteCtx`/`Candidate` in `relate.rs`, `NoteRow` in `db.rs`) — borrowing there avoids a needless clone; keep it, and say so in the doc-comment.
 - Never silence the borrow checker with a reflexive `.clone()`. Diagnose ownership first: should this be a key instead of a reference?
 - No self-referential structs in safe Rust; restructure with indices.
-- No `.unwrap()` / `.expect()` in production paths; handle via `match`, `if let`, or `?`.
+- No `.unwrap()` / `.expect()` in production paths; handle via `match`, `if let`, or `?`. This holds even for an invariant you believe can't fail (e.g. `strip_prefix` on a path you just walked) — degrade gracefully (skip it) rather than panic.
 - When stuck, ask: "Who owns this, and can the relationship be an ID instead of a pointer?"
 
 ### Rust style & structure
 
-- Errors: `thiserror` for libraries (typed enums), `anyhow` for binaries/apps. Don't hand-roll error-handling boilerplate.
+- Errors: reach for `thiserror` typed enums wherever error *variants get matched on* — every library, **and any binary that does too**: the CLI maps variants to user-facing messages in `user_message`, so `CliError` is a `thiserror` enum, not `anyhow` (which erases the type and would force `downcast_ref`). Use `anyhow` only where errors are merely propagated and printed. Never hand-roll `From`/`Display` impls — `#[from]` and `#[error("…")]` generate them.
 - Signatures: accept `&str` not `&String`, `&[T]` not `&Vec<T>`. Return owned types and let callers borrow.
 - Prefer iterator chains over manual index loops (`for x in &items`, not `for i in 0..items.len()`).
 - Do NOT introduce `async`/`tokio`, generics, traits, or macros until there's a concrete need. No speculative abstraction.
-- `unsafe` requires an explicit justification comment; otherwise disallowed.
+- `unsafe` requires an explicit `// SAFETY:` comment stating the invariant that makes it sound (see `db.rs`'s `sqlite-vec` registration and `model.rs`'s weights mmap); otherwise disallowed.
 - Derive `Debug` on public data types (and `Clone`/`PartialEq` where it makes sense).
 - Keep modules small and domain-named; document public items with `///` comments stating intent, not mechanics.

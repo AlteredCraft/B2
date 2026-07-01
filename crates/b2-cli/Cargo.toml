@@ -14,6 +14,7 @@ b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
 clap = { version = "4.6.1", features = ["derive"] }
 serde_json = "1.0.150"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 tempfile = "3.27.0"
