@@ -1,0 +1,26 @@
+[package]
+name = "b2-embed"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "B2's real local embedder — candle-backed inference behind the b2-core Embedder seam"
+
+# Heavy ML deps (candle + tokenizers) live *only* here, never in b2-core, so the
+# core test suite stays fast, deterministic, and model-free (tasks.md testability
+# points 4–5). The `b2` binary depends on this crate to inject the real model.
+
+[dependencies]
+b2-core = { path = "../b2-core" }
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+hf-hub = { version = "0.4", features = ["ureq"] }
+tokenizers = "0.21"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+toml = "0.8"
+dirs = "6.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tempfile = "3.27.0"

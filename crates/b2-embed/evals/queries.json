@@ -1,0 +1,13 @@
+{
+  "description": "Hand-labelled semantic-retrieval set. Each query deliberately avoids the target note's keywords (synonyms/paraphrase) so it measures semantic lift, not lexical overlap. `relevant` lists the vault-relative path(s) that should rank first.",
+  "queries": [
+    { "query": "how do leaves turn light into food", "relevant": ["photosynthesis.md"] },
+    { "query": "pedalling a bike up a steep hill", "relevant": ["bicycle.md"] },
+    { "query": "i can't fall asleep at night", "relevant": ["insomnia.md"] },
+    { "query": "a mountain that erupts and spews magma", "relevant": ["volcano.md"] },
+    { "query": "keeping messages secret from eavesdroppers", "relevant": ["encryption.md"] },
+    { "query": "a strong little italian coffee shot", "relevant": ["espresso.md"] },
+    { "query": "scrambling data with a secret key", "relevant": ["encryption.md"] },
+    { "query": "trouble sleeping because of caffeine", "relevant": ["insomnia.md"] }
+  ]
+}

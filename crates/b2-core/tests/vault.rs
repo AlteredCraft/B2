@@ -57,7 +57,11 @@ fn reindex_stamps_a_note_missing_a_b2id() {
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);
     // an extra note with no b2id → reindex must stamp exactly it.
-    std::fs::write(root.join("orphan.md"), "---\ntype: note\ntitle: Orphan\n---\nbody\n").unwrap();
+    std::fs::write(
+        root.join("orphan.md"),
+        "---\ntype: note\ntitle: Orphan\n---\nbody\n",
+    )
+    .unwrap();
 
     let vault = Vault::open(&root).unwrap();
     let report = vault.reindex().unwrap();
@@ -85,10 +89,8 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
         .iter()
         .all(|n| n.title.as_deref() == Some("Spaced repetition")));
     // the typed `elaborates` edge carries its explanation through.
-    assert!(ns
-        .iter()
-        .any(|n| n.relation == "elaborates"
-            && n.explanation.as_deref() == Some("applies the forgetting curve")));
+    assert!(ns.iter().any(|n| n.relation == "elaborates"
+        && n.explanation.as_deref() == Some("applies the forgetting curve")));
 }
 
 #[test]

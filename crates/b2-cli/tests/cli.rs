@@ -36,9 +36,12 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Run `b2 <args...>` and capture the result.
+/// Run `b2 <args...>` and capture the result. The suite runs under the fake
+/// embedder (`B2_EMBEDDER=fake`) so CI never downloads or runs the real model — it
+/// proves the wiring + output shape, not model quality (tasks.md testability 4–5).
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
         .args(args)
         .output()
         .expect("b2 binary runs")
@@ -167,7 +170,9 @@ fn search_finds_note_human_and_json() {
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     let arr = v.as_array().expect("search --json is an array");
     assert!(!arr.is_empty());
-    assert!(arr.iter().any(|h| h["path"] == "notes/spaced-repetition.md"));
+    assert!(arr
+        .iter()
+        .any(|h| h["path"] == "notes/spaced-repetition.md"));
     // --json stdout is pure data: no caveat leaks into it.
     assert!(!stdout(&json).to_lowercase().contains("semantic"));
 }

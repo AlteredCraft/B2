@@ -35,9 +35,15 @@ fn count(conn: &Connection, table: &str) -> i64 {
 #[test]
 fn fake_embedder_is_deterministic() {
     let e = FakeEmbedder::new(16);
-    assert_eq!(e.embed("hello world"), e.embed("hello world"));
-    assert_ne!(e.embed("hello world"), e.embed("a different chunk"));
-    assert_eq!(e.embed("x").len(), 16);
+    assert_eq!(
+        e.embed("hello world").unwrap(),
+        e.embed("hello world").unwrap()
+    );
+    assert_ne!(
+        e.embed("hello world").unwrap(),
+        e.embed("a different chunk").unwrap()
+    );
+    assert_eq!(e.embed("x").unwrap().len(), 16);
 }
 
 #[test]
@@ -71,7 +77,7 @@ fn knn_finds_the_chunk_whose_text_we_query() {
         )
         .unwrap();
 
-    let hits = db::vector_search(&conn, &embedder.embed(&text), 3).unwrap();
+    let hits = db::vector_search(&conn, &embedder.embed(&text).unwrap(), 3).unwrap();
     assert!(!hits.is_empty());
     assert_eq!(hits[0].0, id, "nearest chunk is the one we embedded");
     assert!(
