@@ -1,0 +1,18 @@
+[package]
+name = "b2-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "B2 CLI — the first dumb adapter over the b2-core typed API (headless-first)"
+
+[[bin]]
+name = "b2"
+path = "src/main.rs"
+
+[dependencies]
+b2-core = { path = "../b2-core" }
+clap = { version = "4.6.1", features = ["derive"] }
+serde_json = "1.0.150"
+
+[dev-dependencies]
+tempfile = "3.27.0"

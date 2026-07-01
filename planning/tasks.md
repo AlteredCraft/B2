@@ -41,58 +41,39 @@ areas, v1 scope, locked decisions).
 - [x] **Suggestion lifecycle, end-to-end** — generate → list → **accept** (append to frontmatter
   `relations:`, Markdown-first, re-project as `origin=frontmatter`) / reject (tombstone). Frontmatter
   `relations:` reader + inline-wins dedup. Survives drop→rebuild→replay; accepted edges stay pristine.
+- [x] **`b2` CLI over a typed Core API** — the walking skeleton. A `b2_core::Vault` façade
+  (`open`/`reindex`/`neighbors`/`search`; a note ref resolves by path **or** `b2id`) is now the one
+  typed contract, and a `b2-cli` crate (binary `b2`) is a *dumb* adapter over it — parse args, call the
+  façade, print — with a `--json` mode for agents. Index + log live in `<vault>/.b2/` (one portable
+  folder). Ships the deterministic `FakeEmbedder`: `search`'s BM25 half is real, the vector half is not
+  yet semantic (the CLI says so, never overstating). First real dogfooding moment — point B2 at a folder
+  and explore its graph + search from the terminal. Façade + CLI-level tests (67 total).
 
-## Next up — thin vertical slice: the `b2` CLI over a typed Core API
+## Next up — real embedder + eval suite
 
-> **Pick this up fresh.** The engine (`crates/b2-core`, steps 0→5 + accept, 51 tests) exists only as a
-> library exercised by integration tests that call module functions directly. There is **no adapter** —
-> you cannot yet point B2 at a real vault and use it. This slice fixes that, and in doing so forces the
-> **Core API surface** (testability-stack point 1: "one typed core API; CLI and tests are clients") into
-> existence. Keep it *thin and vertical*: the smallest end-to-end that makes B2 a real, daily-usable
-> artifact against a real vault — not a broad command surface.
+> **Pick this up fresh.** The walking skeleton is done: the `b2` CLI drives a typed `b2_core::Vault`
+> façade against a real vault, but the shipped embedder is the deterministic *fake* — so the vector
+> half of `search` (and, later, discovery candidate generation) is not yet semantic. This is the
+> deferred half of build-spec steps 3 & 5.
 
-**Goal (the slice):** *point B2 at a folder of Markdown and explore its graph + search from the terminal.*
-Fully deterministic (no live model), so it stays test-first like everything before it.
+**Goal:** drop a local model into the embedder seam ([`embed::Embedder`](../crates/b2-core/src/embed.rs);
+[index-engine.md](index-engine.md) §6), replacing the `FakeEmbedder` the façade currently constructs —
+one localized swap, no schema or flow change (a model id/dim change re-embeds via
+`ensure_embedding_space`). Then the **eval suite** that scores semantic + suggestion quality against a
+hand-labeled set, kept **separate** from the deterministic plumbing tests so model quality never flakes
+CI ([vision-and-scope.md](vision-and-scope.md), testability stack point 5).
 
-**In scope:**
-- **Core API façade** — a small typed entry point (e.g. `b2_core::Vault`) that owns the open connection,
-  the `JsonlSink`, and the embedder, exposing *only what this slice needs*: `open(vault_root)`,
-  `reindex()`, `neighbors(note_ref)`, `search(query, limit)`. `note_ref` resolves by path **or** `b2id`.
-  This is the contract; the CLI and tests are its only clients. Do **not** pre-build a sprawling API —
-  add operations when a command needs them.
-- **`b2-cli` crate** — a new workspace member; a *dumb* adapter (no logic, just parse args → call the
-  façade → print). Commands: `b2 reindex [vault]`, `b2 neighbors <note>`, `b2 search <query>`.
-  Human-readable output plus a `--json` mode for agents (vision-and-scope: the agent drives the CLI).
-- **Index + log location:** `<vault>/.b2/` — `b2.sqlite` beside `log/events.jsonl`, so a vault is one
-  portable folder ([data-model.md](data-model.md) §4).
-- **Embedder:** ship the deterministic `FakeEmbedder` as the default for now (no model-download ritual,
-  keeps the slice deterministic). Document that `search`'s **BM25 half is real**; the **vector half is
-  not yet semantic** until the real embedder lands — do not overstate it in CLI output.
-- **Tests:** CLI-level — run a command against a copied fixture vault and assert output (the "run a
-  command against a fixture, assert the output" surface [vision-and-scope.md](vision-and-scope.md) names),
-  plus façade tests. Reuse the golden vault; add a slightly larger fixture if useful.
+**Unlocks / knock-on:** the qmd chunker upgrade (a real embedder can finally score it, build spec §1.2),
+and the CLI's `search` can stop caveating its vector half.
 
-**Explicitly out of scope (deliberately deferred so the slice stays thin):**
-- `b2 suggest` / `b2 link --accept` / `b2 reject` — the accept operation is *built* in the engine, but
-  nothing **generates** suggestions until the discovery pipeline exists, so these commands would be empty
-  in real use. Add them alongside discovery.
-- `b2 add` (note CRUD), `b2 mv` (move + wikilink rewrite), `b2 explain` — follow-on commands.
-- Real embedder, semantic-quality eval, the qmd chunker upgrade.
+### After that (ordered)
 
-**Why this slice first:** it is the product's walking skeleton — the engine's is done, but nothing yet
-*uses* it. It delivers the first real dogfooding moment (point B2 at a copy of the real vault), it seeds
-the single-binary artifact (vision-and-scope, headless-first), and it makes the Core API real without
-speculation. The `b2id` stamp-on-reindex is the one write it performs on the real vault — by design
-([data-model.md](data-model.md) §1); consider a `--dry-run` as a fast follow, not part of this slice.
-
-### After the slice (ordered)
-
-- **Real embedder + eval suite** — drop a local model into the embedder seam, then the eval that scores
-  semantic + suggestion quality (the deferred half of steps 3 & 5; also unlocks the qmd chunker upgrade).
 - **Connection-discovery pipeline** — candidate generation (the graph⨝vector join is ready) → typed,
-  explained suggestions → the review loop; then the `suggest`/`accept`/`reject` CLI commands.
-- **Remaining CLI + kernel ops** — `b2 add`, `b2 mv` (the move + wikilink rewrite, [user-stories.md](user-stories.md)
-  Story 1), `b2 explain`.
+  explained suggestions → the review loop; then the `suggest` / `accept` / `reject` CLI commands (the
+  accept op is *built* in the engine; nothing **generates** suggestions until this lands).
+- **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
+  [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
+  the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).
 
 ## Backlog (later, not now)
 

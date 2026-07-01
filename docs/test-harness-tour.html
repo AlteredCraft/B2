@@ -96,6 +96,8 @@
   <a href="#step4"><span class="dot" style="background:var(--s4)"></span>Step 4 · Event log · replay</a>
   <a href="#step5"><span class="dot" style="background:var(--s5)"></span>Step 5 · Hybrid retrieval</a>
   <a href="#accept"><span class="dot" style="background:var(--accent)"></span>Flow ③ · Accept &amp; relations</a>
+  <div class="grp">The adapter</div>
+  <a href="#cli"><span class="dot" style="background:#39c5cf"></span>CLI · façade + b2 binary</a>
   <div class="grp">Wrap-up</div>
   <a href="#schema">Schema map</a>
   <a href="#edges">Edges of the harness</a>
@@ -107,16 +109,17 @@
   <h2>B2 — touring the harness, and the system beneath it</h2>
   <p class="lead">B2 is a local-first Markdown knowledge vault with an AI layer that discovers
   <em>typed, explained</em> connections between notes. The code that exists today is the
-  <strong>index engine</strong>: a SQLite store treated as a <em>disposable projection</em> of your
-  Markdown plus a thin event log. This page walks the test suite that engine is built against —
-  what each test pins, and the shape of the thing being pinned.</p>
+  <strong>index engine</strong> — a SQLite store treated as a <em>disposable projection</em> of your
+  Markdown plus a thin event log — and, now, the <strong>first adapter over it</strong>: the
+  <code>b2</code> CLI over a typed <code>Vault</code> core API. This page walks the test suite both are
+  built against — what each test pins, and the shape of the thing being pinned.</p>
 
   <div class="badges">
-    <span class="badge green"><span class="pip"></span> <b>51&nbsp;/&nbsp;51</b>&nbsp;tests passing</span>
-    <span class="badge"><b>12</b>&nbsp;test files&nbsp;·&nbsp;1&nbsp;shared fixture module</span>
-    <span class="badge">crate&nbsp;<b>b2-core</b>&nbsp;v0.1.0</span>
+    <span class="badge green"><span class="pip"></span> <b>67&nbsp;/&nbsp;67</b>&nbsp;tests passing</span>
+    <span class="badge"><b>14</b>&nbsp;test files&nbsp;·&nbsp;2&nbsp;crates</span>
+    <span class="badge">crates&nbsp;<b>b2-core</b>&nbsp;·&nbsp;<b>b2-cli</b>&nbsp;v0.1.0</span>
     <span class="badge">Rust&nbsp;<b>1.96.1</b>&nbsp;·&nbsp;edition&nbsp;2021</span>
-    <span class="badge">step 0&nbsp;→&nbsp;5&nbsp;<b>+ accept</b>&nbsp;complete</span>
+    <span class="badge">step 0&nbsp;→&nbsp;5&nbsp;<b>+ accept + CLI</b>&nbsp;complete</span>
   </div>
   <p class="sub" style="margin-top:14px">Verified by <code>cargo test</code> on the toolchain above — every step of the
   build ladder is green. The harness is <em>integration-first</em>: most tests open a real SQLite
@@ -126,7 +129,7 @@
 <!-- ============ SUT ============ -->
 <section id="sut">
   <h3>The system under test</h3>
-  <p class="sub">One crate, <code>b2-core</code>, ~2,150 lines of source across fourteen modules. Its job:
+  <p class="sub">The engine crate, <code>b2-core</code>, is ~2,375 lines of source across fifteen modules. Its job:
   turn a folder of Markdown into a queryable index — <code>notes</code>, <code>chunks</code> (full-text +
   vector), and a typed <code>edges</code> graph — and keep that index a <em>pure function</em> of the files
   on disk plus an append-only log.</p>
@@ -162,8 +165,11 @@
         <li><code>event.rs</code> — event-log sink</li>
         <li><code>replay.rs</code> — log → review state</li>
         <li><code>suggest.rs</code> — suggestion lifecycle</li>
+        <li><code>vault.rs</code> — the typed <code>Vault</code> façade</li>
         <li><code>relation.rs</code> · <code>id.rs</code> · <code>error.rs</code></li>
       </ul>
+      <p style="margin:10px 0 0;font-size:12.5px;color:var(--muted)">Plus a second crate, <code>b2-cli</code> — the
+      <code>b2</code> binary: a dumb adapter (<code>main.rs</code>) that only parses args and calls the façade.</p>
     </div>
     <div class="card tight">
       <div class="kicker">The load-bearing bet</div>
@@ -434,6 +440,48 @@ memory]] retrieval curve.
   </div>
 </div>
 
+<!-- CLI ADAPTER -->
+<div class="stepcard" id="cli">
+  <div class="bar" style="background:#39c5cf"></div>
+  <div class="body">
+    <h4><span class="stepnum" style="background:#39c5cf">ADAPTER</span> The typed <code>Vault</code> façade &amp; the <code>b2</code> CLI <span class="count">vault.rs + cli.rs · 16 tests</span></h4>
+    <div class="files">crates/b2-core/tests/vault.rs · crates/b2-cli/tests/cli.rs</div>
+    <p class="sub" style="margin:2px 0 12px;max-width:820px">The walking skeleton (2026-06-30): a single typed entry
+    point — <code>b2_core::Vault</code> with <code>open</code> / <code>reindex</code> / <code>neighbors</code> /
+    <code>search</code> (a note ref resolves by <b>path or b2id</b>) — and a <em>dumb</em> <code>b2</code> binary over
+    it that only parses args and prints (human, or <code>--json</code> for agents). Point B2 at a folder and explore its
+    graph + search from the terminal. Both layers are tested against the same golden vault; the index + log live in
+    <code>&lt;vault&gt;/.b2/</code>, one portable folder.</p>
+    <div class="kicker" style="margin-top:6px">Core API façade — vault.rs</div>
+    <ul class="testlist">
+      <li><span class="nm tick">✓</span><span class="nm">open_creates_the_b2_dir_and_index</span><span class="ds">Opening a vault creates <code>&lt;vault&gt;/.b2/</code> with <code>b2.sqlite</code> + <code>log/</code>.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">reindex_reports_counts_and_is_idempotent</span><span class="ds">Returns notes-indexed / stamped counts; a second reindex stamps nothing.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">reindex_stamps_a_note_missing_a_b2id</span><span class="ds">An id-less note is stamped exactly once, and the stamp is logged durably.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">neighbors_of_memory_are_inbound_resolved_to_paths_and_titles</span><span class="ds">Inbound neighbors resolve to the other note's path + title; the explanation rides through.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">neighbors_of_srs_are_outbound_and_ref_forms_agree</span><span class="ds"><code>path</code>, path-without-<code>.md</code>, and <code>b2id</code> refs all resolve to the same set.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">unknown_ref_is_note_not_found</span><span class="ds">A bad ref is a typed <code>NoteNotFound</code>, distinct from "found, no neighbors."</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">search_finds_the_note_with_a_snippet_and_is_note_level</span><span class="ds">Hybrid search resolves chunk hits up to notes, with a snippet, deduped per note.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">search_before_reindex_is_empty</span><span class="ds">Searching a not-yet-reindexed vault returns empty — not an error.</span></li>
+    </ul>
+    <div class="kicker" style="margin-top:10px">CLI adapter (runs the built <code>b2</code> binary) — cli.rs</div>
+    <ul class="testlist">
+      <li><span class="nm tick">✓</span><span class="nm">reindex_reports_counts_human_and_json</span><span class="ds">Human "Indexed 2 notes…"; <code>--json</code> yields <code>{indexed, stamped}</code>; <code>.b2/</code> lands in the vault.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">reindex_accepts_a_positional_vault</span><span class="ds">The spec's <code>b2 reindex [vault]</code> positional form works without <code>-C</code>.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">neighbors_by_path_and_by_b2id</span><span class="ds">Both ref forms print the right labels and the target's title.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">neighbors_json_shape</span><span class="ds"><code>--json</code> is an array of <code>{direction, path, label, …}</code>.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">neighbors_unknown_note_fails_cleanly</span><span class="ds">Unknown note ⇒ nonzero exit + actionable stderr, no panic or stack trace.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">search_finds_note_human_and_json</span><span class="ds">Finds the note; the not-yet-semantic caveat rides <em>stderr</em>, so <code>--json</code> stdout stays pure data.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">search_respects_limit</span><span class="ds"><code>--limit</code> caps the number of notes returned.</span></li>
+      <li><span class="nm tick">✓</span><span class="nm">search_before_reindex_is_empty_but_succeeds</span><span class="ds">An empty array and a clean exit, never an error.</span></li>
+    </ul>
+    <div class="invariant"><b>Pins:</b> the decoupled-core discipline — the CLI holds <em>no logic</em>; every command is a
+    thin call to the one typed <code>Vault</code> contract. Prove a behavior once at the façade and again at the command
+    surface; a future GUI is a second adapter that inherits both. <span style="color:var(--muted)">Honest scope:
+    <code>search</code>'s BM25 half is real; the vector half isn't semantic until the real embedder lands — and the CLI
+    says so on stderr.</span></div>
+  </div>
+</div>
+
 <!-- ============ SCHEMA ============ -->
 <section id="schema">
   <h3>Schema map — what the tests assert against</h3>
@@ -467,8 +515,10 @@ memory]] retrieval curve.
       The <code>b2id</code>-keyed edges already make it a bounded, foreign-key-true operation; it just needs wiring.</li>
       <li><b>Semantic quality.</b> Everything vector-related runs on the deterministic <code>FakeEmbedder</code>, so the
       suite proves plumbing, not ranking quality. A real-embedder eval suite is a separate, later effort.</li>
-      <li><b>No CLI / public API surface yet.</b> Tests call the crate's internal functions directly; the
-      <code>b2 add/search/link/suggest/neighbors/reindex</code> command surface and the typed core API are still backlog.</li>
+      <li><b>Only three commands so far.</b> The typed core API and the <code>b2</code> CLI now exist, but the surface is
+      the walking skeleton — <code>reindex</code> / <code>neighbors</code> / <code>search</code>. The rest
+      (<code>add</code>, <code>mv</code>, <code>suggest</code> / <code>accept</code> / <code>reject</code>,
+      <code>explain</code>) is still backlog.</li>
       <li><b>The discovery pipeline.</b> Candidate generation → typed/explained suggestions → review loop exists only as
       its substrate (the graph⨝vector join + the suggestion lifecycle), not as an orchestrated pipeline.</li>
     </ul>
@@ -477,9 +527,9 @@ memory]] retrieval curve.
 
 <div class="foot">
   <p>Generated from the repository at branch <code>main</code>. Test results reflect
-  <code>cargo test</code> on rustc 1.96.1 — <b style="color:var(--green)">51 passed, 0 failed</b> across 12 integration
-  test binaries. Source of truth: <code>crates/b2-core/tests/</code>, <code>crates/b2-core/src/</code>, and
-  <code>planning/specs/index-engine-build.md</code>.</p>
+  <code>cargo test</code> on rustc 1.96.1 — <b style="color:var(--green)">67 passed, 0 failed</b> across 14 integration
+  test binaries. Source of truth: <code>crates/b2-core/tests/</code>, <code>crates/b2-core/src/</code>,
+  <code>crates/b2-cli/</code>, and <code>planning/specs/index-engine-build.md</code>.</p>
 </div>
 
 </main>

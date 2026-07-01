@@ -16,6 +16,11 @@ pub enum Error {
 
     #[error("frontmatter edit unsupported: {0}")]
     Frontmatter(String),
+
+    /// A note reference (path or `b2id`) did not resolve to any indexed note —
+    /// the one domain error the façade distinguishes from "found, no results".
+    #[error("note not found: {0}")]
+    NoteNotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

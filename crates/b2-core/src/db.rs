@@ -335,6 +335,16 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
+/// A chunk's text (None if the chunk id is unknown) — the search-hit → snippet
+/// resolution the CLI shows.
+pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT text FROM chunks WHERE id = ?1", [chunk_id], |r| {
+            r.get(0)
+        })
+        .optional()?)
+}
+
 /// A note's `title` (None if the note is absent or has no title) — the alias for a
 /// `[[path|title]]` link written on accept.
 pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {

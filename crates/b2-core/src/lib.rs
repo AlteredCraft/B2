@@ -19,6 +19,8 @@ pub mod relation;
 pub mod replay;
 pub mod search;
 pub mod suggest;
+pub mod vault;
 
 pub use db::{open, SCHEMA_VERSION};
 pub use error::{Error, Result};
+pub use vault::Vault;
