@@ -104,6 +104,7 @@
   <div class="grp">The pipelines</div>
   <a href="#pipelines-overview">Pipelines, at a glance</a>
   <a href="#ingest"><span class="dot" style="background:var(--t1)"></span>① Ingest: vault → index</a>
+  <a href="indexing.html"><span class="dot" style="background:var(--t1)"></span>Indexing deep dive&nbsp;↗</a>
   <a href="#notes"><span class="dot" style="background:var(--t1)"></span>Notes &amp; the write discipline</a>
   <a href="#graph"><span class="dot" style="background:var(--t2)"></span>Chunks, links &amp; the graph</a>
   <a href="#vocab"><span class="dot" style="background:var(--t2)"></span>The relation vocabulary</a>
@@ -484,7 +485,9 @@
     <code>'delete'</code> sentinel; stale <code>chunks_vec</code> rows are cleared explicitly, since that
     virtual table has no trigger back to <code>chunks</code>), and <code>replace_authored_edges</code>
     deletes only the note's <code>inline</code>/<code>frontmatter</code> edges — never the log-derived
-    <code>suggested</code> rows, so a re-parse can't clobber the review queue.</p>
+    <code>suggested</code> rows, so a re-parse can't clobber the review queue. A full reindex is itself
+    <b>incremental</b>: a note whose body is unchanged reuses its vectors, so only edited notes re-embed
+    (<a href="indexing.html">the indexing pipeline</a>).</p>
     <div class="ground"><b>Ground truth:</b> <span class="mono">one_note_reindex_equals_full</span>
     (graph.rs) asserts an incremental re-index of one note yields a byte-identical edge set to a full
     rebuild, and that a second full reindex is identical again (idempotent);
@@ -643,11 +646,12 @@
     <div class="grid2">
       <div class="seam">
         <div class="kicker" style="color:var(--purple)">The trait — <code>embed::Embedder</code></div>
-        <p style="font-size:13px;margin:6px 0">Four methods: <code>model_id</code>, <code>dim</code>,
-        <code>embed</code> (a document/passage), and <code>embed_query</code> (defaulting to symmetric).
-        <code>embed</code> is <b>fallible</b> — a real model runs tensor math that can fail, and the index
-        path must surface that, not panic. Retrieval is <b>asymmetric-ready</b>: models that prompt
-        queries and documents differently override <code>embed_query</code>.</p>
+        <p style="font-size:13px;margin:6px 0">Five methods: <code>model_id</code>, <code>dim</code>,
+        <code>embed</code> (a document/passage), <code>embed_query</code> (defaulting to symmetric), and
+        <code>embed_batch</code> (many passages in one call — the reindex hot path; the default maps
+        <code>embed</code>). <code>embed</code> is <b>fallible</b> — a real model runs tensor math that can
+        fail, and the index path must surface that, not panic. Retrieval is <b>asymmetric-ready</b>: models
+        that prompt queries and documents differently override <code>embed_query</code>.</p>
         <p style="font-size:12.5px;color:var(--muted);margin:0"><b>FakeEmbedder</b> (the CI default):
         blake3-hashes text into a vector, so identical text → identical vector, deterministically. KNN is
         reproducible and drop-&amp;-rebuild yields byte-identical vectors. It is <em>not</em> semantic — it
@@ -677,6 +681,9 @@
     <span class="mono">changing_dim_recreates_the_vector_space_and_clears_vectors</span>, so a swap can
     never leave stale vectors. The 4 config unit tests in <span class="mono">b2-embed</span> pin source
     resolution (default / mirror endpoint / alternate repo / path sanitizing).</div>
+    <p style="font-size:13px;color:var(--muted);margin:12px 0 0">↳ <b>Deep dive:</b> how a reindex decides
+    <em>what</em> to embed (incremental skip + <code>--force</code>), batched inference, Accelerate, the
+    model-swap discipline, and progress — <a href="indexing.html">the indexing pipeline</a>.</p>
   </div>
 </div>
 
