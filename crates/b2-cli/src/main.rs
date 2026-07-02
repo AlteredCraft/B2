@@ -42,9 +42,13 @@ enum Command {
     /// Download + verify the embedding model into the shared cache (one-time setup).
     Init,
     /// Re-project every note under the vault into the index (stamps missing b2ids).
+    /// Incremental by default: notes whose content is unchanged keep their vectors.
     Reindex {
         /// Vault root (overrides --vault); defaults to --vault / the current dir.
         vault: Option<PathBuf>,
+        /// Re-embed every note, even unchanged ones (a full rebuild in place).
+        #[arg(long)]
+        force: bool,
     },
     /// Show a note's typed neighbors. NOTE is a vault-relative path or a b2id.
     Neighbors { note: String },
@@ -95,16 +99,16 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 );
             }
         }
-        Command::Reindex { vault } => {
+        Command::Reindex { vault, force } => {
             // Reindex's positional vault wins over the global flag.
             let root = vault.as_ref().unwrap_or(&cli.vault);
-            // Reindex embeds every chunk → it needs the real model.
+            // Reindex embeds every changed chunk → it needs the real model.
             let (vault, _semantic) = open_vault(root, true)?;
             // Embedding a large vault on CPU is slow; show a live progress line so it
             // never looks frozen. Only on an interactive stderr (never in --json, and
             // never when piped/captured) so machine output and tests stay clean.
             let report = if cli.json || !std::io::stderr().is_terminal() {
-                vault.reindex()?
+                vault.reindex_with_progress(*force, &mut |_| {})?
             } else {
                 let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
                     eprint!(
@@ -113,7 +117,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     );
                     let _ = std::io::stderr().flush();
                 };
-                let report = vault.reindex_with_progress(&mut on_progress)?;
+                let report = vault.reindex_with_progress(*force, &mut on_progress)?;
                 eprintln!(); // close the progress line
                 report
             };
@@ -121,8 +125,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Indexed {} notes ({} stamped)",
-                    report.indexed, report.stamped
+                    "Indexed {} notes ({} embedded, {} stamped)",
+                    report.indexed, report.embedded, report.stamped
                 );
             }
         }

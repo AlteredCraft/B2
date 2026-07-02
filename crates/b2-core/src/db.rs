@@ -397,6 +397,32 @@ pub fn note_text(conn: &Connection, note_b2id: &str) -> Result<String> {
     Ok(parts.join("\n\n"))
 }
 
+/// A note's stored body hash (None if the note isn't indexed yet). Read **before**
+/// re-upserting so an incremental reindex can tell whether the body actually
+/// changed and skip re-embedding an unchanged note.
+pub fn note_body_hash(conn: &Connection, b2id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT body_hash FROM notes WHERE b2id = ?1", [b2id], |r| {
+            r.get(0)
+        })
+        .optional()?)
+}
+
+/// Whether every chunk of `b2id` already has a stored vector (and it has at least
+/// one chunk). False after a model swap emptied `chunks_vec`, so an unchanged-body
+/// note is still re-embedded then. Requires `chunks_vec` to exist — callers ensure
+/// the embedding space first.
+pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
+    let (n_chunks, n_missing): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE v.chunk_id IS NULL)
+         FROM chunks c LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+         WHERE c.note_b2id = ?1",
+        [b2id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(n_chunks > 0 && n_missing == 0)
+}
+
 /// A note's `title` (None if the note is absent or has no title) — the alias for a
 /// `[[path|title]]` link written on accept.
 pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {

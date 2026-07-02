@@ -92,6 +92,28 @@ fn reindex_reports_counts_human_and_json() {
 }
 
 #[test]
+fn reindex_is_incremental_and_force_reembeds() {
+    let (_g, root) = golden_vault();
+
+    // First reindex embeds both notes.
+    let first = run_in(&root, &["--json", "reindex"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let v: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(v["indexed"], 2);
+    assert_eq!(v["embedded"], 2);
+
+    // Nothing changed on disk → the second reindex re-embeds nothing.
+    let again = run_in(&root, &["--json", "reindex"]);
+    let v: Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(v["embedded"], 0, "unchanged notes are not re-embedded");
+
+    // --force re-embeds every note regardless.
+    let forced = run_in(&root, &["--json", "reindex", "--force"]);
+    let v: Value = serde_json::from_slice(&forced.stdout).unwrap();
+    assert_eq!(v["embedded"], 2, "--force re-embeds everything");
+}
+
+#[test]
 fn reindex_accepts_a_positional_vault() {
     let (_g, root) = golden_vault();
     // the spec's `b2 reindex [vault]` form, no -C.

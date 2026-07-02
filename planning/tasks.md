@@ -134,6 +134,18 @@ areas, v1 scope, locked decisions).
   candle's CPU matmuls (macOS-gated in `b2-embed`), the real multiplier: a 160-chunk reindex went **84s → 11s**
   wall (~70× less CPU work) with retrieval-eval quality unchanged. **100** workspace tests green.
 
+- [x] **Incremental reindex + `--force` (fast-follow)** — reindex no longer re-embeds the whole vault every
+  run. A note whose body hash (stored in `notes.body_hash`;
+  [`db::note_body_hash`](../crates/b2-core/src/db.rs)) is unchanged *and* whose chunks all still have vectors
+  ([`db::note_fully_embedded`](../crates/b2-core/src/db.rs)) reuses them verbatim — its `pending` embed work is
+  empty, so nothing is re-embedded. A model swap (which empties `chunks_vec`) or `b2 reindex --force`
+  re-embeds everything; `ReindexReport` now reports `embedded` next to `indexed`/`stamped`. Frontmatter-only
+  edits (e.g. an accepted relation) still re-project the note + edges but skip re-embedding — so `accept` got
+  cheaper too. The invariant (`incremental ≡ full rebuild`) holds because the reused vectors are byte-identical
+  to a fresh embed. Real-model check: an unchanged reindex of a 4-doc / 160-chunk vault dropped **2.7s →
+  0.09s** (mmap means the weights aren't even faulted in when there's nothing to embed); editing one note
+  re-embeds only it. **102** workspace tests green.
+
 ## Next up — make the suggestions real (the LLM relator), then kernel CRUD
 
 > **Pick this up fresh.** The discovery pipeline is **end-to-end and reachable** — `b2 suggest` / `accept` /
@@ -161,8 +173,21 @@ measure (e.g. the keyword-half stopword noise the first eval pass surfaced).
 
 ## Backlog (later, not now)
 
-- Property tests for the invariants — round-trip, `full-reindex ≡ incremental`, rename-keeps-backlinks as
-  property tests over generated vaults (golden-vault scenarios exist; property coverage is the gap).
+- **Non-blocking embedding — deferred approaches** (incremental reindex is *done*; these tackle the one part
+  it can't, the first cold index of a large vault, and all compose with it):
+  - **Background reindex + `b2 status`** — `b2 reindex` detaches and returns immediately; a separate process
+    embeds while `search`/`suggest` read the index live (SQLite WAL already permits one writer + concurrent
+    readers across processes). Cost: a background-process lifecycle + cross-process progress. The most direct
+    answer to "embedding can't block" for a cold index.
+  - **Progressive (keyword-first) index** — insert all chunk text + FTS up front so BM25 keyword search works
+    immediately, then embed vectors in the background so the semantic half fills in behind it. Best
+    "usable during a long cold index" feel; pairs with the background runner.
+  - **Faster / smaller embedder** — swap bge-base (768-dim) for bge-small (384-dim, ~3× faster) or a
+    quantized / ONNX path to cut per-chunk cost. A raw-speed lever behind the existing `Embedder` seam, not a
+    structural fix — measure retrieval quality (the eval) before switching the default.
+- Property tests for the invariants — round-trip, `full-reindex ≡ incremental` (now real, worth pinning),
+  rename-keeps-backlinks as property tests over generated vaults (golden-vault scenarios exist; property
+  coverage is the gap).
 - qmd chunker upgrade — replace the minimal paragraph chunker once a real embedder + eval can score it
   (build spec §1.2).
 - Distance-weighting for candidate ranking — v1 ranks candidates by semantic max-sim alone (graph distance

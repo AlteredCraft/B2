@@ -31,6 +31,9 @@ pub struct Ingested {
     pub b2id: String,
     /// Whether B2 had to stamp a missing `b2id` (and thus wrote the file).
     pub stamped: bool,
+    /// Whether this note was (re)embedded this run — `false` when an unchanged body
+    /// let the incremental path reuse its existing vectors.
+    pub embedded: bool,
 }
 
 /// What [`project_note_and_chunks`] returns: the note's `b2id`, whether it was
@@ -57,12 +60,21 @@ pub struct ReindexProgress {
 /// `(chunk_id, text)` pairs still needing a vector — embedding is deferred to
 /// [`embed_pending`] so it can be **batched** (and, in a full reindex, report
 /// progress). No embedder here.
+///
+/// **Incremental:** unless `force`, a note whose body hash is unchanged *and* whose
+/// chunks already all have vectors is left untouched — its chunks/vectors are
+/// re-used verbatim and the returned `pending` is empty, so nothing is re-embedded.
+/// Frontmatter-only edits still re-project the note row + edges (phase 2), just not
+/// the body vectors. This is what makes a routine reindex cheap; the invariant
+/// (`incremental ≡ full rebuild`) holds because the re-used vectors are byte-for-byte
+/// what a fresh embed would produce.
 fn project_note_and_chunks(
     conn: &Connection,
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
+    force: bool,
 ) -> Result<ProjectedNote> {
     let abs = vault_root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
@@ -93,6 +105,10 @@ fn project_note_and_chunks(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64);
 
+    // The previously-indexed body hash, read BEFORE the upsert overwrites it — the
+    // incremental "did the body change?" signal below.
+    let prev_hash = db::note_body_hash(conn, &b2id)?;
+
     let fields = parsed.fields();
     db::upsert_note(
         conn,
@@ -114,14 +130,25 @@ fn project_note_and_chunks(
 
     let relations = parsed.fields().relations.clone();
 
-    // Chunk → project rows; hand the (id, text) pairs back for a batched embed
-    // (Flow ①). replace_chunks also clears any stale vectors for this note.
-    let chunks = chunk_body(&body);
-    let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
-    let pending: Vec<(i64, String)> = chunk_ids
-        .into_iter()
-        .zip(chunks.into_iter().map(|c| c.text))
-        .collect();
+    // Incremental fast path: an unchanged body means identical chunks, and if those
+    // chunks already all have vectors there is nothing to redo — reuse them and
+    // return no pending work. `force` bypasses this; so does a model swap, which
+    // emptied `chunks_vec` (note_fully_embedded then returns false).
+    let unchanged = !force
+        && prev_hash.as_deref() == Some(body_hash.as_str())
+        && db::note_fully_embedded(conn, &b2id)?;
+    let pending = if unchanged {
+        Vec::new()
+    } else {
+        // Chunk → project rows; hand the (id, text) pairs back for a batched embed
+        // (Flow ①). replace_chunks also clears any stale vectors for this note.
+        let chunks = chunk_body(&body);
+        let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
+        chunk_ids
+            .into_iter()
+            .zip(chunks.into_iter().map(|c| c.text))
+            .collect()
+    };
 
     Ok((b2id, stamped, body, relations, pending))
 }
@@ -227,15 +254,24 @@ pub fn ingest_file(
     embedder: &dyn Embedder,
 ) -> Result<Ingested> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
+    // Incremental (force=false): a frontmatter-only edit (e.g. an accepted relation)
+    // leaves the body unchanged, so this re-projects the note + edges without
+    // needlessly re-embedding it.
     let (b2id, stamped, body, relations, pending) =
-        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink)?;
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink, false)?;
+    let embedded = !pending.is_empty();
     embed_pending(conn, embedder, &pending, |_| {})?;
     project_edges(conn, &b2id, &body, &relations)?;
-    Ok(Ingested { b2id, stamped })
+    Ok(Ingested {
+        b2id,
+        stamped,
+        embedded,
+    })
 }
 
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
-/// with no progress reporting. Dotfolders (e.g. `.b2/`) are skipped.
+/// incrementally (unchanged notes reuse their vectors) and with no progress
+/// reporting. Dotfolders (e.g. `.b2/`) are skipped.
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
@@ -243,19 +279,21 @@ pub fn ingest_vault(
     sink: &dyn EventSink,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
-    ingest_vault_with_progress(conn, vault_root, idgen, sink, embedder, &mut |_| {})
+    ingest_vault_with_progress(conn, vault_root, idgen, sink, embedder, false, &mut |_| {})
 }
 
-/// Like [`ingest_vault`], but calls `on_progress` after every embed batch so a slow
-/// full reindex (real model on CPU) never looks frozen. The embed phase is batched
-/// ([`embed_pending`]); everything else — two-phase order, idempotency,
-/// determinism — is unchanged.
+/// Like [`ingest_vault`], but takes `force` (re-embed every note, even unchanged
+/// ones) and calls `on_progress` after every embed batch so a slow full reindex
+/// (real model on CPU) never looks frozen. The embed phase is batched
+/// ([`embed_pending`]) and incremental unless `force`; the two-phase order,
+/// idempotency, and determinism are unchanged.
 pub fn ingest_vault_with_progress(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
     sink: &dyn EventSink,
     embedder: &dyn Embedder,
+    force: bool,
     on_progress: &mut dyn FnMut(ReindexProgress),
 ) -> Result<Vec<Ingested>> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
@@ -266,12 +304,13 @@ pub fn ingest_vault_with_progress(
     let notes_total = rel_paths.len();
 
     // Phase 1: notes + chunks (fills the resolver for every note), then a batched
-    // embed per note reporting cumulative progress.
+    // embed per note reporting cumulative progress. Unchanged notes embed nothing.
     let mut staged = Vec::with_capacity(notes_total);
     let mut chunks_done = 0usize;
     for (i, rel) in rel_paths.iter().enumerate() {
         let (b2id, stamped, body, relations, pending) =
-            project_note_and_chunks(conn, vault_root, rel, idgen, sink)?;
+            project_note_and_chunks(conn, vault_root, rel, idgen, sink, force)?;
+        let embedded = !pending.is_empty();
         embed_pending(conn, embedder, &pending, |n| {
             chunks_done += n;
             on_progress(ReindexProgress {
@@ -280,16 +319,17 @@ pub fn ingest_vault_with_progress(
                 chunks_done,
             });
         })?;
-        staged.push((b2id, stamped, body, relations));
+        staged.push((b2id, stamped, body, relations, embedded));
     }
 
     // Phase 2: edges (resolve links against the now-complete resolver).
     let mut out = Vec::with_capacity(staged.len());
-    for (b2id, stamped, body, relations) in &staged {
+    for (b2id, stamped, body, relations, embedded) in &staged {
         project_edges(conn, b2id, body, relations)?;
         out.push(Ingested {
             b2id: b2id.clone(),
             stamped: *stamped,
+            embedded: *embedded,
         });
     }
     Ok(out)

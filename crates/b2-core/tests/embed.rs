@@ -80,6 +80,7 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
         &UlidGen,
         &NullSink,
         &FakeEmbedder::new(64),
+        false,
         &mut |p| events.push(p),
     )
     .unwrap();
@@ -99,6 +100,37 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
         assert!(w[1].chunks_done >= w[0].chunks_done, "cumulative");
     }
     assert_eq!(events.last().unwrap().chunks_done as i64, total);
+}
+
+#[test]
+fn reindex_is_incremental_and_force_reembeds_everything() {
+    use b2_core::vault::Vault;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    let vault = Vault::open(&root).unwrap();
+
+    // First index: both notes are new → both embedded.
+    let first = vault.reindex().unwrap();
+    assert_eq!(first.indexed, 2);
+    assert_eq!(first.embedded, 2, "a fresh index embeds every note");
+
+    // Nothing changed on disk → the incremental reindex re-embeds nothing.
+    let again = vault.reindex().unwrap();
+    assert_eq!(again.indexed, 2);
+    assert_eq!(again.embedded, 0, "unchanged notes reuse their vectors");
+
+    // Edit exactly one note's BODY → only that note re-embeds.
+    let srs = root.join("notes/spaced-repetition.md");
+    let text = std::fs::read_to_string(&srs).unwrap();
+    std::fs::write(&srs, format!("{text}\n\nA newly appended paragraph.")).unwrap();
+    let edited = vault.reindex().unwrap();
+    assert_eq!(edited.embedded, 1, "only the changed note re-embeds");
+
+    // --force re-embeds everything regardless of change.
+    let forced = vault.reindex_with_progress(true, &mut |_| {}).unwrap();
+    assert_eq!(forced.embedded, 2, "force re-embeds every note");
 }
 
 #[test]

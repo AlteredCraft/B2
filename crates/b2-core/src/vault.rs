@@ -52,11 +52,13 @@ pub struct Vault {
     idgen: UlidGen,
 }
 
-/// What `reindex` did: how many notes were projected, and how many needed a `b2id`
-/// stamped (B2's one always-allowed write to the vault, data-model.md §1).
+/// What `reindex` did: how many notes were projected, how many were actually
+/// (re)embedded (the rest reused their vectors — incremental), and how many needed
+/// a `b2id` stamped (B2's one always-allowed write to the vault, data-model.md §1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ReindexReport {
     pub indexed: usize,
+    pub embedded: usize,
     pub stamped: usize,
 }
 
@@ -146,16 +148,20 @@ impl Vault {
 
     /// Re-project every `.md` note under the vault root into the index (Flow ①):
     /// notes, chunks (+embeddings), and the typed graph. Stamps any missing `b2id`.
+    /// **Incremental** — a note whose body is unchanged reuses its vectors rather
+    /// than re-embedding (see [`reindex_with_progress`](Self::reindex_with_progress)
+    /// to force a full re-embed or observe progress).
     pub fn reindex(&self) -> Result<ReindexReport> {
-        self.reindex_with_progress(&mut |_| {})
+        self.reindex_with_progress(false, &mut |_| {})
     }
 
-    /// [`reindex`](Self::reindex), but calls `on_progress` after each embed batch —
-    /// the seam the CLI uses to show a live progress line, since embedding a large
-    /// vault under the real model is the one slow step and would otherwise look
-    /// frozen. The report is identical to `reindex`'s.
+    /// [`reindex`](Self::reindex) with two knobs the CLI needs: `force` re-embeds
+    /// every note even if unchanged (a full rebuild without dropping the index), and
+    /// `on_progress` fires after each embed batch so a slow full reindex under the
+    /// real model shows a live progress line instead of looking frozen.
     pub fn reindex_with_progress(
         &self,
+        force: bool,
         on_progress: &mut dyn FnMut(ingest::ReindexProgress),
     ) -> Result<ReindexReport> {
         let ingested = ingest::ingest_vault_with_progress(
@@ -164,10 +170,12 @@ impl Vault {
             &self.idgen,
             &self.sink,
             self.embedder.as_ref(),
+            force,
             on_progress,
         )?;
         Ok(ReindexReport {
             indexed: ingested.len(),
+            embedded: ingested.iter().filter(|i| i.embedded).count(),
             stamped: ingested.iter().filter(|i| i.stamped).count(),
         })
     }
