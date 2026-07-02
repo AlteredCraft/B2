@@ -52,6 +52,13 @@ enum Command {
     },
     /// Show a note's typed neighbors. NOTE is a vault-relative path or a b2id.
     Neighbors { note: String },
+    /// Move/rename a note and rewrite every inbound link to point at its new path.
+    Mv {
+        /// The note to move: a vault-relative path or a b2id.
+        from: String,
+        /// The new vault-relative path (the `.md` extension is optional).
+        to: String,
+    },
     /// Hybrid keyword+semantic+graph search across the vault.
     Search {
         query: String,
@@ -153,6 +160,27 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         .map(|e| format!(" — {e}"))
                         .unwrap_or_default();
                     println!("{arrow} {}  {name} ({}){explanation}", n.label, n.path);
+                }
+            }
+        }
+        Command::Mv { from, to } => {
+            // A move rewrites inbound files, changing their bodies → they re-embed
+            // on re-projection, so `mv` needs the same real model the index was
+            // built with, like `reindex`/`accept`.
+            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            let report = vault.move_note(from, to)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("Moved {} → {}", report.from, report.to);
+                if report.links_rewritten > 0 {
+                    println!(
+                        "Rewrote {} inbound link(s) across {} file(s).",
+                        report.links_rewritten,
+                        report.rewrote.len()
+                    );
+                } else {
+                    println!("No inbound links to rewrite.");
                 }
             }
         }
@@ -312,6 +340,12 @@ fn user_message(err: &CliError) -> String {
         CliError::SuggestionNotFound(id) => format!(
             "No pending suggestion with id '{id}'. Run `b2 suggest` to see the current queue and its ids."
         ),
+        CliError::Core(b2_core::Error::MoveTargetExists(p)) => format!(
+            "Can't move: a file already exists at '{p}'. Choose a different destination."
+        ),
+        CliError::Core(b2_core::Error::MoveDestination(_)) => {
+            "That move destination isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
+        }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {

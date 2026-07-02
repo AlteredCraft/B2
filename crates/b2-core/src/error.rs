@@ -33,6 +33,16 @@ pub enum Error {
     /// is a `reindex` (which re-embeds). See index-engine.md §8 and tasks.md.
     #[error("index built with embedding model {indexed}, but the active model is {active}; run `b2 reindex`")]
     ModelMismatch { indexed: String, active: String },
+
+    /// `b2 mv` was given a destination that isn't a valid vault-relative Markdown
+    /// path — empty, absolute, escaping the vault via `..`, or the source itself.
+    #[error("invalid move destination: {0}")]
+    MoveDestination(String),
+
+    /// `b2 mv` would overwrite an existing file — refused (the vault never clobbers,
+    /// data-model.md §1). The path is echoed for the user-facing message.
+    #[error("move target already exists: {0}")]
+    MoveTargetExists(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
