@@ -537,6 +537,25 @@ pub fn resolve_b2id_to_path(conn: &Connection, b2id: &str) -> Result<Option<Stri
         .optional()?)
 }
 
+/// Every active authored edge pointing *at* `dst_b2id`: the source note's `b2id`,
+/// its vault-relative `path`, and the exact `dst_path_raw` text the inbound link
+/// was written with. This is the bounded set a move must rewrite — the
+/// materialized graph names the files to touch, so a move never scans the vault
+/// (index-engine.md §8). Ordered for deterministic rewriting.
+pub fn inbound_edge_targets(
+    conn: &Connection,
+    dst_b2id: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.src_id, n.path, e.dst_path_raw
+         FROM edges e JOIN notes n ON n.b2id = e.src_id
+         WHERE e.dst_id = ?1 AND e.status = 'active'
+         ORDER BY n.path, e.dst_path_raw",
+    )?;
+    let rows = stmt.query_map([dst_b2id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Resolve a wikilink target (`dst_path_raw`, written without the `.md`
 /// extension in Obsidian) to a `b2id`. Tries the literal path, then with `.md`
 /// appended. `None` means the link is dangling.

@@ -24,6 +24,7 @@ use crate::error::{Error, Result};
 use crate::event::JsonlSink;
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
+use crate::mv::{self, MoveReport};
 use crate::relate::FakeRelator;
 use crate::{ingest, search, suggest};
 use rusqlite::Connection;
@@ -341,6 +342,33 @@ impl Vault {
         let now = self.now()?;
         suggest::reject_suggestion(&self.conn, &self.sink, edge_id, &now)?;
         Ok(true)
+    }
+
+    /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a
+    /// vault-relative path; a `.md` suffix is optional), rewriting every inbound
+    /// `[[oldpath|alias]]` link to the new path and re-projecting the index
+    /// (user-stories.md Story 1). The graph never breaks — edges key on `b2id`, so
+    /// `neighbors`/backlinks show the same set before and after; only the human
+    /// convenience-copy link text is repaired. Errors with [`Error::NoteNotFound`]
+    /// for an unknown source, or [`Error::MoveDestination`] /
+    /// [`Error::MoveTargetExists`] for a bad or occupied destination.
+    ///
+    /// Rewriting an inbound file changes its body, so this **re-embeds** those
+    /// files: the CLI opens the vault with the real model for `mv`, as for
+    /// `reindex`/`accept`.
+    pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
+        let b2id = self.resolve_ref(note_ref)?;
+        let old_rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        mv::move_note(
+            &self.conn,
+            &self.idgen,
+            self.embedder.as_ref(),
+            &self.root,
+            &b2id,
+            &old_rel,
+            to,
+        )
     }
 
     /// The current UTC time as an ISO-8601 string, taken from **SQLite** — the same

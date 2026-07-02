@@ -15,6 +15,7 @@ pub mod graph;
 pub mod id;
 pub mod ingest;
 pub mod link;
+pub mod mv;
 pub mod note;
 pub mod relate;
 pub mod relation;

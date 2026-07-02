@@ -146,13 +146,34 @@ areas, v1 scope, locked decisions).
   0.09s** (mmap means the weights aren't even faulted in when there's nothing to embed); editing one note
   re-embeds only it. **102** workspace tests green.
 
+- [x] **`b2 mv` — move/rename + inbound-link repair (Story 1)** — the first note-authoring kernel op ships,
+  directly realizing the locked invariant **"rename keeps every backlink resolving"**
+  ([user-stories.md](user-stories.md) Story 1). A new [`mv::move_note`](../crates/b2-core/src/mv.rs) on the
+  [`Vault`](../crates/b2-core/src/vault.rs) façade + a `b2 mv <from> <to>` command (`--json`). The graph
+  **never breaks** because edges key on `b2id`: the move leaves the target's id untouched, so `neighbors` /
+  backlinks show the same set before and after — only the human convenience-copy `[[oldpath|alias]]` text is
+  repaired. Mechanism, **Markdown-first** (mirrors `accept`): [`db::inbound_edge_targets`](../crates/b2-core/src/db.rs)
+  reads the materialized graph to name **exactly** the inbound files + link strings to rewrite (bounded, never
+  an O(vault) scan — [index-engine.md](index-engine.md) §8) → a byte-preserving `rewrite_links` swaps only the
+  target token (surrounding whitespace + `|alias` kept; a prefix-sharing `[[foo-bar]]` is never touched when
+  moving `foo`; each link keeps its own `.md`-or-not convention) → move the file (creating parent dirs) →
+  re-project the moved note first (its `notes.path` current before inbound links re-resolve) then each rewritten
+  file. **Not logged** — a move is fully reconstructible from Markdown (files at new paths, `b2id`s intact), so
+  replay is untouched. Destination is validated (empty / absolute / `..`-escaping / onto-an-existing-file all
+  refused with clean generic errors: [`Error::MoveDestination`](../crates/b2-core/src/error.rs) /
+  `MoveTargetExists`); `.md` is optional. The CLI opens the real model (rewriting an inbound file changes its
+  body → it re-embeds), like `reindex`/`accept`. **15 new tests** (6 `rewrite_links` unit: alias/whitespace
+  preservation, prefix-safety, `.md` variants; 9 façade integration: graph-unchanged, byte-exact inbound diff,
+  unrelated files untouched, subdir creation, `.md`-optional, clobber/invalid/unknown-src errors, prefix-sibling
+  safety); **117** workspace tests green.
+
 ## Next up — make the suggestions real (the LLM relator), then kernel CRUD
 
 > **Pick this up fresh.** The discovery pipeline is **end-to-end and reachable** — `b2 suggest` / `accept` /
 > `reject` work — but the intelligence is a **stub**: [`FakeRelator`](../crates/b2-core/src/relate.rs) hashes
 > the note pair, it never reads the notes (the CLI says so loudly). Two fronts remain: make the suggestions
-> *real* (the LLM relator behind the existing seam), and the note-authoring kernel ops (`add` / `mv`) B2 still
-> can't do.
+> *real* (the LLM relator behind the existing seam), and the remaining note-authoring kernel ops — `b2 mv`
+> (move + inbound-link repair) now ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
 
 - **The real relator** — the LLM-backed relator in its **own crate** (the `b2-embed` / `LocalEmbedder`
   precedent — keep `b2-core` model-free), dropped in behind the existing
@@ -161,9 +182,11 @@ areas, v1 scope, locked decisions).
   [`db::note_text`](../crates/b2-core/src/db.rs)), and the CLI's stub-relator caveat comes off. Then the
   **suggestion-quality eval** — extend the eval suite's scaffolded half (precision/recall over a
   hand-labelled candidate set), out of CI, exactly as the retrieval eval needs a real embedder.
-- **Remaining CLI + kernel ops** — `b2 add` (note CRUD), `b2 mv` (the move + wikilink rewrite,
-  [user-stories.md](user-stories.md) Story 1), `b2 explain`; plus a `reindex --dry-run` fast-follow (skip
-  the `b2id` stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1).
+- **Remaining CLI + kernel ops** — `b2 mv` is **done** (above). Still open: `b2 add` (note CRUD), `b2 explain`
+  (a note's connections with their "why"); plus a `reindex --dry-run` fast-follow (skip the `b2id`
+  stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1). Link-*delete*
+  ([user-stories.md](user-stories.md) Story 2) already falls out of a plain edit + reindex; a dedicated op is
+  only needed if orphan-surfacing lands.
 
 **Not in scope (keep discovery thin):** query expansion (qmd's 1.7B third model — off-by-default, later);
 a reranker (a one-stage insertion after RRF, [index-engine.md](index-engine.md) §5); the actual
