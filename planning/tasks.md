@@ -236,20 +236,62 @@ areas, v1 scope, locked decisions).
   [specs/eval-strategy.md](specs/eval-strategy.md) (covers both evals — retrieval + suggestion — as one out-of-CI
   model-quality pass).
 
-## Next up — kernel CRUD (`b2 add` / `b2 explain`); eval tuning is parked
+- [x] **`b2 add` + `b2 explain` — the note-authoring kernel CRUD** — the two remaining note-authoring ops ship, so a
+  vault can be **created and understood** from the terminal, not just moved/searched. **`b2 add <path> [--title]
+  [--content]`** ([`add::add_note`](../crates/b2-core/src/add.rs) on the [`Vault`](../crates/b2-core/src/vault.rs)
+  façade) creates a new note and projects it — it's immediately in the graph + searchable. **Markdown-first** (mirrors
+  `mv`/`accept`): render a minimal valid frontmatter (`type: note`, an optional YAML-quoted `title`, today's `created`
+  from the façade's SQLite clock — [`Vault::today`](../crates/b2-core/src/vault.rs), the `now()` precedent keeping
+  `b2-core` wall-clock-free) with **no `b2id`**, write the file, then re-project via
+  [`ingest::ingest_file`](../crates/b2-core/src/ingest.rs) — which **stamps the `b2id`** (and logs it): one
+  "stamp on first sight" identity path for every note ([data-model.md](data-model.md) §1), so a created note is fully
+  reconstructible from Markdown ∪ log and needs no bespoke event. Refuses to clobber
+  ([`Error::AddTargetExists`](../crates/b2-core/src/error.rs)) and validates the path
+  ([`Error::AddDestination`](../crates/b2-core/src/error.rs)); the empty/absolute/`..`-escaping + `.md`-append
+  normalizer is now shared with `mv` ([`pathspec::normalize_rel_md`](../crates/b2-core/src/pathspec.rs)). Creates missing
+  parent dirs; embeds the new body → opens the real model like `reindex`/`accept`/`mv`. **`b2 explain <note>`**
+  ([`Vault::explain`](../crates/b2-core/src/vault.rs) → `ExplainView`) presents a note's connections **with their
+  "why"**: the note's header (title/path/`b2id`) + every active typed edge, grouped by direction with each edge's
+  explanation, and an **orphan flag** when nothing points at it (surfaced, never acted on — [user-stories.md](user-stories.md)
+  Story 2). A pure graph read (no embed, like `neighbors`), reusing [`NeighborView`](../crates/b2-core/src/vault.rs) via a
+  shared `neighbors_of`. [`graph::Neighbor`](../crates/b2-core/src/graph.rs) gained **`origin`** so `explain` shows
+  `inline` (a human body link) vs `frontmatter` (a B2-committed relation) provenance — the distinction
+  [data-model.md](data-model.md) §0 says `explain` surfaces. **26 new tests** (3 `pathspec` + 4 `add` unit; 7 `add` + 6
+  `explain` façade: stamp-logged, edge projection, clobber/invalid-path/unknown-note clean errors, `.md`-optional,
+  subdir creation, provenance, orphan; 6 CLI: add/explain human+JSON, clobber/orphan/unknown clean exits); **155**
+  workspace tests green.
 
-> **Pick this up fresh.** Connection discovery is **real, end-to-end, reachable, and measured** — `b2 suggest` runs
-> candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue,
-> `accept`/`reject` work, and the [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) has a
-> **2026-07-03 baseline**. The relator-tuning effort is **intentionally paused here** (see below) — the harness +
-> baseline are a good stopping point, and tuning against a single run isn't worthwhile yet. The **active front** is
-> the remaining note-authoring kernel ops: `b2 mv` ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
+- [x] **`b2 reindex --dry-run` — a read-only preview (fast-follow)** — the last open CLI knob ships: a dry-run that
+  reports what a reindex **would** do (`would_index` / `would_embed` / `would_stamp`) while writing **nothing** — no
+  `b2id` stamped to the Markdown (B2's one vault write, [data-model.md](data-model.md) §1), no index/log mutation, no
+  embedding — so a user can preview against a pristine vault. [`ingest::plan_reindex`](../crates/b2-core/src/ingest.rs)
+  walks the files (same sorted order + dotfolder skip as ingest) and decides, per note, would-stamp (the file lacks a
+  `b2id`) and would-(re)embed. **No drift:** the embed decision is a new
+  [`would_reembed`](../crates/b2-core/src/ingest.rs) predicate now **shared** with the real incremental path
+  (`project_note_and_chunks` was refactored to call it — behavior-identical, proven by the unchanged incremental/force
+  tests), so the preview can't diverge from the run; a `space_exists` guard lets a never-embedded vault short-circuit
+  without querying a not-yet-existing `chunks_vec`. The façade
+  [`Vault::plan_reindex`](../crates/b2-core/src/vault.rs) returns a dedicated **`ReindexPlan`** whose past-tense-free
+  `would_*` keys are the honesty signal (distinct from `ReindexReport`); a dry-run **needs no model** (pure read, opens
+  with the fake like `neighbors`), so previewing never forces a `b2 init`. **Documented limitation:** it previews an
+  incremental run under the embedder the index was built with and does **not** detect a pending model swap (that needs
+  the real model loaded, which a dry-run avoids). **5 new tests** (4 façade: counts match a real reindex then go to
+  zero, `--force` would-re-embed-all, edit flags exactly one note, and byte-identical files + empty index prove no
+  write; 1 CLI: `would_*` JSON shape + "No changes made" + a following real reindex still does all the work); **160**
+  workspace tests green.
 
-- **Remaining CLI + kernel ops _(active)_** — `b2 mv` is **done**. Still open: `b2 add` (note CRUD), `b2 explain`
-  (a note's connections with their "why"); plus a `reindex --dry-run` fast-follow (skip the `b2id`
-  stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1). Link-*delete*
-  ([user-stories.md](user-stories.md) Story 2) already falls out of a plain edit + reindex; a dedicated op is
-  only needed if orphan-surfacing lands.
+## Next up — relator-quality tuning (parked); the v1 kernel is complete
+
+> **Pick this up fresh.** The v1 kernel is now **feature-complete**: `b2 reindex` (incremental, `--force`,
+> `--dry-run`) / `search` / `neighbors` / `explain` / `add` / `mv` / `suggest` / `accept` / `reject` all ship, over a
+> model-free deterministic core with the real embedder + Claude relator behind seams. Connection discovery is **real,
+> end-to-end, reachable, and measured** — `b2 suggest` runs candidate-gen → the Claude-backed
+> [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue, and the
+> [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) has a **2026-07-03 baseline**. The one open
+> thread is **relator-quality tuning** (deliberately parked — see below); beyond it, the remaining work is the
+> **Backlog** items (non-blocking cold-index embedding, the docs refresh for the 4th crate, property tests, the qmd
+> chunker upgrade) and the actual packaging/distribution build.
+
 - **Relator-quality tuning _(paused 2026-07-03)_** — the harness + a first baseline ship; deliberately parked
   *before* tuning, because one run (precision 0.82, recall 1.00, verb-acc 0.93 over 22 pairs on
   `claude-opus-4-8`) isn't enough signal to change the prompt or model, and the 3 firing misses are borderline

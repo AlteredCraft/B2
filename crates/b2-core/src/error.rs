@@ -50,6 +50,18 @@ pub enum Error {
     /// data-model.md §1). The path is echoed for the user-facing message.
     #[error("move target already exists: {0}")]
     MoveTargetExists(String),
+
+    /// `b2 add` was given a destination that isn't a valid vault-relative Markdown
+    /// path — empty, absolute, or escaping the vault via `..`. The `mv` parallel of
+    /// [`Error::MoveDestination`], distinct so the CLI can phrase it for note
+    /// creation rather than a move.
+    #[error("invalid new-note path: {0}")]
+    AddDestination(String),
+
+    /// `b2 add` would overwrite an existing file — refused (the vault never clobbers,
+    /// data-model.md §1). The path is echoed for the user-facing message.
+    #[error("note already exists: {0}")]
+    AddTargetExists(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

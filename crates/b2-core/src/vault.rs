@@ -17,6 +17,7 @@
 //! (keyword) half is always real; the vector half is only semantic under a real
 //! embedder — callers must not overstate the fake.
 
+use crate::add::{self, AddReport};
 use crate::db;
 use crate::discover::{self, GenerateOutcome};
 use crate::embed::{Embedder, FakeEmbedder};
@@ -63,6 +64,20 @@ pub struct ReindexReport {
     pub stamped: usize,
 }
 
+/// What a reindex **would** do — the `reindex --dry-run` preview. The `would_*`
+/// keys (vs [`ReindexReport`]'s past-tense `indexed`/`embedded`/`stamped`) are the
+/// honesty signal: this is a projection, computed read-only with **no** writes —
+/// notably no `b2id` stamped to the vault (B2's one write, data-model.md §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ReindexPlan {
+    /// Notes a real reindex would project into the index (every `.md` file).
+    pub would_index: usize,
+    /// …of which this many would be (re)embedded (the rest reuse their vectors).
+    pub would_embed: usize,
+    /// Notes currently missing a `b2id` that a real reindex would stamp.
+    pub would_stamp: usize,
+}
+
 /// One neighbor of a note, resolved for display: the note at the other end of an
 /// active edge, with its path + title (so the CLI stays a dumb printer).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,6 +95,25 @@ pub struct NeighborView {
     /// Display label: the verb outbound, its inverse inbound (data-model.md §2).
     pub label: String,
     pub explanation: Option<String>,
+    /// Edge provenance: `"inline"` (a human body link) or `"frontmatter"` (a
+    /// relation B2 accepted, or a human/importer authored) — data-model.md §0.
+    /// `b2 explain` renders it; `b2 neighbors` carries it too.
+    pub origin: String,
+}
+
+/// A note's full connection picture for `b2 explain`: the note itself (resolved to
+/// its identity + display fields) and every active connection with its "why". A
+/// thin header over [`NeighborView`] — `explain`'s job is to present a note's typed
+/// edges and their explanations, so it reuses the same per-edge shape `neighbors`
+/// returns rather than a parallel one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExplainView {
+    pub b2id: String,
+    pub path: String,
+    pub title: Option<String>,
+    /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them),
+    /// each with its label, target, and explanation. Empty for an isolated note.
+    pub connections: Vec<NeighborView>,
 }
 
 /// One search hit, resolved to the note it belongs to with a text snippet.
@@ -181,14 +215,36 @@ impl Vault {
         })
     }
 
+    /// Preview a reindex (`reindex --dry-run`): report what [`reindex`](Self::reindex)
+    /// **would** do — how many notes it would index, (re)embed, and stamp — with
+    /// **no** writes: no `b2id` stamped to the Markdown (B2's one vault write,
+    /// data-model.md §1), no index/log mutation, no embedding. `force` previews a
+    /// full rebuild (every note would re-embed). A pure read, so it needs no model
+    /// (the CLI opens with the fake for it, like `neighbors`).
+    pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
+        let planned = ingest::plan_reindex(&self.conn, &self.root, force)?;
+        Ok(ReindexPlan {
+            would_index: planned.len(),
+            would_embed: planned.iter().filter(|p| p.would_embed).count(),
+            would_stamp: planned.iter().filter(|p| p.would_stamp).count(),
+        })
+    }
+
     /// Active neighbors of the note referenced by `note_ref` (path **or** `b2id`),
     /// each resolved to the other note's path + title for display. Errors with
     /// [`Error::NoteNotFound`] when the ref matches no indexed note (distinct from
     /// a found note that simply has no neighbors → an empty list).
     pub fn neighbors(&self, note_ref: &str) -> Result<Vec<NeighborView>> {
         let b2id = self.resolve_ref(note_ref)?;
+        self.neighbors_of(&b2id)
+    }
+
+    /// The active neighbors of an already-resolved `b2id`, each resolved to the
+    /// other note's path + title for display. Shared by [`neighbors`](Self::neighbors)
+    /// and [`explain`](Self::explain) so the two present the same edge shape.
+    fn neighbors_of(&self, b2id: &str) -> Result<Vec<NeighborView>> {
         let mut out = Vec::new();
-        for n in graph::neighbors(&self.conn, &b2id)? {
+        for n in graph::neighbors(&self.conn, b2id)? {
             let path = db::resolve_b2id_to_path(&self.conn, &n.other)?.unwrap_or_default();
             let title = db::note_title(&self.conn, &n.other)?;
             out.push(NeighborView {
@@ -203,9 +259,29 @@ impl Vault {
                 .to_string(),
                 label: n.label,
                 explanation: n.explanation,
+                origin: n.origin,
             });
         }
         Ok(out)
+    }
+
+    /// Explain a note's connections (`b2 explain`): the note referenced by
+    /// `note_ref` (path **or** `b2id`) resolved to its identity + title, together
+    /// with every active typed edge and its "why". Errors with
+    /// [`Error::NoteNotFound`] when the ref matches no indexed note; a found note
+    /// with no edges returns an [`ExplainView`] with an empty `connections`. A pure
+    /// graph read — no embedding, like [`neighbors`](Self::neighbors).
+    pub fn explain(&self, note_ref: &str) -> Result<ExplainView> {
+        let b2id = self.resolve_ref(note_ref)?;
+        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?.unwrap_or_default();
+        let title = db::note_title(&self.conn, &b2id)?;
+        let connections = self.neighbors_of(&b2id)?;
+        Ok(ExplainView {
+            b2id,
+            path,
+            title,
+            connections,
+        })
     }
 
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at
@@ -391,6 +467,37 @@ impl Vault {
         )
     }
 
+    /// Create a new note (`b2 add`): write `path` (a vault-relative path; `.md`
+    /// optional) with a minimal valid frontmatter (`type: note`, an optional
+    /// `title`, today's `created`) and `content` as its body, then project it into
+    /// the index — the created note is immediately searchable and in the graph.
+    /// Errors with [`Error::AddDestination`] for a bad path or
+    /// [`Error::AddTargetExists`] rather than clobber an existing file.
+    ///
+    /// Projection **embeds** the new note, so the CLI opens the vault with the real
+    /// model for `add`, as for `reindex`/`accept`/`mv`. The `b2id` is stamped by the
+    /// ordinary ingest path (and logged), so the note is fully reconstructible from
+    /// Markdown.
+    pub fn add_note(
+        &self,
+        path: &str,
+        title: Option<&str>,
+        content: Option<&str>,
+    ) -> Result<AddReport> {
+        let created = self.today()?;
+        add::add_note(
+            &self.conn,
+            &self.idgen,
+            &self.sink,
+            self.embedder.as_ref(),
+            &self.root,
+            path,
+            title,
+            content,
+            &created,
+        )
+    }
+
     /// The current UTC time as an ISO-8601 string, taken from **SQLite** — the same
     /// clock that stamps `indexed_at` — so `b2-core` needs no wall-clock crate and
     /// the engine ops still take the timestamp as a param (the façade is the
@@ -401,6 +508,14 @@ impl Vault {
             .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |r| {
                 r.get(0)
             })?)
+    }
+
+    /// Today's date (`YYYY-MM-DD`) from the same SQLite clock as [`now`](Self::now)
+    /// — the vault convention for a note's `created:` field (data-model.md §1).
+    fn today(&self) -> Result<String> {
+        Ok(self
+            .conn
+            .query_row("SELECT strftime('%Y-%m-%d','now')", [], |r| r.get(0))?)
     }
 
     /// Resolve a note reference to a `b2id`: try it as a `b2id` first (exact PK

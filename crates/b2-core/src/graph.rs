@@ -28,6 +28,11 @@ pub struct Neighbor {
     /// (data-model.md §2). Symmetric verbs read the same both ways.
     pub label: String,
     pub explanation: Option<String>,
+    /// Edge provenance — `inline` (human body link), `frontmatter` (a relation B2
+    /// accepted, or a human/importer authored) (data-model.md §0). Only `active`
+    /// edges are returned, so `suggested` never appears here. `b2 explain` surfaces
+    /// this so a human body link reads distinctly from a B2-committed one.
+    pub origin: String,
 }
 
 /// All active neighbors of `b2id` — outbound edges (this note → others) then
@@ -37,7 +42,7 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
     let mut out = Vec::new();
 
     let mut stmt = conn.prepare(
-        "SELECT dst_id, type, explanation FROM edges
+        "SELECT dst_id, type, explanation, origin FROM edges
          WHERE src_id = ?1 AND status = 'active' AND dst_id IS NOT NULL
          ORDER BY type, dst_id",
     )?;
@@ -46,10 +51,11 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
         ))
     })?;
     for row in rows {
-        let (other, edge_type, explanation) = row?;
+        let (other, edge_type, explanation, origin) = row?;
         let label = edge_type.clone();
         out.push(Neighbor {
             other,
@@ -57,11 +63,12 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
             direction: Direction::Outbound,
             label,
             explanation,
+            origin,
         });
     }
 
     let mut stmt = conn.prepare(
-        "SELECT src_id, type, explanation FROM edges
+        "SELECT src_id, type, explanation, origin FROM edges
          WHERE dst_id = ?1 AND status = 'active'
          ORDER BY type, src_id",
     )?;
@@ -70,10 +77,11 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
         ))
     })?;
     for row in rows {
-        let (other, edge_type, explanation) = row?;
+        let (other, edge_type, explanation, origin) = row?;
         let label = relation::inverse_label(&edge_type).to_string();
         out.push(Neighbor {
             other,
@@ -81,6 +89,7 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
             direction: Direction::Inbound,
             label,
             explanation,
+            origin,
         });
     }
 

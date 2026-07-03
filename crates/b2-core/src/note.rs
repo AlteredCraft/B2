@@ -248,8 +248,10 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
     Ok(insert_at.map(|at| (at, indent)))
 }
 
-/// YAML double-quote a string (escaping `\` and `"`), so a typed-link spec with
-/// `[[`, `|`, `:` is always a safe scalar.
-fn yaml_quote(s: &str) -> String {
+/// YAML double-quote a string (escaping `\` and `"`), so a value with `[[`, `|`,
+/// `:` (a typed-link spec, or a new note's `title`) is always a safe scalar.
+/// `pub(crate)` so [`crate::add`] renders a new note's frontmatter with the same
+/// quoting the relation-append path uses.
+pub(crate) fn yaml_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }

@@ -50,9 +50,28 @@ enum Command {
         /// Re-embed every note, even unchanged ones (a full rebuild in place).
         #[arg(long)]
         force: bool,
+        /// Preview what a reindex would do without writing anything — no b2id
+        /// stamped, no index or log change, no embedding.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Create a new note and project it into the index (it's immediately in the
+    /// graph + searchable). PATH is vault-relative (the `.md` extension is optional).
+    Add {
+        /// Where the new note goes: a vault-relative path (`.md` optional).
+        path: String,
+        /// The note's human title (frontmatter `title:`).
+        #[arg(long)]
+        title: Option<String>,
+        /// Initial body content (Markdown). Omit for an empty note to fill in later.
+        #[arg(long)]
+        content: Option<String>,
     },
     /// Show a note's typed neighbors. NOTE is a vault-relative path or a b2id.
     Neighbors { note: String },
+    /// Explain a note's connections — every typed edge and its "why". NOTE is a
+    /// vault-relative path or a b2id.
+    Explain { note: String },
     /// Move/rename a note and rewrite every inbound link to point at its new path.
     Mv {
         /// The note to move: a vault-relative path or a b2id.
@@ -107,9 +126,29 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 );
             }
         }
-        Command::Reindex { vault, force } => {
+        Command::Reindex {
+            vault,
+            force,
+            dry_run,
+        } => {
             // Reindex's positional vault wins over the global flag.
             let root = vault.as_ref().unwrap_or(&cli.vault);
+            if *dry_run {
+                // A dry-run neither embeds nor stamps → no model needed (open with
+                // the fake, like `neighbors`); it's a pure read, so there's no slow
+                // embed phase to show progress for.
+                let (vault, _semantic) = open_vault(root, false)?;
+                let plan = vault.plan_reindex(*force)?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&plan)?);
+                } else {
+                    println!(
+                        "Dry run: would index {} note(s) — {} to embed, {} to stamp. No changes made.",
+                        plan.would_index, plan.would_embed, plan.would_stamp
+                    );
+                }
+                return Ok(());
+            }
             // Reindex embeds every changed chunk → it needs the real model.
             let (vault, _semantic) = open_vault(root, true)?;
             // Embedding a large vault on CPU is slow; show a live progress line so it
@@ -138,6 +177,21 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 );
             }
         }
+        Command::Add {
+            path,
+            title,
+            content,
+        } => {
+            // Add projects the new note, which embeds its body → it needs the same
+            // real model the index was built with, like `reindex`/`accept`/`mv`.
+            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            let report = vault.add_note(path, title.as_deref(), content.as_deref())?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("Created {} (b2id {}).", report.path, report.b2id);
+            }
+        }
         Command::Neighbors { note } => {
             // Neighbors is a pure graph query — it never embeds, so don't require
             // the model (no needless `b2 init` just to explore the graph).
@@ -161,6 +215,45 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         .map(|e| format!(" — {e}"))
                         .unwrap_or_default();
                     println!("{arrow} {}  {name} ({}){explanation}", n.label, n.path);
+                }
+            }
+        }
+        Command::Explain { note } => {
+            // Explain is a pure graph read (edges + their explanations), no embed —
+            // like `neighbors`, it opens with the fake and needs no `b2 init`.
+            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            let view = vault.explain(note)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+            } else {
+                let name = view.title.as_deref().unwrap_or(&view.path);
+                println!("{name} ({})  [b2id {}]", view.path, view.b2id);
+                if view.connections.is_empty() {
+                    // Zero connections at all — nothing links to it and it links to
+                    // nothing (an orphan; the kernel only surfaces, never archives).
+                    println!("No connections yet.");
+                } else {
+                    println!("Connections:");
+                    for c in &view.connections {
+                        let arrow = if c.direction == "outbound" {
+                            "→"
+                        } else {
+                            "←"
+                        };
+                        let target = c.title.as_deref().unwrap_or(&c.path);
+                        println!(
+                            "  {arrow} {}  {target} ({})  [{}]",
+                            c.label, c.path, c.origin
+                        );
+                        if let Some(why) = &c.explanation {
+                            println!("      why: {why}");
+                        }
+                    }
+                    // If nothing points *at* the note, it's an orphan — surfaced, not
+                    // acted on (user-stories.md Story 2; files are only touched when asked).
+                    if !view.connections.iter().any(|c| c.direction == "inbound") {
+                        println!("No inbound links — this note is an orphan.");
+                    }
                 }
             }
         }
@@ -418,6 +511,12 @@ fn user_message(err: &CliError) -> String {
         ),
         CliError::Core(b2_core::Error::MoveDestination(_)) => {
             "That move destination isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
+        }
+        CliError::Core(b2_core::Error::AddTargetExists(p)) => format!(
+            "A note already exists at '{p}'. Choose a different path, or edit that note."
+        ),
+        CliError::Core(b2_core::Error::AddDestination(_)) => {
+            "That note path isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
         }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };

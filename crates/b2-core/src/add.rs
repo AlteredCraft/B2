@@ -1,0 +1,150 @@
+//! Create a new note (the `b2 add` kernel op — note CRUD's *create*).
+//!
+//! B2 authors a *new* file here — which is not the same as authoring a human's
+//! body: the whole document is B2-minted on the user's request, and its frontmatter
+//! is B2's managed zone (data-model.md §0/§1). What B2 still never does is inject
+//! structure into an *existing* human note; `add` only ever writes a file that did
+//! not exist.
+//!
+//! **Markdown-first**, like [`crate::mv`] and [`crate::suggest::accept_suggestion`]:
+//! write the `.md` file, then project it into the index from that source of truth.
+//! The new note is stamped its `b2id` by the ordinary ingest path
+//! ([`ingest::ingest_file`]) — "stamp on first sight" (§1), one code path for every
+//! note's identity — so the `b2id.stamped` event is logged exactly as a reindex
+//! would log it. The note is therefore fully reconstructible from Markdown (file on
+//! disk, `b2id` inside), so `add` needs no bespoke event of its own.
+//!
+//! The `created` date is passed in (the façade's determinism boundary, like the
+//! move/suggestion timestamps), keeping `b2-core` wall-clock-free.
+
+use crate::embed::Embedder;
+use crate::error::{Error, Result};
+use crate::event::EventSink;
+use crate::id::IdGen;
+use crate::ingest;
+use crate::note::yaml_quote;
+use rusqlite::Connection;
+use serde::Serialize;
+use std::fs;
+use std::path::Path;
+
+/// What [`add_note`] did: the created note's `b2id` (stamped by ingest) and its
+/// vault-relative path (`.md`-normalized).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AddReport {
+    pub b2id: String,
+    pub path: String,
+}
+
+/// Create a new note at `path_input` (a vault-relative path; a `.md` suffix is
+/// optional and added if missing) with a minimal, valid frontmatter (`type: note`,
+/// an optional `title`, and `created`) and `content` as its body, then project it
+/// into the index.
+///
+/// Refuses to clobber: [`Error::AddTargetExists`] if a file already sits at the
+/// destination, [`Error::AddDestination`] for an empty/absolute/vault-escaping path
+/// (the vault never overwrites, data-model.md §1). Missing parent directories are
+/// created, mirroring `mv`.
+///
+/// Projection **embeds** the new note's chunks, so the caller must open the vault
+/// with the same embedder the index was built with (the CLI loads the real model
+/// for `add`, as for `reindex`/`accept`/`mv`).
+#[allow(clippy::too_many_arguments)]
+pub fn add_note(
+    conn: &Connection,
+    idgen: &dyn IdGen,
+    sink: &dyn EventSink,
+    embedder: &dyn Embedder,
+    vault_root: &Path,
+    path_input: &str,
+    title: Option<&str>,
+    content: Option<&str>,
+    created: &str,
+) -> Result<AddReport> {
+    let rel = crate::pathspec::normalize_rel_md(path_input).map_err(Error::AddDestination)?;
+    let abs = vault_root.join(&rel);
+    if abs.exists() {
+        return Err(Error::AddTargetExists(rel));
+    }
+
+    // 1. Markdown first: write the new file (creating any missing parent dirs). The
+    //    `b2id` is deliberately left off — ingest stamps it on first sight (§1).
+    let doc = render_note(title, content, created);
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&abs, doc)?;
+
+    // 2. Project from that Markdown: stamp the `b2id` (logged via `sink`), chunk +
+    //    embed the body, and derive any edges its content authors.
+    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, sink, embedder)?;
+    Ok(AddReport {
+        b2id: ingested.b2id,
+        path: rel,
+    })
+}
+
+/// Render a new note's text: a minimal valid frontmatter block followed by the body.
+/// `title` is YAML-quoted (so any character is a safe scalar) and omitted entirely
+/// when `None`; `content` is trimmed of trailing newlines and, when non-empty,
+/// placed after one blank line. The `b2id` is intentionally absent — ingest stamps
+/// it (§1), keeping one identity-minting code path for every note.
+fn render_note(title: Option<&str>, content: Option<&str>, created: &str) -> String {
+    let mut s = String::from("---\ntype: note\n");
+    if let Some(t) = title {
+        s.push_str(&format!("title: {}\n", yaml_quote(t)));
+    }
+    s.push_str(&format!("created: {created}\n---\n"));
+    if let Some(body) = content {
+        let body = body.trim_end_matches('\n');
+        if !body.is_empty() {
+            s.push('\n');
+            s.push_str(body);
+            s.push('\n');
+        }
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_full_frontmatter_and_body() {
+        let out = render_note(Some("My Title"), Some("Hello world."), "2026-07-03");
+        assert_eq!(
+            out,
+            "---\ntype: note\ntitle: \"My Title\"\ncreated: 2026-07-03\n---\n\nHello world.\n"
+        );
+    }
+
+    #[test]
+    fn omits_title_when_absent_and_body_when_empty() {
+        let out = render_note(None, None, "2026-07-03");
+        assert_eq!(out, "---\ntype: note\ncreated: 2026-07-03\n---\n");
+        // An explicitly-empty content string is treated like no body.
+        let blank = render_note(None, Some("\n\n"), "2026-07-03");
+        assert_eq!(blank, "---\ntype: note\ncreated: 2026-07-03\n---\n");
+    }
+
+    #[test]
+    fn a_title_with_special_chars_is_quoted_safely() {
+        let out = render_note(Some(r#"A: "quoted" \ path"#), None, "2026-07-03");
+        assert!(out.contains(r#"title: "A: \"quoted\" \\ path""#), "{out}");
+    }
+
+    #[test]
+    fn the_rendered_note_round_trips_and_parses_its_fields() {
+        // A note `add` writes must parse back with exactly the fields it set (and no
+        // b2id yet — ingest stamps that).
+        let out = render_note(Some("Spaced repetition"), Some("Body."), "2026-07-03");
+        let parsed = crate::note::parse(&out);
+        assert_eq!(parsed.as_str(), out, "renders round-trip losslessly");
+        let f = parsed.fields();
+        assert_eq!(f.r#type.as_deref(), Some("note"));
+        assert_eq!(f.title.as_deref(), Some("Spaced repetition"));
+        assert_eq!(f.created.as_deref(), Some("2026-07-03"));
+        assert!(f.b2id.is_none(), "b2id is stamped by ingest, not by render");
+    }
+}

@@ -141,28 +141,13 @@ pub fn move_note(
     })
 }
 
-/// Normalize + validate a move destination into a vault-relative `.md` path.
-/// Rejects an empty, absolute, or vault-escaping (`..`) path; appends `.md` if the
-/// user omitted it. Backslashes are normalized to `/` so `notes.path` stays in the
-/// one separator convention the index uses.
+/// Normalize + validate a move destination into a vault-relative `.md` path,
+/// mapping any rejection ([`crate::pathspec::normalize_rel_md`] — empty, absolute,
+/// or vault-escaping) onto [`Error::MoveDestination`]. The "onto its current path"
+/// and "onto an existing file" checks stay in [`move_note`], which alone knows the
+/// source path and can read the disk.
 fn normalize_dest(input: &str) -> Result<String> {
-    let s = input.trim().replace('\\', "/");
-    if s.is_empty() {
-        return Err(Error::MoveDestination("destination is empty".into()));
-    }
-    if s.starts_with('/') {
-        return Err(Error::MoveDestination(format!(
-            "{s} is absolute; give a vault-relative path"
-        )));
-    }
-    if s.split('/').any(|c| c == "..") {
-        return Err(Error::MoveDestination(format!("{s} escapes the vault")));
-    }
-    Ok(if s.ends_with(".md") {
-        s
-    } else {
-        format!("{s}.md")
-    })
+    crate::pathspec::normalize_rel_md(input).map_err(Error::MoveDestination)
 }
 
 /// Rewrite every wikilink whose *trimmed* target is a key in `targets` to that

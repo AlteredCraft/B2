@@ -114,12 +114,176 @@ fn reindex_is_incremental_and_force_reembeds() {
 }
 
 #[test]
+fn reindex_dry_run_previews_and_writes_nothing() {
+    let (_g, root) = golden_vault();
+    // A note with no b2id, so the preview has something to "would stamp".
+    std::fs::write(
+        root.join("fresh.md"),
+        "---\ntype: note\ntitle: Fresh\n---\nNo b2id yet.\n",
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(root.join("fresh.md")).unwrap();
+
+    // JSON: honest `would_*` keys, never the past-tense reindex shape.
+    let json = run_in(&root, &["--json", "reindex", "--dry-run"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["would_index"], 3);
+    assert_eq!(v["would_embed"], 3);
+    assert_eq!(v["would_stamp"], 1);
+    assert!(v.get("indexed").is_none(), "not the real-reindex shape");
+
+    // Human: says it's a preview and made no changes.
+    let human = run_in(&root, &["reindex", "--dry-run"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    assert!(stdout(&human).contains("Dry run"), "{:?}", stdout(&human));
+    assert!(
+        stdout(&human).contains("No changes made"),
+        "{:?}",
+        stdout(&human)
+    );
+
+    // Nothing was written: the b2id-less note is byte-identical (never stamped),
+    // and the work is still pending — a real reindex now embeds all 3.
+    assert_eq!(
+        std::fs::read_to_string(root.join("fresh.md")).unwrap(),
+        before
+    );
+    let real = run_in(&root, &["--json", "reindex"]);
+    let v: Value = serde_json::from_slice(&real.stdout).unwrap();
+    assert_eq!(v["indexed"], 3);
+    assert_eq!(v["embedded"], 3, "the dry-run did no embedding work");
+    assert_eq!(v["stamped"], 1);
+}
+
+#[test]
 fn reindex_accepts_a_positional_vault() {
     let (_g, root) = golden_vault();
     // the spec's `b2 reindex [vault]` form, no -C.
     let out = run(&["reindex", root.to_str().unwrap()]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("Indexed 2"));
+}
+
+// --- note CRUD: add -----------------------------------------------------------
+
+#[test]
+fn add_creates_a_note_human_and_json() {
+    let (_g, root) = golden_vault();
+
+    // Human: reports the created path + b2id.
+    let human = run_in(
+        &root,
+        &[
+            "add",
+            "notes/gadgets",
+            "--title",
+            "All about gadgets",
+            "--content",
+            "Gadgets are handy little devices.",
+        ],
+    );
+    assert!(human.status.success(), "{}", stderr(&human));
+    assert!(stdout(&human).contains("Created"), "{:?}", stdout(&human));
+    assert!(
+        stdout(&human).contains("notes/gadgets.md"),
+        "{:?}",
+        stdout(&human)
+    );
+
+    // The file exists with a stamped, titled frontmatter and the body.
+    let text = std::fs::read_to_string(root.join("notes/gadgets.md")).unwrap();
+    assert!(text.contains("b2id:"), "{text}");
+    assert!(text.contains(r#"title: "All about gadgets""#), "{text}");
+    assert!(text.contains("Gadgets are handy little devices."), "{text}");
+
+    // Immediately searchable (keyword half is real even under the fake embedder).
+    let search = run_in(&root, &["--json", "search", "gadgets"]);
+    let v: Value = serde_json::from_slice(&search.stdout).unwrap();
+    assert!(v
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h["path"] == "notes/gadgets.md"));
+
+    // JSON: a new note at a different path returns the report shape.
+    let json = run_in(&root, &["--json", "add", "notes/another"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["path"], "notes/another.md");
+    assert!(v["b2id"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+#[test]
+fn add_refuses_to_clobber_and_reports_it() {
+    let (_g, root) = golden_vault();
+    let out = run_in(&root, &["add", "concepts/memory.md"]);
+    assert!(!out.status.success(), "clobber must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("already exists"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}
+
+#[test]
+fn add_invalid_path_fails_cleanly() {
+    let (_g, root) = golden_vault();
+    let out = run_in(&root, &["add", "../escape.md"]);
+    assert!(!out.status.success(), "invalid path must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("path"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}
+
+// --- explain: a note's connections with their why -----------------------------
+
+#[test]
+fn explain_shows_connections_human_and_json() {
+    let (_g, root) = reindexed();
+
+    let human = run_in(&root, &["explain", "notes/spaced-repetition"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let out = stdout(&human);
+    assert!(out.contains("Spaced repetition"), "header: {out}");
+    assert!(out.contains("elaborates"), "{out}");
+    assert!(out.contains("why:"), "the explanation is labelled: {out}");
+    assert!(out.contains("forgetting curve"), "{out}");
+
+    let json = run_in(&root, &["--json", "explain", "notes/spaced-repetition"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["path"], "notes/spaced-repetition.md");
+    assert_eq!(v["title"], "Spaced repetition");
+    let conns = v["connections"].as_array().expect("connections array");
+    assert_eq!(conns.len(), 2);
+    assert!(conns.iter().all(|c| c["direction"] == "outbound"));
+    assert!(conns.iter().all(|c| c["origin"] == "inline"));
+    assert!(conns.iter().any(|c| c["label"] == "elaborates"));
+}
+
+#[test]
+fn explain_reports_an_orphan() {
+    let (_g, root) = reindexed();
+    // A note nothing links to and that links to nothing.
+    let out = run_in(&root, &["add", "islands/lonely", "--content", "By itself."]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let explain = run_in(&root, &["explain", "islands/lonely"]);
+    assert!(explain.status.success(), "{}", stderr(&explain));
+    let text = stdout(&explain).to_lowercase();
+    assert!(
+        text.contains("no connections"),
+        "an isolated note reports no connections: {text}"
+    );
+}
+
+#[test]
+fn explain_unknown_note_fails_cleanly() {
+    let (_g, root) = reindexed();
+    let out = run_in(&root, &["explain", "does/not/exist"]);
+    assert!(!out.status.success(), "unknown note must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("not found"), "stderr: {err}");
+    assert!(!err.contains("panicked"), "stderr: {err}");
 }
 
 #[test]

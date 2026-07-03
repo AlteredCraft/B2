@@ -41,6 +41,18 @@ pub struct Ingested {
 /// still needing a vector. A named alias so the 5-tuple stays readable.
 type ProjectedNote = (String, bool, String, Vec<String>, Vec<(i64, String)>);
 
+/// One note's entry in a [`plan_reindex`] preview (the `reindex --dry-run`): what a
+/// real reindex *would* do to this file, decided read-only (no writes).
+#[derive(Debug, Clone)]
+pub struct PlannedNote {
+    /// Vault-relative path of the note.
+    pub path: String,
+    /// A real reindex would stamp a `b2id` (the file currently lacks one).
+    pub would_stamp: bool,
+    /// A real reindex would (re)embed this note's body (changed, fresh, or forced).
+    pub would_embed: bool,
+}
+
 /// Progress during the embed phase of a full reindex, reported **per batch** so a
 /// large vault never looks frozen while it embeds (the one genuinely slow step
 /// under a real model). Purely observational — it changes nothing about the result.
@@ -105,9 +117,10 @@ fn project_note_and_chunks(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64);
 
-    // The previously-indexed body hash, read BEFORE the upsert overwrites it — the
-    // incremental "did the body change?" signal below.
-    let prev_hash = db::note_body_hash(conn, &b2id)?;
+    // Decide the incremental embed BEFORE the upsert overwrites `body_hash`, reading
+    // the note's stored hash + vector state. The embedding space is ensured by the
+    // caller here, so it always exists (hence `space_exists = true`).
+    let reembed = would_reembed(conn, &b2id, &body_hash, force, true)?;
 
     let fields = parsed.fields();
     db::upsert_note(
@@ -132,14 +145,9 @@ fn project_note_and_chunks(
 
     // Incremental fast path: an unchanged body means identical chunks, and if those
     // chunks already all have vectors there is nothing to redo — reuse them and
-    // return no pending work. `force` bypasses this; so does a model swap, which
-    // emptied `chunks_vec` (note_fully_embedded then returns false).
-    let unchanged = !force
-        && prev_hash.as_deref() == Some(body_hash.as_str())
-        && db::note_fully_embedded(conn, &b2id)?;
-    let pending = if unchanged {
-        Vec::new()
-    } else {
+    // return no pending work (`reembed = false`). `force` bypasses this; so does a
+    // model swap, which emptied `chunks_vec` (note_fully_embedded then returns false).
+    let pending = if reembed {
         // Chunk → project rows; hand the (id, text) pairs back for a batched embed
         // (Flow ①). replace_chunks also clears any stale vectors for this note.
         let chunks = chunk_body(&body);
@@ -148,9 +156,34 @@ fn project_note_and_chunks(
             .into_iter()
             .zip(chunks.into_iter().map(|c| c.text))
             .collect()
+    } else {
+        Vec::new()
     };
 
     Ok((b2id, stamped, body, relations, pending))
+}
+
+/// Whether a note's body would be (re)embedded this run — the negation of the
+/// incremental "unchanged" fast path: true when `force`, when the vault has no
+/// embedding space yet (`space_exists = false` → a pristine/never-embedded index),
+/// when the stored body hash differs (content changed), or when the note is not
+/// fully embedded (a fresh note, or a model swap emptied `chunks_vec`). Shared by
+/// the real ingest and the [`plan_reindex`] dry-run so the preview cannot drift from
+/// the run. `space_exists` lets a pristine vault short-circuit without querying a
+/// `chunks_vec` that does not exist yet (which would error).
+fn would_reembed(
+    conn: &Connection,
+    b2id: &str,
+    body_hash: &str,
+    force: bool,
+    space_exists: bool,
+) -> Result<bool> {
+    if force || !space_exists {
+        return Ok(true);
+    }
+    let unchanged = db::note_body_hash(conn, b2id)?.as_deref() == Some(body_hash)
+        && db::note_fully_embedded(conn, b2id)?;
+    Ok(!unchanged)
 }
 
 /// Embed a note's pending `(chunk_id, text)` pairs into `chunks_vec`, in batches of
@@ -330,6 +363,44 @@ pub fn ingest_vault_with_progress(
             b2id: b2id.clone(),
             stamped: *stamped,
             embedded: *embedded,
+        });
+    }
+    Ok(out)
+}
+
+/// A **read-only** preview of a reindex — the `reindex --dry-run`. Walks every `.md`
+/// file (same sorted order + dotfolder skip as [`ingest_vault`]) and decides, per
+/// note, whether a real run would stamp a `b2id` (the file lacks one) and would
+/// (re)embed its body — with **no writes at all**: no stamp to the Markdown (B2's
+/// one vault write, data-model.md §1), no index or log mutation, no embedding. So a
+/// user can preview an (incremental) reindex against a pristine vault.
+///
+/// The embed decision reads the *currently stored* vectors, so it previews an
+/// incremental run under the embedder the index was built with; it does **not**
+/// detect a pending model swap (that needs the real model loaded, which a dry-run
+/// deliberately avoids). Needs no embedder — a pure read, like the graph queries.
+pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result<Vec<PlannedNote>> {
+    let space_exists = db::embedding_space_exists(conn)?;
+    let mut rel_paths = Vec::new();
+    collect_md_files(vault_root, vault_root, &mut rel_paths)?;
+    rel_paths.sort();
+
+    let mut out = Vec::with_capacity(rel_paths.len());
+    for rel in rel_paths {
+        let raw = fs::read_to_string(vault_root.join(&rel))?;
+        let parsed = note::parse(&raw);
+        let would_stamp = parsed.fields().b2id.is_none();
+        let body_hash = blake3::hash(parsed.body().as_bytes()).to_hex().to_string();
+        // A note with no b2id is new to the index → always (re)embedded; one with a
+        // b2id is compared against its stored state, exactly as the real run decides.
+        let would_embed = match &parsed.fields().b2id {
+            Some(id) => would_reembed(conn, id, &body_hash, force, space_exists)?,
+            None => true,
+        };
+        out.push(PlannedNote {
+            path: rel,
+            would_stamp,
+            would_embed,
         });
     }
     Ok(out)
