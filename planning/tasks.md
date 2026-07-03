@@ -236,28 +236,27 @@ areas, v1 scope, locked decisions).
   [specs/eval-strategy.md](specs/eval-strategy.md) (covers both evals — retrieval + suggestion — as one out-of-CI
   model-quality pass).
 
-## Next up — run + tune the eval, then kernel CRUD
+## Next up — kernel CRUD (`b2 add` / `b2 explain`); eval tuning is parked
 
-> **Pick this up fresh.** Connection discovery is **real, end-to-end, reachable, and now measurable** — `b2 suggest`
-> runs candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue,
-> `accept`/`reject` work, and the [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) scores the
-> relator's judgment against a hand-labelled set. What's left on the quality front is to **run it with a real key and
-> tune from the numbers**; the other front is the remaining note-authoring kernel ops — `b2 mv` ships, so `b2 add`
-> (note CRUD) and `b2 explain` are what's left.
+> **Pick this up fresh.** Connection discovery is **real, end-to-end, reachable, and measured** — `b2 suggest` runs
+> candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue,
+> `accept`/`reject` work, and the [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) has a
+> **2026-07-03 baseline**. The relator-tuning effort is **intentionally paused here** (see below) — the harness +
+> baseline are a good stopping point, and tuning against a single run isn't worthwhile yet. The **active front** is
+> the remaining note-authoring kernel ops: `b2 mv` ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
 
-- **Run + tune the suggestion-quality eval** ([strategy + baseline](specs/eval-strategy.md)) — the harness ships and
-  has a first **2026-07-03 baseline** (`claude-opus-4-8`: precision 0.82, recall 1.00, verb-acc 0.93 over the 22-pair
-  seed; the 3 firing misses are boundary `relates`/direction cases). The open work is to tune from more than one run:
-  re-run for variance, then act on it — adjust the [prompt](../crates/b2-relate/src/prompt.rs)
-  (verb glosses, the decline-by-default stance) and/or the default model, and **grow the labelled set** — the 22-pair
-  seed is a starting point, and the durable **audit log** (backlog) is its natural capture mechanism
-  (`(pair, verdict, confidence, decline-reason)` per real call). A `--repeat N` agreement pass (the model is sampled
-  once per pair today) and the deferred **distance-weighting** experiment (backlog) both hang off this.
-- **Remaining CLI + kernel ops** — `b2 mv` is **done**. Still open: `b2 add` (note CRUD), `b2 explain`
+- **Remaining CLI + kernel ops _(active)_** — `b2 mv` is **done**. Still open: `b2 add` (note CRUD), `b2 explain`
   (a note's connections with their "why"); plus a `reindex --dry-run` fast-follow (skip the `b2id`
   stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1). Link-*delete*
   ([user-stories.md](user-stories.md) Story 2) already falls out of a plain edit + reindex; a dedicated op is
   only needed if orphan-surfacing lands.
+- **Relator-quality tuning _(paused 2026-07-03)_** — the harness + a first baseline ship; deliberately parked
+  *before* tuning, because one run (precision 0.82, recall 1.00, verb-acc 0.93 over 22 pairs on
+  `claude-opus-4-8`) isn't enough signal to change the prompt or model, and the 3 firing misses are borderline
+  `relates`/direction cases. **Resume checklist + the lever inventory live in
+  [specs/eval-strategy.md](specs/eval-strategy.md) §6** — first step on resume is a `--repeat N` variance pass,
+  *then* grow the labelled set, *then* tune one lever at a time. The deferred **distance-weighting** experiment
+  (backlog) hangs off this eval too.
 
 **Not in scope (keep discovery thin):** query expansion (qmd's 1.7B third model — off-by-default, later);
 a reranker (a one-stage insertion after RRF, [index-engine.md](index-engine.md) §5); the actual

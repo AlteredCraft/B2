@@ -182,3 +182,40 @@ against a single run**; re-run and grow the set first.
 - **Noted follow-ups.** `--repeat N` to report agreement across samples (the model is sampled once today);
   and, once this eval can score it, the deferred **distance-weighting** experiment for candidate ranking
   ([tasks.md](../tasks.md) backlog) — the candidate-gen measurement this relator eval deliberately leaves out.
+
+## 6. Paused 2026-07-03 — how to resume
+
+**Status.** The harness, the 22-pair seed set, and one baseline (§4) ship. The tuning effort is **parked here on
+purpose**: tuning the prompt or model against a single, once-sampled run would be fitting to noise. This section is
+the handoff — do these **in order**, each step gating the next, so a cold resume (fresh session or later self)
+knows exactly where to start.
+
+1. **Establish variance first — the blocking step.** Every pair is sampled once today, so the baseline
+   (precision 0.82) is a point, not a distribution; a single pair flipping moves it ≈ ±0.06. The first coding task
+   on resume is **`--repeat N`**: run each pair N times and report each metric's mean + spread (and per-pair
+   agreement). Run 3–5×. If the misses recur, they're real; if they flicker, they're sampling noise. **Do not tune
+   until you know which.**
+2. **Grow the labelled set** (§5). 22 pairs is too few to trust a one-pair precision swing and leans on the coffee
+   cluster. Add pairs — weighted toward **declines** (precision is the bound) and **direction** cases (the one
+   clear miss type) — by hand, or by wiring the **audit log** (backlog) to harvest real `relate()` calls and
+   confirming their gold. Re-baseline after growing.
+3. **Triage each miss into one of three buckets** (the eval prints them with the labeller comment):
+   - **Label question** → widen/fix the gold in `pairs.json`, not the model. *(Baseline: `channeling → espresso`
+     fired `part-of`, arguably defensible for a named sub-phenomenon.)*
+   - **Real model error** → a prompt/model lever. *(Baseline: `diet-heart-hypothesis → mediterranean-trial` fired
+     `example-of` — wrong type and wrong direction.)*
+   - **Acceptable boundary** → leave it; the human `accept`/`reject` is the final gate. *(Baseline: the two
+     low-confidence `relates` over-fires on adjacent notes.)*
+4. **Then tune one lever at a time**, re-running to confirm the floor doesn't regress.
+
+**Lever inventory** (what to reach for, and where it lives):
+
+| Lever | Where | Use for |
+|---|---|---|
+| Verb glosses / decline stance | [`prompt.rs`](../../crates/b2-relate/src/prompt.rs) `gloss()`, `system_prompt()` | the two `relates` over-fires; the direction miss |
+| Default model | [`config.rs`](../../crates/b2-relate/src/config.rs) `DEFAULT_MODEL` | opus (default) vs. cheaper `claude-haiku-4-5` — the eval justifies a downgrade |
+| Confidence floor on firing *(not built)* | [`generate_for_anchor`](../../crates/b2-core/src/discover.rs) or the relator | the over-fires are low-confidence (0.55–0.60); trade a little recall for precision — add only if the eval says it helps |
+| Gold verb sets | `pairs.json` | the cheapest fix when a "miss" is really a label |
+
+**Guardrail:** do not change the prompt or model off the single 2026-07-03 baseline — steps 1–2 (variance, then a
+bigger set) come first.
