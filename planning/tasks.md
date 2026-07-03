@@ -3,7 +3,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-02
+updated: 2026-07-03
 status: active
 ---
 
@@ -212,21 +212,47 @@ areas, v1 scope, locked decisions).
   the follow-up). Instrumentation + dedup mirrored to [docs/discovery.html](../docs/discovery.html). **2 new tests**
   (re-run makes zero relator calls for pending pairs; a rejected pair is never re-judged); **129** workspace tests green.
 
-## Next up — the suggestion-quality eval, then kernel CRUD
+- [x] **Suggestion-quality eval — the harness + seed labelled set** — the relator makes typed judgments but nothing
+  scored them; now the measurement exists. A new **`cargo run -p b2-relate --example suggest-eval`**
+  ([suggest-eval.rs](../crates/b2-relate/examples/suggest-eval.rs)), the relator-side parallel of the retrieval eval
+  in `b2-embed` — an **example, not a test**, so a real key + spend + model non-determinism never touch the
+  deterministic CI suite. **Decision (2026-07-03), mirroring the "isolated pairs" answer:** it scores the
+  [`Relator`](../crates/b2-core/src/relate.rs)'s **judgment in isolation** — it does **not** build a vault or run
+  candidate-gen/the embedder — so the number measures the precision gate itself, not entangled candidate-gen quality
+  (that stays a separate, separately-tuned concern). It feeds hand-labelled note pairs
+  ([evals/pairs.json](../crates/b2-relate/evals/pairs.json): 22 pairs over an 18-note
+  [evals/corpus/](../crates/b2-relate/evals/corpus)) straight to the real
+  [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) and scores **firing precision** (the over-firing gate — the
+  relator's whole job), **firing recall**, and **verb accuracy** (gold lists *every defensible* core verb per pair,
+  most-apt first, because the vocabulary genuinely overlaps — exact-match-only would report fake errors). Declines
+  deliberately include "same-topic but not connected" traps (sibling brewing methods, a direction-reversed pair)
+  since over-firing is the primary failure mode; the seed set covers all 10 core verbs. Honest engineering: labels are
+  **validated up front** (unknown note / non-core verb / evidence-not-a-substring all fail fast **before any paid
+  call** — a data typo costs nothing), a per-pair table + a "misses" block (with the labeller's comment) make tuning
+  legible, per-run token usage is reported, and a soft precision floor (0.75, the retrieval eval's `p@1` precedent)
+  exits non-zero for a manual gate. **8 model-free scoring tests** (gold parse/validate, the four confusion quadrants,
+  frontmatter parse, evidence resolution) run via `cargo test -p b2-relate --examples`, **out of** the default
+  suite like the retrieval eval — **129** workspace tests unchanged. Strategy + first-run baseline documented in
+  [specs/eval-strategy.md](specs/eval-strategy.md) (covers both evals — retrieval + suggestion — as one out-of-CI
+  model-quality pass).
 
-> **Pick this up fresh.** Connection discovery is now **real, end-to-end, and reachable** — `b2 suggest` runs
-> candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue, and
-> `accept`/`reject` work. What's unmeasured is *quality*: the relator makes judgments, but nothing scores how good
-> they are. Two fronts remain: the **suggestion-quality eval**, and the remaining note-authoring kernel ops — `b2 mv`
-> (move + inbound-link repair) ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
+## Next up — run + tune the eval, then kernel CRUD
 
-- **The suggestion-quality eval** — extend the eval suite's scaffolded half (precision/recall over a
-  hand-labelled candidate set), out of CI, exactly as the retrieval eval needs a real embedder. This is what
-  turns the relator from "ships" into "tuned" — measure verb accuracy + decline precision, and only then adjust
-  the prompt / default model. Data path: the run already reports per-run tokens + the full `generated / declined
-  / non_core / existing` tally; a hand-labelled set is the missing piece, and the durable **audit log** (backlog)
-  is its natural capture mechanism (`(pair, verdict, confidence, decline-reason)` per call). Pairs with the
-  deferred distance-weighting experiment (backlog).
+> **Pick this up fresh.** Connection discovery is **real, end-to-end, reachable, and now measurable** — `b2 suggest`
+> runs candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue,
+> `accept`/`reject` work, and the [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) scores the
+> relator's judgment against a hand-labelled set. What's left on the quality front is to **run it with a real key and
+> tune from the numbers**; the other front is the remaining note-authoring kernel ops — `b2 mv` ships, so `b2 add`
+> (note CRUD) and `b2 explain` are what's left.
+
+- **Run + tune the suggestion-quality eval** ([strategy + baseline](specs/eval-strategy.md)) — the harness ships and
+  has a first **2026-07-03 baseline** (`claude-opus-4-8`: precision 0.82, recall 1.00, verb-acc 0.93 over the 22-pair
+  seed; the 3 firing misses are boundary `relates`/direction cases). The open work is to tune from more than one run:
+  re-run for variance, then act on it — adjust the [prompt](../crates/b2-relate/src/prompt.rs)
+  (verb glosses, the decline-by-default stance) and/or the default model, and **grow the labelled set** — the 22-pair
+  seed is a starting point, and the durable **audit log** (backlog) is its natural capture mechanism
+  (`(pair, verdict, confidence, decline-reason)` per real call). A `--repeat N` agreement pass (the model is sampled
+  once per pair today) and the deferred **distance-weighting** experiment (backlog) both hang off this.
 - **Remaining CLI + kernel ops** — `b2 mv` is **done**. Still open: `b2 add` (note CRUD), `b2 explain`
   (a note's connections with their "why"); plus a `reindex --dry-run` fast-follow (skip the `b2id`
   stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1). Link-*delete*

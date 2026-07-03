@@ -20,6 +20,8 @@ schema must satisfy the data model, never the reverse.
 - `planning/index-engine.md` + `planning/specs/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the step 0→5 build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
 - `planning/user-stories.md` — kernel behavior as testable scenarios.
+- `planning/specs/eval-strategy.md` — how model quality (the `Embedder` + `Relator` seams) is measured out-of-CI:
+  the two hand-labelled evals, their metrics, and how to run/grow them.
 
 ## Commands
 
