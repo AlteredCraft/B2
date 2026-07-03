@@ -50,7 +50,13 @@ lock-in · AI-native (not bolted-on) · single binary
 
 ## The docs
 
-### HTML guides: https://alteredcraft.github.io/B2/
+### HTML guides — [alteredcraft.github.io/B2](https://alteredcraft.github.io/B2/)
+
+New here? Start with the **[Quick start](https://alteredcraft.github.io/B2/quickstart.html)** — set up
+and work with a vault in about ten minutes. Then go deeper:
+[system architecture](https://alteredcraft.github.io/B2/architecture.html) ·
+[indexing pipeline](https://alteredcraft.github.io/B2/indexing.html) ·
+[connection discovery](https://alteredcraft.github.io/B2/discovery.html).
 
 | Doc | What it owns |
 |---|---|

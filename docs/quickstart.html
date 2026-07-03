@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B2 — Quick start: set up and work with a vault</title>
+<meta name="description" content="A hands-on walkthrough: build the b2 CLI, point it at a folder of Markdown, and search, explore, and discover typed connections between your notes.">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
+    --pink:#f778ba; --cyan:#39c5cf; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  .wrap{max-width:820px;margin:0 auto;padding:0 24px}
+  /* top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--line)}
+  .topbar .brand{font-weight:700;letter-spacing:.3px}
+  .topbar .brand span{color:var(--muted);font-weight:400}
+  .topbar a.gh{color:var(--muted);font-size:13.5px}
+  /* hero */
+  header.hero{padding:46px 0 6px}
+  .kicker{font-size:11.5px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted);margin-bottom:14px}
+  h1.word{font-size:44px;line-height:1.05;margin:0 0 16px;letter-spacing:-.8px}
+  p.lead{font-size:18px;color:var(--ink);max-width:680px;margin:0 0 8px}
+  p.lead em{color:var(--purple);font-style:normal}
+  p.sublead{font-size:15px;color:var(--muted);max-width:660px;margin:10px 0 0}
+  /* section headings */
+  h2.sec{font-size:13px;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted);margin:44px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
+  /* step blocks */
+  .step{margin:26px 0}
+  .step .head{display:flex;align-items:baseline;gap:12px;margin:0 0 8px}
+  .step .num{flex:none;width:26px;height:26px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--accent);font:600 13px/26px var(--mono);text-align:center}
+  .step h3{font-size:19px;margin:0;letter-spacing:-.2px}
+  .step .body{margin-left:38px}
+  .step .body>p:first-child{margin-top:2px}
+  p{margin:10px 0}
+  ul{margin:10px 0;padding-left:20px} li{margin:5px 0}
+  /* code */
+  pre{background:#0a0e14;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;margin:14px 0;font-family:var(--mono);font-size:13px;line-height:1.6;color:var(--ink)}
+  pre .c{color:var(--muted)}            /* comment */
+  pre .p{color:var(--green)}            /* prompt $ */
+  pre .o{color:var(--muted)}            /* program output */
+  pre .k{color:var(--cyan)}             /* command / keyword */
+  pre .s{color:var(--amber)}            /* string / arg */
+  :not(pre)>code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--ink)}
+  /* callouts */
+  .note{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--panel);border-radius:8px;padding:12px 16px;margin:16px 0;font-size:13.5px;color:var(--muted)}
+  .note.tip{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note b{color:var(--ink)} .note code{font-size:.92em}
+  .note .tag{display:inline-block;font:600 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin-right:8px;vertical-align:middle}
+  .note.tip .tag{color:var(--green)} .note.warn .tag{color:var(--amber)}
+  /* table */
+  .tablewrap{overflow-x:auto;margin:16px 0}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  td code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;white-space:nowrap}
+  td.d{color:var(--muted)}
+  /* equation card */
+  .eqcard{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .eq{font-family:var(--mono);font-size:16px;text-align:center;color:var(--ink);margin:2px 0 8px}
+  .eqcard p{color:var(--muted);font-size:13px;margin:0;text-align:center;max-width:640px;margin:0 auto}
+  /* links row */
+  .more{display:flex;flex-wrap:wrap;gap:22px;margin:40px 0 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:14px}
+  .more a{display:flex;align-items:center;gap:8px}
+  footer{color:var(--muted);font-size:12.5px;padding:26px 0 60px}
+  @media(max-width:760px){h1.word{font-size:34px}.step .body{margin-left:0}.step .head{gap:9px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">B2 <span>· quick start</span></div>
+    <a class="gh" href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
+  </div>
+
+  <header class="hero">
+    <div class="kicker">Set up · index · search · discover connections</div>
+    <h1 class="word">Get started with B2</h1>
+    <p class="lead">Point B2 at a folder of Markdown and it becomes a second brain that reads
+    everything, lets you <em>search</em> it, and keeps discovering <em>typed, explained</em>
+    connections between your notes.</p>
+    <p class="sublead">This guide takes you from an empty checkout to a working vault you can search and
+    grow — about ten minutes, most of it a one-time model download. Your <code>.md</code> files stay
+    plain and yours the whole way; B2 only ever adds a hidden index folder and (with your say-so) a
+    typed link in a note's frontmatter.</p>
+  </header>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Before you start</h2>
+
+  <p>You'll need a <b>Rust toolchain</b> (<a href="https://rustup.rs">rustup.rs</a>) to build the
+  <code>b2</code> binary — B2 ships as source today, as one static binary. macOS and Linux are the
+  tested platforms.</p>
+
+  <p>Two things are <b>optional</b> and only matter for the smart features:</p>
+  <ul>
+    <li><b>The embedding model</b> — a one-time ~440&nbsp;MB download (<code>b2 init</code>) that
+      powers <em>semantic</em> search. Skip it and run in an offline keyword-only mode instead
+      (shown below).</li>
+    <li><b>An Anthropic API key</b> — only <code>b2 suggest</code> (AI connection discovery) calls a
+      model over the network. Everything else runs entirely on your machine.</li>
+  </ul>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Set up</h2>
+
+  <div class="step">
+    <div class="head"><div class="num">1</div><h3>Build the <code>b2</code> CLI</h3></div>
+    <div class="body">
+      <p>Clone the repo and build the release binary, then alias it so <code>b2</code> is on your path
+      for this shell:</p>
+<pre><span class="p">$</span> <span class="k">git</span> clone https://github.com/AlteredCraft/B2 &amp;&amp; <span class="k">cd</span> B2
+<span class="p">$</span> <span class="k">cargo</span> build --release -p b2-cli
+<span class="p">$</span> <span class="k">alias</span> b2=./target/release/b2
+<span class="p">$</span> <span class="k">b2</span> --help
+<span class="o">B2 — explore a Markdown vault's typed graph and search from the terminal</span></pre>
+      <div class="note tip"><span class="tag">Tip</span> Every command takes a global
+      <code>-C &lt;path&gt;</code> (or <code>--vault</code>) to point at your vault, and
+      <code>--json</code> to emit machine-readable output for agents and scripts. The examples below
+      run from <em>inside</em> the vault folder, so the default (<code>.</code>) just works.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="head"><div class="num">2</div><h3>Install the embedding model <span style="color:var(--muted);font-size:14px;font-weight:400">(one-time)</span></h3></div>
+    <div class="body">
+      <p>Semantic search needs a local embedding model. <code>b2 init</code> downloads and verifies it
+      into a shared cache once — it is <em>not</em> re-downloaded per vault, and there is never a
+      surprise download mid-command later.</p>
+<pre><span class="p">$</span> <span class="k">b2</span> init
+<span class="o">Installed 'bge-base-en-v1.5' (768 dims). Run `b2 reindex` to embed your vault.</span></pre>
+      <div class="note"><span class="tag">No model?</span> You can do everything in this guide
+      <em>offline</em> by prefixing commands with <code>B2_EMBEDDER=fake</code>. Search still works on
+      keywords (BM25), but the semantic half is switched off — the CLI tells you so, and never pretends
+      a result is semantic when it isn't.</div>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Create a vault</h2>
+
+  <p>A <b>vault</b> is nothing more than a folder of Markdown files. Point B2 at notes you already have,
+  or start fresh — there's no import step and no proprietary format to convert into.</p>
+
+  <div class="step">
+    <div class="head"><div class="num">3</div><h3>Create some notes</h3></div>
+    <div class="body">
+      <p>Just write Markdown files. Here are two — a concept and a note that connects to it. The
+      frontmatter is minimal; the body is plain prose:</p>
+<pre><span class="c"># ~/vault/concepts/memory.md</span>
+---
+type: concept
+title: "Human memory"
+created: 2026-07-03
+---
+The brain encodes, stores, and retrieves information.</pre>
+<pre><span class="c"># ~/vault/notes/spaced-repetition.md</span>
+---
+type: note
+title: "Spaced repetition"
+created: 2026-07-03
+---
+Spaced repetition exploits the retrieval curve.
+
+## Relations
+- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve</pre>
+      <p>That last line is a <b>typed connection</b>: the verb <code>elaborates</code>, a
+      <b>wikilink</b> <code>[[concepts/memory|Human memory]]</code> to the target, and a "why". A bare
+      <code>[[path|title]]</code> anywhere in prose is an untyped <code>references</code> link. The verbs
+      come from a small closed vocabulary — <code>references</code>, <code>relates</code>,
+      <code>elaborates</code>, <code>supports</code>, <code>refutes</code>, <code>contradicts</code>,
+      <code>example-of</code>, <code>part-of</code>, <code>supersedes</code>,
+      <code>derived-from</code> — the same set B2's discovery uses.</p>
+      <div class="note tip"><span class="tag">Or scaffold one</span> Prefer a command?
+      <code>b2 add notes/spaced-repetition --title "Spaced repetition" --content "…"</code> writes a
+      valid note <em>and</em> indexes it in one step (so you can skip the reindex in step&nbsp;5 for
+      notes you create this way). The <code>.md</code> extension is optional; parent folders are created
+      for you.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="head"><div class="num">4</div><h3>Know what B2 will and won't touch</h3></div>
+    <div class="body">
+      <p>Nothing is hidden — the files stay ordinary Markdown that work in Obsidian, or anything else,
+      with no B2 running. After indexing (next step), that first note gains exactly one line B2 manages:</p>
+<pre><span class="c">---</span>
+<span class="c">b2id: 01KWMCW242E0WSKVYDYNQBT7SN</span>   <span class="c"># set by B2 on first index — a stable id, never changes</span>
+<span class="c">type: note</span>
+<span class="c">title: "Spaced repetition"</span>
+<span class="c">created: 2026-07-03</span>
+<span class="c">---</span>
+<span class="c">Spaced repetition exploits the retrieval curve.</span>
+
+<span class="c">## Relations</span>
+<span class="c">- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve</span></pre>
+      <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly two
+      places, and <b>never touches your prose</b>: it stamps the <code>b2id</code> the first time it
+      indexes a note, and — only when you <em>accept</em> a suggested connection (step&nbsp;8) — it
+      appends a typed link to a frontmatter <code>relations:</code> block. Connections you write yourself
+      live in the body and are labelled <code>inline</code>; ones B2 commits live in frontmatter and are
+      labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="head"><div class="num">5</div><h3>Index the vault</h3></div>
+    <div class="body">
+      <p><code>b2 reindex</code> reads every note, stamps any missing <code>b2id</code>, and builds the
+      searchable index. It's how B2 catches up to files you've created or edited by hand:</p>
+<pre><span class="p">$</span> <span class="k">cd</span> ~/vault
+<span class="p">$</span> <span class="k">b2</span> reindex
+<span class="o">  embedding… note 2/2 (1 chunks)</span>
+<span class="o">Indexed 2 notes (2 embedded, 2 stamped)</span></pre>
+      <p>Run it again after editing notes — it's <b>incremental</b>: unchanged notes keep their vectors,
+      so only what actually changed is re-embedded. Two flags help:</p>
+      <ul>
+        <li><code>b2 reindex --dry-run</code> — preview what <em>would</em> happen (writes nothing, not
+          even a <code>b2id</code>).</li>
+        <li><code>b2 reindex --force</code> — re-embed everything from scratch.</li>
+      </ul>
+      <div class="note tip"><span class="tag">Where it lives</span> The index and a small event log go
+      in a single <code>.b2/</code> folder inside your vault. It's <b>disposable</b> — delete it and the
+      next <code>reindex</code> rebuilds it identical from your Markdown. Add <code>.b2/</code> to your
+      <code>.gitignore</code> if the vault is a git repo.</div>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Work with it</h2>
+
+  <div class="step">
+    <div class="head"><div class="num">6</div><h3>Search</h3></div>
+    <div class="body">
+      <p>One command, hybrid ranking — it fuses keyword (BM25) and semantic (vector) matches, so you
+      find notes by wording <em>and</em> by meaning:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> search <span class="s">"how does forgetting work"</span>
+<span class="o">0.0328  Spaced repetition (notes/spaced-repetition.md)</span>
+<span class="o">    Spaced repetition exploits the retrieval curve.</span>
+<span class="o">0.0161  Human memory (concepts/memory.md)</span>
+<span class="o">    The brain encodes, stores, and retrieves information.</span></pre>
+      <p>Use <code>--limit N</code> to widen or narrow the result set.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="head"><div class="num">7</div><h3>Explore the graph</h3></div>
+    <div class="body">
+      <p>Follow the connections around any note. <code>neighbors</code> is a quick list of what a note
+      links to and from; <code>explain</code> adds each connection's <em>why</em> and its provenance:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> neighbors <span class="s">notes/spaced-repetition</span>
+<span class="o">→ elaborates  Human memory (concepts/memory.md) — applies the forgetting curve</span>
+
+<span class="p">$</span> <span class="k">b2</span> explain <span class="s">concepts/memory</span>
+<span class="o">Human memory (concepts/memory.md)  [b2id 01KWMCW242E0WSKVYDYNQBT7SN]</span>
+<span class="o">Connections:</span>
+<span class="o">  ← elaborated-by  Spaced repetition (notes/spaced-repetition.md)  [inline]</span>
+<span class="o">      why: applies the forgetting curve</span></pre>
+      <p>You can pass a note as either its vault-relative path or its <code>b2id</code>. When nothing
+      points at a note, <code>explain</code> flags it as an <b>orphan</b> — surfaced for you to notice,
+      never auto-changed.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="head"><div class="num">8</div><h3>Discover connections</h3></div>
+    <div class="body">
+      <p>This is the point of B2. <code>b2 suggest</code> looks for note pairs that are semantically
+      close but <em>not</em> yet connected, asks a model to classify each into a typed, explained
+      connection, and queues the good ones for your review. Nothing is written to your notes yet —
+      suggestions are inert until you accept them.</p>
+      <div class="note"><span class="tag">Needs a key</span> The real relator calls Claude, so set
+      <code>ANTHROPIC_API_KEY</code> first. It reads it from the environment only, never a config file.
+      For an offline dry run of the mechanics, use <code>B2_RELATOR=fake</code> — but treat those
+      stub suggestions as placeholders, not real judgments (the CLI says so, loudly).</div>
+<pre><span class="p">$</span> <span class="k">export</span> ANTHROPIC_API_KEY=<span class="s">sk-ant-…</span>
+<span class="p">$</span> <span class="k">b2</span> suggest
+<span class="o">[01J…AB]  Cramming works  contradicts→  Spaced repetition  (0.88)</span>
+<span class="o">    Massed practice yields only short-term recall; spacing targets durable memory.</span>
+<span class="o">Considered 3 pair(s): 1 generated · 2 declined · 0 non-core · 0 existing.</span>
+<span class="o">~ 2140 input + 96 output tokens over 3 call(s).</span></pre>
+      <p>Each line is a pending suggestion with an <code>id</code>. Review them, then decide — one at a
+      time, you're always in the loop:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> accept <span class="s">01J…AB</span>
+<span class="o">Accepted. Wrote the typed link into the source note's frontmatter.</span>
+
+<span class="p">$</span> <span class="k">b2</span> reject <span class="s">01J…CD</span>
+<span class="o">Rejected. This pair won't be suggested again.</span></pre>
+      <p><b>Accept</b> appends the typed link to the source note's frontmatter <code>relations:</code>
+      (that's the connection becoming real, in plain Markdown). <b>Reject</b> remembers your decision so
+      the same pair is never proposed again. <code>suggest</code> is idempotent and cost-aware — a re-run
+      only pays to classify genuinely new or changed pairs.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Day to day</h2>
+
+  <p>Edit notes in whatever you like — B2 is a layer over your files, not a place you have to live in.
+  When you rename or reorganize, let B2 keep the graph intact:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> mv <span class="s">concepts/memory</span> <span class="s">concepts/human-memory</span>
+<span class="o">Moved concepts/memory.md → concepts/human-memory.md</span>
+<span class="o">Rewrote 1 inbound link(s) across 1 file(s).</span></pre>
+  <p>Because connections key on the immutable <code>b2id</code>, a move <b>never breaks a backlink</b> —
+  B2 also repairs the human-readable link text in every note that pointed at it. Refactor fearlessly:
+  move, split, merge, rename. After a batch of hand-edits, a quick <code>b2 reindex</code> catches
+  everything up.</p>
+
+  <div class="eqcard">
+    <div class="eq">index = projection of ( Markdown ∪ log )</div>
+    <p>The mental model in one line: your Markdown is the only source of truth. The index is a
+    disposable cache you can drop and rebuild identically; the sole thing your notes can't reconstruct is
+    a tiny append-only log of your review decisions. Nothing locks you in.</p>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Command reference</h2>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Command</th><th>What it does</th><th>Model?</th></tr></thead>
+    <tbody>
+      <tr><td><code>b2 init</code></td><td class="d">Download + verify the embedding model (one-time, per machine).</td><td class="d">downloads it</td></tr>
+      <tr><td><code>b2 add &lt;path&gt;</code></td><td class="d">Create a note (<code>--title</code>, <code>--content</code>) and index it.</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 reindex</code></td><td class="d">Re-project the vault; incremental. <code>--dry-run</code>, <code>--force</code>.</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 search &lt;query&gt;</code></td><td class="d">Hybrid keyword + semantic search. <code>--limit N</code>.</td><td class="d">embeds query</td></tr>
+      <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's typed links, in and out.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its "why" + provenance; flags orphans.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 mv &lt;from&gt; &lt;to&gt;</code></td><td class="d">Move/rename a note and repair every inbound link.</td><td class="d">re-embeds touched</td></tr>
+      <tr><td><code>b2 suggest</code></td><td class="d">Generate connection suggestions; list the review queue. <code>--top N</code>.</td><td class="d">Claude (key)</td></tr>
+      <tr><td><code>b2 accept &lt;id&gt;</code></td><td class="d">Write a suggested typed link into the source note's frontmatter.</td><td class="d">re-embeds note</td></tr>
+      <tr><td><code>b2 reject &lt;id&gt;</code></td><td class="d">Tombstone a suggestion so the pair is never proposed again.</td><td class="d">no</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 class="sec">Config &amp; environment</h2>
+
+  <p>Zero-config is the happy path — everything above works with no config file. When you want to tune,
+  a single optional TOML at <code>~/.config/b2/config.toml</code> holds both seams:</p>
+<pre><span class="c"># ~/.config/b2/config.toml  (all optional)</span>
+<span class="k">[embedder]</span>
+<span class="k">model</span> = <span class="s">"bge-base-en-v1.5"</span>
+
+<span class="k">[relator]</span>
+<span class="k">model</span> = <span class="s">"claude-opus-4-8"</span>   <span class="c"># default; set "claude-haiku-4-5" for cheaper, high-volume runs</span></pre>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Environment variable</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>ANTHROPIC_API_KEY</code></td><td class="d">Required by <code>b2 suggest</code>'s real relator. Secrets live here, never in the config file.</td></tr>
+      <tr><td><code>B2_EMBEDDER=fake</code></td><td class="d">Offline mode: deterministic non-semantic embedder. Search runs keyword-only.</td></tr>
+      <tr><td><code>B2_RELATOR=fake</code></td><td class="d">Use the deterministic stub relator (placeholder suggestions, no network, no key).</td></tr>
+      <tr><td><code>B2_DEBUG</code></td><td class="d">Print internal error detail after the generic user-facing message.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note warn"><span class="tag">Honest about limits</span> Search snippets and scores come
+  from the index, so <code>reindex</code> first. <code>suggest</code> reads the vectors a prior
+  <code>reindex</code> stored, so index before you discover. And under <code>B2_EMBEDDER=fake</code>
+  the semantic half of search is off — great for offline exploring, not for real recall.</div>
+
+  <div class="more">
+    <a href="index.html">⌂ <span>Docs home</span></a>
+    <a href="architecture.html">📐 <span>System architecture</span></a>
+    <a href="indexing.html">🗂️ <span>Indexing pipeline</span></a>
+    <a href="discovery.html">🔗 <span>Connection discovery</span></a>
+    <a href="https://github.com/AlteredCraft/B2">⌂ <span>Source on GitHub</span></a>
+  </div>
+
+  <footer>
+    B2 · quick start · Rust. Your Markdown is the source of truth; the index is a disposable projection
+    of it. Built in the open.
+  </footer>
+
+</div>
+</body>
+</html>
