@@ -112,6 +112,7 @@
   <a href="#retrieval"><span class="dot" style="background:var(--t3)"></span>② Hybrid retrieval</a>
   <a href="#relator"><span class="dot" style="background:var(--amber)"></span>The relator seam</a>
   <a href="#discovery"><span class="dot" style="background:var(--amber)"></span>★ Connection discovery</a>
+  <a href="discovery.html"><span class="dot" style="background:var(--amber)"></span>Discovery run deep dive&nbsp;↗</a>
   <a href="#lifecycle"><span class="dot" style="background:var(--pink)"></span>③ Suggestion lifecycle</a>
   <a href="#log"><span class="dot" style="background:var(--pink)"></span>Event log &amp; replay</a>
   <a href="#adapter"><span class="dot" style="background:var(--cyan)"></span>The Vault façade &amp; CLI</a>
@@ -737,7 +738,7 @@
   <div class="bar" style="background:var(--amber)"></div>
   <div class="body">
     <h4><span class="tagnum" style="background:var(--amber)">SEAM</span> The relator — the precision gate, behind a swappable trait</h4>
-    <div class="files">crates/b2-core/src/relate.rs (seam + fake) · a real LLM relator: a future crate</div>
+    <div class="files">crates/b2-core/src/relate.rs (seam + fake) · crates/b2-relate/ (real, Claude-backed) · <a href="discovery.html">the discovery run&nbsp;↗</a></div>
     <p class="sub" style="margin:2px 0 12px;max-width:840px">Connection discovery is a three-stage pipeline
     — <b>candidate generation → classify/explain → review</b> — and only the middle stage needs a model.
     Candidate generation is deterministic (next section); the review loop is deterministic (Flow ③).
@@ -762,8 +763,9 @@
         <code>FakeEmbedder</code>): same pair → same verdict, so a discovery run is reproducible and
         drop-&amp;-rebuild yields the same suggestions. It always emits a <b>core</b> verb when it fires and
         <b>declines one pair in four</b> to exercise the prune path — it never reads note text, so nothing
-        here is mistaken for real judgment. The real LLM relator drops in through the same seam later, in its
-        own crate, keeping <code>b2-core</code> model-free.</p>
+        here is mistaken for real judgment. The real, Claude-backed relator now ships in its own crate
+        (<code>b2-relate</code>), dropped in through this same seam — <code>b2-core</code> stays model-free.
+        See <a href="discovery.html">the discovery run</a> for the end-to-end <code>b2 suggest</code> flow.</p>
       </div>
     </div>
     <div class="invariant"><b>The type gate is not trusted to the model.</b> Discovery only ever emits the

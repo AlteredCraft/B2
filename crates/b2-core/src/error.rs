@@ -27,6 +27,13 @@ pub enum Error {
     #[error("embedding failed: {0}")]
     Embed(String),
 
+    /// The relator failed to classify a candidate pair (real-model network/API
+    /// error). The discovery-seam parallel of [`Error::Embed`]: kept as a message
+    /// so `b2-core` stays free of the relator runtime's types (the real relator
+    /// lives in its own crate, `b2-relate`).
+    #[error("relation classification failed: {0}")]
+    Relator(String),
+
     /// The index's recorded embedding model/dim differs from the active embedder,
     /// so its vectors are incomparable with new query vectors. A read (search)
     /// fails fast with this rather than returning silently wrong results; the fix

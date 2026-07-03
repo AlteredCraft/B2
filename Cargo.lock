@@ -129,6 +129,7 @@ version = "0.1.0"
 dependencies = [
  "b2-core",
  "b2-embed",
+ "b2-relate",
  "clap",
  "serde_json",
  "tempfile",
@@ -166,6 +167,19 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers",
  "toml",
+]
+
+[[package]]
+name = "b2-relate"
+version = "0.1.0"
+dependencies = [
+ "b2-core",
+ "dirs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml",
+ "ureq",
 ]
 
 [[package]]

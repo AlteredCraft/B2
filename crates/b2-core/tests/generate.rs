@@ -53,6 +53,33 @@ impl Relator for AlwaysDecline {
     }
 }
 
+/// Counts `relate` calls (interior-mutable, single-threaded) so a test can prove the
+/// pre-call dedup skips settled pairs **without** paying for the model. Fires a core
+/// verb like [`AlwaysCore`].
+struct CountingCore {
+    calls: std::cell::Cell<usize>,
+}
+impl CountingCore {
+    fn new() -> Self {
+        Self {
+            calls: std::cell::Cell::new(0),
+        }
+    }
+}
+impl Relator for CountingCore {
+    fn model_id(&self) -> &str {
+        "counting-core"
+    }
+    fn relate(&self, _a: &NoteCtx, _c: &Candidate) -> Result<Option<Proposal>> {
+        self.calls.set(self.calls.get() + 1);
+        Ok(Some(Proposal {
+            edge_type: "relates".to_string(),
+            explanation: "stub: counting".to_string(),
+            confidence: 0.9,
+        }))
+    }
+}
+
 /// Always fires a *tail* (non-core) verb — the `is_core` gate must drop it. Stands
 /// in for a real relator that strays outside the closed core; `FakeRelator` never
 /// does, so this stub is the only way to test the guardrail.
@@ -207,19 +234,84 @@ fn re_running_generates_nothing_new() {
     assert!(first.generated > 0, "the first run populates the queue");
     let after_first = queue_shape(&conn);
 
-    // A suggested edge is not `active`, so it never shrinks the candidate pool — the
-    // second run re-considers every pair and `edge_exists` refuses each one.
+    // A suggested edge is not `active`, so it never shrinks the candidate *pool* — but
+    // pre-call dedup now skips each already-suggested pair *before* the relator, so a
+    // re-run produces nothing new and every prior suggestion lands in `existing`.
     let second =
         discover::generate_all(&conn, &NullSink, &SeqId::new(), &AlwaysCore, 10, CREATED).unwrap();
     assert_eq!(second.generated, 0, "nothing new on a re-run");
     assert_eq!(
         second.existing, first.generated,
-        "every prior suggestion is now refused as already-existing"
+        "every prior suggestion is now skipped as already-existing"
     );
     assert_eq!(
         queue_shape(&conn),
         after_first,
         "the queue is unchanged by the second run"
+    );
+}
+
+#[test]
+fn a_re_run_skips_the_relator_for_settled_pairs() {
+    // The cost invariant: pending suggestions are skipped *before* the relator on a
+    // re-run, so it makes no model calls for them. This is what makes `suggest`
+    // idempotent in cost, not just in effect.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (conn, _vault) = linked_chain(tmp.path());
+    let relator = CountingCore::new();
+
+    let first =
+        discover::generate_all(&conn, &NullSink, &SeqId::new(), &relator, 10, CREATED).unwrap();
+    assert!(first.generated > 0);
+    let calls_after_first = relator.calls.get();
+    assert_eq!(
+        calls_after_first,
+        first.generated + first.declined + first.non_core,
+        "first run: one relator call per pair that reached the model"
+    );
+
+    let second =
+        discover::generate_all(&conn, &NullSink, &SeqId::new(), &relator, 10, CREATED).unwrap();
+    assert_eq!(
+        relator.calls.get(),
+        calls_after_first,
+        "re-run: zero new relator calls — every settled pair is skipped before the call"
+    );
+    assert_eq!(second.generated, 0);
+    assert_eq!(second.existing, first.generated);
+}
+
+#[test]
+fn a_rejected_pair_is_never_re_judged() {
+    // A rejection tombstone must also stop the re-pay, not just re-creation: a rejected
+    // pair keeps its edge row, so pre-call dedup skips it forever — no call, no re-add.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (conn, _vault) = linked_chain(tmp.path());
+    let relator = CountingCore::new();
+
+    discover::generate_all(&conn, &NullSink, &SeqId::new(), &relator, 10, CREATED).unwrap();
+    let ids: Vec<String> = suggest::list_suggestions(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.edge_id)
+        .collect();
+    assert!(!ids.is_empty());
+    for id in &ids {
+        suggest::reject_suggestion(&conn, &NullSink, id, CREATED).unwrap();
+    }
+    let calls_after_reject = relator.calls.get();
+
+    let out =
+        discover::generate_all(&conn, &NullSink, &SeqId::new(), &relator, 10, CREATED).unwrap();
+    assert_eq!(
+        relator.calls.get(),
+        calls_after_reject,
+        "a rejected pair is never re-judged — no fresh model call"
+    );
+    assert_eq!(out.generated, 0, "and never re-proposed");
+    assert!(
+        suggest::list_suggestions(&conn).unwrap().is_empty(),
+        "the tombstoned pairs stay out of the queue"
     );
 }
 

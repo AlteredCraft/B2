@@ -1,0 +1,20 @@
+[package]
+name = "b2-relate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "B2's real relator — Claude-backed connection classification behind the b2-core Relator seam"
+
+# The LLM-backed relator lives here, never in b2-core, so the core test suite stays
+# fast, deterministic, and model-free (the `b2-embed`/`LocalEmbedder` precedent).
+# Rust has no official Anthropic SDK, so this talks to the Messages API over raw HTTP
+# via `ureq` (already in the workspace lock tree, transitively through `hf-hub`).
+
+[dependencies]
+b2-core = { path = "../b2-core" }
+ureq = { version = "2.12", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+toml = "0.8"
+dirs = "6.0"
+thiserror = "2.0.18"

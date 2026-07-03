@@ -25,7 +25,7 @@ use crate::event::JsonlSink;
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
 use crate::mv::{self, MoveReport};
-use crate::relate::FakeRelator;
+use crate::relate::Relator;
 use crate::{ingest, search, suggest};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -258,26 +258,46 @@ impl Vault {
 
     /// Generate connection-discovery suggestions across the whole vault (Flow ③
     /// generate): every note as an anchor, its complement candidates judged by the
-    /// relator, each fired-and-core proposal written to the queue + durable log.
-    /// **Idempotent** — a pair already active, pending, or rejected is never
-    /// re-proposed — so it is safe to run repeatedly. `top_n` bounds the candidates
-    /// considered per anchor. Returns the run tally.
+    /// supplied `relator`, each fired-and-core proposal written to the queue +
+    /// durable log. **Idempotent** — a pair already active, pending, or rejected is
+    /// never re-proposed — so it is safe to run repeatedly. `top_n` bounds the
+    /// candidates considered per anchor. Returns the run tally.
     ///
-    /// The relator is the deterministic [`FakeRelator`] for now; the real
-    /// LLM-backed relator drops in through the same seam later (its own crate,
-    /// mirroring the embedder). So these are **stub** proposals, not real
-    /// judgments — the CLI must say so and never overstate them. Candidate
-    /// generation reads the *stored* vectors, so this needs no live embedder (a
-    /// prior `reindex` is enough).
-    pub fn generate_suggestions(&self, top_n: usize) -> Result<GenerateOutcome> {
+    /// The relator is **injected as an argument**, not held on the façade like the
+    /// embedder: it has a single consumer (this one method), whereas the embedder is
+    /// needed by `reindex`/`search`/`accept`/`mv` and so is wired at `open` time.
+    /// Passing it here keeps the façade surface minimal (add operations when a
+    /// command needs them) while still keeping `b2-core` model-free — the CLI wires
+    /// the real Claude-backed relator (`b2-relate`), tests pass the deterministic
+    /// [`FakeRelator`](crate::relate::FakeRelator). Candidate generation reads the
+    /// *stored* vectors, so this needs no live embedder (a prior `reindex` is enough).
+    pub fn generate_suggestions(
+        &self,
+        relator: &dyn Relator,
+        top_n: usize,
+    ) -> Result<GenerateOutcome> {
+        self.generate_suggestions_with_progress(relator, top_n, &mut |_| {})
+    }
+
+    /// [`generate_suggestions`](Self::generate_suggestions) with a per-anchor progress
+    /// callback the CLI renders as a live line — a suggestion run is network-bound
+    /// under the real relator (one call per candidate pair), so it must not look
+    /// frozen. The callback only observes; the run stays deterministic.
+    pub fn generate_suggestions_with_progress(
+        &self,
+        relator: &dyn Relator,
+        top_n: usize,
+        on_progress: &mut dyn FnMut(discover::SuggestProgress),
+    ) -> Result<GenerateOutcome> {
         let now = self.now()?;
-        discover::generate_all(
+        discover::generate_all_with_progress(
             &self.conn,
             &self.sink,
             &self.idgen,
-            &FakeRelator::new(),
+            relator,
             top_n,
             &now,
+            on_progress,
         )
     }
 

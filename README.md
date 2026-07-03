@@ -50,6 +50,8 @@ lock-in · AI-native (not bolted-on) · single binary
 
 ## The docs
 
+### HTML guides: https://alteredcraft.github.io/B2/
+
 | Doc | What it owns |
 |---|---|
 | [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
@@ -58,3 +60,12 @@ lock-in · AI-native (not bolted-on) · single binary
 | [specs/index-engine-build.md](planning/specs/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
 | [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |
 | [tasks.md](planning/tasks.md) | The working queue — what's done, what's next. |
+
+
+## Build and run
+
+```bash
+cargo build --release -p b2-cli
+alias b2=./target/release/b2
+b2 --help
+```

@@ -3,7 +3,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-01
+updated: 2026-07-02
 status: active
 ---
 
@@ -167,22 +167,67 @@ areas, v1 scope, locked decisions).
   unrelated files untouched, subdir creation, `.md`-optional, clobber/invalid/unknown-src errors, prefix-sibling
   safety); **117** workspace tests green.
 
-## Next up — make the suggestions real (the LLM relator), then kernel CRUD
+- [x] **The real relator — Claude-backed, in its own crate** — the intelligence is no longer a stub: `b2 suggest`
+  now makes genuine typed judgments. A new **`b2-relate`** crate holds the **`ClaudeRelator`** behind the existing
+  [`Relator`](../crates/b2-core/src/relate.rs) seam (the `b2-embed`/`LocalEmbedder` precedent — `b2-core` stays
+  model-free; heavy/IO deps live only here). **Decisions:** backend is **pluggable, Claude first** — a config
+  `[relator] backend` selects it ([`RelateConfig`](../crates/b2-relate/src/config.rs), same global TOML the embedder
+  reads), so a local/Ollama backend drops in behind the same seam later. Rust has no official Anthropic SDK, so the
+  transport is **raw HTTP over `ureq`** (already in the lock tree via `hf-hub`; synchronous — no `tokio`, per the
+  no-speculative-async rule). Structured output is **forced tool use**: one `classify_relation` tool whose
+  `input_schema` pins `relation` to the closed core set ([`relation::CORE`](../crates/b2-core/src/relation.rs)) via
+  `enum` + `tool_choice`, so the model returns a typed verdict, not free text — and the pipeline still **re-validates
+  [`is_core`](../crates/b2-core/src/relation.rs)** (a real relator's verb is checked, never trusted). Default model
+  **`claude-opus-4-8`** (config-overridable to `claude-haiku-4-5` for cheap high-volume runs); the **API key comes
+  from `ANTHROPIC_API_KEY`** (never the config file — secrets policy) and is validated at construction, so a missing
+  key **fails fast** with an actionable message, never a mid-run 401. **Injection sub-decision:** the relator is
+  passed **as an argument** to [`Vault::generate_suggestions`](../crates/b2-core/src/vault.rs)`(&dyn Relator, top_n)`,
+  *not* held on the façade like the embedder — it has a single consumer, so an argument keeps the façade surface
+  minimal while still keeping `b2-core` model-free (the façade already reads `NoteCtx.text` from
+  [`db::note_text`](../crates/b2-core/src/db.rs)). New [`Error::Relator`](../crates/b2-core/src/error.rs) (the
+  discovery-seam parallel of `Error::Embed`); the CLI adds `CliError::Relate` + generic, no-internals-leaked messages,
+  selects the real relator by default and the deterministic stub under **`B2_RELATOR=fake`** (or `B2_EMBEDDER=fake`,
+  keeping the model-free CLI suite driving the stub), and the loud stub caveat **comes off** under the real relator.
+  **10 model-free `b2-relate` tests** (config defaults/overrides/unknown-backend/`[relator]`-table parse; request
+  forces the tool + pins the verb enum + carries the evidence chunk; response parse: fired proposal / decline /
+  verb-less-degrades-to-decline / confidence clamp+default / no-tool-call-is-an-error) + a **`#[ignore]` live smoke**
+  test (real key, out of CI); **127** workspace tests green.
 
-> **Pick this up fresh.** The discovery pipeline is **end-to-end and reachable** — `b2 suggest` / `accept` /
-> `reject` work — but the intelligence is a **stub**: [`FakeRelator`](../crates/b2-core/src/relate.rs) hashes
-> the note pair, it never reads the notes (the CLI says so loudly). Two fronts remain: make the suggestions
-> *real* (the LLM relator behind the existing seam), and the remaining note-authoring kernel ops — `b2 mv`
-> (move + inbound-link repair) now ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
+- [x] **`b2 suggest` cost controls — progress, token usage, pre-call dedup (fast-follow)** — dogfooding the real
+  relator on a live vault surfaced that `suggest` is the one **paid, network-bound** command, and it was neither
+  observable nor incremental. Three fixes: (1) **live progress** — a [`SuggestProgress`](../crates/b2-core/src/discover.rs)
+  callback (the [`ReindexProgress`](../crates/b2-core/src/ingest.rs) analog) via `generate_all_with_progress` /
+  [`Vault::generate_suggestions_with_progress`](../crates/b2-core/src/vault.rs); the CLI renders
+  `judging… note i/N · k call(s) · g new` on an interactive stderr (TTY-gated, off in `--json`/pipes). (2) **Token
+  usage** — [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) sums each response's `usage` block into atomics
+  (so `&self` suffices — no `Relator` trait change) and exposes [`Usage`](../crates/b2-relate/src/claude.rs); the CLI
+  prints `~ N input + M output tokens over C call(s)` for the real relator (tokens, not dollars — pricing drifts).
+  The full tally (`generated · declined · non_core · existing`) is surfaced, not just `generated`. (3) **Pre-call
+  dedup — idempotent in _cost_, not just effect.** The idempotency guard fired *after* the paid call, so a re-run
+  re-classified every pending/rejected pair. Now [`generate_for_anchor`](../crates/b2-core/src/discover.rs) checks
+  [`db::edge_exists_for_pair`](../crates/b2-core/src/db.rs) (any type, any status) **before** `relate()` and skips a
+  settled pair (pending suggestion or rejection tombstone) with no model call — so a re-run pays only for genuinely
+  new pairs. Deliberately **pair-level** (the type isn't known until after the call), a small strengthening of the
+  per-`(pair,type)` tombstone. *Declines* leave no edge so they still re-pay (the `body_hash` anchor-skip below is
+  the follow-up). Instrumentation + dedup mirrored to [docs/discovery.html](../docs/discovery.html). **2 new tests**
+  (re-run makes zero relator calls for pending pairs; a rejected pair is never re-judged); **129** workspace tests green.
 
-- **The real relator** — the LLM-backed relator in its **own crate** (the `b2-embed` / `LocalEmbedder`
-  precedent — keep `b2-core` model-free), dropped in behind the existing
-  [`Relator`](../crates/b2-core/src/relate.rs) seam. `Vault::generate_suggestions` swaps the fake for it
-  (mirror the embedder's `open_with_embedder` injection — the façade already reads `NoteCtx.text` from
-  [`db::note_text`](../crates/b2-core/src/db.rs)), and the CLI's stub-relator caveat comes off. Then the
-  **suggestion-quality eval** — extend the eval suite's scaffolded half (precision/recall over a
-  hand-labelled candidate set), out of CI, exactly as the retrieval eval needs a real embedder.
-- **Remaining CLI + kernel ops** — `b2 mv` is **done** (above). Still open: `b2 add` (note CRUD), `b2 explain`
+## Next up — the suggestion-quality eval, then kernel CRUD
+
+> **Pick this up fresh.** Connection discovery is now **real, end-to-end, and reachable** — `b2 suggest` runs
+> candidate-gen → the Claude-backed [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue, and
+> `accept`/`reject` work. What's unmeasured is *quality*: the relator makes judgments, but nothing scores how good
+> they are. Two fronts remain: the **suggestion-quality eval**, and the remaining note-authoring kernel ops — `b2 mv`
+> (move + inbound-link repair) ships, so `b2 add` (note CRUD) and `b2 explain` are what's left.
+
+- **The suggestion-quality eval** — extend the eval suite's scaffolded half (precision/recall over a
+  hand-labelled candidate set), out of CI, exactly as the retrieval eval needs a real embedder. This is what
+  turns the relator from "ships" into "tuned" — measure verb accuracy + decline precision, and only then adjust
+  the prompt / default model. Data path: the run already reports per-run tokens + the full `generated / declined
+  / non_core / existing` tally; a hand-labelled set is the missing piece, and the durable **audit log** (backlog)
+  is its natural capture mechanism (`(pair, verdict, confidence, decline-reason)` per call). Pairs with the
+  deferred distance-weighting experiment (backlog).
+- **Remaining CLI + kernel ops** — `b2 mv` is **done**. Still open: `b2 add` (note CRUD), `b2 explain`
   (a note's connections with their "why"); plus a `reindex --dry-run` fast-follow (skip the `b2id`
   stamp-on-reindex, the one write B2 performs on the vault — [data-model.md](data-model.md) §1). Link-*delete*
   ([user-stories.md](user-stories.md) Story 2) already falls out of a plain edit + reindex; a dedicated op is
@@ -208,6 +253,32 @@ measure (e.g. the keyword-half stopword noise the first eval pass surfaced).
   - **Faster / smaller embedder** — swap bge-base (768-dim) for bge-small (384-dim, ~3× faster) or a
     quantized / ONNX path to cut per-chunk cost. A raw-speed lever behind the existing `Embedder` seam, not a
     structural fix — measure retrieval quality (the eval) before switching the default.
+- **`suggest` incremental cost — the `body_hash` anchor-skip.** Pre-call dedup (done) makes a re-run free for
+  *settled* pairs (pending + rejected), but *declines* leave no edge, so an unchanged note's declined candidates
+  are re-judged (re-paid) every run. Skip a whole **anchor** whose note `body_hash` is unchanged since its last
+  suggest pass — mirroring reindex's incremental heuristic — so re-runs pay only for genuinely new/changed notes.
+  Needs a per-note "last-suggested hash" watermark (durable, in the log or a small meta row). Alternatively/also:
+  persist declines as a lightweight tombstone (falls out of the audit log below) so they too skip pre-call.
+- **Durable audit log of model calls — observability, *not* state.** A separate append-only
+  `.b2/log/audit.jsonl` (one line per `relate()`: timestamp, anchor+candidate b2ids, model, verdict incl. the
+  raw decline, confidence, tokens, latency). Hard rule: **kept out of the authoritative `events.jsonl`** — it is
+  disposable telemetry, never replayed into the index (a violation of the projection invariant). Emit it from
+  `b2-relate` (where the call + non-determinism already live, so `b2-core` stays pure). **Privacy:** the relator
+  ships note *bodies* to the API — default to ids + metadata, gate full request/response text behind a
+  `verbose`/debug flag. Value: cost history across runs, and — the reason it's more than telemetry — a
+  `(pair, verdict, confidence, decline-reason)` corpus that feeds the **suggestion-quality eval** (Next up) and
+  lets declines be skipped pre-call. Current instrumentation is deliberately **transient** (per-run token
+  summary + progress line, nothing persisted); this is the durable follow-up if/when the eval needs it.
+- **`accept` could resolve the reverse-direction pending suggestion.** Accepting `A →type B` makes A↔B an
+  active edge, so candidate-gen excludes the pair thereafter — but any *already-pending* reverse suggestion
+  `B →type' A` just sits in the queue (never re-proposed, but never cleared). Minor UX rough edge surfaced while
+  dogfooding: `accept` (or a small `suggest --gc`) could auto-resolve pending suggestions whose pair is now
+  connected. Low priority; costs no calls, just queue tidiness.
+- **Docs refresh for the 4th crate.** `architecture.html` still says "Three crates" / draws a 3-box crates
+  diagram (b2-core/b2-embed/b2-cli) and carries pre-`b2-relate` test tallies; `CLAUDE.md`'s architecture section
+  still calls the real relator "future work in its own crate"; the `index.html` test-count badge is a manual
+  snapshot. A coherent pass: add `b2-relate` to the crates diagram + prose, refresh tallies, and update the
+  CLAUDE.md relator line. Deferred here to avoid a half-done SVG redraw mid-feature.
 - Property tests for the invariants — round-trip, `full-reindex ≡ incremental` (now real, worth pinning),
   rename-keeps-backlinks as property tests over generated vaults (golden-vault scenarios exist; property
   coverage is the gap).

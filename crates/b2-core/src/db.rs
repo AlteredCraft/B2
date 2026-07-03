@@ -585,6 +585,22 @@ pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &st
     Ok(found.is_some())
 }
 
+/// Whether **any** edge exists between `src_id` and `dst_id` — any type, any status
+/// (active, pending, or rejected). The pair-level counterpart of [`edge_exists`]:
+/// discovery's pre-call dedup uses it to skip a pair that is already *decided* (in the
+/// review queue, or tombstoned) **before** paying for a relator call, so a re-run
+/// costs nothing for settled pairs.
+pub fn edge_exists_for_pair(conn: &Connection, src_id: &str, dst_id: &str) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM edges WHERE src_id = ?1 AND dst_id = ?2 LIMIT 1",
+            params![src_id, dst_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
 /// Insert a suggested edge (`origin='suggested'`, `status='suggested'`,
 /// `occurrence_index=0`). Returns whether a row was inserted: `false` means the
 /// `(src, dst, type, 0)` tuple is already taken — which on **replay** happens when

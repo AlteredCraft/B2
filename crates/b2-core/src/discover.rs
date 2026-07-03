@@ -203,6 +203,24 @@ pub fn generate_for_anchor(
     let by = format!("agent:{}", relator.model_id());
 
     for cand in cands {
+        // Pre-call dedup — the cost gate. If this directed pair already has an edge (a
+        // pending suggestion, or a rejection tombstone; active pairs never reach here,
+        // candidate generation already excludes connected notes), it is already
+        // *decided* — skip it **without** calling the relator, so a re-run doesn't
+        // re-pay for settled pairs. This makes `suggest` idempotent in *cost*, not just
+        // in effect ([`generate_suggestion`]'s per-type guard stays as a backstop).
+        //
+        // Note this is deliberately *pair-level* (any type): once a pair is pending or
+        // rejected, discovery won't re-ask the model about it under a different verb —
+        // a small strengthening of the per-(pair,type) tombstone (data-model.md §4),
+        // required because the type isn't known until *after* the call we're avoiding.
+        // *Declines* leave no edge, so they are not covered here — skipping unchanged
+        // anchors wholesale (a `body_hash` gate) is the follow-up that closes that gap
+        // (see tasks.md).
+        if db::edge_exists_for_pair(conn, anchor, &cand.note_b2id)? {
+            outcome.existing += 1;
+            continue;
+        }
         let cand_title = db::note_title(conn, &cand.note_b2id)?;
         let cand_text = db::note_text(conn, &cand.note_b2id)?;
         let evidence = db::chunk_text(conn, cand.evidence_chunk_id)?.unwrap_or_default();
@@ -247,6 +265,25 @@ pub fn generate_for_anchor(
     Ok(outcome)
 }
 
+/// Live progress for a suggestion run — fired once per anchor as [`generate_all`]
+/// works through the vault, so a long, network-bound run (one relator call per
+/// candidate pair) shows a moving line instead of looking frozen. The discovery
+/// analog of [`ingest::ReindexProgress`](crate::ingest::ReindexProgress); counts are
+/// cumulative across the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuggestProgress {
+    /// 1-based count of anchors (notes) processed so far.
+    pub anchor_index: usize,
+    /// Total anchors in the run.
+    pub anchors_total: usize,
+    /// Cumulative **relator calls made** so far — the pairs that actually reached the
+    /// model (`generated + declined + non_core`). Pairs skipped by pre-call dedup
+    /// (`existing`) cost no call and are **not** counted here, so this tracks spend.
+    pub calls: usize,
+    /// Cumulative suggestions written so far.
+    pub generated: usize,
+}
+
 /// Run [`generate_for_anchor`] over the whole vault, every note an anchor in sorted
 /// `b2id` order ([`db::all_note_ids`]) so the sequence of minted ids — and thus the
 /// review queue — is reproducible (tasks.md ②). Returns the summed
@@ -259,10 +296,34 @@ pub fn generate_all(
     top_n: usize,
     created: &str,
 ) -> Result<GenerateOutcome> {
+    generate_all_with_progress(conn, sink, idgen, relator, top_n, created, &mut |_| {})
+}
+
+/// [`generate_all`] with a progress callback fired after each anchor — the CLI
+/// renders it as a live line on an interactive stderr. Determinism is unchanged: the
+/// callback only observes cumulative counts, it never influences the run.
+pub fn generate_all_with_progress(
+    conn: &Connection,
+    sink: &dyn EventSink,
+    idgen: &dyn IdGen,
+    relator: &dyn Relator,
+    top_n: usize,
+    created: &str,
+    on_progress: &mut dyn FnMut(SuggestProgress),
+) -> Result<GenerateOutcome> {
+    let anchors = db::all_note_ids(conn)?;
+    let anchors_total = anchors.len();
     let mut total = GenerateOutcome::default();
-    for anchor in db::all_note_ids(conn)? {
-        let one = generate_for_anchor(conn, sink, idgen, relator, &anchor, top_n, created)?;
+    for (i, anchor) in anchors.iter().enumerate() {
+        let one = generate_for_anchor(conn, sink, idgen, relator, anchor, top_n, created)?;
         total.merge(&one);
+        on_progress(SuggestProgress {
+            anchor_index: i + 1,
+            anchors_total,
+            // Actual relator calls — excludes pre-call-deduped `existing` pairs.
+            calls: total.generated + total.declined + total.non_core,
+            generated: total.generated,
+        });
     }
     Ok(total)
 }

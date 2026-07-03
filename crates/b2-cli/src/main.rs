@@ -10,6 +10,7 @@
 //! `B2_EMBEDDER=fake` forces the deterministic fake embedder — an offline/dev mode
 //! that needs no model, and what the CLI test suite uses to stay fast and model-free.
 
+use b2_core::discover::SuggestProgress;
 use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
@@ -213,11 +214,47 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             }
         }
         Command::Suggest { top } => {
-            // Candidate generation reads the stored vectors (no re-embed) and the
-            // relator is a deterministic stub, so `suggest` needs no model — like
-            // `neighbors`. A prior `reindex` supplies the vectors it reads.
+            // Candidate generation reads the stored vectors (no re-embed), so `suggest`
+            // needs no embedder — like `neighbors`. A prior `reindex` supplies the
+            // vectors it reads. The *relator* is injected here (its single consumer):
+            // the real Claude-backed relator by default, or the deterministic stub in
+            // offline/dev/test mode (`B2_RELATOR=fake`, or `B2_EMBEDDER=fake`).
             let (vault, _semantic) = open_vault(&cli.vault, false)?;
-            let tally = vault.generate_suggestions(*top)?;
+            let use_fake = use_fake_relator();
+            // A suggest run is network-bound under the real relator (one model call per
+            // candidate pair), so show a live line on an interactive stderr — off in
+            // --json and pipes, exactly like `reindex`, so machine output/tests stay clean.
+            let interactive = !cli.json && std::io::stderr().is_terminal();
+            let mut render = |p: SuggestProgress| {
+                eprint!(
+                    "\r  judging… note {}/{} · {} call(s) · {} new",
+                    p.anchor_index, p.anchors_total, p.calls, p.generated
+                );
+                let _ = std::io::stderr().flush();
+            };
+            // The relator is the stub in offline/dev/test mode, else the real Claude
+            // one — whose per-run token usage we surface below (the fake has none).
+            let (tally, usage) = if use_fake {
+                let relator = b2_core::relate::FakeRelator::new();
+                let tally = if interactive {
+                    vault.generate_suggestions_with_progress(&relator, *top, &mut render)?
+                } else {
+                    vault.generate_suggestions(&relator, *top)?
+                };
+                (tally, None)
+            } else {
+                let config = b2_relate::RelateConfig::load()?;
+                let relator = b2_relate::ClaudeRelator::from_config(&config)?;
+                let tally = if interactive {
+                    vault.generate_suggestions_with_progress(&relator, *top, &mut render)?
+                } else {
+                    vault.generate_suggestions(&relator, *top)?
+                };
+                (tally, Some(relator.usage()))
+            };
+            if interactive {
+                eprintln!(); // close the live line
+            }
             let queue = vault.list_suggestions()?;
             if cli.json {
                 // Pure data on stdout: the pending queue (agents act on `edge_id`).
@@ -239,11 +276,28 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         }
                     }
                 }
-                // Feedback + honesty on stderr, so stdout stays pure results.
-                eprintln!("Generated {} new suggestion(s).", tally.generated);
+                // Feedback + honesty on stderr, so stdout stays pure results. The full
+                // tally (not just `generated`) makes declines/skips visible.
+                let considered = tally.generated + tally.declined + tally.non_core + tally.existing;
                 eprintln!(
-                    "note: suggestions come from a stub relator (no judgment model yet) — treat them as placeholders, not real connections."
+                    "Considered {considered} pair(s): {} generated · {} declined · {} non-core · {} existing.",
+                    tally.generated, tally.declined, tally.non_core, tally.existing
                 );
+                // Real-relator cost, in tokens (not dollars — pricing drifts and isn't
+                // the CLI's to hardcode). Absent for the stub.
+                if let Some(u) = usage {
+                    eprintln!(
+                        "~ {} input + {} output tokens over {} call(s).",
+                        u.input_tokens, u.output_tokens, u.calls
+                    );
+                }
+                // Only the stub relator warrants the placeholder caveat; the real one
+                // makes genuine judgments, so it comes off (never overstate either way).
+                if use_fake {
+                    eprintln!(
+                        "note: suggestions come from a stub relator (no judgment model yet) — treat them as placeholders, not real connections."
+                    );
+                }
             }
         }
         Command::Accept { id } => {
@@ -302,6 +356,14 @@ fn use_fake_embedder() -> bool {
     matches!(std::env::var("B2_EMBEDDER").ok().as_deref(), Some("fake"))
 }
 
+/// Whether `suggest` should use the deterministic stub relator instead of the real
+/// Claude-backed one. True when `B2_RELATOR=fake`, or when the whole offline/dev mode
+/// is on (`B2_EMBEDDER=fake`) — which keeps the model-free test suite driving the
+/// fake relator without a network or an API key.
+fn use_fake_relator() -> bool {
+    matches!(std::env::var("B2_RELATOR").ok().as_deref(), Some("fake")) || use_fake_embedder()
+}
+
 /// The CLI's error, composing the two crates it drives. Kept internal; `user_message`
 /// turns it into a generic, actionable, no-internals-leaked line (logging policy).
 /// `#[from]` supplies the `?` conversions; `transparent` defers `Display` to the
@@ -312,6 +374,8 @@ enum CliError {
     Core(#[from] b2_core::Error),
     #[error(transparent)]
     Embed(#[from] EmbedError),
+    #[error(transparent)]
+    Relate(#[from] b2_relate::RelateError),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
     /// A CLI-level domain error: `accept`/`reject` were given an id that is not a
@@ -337,6 +401,15 @@ fn user_message(err: &CliError) -> String {
         CliError::Embed(EmbedError::Download(_)) => {
             "Could not download the embedding model. Check your network and try `b2 init` again.".to_string()
         }
+        CliError::Relate(b2_relate::RelateError::MissingApiKey) => {
+            "The connection relator needs an API key. Set ANTHROPIC_API_KEY, or run with B2_RELATOR=fake for an offline stub.".to_string()
+        }
+        CliError::Relate(_) => {
+            "The relator configuration isn't valid. Check ~/.config/b2/config.toml (the [relator] table).".to_string()
+        }
+        CliError::Core(b2_core::Error::Relator(_)) => {
+            "Couldn't reach the connection relator. Check your API key and network, then run `b2 suggest` again.".to_string()
+        }
         CliError::SuggestionNotFound(id) => format!(
             "No pending suggestion with id '{id}'. Run `b2 suggest` to see the current queue and its ids."
         ),
@@ -352,6 +425,7 @@ fn user_message(err: &CliError) -> String {
         let detail = match err {
             CliError::Core(e) => e.to_string(),
             CliError::Embed(e) => e.to_string(),
+            CliError::Relate(e) => e.to_string(),
             CliError::Serde(e) => e.to_string(),
             CliError::SuggestionNotFound(id) => format!("suggestion not found: {id}"),
         };
