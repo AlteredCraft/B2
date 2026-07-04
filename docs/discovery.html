@@ -9,7 +9,7 @@
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
     --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
-    --pink:#f778ba; --cyan:#39c5cf; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --pink:#f778ba; --cyan:#39c5cf; --danger:#f85149; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
     --t0:#6e7681; --t1:#58a6ff; --t2:#3fb950; --t3:#bc8cff;
   }
   *{box-sizing:border-box}
@@ -47,6 +47,11 @@
   .invariant b{color:var(--ink)}
   .caveat{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;padding:11px 14px;font-size:13.5px}
   .caveat b{color:var(--ink)}
+  .warnbox{margin:22px 0 6px;background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.4);border-left:4px solid var(--danger);border-radius:10px;padding:15px 18px;font-size:14px;line-height:1.6}
+  .warnbox .hd{display:flex;align-items:center;gap:9px;font-weight:700;color:var(--ink);font-size:14.5px;margin-bottom:7px}
+  .warnbox .hd .dot{font-size:16px;line-height:1}
+  .warnbox b{color:var(--ink)} .warnbox p{margin:7px 0 0;color:var(--ink)}
+  .warnbox .tag{display:inline-block;font:700 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--danger);border:1px solid rgba(248,81,73,.5);border-radius:5px;padding:3px 6px}
   .files{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin:2px 0 10px}
   table{border-collapse:collapse;width:100%;font-size:13.5px;margin:6px 0}
   th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -97,6 +102,21 @@
     <a href="architecture.html#discovery">candidate engine</a> and <a href="architecture.html#relator">relator
     seam</a>.</p>
   </header>
+
+  <div class="warnbox">
+    <div class="hd"><span class="dot">⚠️</span><span class="tag">Not recommended yet</span></div>
+    <b>Running <code>b2 suggest</code> on a real vault can make thousands of paid API calls.</b>
+    <p>Candidate generation is free, but the relator makes <b>one Claude call per candidate pair</b> —
+    roughly <code>notes × --top</code> calls on a first run. A few hundred notes is already
+    <em>thousands</em> of requests (and the matching token spend). We <b>do not recommend running it as it
+    stands</b>; treat this page as a description of how the pipeline works, not an endorsement of running it
+    at scale.</p>
+    <p>A lower-cost path is in progress — most likely a <b>local-LLM relator backend</b> behind the same
+    <code>Relator</code> seam — so discovery can run without a per-pair API bill. Until then, if you do try
+    it, keep the vault small, use <code>--top 2</code>, and set
+    <code>model = "claude-haiku-4-5"</code>. The cost mechanics are detailed in
+    <a href="#cost">§3 below</a>.</p>
+  </div>
 
   <div class="caveat"><b>Prerequisite — a reindexed index.</b> <code>suggest</code> reads the vectors + typed
   graph a prior <a href="indexing.html"><code>b2 reindex</code></a> wrote — it reads stored vectors

@@ -9,7 +9,7 @@
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
     --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
-    --pink:#f778ba; --cyan:#39c5cf; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --pink:#f778ba; --cyan:#39c5cf; --danger:#f85149; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -52,9 +52,11 @@
   .note{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--panel);border-radius:8px;padding:12px 16px;margin:16px 0;font-size:13.5px;color:var(--muted)}
   .note.tip{border-left-color:var(--green)}
   .note.warn{border-left-color:var(--amber)}
+  .note.danger{border-left-color:var(--danger);border-color:rgba(248,81,73,.4);background:rgba(248,81,73,.08)}
   .note b{color:var(--ink)} .note code{font-size:.92em}
+  .note.danger{color:var(--ink)}
   .note .tag{display:inline-block;font:600 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin-right:8px;vertical-align:middle}
-  .note.tip .tag{color:var(--green)} .note.warn .tag{color:var(--amber)}
+  .note.tip .tag{color:var(--green)} .note.warn .tag{color:var(--amber)} .note.danger .tag{color:var(--danger)}
   /* table */
   .tablewrap{overflow-x:auto;margin:16px 0}
   table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
@@ -277,6 +279,13 @@ Spaced repetition exploits the retrieval curve.
       close but <em>not</em> yet connected, asks a model to classify each into a typed, explained
       connection, and queues the good ones for your review. Nothing is written to your notes yet —
       suggestions are inert until you accept them.</p>
+      <div class="note danger"><span class="tag">⚠ Not recommended yet</span> On a real vault,
+      <code>b2 suggest</code> makes <b>one Claude call per candidate pair</b> — roughly
+      <code>notes × --top</code>, which is easily <b>thousands of paid API calls</b> (plus token spend) for
+      a few hundred notes. <b>We don't recommend running it as it stands.</b> A lower-cost path is in
+      progress — most likely a <b>local-LLM relator</b> behind the same seam — so discovery can run without
+      a per-pair API bill. If you try it anyway, keep the vault small and use <code>--top 2</code> with
+      <code>model = "claude-haiku-4-5"</code>. See the <a href="discovery.html#cost">cost breakdown</a>.</div>
       <div class="note"><span class="tag">Needs a key</span> The real relator calls Claude, so set
       <code>ANTHROPIC_API_KEY</code> first. It reads it from the environment only, never a config file.
       For an offline dry run of the mechanics, use <code>B2_RELATOR=fake</code> — but treat those
