@@ -3,6 +3,10 @@
 **/*.rs.bk
 Cargo.lock.orig
 
+# B2's disposable index — a pure projection of the Markdown, never authoritative.
+# Drop it and `b2 reindex` rebuilds it identical, so it must never be committed.
+.b2/
+
 # SQLite scratch / WAL sidecars from ad-hoc runs
 *.sqlite
 *.sqlite-wal
