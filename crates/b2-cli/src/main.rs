@@ -26,15 +26,11 @@ use std::process::ExitCode;
 )]
 struct Cli {
     /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
-    /// Falls back to `$B2_VAULT_PATH`, then the current dir; an explicit `-C` wins over both.
-    #[arg(
-        short = 'C',
-        long = "vault",
-        global = true,
-        env = "B2_VAULT_PATH",
-        default_value = "."
-    )]
-    vault: PathBuf,
+    /// Set it with `-C <path>` or `$B2_VAULT_PATH` (the flag wins). Read-only commands
+    /// fall back to the current dir; `reindex` requires it explicitly, so it can never
+    /// silently build an index in the wrong directory.
+    #[arg(short = 'C', long = "vault", global = true, env = "B2_VAULT_PATH")]
+    vault: Option<PathBuf>,
 
     /// Emit machine-readable JSON instead of human-readable text.
     #[arg(long, global = true)]
@@ -118,6 +114,15 @@ enum Command {
     },
 }
 
+impl Cli {
+    /// The vault root for **read-only** commands: the `-C`/`$B2_VAULT_PATH` value if
+    /// given, else the current directory. A pure read can't pollute anything, so the
+    /// cwd convenience is safe here (unlike `reindex`, which requires an explicit vault).
+    fn vault_or_cwd(&self) -> PathBuf {
+        self.vault.clone().unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match dispatch(&cli) {
@@ -151,8 +156,14 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             force,
             dry_run,
         } => {
-            // Reindex's positional vault wins over the global flag.
-            let root = vault.as_ref().unwrap_or(&cli.vault);
+            // Reindex must never silently index the current directory: a stale binary,
+            // a mistyped env var, or the wrong cwd would otherwise build an index in the
+            // wrong place (and leave a stray `.b2/`). Require an explicit vault — the
+            // positional wins, then `-C`/`$B2_VAULT_PATH`; with none, fail loudly.
+            let root = vault
+                .as_ref()
+                .or(cli.vault.as_ref())
+                .ok_or(CliError::VaultRequired)?;
             if *dry_run {
                 // A dry-run neither embeds nor stamps → no model needed (open with
                 // the fake, like `neighbors`); it's a pure read, so there's no slow
@@ -177,15 +188,30 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             let report = if cli.json || !std::io::stderr().is_terminal() {
                 vault.reindex_with_progress(*force, &mut |_| {})?
             } else {
+                // Name the vault being indexed up front, then a live line that counts
+                // the notes actually (re)embedded — not every note, most of which an
+                // incremental run reuses untouched — with the current file + its chunks.
+                let shown = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+                eprintln!("Indexing {}", shown.display());
+                let mut progressed = false;
                 let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
+                    progressed = true;
+                    // \x1b[K clears any tail of a previous, longer line (paths vary in
+                    // length); safe here because this branch only runs on a real terminal.
                     eprint!(
-                        "\r  embedding… note {}/{} ({} chunks)",
-                        p.note_index, p.notes_total, p.chunks_done
+                        "\r  embedding {}/{} · {} ({} chunk{})\x1b[K",
+                        p.notes_embedded,
+                        p.notes_to_embed,
+                        p.note_path,
+                        p.note_chunks,
+                        if p.note_chunks == 1 { "" } else { "s" },
                     );
                     let _ = std::io::stderr().flush();
                 };
                 let report = vault.reindex_with_progress(*force, &mut on_progress)?;
-                eprintln!(); // close the progress line
+                if progressed {
+                    eprintln!(); // close the progress line
+                }
                 report
             };
             if cli.json {
@@ -204,7 +230,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         } => {
             // Add projects the new note, which embeds its body → it needs the same
             // real model the index was built with, like `reindex`/`mv`/`link`.
-            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
             let report = vault.add_note(path, title.as_deref(), content.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -215,7 +241,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Neighbors { note } => {
             // Neighbors is a pure graph query — it never embeds, so don't require
             // the model (no needless `b2 init` just to explore the graph).
-            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
             let neighbors = vault.neighbors(note)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&neighbors)?);
@@ -241,7 +267,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Explain { note } => {
             // Explain is a pure graph read (edges + their explanations), no embed —
             // like `neighbors`, it opens with the fake and needs no `b2 init`.
-            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
             let view = vault.explain(note)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&view)?);
@@ -281,7 +307,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // A move rewrites inbound files, changing their bodies → they re-embed
             // on re-projection, so `mv` needs the same real model the index was
             // built with, like `reindex`/`add`/`link`.
-            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
             let report = vault.move_note(from, to)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -300,7 +326,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         }
         Command::Search { query, limit } => {
             // Search embeds the query for the vector half → it needs the real model.
-            let (vault, semantic) = open_vault(&cli.vault, true)?;
+            let (vault, semantic) = open_vault(&cli.vault_or_cwd(), true)?;
             let results = vault.search(query, *limit)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
@@ -330,7 +356,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // Candidate generation reads the *stored* vectors (no query embedding), so
             // like `neighbors` it needs no live model — a prior `reindex` supplies them.
             // Open with the fake; it's a pure, instant local read.
-            let (vault, _semantic) = open_vault(&cli.vault, false)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
             let results = vault.similar(note, *limit)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
@@ -359,7 +385,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // Link appends to the source note's frontmatter and re-projects it, so it
             // opens with the same real model the index was built with (like `add`/`mv`);
             // a frontmatter-only edit won't actually re-embed.
-            let (vault, _semantic) = open_vault(&cli.vault, true)?;
+            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
             let report = vault.link(src, dst, edge_type, explanation.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -416,6 +442,10 @@ enum CliError {
     Embed(#[from] EmbedError),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
+    /// `reindex` was run with no vault at all (no positional, no `-C`, no
+    /// `$B2_VAULT_PATH`) — refuse rather than silently index the current directory.
+    #[error("no vault specified")]
+    VaultRequired,
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -449,6 +479,9 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::InvalidRelation(v)) => format!(
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),
+        CliError::VaultRequired => {
+            "No vault specified. Point B2 at your vault with `-C <path>` (or `b2 reindex <path>`), or set B2_VAULT_PATH.".to_string()
+        }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
@@ -456,6 +489,7 @@ fn user_message(err: &CliError) -> String {
             CliError::Core(e) => e.to_string(),
             CliError::Embed(e) => e.to_string(),
             CliError::Serde(e) => e.to_string(),
+            CliError::VaultRequired => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {

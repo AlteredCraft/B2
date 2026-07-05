@@ -47,8 +47,10 @@ cargo fmt
 cargo clippy --workspace
 ```
 
-Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins;
-falls back to the current dir); `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
+Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
+Read-only commands fall back to the current dir; `reindex` requires an explicit vault (flag, positional,
+or env) and refuses otherwise, so a stale binary or typo'd var can't silently index the wrong dir.
+`B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
 (offline/dev mode, and what the test suite runs under); `B2_DEBUG` makes the CLI print internal error
 detail after the generic message.
 

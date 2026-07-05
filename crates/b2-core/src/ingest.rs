@@ -55,13 +55,24 @@ pub struct PlannedNote {
 /// Progress during the embed phase of a full reindex, reported **per batch** so a
 /// large vault never looks frozen while it embeds (the one genuinely slow step
 /// under a real model). Purely observational — it changes nothing about the result.
-#[derive(Debug, Clone, Copy)]
+///
+/// The counts describe the notes that actually (re)embed this run, *not* every note:
+/// an incremental reindex reuses most notes' vectors untouched, so `notes_to_embed`
+/// is the real unit of work (it equals the report's `embedded` count). Reporting
+/// position in the full note list instead would jump to e.g. "note 14/18" while only
+/// a handful of notes are doing any work.
+#[derive(Debug, Clone)]
 pub struct ReindexProgress {
-    /// The note currently being embedded (1-based)…
-    pub note_index: usize,
-    /// …out of this many notes.
-    pub notes_total: usize,
-    /// Chunks embedded so far, cumulative across all notes.
+    /// Vault-relative path of the note currently embedding.
+    pub note_path: String,
+    /// Number of chunks in the current note (this file's own chunk count).
+    pub note_chunks: usize,
+    /// How many notes have begun embedding so far (1-based)…
+    pub notes_embedded: usize,
+    /// …out of this many notes that need (re)embedding this run — the changed/fresh
+    /// notes (or every note under `force`), not the whole vault.
+    pub notes_to_embed: usize,
+    /// Chunks embedded so far, cumulative across every note this run.
     pub chunks_done: usize,
 }
 
@@ -327,33 +338,54 @@ pub fn ingest_vault_with_progress(
     rel_paths.sort();
     let notes_total = rel_paths.len();
 
-    // Phase 1: notes + chunks (fills the resolver for every note), then a batched
-    // embed per note reporting cumulative progress. Unchanged notes embed nothing.
+    // Phase 1: project every note + its chunks (this fills the link resolver for
+    // every note). Stage each note's pending vectors instead of embedding inline:
+    // the progress line below counts the notes that *actually* embed, and that
+    // denominator isn't known until every note's incremental decision is made — so
+    // all projecting precedes any embedding.
     let mut staged = Vec::with_capacity(notes_total);
-    let mut chunks_done = 0usize;
-    for (i, rel) in rel_paths.iter().enumerate() {
+    for rel in &rel_paths {
         let (b2id, stamped, body, relations, pending) =
             project_note_and_chunks(conn, vault_root, rel, idgen, force)?;
-        let embedded = !pending.is_empty();
-        embed_pending(conn, embedder, &pending, |n| {
+        staged.push((rel.clone(), b2id, stamped, body, relations, pending));
+    }
+
+    // Phase 1b: embed the staged pending vectors (batched, incremental). Progress is
+    // reported per batch in terms of the notes that do work — an incremental run
+    // reuses most notes' vectors, so those contribute no chunks and no progress line.
+    let notes_to_embed = staged
+        .iter()
+        .filter(|(_, _, _, _, _, pending)| !pending.is_empty())
+        .count();
+    let mut embedded_so_far = 0usize;
+    let mut chunks_done = 0usize;
+    for (rel, _, _, _, _, pending) in &staged {
+        if pending.is_empty() {
+            continue;
+        }
+        embedded_so_far += 1;
+        let notes_embedded = embedded_so_far; // immutable per-note snapshot for the closure
+        let note_chunks = pending.len();
+        embed_pending(conn, embedder, pending, |n| {
             chunks_done += n;
             on_progress(ReindexProgress {
-                note_index: i + 1,
-                notes_total,
+                note_path: rel.clone(),
+                note_chunks,
+                notes_embedded,
+                notes_to_embed,
                 chunks_done,
             });
         })?;
-        staged.push((b2id, stamped, body, relations, embedded));
     }
 
     // Phase 2: edges (resolve links against the now-complete resolver).
     let mut out = Vec::with_capacity(staged.len());
-    for (b2id, stamped, body, relations, embedded) in &staged {
+    for (_, b2id, stamped, body, relations, pending) in &staged {
         project_edges(conn, b2id, body, relations)?;
         out.push(Ingested {
             b2id: b2id.clone(),
             stamped: *stamped,
-            embedded: *embedded,
+            embedded: !pending.is_empty(),
         });
     }
     Ok(out)

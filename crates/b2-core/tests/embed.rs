@@ -88,14 +88,24 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     assert!(total > 0);
     assert_eq!(count(&conn, "chunks_vec"), total);
 
-    // Progress: reported, note_index in range, notes_total stable, chunks_done
-    // non-decreasing and ending exactly at the chunk total.
+    // Progress: reported, per-note fields populated, notes_embedded within the
+    // stable denominator and monotonic, chunks_done non-decreasing and ending
+    // exactly at the chunk total. A fresh index embeds every note, so the "notes to
+    // embed" denominator equals the full note count here.
     assert!(!events.is_empty(), "at least one batch is reported");
     let notes = count(&conn, "notes") as usize;
-    assert!(events.iter().all(|e| e.notes_total == notes));
-    assert!(events.iter().all(|e| (1..=notes).contains(&e.note_index)));
+    assert!(events.iter().all(|e| e.notes_to_embed == notes));
+    assert!(events
+        .iter()
+        .all(|e| (1..=e.notes_to_embed).contains(&e.notes_embedded)));
+    assert!(events.iter().all(|e| e.note_chunks > 0));
+    assert!(events.iter().all(|e| !e.note_path.is_empty()));
     for w in events.windows(2) {
         assert!(w[1].chunks_done >= w[0].chunks_done, "cumulative");
+        assert!(
+            w[1].notes_embedded >= w[0].notes_embedded,
+            "notes_embedded is monotonic"
+        );
     }
     assert_eq!(events.last().unwrap().chunks_done as i64, total);
 }

@@ -167,6 +167,28 @@ fn reindex_dry_run_previews_and_writes_nothing() {
 }
 
 #[test]
+fn reindex_without_any_vault_refuses_instead_of_indexing_cwd() {
+    // No positional, no -C, no $B2_VAULT_PATH → reindex must fail loudly rather than
+    // silently build an index in the current directory (the stale-binary / typo'd-env
+    // footgun). env_remove guards against a B2_VAULT_PATH leaking in from the shell.
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env_remove("B2_VAULT_PATH")
+        .arg("reindex")
+        .output()
+        .expect("b2 binary runs");
+    assert!(
+        !out.status.success(),
+        "reindex with no vault must exit non-zero"
+    );
+    assert!(
+        stderr(&out).contains("No vault specified"),
+        "expected an actionable message, got: {:?}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn reindex_accepts_a_positional_vault() {
     let (_g, root) = golden_vault();
     // the spec's `b2 reindex [vault]` form, no -C.

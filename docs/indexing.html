@@ -338,10 +338,14 @@
     <h2><span class="num">6</span>Progress &amp; force — the operator view</h2>
     <p class="sub">Because a cold index of a large vault is real work, the embed phase reports
     <code>ReindexProgress</code> after every batch, and the CLI renders a live line — on an interactive stderr
-    only, so <code>--json</code> and piped/captured output stay pure data.</p>
-    <pre><span class="c"># incremental by default — only changed notes re-embed</span>
-b2 reindex
-  embedding… note 812/1200 (14203 chunks)     <span class="c"># live, in place (TTY only)</span>
+    only, so <code>--json</code> and piped/captured output stay pure data. The count tracks the notes that
+    <em>actually</em> embed (<code>3/3</code> below, matching the report's <code>embedded</code>), not
+    position in the full list — an incremental run reuses most notes untouched, so the line reflects real
+    work rather than jumping to something like <code>812/1200</code>.</p>
+    <pre><span class="c"># incremental by default — only changed notes re-embed; reindex needs an explicit vault</span>
+b2 reindex ~/vault
+Indexing /Users/you/vault
+  embedding 3/3 · notes/spaced-repetition.md (11 chunks)     <span class="c"># live, in place (TTY only)</span>
 Indexed 1200 notes (<span class="n">3</span> embedded, 0 stamped)
 
 <span class="c"># re-embed everything in place, without deleting the index</span>
