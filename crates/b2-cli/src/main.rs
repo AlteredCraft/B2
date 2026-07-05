@@ -27,8 +27,8 @@ use std::process::ExitCode;
 struct Cli {
     /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
     /// Set it with `-C <path>` or `$B2_VAULT_PATH` (the flag wins). Read-only commands
-    /// fall back to the current dir; `reindex` requires it explicitly, so it can never
-    /// silently build an index in the wrong directory.
+    /// fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`link`)
+    /// require it explicitly, so they can never silently touch the wrong directory.
     #[arg(short = 'C', long = "vault", global = true, env = "B2_VAULT_PATH")]
     vault: Option<PathBuf>,
 
@@ -47,7 +47,7 @@ enum Command {
     /// Re-project every note under the vault into the index (stamps missing b2ids).
     /// Incremental by default: notes whose content is unchanged keep their vectors.
     Reindex {
-        /// Vault root (overrides --vault); defaults to --vault / the current dir.
+        /// Vault root (overrides --vault / $B2_VAULT_PATH). Required — no cwd default.
         vault: Option<PathBuf>,
         /// Re-embed every note, even unchanged ones (a full rebuild in place).
         #[arg(long)]
@@ -115,11 +115,23 @@ enum Command {
 }
 
 impl Cli {
-    /// The vault root for **read-only** commands: the `-C`/`$B2_VAULT_PATH` value if
-    /// given, else the current directory. A pure read can't pollute anything, so the
-    /// cwd convenience is safe here (unlike `reindex`, which requires an explicit vault).
+    /// The vault root for **read-only** commands (`search`, `neighbors`, `explain`,
+    /// `similar`): the `-C`/`$B2_VAULT_PATH` value if given, else the current directory.
+    /// A pure read can't pollute anything, so the cwd convenience is safe here.
     fn vault_or_cwd(&self) -> PathBuf {
         self.vault.clone().unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// The vault root for commands that **write** to the vault (`reindex`, `add`, `mv`,
+    /// `link`): `positional` (only `reindex` has one) wins, then `-C`/`$B2_VAULT_PATH`;
+    /// with none, error rather than silently building or mutating in the current
+    /// directory — a stale binary or a mistyped var would otherwise pollute the wrong
+    /// place (and leave a stray `.b2/`). This is the write-side counterpart to
+    /// [`vault_or_cwd`](Self::vault_or_cwd).
+    fn require_vault<'a>(&'a self, positional: Option<&'a Path>) -> Result<&'a Path, CliError> {
+        positional
+            .or(self.vault.as_deref())
+            .ok_or(CliError::VaultRequired)
     }
 }
 
@@ -156,14 +168,9 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             force,
             dry_run,
         } => {
-            // Reindex must never silently index the current directory: a stale binary,
-            // a mistyped env var, or the wrong cwd would otherwise build an index in the
-            // wrong place (and leave a stray `.b2/`). Require an explicit vault — the
-            // positional wins, then `-C`/`$B2_VAULT_PATH`; with none, fail loudly.
-            let root = vault
-                .as_ref()
-                .or(cli.vault.as_ref())
-                .ok_or(CliError::VaultRequired)?;
+            // Reindex writes an index → require an explicit vault (positional wins),
+            // never a silent cwd fallback. See `Cli::require_vault`.
+            let root = cli.require_vault(vault.as_deref())?;
             if *dry_run {
                 // A dry-run neither embeds nor stamps → no model needed (open with
                 // the fake, like `neighbors`); it's a pure read, so there's no slow
@@ -191,7 +198,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 // Name the vault being indexed up front, then a live line that counts
                 // the notes actually (re)embedded — not every note, most of which an
                 // incremental run reuses untouched — with the current file + its chunks.
-                let shown = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+                let shown = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
                 eprintln!("Indexing {}", shown.display());
                 let mut progressed = false;
                 let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
@@ -228,9 +235,9 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             title,
             content,
         } => {
-            // Add projects the new note, which embeds its body → it needs the same
-            // real model the index was built with, like `reindex`/`mv`/`link`.
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
+            // Add writes a new note (and embeds its body) → require an explicit vault
+            // (no silent cwd), and it needs the real model like `reindex`/`mv`/`link`.
+            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
             let report = vault.add_note(path, title.as_deref(), content.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -304,10 +311,10 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             }
         }
         Command::Mv { from, to } => {
-            // A move rewrites inbound files, changing their bodies → they re-embed
-            // on re-projection, so `mv` needs the same real model the index was
+            // A move rewrites files (and re-embeds them on re-projection) → require an
+            // explicit vault (no silent cwd), and it needs the real model the index was
             // built with, like `reindex`/`add`/`link`.
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
+            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
             let report = vault.move_note(from, to)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -382,10 +389,10 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             edge_type,
             explanation,
         } => {
-            // Link appends to the source note's frontmatter and re-projects it, so it
-            // opens with the same real model the index was built with (like `add`/`mv`);
-            // a frontmatter-only edit won't actually re-embed.
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), true)?;
+            // Link writes the source note's frontmatter and re-projects it → require an
+            // explicit vault (no silent cwd), opening with the same real model the index
+            // was built with (like `add`/`mv`); a frontmatter-only edit won't re-embed.
+            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
             let report = vault.link(src, dst, edge_type, explanation.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -480,7 +487,7 @@ fn user_message(err: &CliError) -> String {
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),
         CliError::VaultRequired => {
-            "No vault specified. Point B2 at your vault with `-C <path>` (or `b2 reindex <path>`), or set B2_VAULT_PATH.".to_string()
+            "No vault specified. Point B2 at your vault with `-C <path>`, or set B2_VAULT_PATH.".to_string()
         }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };

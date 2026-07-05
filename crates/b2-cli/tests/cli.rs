@@ -167,25 +167,37 @@ fn reindex_dry_run_previews_and_writes_nothing() {
 }
 
 #[test]
-fn reindex_without_any_vault_refuses_instead_of_indexing_cwd() {
-    // No positional, no -C, no $B2_VAULT_PATH → reindex must fail loudly rather than
-    // silently build an index in the current directory (the stale-binary / typo'd-env
-    // footgun). env_remove guards against a B2_VAULT_PATH leaking in from the shell.
-    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
-        .env("B2_EMBEDDER", "fake")
-        .env_remove("B2_VAULT_PATH")
-        .arg("reindex")
-        .output()
-        .expect("b2 binary runs");
-    assert!(
-        !out.status.success(),
-        "reindex with no vault must exit non-zero"
-    );
-    assert!(
-        stderr(&out).contains("No vault specified"),
-        "expected an actionable message, got: {:?}",
-        stderr(&out)
-    );
+fn write_commands_refuse_without_an_explicit_vault() {
+    // Every command that writes to the vault (builds the index, or creates/moves/edits
+    // notes) must fail loudly when no vault is given — never silently touch the current
+    // directory (the stale-binary / typo'd-env footgun that left a stray `.b2/`). Reads
+    // (search/neighbors/explain/similar) keep the cwd default and are intentionally out.
+    // env_remove guards against a B2_VAULT_PATH leaking in from the shell.
+    let write_cmds: &[&[&str]] = &[
+        &["reindex"],
+        &["add", "notes/new"],
+        &["mv", "notes/a", "notes/b"],
+        &["link", "notes/a", "notes/b"],
+    ];
+    for args in write_cmds {
+        let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+            .env("B2_EMBEDDER", "fake")
+            .env_remove("B2_VAULT_PATH")
+            .args(*args)
+            .output()
+            .expect("b2 binary runs");
+        assert!(
+            !out.status.success(),
+            "`b2 {}` with no vault must exit non-zero",
+            args.join(" ")
+        );
+        assert!(
+            stderr(&out).contains("No vault specified"),
+            "`b2 {}`: expected the no-vault message, got: {:?}",
+            args.join(" "),
+            stderr(&out)
+        );
+    }
 }
 
 #[test]

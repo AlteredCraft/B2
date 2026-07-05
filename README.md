@@ -81,6 +81,6 @@ b2 --help
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
 every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,
-`neighbors`, …) fall back to the current dir; `reindex` requires an explicit vault and refuses
-otherwise, so it can't silently build an index in the wrong place. Full walkthrough:
+`neighbors`, …) fall back to the current dir; commands that write (`reindex`, `add`, `mv`, `link`) require an
+explicit vault and refuse otherwise, so they can't silently touch the wrong place. Full walkthrough:
 **[Quick start](https://alteredcraft.github.io/B2/quickstart.html)**.

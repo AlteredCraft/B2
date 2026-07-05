@@ -344,13 +344,13 @@ directly, since it reuses the same stored vectors.
   all projections before embedding so the `n/N` denominator is the notes that actually embed (it equals the
   report's `embedded`). The CLI prints an `Indexing <vault>` header + `embedding n/N · <path> (k chunks)` on an
   interactive stderr. Test `reindex_with_progress_reports_cumulative_and_fully_embeds` updated.
-- [x] **`reindex` requires an explicit vault — no silent cwd fallback.** A stale binary (built before the
+- [x] **Write commands require an explicit vault — no silent cwd fallback.** A stale binary (built before the
   `B2_VAULT_PATH` env landed) and a mistyped var both silently indexed the *current directory*, leaving a stray
-  `.b2/`. The global `--vault` is now `Option<PathBuf>` (no `default_value`); read-only commands still fall back
-  to `.` (a pure read can't pollute), but `reindex` resolves positional → `-C`/`$B2_VAULT_PATH` and errors with
-  `CliError::VaultRequired` otherwise. New CLI test `reindex_without_any_vault_refuses_instead_of_indexing_cwd`;
-  README + CLAUDE.md + the docs site (quickstart, indexing) mirrored. *(Open: `add`/`mv`/`link` also write and
-  still default to cwd — same footgun class, deferred.)*
+  `.b2/`. The global `--vault` is now `Option<PathBuf>` (no `default_value`); read-only commands (`search`,
+  `neighbors`, `explain`, `similar`) still fall back to `.` (a pure read can't pollute), but **every command that
+  writes** — `reindex`, `add`, `mv`, `link` — resolves through `Cli::require_vault` (positional → `-C`/
+  `$B2_VAULT_PATH`, else `CliError::VaultRequired`). CLI test `write_commands_refuse_without_an_explicit_vault`
+  covers all four; README + CLAUDE.md + the docs site (quickstart, indexing) mirrored.
 
 ## Backlog (later, not now)
 

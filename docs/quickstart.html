@@ -127,9 +127,10 @@
       <code>-C &lt;path&gt;</code> (or <code>--vault</code>) to point at your vault — or set
       <code>B2_VAULT_PATH</code> once so every command finds it without the flag — and
       <code>--json</code> to emit machine-readable output for agents and scripts. The examples below
-      run from <em>inside</em> the vault folder, so read-only commands default to <code>.</code>;
-      <code>reindex</code> is the exception — it needs an explicit vault (a path, <code>-C</code>, or
-      <code>B2_VAULT_PATH</code>), so it can't silently index the wrong directory.</div>
+      run from <em>inside</em> the vault folder, so read-only commands default to <code>.</code>; commands
+      that <em>write</em> (<code>reindex</code>, <code>add</code>, <code>mv</code>, <code>link</code>) need an
+      explicit vault (a path, <code>-C</code>, or <code>B2_VAULT_PATH</code>), so they can't silently touch the
+      wrong directory.</div>
     </div>
   </div>
 
@@ -360,7 +361,7 @@ Spaced repetition exploits the retrieval curve.
   <table>
     <thead><tr><th>Environment variable</th><th>Effect</th></tr></thead>
     <tbody>
-      <tr><td><code>B2_VAULT_PATH</code></td><td class="d">Vault root, so commands find it without <code>-C</code>. An explicit <code>-C</code>/<code>--vault</code> overrides it. Read-only commands fall back to the current dir; <code>reindex</code> requires it explicitly.</td></tr>
+      <tr><td><code>B2_VAULT_PATH</code></td><td class="d">Vault root, so commands find it without <code>-C</code>. An explicit <code>-C</code>/<code>--vault</code> overrides it. Read-only commands fall back to the current dir; commands that write (<code>reindex</code>/<code>add</code>/<code>mv</code>/<code>link</code>) require it explicitly.</td></tr>
       <tr><td><code>B2_EMBEDDER=fake</code></td><td class="d">Offline mode: deterministic non-semantic embedder. Search runs keyword-only.</td></tr>
       <tr><td><code>B2_DEBUG</code></td><td class="d">Print internal error detail after the generic user-facing message.</td></tr>
     </tbody>
