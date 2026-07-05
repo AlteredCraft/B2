@@ -6,20 +6,18 @@
 //! structure into an *existing* human note; `add` only ever writes a file that did
 //! not exist.
 //!
-//! **Markdown-first**, like [`crate::mv`] and [`crate::suggest::accept_suggestion`]:
-//! write the `.md` file, then project it into the index from that source of truth.
-//! The new note is stamped its `b2id` by the ordinary ingest path
-//! ([`ingest::ingest_file`]) — "stamp on first sight" (§1), one code path for every
-//! note's identity — so the `b2id.stamped` event is logged exactly as a reindex
-//! would log it. The note is therefore fully reconstructible from Markdown (file on
-//! disk, `b2id` inside), so `add` needs no bespoke event of its own.
+//! **Markdown-first**, like [`crate::mv`] and [`crate::vault::Vault::link`]: write the
+//! `.md` file, then project it into the index from that source of truth. The new note
+//! is stamped its `b2id` by the ordinary ingest path ([`ingest::ingest_file`]) —
+//! "stamp on first sight" (§1), one code path for every note's identity. The note is
+//! fully reconstructible from Markdown (file on disk, `b2id` inside), so `add` records
+//! nothing durable of its own.
 //!
 //! The `created` date is passed in (the façade's determinism boundary, like the
-//! move/suggestion timestamps), keeping `b2-core` wall-clock-free.
+//! move/link timestamps), keeping `b2-core` wall-clock-free.
 
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
-use crate::event::EventSink;
 use crate::id::IdGen;
 use crate::ingest;
 use crate::note::yaml_quote;
@@ -48,12 +46,11 @@ pub struct AddReport {
 ///
 /// Projection **embeds** the new note's chunks, so the caller must open the vault
 /// with the same embedder the index was built with (the CLI loads the real model
-/// for `add`, as for `reindex`/`accept`/`mv`).
+/// for `add`, as for `reindex`/`link`/`mv`).
 #[allow(clippy::too_many_arguments)]
 pub fn add_note(
     conn: &Connection,
     idgen: &dyn IdGen,
-    sink: &dyn EventSink,
     embedder: &dyn Embedder,
     vault_root: &Path,
     path_input: &str,
@@ -75,9 +72,9 @@ pub fn add_note(
     }
     fs::write(&abs, doc)?;
 
-    // 2. Project from that Markdown: stamp the `b2id` (logged via `sink`), chunk +
-    //    embed the body, and derive any edges its content authors.
-    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, sink, embedder)?;
+    // 2. Project from that Markdown: stamp the `b2id`, chunk + embed the body, and
+    //    derive any edges its content authors.
+    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, embedder)?;
     Ok(AddReport {
         b2id: ingested.b2id,
         path: rel,

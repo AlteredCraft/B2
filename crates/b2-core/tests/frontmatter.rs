@@ -5,7 +5,6 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::event::NullSink;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::note::parse;
@@ -19,7 +18,7 @@ const B: &str = "01JB0000000000000000000002";
 
 fn ingest(vault: &Path, db: &Path) -> Connection {
     let conn = open(db).unwrap();
-    ingest_vault(&conn, vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     conn
 }
 

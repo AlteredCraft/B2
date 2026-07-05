@@ -97,22 +97,6 @@ fn add_projects_the_edges_its_body_authors() {
 }
 
 #[test]
-fn add_stamps_are_logged() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
-
-    let report = vault.add_note("notes/logged", None, None).unwrap();
-
-    // The b2id.stamped event is appended to the durable log (data-model.md §3/§4),
-    // so the note is reconstructible from Markdown ∪ log like any other.
-    let log = fs::read_to_string(root.join(".b2/log/events.jsonl")).unwrap();
-    assert!(
-        log.contains(&report.b2id) && log.contains("notes/logged.md"),
-        "stamping the new note must be logged: {log}"
-    );
-}
-
-#[test]
 fn add_creates_missing_parent_directories() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed(tmp.path());

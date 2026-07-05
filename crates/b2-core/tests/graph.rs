@@ -4,7 +4,6 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::event::NullSink;
 use b2_core::graph::{neighbors, Direction};
 use b2_core::id::UlidGen;
 use b2_core::ingest::{ingest_file, ingest_vault};
@@ -12,13 +11,12 @@ use b2_core::open;
 use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
 use rusqlite::Connection;
 
-/// (src_id, dst_id, dst_path_raw, type, origin, status, occ, explanation),
-/// ordered — the comparable shape of the whole edge set (id excluded; it is a
-/// deterministic function of the rest).
+/// (src_id, dst_id, dst_path_raw, type, origin, occ, explanation), ordered — the
+/// comparable shape of the whole edge set (id excluded; it is a deterministic
+/// function of the rest). Every edge is authored + active, so there is no `status`.
 type EdgeTuple = (
     String,
     Option<String>,
-    String,
     String,
     String,
     String,
@@ -29,7 +27,7 @@ type EdgeTuple = (
 fn edge_snapshot(conn: &Connection) -> Vec<EdgeTuple> {
     let mut stmt = conn
         .prepare(
-            "SELECT src_id, dst_id, dst_path_raw, type, origin, status, occurrence_index, explanation
+            "SELECT src_id, dst_id, dst_path_raw, type, origin, occurrence_index, explanation
              FROM edges
              ORDER BY src_id, type, dst_path_raw, occurrence_index",
         )
@@ -41,9 +39,8 @@ fn edge_snapshot(conn: &Connection) -> Vec<EdgeTuple> {
             r.get::<_, String>(2)?,
             r.get::<_, String>(3)?,
             r.get::<_, String>(4)?,
-            r.get::<_, String>(5)?,
-            r.get::<_, i64>(6)?,
-            r.get::<_, Option<String>>(7)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, Option<String>>(6)?,
         ))
     })
     .unwrap()
@@ -55,7 +52,7 @@ fn ingest_golden(dir: &std::path::Path) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     conn
 }
 
@@ -75,7 +72,6 @@ fn golden_graph_has_references_and_elaborates_inline_active() {
                 "concepts/memory".to_string(),
                 "elaborates".to_string(),
                 "inline".to_string(),
-                "active".to_string(),
                 0,
                 Some("applies the forgetting curve".to_string()),
             ),
@@ -86,7 +82,6 @@ fn golden_graph_has_references_and_elaborates_inline_active() {
                 "concepts/memory".to_string(),
                 "references".to_string(),
                 "inline".to_string(),
-                "active".to_string(),
                 0,
                 None,
             ),
@@ -132,7 +127,7 @@ fn one_note_reindex_equals_full() {
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     let after_full = edge_snapshot(&conn);
 
     // Re-project a single note against the already-complete index.
@@ -141,7 +136,6 @@ fn one_note_reindex_equals_full() {
         &vault,
         "notes/spaced-repetition.md",
         &UlidGen,
-        &NullSink,
         &FakeEmbedder::default(),
     )
     .unwrap();
@@ -153,7 +147,7 @@ fn one_note_reindex_equals_full() {
     );
 
     // And a second full reindex is identical too (idempotent).
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         after_full,
         edge_snapshot(&conn),

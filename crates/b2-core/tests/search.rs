@@ -10,7 +10,6 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::event::NullSink;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
@@ -24,7 +23,7 @@ fn ingest_golden(dir: &Path) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
     conn
 }
 
@@ -140,7 +139,7 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
     .unwrap();
 
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
 
     // Within 1 hop of A: {A, B}. C is disconnected and must be excluded even
     // though its text matches the query.

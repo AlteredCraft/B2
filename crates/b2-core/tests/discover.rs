@@ -13,7 +13,6 @@ mod common;
 use b2_core::db;
 use b2_core::discover::{self, CandidateNote};
 use b2_core::embed::FakeEmbedder;
-use b2_core::event::NullSink;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
@@ -46,7 +45,7 @@ fn linked_chain_vault(dir: &Path) -> Connection {
     write_note(&vault, "c.md", C, "shared topic gamma.");
     write_note(&vault, "e.md", E, "shared topic delta.");
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
     conn
 }
 
@@ -54,7 +53,7 @@ fn ingest_golden(dir: &Path) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
     conn
 }
 

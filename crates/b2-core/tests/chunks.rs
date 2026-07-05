@@ -4,7 +4,6 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::event::NullSink;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
@@ -16,7 +15,7 @@ fn chunks_are_projected_for_each_note() {
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
 
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
@@ -51,7 +50,7 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
 
     // 'forgetting' appears only in spaced-repetition's Relations paragraph.
     let note: String = conn
@@ -73,7 +72,7 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     let fts_count = |c: &rusqlite::Connection| -> i64 {
         c.query_row("SELECT COUNT(*) FROM chunks_fts", [], |r| r.get(0))
             .unwrap()
@@ -81,7 +80,7 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     let before = fts_count(&conn);
 
     // Re-ingesting must replace, not accumulate (delete sentinel + reinsert).
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         before,
         fts_count(&conn),

@@ -7,7 +7,6 @@ mod common;
 
 use b2_core::db;
 use b2_core::embed::{Embedder, FakeEmbedder};
-use b2_core::event::NullSink;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
@@ -18,7 +17,7 @@ fn ingest_golden(dir: &std::path::Path, embedder: &FakeEmbedder) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, embedder).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, embedder).unwrap();
     conn
 }
 
@@ -78,7 +77,6 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
         &conn,
         &vault,
         &UlidGen,
-        &NullSink,
         &FakeEmbedder::new(64),
         false,
         &mut |p| events.push(p),
@@ -193,11 +191,11 @@ fn reindex_yields_identical_vectors() {
         .unwrap()
     };
 
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &embedder).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &embedder).unwrap();
     let before = vec_for_srs_seq0(&conn);
 
     // A full re-index re-embeds deterministically → byte-identical vectors.
-    ingest_vault(&conn, &vault, &UlidGen, &NullSink, &embedder).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &embedder).unwrap();
     assert_eq!(before, vec_for_srs_seq0(&conn));
 }
 

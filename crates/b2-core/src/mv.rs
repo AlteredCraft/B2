@@ -6,15 +6,14 @@
 //! stale is the human-facing convenience copy: the inline `[[oldpath|alias]]` text
 //! in the files that link *at* the moved note. This module rewrites exactly those.
 //!
-//! It is **Markdown-first** (like [`crate::suggest::accept_suggestion`]): rewrite
+//! It is **Markdown-first** (like [`crate::vault::Vault::link`]): rewrite
 //! the inbound files' text, move the file on disk, *then* re-project the index from
 //! the now-current Markdown. The disposable index is rebuilt from the source of
 //! truth; a crash mid-move leaves the Markdown correct and a `b2 reindex` recovers.
 //!
-//! A move is **not logged**. The event log holds only what isn't reconstructible
-//! from Markdown (review state); a move is fully reconstructible — files sit at
-//! their new paths with `b2id`s intact — so replay is untouched (CLAUDE.md, the
-//! core invariant).
+//! A move is fully reconstructible from Markdown — files sit at their new paths with
+//! their `b2id`s intact — so nothing durable is recorded; the index re-derives from
+//! Markdown (`index = projection of (Markdown)`, CLAUDE.md, the core invariant).
 //!
 //! Bounded, not a scan: [`db::inbound_edge_targets`] reads the materialized graph
 //! to name *exactly* the inbound files and link strings to touch (index-engine.md
@@ -23,7 +22,6 @@
 use crate::db;
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
-use crate::event::NullSink;
 use crate::id::IdGen;
 use crate::ingest;
 use rusqlite::Connection;
@@ -124,12 +122,12 @@ pub fn move_note(
     // 3. Re-project from the now-current Markdown. The moved note goes first so its
     //    `notes.path` is current before inbound files re-resolve their links to it.
     //    (An unchanged body means the moved note reuses its vectors — no re-embed.)
-    ingest::ingest_file(conn, vault_root, &new_rel, idgen, &NullSink, embedder)?;
+    ingest::ingest_file(conn, vault_root, &new_rel, idgen, embedder)?;
     for src_path in &rewrote {
         if src_path == old_rel {
             continue; // the moved note itself (a self-link) — already re-projected
         }
-        ingest::ingest_file(conn, vault_root, src_path, idgen, &NullSink, embedder)?;
+        ingest::ingest_file(conn, vault_root, src_path, idgen, embedder)?;
     }
 
     Ok(MoveReport {

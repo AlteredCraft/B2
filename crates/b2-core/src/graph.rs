@@ -35,15 +35,15 @@ pub struct Neighbor {
     pub origin: String,
 }
 
-/// All active neighbors of `b2id` — outbound edges (this note → others) then
-/// inbound edges (others → this note), each labeled for display. Suggested and
-/// rejected edges are excluded (`status='active'` only).
+/// All neighbors of `b2id` — outbound edges (this note → others) then inbound edges
+/// (others → this note), each labeled for display. Every edge is authored and active
+/// (there is no suggestion lifecycle), so this is the note's full typed graph.
 pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
     let mut out = Vec::new();
 
     let mut stmt = conn.prepare(
         "SELECT dst_id, type, explanation, origin FROM edges
-         WHERE src_id = ?1 AND status = 'active' AND dst_id IS NOT NULL
+         WHERE src_id = ?1 AND dst_id IS NOT NULL
          ORDER BY type, dst_id",
     )?;
     let rows = stmt.query_map([b2id], |r| {
@@ -69,7 +69,7 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
 
     let mut stmt = conn.prepare(
         "SELECT src_id, type, explanation, origin FROM edges
-         WHERE dst_id = ?1 AND status = 'active'
+         WHERE dst_id = ?1
          ORDER BY type, src_id",
     )?;
     let rows = stmt.query_map([b2id], |r| {

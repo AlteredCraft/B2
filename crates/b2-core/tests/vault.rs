@@ -30,7 +30,6 @@ fn open_creates_the_b2_dir_and_index() {
 
     assert!(root.join(".b2").is_dir(), ".b2/ must exist");
     assert!(root.join(".b2/b2.sqlite").is_file(), "index must exist");
-    assert!(root.join(".b2/log").is_dir(), ".b2/log/ must exist");
 }
 
 #[test]
@@ -67,8 +66,12 @@ fn reindex_stamps_a_note_missing_a_b2id() {
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 3);
     assert_eq!(report.stamped, 1);
-    // the stamp is durable in the log.
-    assert!(root.join(".b2/log/events.jsonl").is_file());
+    // the stamp is durable in the note's frontmatter (the id travels in the file).
+    let stamped = std::fs::read_to_string(root.join("orphan.md")).unwrap();
+    assert!(
+        stamped.contains("b2id:"),
+        "the missing b2id must be written to disk"
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@
 //! `sqlite-vec` is registered as a SQLite *auto-extension* (statically linked, no
 //! runtime `load_extension`), and every connection is opened `WAL` +
 //! `foreign_keys=ON` per planning/specs/index-engine-build.md §0. Every table here
-//! is a derived projection of `(Markdown ∪ log)` — nothing is a source of truth.
+//! is a derived projection of `Markdown` — nothing is a source of truth.
 
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
@@ -17,8 +17,11 @@ use std::path::Path;
 use std::sync::Once;
 
 /// The B2 index schema version stamped into `meta.schema_version`. Bumping it is
-/// the migration gate — which B2 schema built a given `b2.sqlite` (§1.0).
-pub const SCHEMA_VERSION: i64 = 1;
+/// the migration gate: on a mismatch `migrate()` drops the derived tables and lets
+/// the next `reindex` rebuild them (the index is disposable). **2** dropped the
+/// suggestion machinery — the `status` column, the `origin='suggested'` value, and
+/// the `edge_provenance` table — with the 2026-07-04 relator cut (data-model.md §4).
+pub const SCHEMA_VERSION: i64 = 2;
 
 static REGISTER_VEC: Once = Once::new();
 
@@ -55,18 +58,42 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Create the schema and seed `schema_version` once. `IF NOT EXISTS` +
-/// `INSERT OR IGNORE` keep this a no-op on reopen, so `open()` stays idempotent.
-/// The DDL mirrors planning/specs/index-engine-build.md §1 (chunks_vec lands in
-/// step 3; suggested-edge provenance in step 4).
+/// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
+/// no-op on reopen; a `schema_version` mismatch drops the derived tables first so the
+/// next `reindex` rebuilds them (the index is disposable). The DDL mirrors
+/// planning/specs/index-engine-build.md §1 (chunks_vec is created at embed time).
 fn migrate(conn: &Connection) -> Result<()> {
+    // `meta` must exist before we can read the schema version the index was built at.
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS meta (
-           key   TEXT PRIMARY KEY,
-           value TEXT NOT NULL
-         );
-
-         CREATE TABLE IF NOT EXISTS notes (
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )?;
+    // Schema-version gate: a mismatch means the derived tables have the wrong shape.
+    // The index is disposable (vision-and-scope, "volatile vault over a disposable
+    // index"), so drop the stale derived tables and clear `meta` — the next `reindex`
+    // rebuilds everything under the new schema. Children first (FKs); dropping `chunks`
+    // takes its FTS triggers with it.
+    let prior: Option<i64> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|s| s.parse().ok());
+    if prior.is_some_and(|v| v != SCHEMA_VERSION) {
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS edge_provenance;
+             DROP TABLE IF EXISTS edges;
+             DROP TABLE IF EXISTS chunks_vec;
+             DROP TABLE IF EXISTS chunks_fts;
+             DROP TABLE IF EXISTS chunks;
+             DROP TABLE IF EXISTS note_aliases;
+             DROP TABLE IF EXISTS notes;
+             DELETE FROM meta;",
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS notes (
            b2id        TEXT PRIMARY KEY,
            path        TEXT NOT NULL UNIQUE,
            type        TEXT NOT NULL,
@@ -123,30 +150,17 @@ fn migrate(conn: &Connection) -> Result<()> {
            dst_id           TEXT,
            dst_path_raw     TEXT NOT NULL,
            type             TEXT NOT NULL,
-           origin           TEXT NOT NULL CHECK (origin IN ('inline','frontmatter','suggested')),
-           status           TEXT NOT NULL CHECK (status IN ('active','suggested','rejected')),
+           origin           TEXT NOT NULL CHECK (origin IN ('inline','frontmatter')),
            explanation      TEXT,
            occurrence_index INTEGER NOT NULL DEFAULT 0,
-           CHECK ( (origin = 'suggested'               AND status IN ('suggested','rejected'))
-                OR (origin IN ('inline','frontmatter') AND status = 'active') ),
            UNIQUE (src_id, dst_id, type, occurrence_index)
          );
          CREATE INDEX IF NOT EXISTS edges_src_idx      ON edges(src_id);
          CREATE INDEX IF NOT EXISTS edges_dst_type_idx ON edges(dst_id, type);
-         CREATE INDEX IF NOT EXISTS edges_status_idx   ON edges(status);
-         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;
-
-         CREATE TABLE IF NOT EXISTS edge_provenance (
-           edge_id    TEXT PRIMARY KEY REFERENCES edges(id) ON DELETE CASCADE,
-           by         TEXT NOT NULL,
-           source     TEXT,
-           confidence REAL,
-           created    TEXT NOT NULL,
-           decided    TEXT
-         );",
+         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;",
     )?;
     conn.execute(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?1)",
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
         [SCHEMA_VERSION.to_string()],
     )?;
     Ok(())
@@ -209,15 +223,6 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
         )?;
     }
     Ok(())
-}
-
-/// Every note's `b2id`, sorted ascending — the deterministic anchor iteration
-/// order for whole-vault connection discovery (tasks.md ②), so the ids minted for
-/// its suggestions are reproducible under a fixed [`IdGen`](crate::id::IdGen).
-pub fn all_note_ids(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT b2id FROM notes ORDER BY b2id")?;
-    let rows = stmt.query_map([], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -481,24 +486,21 @@ pub struct EdgeRow {
     pub dst_path_raw: String,
     pub r#type: String,
     pub origin: String,
-    pub status: String,
     pub explanation: Option<String>,
     pub occurrence_index: i64,
 }
 
-/// Replace a note's authored (`inline`/`frontmatter`) edges. Log-derived
-/// `suggested`/`rejected` rows are left untouched, so a Markdown re-parse never
-/// clobbers the review queue (Flow ①).
+/// Replace a note's edges. Every edge is authored (body links ∪ frontmatter
+/// `relations:`), so this deletes the note's edges and re-inserts them from the
+/// current Markdown (Flow ①) — the whole graph is a projection of Markdown, with no
+/// suggestion rows to preserve.
 pub fn replace_authored_edges(conn: &Connection, src_id: &str, edges: &[EdgeRow]) -> Result<()> {
-    conn.execute(
-        "DELETE FROM edges WHERE src_id = ?1 AND origin IN ('inline','frontmatter')",
-        [src_id],
-    )?;
+    conn.execute("DELETE FROM edges WHERE src_id = ?1", [src_id])?;
     for e in edges {
         conn.execute(
             "INSERT INTO edges
-               (id, src_id, dst_id, dst_path_raw, type, origin, status, explanation, occurrence_index)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+               (id, src_id, dst_id, dst_path_raw, type, origin, explanation, occurrence_index)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 e.id,
                 e.src_id,
@@ -506,7 +508,6 @@ pub fn replace_authored_edges(conn: &Connection, src_id: &str, edges: &[EdgeRow]
                 e.dst_path_raw,
                 e.r#type,
                 e.origin,
-                e.status,
                 e.explanation,
                 e.occurrence_index,
             ],
@@ -549,7 +550,7 @@ pub fn inbound_edge_targets(
     let mut stmt = conn.prepare(
         "SELECT e.src_id, n.path, e.dst_path_raw
          FROM edges e JOIN notes n ON n.b2id = e.src_id
-         WHERE e.dst_id = ?1 AND e.status = 'active'
+         WHERE e.dst_id = ?1
          ORDER BY n.path, e.dst_path_raw",
     )?;
     let rows = stmt.query_map([dst_b2id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
@@ -567,13 +568,12 @@ pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<
 }
 
 // ---------------------------------------------------------------------------
-// review state: suggested/rejected edges + edge_provenance
-// (projected from the log by suggest/replay — never authored here)
+// edge existence — used by `b2 link` to stay idempotent
 // ---------------------------------------------------------------------------
 
-/// Whether any edge already exists for `(src_id, dst_id, type)` — in any status.
-/// Generation uses this to refuse re-proposing an already-active, pending, or
-/// rejected (tombstoned) connection (data-model.md §4).
+/// Whether the directed edge `(src_id, dst_id, type)` already exists. `b2 link` uses
+/// this to avoid appending a duplicate frontmatter relation for a connection that is
+/// already recorded (data-model.md §4).
 pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &str) -> Result<bool> {
     let found: Option<i64> = conn
         .query_row(
@@ -583,91 +583,4 @@ pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &st
         )
         .optional()?;
     Ok(found.is_some())
-}
-
-/// Whether **any** edge exists between `src_id` and `dst_id` — any type, any status
-/// (active, pending, or rejected). The pair-level counterpart of [`edge_exists`]:
-/// discovery's pre-call dedup uses it to skip a pair that is already *decided* (in the
-/// review queue, or tombstoned) **before** paying for a relator call, so a re-run
-/// costs nothing for settled pairs.
-pub fn edge_exists_for_pair(conn: &Connection, src_id: &str, dst_id: &str) -> Result<bool> {
-    let found: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM edges WHERE src_id = ?1 AND dst_id = ?2 LIMIT 1",
-            params![src_id, dst_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(found.is_some())
-}
-
-/// Insert a suggested edge (`origin='suggested'`, `status='suggested'`,
-/// `occurrence_index=0`). Returns whether a row was inserted: `false` means the
-/// `(src, dst, type, 0)` tuple is already taken — which on **replay** happens when
-/// an accepted suggestion's edge was already materialized from frontmatter by
-/// Flow ①, so the `generated` event is harmlessly absorbed (the caller then skips
-/// the provenance row to avoid a dangling FK). The companion provenance row is
-/// inserted separately.
-pub fn insert_suggested_edge(
-    conn: &Connection,
-    edge_id: &str,
-    src_id: &str,
-    dst_id: Option<&str>,
-    dst_path_raw: &str,
-    edge_type: &str,
-    explanation: Option<&str>,
-) -> Result<bool> {
-    let n = conn.execute(
-        "INSERT OR IGNORE INTO edges
-           (id, src_id, dst_id, dst_path_raw, type, origin, status, explanation, occurrence_index)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'suggested', 'suggested', ?6, 0)",
-        params![
-            edge_id,
-            src_id,
-            dst_id,
-            dst_path_raw,
-            edge_type,
-            explanation
-        ],
-    )?;
-    Ok(n == 1)
-}
-
-/// Insert the provenance row for a suggested/rejected edge.
-pub fn insert_edge_provenance(
-    conn: &Connection,
-    edge_id: &str,
-    by: &str,
-    source: Option<&str>,
-    confidence: Option<f64>,
-    created: &str,
-    decided: Option<&str>,
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO edge_provenance(edge_id, by, source, confidence, created, decided)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![edge_id, by, source, confidence, created, decided],
-    )?;
-    Ok(())
-}
-
-/// Tombstone a suggestion: flip the edge to `status='rejected'` and stamp the
-/// provenance `decided` time. The row stays as rejection memory (never re-proposed).
-pub fn mark_edge_rejected(conn: &Connection, edge_id: &str, decided: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE edges SET status = 'rejected' WHERE id = ?1",
-        [edge_id],
-    )?;
-    conn.execute(
-        "UPDATE edge_provenance SET decided = ?2 WHERE edge_id = ?1",
-        params![edge_id, decided],
-    )?;
-    Ok(())
-}
-
-/// Delete an edge (its `edge_provenance` row cascades). Used when an accepted
-/// suggestion leaves the queue on replay — its active edge comes from Markdown.
-pub fn delete_edge(conn: &Connection, edge_id: &str) -> Result<()> {
-    conn.execute("DELETE FROM edges WHERE id = ?1", [edge_id])?;
-    Ok(())
 }

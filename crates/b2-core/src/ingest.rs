@@ -12,7 +12,6 @@ use crate::chunk::chunk_body;
 use crate::db::{self, EdgeRow, NoteRow};
 use crate::embed::Embedder;
 use crate::error::Result;
-use crate::event::{Event, EventSink};
 use crate::id::IdGen;
 use crate::note;
 use rusqlite::Connection;
@@ -85,7 +84,6 @@ fn project_note_and_chunks(
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
-    sink: &dyn EventSink,
     force: bool,
 ) -> Result<ProjectedNote> {
     let abs = vault_root.join(rel_path);
@@ -96,14 +94,11 @@ fn project_note_and_chunks(
     let b2id = match parsed.fields().b2id.clone() {
         Some(id) => id,
         None => {
-            // The one always-allowed write: stamp, persist, then log it.
+            // The one always-allowed write: stamp it into the file. The id lives in the
+            // frontmatter, so identity travels with the note — nothing else to record.
             let id = idgen.new_id();
             parsed.stamp_b2id(&id);
             fs::write(&abs, parsed.as_str())?;
-            sink.append(&Event::B2idStamped {
-                b2id: id.clone(),
-                path: rel_path.to_string(),
-            })?;
             stamped = true;
             id
         }
@@ -254,7 +249,6 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
             dst_path_raw: link.target_path.clone(),
             r#type: link.edge_type.clone(),
             origin: origin.to_string(),
-            status: "active".to_string(),
             explanation: link.explanation.clone(),
             occurrence_index,
         });
@@ -283,15 +277,14 @@ pub fn ingest_file(
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
-    sink: &dyn EventSink,
     embedder: &dyn Embedder,
 ) -> Result<Ingested> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
-    // Incremental (force=false): a frontmatter-only edit (e.g. an accepted relation)
+    // Incremental (force=false): a frontmatter-only edit (e.g. a committed relation)
     // leaves the body unchanged, so this re-projects the note + edges without
     // needlessly re-embedding it.
     let (b2id, stamped, body, relations, pending) =
-        project_note_and_chunks(conn, vault_root, rel_path, idgen, sink, false)?;
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, false)?;
     let embedded = !pending.is_empty();
     embed_pending(conn, embedder, &pending, |_| {})?;
     project_edges(conn, &b2id, &body, &relations)?;
@@ -309,10 +302,9 @@ pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
-    sink: &dyn EventSink,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
-    ingest_vault_with_progress(conn, vault_root, idgen, sink, embedder, false, &mut |_| {})
+    ingest_vault_with_progress(conn, vault_root, idgen, embedder, false, &mut |_| {})
 }
 
 /// Like [`ingest_vault`], but takes `force` (re-embed every note, even unchanged
@@ -324,7 +316,6 @@ pub fn ingest_vault_with_progress(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
-    sink: &dyn EventSink,
     embedder: &dyn Embedder,
     force: bool,
     on_progress: &mut dyn FnMut(ReindexProgress),
@@ -342,7 +333,7 @@ pub fn ingest_vault_with_progress(
     let mut chunks_done = 0usize;
     for (i, rel) in rel_paths.iter().enumerate() {
         let (b2id, stamped, body, relations, pending) =
-            project_note_and_chunks(conn, vault_root, rel, idgen, sink, force)?;
+            project_note_and_chunks(conn, vault_root, rel, idgen, force)?;
         let embedded = !pending.is_empty();
         embed_pending(conn, embedder, &pending, |n| {
             chunks_done += n;

@@ -27,13 +27,6 @@ pub enum Error {
     #[error("embedding failed: {0}")]
     Embed(String),
 
-    /// The relator failed to classify a candidate pair (real-model network/API
-    /// error). The discovery-seam parallel of [`Error::Embed`]: kept as a message
-    /// so `b2-core` stays free of the relator runtime's types (the real relator
-    /// lives in its own crate, `b2-relate`).
-    #[error("relation classification failed: {0}")]
-    Relator(String),
-
     /// The index's recorded embedding model/dim differs from the active embedder,
     /// so its vectors are incomparable with new query vectors. A read (search)
     /// fails fast with this rather than returning silently wrong results; the fix
@@ -62,6 +55,13 @@ pub enum Error {
     /// data-model.md §1). The path is echoed for the user-facing message.
     #[error("note already exists: {0}")]
     AddTargetExists(String),
+
+    /// `b2 link` was given a `--type` that is not a core relation verb
+    /// (data-model.md §2). The core is the palette `b2 link` offers; a tail verb can
+    /// still be hand-authored in the Markdown, but the command validates to the core
+    /// so a typo (`elaborate` for `elaborates`) is caught rather than silently stored.
+    #[error("not a core relation verb: {0}")]
+    InvalidRelation(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

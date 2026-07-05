@@ -2,36 +2,14 @@
 //!
 //! Green-scenario assertions for build-plan step 1
 //! (planning/specs/index-engine-build.md §4): ingest the golden vault, resolve
-//! `memory ⇄ path` both ways, and prove a note missing a `b2id` is stamped on
-//! disk *and* logged (via the event-sink seam; the durable JSONL log is step 4).
+//! `memory ⇄ path` both ways, and prove a note missing a `b2id` is stamped on disk
+//! (B2's one always-allowed write; the id travels in the frontmatter — data-model.md §1).
 
-use b2_core::event::{Event, EventSink};
 use b2_core::id::IdGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::{db, open};
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
-
-/// Test double for the event log — collects what was appended and replays it.
-struct CollectingSink(Mutex<Vec<Event>>);
-impl EventSink for CollectingSink {
-    fn append(&self, event: &Event) -> b2_core::Result<()> {
-        self.0.lock().unwrap().push(event.clone());
-        Ok(())
-    }
-    fn read_all(&self) -> b2_core::Result<Vec<Event>> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-}
-impl CollectingSink {
-    fn new() -> Self {
-        Self(Mutex::new(Vec::new()))
-    }
-    fn events(&self) -> Vec<Event> {
-        self.0.lock().unwrap().clone()
-    }
-}
 
 /// Deterministic id generator so stamping is assertable byte-for-byte.
 struct FixedId(&'static str);
@@ -69,14 +47,12 @@ fn ingests_golden_vault_and_resolves_b2id_path_both_ways() {
     golden_vault_copy(&vault);
 
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    let sink = CollectingSink::new();
     let idgen = FixedId("01JSHOULDNEVERBEUSED000000");
 
     ingest_vault(
         &conn,
         &vault,
         &idgen,
-        &sink,
         &b2_core::embed::FakeEmbedder::default(),
     )
     .unwrap();
@@ -91,19 +67,15 @@ fn ingests_golden_vault_and_resolves_b2id_path_both_ways() {
         .expect("b2id should resolve back to a path");
     assert_eq!(path, "concepts/memory.md");
 
-    // both golden notes landed, and neither needed stamping
+    // both golden notes landed (they already carry a b2id — nothing to stamp)
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 2);
-    assert!(
-        sink.events().is_empty(),
-        "golden notes already carry a b2id — nothing to stamp"
-    );
 }
 
 #[test]
-fn stamps_and_logs_b2id_for_a_note_missing_one_and_persists_it_to_disk() {
+fn stamps_b2id_for_a_note_missing_one_and_persists_it_to_disk() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -115,32 +87,22 @@ fn stamps_and_logs_b2id_for_a_note_missing_one_and_persists_it_to_disk() {
     .unwrap();
 
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    let sink = CollectingSink::new();
     let idgen = FixedId("01JSTAMPED0000000000000000");
 
     ingest_vault(
         &conn,
         &vault,
         &idgen,
-        &sink,
         &b2_core::embed::FakeEmbedder::default(),
     )
     .unwrap();
 
-    // the always-allowed write actually hit the file
+    // the always-allowed write actually hit the file — the id lives in the frontmatter,
+    // so identity travels with the note (there is no separate log; data-model.md §1, §4).
     let on_disk = fs::read_to_string(&note_path).unwrap();
     assert_eq!(
         on_disk,
         "---\nb2id: 01JSTAMPED0000000000000000\ntype: note\ntitle: \"Orphan\"\n---\nNo id here.\n"
-    );
-
-    // and it was logged through the sink seam
-    assert_eq!(
-        sink.events(),
-        vec![Event::B2idStamped {
-            b2id: "01JSTAMPED0000000000000000".to_string(),
-            path: "orphan.md".to_string(),
-        }]
     );
 
     // the freshly stamped note resolves
@@ -168,7 +130,6 @@ fn aliases_are_projected_and_searchable() {
         &conn,
         &vault,
         &b2_core::id::UlidGen,
-        &b2_core::event::NullSink,
         &b2_core::embed::FakeEmbedder::default(),
     )
     .unwrap();

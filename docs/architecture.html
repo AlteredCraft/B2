@@ -570,9 +570,8 @@ relations:
   <code>.b2/</code>, reindex is idempotent and reports counts, all ref forms resolve to the same set, search is
   note-level with a snippet. <span class="mono">cli.rs</span> drives the <em>built binary</em> for every
   command, both human and <code>--json</code>, clean non-zero exits on unknown notes/ids, and that the
-  not-yet-semantic caveat rides stderr. <span style="color:var(--muted)">(Test tallies to refresh after the
-  <code>suggest</code>/<code>accept</code>/<code>reject</code> command tests are removed and <code>similar</code>/<code>link</code>
-  tests land.)</span></div>
+  not-yet-semantic caveat rides stderr — including the <code>similar</code> → <code>link</code> discovery
+  flow and its idempotent, invalid-verb, and both-directions cases.</div>
 </section>
 
 <!-- ============ INVARIANTS ============ -->
@@ -599,7 +598,7 @@ relations:
   assertable. Determinism is a hard requirement of the core — no wall clock, no randomness; timestamps and ids are
   passed in.</p>
   <div class="card">
-    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(counts to refresh once the relator-cut lands in code)</span></div>
+    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(129 tests under <code>cargo test</code>)</span></div>
     <table>
       <tr><th>Property</th><th>Pinned by</th><th class="mono" style="text-align:right">tests</th></tr>
       <tr><td>Substrate — FTS5 + sqlite-vec coexist; pragmas persist</td><td class="mono">substrate.rs</td><td class="mono" style="text-align:right">2</td></tr>
@@ -608,17 +607,15 @@ relations:
       <tr><td>Vectors &amp; the embedder seam</td><td class="mono">embed.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>Candidate generation (near ∖ connected)</td><td class="mono">discover.rs</td><td class="mono" style="text-align:right">7</td></tr>
-      <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter · graph</td><td class="mono" style="text-align:right">↻</td></tr>
+      <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter · graph</td><td class="mono" style="text-align:right">10</td></tr>
       <tr><td>Note-authoring CRUD — add · mv · explain · dry-run</td><td class="mono">add · mv · explain · dry_run · pathspec</td><td class="mono" style="text-align:right">39</td></tr>
-      <tr><td>The <code>Vault</code> façade · the <code>b2</code> CLI (built binary)</td><td class="mono">vault.rs · cli.rs</td><td class="mono" style="text-align:right">↻</td></tr>
-      <tr><td>Embedder config &amp; provisioning</td><td class="mono">b2-embed</td><td class="mono" style="text-align:right">↻</td></tr>
+      <tr><td>The <code>Vault</code> façade · the <code>b2</code> CLI (<code>similar</code>/<code>link</code> included)</td><td class="mono">vault.rs · cli.rs</td><td class="mono" style="text-align:right">31</td></tr>
+      <tr><td>Embedder config &amp; provisioning</td><td class="mono">b2-embed</td><td class="mono" style="text-align:right">4</td></tr>
     </table>
     <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Run under <code>cargo test</code> (rustc 1.96,
     the fake embedder). One <code>#[ignore]</code> test — a batched-embed equality check (<code>b2-embed</code>) —
     exercises the real model out of CI. Open any file in the right column; it is the ground truth this page
-    paraphrases. <b>↻</b> = a tally that moves once the <code>b2-relate</code> crate, the <code>suggest</code>/<code>accept</code>/<code>reject</code>
-    tests, and the <code>event</code>/<code>replay</code> tests are deleted and the <code>similar</code>/<code>link</code>
-    tests land.</p>
+    paraphrases.</p>
   </div>
 </section>
 
@@ -631,10 +628,6 @@ relations:
   slipped through.</p>
   <div class="card" style="border-left:3px solid var(--amber)">
     <ul class="tidy">
-      <li><b>The relator-cut landing in code (in flight).</b> The design docs are already at the two-tier /
-      one-seam model; the code deletions — the <code>b2-relate</code> crate, the <code>Relator</code> seam, the
-      <code>suggest</code>/<code>accept</code>/<code>reject</code> commands, and the <code>event</code>/<code>replay</code>
-      modules — are the next mechanical step. Until then a few test tallies on this page read <b>↻</b>.</li>
       <li><b>Semantic quality in CI.</b> The engine suite runs on the deterministic fake embedder, so it proves
       plumbing, not ranking quality. The real model is measured by one separate out-of-CI eval — retrieval
       precision/MRR (<code>cargo run -p b2-embed --example eval</code>). Model quality never flakes CI.</li>

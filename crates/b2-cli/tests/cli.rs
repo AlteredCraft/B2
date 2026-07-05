@@ -382,13 +382,13 @@ fn search_before_reindex_is_empty_but_succeeds() {
     assert!(v.as_array().unwrap().is_empty());
 }
 
-// --- suggestion lifecycle (③): suggest / accept / reject ---------------------
+// --- connection discovery (③): similar + link ------------------------------
 
-/// A reindexed vault of mutually **unconnected** notes, so connection discovery has
+/// A reindexed vault of mutually **unconnected** notes, so `b2 similar` has
 /// candidates to surface (the golden vault's two notes are directly linked → none).
-/// With the fake embedder the KNN pool is the whole vault, so every other note is a
-/// candidate and the `FakeRelator` fires on most — a reliably non-empty queue.
-fn suggestable_vault() -> (tempfile::TempDir, PathBuf) {
+/// Under the fake embedder the KNN pool is the whole vault, so every other note is a
+/// candidate — a reliably non-empty list.
+fn discovery_vault() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     std::fs::create_dir_all(&root).unwrap();
@@ -404,10 +404,10 @@ fn suggestable_vault() -> (tempfile::TempDir, PathBuf) {
     (tmp, root)
 }
 
-/// The pending queue as JSON (re-runs generation, which is idempotent).
-fn queue(root: &Path) -> Vec<Value> {
-    let out = run_in(root, &["--json", "suggest"]);
-    assert!(out.status.success(), "suggest: {}", stderr(&out));
+/// `b2 similar` as JSON (a pure read over stored vectors; no model call).
+fn similar(root: &Path, note: &str) -> Vec<Value> {
+    let out = run_in(root, &["--json", "similar", note]);
+    assert!(out.status.success(), "similar: {}", stderr(&out));
     serde_json::from_slice::<Value>(&out.stdout)
         .unwrap()
         .as_array()
@@ -416,129 +416,153 @@ fn queue(root: &Path) -> Vec<Value> {
 }
 
 #[test]
-fn suggest_generates_and_lists_json_and_human() {
-    let (_g, root) = suggestable_vault();
+fn similar_lists_candidates_json_and_human() {
+    let (_g, root) = discovery_vault();
 
-    // JSON: a non-empty array of fully-resolved suggestions with a usable handle.
-    let q = queue(&root);
-    assert!(!q.is_empty(), "unconnected notes must yield candidates");
-    for s in &q {
-        assert!(s["edge_id"].as_str().is_some_and(|v| !v.is_empty()));
-        assert!(s["src_path"].as_str().is_some());
-        assert!(s["dst_path"].as_str().is_some());
-        assert!(s["relation"].as_str().is_some());
-        assert_eq!(s["by"], "agent:fake-relator-v1");
+    // JSON: a non-empty, fully-resolved list, never including the anchor itself.
+    let s = similar(&root, "alpha.md");
+    assert!(!s.is_empty(), "unconnected notes must surface candidates");
+    for c in &s {
+        assert!(c["path"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(c["score"].as_f64().is_some());
+        assert_ne!(
+            c["path"], "alpha.md",
+            "the anchor never appears in its own list"
+        );
     }
 
-    // Human: each suggestion prints its id handle; the stub-relator caveat and the
-    // generation summary live on stderr (stdout stays pure results).
-    let human = run_in(&root, &["suggest"]);
+    // Human: prints score/path lines, not the empty-state message.
+    let human = run_in(&root, &["similar", "alpha.md"]);
     assert!(human.status.success(), "{}", stderr(&human));
-    let first_id = q[0]["edge_id"].as_str().unwrap();
     assert!(
-        stdout(&human).contains(first_id),
-        "human list should show the id handle: {:?}",
+        !stdout(&human).contains("No similar"),
+        "expected a list: {}",
         stdout(&human)
     );
-    let err = stderr(&human).to_lowercase();
-    assert!(
-        err.contains("stub relator"),
-        "expected honesty caveat: {err}"
-    );
-    assert!(
-        err.contains("generated"),
-        "expected a generation summary: {err}"
-    );
 }
 
 #[test]
-fn suggest_before_reindex_is_empty_but_succeeds() {
-    let (_g, root) = golden_vault();
-    // never reindexed → no vector space → no candidates, but a clean exit.
-    let out = run_in(&root, &["--json", "suggest"]);
+fn similar_excludes_already_linked() {
+    let (_g, root) = discovery_vault();
+    // beta is a candidate of alpha before any link.
+    assert!(similar(&root, "alpha.md")
+        .iter()
+        .any(|c| c["path"] == "beta.md"));
+
+    // link alpha → beta; beta is now a 1-hop neighbor and drops out of the list.
+    let out = run_in(&root, &["link", "alpha.md", "beta.md", "--type", "relates"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v.as_array().unwrap().is_empty());
+    assert!(
+        similar(&root, "alpha.md")
+            .iter()
+            .all(|c| c["path"] != "beta.md"),
+        "an already-linked note must not be surfaced as similar"
+    );
 }
 
 #[test]
-fn accept_writes_the_link_and_removes_it_from_the_queue() {
-    let (_g, root) = suggestable_vault();
-    let q = queue(&root);
-    let s = &q[0];
-    let id = s["edge_id"].as_str().unwrap();
-    let src_path = s["src_path"].as_str().unwrap();
+fn similar_unknown_note_fails_cleanly() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(&root, &["similar", "nope.md"]);
+    assert!(!out.status.success(), "unknown note must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("not found"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}
 
-    // The source note carries no authored relations yet.
-    let src_file = root.join(src_path);
-    assert!(!std::fs::read_to_string(&src_file)
+#[test]
+fn link_writes_frontmatter_and_shows_in_both_directions() {
+    let (_g, root) = discovery_vault();
+    let src = root.join("alpha.md");
+    assert!(!std::fs::read_to_string(&src)
         .unwrap()
         .contains("relations:"));
 
-    let out = run_in(&root, &["accept", id]);
+    let out = run_in(
+        &root,
+        &["link", "alpha.md", "beta.md", "--type", "elaborates"],
+    );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).to_lowercase().contains("accepted"));
+    assert!(stdout(&out).to_lowercase().contains("linked"));
 
-    // Markdown-first: the typed link now lives in the note's frontmatter…
+    // Markdown-first: the typed relation lands in the source note's frontmatter…
+    let body = std::fs::read_to_string(&src).unwrap();
     assert!(
-        std::fs::read_to_string(&src_file)
-            .unwrap()
-            .contains("relations:"),
-        "accept must append the link to the source note's frontmatter"
+        body.contains("relations:"),
+        "link must append to frontmatter: {body}"
     );
-    // …and the accepted suggestion has left the pending queue (it is now active).
-    assert!(
-        queue(&root).iter().all(|s| s["edge_id"] != id),
-        "an accepted suggestion must not remain pending"
-    );
-}
+    assert!(body.contains("elaborates"), "the verb is written: {body}");
 
-#[test]
-fn reject_tombstones_and_removes_it_from_the_queue() {
-    let (_g, root) = suggestable_vault();
-    let id = {
-        let q = queue(&root);
-        q[0]["edge_id"].as_str().unwrap().to_string()
-    };
-
-    let out = run_in(&root, &["reject", &id]);
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).to_lowercase().contains("rejected"));
-
-    // Tombstoned → gone from the queue and never re-proposed on a later `suggest`.
-    assert!(
-        queue(&root).iter().all(|s| s["edge_id"] != id.as_str()),
-        "a rejected pair must not be re-proposed"
-    );
-}
-
-#[test]
-fn accept_reject_json_shape() {
-    let (_g, root) = suggestable_vault();
-    let q = queue(&root);
-    // reject the first, accept the second, both in --json mode.
-    let reject_id = q[0]["edge_id"].as_str().unwrap();
-    let accept_id = q[1]["edge_id"].as_str().unwrap();
-
-    let r = run_in(&root, &["--json", "reject", reject_id]);
-    assert!(r.status.success(), "{}", stderr(&r));
-    let rv: Value = serde_json::from_slice(&r.stdout).unwrap();
-    assert_eq!(rv["rejected"], true);
-    assert_eq!(rv["edge_id"], reject_id);
-
-    let a = run_in(&root, &["--json", "accept", accept_id]);
-    assert!(a.status.success(), "{}", stderr(&a));
+    // …and the graph shows it outbound from alpha and inbound (backlink) at beta.
+    let a = run_in(&root, &["--json", "neighbors", "alpha.md"]);
     let av: Value = serde_json::from_slice(&a.stdout).unwrap();
-    assert_eq!(av["accepted"], true);
-    assert_eq!(av["edge_id"], accept_id);
+    assert!(
+        av.as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["direction"] == "outbound" && n["path"] == "beta.md"),
+        "alpha → beta must be outbound: {av}"
+    );
+    let b = run_in(&root, &["--json", "neighbors", "beta.md"]);
+    let bv: Value = serde_json::from_slice(&b.stdout).unwrap();
+    assert!(
+        bv.as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["direction"] == "inbound" && n["path"] == "alpha.md"),
+        "beta must show alpha as an inbound backlink: {bv}"
+    );
 }
 
 #[test]
-fn accept_unknown_id_fails_cleanly() {
-    let (_g, root) = suggestable_vault();
-    let out = run_in(&root, &["accept", "01JNOTASUGGESTION00000000000"]);
-    assert!(!out.status.success(), "unknown id must be a nonzero exit");
+fn link_defaults_to_references_and_reports_json() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(&root, &["--json", "link", "alpha.md", "gamma.md"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["relation"], "references");
+    assert_eq!(v["created"], true);
+    assert_eq!(v["src_path"], "alpha.md");
+    assert_eq!(v["dst_path"], "gamma");
+}
+
+#[test]
+fn link_is_idempotent() {
+    let (_g, root) = discovery_vault();
+    run_in(
+        &root,
+        &["link", "alpha.md", "beta.md", "--type", "supports"],
+    );
+    // a second identical link writes nothing.
+    let out = run_in(
+        &root,
+        &[
+            "--json", "link", "alpha.md", "beta.md", "--type", "supports",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["created"], false,
+        "re-linking an existing edge changes nothing"
+    );
+}
+
+#[test]
+fn link_invalid_type_fails_cleanly() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(
+        &root,
+        &["link", "alpha.md", "beta.md", "--type", "bogus-verb"],
+    );
+    assert!(
+        !out.status.success(),
+        "a non-core verb must be a nonzero exit"
+    );
     let err = stderr(&out).to_lowercase();
-    assert!(err.contains("suggestion"), "actionable message: {err}");
+    assert!(
+        err.contains("relation"),
+        "message should name the problem: {err}"
+    );
     assert!(!err.contains("panicked"), "no stack trace: {err}");
 }

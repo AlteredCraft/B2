@@ -2,14 +2,14 @@
 //! testability stack" point 1). Everything before this exists only as modules the
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
-//! durable `JsonlSink`, the embedder, and the id generator, and exposes *only what
-//! the shipped commands need* — `open` / `reindex` / `neighbors` / `search`, plus
-//! the suggestion lifecycle (`generate_suggestions` / `list_suggestions` /
-//! `accept_suggestion` / `reject_suggestion`). Add operations when a command needs
-//! them; do not pre-build a sprawling surface.
+//! embedder, and the id generator, and exposes *only what the shipped commands need*
+//! — `open` / `reindex` / `neighbors` / `explain` / `search` / `similar` / `link` /
+//! `add` / `mv`. Add operations when a command needs them; do not pre-build a
+//! sprawling surface.
 //!
-//! A vault is one portable folder: the index and log live under `<root>/.b2/`
-//! (data-model.md §4), so pointing B2 at a folder of Markdown is the whole setup.
+//! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
+//! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
+//! of Markdown is the whole setup.
 //! The embedder is injected ([`open_with_embedder`](Vault::open_with_embedder)):
 //! the `b2` CLI wires the candle-backed `LocalEmbedder` (real semantics), while
 //! [`open`](Vault::open) defaults to the deterministic [`FakeEmbedder`] so the core
@@ -19,15 +19,13 @@
 
 use crate::add::{self, AddReport};
 use crate::db;
-use crate::discover::{self, GenerateOutcome};
+use crate::discover;
 use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
-use crate::event::JsonlSink;
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
 use crate::mv::{self, MoveReport};
-use crate::relate::Relator;
-use crate::{ingest, search, suggest};
+use crate::{ingest, note, relation, search};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::fs;
@@ -42,11 +40,10 @@ const EMBED_DIM: usize = 64;
 const SNIPPET_CHARS: usize = 160;
 
 /// An open vault: the Markdown at `root`, projected into the disposable index at
-/// `root/.b2/b2.sqlite`, with the durable event log beside it.
+/// `root/.b2/b2.sqlite` (a pure projection — no durable state outside the Markdown).
 pub struct Vault {
     root: PathBuf,
     conn: Connection,
-    sink: JsonlSink,
     // Injected through the seam: the CLI wires the real candle model; `open`
     // defaults to `FakeEmbedder` so the core tests stay deterministic and model-free
     // (the "build for tomorrow's model" seam, vision-and-scope).
@@ -95,8 +92,8 @@ pub struct NeighborView {
     /// Display label: the verb outbound, its inverse inbound (data-model.md §2).
     pub label: String,
     pub explanation: Option<String>,
-    /// Edge provenance: `"inline"` (a human body link) or `"frontmatter"` (a
-    /// relation B2 accepted, or a human/importer authored) — data-model.md §0.
+    /// Edge origin: `"inline"` (a human body link) or `"frontmatter"` (a relation
+    /// committed via `b2 link`, or a human/importer authored) — data-model.md §0.
     /// `b2 explain` renders it; `b2 neighbors` carries it too.
     pub origin: String,
 }
@@ -128,27 +125,32 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-/// One pending suggestion, resolved for display: the typed edge with both ends'
-/// paths + titles and its decision fuel. `edge_id` is the handle `accept`/`reject`
-/// take (so the CLI stays a dumb printer).
+/// One semantically-similar candidate for `b2 similar`: a note near the anchor in
+/// embedding space that is **not** already connected to it, resolved for display
+/// with the passage that made it similar. This is connection-discovery candidate
+/// generation ([`discover::candidates`]) surfaced directly to the human — the
+/// machine finds the candidate, you decide whether to `link` it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SuggestionView {
-    pub edge_id: String,
-    /// The source note (the anchor the edge points *from*).
+pub struct SimilarView {
+    pub b2id: String,
+    pub path: String,
+    pub title: Option<String>,
+    /// Best chunk-pair similarity to the anchor; higher is nearer.
+    pub score: f64,
+    /// A one-line excerpt of the candidate chunk that achieved `score` — the
+    /// evidence for *why* it surfaced.
+    pub evidence: String,
+}
+
+/// What `b2 link` did: the committed typed edge, resolved for display. `created` is
+/// `false` when the directed `(src, dst, type)` edge already existed, so nothing was
+/// written (the command is idempotent).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LinkReport {
     pub src_path: String,
-    pub src_title: Option<String>,
-    /// The target note (`dst_path` falls back to the raw link path if the target is
-    /// dangling — no indexed note).
     pub dst_path: String,
-    pub dst_title: Option<String>,
-    /// The proposed relation verb (data-model.md §2 core set).
     pub relation: String,
-    /// The relator's "why".
-    pub explanation: Option<String>,
-    /// `0.0–1.0` triage prior, if the relator gave one.
-    pub confidence: Option<f64>,
-    /// Provenance `by` — `agent:<model_id>` (data-model.md §4).
-    pub by: String,
+    pub created: bool,
 }
 
 impl Vault {
@@ -167,15 +169,12 @@ impl Vault {
     /// wipe vectors on the next command — a mismatch is caught, and fixed, at
     /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
     pub fn open_with_embedder(vault_root: &Path, embedder: Box<dyn Embedder>) -> Result<Self> {
-        // `Connection::open` creates the DB file but not its parent, and the log
-        // sink creates `.b2/log/`; make `.b2/` first so both land in one place.
+        // `Connection::open` creates the DB file but not its parent; make `.b2/` first.
         fs::create_dir_all(vault_root.join(".b2"))?;
-        let sink = JsonlSink::in_vault(vault_root)?;
         let conn = db::open(&vault_root.join(".b2").join("b2.sqlite"))?;
         Ok(Self {
             root: vault_root.to_path_buf(),
             conn,
-            sink,
             embedder,
             idgen: UlidGen,
         })
@@ -203,7 +202,6 @@ impl Vault {
             &self.conn,
             &self.root,
             &self.idgen,
-            &self.sink,
             self.embedder.as_ref(),
             force,
             on_progress,
@@ -332,112 +330,112 @@ impl Vault {
         Ok(out)
     }
 
-    /// Generate connection-discovery suggestions across the whole vault (Flow ③
-    /// generate): every note as an anchor, its complement candidates judged by the
-    /// supplied `relator`, each fired-and-core proposal written to the queue +
-    /// durable log. **Idempotent** — a pair already active, pending, or rejected is
-    /// never re-proposed — so it is safe to run repeatedly. `top_n` bounds the
-    /// candidates considered per anchor. Returns the run tally.
-    ///
-    /// The relator is **injected as an argument**, not held on the façade like the
-    /// embedder: it has a single consumer (this one method), whereas the embedder is
-    /// needed by `reindex`/`search`/`accept`/`mv` and so is wired at `open` time.
-    /// Passing it here keeps the façade surface minimal (add operations when a
-    /// command needs them) while still keeping `b2-core` model-free — the CLI wires
-    /// the real Claude-backed relator (`b2-relate`), tests pass the deterministic
-    /// [`FakeRelator`](crate::relate::FakeRelator). Candidate generation reads the
-    /// *stored* vectors, so this needs no live embedder (a prior `reindex` is enough).
-    pub fn generate_suggestions(
-        &self,
-        relator: &dyn Relator,
-        top_n: usize,
-    ) -> Result<GenerateOutcome> {
-        self.generate_suggestions_with_progress(relator, top_n, &mut |_| {})
-    }
-
-    /// [`generate_suggestions`](Self::generate_suggestions) with a per-anchor progress
-    /// callback the CLI renders as a live line — a suggestion run is network-bound
-    /// under the real relator (one call per candidate pair), so it must not look
-    /// frozen. The callback only observes; the run stays deterministic.
-    pub fn generate_suggestions_with_progress(
-        &self,
-        relator: &dyn Relator,
-        top_n: usize,
-        on_progress: &mut dyn FnMut(discover::SuggestProgress),
-    ) -> Result<GenerateOutcome> {
-        let now = self.now()?;
-        discover::generate_all_with_progress(
-            &self.conn,
-            &self.sink,
-            &self.idgen,
-            relator,
-            top_n,
-            &now,
-            on_progress,
-        )
-    }
-
-    /// The live review queue: every pending suggestion, each resolved to both ends'
-    /// paths + titles for display, ordered oldest-evidence-first (as
-    /// [`suggest::list_suggestions`] returns them).
-    pub fn list_suggestions(&self) -> Result<Vec<SuggestionView>> {
+    /// Surface the notes most semantically similar to `note_ref` (path **or** `b2id`)
+    /// that are **not already connected** to it — connection-discovery candidate
+    /// generation ([`discover::candidates`]) exposed directly: vector KNN over the
+    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked by best
+    /// chunk-pair max-similarity. Each result carries the candidate's path + title and
+    /// the passage that made it similar. A **pure read over stored vectors — no model
+    /// call** (a prior `reindex` supplies them), like [`neighbors`](Self::neighbors);
+    /// `limit` bounds the count. Errors with [`Error::NoteNotFound`] for an unknown
+    /// ref; returns an empty list for a known note with no vectors or no candidates.
+    pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
+        let b2id = self.resolve_ref(note_ref)?;
         let mut out = Vec::new();
-        for s in suggest::list_suggestions(&self.conn)? {
-            let src_path = db::resolve_b2id_to_path(&self.conn, &s.src_id)?.unwrap_or_default();
-            let src_title = db::note_title(&self.conn, &s.src_id)?;
-            let (dst_path, dst_title) = match &s.dst_id {
-                Some(d) => (
-                    db::resolve_b2id_to_path(&self.conn, d)?
-                        .unwrap_or_else(|| s.dst_path_raw.clone()),
-                    db::note_title(&self.conn, d)?,
-                ),
-                None => (s.dst_path_raw.clone(), None),
-            };
-            out.push(SuggestionView {
-                edge_id: s.edge_id,
-                src_path,
-                src_title,
-                dst_path,
-                dst_title,
-                relation: s.edge_type,
-                explanation: s.explanation,
-                confidence: s.confidence,
-                by: s.by,
+        for c in discover::candidates(&self.conn, &b2id, limit)? {
+            let path = db::resolve_b2id_to_path(&self.conn, &c.note_b2id)?.unwrap_or_default();
+            let title = db::note_title(&self.conn, &c.note_b2id)?;
+            let evidence = db::chunk_text(&self.conn, c.evidence_chunk_id)?
+                .map(|t| snippet(&t))
+                .unwrap_or_default();
+            out.push(SimilarView {
+                b2id: c.note_b2id,
+                path,
+                title,
+                score: c.score,
+                evidence,
             });
         }
         Ok(out)
     }
 
-    /// Accept the pending suggestion `edge_id` (Flow ③): append its typed link to
-    /// the source note's frontmatter `relations:` and re-project it as an active,
-    /// authored edge. Returns `false` if `edge_id` is not a pending suggestion (or
-    /// is dangling, with no concrete target to link).
+    /// Commit a typed connection `src --type--> dst` (`b2 link`, Flow ③): append a
+    /// typed-link string to the **source note's frontmatter `relations:`** (Markdown
+    /// first, **never the body** — data-model.md §0) and re-project it as an
+    /// `origin='frontmatter'` active edge. Both ends resolve by path **or** `b2id`.
+    /// `edge_type` must be a **core** verb (data-model.md §2) — the CLI defaults it to
+    /// `references`; a non-core verb errors with [`Error::InvalidRelation`] rather than
+    /// silently storing a typo. **Idempotent:** if the directed `(src, dst, type)` edge
+    /// already exists, nothing is written (`created: false`).
     ///
-    /// Re-projection **re-embeds the source note**, so the caller must have opened
-    /// the vault with the same embedder the index was built with (the CLI loads the
-    /// real model for `accept`, as for `reindex`).
-    pub fn accept_suggestion(&self, edge_id: &str) -> Result<bool> {
-        let now = self.now()?;
-        suggest::accept_suggestion(
-            &self.conn,
-            &self.sink,
-            self.embedder.as_ref(),
-            &self.root,
-            edge_id,
-            &now,
-        )
-    }
-
-    /// Reject the pending suggestion `edge_id`: tombstone it so the same pair+type
-    /// is never proposed again. Returns `false` if `edge_id` is not a pending
-    /// suggestion (nothing to reject). Touches no vectors — needs no embedder.
-    pub fn reject_suggestion(&self, edge_id: &str) -> Result<bool> {
-        if suggest::get_suggestion(&self.conn, edge_id)?.is_none() {
-            return Ok(false);
+    /// Re-projection re-reads the source note (a frontmatter-only edit skips
+    /// re-embedding, but ingest still takes the embedder), so the CLI opens the vault
+    /// with the same embedder the index was built with, as for `accept`/`add`/`mv`.
+    pub fn link(
+        &self,
+        src_ref: &str,
+        dst_ref: &str,
+        edge_type: &str,
+        explanation: Option<&str>,
+    ) -> Result<LinkReport> {
+        if !relation::is_core(edge_type) {
+            return Err(Error::InvalidRelation(edge_type.to_string()));
         }
-        let now = self.now()?;
-        suggest::reject_suggestion(&self.conn, &self.sink, edge_id, &now)?;
-        Ok(true)
+        let src_id = self.resolve_ref(src_ref)?;
+        let dst_id = self.resolve_ref(dst_ref)?;
+        let src_path = db::resolve_b2id_to_path(&self.conn, &src_id)?
+            .ok_or_else(|| Error::NoteNotFound(src_ref.to_string()))?;
+        let dst_full = db::resolve_b2id_to_path(&self.conn, &dst_id)?
+            .ok_or_else(|| Error::NoteNotFound(dst_ref.to_string()))?;
+        // The link path drops the `.md` Obsidian omits (mirrors accept/suggest).
+        let dst_path = dst_full
+            .strip_suffix(".md")
+            .unwrap_or(&dst_full)
+            .to_string();
+
+        // Idempotent: don't append a duplicate frontmatter line for an existing edge.
+        if db::edge_exists(&self.conn, &src_id, &dst_id, edge_type)? {
+            return Ok(LinkReport {
+                src_path,
+                dst_path,
+                relation: edge_type.to_string(),
+                created: false,
+            });
+        }
+
+        // Build the typed-link spec from the dst's current path + title (mirrors accept).
+        let link = match db::note_title(&self.conn, &dst_id)? {
+            Some(title) => format!("[[{dst_path}|{title}]]"),
+            None => format!("[[{dst_path}]]"),
+        };
+        let spec = match explanation {
+            Some(e) => format!("{edge_type} {link} — {e}"),
+            None => format!("{edge_type} {link}"),
+        };
+
+        // 1. Markdown first: append to frontmatter relations: (never the body, §0).
+        let abs = self.root.join(&src_path);
+        let mut parsed = note::parse(&fs::read_to_string(&abs)?);
+        parsed.add_relation(&spec)?;
+        fs::write(&abs, parsed.as_str())?;
+
+        // 2. Re-project the source note so the edge re-materializes from the Markdown
+        //    as origin='frontmatter' — a projection of the line just written, not an
+        //    index write (data-model.md §3).
+        ingest::ingest_file(
+            &self.conn,
+            &self.root,
+            &src_path,
+            &self.idgen,
+            self.embedder.as_ref(),
+        )?;
+
+        Ok(LinkReport {
+            src_path,
+            dst_path,
+            relation: edge_type.to_string(),
+            created: true,
+        })
     }
 
     /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a
@@ -451,7 +449,7 @@ impl Vault {
     ///
     /// Rewriting an inbound file changes its body, so this **re-embeds** those
     /// files: the CLI opens the vault with the real model for `mv`, as for
-    /// `reindex`/`accept`.
+    /// `reindex`/`link`.
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
         let b2id = self.resolve_ref(note_ref)?;
         let old_rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
@@ -475,9 +473,8 @@ impl Vault {
     /// [`Error::AddTargetExists`] rather than clobber an existing file.
     ///
     /// Projection **embeds** the new note, so the CLI opens the vault with the real
-    /// model for `add`, as for `reindex`/`accept`/`mv`. The `b2id` is stamped by the
-    /// ordinary ingest path (and logged), so the note is fully reconstructible from
-    /// Markdown.
+    /// model for `add`, as for `reindex`/`link`/`mv`. The `b2id` is stamped by the
+    /// ordinary ingest path, so the note is fully reconstructible from Markdown.
     pub fn add_note(
         &self,
         path: &str,
@@ -488,7 +485,6 @@ impl Vault {
         add::add_note(
             &self.conn,
             &self.idgen,
-            &self.sink,
             self.embedder.as_ref(),
             &self.root,
             path,
@@ -498,20 +494,10 @@ impl Vault {
         )
     }
 
-    /// The current UTC time as an ISO-8601 string, taken from **SQLite** — the same
-    /// clock that stamps `indexed_at` — so `b2-core` needs no wall-clock crate and
-    /// the engine ops still take the timestamp as a param (the façade is the
-    /// determinism boundary, exactly as it is for `idgen`).
-    fn now(&self) -> Result<String> {
-        Ok(self
-            .conn
-            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |r| {
-                r.get(0)
-            })?)
-    }
-
-    /// Today's date (`YYYY-MM-DD`) from the same SQLite clock as [`now`](Self::now)
-    /// — the vault convention for a note's `created:` field (data-model.md §1).
+    /// Today's date (`YYYY-MM-DD`) from **SQLite** — the same clock that stamps
+    /// `indexed_at`, so `b2-core` needs no wall-clock crate and the façade is the
+    /// determinism boundary (as it is for `idgen`). The vault convention for a note's
+    /// `created:` field (data-model.md §1).
     fn today(&self) -> Result<String> {
         Ok(self
             .conn

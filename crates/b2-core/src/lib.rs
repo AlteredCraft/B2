@@ -1,4 +1,4 @@
-//! B2 index engine (`b2.sqlite`) — a **disposable** projection of `(Markdown ∪ log)`.
+//! B2 index engine (`b2.sqlite`) — a **disposable** projection of `Markdown`.
 //!
 //! Built step 0→5 per `planning/specs/index-engine-build.md`; the schema is a
 //! derived projection of `planning/data-model.md` and must satisfy it, never the
@@ -11,7 +11,6 @@ pub mod db;
 pub mod discover;
 pub mod embed;
 mod error;
-pub mod event;
 pub mod graph;
 pub mod id;
 pub mod ingest;
@@ -19,11 +18,8 @@ pub mod link;
 pub mod mv;
 pub mod note;
 mod pathspec;
-pub mod relate;
 pub mod relation;
-pub mod replay;
 pub mod search;
-pub mod suggest;
 pub mod vault;
 
 pub use db::{open, SCHEMA_VERSION};
