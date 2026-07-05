@@ -54,6 +54,16 @@ fn run_in(vault: &Path, args: &[&str]) -> Output {
     run(&full)
 }
 
+/// Run `b2 <args...>` with `B2_VAULT_PATH` set (and no `-C`) — the env-var path.
+fn run_with_vault_env(vault: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_VAULT_PATH", vault)
+        .args(args)
+        .output()
+        .expect("b2 binary runs")
+}
+
 fn stdout(o: &Output) -> String {
     String::from_utf8(o.stdout.clone()).unwrap()
 }
@@ -163,6 +173,41 @@ fn reindex_accepts_a_positional_vault() {
     let out = run(&["reindex", root.to_str().unwrap()]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("Indexed 2"));
+}
+
+#[test]
+fn b2_vault_path_env_var_points_at_the_vault() {
+    let (_g, root) = golden_vault();
+    // No -C and not run from inside the vault: the vault comes from $B2_VAULT_PATH.
+    let out = run_with_vault_env(&root, &["reindex"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Indexed 2"), "{:?}", stdout(&out));
+    assert!(root.join(".b2/b2.sqlite").is_file());
+}
+
+#[test]
+fn explicit_flag_overrides_b2_vault_path_env_var() {
+    // Two distinct vaults: one named by $B2_VAULT_PATH, one by -C. The flag must win.
+    let (_g_env, env_root) = golden_vault();
+    let (_g_flag, flag_root) = golden_vault();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_VAULT_PATH", &env_root)
+        .args(["-C", flag_root.to_str().unwrap(), "reindex"])
+        .output()
+        .expect("b2 binary runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Only the -C vault got an index; the env-named vault was untouched.
+    assert!(
+        flag_root.join(".b2/b2.sqlite").is_file(),
+        "the -C vault should be indexed"
+    );
+    assert!(
+        !env_root.join(".b2/b2.sqlite").exists(),
+        "an explicit -C must override $B2_VAULT_PATH"
+    );
 }
 
 // --- note CRUD: add -----------------------------------------------------------

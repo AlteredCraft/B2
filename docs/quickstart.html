@@ -124,7 +124,8 @@
 <span class="p">$</span> <span class="k">b2</span> --help
 <span class="o">B2 — explore a Markdown vault's typed graph and search from the terminal</span></pre>
       <div class="note tip"><span class="tag">Tip</span> Every command takes a global
-      <code>-C &lt;path&gt;</code> (or <code>--vault</code>) to point at your vault, and
+      <code>-C &lt;path&gt;</code> (or <code>--vault</code>) to point at your vault — or set
+      <code>B2_VAULT_PATH</code> once so every command finds it without the flag — and
       <code>--json</code> to emit machine-readable output for agents and scripts. The examples below
       run from <em>inside</em> the vault folder, so the default (<code>.</code>) just works.</div>
     </div>
@@ -356,6 +357,7 @@ Spaced repetition exploits the retrieval curve.
   <table>
     <thead><tr><th>Environment variable</th><th>Effect</th></tr></thead>
     <tbody>
+      <tr><td><code>B2_VAULT_PATH</code></td><td class="d">Vault root, so commands find it without <code>-C</code>. An explicit <code>-C</code>/<code>--vault</code> overrides it; falls back to the current dir.</td></tr>
       <tr><td><code>B2_EMBEDDER=fake</code></td><td class="d">Offline mode: deterministic non-semantic embedder. Search runs keyword-only.</td></tr>
       <tr><td><code>B2_DEBUG</code></td><td class="d">Print internal error detail after the generic user-facing message.</td></tr>
     </tbody>

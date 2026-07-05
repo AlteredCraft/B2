@@ -25,8 +25,15 @@ use std::process::ExitCode;
     about = "B2 — explore a Markdown vault's typed graph and search from the terminal"
 )]
 struct Cli {
-    /// Vault root (the folder of Markdown). The index + log live in `<vault>/.b2/`.
-    #[arg(short = 'C', long = "vault", global = true, default_value = ".")]
+    /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
+    /// Falls back to `$B2_VAULT_PATH`, then the current dir; an explicit `-C` wins over both.
+    #[arg(
+        short = 'C',
+        long = "vault",
+        global = true,
+        env = "B2_VAULT_PATH",
+        default_value = "."
+    )]
     vault: PathBuf,
 
     /// Emit machine-readable JSON instead of human-readable text.

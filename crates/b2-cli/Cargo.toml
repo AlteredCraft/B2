@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive", "env"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
 

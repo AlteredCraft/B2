@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRHXGB0G6ZEHKYGDEQFW40
 title: "B2 — Read me / map"
 type: note
 tags: [b2, readme, overview, map]
@@ -77,3 +78,7 @@ cargo build --release -p b2-cli
 alias b2=./target/release/b2
 b2 --help
 ```
+
+Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
+every command finds it without the flag (an explicit `-C` wins; otherwise it defaults to the current
+dir). Full walkthrough: **[Quick start](https://alteredcraft.github.io/B2/quickstart.html)**.

@@ -1,3 +1,6 @@
+---
+b2id: 01KWSRHGY9XCT43ZW22W73QBY4
+---
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -44,9 +47,10 @@ cargo fmt
 cargo clippy --workspace
 ```
 
-Env vars: `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere (offline/dev mode, and
-what the test suite runs under); `B2_DEBUG` makes the CLI print internal error detail after the
-generic message.
+Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins;
+falls back to the current dir); `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
+(offline/dev mode, and what the test suite runs under); `B2_DEBUG` makes the CLI print internal error
+detail after the generic message.
 
 ## Architecture
 
