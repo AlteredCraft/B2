@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRKASCAYXRPQ1AP5HE6R2N
 title: "B2 — Index Engine: rebuild qmd on SQLite"
 type: note
 tags: [b2, index-engine, sqlite, fts5, sqlite-vec, search, reranker, architecture]

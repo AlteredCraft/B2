@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRPN2YBZ6PG293S7J1JYW7
 title: "B2 — Vision & Scope"
 type: note
 tags: [b2, pkm, motivation, problem-statement, vision, scope]

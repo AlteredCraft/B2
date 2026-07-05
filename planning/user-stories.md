@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRP3XKWKPGBS3WM22FPQKX
 title: "B2 — User Stories"
 type: note
 tags: [b2, user-stories, links, kernel, vault]

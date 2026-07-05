@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRM7W17H7WJ3NAHBBZ0ACB
 title: "B2 — Index Engine: Build Plan & Schema"
 type: note
 tags: [b2, index-engine, sqlite, fts5, sqlite-vec, schema, build-plan, spec]

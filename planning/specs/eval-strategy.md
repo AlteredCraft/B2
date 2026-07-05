@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRM3SWVAVZ66CK3H2Z362K
 title: "B2 — Eval Strategy: measuring model quality"
 type: note
 tags: [b2, evals, testing, embedder, model-quality, spec]

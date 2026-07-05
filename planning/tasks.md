@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRNSA6ZVQEM14NSS345RRY
 title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]

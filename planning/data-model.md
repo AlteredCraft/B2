@@ -1,4 +1,5 @@
 ---
+b2id: 01KWSRJ21R41A1RRWBQ9JAT871
 title: "B2 — Data Model"
 type: note
 tags: [b2, data-model, frontmatter, typed-links, edges, provenance, okf]
