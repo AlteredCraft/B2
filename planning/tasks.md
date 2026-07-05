@@ -3,7 +3,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-03
+updated: 2026-07-05
 status: active
 ---
 
@@ -32,8 +32,8 @@ per-pair latency and dollar cost don't scale. Decision (mirrored in
 - **Backlinks retained** unchanged (`b2 neighbors` / `b2 explain`, inbound + outbound).
 
 So several **Done** items below — *Relator seam*, *Connection-discovery ①/②/③*, *suggest cost controls*,
-*Suggestion-quality eval* — are being **reverted in code** (see "Next up", Phase 2). They stay listed as
-history; only the code that implemented them is removed.
+*Suggestion-quality eval* — were **reverted in code** (commit `2cda889`, 2026-07-04; see "Shipped — the
+discovery pivot" below). They stay listed as history; only the code that implemented them was removed.
 
 ## Done
 
@@ -302,27 +302,29 @@ history; only the code that implemented them is removed.
   write; 1 CLI: `would_*` JSON shape + "No changes made" + a following real reindex still does all the work); **160**
   workspace tests green.
 
-## Next up — the discovery pivot (2026-07-04), in three phases
+## Shipped — the discovery pivot (2026-07-04), in three phases
 
-Phase 0 (docs) is **done** — this file and six others are mirrored to the pivot. Remaining code work:
+Phase 0 (docs) mirrored this file and six others to the pivot; the code landed in commit `2cda889`
+(129 workspace tests green, clippy + fmt clean). What shipped:
 
-- **Phase 1 — additive code (`b2 similar` + `b2 link`); build the new surface before deleting anything.**
-  - `Vault::similar(note, limit)` over [`discover::candidates`](../crates/b2-core/src/discover.rs) (already
-    built + model-free) → **`b2 similar <note>`**: notes ranked by embedding proximity minus the
+- [x] **Phase 1 — additive code (`b2 similar` + `b2 link`); the new surface, built before deleting anything.**
+  - `Vault::similar(note, limit)` over [`discover::candidates`](../crates/b2-core/src/discover.rs)
+    (model-free) → **`b2 similar <note>`**: notes ranked by embedding proximity minus the
     already-connected, each with path · title · score · evidence snippet; default 10; no model call; `--json`.
-  - Extract the frontmatter-append from `accept` ([`note::add_relation`](../crates/b2-core/src/note.rs)) into
-    `Vault::link(src, dst, type=references, explanation?)` → **`b2 link <src> <dst> [--type] [--explanation]`**:
-    Markdown-first write to `relations:` + re-project (the old `accept` minus the queue). A body link stays a
-    manual edit, picked up on the next reindex.
-- **Phase 2 — deletions.** `b2-relate` crate; `relate.rs`; the generate pipeline in `discover.rs`
-  (`generate_for_anchor` / `generate_all*` / `GenerateOutcome` / `SuggestProgress`) — **keep `candidates`**; the
-  suggestion lifecycle in `suggest.rs` (**keep** the extracted link primitive); `replay.rs`; the log tier in
-  `event.rs`; suggestion DB machinery (`status`, `origin='suggested'`, `edge_provenance`, the review-queue
-  readers); the façade + CLI suggestion surface (`suggest`/`accept`/`reject`, `B2_RELATOR`); tests
-  `relate`/`generate`/`suggestions` (adapt `accept` → `link`).
-- **Phase 3 — verify.** `cargo build` / `test` / `clippy --workspace` / `fmt`; confirm the two-tier invariant
-  (drop `b2.sqlite` → reindex identical) and the `similar` → `link` → `neighbors` loop end-to-end; refresh the
-  test tallies in the docs.
+  - The frontmatter-append extracted into `Vault::link(src, dst, type=references, explanation?)`
+    ([`note::add_relation`](../crates/b2-core/src/note.rs)) → **`b2 link <src> <dst> [--type] [--explanation]`**:
+    Markdown-first write to `relations:` + re-project; idempotent. A body link stays a manual edit,
+    picked up on the next reindex.
+- [x] **Phase 2 — deletions.** Removed the `b2-relate` crate; `relate.rs`; the generate pipeline in
+  `discover.rs` (`generate_for_anchor` / `generate_all*` / `GenerateOutcome` / `SuggestProgress`) — **kept
+  `candidates`**; the suggestion lifecycle in `suggest.rs` (**kept** the extracted link primitive); `replay.rs`;
+  the log tier in `event.rs`; the suggestion DB machinery (`status`, `origin='suggested'`, `edge_provenance`,
+  the review-queue readers); the façade + CLI suggestion surface (`suggest`/`accept`/`reject`, `B2_RELATOR`);
+  and the `relate`/`generate`/`suggestions` tests (`accept` tests adapted → `link`). Schema bumped to **v2**
+  with a disposable-index rebuild gate.
+- [x] **Phase 3 — verify.** `cargo build` / `test` / `clippy --workspace` / `fmt` all clean; the two-tier
+  invariant confirmed (drop `b2.sqlite` → reindex identical, backlinks intact) and the
+  `similar` → `link` → `neighbors` loop exercised end-to-end.
 
 **Not in scope (keep discovery thin):** a reranker (a one-stage insertion after RRF,
 [index-engine.md](index-engine.md) §5, still a clean fast-follow); query expansion; the actual

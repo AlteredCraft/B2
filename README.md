@@ -8,24 +8,26 @@ status: draft
 
 # B2 — "second brain"
 
-A personal, **local-first** knowledge-management vault — plain Markdown you fully own — with an
-AI agent that discovers **typed, explained connections** between your notes that you'd never find
-by hand.
+A personal, **local-first** knowledge vault — plain Markdown you fully own — with an AI layer that
+**surfaces the semantically similar notes you haven't linked yet**, so you can commit the typed,
+explained connections between them yourself.
 
-> **Status:** the design is **locked**, the **index engine is built** (`crates/b2-core`: steps 0→5 of
-> the [build spec](planning/specs/index-engine-build.md) + the suggestion **accept** operation), the
-> **`b2` CLI over a typed core API** is live (`crates/b2-cli`): point B2 at a folder and `reindex` /
-> `neighbors` / `search` it from the terminal, with `--json` for agents — and **semantic search is now
-> real** (`crates/b2-embed`: a candle-backed local embedder behind the seam; `b2 init` downloads the
-> model into a shared cache; the fake stays the CI default). All green (73 tests). **Next up:** the
-> connection-discovery pipeline ([tasks.md](planning/tasks.md)). A tour of how the system is
-> constructed — grounded in the test suite: [docs/architecture.html](docs/architecture.html).
+> **Status:** the design is **locked** and the **index engine is built** (`crates/b2-core`: steps 0→5
+> of the [build spec](planning/specs/index-engine-build.md)). The **`b2` CLI over a typed core API** is
+> live (`crates/b2-cli`): point B2 at a folder and `reindex` / `search` / `neighbors` / `explain` it
+> from the terminal, with `--json` for agents. **Semantic search is real** (`crates/b2-embed`: a
+> candle-backed local embedder behind the one seam; `b2 init` downloads the model into a shared cache;
+> the fake stays the CI default). **Connection discovery** ships as **`b2 similar`** (surface the
+> nearest *unlinked* notes — local, free, no model call) **+ `b2 link`** (you commit a typed relation
+> to frontmatter). The LLM relator was tried and **cut 2026-07-04** — its per-pair cost didn't scale;
+> the human is the precision gate ([tasks.md](planning/tasks.md)). All green (129 tests). A tour
+> grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 
 ## What B2 is (the north star)
 
-Point B2 at a folder of Markdown notes and it becomes a second brain that actively thinks alongside
-you: it reads everything, builds a *typed* graph, and keeps **discovering and explaining the
-connections** between notes — so the structure of your knowledge grows on its own instead of rotting.
+Point B2 at a folder of Markdown notes and it becomes a second brain that thinks alongside you: it
+reads everything, builds a *typed* graph, and keeps **surfacing the similar notes you haven't
+connected yet** — so the structure of your knowledge grows as you link them, instead of rotting.
 The files stay plain Markdown on your disk, yours forever; B2 is the **intelligence layer over them,
 not a container around them**. Humans and AI agents are both first-class users.
 
@@ -38,7 +40,7 @@ Two architectural tenets shape every decision (full text:
 
 - **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
   trim orphans. The index is a pure projection of your Markdown (drop it, rebuild it identical);
-  the only durable thing your notes can't reconstruct is a thin event log. Idempotency is the
+  **nothing durable lives outside your notes** (`index = projection of (Markdown)`). Idempotency is the
   mechanism; a vault you can rewrite without fear is the point.
 - **Build for tomorrow's model (the Bitter Lesson).** Every AI part sits behind a swappable seam;
   we orchestrate the minimum today's model needs and no more — so a more capable model is a drop-in,
@@ -61,7 +63,7 @@ and work with a vault in about ten minutes. Then go deeper:
 | Doc | What it owns |
 |---|---|
 | [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
-| [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the three storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
+| [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + `sqlite-vec`) as a disposable projection. The canonical *how*. |
 | [specs/index-engine-build.md](planning/specs/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
 | [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |

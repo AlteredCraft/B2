@@ -257,7 +257,9 @@ zero UI.
   Edge provenance lives in the **event log, not the note** (accepted edges stay pristine); `b2id` is B2's
   one always-allowed frontmatter write. A bare link is a **directed `references`** edge; the typed
   vocabulary is a **10-verb core + tolerated tail**. Settles the data-model "central question"
-  ([tasks.md](tasks.md)). *(Where accepted edges are written was revised 2026-06-30 — see below.)*
+  ([tasks.md](tasks.md)). *(Superseded twice — see below: where accepted edges are written was revised
+  2026-06-30, and the **third tier + the suggestion review layer were cut 2026-07-04** with the LLM
+  relator, collapsing storage to two tiers and the invariant to `index = projection of (Markdown)`.)*
 - **Graph is materialized, not parsed on read.** The typed graph is kept as a **disposable `edges` table
   in the index**, not resolved from the Markdown at query time. A note's *outbound* links are re-derivable
   by parsing it (which is why the table is disposable), but **backlinks, typed multi-hop traversal, the
@@ -268,6 +270,12 @@ zero UI.
   (capability areas 3, 5). Rationale in [index-engine.md](index-engine.md) §3, cost in §8.
 
 ## Decisions locked (2026-06-30)
+
+> **Partly superseded 2026-07-04 (see below).** The core here still holds — B2 writes typed edges to
+> frontmatter, never the body (now on `b2 link`). But the LLM relator was cut, so the **review layer /
+> pending-suggestion** references below are gone, and the graph's "three homes … ∪ the log
+> (`origin=suggested`)" collapsed to **two** — body links (`origin=inline`) ∪ frontmatter `relations:`
+> (`origin=frontmatter`).
 
 - **B2 never authors the body; accepted edges live in frontmatter (revises the data-model §0 "central
   decision").** The body is the rendered/exported document and stays **100% the human's** — B2 must never

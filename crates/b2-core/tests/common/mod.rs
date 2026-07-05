@@ -10,7 +10,7 @@ use std::path::Path;
 pub const MEMORY_ID: &str = "01JMEM0000000000000000000A";
 pub const SRS_ID: &str = "01JSRS0000000000000000000B";
 
-/// Deterministic id generator so stamping / suggestion ids are assertable.
+/// Deterministic id generator so stamped `b2id`s are assertable.
 pub struct FixedId(pub &'static str);
 impl IdGen for FixedId {
     fn new_id(&self) -> String {
@@ -20,7 +20,7 @@ impl IdGen for FixedId {
 
 /// Sequential deterministic ids, for pipeline tests that mint several ids in one
 /// run (where `FixedId`'s single constant would collide on the edges primary key).
-/// ULID-shaped (26 chars) and monotonic, so a run's suggestion ids are assertable.
+/// ULID-shaped (26 chars) and monotonic, so a run's minted ids are assertable.
 pub struct SeqId(Cell<u32>);
 impl SeqId {
     pub fn new() -> Self {

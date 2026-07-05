@@ -13,9 +13,10 @@
 //! written to avoid the target's keywords, so a passing score is genuinely semantic
 //! lift, not lexical overlap.
 //!
-//! Scope: this covers **semantic search** quality. **Suggestion** quality (the other
-//! half of step 5) is scaffolded here but lands with the connection-discovery
-//! pipeline — nothing generates suggestions yet (tasks.md "After that").
+//! Scope: this covers **semantic search** quality — B2's one AI seam, the embedder.
+//! (The LLM relator and its separate suggestion-quality eval were cut 2026-07-04;
+//! connection discovery is now `b2 similar` + `b2 link`, which reuses these same
+//! stored vectors — so this eval covers it too. See specs/eval-strategy.md.)
 
 use b2_core::embed::Embedder;
 use b2_core::vault::Vault;

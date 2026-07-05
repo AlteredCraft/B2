@@ -370,7 +370,7 @@ impl Vault {
     ///
     /// Re-projection re-reads the source note (a frontmatter-only edit skips
     /// re-embedding, but ingest still takes the embedder), so the CLI opens the vault
-    /// with the same embedder the index was built with, as for `accept`/`add`/`mv`.
+    /// with the same embedder the index was built with, as for `add`/`mv`.
     pub fn link(
         &self,
         src_ref: &str,
@@ -387,7 +387,7 @@ impl Vault {
             .ok_or_else(|| Error::NoteNotFound(src_ref.to_string()))?;
         let dst_full = db::resolve_b2id_to_path(&self.conn, &dst_id)?
             .ok_or_else(|| Error::NoteNotFound(dst_ref.to_string()))?;
-        // The link path drops the `.md` Obsidian omits (mirrors accept/suggest).
+        // The link path drops the `.md` Obsidian omits (matches how `[[links]]` are written).
         let dst_path = dst_full
             .strip_suffix(".md")
             .unwrap_or(&dst_full)
@@ -403,7 +403,7 @@ impl Vault {
             });
         }
 
-        // Build the typed-link spec from the dst's current path + title (mirrors accept).
+        // Build the typed-link spec from the dst's current path + title.
         let link = match db::note_title(&self.conn, &dst_id)? {
             Some(title) => format!("[[{dst_path}|{title}]]"),
             None => format!("[[{dst_path}]]"),

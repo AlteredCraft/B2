@@ -390,18 +390,6 @@ pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
         .optional()?)
 }
 
-/// A note's body as the index holds it: its chunk texts in `seq` order, blank-line
-/// joined (empty if the note has no chunks). This is the `NoteCtx.text` a *real*
-/// relator reads (tasks.md ② sub-decision — reuse the already-indexed chunks rather
-/// than re-read the file); [`FakeRelator`](crate::relate::FakeRelator) ignores it,
-/// so discovery is provable without a model.
-pub fn note_text(conn: &Connection, note_b2id: &str) -> Result<String> {
-    let mut stmt = conn.prepare("SELECT text FROM chunks WHERE note_b2id = ?1 ORDER BY seq")?;
-    let rows = stmt.query_map([note_b2id], |r| r.get::<_, String>(0))?;
-    let parts = rows.collect::<rusqlite::Result<Vec<String>>>()?;
-    Ok(parts.join("\n\n"))
-}
-
 /// A note's stored body hash (None if the note isn't indexed yet). Read **before**
 /// re-upserting so an incremental reindex can tell whether the body actually
 /// changed and skip re-embedding an unchanged note.
@@ -429,7 +417,7 @@ pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
 }
 
 /// A note's `title` (None if the note is absent or has no title) — the alias for a
-/// `[[path|title]]` link written on accept.
+/// `[[path|title]]` link written by `b2 link`.
 pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT title FROM notes WHERE b2id = ?1", [b2id], |r| {

@@ -196,7 +196,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             content,
         } => {
             // Add projects the new note, which embeds its body → it needs the same
-            // real model the index was built with, like `reindex`/`accept`/`mv`.
+            // real model the index was built with, like `reindex`/`mv`/`link`.
             let (vault, _semantic) = open_vault(&cli.vault, true)?;
             let report = vault.add_note(path, title.as_deref(), content.as_deref())?;
             if cli.json {
@@ -273,7 +273,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Mv { from, to } => {
             // A move rewrites inbound files, changing their bodies → they re-embed
             // on re-projection, so `mv` needs the same real model the index was
-            // built with, like `reindex`/`accept`.
+            // built with, like `reindex`/`add`/`link`.
             let (vault, _semantic) = open_vault(&cli.vault, true)?;
             let report = vault.move_note(from, to)?;
             if cli.json {
@@ -350,7 +350,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             explanation,
         } => {
             // Link appends to the source note's frontmatter and re-projects it, so it
-            // opens with the same real model the index was built with (like `accept`);
+            // opens with the same real model the index was built with (like `add`/`mv`);
             // a frontmatter-only edit won't actually re-embed.
             let (vault, _semantic) = open_vault(&cli.vault, true)?;
             let report = vault.link(src, dst, edge_type, explanation.as_deref())?;
