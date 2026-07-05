@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What B2 is
 
-A personal, local-first Markdown knowledge vault with an AI layer that discovers **typed, explained
-connections** between notes. The Markdown files stay plain and yours; B2 is the intelligence layer
+A personal, local-first Markdown knowledge vault with an AI layer that **surfaces semantically similar
+notes** for you to connect. The Markdown files stay plain and yours; B2 is the intelligence layer
 over them, not a container around them. This Cargo workspace is the **index engine + CLI**; the
 design lives in `planning/`.
 
@@ -16,12 +16,12 @@ The code is a *projection of the spec*, and comments cite it constantly (e.g. `d
 schema must satisfy the data model, never the reverse.
 
 - `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
-- `planning/data-model.md` — the *what*: note + connection in Markdown, the three storage tiers, the relation vocabulary.
-- `planning/index-engine.md` + `planning/specs/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the step 0→5 build order, data flows.
+- `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
+- `planning/index-engine.md` + `planning/specs/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
 - `planning/user-stories.md` — kernel behavior as testable scenarios.
-- `planning/specs/eval-strategy.md` — how model quality (the `Embedder` + `Relator` seams) is measured out-of-CI:
-  the two hand-labelled evals, their metrics, and how to run/grow them.
+- `planning/specs/eval-strategy.md` — how model quality (the `Embedder` seam) is measured out-of-CI:
+  the hand-labelled retrieval eval, its metrics, and how to run/grow it.
 
 ## Commands
 
@@ -52,33 +52,35 @@ generic message.
 
 ### The core invariant
 
-**`index = a pure projection of (Markdown ∪ log)`.** Three storage tiers:
+**`index = a pure projection of (Markdown)`.** Two storage tiers:
 
-1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable.
-2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + `sqlite-vec`. Drop it and `reindex`
-   rebuilds it identical. Nothing here is authoritative.
-3. **Durable append-only event log** (`<vault>/.b2/log/events.jsonl`) — the *only* state not
-   reconstructible from Markdown: review state (pending suggestions + rejection tombstones).
-   `replay(log) ⇒ review state` is what closes the invariant.
+1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable. Every committed
+   connection lives here: a body `[[link]]`, or a frontmatter `relations:` entry (written by `b2 link`).
+2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + `sqlite-vec` + the typed `edges` graph.
+   Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable state
+   lives outside the Markdown.**
 
-Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency);
-authored edges are re-derived from Markdown on every reindex while log-derived suggestion rows are
-left untouched; the only write B2 ever makes to a note is stamping a missing `b2id` (a ULID).
+Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
+edge is re-derived from Markdown on every reindex; the only write B2 ever makes to a note is stamping a
+missing `b2id` (a ULID) or, on `b2 link`, appending a frontmatter `relations:` entry.
 
-### The two seams (Bitter-Lesson tenet: build for tomorrow's model)
+*(Through 2026-06-30 there was a third tier — a durable `.b2/log/` event log holding the suggestion queue
++ rejection memory — and the invariant was `(Markdown ∪ log)`. The 2026-07-04 relator cut removed it;
+see `vision-and-scope.md` "Decisions locked (2026-07-04)".)*
 
-Every AI part sits behind a swappable trait; the engine is built and tested against a deterministic
-fake, and a real model drops in through the same seam with no schema or flow change.
+### The one seam (Bitter-Lesson tenet: build for tomorrow's model)
+
+The AI part sits behind a swappable trait; the engine is built and tested against a deterministic fake,
+and a real model drops in through the same seam with no schema or flow change.
 
 - **`Embedder`** (`b2-core/src/embed.rs`) — text → vector. Real impl is `b2-embed`'s candle-backed
   `LocalEmbedder` (bge-base-en-v1.5, 768-dim); test/dev impl is `FakeEmbedder` (blake3-hashed,
-  content-addressed, *not* semantic).
-- **`Relator`** (`b2-core/src/relate.rs`) — classifies a candidate note pair into a typed, explained
-  `Proposal` or declines it. Real impl (LLM) is future work in its own crate; test/dev impl is
-  `FakeRelator`. This is the precision gate of connection discovery (currently the **active work** —
-  see `tasks.md` "Next up"; nothing generates suggestions yet).
+  content-addressed, *not* semantic). The fake is content-addressed so drop→rebuild is reproducible.
 
-Both fakes are content-addressed so drop→rebuild→replay is reproducible.
+*(A second seam — `Relator`, an LLM that typed/explained candidate note pairs — was cut 2026-07-04: its
+per-pair cost didn't scale to a real vault. Connection discovery is now `b2 similar` (surface candidates,
+no model) + `b2 link` (the human commits). A reranker would be the next seam if/when one lands —
+`index-engine.md` §5.)*
 
 ### Workspace crates
 
@@ -101,28 +103,30 @@ fake, `open_with_embedder` is how the CLI wires the real model.
 
 ### Data flows
 
-- **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file + log) → project
+- **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
   notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
   independent of file order.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (`chunks_vec`) fused with
   Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL queries are sanitized into a
   safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would otherwise crash the parse).
-- **Flow ③ suggestion lifecycle** (`suggest.rs`) — generate → list → **accept** (append to the source
-  note's frontmatter `relations:`, Markdown-first, **never the body**; re-project as
-  `origin=frontmatter`/`status=active`) / **reject** (tombstone so the pair+type is never re-proposed).
-  Suggestions are inert until accepted.
+- **Flow ③ connection discovery** — **`b2 similar`** (`discover::candidates`) surfaces the semantically
+  nearest *unlinked* notes (vector KNN over stored embeddings, minus the anchor's 1-hop graph neighbors —
+  no model call); **`b2 link`** appends a typed `relations:` entry to the source note's frontmatter
+  (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
+  active edge. No suggestion queue — a connection exists only once you author it.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
-  within *k* typed hops of an anchor. This is the candidate-generation engine for connection discovery.
+  within *k* typed hops of an anchor (scoped traversal). `b2 similar`'s candidate generation is its
+  *complement* (`discover::candidates` — nearest notes *not* already connected).
 
 ### The typed graph & relation vocabulary
 
-`edges` carries `origin` (`inline`/`frontmatter`/`suggested`), `status`
-(`active`/`suggested`/`rejected`), and a deterministic id derived from the identity tuple
-`(src, dst, type, occurrence)`. Authored edges = union of body links (`inline`) and frontmatter
-`relations:` (`frontmatter`), with **inline-wins dedup**. Backlinks are why the graph is materialized
-rather than parsed at read time. The relation vocabulary (`relation.rs`) is a **closed 10-verb core**
-plus a tolerated tail; discovery only ever emits core verbs. Edges are stored once, directed; inverse
-labels are display-only.
+`edges` carries `origin` (`inline`/`frontmatter`) and a deterministic id derived from the identity tuple
+`(src, dst, type, occurrence)`. There is **no `status` column** — every edge is authored and active. The
+edge set = union of body links (`inline`) and frontmatter `relations:` (`frontmatter`), with **inline-wins
+dedup**. Backlinks are why the graph is materialized rather than parsed at read time. The relation
+vocabulary (`relation.rs`) is a **closed 10-verb core** plus a tolerated tail; the core is your typing
+palette on `b2 link` (and what queries rely on). Edges are stored once, directed; inverse labels are
+display-only.
 
 ### Embedding-space discipline
 
@@ -136,9 +140,9 @@ command).
 ## Conventions
 
 - **Determinism is a hard requirement of the core.** No wall-clock and no randomness inside `b2-core`:
-  timestamps and ids are passed in (see `IdGen`, and the `created`/`decided` params on suggestion
-  ops), so operations are reproducible and unit-testable. Tests assert against fixed ids (`FixedId`,
-  the golden-vault b2ids in `tests/common/mod.rs`).
+  timestamps and ids are passed in (see `IdGen`, and the `created` param on write ops), so operations are
+  reproducible and unit-testable. Tests assert against fixed ids (`FixedId`, the golden-vault b2ids in
+  `tests/common/mod.rs`).
 - **Keep `cargo test` fast, deterministic, and model-free.** Real-model work belongs out of CI —
   behind `b2 init`, `--example eval`, or manual runs. Never add candle/tokenizers deps to `b2-core`.
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
@@ -153,7 +157,7 @@ command).
 
 - Ownership forms a tree/DAG, never a cycle. One clear owner per value.
 - For references between values (or any logical cycle): use `slotmap` keys, or `Vec` indices only if nothing is ever removed. Do NOT default to `Rc<RefCell<T>>`; treat `Rc` / `Arc<Mutex<T>>` as last resorts after trying ownership + keys.
-- Prefer owned fields over borrowed (`&'a T`) fields. If a struct sprouts a lifetime parameter, reconsider — it usually wants owned data or a key. Legitimate exception: a short-lived, `Copy`, read-only *view* struct passed into one call and never stored (e.g. `NoteCtx`/`Candidate` in `relate.rs`, `NoteRow` in `db.rs`) — borrowing there avoids a needless clone; keep it, and say so in the doc-comment.
+- Prefer owned fields over borrowed (`&'a T`) fields. If a struct sprouts a lifetime parameter, reconsider — it usually wants owned data or a key. Legitimate exception: a short-lived, `Copy`, read-only *view* struct passed into one call and never stored (e.g. `NoteRow` in `db.rs`) — borrowing there avoids a needless clone; keep it, and say so in the doc-comment.
 - Never silence the borrow checker with a reflexive `.clone()`. Diagnose ownership first: should this be a key instead of a reference?
 - No self-referential structs in safe Rust; restructure with indices.
 - No `.unwrap()` / `.expect()` in production paths; handle via `match`, `if let`, or `?`. This holds even for an invariant you believe can't fail (e.g. `strip_prefix` on a path you just walked) — degrade gracefully (skip it) rather than panic.

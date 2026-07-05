@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>B2 — a local-first Markdown vault with AI-native connection discovery</title>
-<meta name="description" content="B2 is a personal, local-first Markdown knowledge vault with an AI layer that discovers typed, explained connections between your notes.">
+<meta name="description" content="B2 is a personal, local-first Markdown knowledge vault with an AI layer that surfaces semantically similar notes for you to connect.">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
@@ -70,22 +70,22 @@
   <header class="hero">
     <div class="kicker">Local-first Markdown vault · AI-native connection discovery</div>
     <h1 class="word">B2</h1>
-    <p class="lead">A personal, local-first Markdown knowledge vault with an AI layer that discovers
-    <em>typed, explained</em> connections between your notes.</p>
+    <p class="lead">A personal, local-first Markdown knowledge vault with an AI layer that surfaces the
+    <em>semantically nearest</em> notes — for you to connect.</p>
     <p class="sublead">The Markdown stays plain and yours — B2 is the intelligence layer <em>over</em> your
     notes, not a container around them. This repository is the index engine + <code>b2</code> CLI.</p>
 
     <div class="eqcard">
-      <div class="eq">index = projection of ( Markdown ∪ log )</div>
-      <p>Drop the index, rebuild it from your Markdown and a small append-only event log — and it comes back
+      <div class="eq">index = projection of ( Markdown )</div>
+      <p>Drop the index, rebuild it from your Markdown — and it comes back
       identical. The vault is the only source of truth; everything B2 derives is a disposable cache.</p>
     </div>
 
     <div class="badges">
       <span class="badge green"><span class="pip"></span><b>129</b>&nbsp;tests passing</span>
       <span class="badge"><b>Rust</b>&nbsp;· one static binary</span>
-      <span class="badge"><b>4</b> crates · SQLite (FTS5 + sqlite-vec)</span>
-      <span class="badge">status: <b>index engine + CLI</b> · connection discovery shipped (real Claude relator)</span>
+      <span class="badge"><b>3</b> crates · SQLite (FTS5 + sqlite-vec)</span>
+      <span class="badge">status: <b>index engine + CLI</b> · connection discovery via <code>b2 similar</code> + <code>b2 link</code></span>
     </div>
   </header>
 
@@ -95,7 +95,7 @@
       <span class="arrow">↗</span>
     </div>
     <p>A hands-on walkthrough: build the <code>b2</code> CLI, point it at a folder of Markdown, and
-    <strong>search, explore, and discover typed connections</strong> between your notes — from an empty
+    <strong>search, explore, and surface semantically similar notes</strong> to link by hand — from an empty
     checkout to a working vault in about ten minutes.</p>
   </a>
 
@@ -104,16 +104,17 @@
       <h2>Read the system architecture →</h2>
       <span class="arrow">↗</span>
     </div>
-    <p>The full build tour: the three storage tiers, the ingest / retrieval / <strong>connection-discovery</strong>
-    pipelines, the deterministic AI seams, and the invariants that hold it together — every claim
+    <p>The full build tour: the two storage tiers, the ingest / retrieval / <strong>similarity</strong>
+    pipelines, the deterministic embedder seam, and the invariants that hold it together — every claim
     ground-truthed against the test suite.</p>
   </a>
 
   <div class="grid3">
     <div class="card">
-      <div class="h"><span class="dot" style="background:var(--amber)"></span>Typed, explained links</div>
-      <p>Not just "related." B2 proposes typed connections — <em>supersedes</em>, <em>elaborates</em>,
-      <em>refutes</em> — each with a why, and inert until you accept it.</p>
+      <div class="h"><span class="dot" style="background:var(--amber)"></span>Typed links, on your call</div>
+      <p>Not just "related." <code>b2 similar</code> surfaces the semantically nearest notes; you commit the
+      ones worth keeping with <code>b2 link</code> — <em>supersedes</em>, <em>elaborates</em>,
+      <em>refutes</em> — as typed frontmatter. You are the precision gate.</p>
     </div>
     <div class="card">
       <div class="h"><span class="dot" style="background:var(--green)"></span>Your Markdown, untouched</div>

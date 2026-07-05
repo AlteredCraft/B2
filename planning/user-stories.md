@@ -51,7 +51,7 @@ The decision the stories below rest on. It resolves the central "how is a link w
   capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
   the graph regardless.
 - **B2 never authors the body** *(refined 2026-06-30)*. The kernel **reads** the links a human writes in
-  the body but never writes there. B2-discovered edges, once **accepted**, are written to frontmatter
+  the body but never writes there. Connections you commit with **`b2 link`** are written to frontmatter
   **`relations:`** as typed-link strings (`- "<verb> [[path|title]] — …"`) — metadata, not document
   content, so a note like `resume.md` never gains a `## Relations` section. The **only** body write the
   kernel makes is the move-rewrite above, repairing an inbound `[[path]]` the human already wrote. See
@@ -102,9 +102,8 @@ Two distinct operations, both covered:
   cold reindex with no prior index state can only repair a dangling path heuristically (e.g. via the
   alias) — the same failure surface as moving files with Obsidian closed; such links are flagged for
   repair rather than silently dropped.
-- **Provenance is respected.** Mechanical path/alias repairs are kernel-authored edits, not agent
-  *suggestions*; they skip the suggested→accepted review loop and never alter a link's *meaning*
-  (type/explanation untouched).
+- **Meaning is preserved.** Mechanical path/alias repairs edit a link's *text*, never its *meaning* —
+  the edge's type and explanation are untouched, and no new connection is created.
 
 ### Acceptance criteria (testable scenarios)
 
@@ -152,14 +151,14 @@ File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **
 - **Source of truth first.** The edge disappears because A's *Markdown* changed; the index is
   derived from that edit, never the reverse.
 
-### Interaction with typed links, suggestions, and provenance
+### Interaction with typed links
 
 - If the deleted link was a **human-authored typed** edge (`A —contradicts→ B`), that typed edge is
   gone; B's other typed edges are unaffected.
-- If a **suggested/derived** connection used A→B as evidence, removing A→B may invalidate that
-  suggestion's basis. Such suggestions are **inert until accepted** and live in the review layer, so
-  re-evaluating or retracting them never silently rewrites B or any inbound file
-  ([vision-and-scope.md](vision-and-scope.md), "Review & trust").
+- If the deleted connection was a **committed frontmatter relation** (from `b2 link`), remove the
+  `relations:` entry the same way — its edge is gone on the next reindex. B2 authors no connection of its
+  own, so there is never a proposal to re-evaluate ([vision-and-scope.md](vision-and-scope.md), "Review &
+  trust").
 
 ### Acceptance criteria (testable scenarios)
 
@@ -170,11 +169,46 @@ File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **
   `full-reindex ≡ incremental-update` invariant, [vision-and-scope.md](vision-and-scope.md)).
 - **Given** A held B's only backlink, **when** it is deleted, **then** B is reported as an orphan and
   B's file is **not** moved or deleted.
-- **Given** a suggested link whose evidence included A→B, **when** A→B is deleted, **then** that
-  suggestion is re-evaluated/retracted in the review layer only — no inbound file and no accepted
-  edge is altered without explicit acceptance.
 
 ### Open
 
-- **Orphan handling policy** — surface-only, vs. an opt-in agent suggestion ("B is now orphaned;
-  link or archive?"). Either way it stays inert until accepted; the default is likely surface-only.
+- **Orphan handling policy** — surface-only (an orphan flag in `b2 explain` / an orphan report), vs. a
+  future opt-in prompt to `b2 similar` the orphan and re-link it. The default is surface-only; B2 never
+  moves or archives a note on its own.
+
+---
+
+## Story 3 — Surface semantically similar notes, and lock one in (the ⭐ discovery flow)
+
+**As** someone building out my vault,
+**I want** B2 to show me the notes most similar in meaning to a given note that I haven't linked yet,
+**so that** I can discover and commit the non-obvious connections myself, without an LLM guessing for me.
+
+### What discovery means here
+
+Connection discovery is two explicit steps, both fast and local — no model call at surface time
+([vision-and-scope.md](vision-and-scope.md), "Decisions locked (2026-07-04)"):
+
+1. **Surface** — `b2 similar <note>` ranks the notes nearest the given note in embedding space,
+   **excluding** the ones it is already linked to, and shows each with its path, title, similarity
+   score, and the passage that made it similar. A pure read over the stored vectors + the graph (the
+   "∖ already-connected" exclusion); it writes nothing and calls no model.
+2. **Lock in** — from that list I commit the connections worth keeping. Either I write a `[[link]]` in my
+   note's body myself, or I run `b2 link <src> <dst> --type <verb>` and B2 appends the typed relation to
+   the source note's frontmatter `relations:` (Markdown first; never the body). I choose the type; B2
+   supplies nothing but the mechanics.
+
+The machine finds the candidates; I supply the judgment and the type. There is no suggestion queue and
+nothing inert — a connection exists only once I author it.
+
+### Acceptance criteria (testable scenarios)
+
+- **Given** a vault with an embedding index, **when** I run `b2 similar A`, **then** it returns notes
+  ranked by similarity to A, never includes A itself or a note already linked to A, and writes no file
+  and no edge.
+- **Given** `b2 similar A` lists B, **when** I run `b2 link A B --type elaborates`, **then** A's
+  frontmatter `relations:` gains `- "elaborates [[pathB|B]]"`, A's **body is byte-identical**, and after
+  reindex `b2 neighbors A` shows B (outbound) while `b2 neighbors B` shows A (backlink).
+- **Given** I omit `--type`, **then** the committed relation defaults to `references`.
+- **Given** A and B are now linked, **when** I re-run `b2 similar A`, **then** B no longer appears — it is
+  already connected, so the "∖ already-connected" exclusion drops it.

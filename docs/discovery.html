@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>B2 — Inside b2 suggest: the connection-discovery run</title>
-<meta name="description" content="What actually happens when you run b2 suggest: how candidate generation reads the index, how the Claude-backed relator turns each pair into a typed suggestion, and what a run costs.">
+<title>B2 — Inside b2 similar: local connection discovery</title>
+<meta name="description" content="What actually happens when you run b2 similar: a pure local vector KNN over your stored embeddings that surfaces the semantically nearest notes you haven't linked yet — no model call, no network, no cost — and how b2 link commits the ones worth keeping.">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
@@ -52,6 +52,11 @@
   .warnbox .hd .dot{font-size:16px;line-height:1}
   .warnbox b{color:var(--ink)} .warnbox p{margin:7px 0 0;color:var(--ink)}
   .warnbox .tag{display:inline-block;font:700 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--danger);border:1px solid rgba(248,81,73,.5);border-radius:5px;padding:3px 6px}
+  .goodbox{margin:22px 0 6px;background:rgba(63,185,80,.07);border:1px solid rgba(63,185,80,.35);border-left:4px solid var(--green);border-radius:10px;padding:15px 18px;font-size:14px;line-height:1.6}
+  .goodbox .hd{display:flex;align-items:center;gap:9px;font-weight:700;color:var(--ink);font-size:14.5px;margin-bottom:7px}
+  .goodbox .hd .dot{font-size:16px;line-height:1}
+  .goodbox b{color:var(--ink)} .goodbox p{margin:7px 0 0;color:var(--ink)}
+  .goodbox .tag{display:inline-block;font:700 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--green);border:1px solid rgba(63,185,80,.5);border-radius:5px;padding:3px 6px}
   .files{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin:2px 0 10px}
   table{border-collapse:collapse;width:100%;font-size:13.5px;margin:6px 0}
   th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -95,276 +100,214 @@
 
   <header class="hero">
     <div class="kicker">Deep dive · the discovery run</div>
-    <h1 class="title">Inside <span class="eq">b2 suggest</span></h1>
-    <p class="lead">Exactly what happens when you run <code>b2 suggest</code>: how candidate generation reads
-    the index, how the real <b>Claude-backed relator</b> turns each candidate pair into a typed, explained
-    suggestion, and what a run costs. A companion to the architecture's
-    <a href="architecture.html#discovery">candidate engine</a> and <a href="architecture.html#relator">relator
-    seam</a>.</p>
+    <h1 class="title">Inside <span class="eq">b2 similar</span></h1>
+    <p class="lead">Exactly what happens when you run <code>b2 similar</code>: a pure, <b>local vector KNN</b>
+    over the embeddings your index already holds, surfacing the notes most similar in meaning to one you name
+    — <b>minus the ones you've already linked</b> — each with the passage that made it similar.
+    <b>No model call, no network, no cost.</b> You read the list; <code>b2 link</code> commits the ones worth
+    keeping. A companion to the architecture's <a href="architecture.html#discovery">candidate engine</a>.</p>
   </header>
 
-  <div class="warnbox">
-    <div class="hd"><span class="dot">⚠️</span><span class="tag">Not recommended yet</span></div>
-    <b>Running <code>b2 suggest</code> on a real vault can make thousands of paid API calls.</b>
-    <p>Candidate generation is free, but the relator makes <b>one Claude call per candidate pair</b> —
-    roughly <code>notes × --top</code> calls on a first run. A few hundred notes is already
-    <em>thousands</em> of requests (and the matching token spend). We <b>do not recommend running it as it
-    stands</b>; treat this page as a description of how the pipeline works, not an endorsement of running it
-    at scale.</p>
-    <p>A lower-cost path is in progress — most likely a <b>local-LLM relator backend</b> behind the same
-    <code>Relator</code> seam — so discovery can run without a per-pair API bill. Until then, if you do try
-    it, keep the vault small, use <code>--top 2</code>, and set
-    <code>model = "claude-haiku-4-5"</code>. The cost mechanics are detailed in
-    <a href="#cost">§3 below</a>.</p>
+  <div class="goodbox">
+    <div class="hd"><span class="dot">⚡</span><span class="tag">Free &amp; local</span></div>
+    <b><code>b2 similar</code> makes zero API calls and touches no network.</b>
+    <p>Discovery is a <b>vector KNN over your already-stored embeddings</b> — it reads vectors straight back
+    and re-embeds nothing, so a run is instant and costs nothing per note, per pair, or per token. The only
+    embedding work is the <b>one-time <code>b2 reindex</code></b> that built those vectors in the first place.
+    <b>You</b> are the precision gate — you decide which surfaced notes deserve a real connection and author
+    it. There is no suggestion queue, nothing "inert until accepted": a connection exists only once you write
+    it.</p>
   </div>
 
-  <div class="caveat"><b>Prerequisite — a reindexed index.</b> <code>suggest</code> reads the vectors + typed
+  <div class="caveat"><b>Prerequisite — a real-model index.</b> <code>similar</code> reads the vectors + typed
   graph a prior <a href="indexing.html"><code>b2 reindex</code></a> wrote — it reads stored vectors
-  <em>straight back</em> and never re-embeds, so it needs no model of its own. But if that index was built
-  under <code>B2_EMBEDDER=fake</code>, the vectors are blake3 hashes, not semantics — candidate generation then
-  surfaces meaningless neighbours and the relator judges nonsense. For real suggestions the order is
-  <code>b2 init</code> → <code>b2 reindex</code> (real model) → <code>b2 suggest</code>.</div>
+  <em>straight back</em> and never re-embeds, so it needs <b>no model and no API key of its own</b> (it calls
+  nothing). But if that index was built under <code>B2_EMBEDDER=fake</code>, the vectors are blake3 hashes,
+  not semantics, and the neighbours it surfaces are <em>meaningless</em>. For real discovery the order is
+  <code>b2 init</code> → <code>b2 reindex</code> (real model) → <code>b2 similar</code>.</div>
 
   <!-- ========================================================= -->
   <section id="pipeline">
-    <h2><span class="num">1</span>The pipeline, per candidate</h2>
-    <div class="files">crates/b2-core/src/discover.rs · crates/b2-relate/ · crates/b2-cli/src/main.rs</div>
-    <p class="sub">The command visits <b>every note as an anchor</b> (in sorted <code>b2id</code> order, so the
-    run is reproducible), generates its candidates, and asks the relator to judge each one. Every candidate
-    lands in exactly one of four buckets — the accounting the CLI reports.</p>
+    <h2><span class="num">1</span>The pipeline, per anchor</h2>
+    <div class="files">crates/b2-core/src/discover.rs — the <code>candidates</code> fn · crates/b2-cli/src/main.rs</div>
+    <p class="sub">You name one note — the <b>anchor</b>. B2 reads its stored chunk vectors, finds the nearest
+    chunks across the whole vault, scores every <em>other</em> note by its best chunk-pair match, subtracts
+    the notes already one hop away in the graph (the ones you've linked), ranks what's left, and lists the top
+    N. Every step is vector math and a graph read — no model, no network.</p>
 
     <div class="diagram">
-      <svg viewBox="0 0 1000 536" xmlns="http://www.w3.org/2000/svg" role="img"
-           aria-label="The per-candidate suggest pipeline and its four outcome buckets">
+      <svg viewBox="0 0 1000 486" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="The b2 similar pipeline: anchor chunk vectors, KNN over chunks_vec, max-sim per note, subtract already-linked neighbours, rank, list top N">
         <defs>
           <marker id="s-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
           <marker id="s-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
-          <marker id="s-pink"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--pink)"/></marker>
           <marker id="s-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--green)"/></marker>
-          <marker id="s-muted"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
         </defs>
 
-        <!-- spine -->
-        <rect class="node" style="stroke:var(--t1)" x="200" y="16" width="360" height="44" rx="10"/>
-        <text class="title" x="380" y="38" text-anchor="middle">anchor = each note · sorted b2id</text>
-        <text class="sub mono-t" x="380" y="53" text-anchor="middle">db::all_note_ids</text>
+        <!-- spine: the central column -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="20" width="440" height="52" rx="10"/>
+        <text class="title" x="500" y="43" text-anchor="middle">anchor note · its stored chunk vectors</text>
+        <text class="sub mono-t" x="500" y="60" text-anchor="middle">db::chunks_for_note — read back, never re-embed</text>
 
-        <rect class="node" style="stroke:var(--t3)" x="200" y="76" width="360" height="52" rx="10"/>
-        <text class="title" x="380" y="99" text-anchor="middle">candidates — near ∖ connected → top-N</text>
-        <text class="sub mono-t" x="380" y="116" text-anchor="middle">max-sim over chunks_vec · − reachable_within(a,1)</text>
+        <rect class="node" style="stroke:var(--t1)" x="280" y="94" width="440" height="52" rx="10"/>
+        <text class="title" x="500" y="117" text-anchor="middle">KNN each vector over chunks_vec</text>
+        <text class="sub mono-t" x="500" y="134" text-anchor="middle">db::vector_search — full-vault pool, exact</text>
 
-        <!-- the cost gate: pre-call dedup, before any paid call -->
-        <rect class="node" style="stroke:var(--muted);fill:rgba(154,167,180,.06)" x="200" y="148" width="360" height="54" rx="10"/>
-        <text class="title" x="380" y="171" text-anchor="middle">already has an edge?  (pending / rejected)</text>
-        <text class="sub mono-t" x="380" y="189" text-anchor="middle">db::edge_exists_for_pair — skip before any call</text>
+        <rect class="node" style="stroke:var(--t3)" x="280" y="168" width="440" height="52" rx="10"/>
+        <text class="title" x="500" y="191" text-anchor="middle">score each other note by best chunk-pair (max-sim)</text>
+        <text class="sub mono-t" x="500" y="208" text-anchor="middle">max over anchor-chunk × note-chunk · keep the evidence chunk</text>
 
-        <rect class="node" style="stroke:var(--purple);fill:rgba(188,140,255,.07)" x="200" y="224" width="360" height="58" rx="10"/>
-        <text class="title" x="380" y="248" text-anchor="middle">Relator.relate(anchor, candidate)</text>
-        <text class="sub mono-t" x="380" y="266" text-anchor="middle">one Claude Messages-API call · forced tool</text>
+        <!-- the graph exclusion: side chip feeding the subtract step -->
+        <rect class="chip" style="stroke:var(--amber);fill:rgba(210,153,34,.06)" x="40" y="248" width="212" height="46" rx="9"/>
+        <text class="title" x="52" y="269" text-anchor="start" style="fill:var(--amber)">graph · already-linked</text>
+        <text class="sub mono-t" x="52" y="285" text-anchor="start">reachable_within(anchor, 1)</text>
 
-        <rect class="node" style="stroke:var(--amber);fill:rgba(210,153,34,.06)" x="220" y="316" width="320" height="48" rx="10"/>
-        <text class="title" x="380" y="338" text-anchor="middle">edge_type is a core verb?</text>
-        <text class="sub mono-t" x="380" y="355" text-anchor="middle">relation::is_core — checked, not trusted</text>
+        <rect class="node" style="stroke:var(--amber);fill:rgba(210,153,34,.05)" x="280" y="242" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="266" text-anchor="middle">subtract anchor + its 1-hop neighbours</text>
+        <text class="sub mono-t" x="500" y="284" text-anchor="middle">the “∖ already-connected” set — near but not yet linked</text>
 
-        <rect class="node" style="stroke:var(--green);fill:rgba(63,185,80,.07)" x="220" y="392" width="320" height="52" rx="10"/>
-        <text class="title" x="380" y="415" text-anchor="middle">write pending suggestion</text>
-        <text class="sub mono-t" x="380" y="433" text-anchor="middle">SQLite row + append events.jsonl</text>
+        <rect class="node" style="stroke:var(--t1)" x="280" y="320" width="440" height="52" rx="10"/>
+        <text class="title" x="500" y="343" text-anchor="middle">rank by score · take top N</text>
+        <text class="sub mono-t" x="500" y="360" text-anchor="middle">sort desc · tie-break b2id · truncate(limit) — deterministic</text>
 
-        <rect class="node" style="stroke:var(--t1)" x="200" y="472" width="360" height="44" rx="10"/>
-        <text class="title" x="380" y="494" text-anchor="middle">list_suggestions → the review queue</text>
-        <text class="sub mono-t" x="380" y="509" text-anchor="middle">resolved to path + title, printed</text>
-
-        <!-- outcome chips (right) -->
-        <rect class="chip" style="stroke:var(--muted)" x="648" y="154" width="300" height="42" rx="9"/>
-        <text class="title" x="666" y="173" text-anchor="start" style="fill:var(--muted)">existing</text>
-        <text class="sub mono-t" x="666" y="189" text-anchor="start">already decided — skipped, no call</text>
-
-        <rect class="chip" style="stroke:var(--amber)" x="648" y="232" width="300" height="42" rx="9"/>
-        <text class="title" x="666" y="251" text-anchor="start" style="fill:var(--amber)">declined</text>
-        <text class="sub mono-t" x="666" y="267" text-anchor="start">Ok(None) — the relator pruned it</text>
-
-        <rect class="chip" style="stroke:var(--amber)" x="648" y="319" width="300" height="42" rx="9"/>
-        <text class="title" x="666" y="338" text-anchor="start" style="fill:var(--amber)">non_core</text>
-        <text class="sub mono-t" x="666" y="354" text-anchor="start">off-vocabulary verb — dropped, counted</text>
-
-        <rect class="chip" style="stroke:var(--green)" x="648" y="397" width="300" height="42" rx="9"/>
-        <text class="title" x="666" y="416" text-anchor="start" style="fill:var(--green)">generated</text>
-        <text class="sub mono-t" x="666" y="432" text-anchor="start">new pending suggestion</text>
+        <rect class="node" style="stroke:var(--green)" x="280" y="394" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="418" text-anchor="middle">list candidates — path · title · score · evidence</text>
+        <text class="sub mono-t" x="500" y="436" text-anchor="middle">CandidateNote { note_b2id, score, evidence_chunk_id }</text>
 
         <!-- spine edges -->
-        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M380,60 L380,74"/>
-        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M380,128 L380,146"/>
-        <path class="edge" style="stroke:var(--muted)" marker-end="url(#s-muted)" d="M380,202 L380,222"/>
-        <text class="lbl" x="392" y="217" text-anchor="start" style="fill:var(--muted)">new pair</text>
-        <path class="edge" style="stroke:var(--purple)" marker-end="url(#s-accent)" d="M380,282 L380,314"/>
-        <text class="lbl" x="392" y="301" text-anchor="start" style="fill:var(--purple)">Some(Proposal)</text>
-        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M380,364 L380,390"/>
-        <text class="lbl" x="392" y="382" text-anchor="start" style="fill:var(--amber)">core</text>
-        <path class="edge" style="stroke:var(--green)" marker-end="url(#s-green)" d="M380,444 L380,470"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,72 L500,92"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,146 L500,166"/>
+        <path class="edge" style="stroke:var(--purple)" marker-end="url(#s-amber)" d="M500,220 L500,240"/>
+        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M500,298 L500,318"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-green)" d="M500,372 L500,392"/>
 
-        <!-- branches to chips -->
-        <path class="edge" style="stroke:var(--muted)" marker-end="url(#s-muted)" d="M560,175 L646,175"/>
-        <text class="lbl" x="600" y="168" text-anchor="middle" style="fill:var(--muted)">settled</text>
-        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M560,253 L646,253"/>
-        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M540,340 L646,340"/>
-        <text class="lbl" x="592" y="333" text-anchor="middle" style="fill:var(--amber)">not core</text>
-        <path class="edge" style="stroke:var(--green)" marker-end="url(#s-green)" d="M540,418 L646,418"/>
+        <!-- graph exclusion feeds the subtract step -->
+        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M252,271 L278,270"/>
       </svg>
       <div class="legend">
-        <span><span class="sw" style="border-color:var(--green)"></span> generated (written)</span>
-        <span><span class="sw" style="border-color:var(--amber)"></span> declined / non-core (pruned)</span>
-        <span><span class="sw" style="border-color:var(--muted)"></span> existing (skipped, no call)</span>
-        <span><span class="sw" style="border-color:var(--purple)"></span> the model call</span>
+        <span><span class="sw" style="border-color:var(--accent)"></span> vectors — KNN &amp; max-sim (no model)</span>
+        <span><span class="sw" style="border-color:var(--amber)"></span> graph — the ∖ already-linked exclusion</span>
+        <span><span class="sw" style="border-color:var(--green)"></span> the ranked list you read</span>
       </div>
     </div>
-    <p class="cap"><code>generated + declined + non_core + existing</code> = the pairs considered — the tally the
-    CLI prints on stderr. The <b>cost gate is pre-call</b>: an already-settled pair (a pending suggestion or a
-    rejection tombstone) is skipped <em>before</em> the paid <code>relate()</code>, so a re-run pays only for
-    new pairs. Everything downstream of <code>relate()</code> is precision — the relator's decline, the
-    <code>is_core</code> check, and finally you. (<code>generate_suggestion</code> keeps a per-type guard as a
-    backstop.)</p>
-  </section>
+    <p class="cap">A candidate is a note <b>near the anchor in embedding space but not already connected</b> —
+    the <em>complement</em> of the graph, not the intersection. Generation is deliberately <b>permissive</b>:
+    it over-produces and leaves the judgment to you. Two honesty notes baked into the code:
+    it is <b>passage↔passage</b> — the anchor is represented by the vectors already in <code>chunks_vec</code>,
+    never by an <code>embed_query</code> of its text (bge's asymmetric query prefix is the wrong side); and the
+    <b>1-hop exclusion is the graph's only role</b> — graph-distant "bridge" notes ride along unboosted, so a
+    transitively-related note two hops away still surfaces.</p>
 
-  <!-- ========================================================= -->
-  <section id="relator">
-    <h2><span class="num">2</span>The relator, made real</h2>
-    <div class="files">crates/b2-relate/ — config.rs · prompt.rs · claude.rs</div>
-    <p class="sub">The middle stage — turning a pair into a typed verdict — is the one step that needs a model.
-    It lives behind the same <a href="architecture.html#relator"><code>Relator</code></a> trait the fake uses,
-    in its own crate so <code>b2-core</code> stays model-free (the <code>b2-embed</code> precedent). The
-    shipped backend is <b>Claude over the Messages API</b>.</p>
-
-    <div class="grid2">
-      <div class="card tight">
-        <div class="kickerlbl" style="color:var(--cyan)">How one pair is judged</div>
-        <ul class="tidy" style="font-size:13px;margin:6px 0 0">
-          <li><b>Forced tool use.</b> One <code>classify_relation</code> tool whose <code>relation</code> is an
-          <code>enum</code> of the closed core verbs, forced via <code>tool_choice</code> — so the model
-          returns a typed verdict, never free text to repair.</li>
-          <li><b>Raw HTTP, synchronous.</b> Rust has no official SDK, so it's a plain <code>ureq</code> POST —
-          no <code>tokio</code> pulled into the tree.</li>
-          <li><b>Still re-validated.</b> The pipeline re-checks <code>is_core</code> — a real model's verb is
-          verified, not trusted.</li>
-        </ul>
-      </div>
-      <div class="card tight">
-        <div class="kickerlbl" style="color:var(--amber)">Config — pluggable, Claude first</div>
-        <p style="font-size:13px;margin:6px 0 0">A <code>[relator]</code> table in the same global TOML the
-        embedder reads. The backend is <em>selectable</em> (a local one can drop in behind the seam later);
-        Claude is the default. The <b>API key is never in the file</b> — it comes from
-        <code>ANTHROPIC_API_KEY</code> and is validated at startup, so a missing key <b>fails fast</b> with an
-        actionable message, never a mid-run 401.</p>
-      </div>
-    </div>
-
-    <pre><span class="c"># ~/.config/b2/config.toml — all optional</span>
-[relator]
-backend   = <span class="g">"claude"</span>            <span class="c"># the default; the seam for a future local backend</span>
-model     = <span class="g">"claude-opus-4-8"</span>   <span class="c"># override to "claude-haiku-4-5" for cheap, high-volume runs</span>
-base_url  = <span class="g">"https://api.anthropic.com"</span>
-max_tokens = <span class="n">1024</span></pre>
-
-    <div class="invariant"><b>Offline &amp; deterministic when you need it.</b> <code>B2_RELATOR=fake</code> (or the
-    blanket <code>B2_EMBEDDER=fake</code>) swaps in the content-addressed <code>FakeRelator</code> — no network,
-    no key — which is exactly how the model-free test suite drives <code>suggest</code>. The loud "stub
-    relator" caveat prints only on that path; under the real relator it comes off.</div>
-
-    <div class="ground"><b>Ground truth:</b> <span class="mono">b2-relate</span> — 10 model-free tests (config
-    defaults / overrides / unknown-backend; the request forces the tool, pins the verb <code>enum</code>, and
-    carries the evidence; response parse covers fired / decline / verb-less-degrades / confidence-clamp /
-    no-tool-call-errors) plus an <span class="mono">#[ignore]</span>d live smoke test. The CLI's
-    <span class="mono">suggest</span> tests drive the whole flow on the fake. <b>127</b> workspace tests green.</div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">discover::candidates(conn, anchor, limit)</span> —
+    for each of the anchor's stored chunk vectors, <span class="mono">db::vector_search</span> over the full
+    <span class="mono">chunks_vec</span> pool; a <span class="mono">HashMap&lt;note, (best_score, chunk)&gt;</span>
+    keeps each note's max-sim and the chunk that achieved it; <span class="mono">graph::reachable_within(anchor, 1)</span>
+    is subtracted; the result sorts by score with a <span class="mono">b2id</span> tie-break and truncates to
+    <span class="mono">limit</span>. Returns empty when there's no embedding space, the anchor has no chunks, or
+    <span class="mono">limit == 0</span>. Vector-only; re-embeds nothing.</div>
   </section>
 
   <!-- ========================================================= -->
   <section id="cost">
-    <h2><span class="num">3</span>What a run costs — and how to run it well</h2>
-    <p class="sub">The honest operator view. The relator is a network model, so <code>suggest</code> is the one
-    command whose cost scales with your vault and your token budget. The number that matters is
-    <b>calls</b> — and calls scale with <em>notes × top</em>, not with your chunk count. On the <b>first</b>
-    run; a re-run is <b>incremental</b> (see below). The run surfaces this as it goes: a live
-    <code>judging… i/N call(s)</code> line while it works, then a summary with the <b>actual token total</b>
-    (transient — nothing is written to disk).</p>
+    <h2><span class="num">2</span>What a run costs</h2>
+    <p class="sub">The short version: <b>nothing, and it's instant.</b> <code>b2 similar</code> is a local KNN
+    over vectors already on disk — it makes no network request, loads no model, and spends no tokens. There is
+    no per-note, per-pair, or per-token bill because there is no model in the loop at all.</p>
 
-    <div class="example">
-      <div class="kickerlbl">A worked example</div>
-      <p style="font-size:14px;margin:6px 0 10px">A vault of <span class="num">200</span> notes,
-      <span class="num">~1,400</span> chunks (≈7 per note), run at <code>--top 5</code>:</p>
-      <ul class="tidy" style="font-size:13.5px;margin:0">
-        <li><b>Candidate generation</b> is pure vector math over the <span class="num">1,400</span>-chunk pool
-        — <b>no model, no spend</b>. It yields up to 5 candidates per anchor.</li>
-        <li><b>The relator</b> makes <b>one Claude call per candidate</b> →
-        up to <span class="num">5 × 200 = ~1,000</span> calls on the first run (fewer where a note has under 5
-        unconnected near-neighbours).</li>
-        <li><b>A re-run</b> is cheap: pending suggestions and rejected pairs are skipped <em>before</em> the
-        model (pre-call dedup), and accepted pairs drop out entirely. It re-pays only for pairs still without
-        a verdict — chiefly earlier <b>declines</b>, which leave no edge to skip.</li>
-        <li><b>Levers:</b> <code>--top 2</code> → <span class="num">~400</span> calls;
-        <code>model = "claude-haiku-4-5"</code> → a fraction of the per-call cost. Chunk count sets the KNN
-        pool (candidate-gen compute), <b>not</b> the call count.</li>
-      </ul>
+    <div class="grid2">
+      <div class="card tight">
+        <div class="kickerlbl" style="color:var(--green)">The only cost is the index</div>
+        <p style="font-size:13px;margin:6px 0 0">Embedding happens <b>once</b>, in <code>b2 reindex</code>,
+        when your vectors are written. <code>similar</code> reads those vectors <em>straight back</em>; running
+        it a hundred times costs exactly what running it zero times does. Re-embedding only happens when a note
+        changes and you reindex again.</p>
+      </div>
+      <div class="card tight">
+        <div class="kickerlbl" style="color:var(--cyan)">Scale &amp; the tuning lever</div>
+        <p style="font-size:13px;margin:6px 0 0">Cost scales with <b>chunk count</b> (the KNN pool), not with
+        a token budget — it's CPU-bound vector math, milliseconds on a personal vault. The one knob is
+        <code>--limit</code> (how many candidates to list); it changes what you read, never what you pay. No
+        API key, no config table, no rate limit.</p>
+      </div>
     </div>
 
-    <table>
-      <tr><th>Property</th><th>What it means for you</th></tr>
-      <tr><td class="mono">one call per pair</td>
-        <td>Roughly <code>top × notes</code> Claude calls per run (<code>--top</code> defaults to 5). Keep
-        <code>--top</code> modest; set <code>model = "claude-haiku-4-5"</code> if you run it often.</td></tr>
-      <tr><td class="mono">idempotent<br>in cost</td>
-        <td>Pending + rejected pairs are skipped <em>before</em> <code>relate()</code> — a re-run makes
-        <b>no</b> model call for a settled pair. It still re-judges earlier <em>declines</em> (they leave no
-        edge to skip); a <code>body_hash</code> gate that skips unchanged notes wholesale is the follow-up
-        that closes that gap.</td></tr>
-      <tr><td class="mono">recoverable</td>
-        <td>Each suggestion is written the moment it's generated. A mid-run network error aborts with a generic
-        message, but everything already generated is saved and a re-run continues (re-paying for the earlier
-        pairs).</td></tr>
-      <tr><td class="mono">deterministic gen,<br>non-deterministic verdict</td>
-        <td>Candidate generation is reproducible; the LLM verdict is not — but once a suggestion exists it's
-        never regenerated, and a <code>reject</code> is a permanent tombstone.</td></tr>
-    </table>
+    <pre><span class="c"># the real path — build the index once, then discover for free, forever</span>
+b2 init                       <span class="c"># provision the real embedder (one time)</span>
+b2 reindex                    <span class="c"># embed the vault — the only embedding cost</span>
+b2 similar espresso-extraction.md    <span class="c"># instant local KNN — no model, no network, no tokens</span></pre>
 
-    <pre><span class="c"># the real path — real model index, real relator</span>
-export ANTHROPIC_API_KEY=<span class="g">…</span>
-b2 suggest --top 5            <span class="c"># candidate-gen → Claude → the pending queue</span>
-  [<span class="a">01J…</span>]  Espresso extraction  supports→  Grind size  (0.82)
-      The anchor's pressure claim backs the candidate's extraction point.
-<span class="c"># stderr — a live line while it runs, then the run summary:</span>
-  judging… note <span class="n">200</span>/200 · 1000 call(s) · 240 new
-Considered 1000 pair(s): <span class="n">240</span> generated · 754 declined · 6 non-core · 0 existing.
-~ 2.3M input + 41k output tokens over 1000 call(s).
-
-b2 accept <span class="a">01J…</span>              <span class="c"># write the typed link into the source note's frontmatter</span>
-b2 reject <span class="a">01J…</span>              <span class="c"># tombstone the pair — never proposed again</span></pre>
+    <div class="invariant"><b>Deterministic and re-runnable.</b> Candidate generation is pure vector math over
+    stored data — same index, same anchor, same ranked list every time (ties broken by <code>b2id</code>). Run
+    it as often as you like; it writes nothing and changes nothing.</div>
   </section>
 
   <!-- ========================================================= -->
-  <section id="review">
-    <h2><span class="num">4</span>Accept &amp; reject — closing the loop</h2>
-    <p class="sub">A suggestion is <b>inert</b> until you act on it — it lives only in the event log and the
-    disposable index, never in your Markdown. Two terminal moves resolve it (the
-    <a href="architecture.html#lifecycle">suggestion lifecycle</a>):</p>
+  <section id="link">
+    <h2><span class="num">3</span>From the list to a link — <span class="eq">b2 link</span></h2>
+    <div class="files">planning/user-stories.md — Story 3 · planning/data-model.md §4</div>
+    <p class="sub">The list is candidates, not connections. You pick the ones worth keeping and <b>commit</b>
+    them. Two ways, both authored in Markdown — B2 supplies the mechanics, you supply the judgment and the
+    type:</p>
     <div class="grid2">
       <div class="card tight">
-        <div class="kickerlbl" style="color:var(--cyan)">accept</div>
-        <p style="font-size:13px;margin:6px 0 0">Appends the typed link to the source note's frontmatter
-        <code>relations:</code> — Markdown-first, never the body — and re-projects it as an <em>authored</em>
-        edge. Re-projection re-embeds that one note, so <code>accept</code> loads the real model like
-        <code>reindex</code>.</p>
+        <div class="kickerlbl" style="color:var(--cyan)">write a body link yourself</div>
+        <p style="font-size:13px;margin:6px 0 0">Type a bare <code>[[path|title]]</code> (an untyped
+        <code>references</code> edge) or a typed <code>- &lt;verb&gt; [[path|title]] — …</code> line in your
+        note's body. B2 <b>reads</b> it on the next reindex; it never writes your body.</p>
       </div>
       <div class="card tight">
-        <div class="kickerlbl" style="color:var(--pink)">reject</div>
-        <p style="font-size:13px;margin:6px 0 0">Appends a tombstone event so the same pair + type is
-        <b>never proposed again</b>. Touches no vectors, needs no model — just the log.</p>
+        <div class="kickerlbl" style="color:var(--green)">or run <code>b2 link</code></div>
+        <p style="font-size:13px;margin:6px 0 0"><code>b2 link &lt;src&gt; &lt;dst&gt; [--type &lt;verb&gt;]
+        [--explanation …]</code> appends one typed-link string to the <b>source note's frontmatter
+        <code>relations:</code></b> — Markdown-first, <b>never the body</b> — then re-projects that note so the
+        edge materializes as <code>origin=frontmatter</code>, active.</p>
       </div>
     </div>
-    <div class="invariant"><b>The queue survives a rebuild.</b> Drop the index and it rebuilds from Markdown;
-    replay the log and the pending queue, the accepted edges, and the rejection tombstones all come back — the
-    review state is the one thing the log, not the Markdown, is authoritative for.</div>
+
+    <div class="example">
+      <div class="kickerlbl">A worked example</div>
+      <p style="font-size:14px;margin:6px 0 10px"><code>b2 similar espresso-extraction.md</code> surfaced
+      <span class="num">Grind size</span> as its nearest unlinked note. You agree it's load-bearing — the shot
+      depends on the grind — so you commit it with the verb <em>you</em> choose from the core vocabulary:</p>
+    </div>
+
+    <pre><span class="c"># 1 — surface the nearest not-yet-linked notes (free, local, instant)</span>
+b2 similar espresso-extraction.md
+  <span class="n">0.8143</span>  Grind size (notes/dialing-in-grind.md)
+      Finer grinds raise extraction pressure; past a point the shot chokes and turns bitter…
+  <span class="n">0.7920</span>  Water temperature (notes/brew-temp.md)
+      Temperature stability matters as much as the target — a swing mid-shot muddies the cup…
+  <span class="n">0.7614</span>  Tamping (notes/tamping.md)
+      An even tamp keeps the puck flat so water can't channel down one side…
+<span class="c"># stderr: 3 candidate(s) · a local KNN over stored vectors · no model call.</span>
+
+<span class="c"># 2 — commit the one worth keeping; you pick the type (defaults to `references`)</span>
+b2 link espresso-extraction.md notes/dialing-in-grind.md <span class="a">--type supports</span> \
+        <span class="a">--explanation</span> <span class="g">"grind size sets the extraction pressure"</span>
+  linked   espresso-extraction.md  <span class="g">supports→</span>  Grind size
+  wrote    frontmatter relations: (body byte-identical) · reindexed · 1 edge active</pre>
+
+    <p class="cap">What changed on disk is one line, in the <b>source</b> note's frontmatter — the body is
+    untouched:</p>
+    <pre> <span class="n">relations:</span>
+<span class="g">+  - "supports [[dialing-in-grind.md|Grind size]] — grind size sets the extraction pressure"</span></pre>
+
+    <div class="invariant"><b>An edge exists iff it's in the Markdown.</b> There is no <code>suggested</code>
+    or <code>rejected</code> status and no review queue to survive a rebuild — drop the index, reindex, and the
+    edge comes back <em>because it's in your note</em>. A committed edge is pristine: just the
+    <code>&lt;verb&gt; [[path|title]]</code> line, no <code>by</code>, <code>confidence</code>, or provenance
+    stapled on. To undo one, delete its <code>relations:</code> entry; it's gone on the next reindex.</div>
+
+    <div class="ground"><b>Ground truth:</b> the core vocabulary is the closed 10-verb set in
+    <span class="mono">relation::CORE</span> — <span class="mono">references · relates · elaborates · supports ·
+    refutes · contradicts · example-of · part-of · supersedes · derived-from</span> — now your typing palette on
+    <span class="mono">b2 link</span>. Mirrored across <span class="mono">data-model.md §4</span>,
+    <span class="mono">index-engine.md §3</span>, and <span class="mono">user-stories.md</span> Story 3.
+    <b>(Workspace test count to refresh — the relator deletions haven't landed yet.)</b></div>
   </section>
 
   <footer>
-    B2 · <code>b2 suggest</code> deep dive · a projection of the spec in <code>planning/</code>. Back to the
+    B2 · <code>b2 similar</code> deep dive · a projection of the spec in <code>planning/</code>. Back to the
     <a href="architecture.html">system architecture</a>, the <a href="indexing.html">indexing pipeline</a>, or
     the <a href="index.html">overview</a>.
   </footer>

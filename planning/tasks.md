@@ -13,6 +13,28 @@ Working task queue for B2. Start at [README.md](../README.md) for the map; conte
 [vision-and-scope.md](vision-and-scope.md) (motivations, principles, design philosophy, capability
 areas, v1 scope, locked decisions).
 
+## ⚠ Course correction — 2026-07-04: discovery is similarity + human judgment
+
+**Read this before the Done list below.** Dogfooding the LLM relator on a real 1000+ note vault showed its
+per-pair latency and dollar cost don't scale. Decision (mirrored in
+[vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-04)", and across
+[data-model.md](data-model.md) / [index-engine.md](index-engine.md) /
+[specs/index-engine-build.md](specs/index-engine-build.md) / [user-stories.md](user-stories.md) /
+[specs/eval-strategy.md](specs/eval-strategy.md)):
+
+- **Cut the LLM relator entirely** — the `Relator` seam, the `b2-relate` crate, and the suggestion queue
+  (`b2 suggest` / `accept` / `reject`).
+- **Discovery is now `b2 similar`** (surface the semantically-nearest *unlinked* notes — vector KNN over
+  stored embeddings, no model, no network) **+ `b2 link`** (you commit a typed relation to frontmatter).
+  The human is the precision gate the relator used to be.
+- **Collapse to two storage tiers** — drop the `.b2/log/` event log + `replay.rs`; the invariant
+  simplifies to `index = projection of (Markdown)`.
+- **Backlinks retained** unchanged (`b2 neighbors` / `b2 explain`, inbound + outbound).
+
+So several **Done** items below — *Relator seam*, *Connection-discovery ①/②/③*, *suggest cost controls*,
+*Suggestion-quality eval* — are being **reverted in code** (see "Next up", Phase 2). They stay listed as
+history; only the code that implemented them is removed.
+
 ## Done
 
 - [x] **Motivations & problem** — folded into [vision-and-scope.md](vision-and-scope.md)
@@ -280,31 +302,34 @@ areas, v1 scope, locked decisions).
   write; 1 CLI: `would_*` JSON shape + "No changes made" + a following real reindex still does all the work); **160**
   workspace tests green.
 
-## Next up — relator-quality tuning (parked); the v1 kernel is complete
+## Next up — the discovery pivot (2026-07-04), in three phases
 
-> **Pick this up fresh.** The v1 kernel is now **feature-complete**: `b2 reindex` (incremental, `--force`,
-> `--dry-run`) / `search` / `neighbors` / `explain` / `add` / `mv` / `suggest` / `accept` / `reject` all ship, over a
-> model-free deterministic core with the real embedder + Claude relator behind seams. Connection discovery is **real,
-> end-to-end, reachable, and measured** — `b2 suggest` runs candidate-gen → the Claude-backed
-> [`ClaudeRelator`](../crates/b2-relate/src/claude.rs) → the review queue, and the
-> [suggest-eval harness](../crates/b2-relate/examples/suggest-eval.rs) has a **2026-07-03 baseline**. The one open
-> thread is **relator-quality tuning** (deliberately parked — see below); beyond it, the remaining work is the
-> **Backlog** items (non-blocking cold-index embedding, the docs refresh for the 4th crate, property tests, the qmd
-> chunker upgrade) and the actual packaging/distribution build.
+Phase 0 (docs) is **done** — this file and six others are mirrored to the pivot. Remaining code work:
 
-- **Relator-quality tuning _(paused 2026-07-03)_** — the harness + a first baseline ship; deliberately parked
-  *before* tuning, because one run (precision 0.82, recall 1.00, verb-acc 0.93 over 22 pairs on
-  `claude-opus-4-8`) isn't enough signal to change the prompt or model, and the 3 firing misses are borderline
-  `relates`/direction cases. **Resume checklist + the lever inventory live in
-  [specs/eval-strategy.md](specs/eval-strategy.md) §6** — first step on resume is a `--repeat N` variance pass,
-  *then* grow the labelled set, *then* tune one lever at a time. The deferred **distance-weighting** experiment
-  (backlog) hangs off this eval too.
+- **Phase 1 — additive code (`b2 similar` + `b2 link`); build the new surface before deleting anything.**
+  - `Vault::similar(note, limit)` over [`discover::candidates`](../crates/b2-core/src/discover.rs) (already
+    built + model-free) → **`b2 similar <note>`**: notes ranked by embedding proximity minus the
+    already-connected, each with path · title · score · evidence snippet; default 10; no model call; `--json`.
+  - Extract the frontmatter-append from `accept` ([`note::add_relation`](../crates/b2-core/src/note.rs)) into
+    `Vault::link(src, dst, type=references, explanation?)` → **`b2 link <src> <dst> [--type] [--explanation]`**:
+    Markdown-first write to `relations:` + re-project (the old `accept` minus the queue). A body link stays a
+    manual edit, picked up on the next reindex.
+- **Phase 2 — deletions.** `b2-relate` crate; `relate.rs`; the generate pipeline in `discover.rs`
+  (`generate_for_anchor` / `generate_all*` / `GenerateOutcome` / `SuggestProgress`) — **keep `candidates`**; the
+  suggestion lifecycle in `suggest.rs` (**keep** the extracted link primitive); `replay.rs`; the log tier in
+  `event.rs`; suggestion DB machinery (`status`, `origin='suggested'`, `edge_provenance`, the review-queue
+  readers); the façade + CLI suggestion surface (`suggest`/`accept`/`reject`, `B2_RELATOR`); tests
+  `relate`/`generate`/`suggestions` (adapt `accept` → `link`).
+- **Phase 3 — verify.** `cargo build` / `test` / `clippy --workspace` / `fmt`; confirm the two-tier invariant
+  (drop `b2.sqlite` → reindex identical) and the `similar` → `link` → `neighbors` loop end-to-end; refresh the
+  test tallies in the docs.
 
-**Not in scope (keep discovery thin):** query expansion (qmd's 1.7B third model — off-by-default, later);
-a reranker (a one-stage insertion after RRF, [index-engine.md](index-engine.md) §5); the actual
+**Not in scope (keep discovery thin):** a reranker (a one-stage insertion after RRF,
+[index-engine.md](index-engine.md) §5, still a clean fast-follow); query expansion; the actual
 packaging/distribution build. **Unlocks (now available):** the qmd chunker upgrade — a real embedder can
-finally score paragraph vs. qmd chunking (build spec §1.2); and ranking-quality tuning the eval can now
-measure (e.g. the keyword-half stopword noise the first eval pass surfaced).
+finally score paragraph vs. qmd chunking (build spec §1.2); and ranking-quality tuning the retrieval eval can
+now measure (e.g. the keyword-half stopword noise the first eval pass surfaced) — which lifts `b2 similar`
+directly, since it reuses the same stored vectors.
 
 ## Backlog (later, not now)
 
@@ -320,39 +345,17 @@ measure (e.g. the keyword-half stopword noise the first eval pass surfaced).
   - **Faster / smaller embedder** — swap bge-base (768-dim) for bge-small (384-dim, ~3× faster) or a
     quantized / ONNX path to cut per-chunk cost. A raw-speed lever behind the existing `Embedder` seam, not a
     structural fix — measure retrieval quality (the eval) before switching the default.
-- **`suggest` incremental cost — the `body_hash` anchor-skip.** Pre-call dedup (done) makes a re-run free for
-  *settled* pairs (pending + rejected), but *declines* leave no edge, so an unchanged note's declined candidates
-  are re-judged (re-paid) every run. Skip a whole **anchor** whose note `body_hash` is unchanged since its last
-  suggest pass — mirroring reindex's incremental heuristic — so re-runs pay only for genuinely new/changed notes.
-  Needs a per-note "last-suggested hash" watermark (durable, in the log or a small meta row). Alternatively/also:
-  persist declines as a lightweight tombstone (falls out of the audit log below) so they too skip pre-call.
-- **Durable audit log of model calls — observability, *not* state.** A separate append-only
-  `.b2/log/audit.jsonl` (one line per `relate()`: timestamp, anchor+candidate b2ids, model, verdict incl. the
-  raw decline, confidence, tokens, latency). Hard rule: **kept out of the authoritative `events.jsonl`** — it is
-  disposable telemetry, never replayed into the index (a violation of the projection invariant). Emit it from
-  `b2-relate` (where the call + non-determinism already live, so `b2-core` stays pure). **Privacy:** the relator
-  ships note *bodies* to the API — default to ids + metadata, gate full request/response text behind a
-  `verbose`/debug flag. Value: cost history across runs, and — the reason it's more than telemetry — a
-  `(pair, verdict, confidence, decline-reason)` corpus that feeds the **suggestion-quality eval** (Next up) and
-  lets declines be skipped pre-call. Current instrumentation is deliberately **transient** (per-run token
-  summary + progress line, nothing persisted); this is the durable follow-up if/when the eval needs it.
-- **`accept` could resolve the reverse-direction pending suggestion.** Accepting `A →type B` makes A↔B an
-  active edge, so candidate-gen excludes the pair thereafter — but any *already-pending* reverse suggestion
-  `B →type' A` just sits in the queue (never re-proposed, but never cleared). Minor UX rough edge surfaced while
-  dogfooding: `accept` (or a small `suggest --gc`) could auto-resolve pending suggestions whose pair is now
-  connected. Low priority; costs no calls, just queue tidiness.
-- **Docs refresh for the 4th crate.** `architecture.html` still says "Three crates" / draws a 3-box crates
-  diagram (b2-core/b2-embed/b2-cli) and carries pre-`b2-relate` test tallies; `CLAUDE.md`'s architecture section
-  still calls the real relator "future work in its own crate"; the `index.html` test-count badge is a manual
-  snapshot. A coherent pass: add `b2-relate` to the crates diagram + prose, refresh tallies, and update the
-  CLAUDE.md relator line. Deferred here to avoid a half-done SVG redraw mid-feature.
+- **Docs: keep the HTML + test-count badge in sync.** The 2026-07-04 pivot returns the workspace to **three**
+  crates (`b2-core`/`b2-embed`/`b2-cli`), so `architecture.html`'s "Three crates" framing is correct again once
+  the discovery narrative is updated (done in the pivot's Phase 0). The `index.html` test-count badge remains a
+  manual snapshot — refresh it whenever tallies move.
 - Property tests for the invariants — round-trip, `full-reindex ≡ incremental` (now real, worth pinning),
   rename-keeps-backlinks as property tests over generated vaults (golden-vault scenarios exist; property
   coverage is the gap).
-- qmd chunker upgrade — replace the minimal paragraph chunker once a real embedder + eval can score it
+- qmd chunker upgrade — replace the minimal paragraph chunker once the real-embedder retrieval eval can score it
   (build spec §1.2).
-- Distance-weighting for candidate ranking — v1 ranks candidates by semantic max-sim alone (graph distance
-  is exclusion-only, ① resolved 2026-07-01). Once the suggestion-quality eval exists (②), measure whether
-  boosting graph-*close* (triadic closure) or graph-*distant* (serendipity/bridging) candidates lifts
-  accept-precision — and only add the knob if the eval says so.
+- Distance-weighting for `b2 similar` ranking — today candidates are ranked by semantic max-sim alone (graph
+  distance is exclusion-only, ① resolved 2026-07-01). A possible knob: boost graph-*close* (triadic closure) or
+  graph-*distant* (serendipity/bridging) candidates. With no automated accept-precision signal (the human is the
+  gate), this is a dogfooding-judged experiment — add the knob only if it visibly improves the surfaced list.
 - GUI — deferred per the headless-first approach ([vision-and-scope.md](vision-and-scope.md)).

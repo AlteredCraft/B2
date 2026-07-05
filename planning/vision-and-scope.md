@@ -35,8 +35,8 @@ never find by hand.
     bookkeeping a capable agent should be doing for me.
   - Search is keyword only.
 - I want the ownership of Obsidian **and** genuinely native AI — specifically **connection
-  discovery**: an agent that proposes typed, explained relationships across my vault and
-  helps the structure grow over time.
+  discovery**: surfacing the relationships across my vault I'd never find by hand — semantically, over
+  everything — so I can make them real and typed, and the structure grows over time.
 
 ## The problem we're solving
 
@@ -52,9 +52,9 @@ storage + AI-native connection discovery, running locally on my machine.**
 ## Vision (the north star)
 
 Point B2 at a folder of my Markdown notes and it becomes a second brain that actively thinks
-alongside me. It reads everything, understands what each note is about, and keeps **discovering
-and explaining the connections** between notes — *typed*, not just "related" — so the structure
-of my knowledge grows on its own instead of rotting. The files stay plain Markdown on my disk,
+alongside me. It reads everything, understands what each note is about, and keeps **surfacing the
+connections** between notes I'd never find by hand — ready for me to make them *typed*, not just
+"related" — so the structure of my knowledge grows instead of rotting. The files stay plain Markdown on my disk,
 mine forever; B2 is the **intelligence layer over them, not a container around them**. Humans and
 AI agents are both first-class users: I write and wander; the agent reads, enriches, links, and
 proposes — and I stay in control of what it commits.
@@ -89,24 +89,25 @@ are these tenets made mechanical; this is their canonical statement.
 
 - **A volatile vault over a disposable index.** Your notes are meant to churn — move, split, merge,
   compress, trim orphans, big refactors — and B2 must *welcome* that, never penalize it. We guarantee
-  it by keeping almost nothing that isn't re-derivable from your Markdown: the index is a pure
-  projection (`index = projection of (Markdown ∪ log)`), and dropping it and rebuilding yields an
-  identical one (the locked `full-reindex ≡ incremental-update` invariant). The one durable thing B2
-  keeps that your notes *can't* reconstruct is a thin append-only event log
-  ([data-model.md](data-model.md) §4), whose single load-bearing job is remembering what you've
-  **rejected** so it isn't re-proposed — everything else in it is prunable. An index that is never a
-  source of truth can't drift into a liability; so we spend complexity to keep it *derivable*, not to
-  keep it *correct under edit*. Idempotency is the mechanism; a vault you can rewrite fearlessly is the
-  point.
+  it by keeping **nothing** that isn't re-derivable from your Markdown: the index is a pure projection
+  (`index = projection of (Markdown)`), and dropping it and rebuilding yields an identical one (the
+  locked `full-reindex ≡ incremental-update` invariant). There is **no** durable state outside your
+  notes — every connection you commit lives in the Markdown itself (a body link, or a frontmatter
+  `relations:` entry), so losing the index loses nothing at all. An index that is never a source of
+  truth can't drift into a liability; so we spend complexity to keep it *derivable*, not to keep it
+  *correct under edit*. Idempotency is the mechanism; a vault you can rewrite fearlessly is the point.
+  *(Until 2026-07-04 one durable thing lived outside Markdown — a thin event log remembering rejected
+  suggestions; cutting the LLM relator removed the only thing it was for, so the third tier is gone.)*
 - **Build for tomorrow's model (the Bitter Lesson).** Model capability is rising faster than any
   scaffolding we could write to compensate for today's limits, so we refuse to freeze those limits
-  into B2's structure. Every AI part sits behind a **swappable seam** — embedder, relator, reranker —
-  so a better model is a drop-in, not a rewrite. Model-compensating machinery (query expansion, heavy
-  prompt orchestration) is deferred or off by default. Where we *do* hand-engineer structure for
-  tractability — the closed relation vocabulary that makes discovery scoreable and queries reliable
-  ([data-model.md](data-model.md) §2) — we keep it a **policy we can relax**, never a structural
-  assumption, so a more capable model can be let off the leash without a redesign. Orchestrate the
-  minimum today's model needs, and no more.
+  into B2's structure. Every AI part sits behind a **swappable seam** — today the embedder (a reranker
+  when one lands) — so a better model is a drop-in, not a rewrite. Model-compensating machinery (query
+  expansion, heavy prompt orchestration, an LLM adjudicating every candidate pair) is deferred or off by
+  default — the 2026-07-04 removal of the per-pair relator is this tenet *applied*, not an exception to
+  it. Where we *do* hand-engineer structure for tractability — the closed relation vocabulary that keeps
+  queries reliable and gives you a stable typing palette ([data-model.md](data-model.md) §2) — we keep
+  it a **policy we can relax**, never a structural assumption, so a more capable model can be let off the
+  leash without a redesign. Orchestrate the minimum today's model needs, and no more.
 
 ## What B2 is (and is not)
 
@@ -125,7 +126,7 @@ not an Obsidian plugin or skin. The core must be fully exercisable and verifiabl
 at all — every capability reachable and assertable without a pixel on screen.
 
 **The CLI is the "UI before the UI."** The first adapter over the headless core is a CLI, not a
-screen: `b2 add`, `b2 search`, `b2 link`, `b2 suggest`, `b2 neighbors`, `b2 reindex`, `b2 explain`.
+screen: `b2 add`, `b2 search`, `b2 similar`, `b2 link`, `b2 neighbors`, `b2 reindex`, `b2 explain`.
 It's a real, daily-usable product with zero GUI; a trivially testable surface (run a command
 against a fixture vault, assert the output); and it keeps the decoupled-core discipline honest —
 the CLI holds *no logic*, it only calls the core API. When the GUI finally arrives it's a second
@@ -138,31 +139,31 @@ artifact — UI-last and the binary goal pull the same way.
 1. *One typed core API as the contract.* All logic lives behind it; CLI and tests are clients.
    Testing the API exhaustively is testing the app.
 2. *Golden-vault fixtures.* Small Markdown corpora with known structure → assert the derived graph,
-   search hits, and suggestions. Add a frozen snapshot of a copy of the real vault as a large
+   search hits, and similarity candidates. Add a frozen snapshot of a copy of the real vault as a large
    integration fixture — real frontmatter, real link density.
 3. *Property tests for the invariants:* round-trip losslessness (`parse → serialize → parse`),
    `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. These catch
    whole classes of bugs, not single cases.
-4. *Deterministic seams for the AI parts.* Discovery's mechanism (candidate generation → ranking →
-   typing → review state) is fully testable with a fake embedder (deterministic vectors) and a
-   scripted relator (canned LLM output). No live model is needed to prove the pipeline is correct.
+4. *Deterministic seams for the AI parts.* Discovery's mechanism (candidate generation → similarity
+   ranking) is fully testable with a fake embedder (deterministic vectors) — no live model is needed to
+   prove the pipeline is correct. The one AI seam left is the embedder; the relator and its scripted fake
+   went with the LLM-relator removal (2026-07-04).
 5. *Split "is the plumbing right?" from "is the AI good?"* Fast deterministic tests on every change
-   (replay recorded model transcripts as fixtures); a separate, occasional eval suite that hits a
-   real model and scores suggestion quality (precision/recall) against a hand-labeled set. Model
-   quality never flakes CI.
+   (fake embedder); a separate, occasional eval suite that hits the real embedder and scores retrieval
+   quality (precision/MRR) against a hand-labeled set. Model quality never flakes CI.
 
 ### Seeing & dogfooding without a screen
 
-- *Observability stands in for visual feedback.* `b2 explain <note>` dumps the local graph, why a
-  suggestion fired, and index state; structured logs / an event stream to tail.
+- *Observability stands in for visual feedback.* `b2 explain <note>` dumps the local graph with each
+  edge's explanation and index state; `b2 similar <note>` shows what B2 would surface; structured logs to tail.
 - *A REPL / notebook over the core API* is the headless equivalent of clicking around — poke the
   system, find gaps, before any of it becomes a screen.
 - *Dogfood the AI-native promise now, no MCP needed.* An agent (e.g. Claude) can drive the `b2`
   commands directly — the CLI is the agent's hands — exercising the "an agent reads, enriches, and
   connects my vault" loop today, headless, with no protocol layer and no UI.
 
-**Milestones are scenarios, not screens.** Done is a passing scenario — "given vault X, `b2 suggest
-<note>` returns these typed, explained links" — not something to look at. As long as progress is
+**Milestones are scenarios, not screens.** Done is a passing scenario — "given vault X, `b2 similar
+<note>` surfaces these nearest notes and `b2 link` commits the ones I pick" — not something to look at. As long as progress is
 measured in green scenarios, there's no pressure to build a UI to check whether it works; the tests
 already said so. That is what lets the UI be deferred for a long time without flying blind.
 
@@ -176,13 +177,15 @@ already said so. That is what lets the UI be deferred for a long time without fl
    `supersedes`, …), not an undifferentiated edge.
 4. **Hybrid retrieval** — keyword + graph (and semantic where the index engine allows) — fixing
    Obsidian's keyword-only limit.
-5. **Connection discovery** ⭐ — B2 proposes *typed, explained* relationships between notes I never
-   linked: "these argue the same thing from different angles," "this supersedes that." The reason
-   B2 exists.
-6. **Review & trust** — every agent-proposed link or edit is **provenance-tagged and inert until
-   accepted**. I (or a policy) promote suggestions; nothing pollutes the vault silently.
-7. **Explainability** — B2 can always show *why*: the local graph, why a suggestion fired, what the
-   agent changed.
+5. **Connection discovery** ⭐ — for any note, B2 surfaces the notes most *semantically similar* to it
+   that I haven't linked yet — over my whole vault, instantly and locally — and I lock in the ones worth
+   a real connection as a *typed* link (in the body, or committed to frontmatter). The machine finds the
+   candidates; I supply the judgment and the type. The reason B2 exists.
+6. **Review & trust** — B2 never writes a connection I didn't ask for. Every committed edge is one I
+   authored in the body or explicitly locked in with `b2 link`; B2's only unbidden write to a note is
+   stamping a missing `b2id`. Nothing pollutes the vault silently — the vault changes only on my command.
+7. **Explainability** — B2 can always show *why*: the local graph, each edge's explanation, and what
+   changed and when.
 
 ## Scope: v1 vs. later vs. never
 
@@ -192,8 +195,9 @@ already said so. That is what lets the UI be deferred for a long time without fl
 - A rebuildable derived index: **keyword (full-text) + the typed graph**, plus **semantic search if
   the chosen index engine provides it** (see Decisions locked).
 - Typed links — authored *and* machine-derived — unified into one graph.
-- **Connection discovery v1:** candidate generation (graph + keyword/co-occurrence) → typed,
-  explained suggestions → review/accept loop, with the LLM step behind a swappable seam.
+- **Connection discovery v1:** for any note, surface its semantically nearest not-yet-linked notes
+  (vector KNN over stored embeddings) → the human locks in the worthwhile ones as typed links (a body
+  link, or `b2 link` → frontmatter). No LLM in the loop; the human is the precision gate.
 - Provenance on every note and edge.
 - Full test coverage: golden vaults, property tests, deterministic AI seams (see the testability
   stack above).
@@ -216,10 +220,10 @@ already said so. That is what lets the UI be deferred for a long time without fl
 I point B2 at a copy of my real vault and, entirely from the CLI:
 
 - it indexes every note and builds the typed graph;
-- `b2 suggest <note>` returns typed, explained connections I hadn't made — and some are genuinely
-  useful;
-- I accept a few; they're written back as Markdown with provenance, and any editor shows them as
-  normal links;
+- `b2 similar <note>` surfaces the notes nearest it in meaning that I hadn't linked — and some are
+  genuinely worth connecting;
+- I lock a few in with `b2 link` (or a body link of my own); they're written back as Markdown
+  (frontmatter `relations:`), and any editor shows them as normal links;
 - every bit of this is covered by tests that pass with no live model and no screen.
 
 That milestone proves the thesis — *self-owned Markdown + AI-native connection discovery* — with
@@ -303,6 +307,41 @@ Settles "the index-engine choice is a gating decision" for semantic search
   has run. The download **source is configurable** (default HF repo; overridable to a mirror, another
   repo, or a local path for fully-offline installs), set in a global TOML config; the model is cached in a
   shared XDG dir, not per-vault.
+
+## Decisions locked (2026-07-04) — discovery is similarity + human judgment, not an LLM relator
+
+A course-correction from dogfooding B2 on a real 1000+ note vault. It **returns to the two tenets**
+rather than departing from them — the machinery it removes is exactly what those tenets say to avoid.
+
+- **The LLM relator is cut.** Connection discovery was built as *candidate generation → an LLM
+  "relator" that types & explains every candidate pair → a review/accept queue.* On a real vault the
+  relator's per-pair latency and dollar cost don't scale (the first pass is ~notes × candidates model
+  calls), and — the deeper point — a per-pair LLM adjudicator is precisely the **"heavy prompt
+  orchestration / model-compensating machinery" the Bitter-Lesson tenet says to defer.** So it goes: the
+  `Relator` seam, the Claude-backed relator (the `b2-relate` crate), and the suggestion queue
+  (`generate`/`accept`/`reject`) are removed.
+- **Discovery is now semantic-similarity surfacing + human lock-in.** Point B2 at a note and it surfaces
+  the notes most **semantically similar** to it that you haven't linked yet — instantly, locally, over
+  your whole vault (vector KNN over already-stored embeddings; no model call, no network). *You* decide
+  which are worth a real connection and **lock it in**: a link in the body (which you write), or a typed
+  relation B2 commits to frontmatter `relations:` on **`b2 link`**. The discovery is the machine's; the
+  **judgment stays yours** — you are the precision gate the relator used to be. This is still
+  **AI-native** (principle #4): the intelligence simply moved from expensive per-pair judgment to cheap
+  whole-vault semantic surfacing, which is where the Bitter Lesson says to put it.
+- **Storage collapses from three tiers to two.** With no suggestions to queue and no rejections to
+  remember, the durable `.b2/log/` event tier and its replay have **no load-bearing job left** (the only
+  other thing they held — `b2id.stamped` — is history reconstructible from the Markdown itself, since the
+  id lives in the file). So the log tier is removed and the core invariant **simplifies** from
+  `index = projection of (Markdown ∪ log)` to **`index = projection of (Markdown)`** — which *strengthens*
+  the "volatile vault over a disposable index" tenet: now literally nothing durable exists that your
+  Markdown can't reconstruct. Two tiers remain: **pristine Markdown** (source of truth) + a **disposable
+  SQLite index** (drop it, `reindex` rebuilds it identical).
+- **What's retained, unchanged:** typed links (authored in the body, or committed to frontmatter), the
+  materialized typed graph with **backlinks** (`b2 neighbors` / `b2 explain` — inbound *and* outbound),
+  hybrid keyword + semantic + graph retrieval, the real local embedder behind its seam, and the closed
+  10-verb relation vocabulary — now serving as *your* typing palette on `b2 link` rather than the
+  relator's emit set. Mirrored across [data-model.md](data-model.md), [index-engine.md](index-engine.md),
+  [tasks.md](tasks.md), and [user-stories.md](user-stories.md).
 
 ## Inspiration — not a copy
 

@@ -21,16 +21,18 @@ status: draft
 
 **This doc owns:** the precise DDL, the relations between tables, the read/write data flows, and the
 build sequence. **It does not own:** the *why* of SQLite ([index-engine.md](../index-engine.md)), the
-note/edge/provenance model it projects ([data-model.md](../data-model.md)), or the language/packaging
-choice ([index-engine.md](../index-engine.md) §6–§7).
+note/edge model it projects ([data-model.md](../data-model.md)), or the language/packaging choice
+([index-engine.md](../index-engine.md) §6–§7).
 
-Recap of the three tiers it sits in ([data-model.md](../data-model.md)): **Markdown** is the source of
-truth for *knowledge*; **`b2.sqlite`** (this doc) is a **disposable cache** of every queryable concern;
-the **`.b2/log/`** event log is the durable source of truth for *history* + review state. The law that
-binds them, and the yardstick every flow below is measured against:
+Recap of the two tiers it sits in ([data-model.md](../data-model.md)): **Markdown** is the single source
+of truth; **`b2.sqlite`** (this doc) is a **disposable cache** of every queryable concern, with no
+durable state outside the notes. The law that binds them, and the yardstick every flow below is measured
+against:
 
-> **`index = projection of (Markdown ∪ log)`.** Drop `b2.sqlite`, re-scan the vault, replay the log →
-> a byte-identical index (the locked `full-reindex ≡ incremental-update` invariant).
+> **`index = projection of (Markdown)`.** Drop `b2.sqlite`, re-scan the vault → a byte-identical index
+> (the locked `full-reindex ≡ incremental-update` invariant). *(Through 2026-06-30 a durable `.b2/log/`
+> event log was a second source of truth for review state; the LLM-relator cut removed it — see
+> [data-model.md](../data-model.md) §4.)*
 
 **Conventions used throughout the DDL:**
 
@@ -39,7 +41,7 @@ binds them, and the yardstick every flow below is measured against:
 - The DB is opened with `PRAGMA journal_mode = WAL` and `PRAGMA foreign_keys = ON`. `sqlite-vec` is
   statically linked (no runtime `load_extension`, removing the macOS friction noted in
   [index-engine.md](../index-engine.md) §8).
-- Every table is rebuildable from `(Markdown ∪ log)`; nothing here is a source of truth.
+- Every table is rebuildable from `Markdown`; nothing here is a source of truth.
 
 ---
 
@@ -57,7 +59,6 @@ CREATE TABLE meta (
 --   b2_version       build that wrote it (debug)
 --   embed_model_id   the embedder behind chunks_vec (e.g. 'BAAI/bge-base-en-v1.5')
 --   embed_dim        vector dimension — MUST equal the FLOAT[N] literal in chunks_vec (§1.2)
---   log_seq          last .b2/log sequence applied → enables incremental replay (Flow ⑤)
 --   created_at       when the index was first built
 -- A change to embed_model_id/embed_dim is a model swap → drop chunks_vec + full re-embed
 -- (index-engine.md §8). meta is the only place that can detect it, so vectors never go silently stale.
@@ -155,37 +156,27 @@ CREATE VIRTUAL TABLE chunks_vec USING vec0(
 
 ```sql
 CREATE TABLE edges (
-  id            TEXT PRIMARY KEY,      -- suggested: ULID carried IN the log event (replay-stable).
-                                       -- authored: derived from (src_id, dst_id|dst_path_raw, type, occ).
+  id            TEXT PRIMARY KEY,      -- derived deterministically from (src_id, dst_id|dst_path_raw, type, occ).
   src_id        TEXT NOT NULL REFERENCES notes(b2id) ON DELETE CASCADE,  -- the authoring note; always exists
   dst_id        TEXT,                  -- resolved b2id, or NULL when the link is dangling (soft ref by design)
   dst_path_raw  TEXT NOT NULL,         -- the literal [[path]] as written — the anchor for move-rewrite + repair
   type          TEXT NOT NULL,         -- relation verb (data-model §2); 'references' for a bare wikilink
-  origin        TEXT NOT NULL CHECK (origin IN ('inline','frontmatter','suggested')),
-  status        TEXT NOT NULL CHECK (status IN ('active','suggested','rejected')),
-  explanation   TEXT,                  -- trailing text after — / : , or an agent's rationale
+  origin        TEXT NOT NULL CHECK (origin IN ('inline','frontmatter')),
+  explanation   TEXT,                  -- trailing text after — / :
   occurrence_index INTEGER NOT NULL DEFAULT 0,  -- completes data-model §2's authored-identity tuple;
-                                                -- lets one note link the same target+verb twice. =0 for suggestions.
+                                                -- lets one note link the same target+verb twice.
 
-  -- origin/status coupling (data-model §3, refined): authored edges are always active; a suggested edge
-  -- is only ever suggested or rejected. There is NO 'suggested + active' row — acceptance re-projects the
-  -- edge as origin='frontmatter' from the note's relations: block (see Flow ③). This CHECK makes that a
-  -- hard guarantee, so a bug can never leak an un-accepted edge into the live (status='active') graph.
-  -- origin: 'inline' = body link/typed-line (human); 'frontmatter' = relations: entry (B2-accepted or
-  -- human/importer); 'suggested' = log-replayed review row (data-model §0).
-  CHECK ( (origin = 'suggested'                AND status IN ('suggested','rejected'))
-       OR (origin IN ('inline','frontmatter')  AND status = 'active') ),
-
+  -- Every edge is authored and active — there is no lifecycle and no `status` column (data-model §3, §4).
+  -- origin: 'inline' = body link/typed-line (human); 'frontmatter' = relations: entry (committed via
+  -- `b2 link`, or human/importer-authored). An edge exists iff it is written in the Markdown.
   UNIQUE (src_id, dst_id, type, occurrence_index)   -- the authored-identity tuple as a constraint
 );
 CREATE INDEX edges_src_idx      ON edges(src_id);
-CREATE INDEX edges_dst_type_idx ON edges(dst_id, type);                       -- b2 neighbors [--type]
-CREATE INDEX edges_status_idx   ON edges(status);                            -- the live review queue
+CREATE INDEX edges_dst_type_idx ON edges(dst_id, type);                       -- b2 neighbors [--type] / backlinks
 CREATE INDEX edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL; -- the repair sweep
 -- dst_id is a SOFT reference (nullable, no enforced FK): a link may be dangling, and deleting a target
 -- must be allowed. When a target is deleted, its inbound edges re-project to dst_id = NULL (dangling) —
--- not auto-removed. src_id IS a hard FK with CASCADE: deleting a note removes its outbound edges
--- (including any suggestions about it, which are then moot).
+-- not auto-removed. src_id IS a hard FK with CASCADE: deleting a note removes its outbound edges.
 --
 -- DEFERRED column — dst_alias_raw TEXT: the literal |title as written. Only powers the cosmetic
 -- alias-refresh on a title rename (user-stories Story 1, display-only). A move preserves the existing
@@ -193,34 +184,22 @@ CREATE INDEX edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL; -- 
 -- ship alias-refresh.
 ```
 
-### 1.4 Derived from the log: the review queue — replayed, never authored here
-
-```sql
-CREATE TABLE edge_provenance (
-  edge_id    TEXT PRIMARY KEY REFERENCES edges(id) ON DELETE CASCADE,
-  by         TEXT NOT NULL,            -- 'human' | 'agent:<model-id>'   (data-model §4)
-  source     TEXT,                     -- the evidence signal (free text) — fuel for the accept/reject call
-  confidence REAL,                     -- 0.0–1.0, for triaging the queue
-  created    TEXT NOT NULL,            -- when the suggestion was generated
-  decided    TEXT                      -- when accepted/rejected; NULL while pending
-);
--- Exists ONLY for edges with status IN ('suggested','rejected'). An accepted edge lives in frontmatter
--- relations: and is pristine — it carries NO row here; its history (who proposed it, confidence, when)
--- lives in the log alone (data-model §4). This table is rebuilt purely by replaying .b2/log; never
--- written directly.
-```
-
-### 1.5 Caches — purely disposable
+### 1.4 Caches — purely disposable
 
 ```sql
 CREATE TABLE llm_cache (
   key     TEXT PRIMARY KEY,            -- hash(model_id ∥ task ∥ input)
-  value   TEXT NOT NULL,               -- cached query-expansion variants / rerank scores
+  value   TEXT NOT NULL,               -- cached rerank scores (reserved for the reranker fast-follow, §5)
   created TEXT NOT NULL
 );
 ```
 
-### 1.6 Deliberately deferred (out of v1, no invariant depends on them)
+> **Removed 2026-07-04:** the `edge_provenance` table (the log-derived review queue holding a pending
+> suggestion's `by`/`source`/`confidence`). With the LLM relator and its suggestion lifecycle cut, there
+> is no review queue and no edge provenance — a committed edge is a pristine authored line
+> ([data-model.md](../data-model.md) §4).
+
+### 1.5 Deliberately deferred (out of v1, no invariant depends on them)
 
 - **`dst_alias_raw`** (edges column, §1.3) — cosmetic alias-refresh only.
 - **`note_bodies(note_b2id, content)`** — a cache of each file's text; re-readable from disk anytime.
@@ -243,13 +222,13 @@ CREATE TABLE llm_cache (
  ┌───────────────┐ ┌──────────┐  ┌──────────────────────────────────────────────────┐
  │ note_aliases  │ │  chunks  │  │                      edges                        │
  └───────────────┘ │  id PK   │  │ src_id → notes.b2id (FK) · dst_id ~→ b2id (null)  │
-                   └────┬─────┘  │ id PK                                            │
-              ┌─────────┴────────┐└───────────────────────┬──────────────────────────┘
-       (rowid)│                  │(chunk_id)         1:1   │ (suggested / rejected only)
-        ┌──────────┐       ┌─────────────┐                ▼
-        │chunks_fts│ ext-  │  chunks_vec │          ┌────────────────┐
-        │  FTS5    │content│ vec0 f32[768]│         │ edge_provenance│
-        └──────────┘       └─────────────┘          └────────────────┘
+                   └────┬─────┘  │ id PK · origin ∈ {inline, frontmatter}           │
+              ┌─────────┴────────┐└──────────────────────────────────────────────────┘
+       (rowid)│                  │(chunk_id)
+        ┌──────────┐       ┌─────────────┐
+        │chunks_fts│ ext-  │  chunks_vec │
+        │  FTS5    │content│ vec0 f32[768]│
+        └──────────┘       └─────────────┘
 
    meta(key,value) · llm_cache(key,value)  — standalone bookkeeping / cache
 ```
@@ -259,7 +238,8 @@ CREATE TABLE llm_cache (
   consistent under incremental edits.
 - **`edges.dst_id`** is intentionally *not* a hard FK — that is what lets a target be deleted and a link
   dangle (re-projected to `NULL`) instead of blocking the delete.
-- **`edge_provenance`** hangs off only the suggested/rejected edges; accepted (frontmatter) edges have none.
+- Every `edges` row derives from Markdown (`origin ∈ {inline, frontmatter}`); there is no review-queue
+  side table.
 
 ---
 
@@ -273,17 +253,16 @@ file.md → parse → (frontmatter, body)
   ├─ upsert notes + replace note_aliases        [dirty-check: mtime then body_hash; unchanged ⇒ skip]
   ├─ body → md-aware chunk → chunks(seq, offsets, text)        (FTS auto-synced by triggers)
   │                              └→ embedder SEAM → chunks_vec[chunk_id]   (deterministic fake in tests)
-  └─ authored edges → resolve path→b2id → upsert edges(status=active):
+  └─ authored edges → resolve path→b2id → upsert edges:
         ├─ BODY links/typed-lines      → origin=inline
         └─ FRONTMATTER relations:       → origin=frontmatter
         unresolved → dst_id = NULL, keep dst_path_raw   (flagged for repair)
         dedup: same (src,dst,type) in both homes → inline wins, drop the FM dup (data-model §0, §3)
 ```
 
-Re-projecting one note refreshes **only its `origin IN ('inline','frontmatter')` edges** (delete those
-for `src_id`, re-derive from the current Markdown — both body and `relations:`) and its chunks.
-**`suggested`/`rejected` rows are log-derived and are left untouched by a Markdown re-parse** — that
-separation is what makes "incremental ≡ full" hold without a re-parse clobbering the review queue.
+Re-projecting one note refreshes **all its edges** (delete those for `src_id`, re-derive from the current
+Markdown — both body and `relations:`) and its chunks. Every edge is Markdown-derived, so a one-note
+re-parse is exactly a one-note slice of a full rebuild — which is what makes "incremental ≡ full" hold.
 
 ### ② Hybrid retrieval — reranker is a clean post-fusion seam (fast-follow)
 
@@ -301,26 +280,21 @@ concrete prefix is the model's own — B2 ships bge's) are borrowed from qmd
 ([index-engine.md](../index-engine.md) §1, §5). The reranker and query expansion are deferred behind
 seams — they change *ordering*, not the store or the candidate set.
 
-### ③ Accept a suggestion — makes *inert-until-accepted* literal (B2 never authors the body)
+### ③ Commit a connection (`b2 link`) — B2 never authors the body
 
 ```
-b2 link --accept <edge_id>
-  1. re-resolve dst's CURRENT path + title from dst_id → [[path|title]]   (dst may have moved)
-  2. APPEND  - "<type> [[path|title]] — <explanation>"  to the SRC note's
+b2 link <src> <dst> [--type <verb>=references] [--explanation …]
+  1. resolve <src> + <dst> (path or b2id) → src b2id + dst's CURRENT path + title → [[path|title]]
+  2. APPEND  - "<verb> [[path|title]] — <explanation>"  to the SRC note's
      frontmatter relations:   (Markdown FIRST; NEVER the body — data-model §0)
-  3. log: suggestion.accepted {edge_id, by, confidence, evidence}
-  4. reconcile index:
-        → delete the suggested queue row FIRST (it shares the (src,dst,type,occ) UNIQUE tuple)
-        → re-project the SRC note (Flow ①); the edge re-materializes as
-          origin='frontmatter'/status='active' straight from the relations: entry just written
-          — NOT an in-place status flip.
-        → its edge_provenance row is gone; the accepted edge is pristine, history lives only in the log.
+  3. re-project the SRC note (Flow ①); the edge materializes as origin='frontmatter'
+     straight from the relations: entry just written — a projection of an authored line.
 ```
 
-This is why an `active` edge always traces to an authored line in the file (body or frontmatter), never
-to a mutated queue row — keeping `index = projection of (Markdown ∪ log)` exact (the CHECK in §1.3
-enforces it). The suggestion's `explanation` carries over as the relation's trailing text; its
-provenance (`by`/`confidence`/`source`) does **not** — that stays in the log.
+This is why every edge always traces to an authored line in the file (body or frontmatter), never to a
+bespoke index row — keeping `index = projection of (Markdown)` exact. There is no queue, no status flip,
+and no provenance: a committed edge is pristine ([data-model.md](../data-model.md) §4). `--type` defaults
+to `references`; its palette is the core vocabulary (data-model §2).
 
 ### ④ Move / rename — *rename keeps every backlink resolving*
 
@@ -330,8 +304,7 @@ b2 mv old/path.md → new/path.md            (b2id unchanged ⇒ ZERO edge rows 
   2. inbound = SELECT src_id, id FROM edges WHERE dst_id = <moved b2id>
   3. for each inbound src: in that file, find the link whose literal path = dst_path_raw and
         WRITE [[oldpath|title]] → [[newpath|title]]     (Markdown FIRST; the |title alias is preserved verbatim)
-  4. log: note.moved + link.rewritten_on_move (old→new, per file)
-  5. reconcile index (re-project touched files → dst_path_raw refreshed; no edge identity changes)
+  4. reconcile index (re-project touched files → dst_path_raw refreshed; no edge identity changes)
 ```
 
 A **title-only** rename leaves `path` resolving, so every backlink still works with **no rewrite**;
@@ -340,22 +313,18 @@ refreshing the stale `|title` alias is the deferred cosmetic path (needs `dst_al
 the cold-no-prior-state caveat from [user-stories.md](../user-stories.md) Story 1 (dangling links are
 *flagged*, not dropped).
 
-### ⑤ Drop & rebuild — the disposability proof; `index = projection of (Markdown ∪ log)`
+### ⑤ Drop & rebuild — the disposability proof; `index = projection of (Markdown)`
 
 ```
 rm b2.sqlite
-  ├─ scan vault: each .md → Flow ①         (rebuilds notes/aliases/chunks/fts/vec + active edges:
-  │                                          inline from body, frontmatter from relations:)
-  └─ replay .b2/log from seq 0:
-        suggestion.generated → edges(origin=suggested, status=suggested) + edge_provenance
-        suggestion.rejected  → edges(status=rejected)        (tombstone: same src,dst,type never re-proposed)
-        suggestion.accepted  → NO-OP for the queue (its frontmatter edge already came from Markdown in Flow ①)
-        b2id.stamped / note.* / link.rewritten_on_move → history only; not replayed into queryable state
+  └─ scan vault: each .md → Flow ①         (rebuilds notes/aliases/chunks/fts/vec + every edge:
+                                            inline from body, frontmatter from relations:)
   ⇒ a byte-for-byte identical index.
 ```
 
-Replaying an **accepted** suggestion adds no live queue row, so it is never double-counted as both a
-queue row and an `active` edge — the reason Flow ③ removes the row rather than flipping it.
+There is nothing else to replay: every queryable row is a projection of the Markdown, so re-scanning the
+vault reproduces the index exactly. This is the strongest form of the disposable-index tenet — no durable
+state lives anywhere but your notes.
 
 ---
 
@@ -370,36 +339,37 @@ code, but the schema and flows above are language-neutral and can be locked now.
 | **1** | Vault parse/serialize + resolver | `notes`, `note_aliases` | — | golden vault round-trips byte-identical; a missing `b2id` is stamped + logged; resolver maps `memory ⇄ path` both ways |
 | **2** | Markdown-derived tables (**minimal paragraph chunker**, §1.2 build note) | `chunks` (+`chunks_fts`), `edges` | — | golden graph: `references` + `elaborates` spaced-rep→memory (inline/active); a bare link ⇒ `references`; `neighbors memory` = {referenced-by, elaborated-by}; one-note re-index ≡ full |
 | **3** | sqlite-vec + embedder seam | `chunks_vec` | **embedder** (fake→real) | deterministic fake vectors → reproducible KNN; `embed_model_id`/`embed_dim` recorded; real local model deferred behind the seam (§6 of index-engine.md) |
-| **4** | `.b2/` event log + replay | `edges` (suggested/rejected), `edge_provenance` | log sink | the inert suggestion shows in `b2 suggest`, absent from every file on disk; drop→replay reproduces the queue (Flow ⑤); a rejection tombstone blocks re-proposal |
+| ~~**4**~~ | ~~`.b2/` event log + replay~~ **— built, then removed 2026-07-04** | — | — | the log tier + replay were cut with the LLM relator; there is no suggestion queue ([data-model.md](../data-model.md) §4) |
 | **5** | Hybrid retrieval (on the **minimal** chunker; qmd-chunker upgrade **deferred** past step 5 — §1.2 build note) | reads fts+vec (no new tables; `llm_cache` defers with the reranker) | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
 
-Steps 1–2 establish the Markdown-derived tiers; step 4 layers the log-derived review queue on top; the
-two together are what `index = projection of (Markdown ∪ log)` asserts. The embedder (step 3) and
-reranker (step 5) are the two AI seams — both exercised with deterministic fakes so the plumbing is
-provable with no live model ([vision-and-scope.md](../vision-and-scope.md), testability stack).
+Steps 1–2 establish the Markdown-derived tables; there is no log-derived tier (step 4 was removed
+2026-07-04), so `index = projection of (Markdown)` asserts on the Markdown alone. The embedder (step 3)
+and reranker (step 5) are the two model seams — both exercised with deterministic fakes so the plumbing
+is provable with no live model ([vision-and-scope.md](../vision-and-scope.md), testability stack).
 
 ---
 
-## 5. Decisions baked into this schema (resolved 2026-06-29; acceptance home revised 2026-06-30)
+## 5. Decisions baked into this schema (resolved 2026-06-29; acceptance home revised 2026-06-30; review layer removed 2026-07-04)
 
-- **Acceptance is a re-projection, not an in-place flip (#5), and writes frontmatter — not the body
-  (Decision 1, 2026-06-30).** B2 never authors the body; an accepted suggestion is appended to the source
-  note's frontmatter `relations:`, the `suggested` row leaves the queue, and the edge re-materializes as
-  `origin='frontmatter'`/`status='active'` from the Markdown (Flow ③). The origin/status `CHECK` (§1.3)
-  forbids a `suggested + active` row. The graph is the **union** of body (`inline`) + frontmatter
-  relations (`frontmatter`) + log (`suggested`), deduped **inline-wins** on overlap (Flow ①). Mirrored
-  into [data-model.md](../data-model.md) §0, §2–§4, §7 and [index-engine.md](../index-engine.md) §3.
+- **Committing writes frontmatter — not the body (Decision 1, 2026-06-30) — and is a re-projection, not
+  a bespoke index write.** B2 never authors the body; `b2 link` appends the typed-link string to the
+  source note's frontmatter `relations:`, and the edge materializes as `origin='frontmatter'` from that
+  Markdown (Flow ③). The graph is the **union** of body (`inline`) + frontmatter relations
+  (`frontmatter`), deduped **inline-wins** on overlap (Flow ①). Mirrored into
+  [data-model.md](../data-model.md) §0, §2–§4, §7 and [index-engine.md](../index-engine.md) §3.
 - **Schema additions over [index-engine.md](../index-engine.md) §3's sketch (#2), adopted:** `meta`
-  (model/dim/replay/version), `note_aliases` (resolution + cold repair), `occurrence_index` (the
-  data-model §2 identity tuple), `dst_path_raw` (the move-rewrite + dangling-repair anchor), and the
-  origin/status `CHECK`. **Deferred:** `dst_alias_raw` and the `note_bodies` / `frontmatter_json` /
-  `note_tags` caches (§1.6) — no invariant depends on them.
+  (model/dim/version), `note_aliases` (resolution + cold repair), `occurrence_index` (the data-model §2
+  identity tuple), and `dst_path_raw` (the move-rewrite + dangling-repair anchor). **Deferred:**
+  `dst_alias_raw` and the `note_bodies` / `frontmatter_json` / `note_tags` caches (§1.5) — no invariant
+  depends on them.
 - **`dst_id` is a soft, nullable reference; `src_id` is a hard FK with CASCADE (#4).** Targets can be
   deleted (inbound edges re-project to dangling) and links can dangle, while deleting an authoring note
-  cleanly removes its outbound edges and suggestions.
-- **Edge `id` (#3):** suggestions carry a replay-stable ULID minted at suggestion time (stored in the
-  log event); authored edges derive their `id` deterministically from `(src_id, dst_id | dst_path_raw,
-  type, occurrence_index)`. Only suggested/rejected edges are referenced by `edge_provenance`.
+  cleanly removes its outbound edges.
+- **Edge `id` (#3):** every edge is authored, so its `id` derives deterministically from `(src_id,
+  dst_id | dst_path_raw, type, occurrence_index)` — no minted ULIDs, no provenance side-table.
+- **Review layer removed (2026-07-04).** The `edge_provenance` table, the `status` column, the
+  `origin='suggested'` value, the origin/status `CHECK`, and the `.b2/log/` replay are all gone with the
+  LLM relator. What remains is a pure projection of Markdown ([data-model.md](../data-model.md) §4).
 
 > Next ([tasks.md](../tasks.md)): pick the language (the immediate gate), then build steps 0→5 against
 > the golden-vault fixtures. The schema and flows in this doc are the language-agnostic contract that

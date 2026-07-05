@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>B2 — Quick start: set up and work with a vault</title>
-<meta name="description" content="A hands-on walkthrough: build the b2 CLI, point it at a folder of Markdown, and search, explore, and discover typed connections between your notes.">
+<meta name="description" content="A hands-on walkthrough: build the b2 CLI, point it at a folder of Markdown, and search, explore, and surface semantically similar notes to connect yourself.">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
@@ -87,8 +87,8 @@
     <div class="kicker">Set up · index · search · discover connections</div>
     <h1 class="word">Get started with B2</h1>
     <p class="lead">Point B2 at a folder of Markdown and it becomes a second brain that reads
-    everything, lets you <em>search</em> it, and keeps discovering <em>typed, explained</em>
-    connections between your notes.</p>
+    everything, lets you <em>search</em> it, and surfaces the notes most <em>similar in meaning</em>
+    for you to connect.</p>
     <p class="sublead">This guide takes you from an empty checkout to a working vault you can search and
     grow — about ten minutes, most of it a one-time model download. Your <code>.md</code> files stay
     plain and yours the whole way; B2 only ever adds a hidden index folder and (with your say-so) a
@@ -102,13 +102,12 @@
   <code>b2</code> binary — B2 ships as source today, as one static binary. macOS and Linux are the
   tested platforms.</p>
 
-  <p>Two things are <b>optional</b> and only matter for the smart features:</p>
+  <p>One thing is <b>optional</b>, and it's <em>local</em> — B2 makes no network calls and needs no
+  account or API key at any point:</p>
   <ul>
-    <li><b>The embedding model</b> — a one-time ~440&nbsp;MB download (<code>b2 init</code>) that
-      powers <em>semantic</em> search. Skip it and run in an offline keyword-only mode instead
-      (shown below).</li>
-    <li><b>An Anthropic API key</b> — only <code>b2 suggest</code> (AI connection discovery) calls a
-      model over the network. Everything else runs entirely on your machine.</li>
+    <li><b>The embedding model</b> — a one-time ~440&nbsp;MB download (<code>b2 init</code>) of a local
+      model that powers <em>semantic</em> search and connection discovery. Skip it and run in an offline
+      keyword-only mode instead (shown below). Everything runs entirely on your machine.</li>
   </ul>
 
   <!-- ============================================================= -->
@@ -134,9 +133,10 @@
   <div class="step">
     <div class="head"><div class="num">2</div><h3>Install the embedding model <span style="color:var(--muted);font-size:14px;font-weight:400">(one-time)</span></h3></div>
     <div class="body">
-      <p>Semantic search needs a local embedding model. <code>b2 init</code> downloads and verifies it
-      into a shared cache once — it is <em>not</em> re-downloaded per vault, and there is never a
-      surprise download mid-command later.</p>
+      <p>Semantic search and connection discovery run on a <b>local</b> embedding model — no account, no
+      API key, no network at query time. <code>b2 init</code> downloads and verifies the model into a
+      shared cache once — it is <em>not</em> re-downloaded per vault, and there is never a surprise
+      download mid-command later.</p>
 <pre><span class="p">$</span> <span class="k">b2</span> init
 <span class="o">Installed 'bge-base-en-v1.5' (768 dims). Run `b2 reindex` to embed your vault.</span></pre>
       <div class="note"><span class="tag">No model?</span> You can do everything in this guide
@@ -180,7 +180,7 @@ Spaced repetition exploits the retrieval curve.
       come from a small closed vocabulary — <code>references</code>, <code>relates</code>,
       <code>elaborates</code>, <code>supports</code>, <code>refutes</code>, <code>contradicts</code>,
       <code>example-of</code>, <code>part-of</code>, <code>supersedes</code>,
-      <code>derived-from</code> — the same set B2's discovery uses.</p>
+      <code>derived-from</code> — the same palette you'll pick from with <code>b2 link</code>.</p>
       <div class="note tip"><span class="tag">Or scaffold one</span> Prefer a command?
       <code>b2 add notes/spaced-repetition --title "Spaced repetition" --content "…"</code> writes a
       valid note <em>and</em> indexes it in one step (so you can skip the reindex in step&nbsp;5 for
@@ -206,10 +206,10 @@ Spaced repetition exploits the retrieval curve.
 <span class="c">- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve</span></pre>
       <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly two
       places, and <b>never touches your prose</b>: it stamps the <code>b2id</code> the first time it
-      indexes a note, and — only when you <em>accept</em> a suggested connection (step&nbsp;8) — it
-      appends a typed link to a frontmatter <code>relations:</code> block. Connections you write yourself
-      live in the body and are labelled <code>inline</code>; ones B2 commits live in frontmatter and are
-      labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
+      indexes a note, and — only when you run <code>b2 link</code> (step&nbsp;8) — it appends a typed link
+      to a frontmatter <code>relations:</code> block. Connections you write yourself live in the body and
+      are labelled <code>inline</code>; ones you commit with <code>b2 link</code> live in frontmatter and
+      are labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
     </div>
   </div>
 
@@ -229,10 +229,10 @@ Spaced repetition exploits the retrieval curve.
           even a <code>b2id</code>).</li>
         <li><code>b2 reindex --force</code> — re-embed everything from scratch.</li>
       </ul>
-      <div class="note tip"><span class="tag">Where it lives</span> The index and a small event log go
-      in a single <code>.b2/</code> folder inside your vault. It's <b>disposable</b> — delete it and the
-      next <code>reindex</code> rebuilds it identical from your Markdown. Add <code>.b2/</code> to your
-      <code>.gitignore</code> if the vault is a git repo.</div>
+      <div class="note tip"><span class="tag">Where it lives</span> The index goes in a single
+      <code>.b2/</code> folder inside your vault. It's <b>disposable</b> — delete it and the next
+      <code>reindex</code> rebuilds it identical from your Markdown. Nothing durable lives outside your
+      notes. Add <code>.b2/</code> to your <code>.gitignore</code> if the vault is a git repo.</div>
     </div>
   </div>
 
@@ -275,38 +275,31 @@ Spaced repetition exploits the retrieval curve.
   <div class="step">
     <div class="head"><div class="num">8</div><h3>Discover connections</h3></div>
     <div class="body">
-      <p>This is the point of B2. <code>b2 suggest</code> looks for note pairs that are semantically
-      close but <em>not</em> yet connected, asks a model to classify each into a typed, explained
-      connection, and queues the good ones for your review. Nothing is written to your notes yet —
-      suggestions are inert until you accept them.</p>
-      <div class="note danger"><span class="tag">⚠ Not recommended yet</span> On a real vault,
-      <code>b2 suggest</code> makes <b>one Claude call per candidate pair</b> — roughly
-      <code>notes × --top</code>, which is easily <b>thousands of paid API calls</b> (plus token spend) for
-      a few hundred notes. <b>We don't recommend running it as it stands.</b> A lower-cost path is in
-      progress — most likely a <b>local-LLM relator</b> behind the same seam — so discovery can run without
-      a per-pair API bill. If you try it anyway, keep the vault small and use <code>--top 2</code> with
-      <code>model = "claude-haiku-4-5"</code>. See the <a href="discovery.html#cost">cost breakdown</a>.</div>
-      <div class="note"><span class="tag">Needs a key</span> The real relator calls Claude, so set
-      <code>ANTHROPIC_API_KEY</code> first. It reads it from the environment only, never a config file.
-      For an offline dry run of the mechanics, use <code>B2_RELATOR=fake</code> — but treat those
-      stub suggestions as placeholders, not real judgments (the CLI says so, loudly).</div>
-<pre><span class="p">$</span> <span class="k">export</span> ANTHROPIC_API_KEY=<span class="s">sk-ant-…</span>
-<span class="p">$</span> <span class="k">b2</span> suggest
-<span class="o">[01J…AB]  Cramming works  contradicts→  Spaced repetition  (0.88)</span>
-<span class="o">    Massed practice yields only short-term recall; spacing targets durable memory.</span>
-<span class="o">Considered 3 pair(s): 1 generated · 2 declined · 0 non-core · 0 existing.</span>
-<span class="o">~ 2140 input + 96 output tokens over 3 call(s).</span></pre>
-      <p>Each line is a pending suggestion with an <code>id</code>. Review them, then decide — one at a
-      time, you're always in the loop:</p>
-<pre><span class="p">$</span> <span class="k">b2</span> accept <span class="s">01J…AB</span>
-<span class="o">Accepted. Wrote the typed link into the source note's frontmatter.</span>
-
-<span class="p">$</span> <span class="k">b2</span> reject <span class="s">01J…CD</span>
-<span class="o">Rejected. This pair won't be suggested again.</span></pre>
-      <p><b>Accept</b> appends the typed link to the source note's frontmatter <code>relations:</code>
-      (that's the connection becoming real, in plain Markdown). <b>Reject</b> remembers your decision so
-      the same pair is never proposed again. <code>suggest</code> is idempotent and cost-aware — a re-run
-      only pays to classify genuinely new or changed pairs.</p>
+      <p>This is the point of B2. <code>b2 similar &lt;note&gt;</code> surfaces the notes most
+      <em>semantically similar</em> to a given one that you haven't linked yet — a pure, instant read over
+      the vectors <code>reindex</code> already stored. <b>No model call, no network, no cost:</b> the
+      ranking and the "∖ already-connected" exclusion happen locally over your whole vault.</p>
+<pre><span class="p">$</span> <span class="k">b2</span> similar <span class="s">notes/spaced-repetition</span>
+<span class="o">0.71  Cramming works       (notes/cramming.md)</span>
+<span class="o">    Massed practice yields only short-term recall.</span>
+<span class="o">0.63  The forgetting curve  (concepts/forgetting-curve.md)</span>
+<span class="o">    Retention decays exponentially without review.</span></pre>
+      <p>Each row is a similarity score, the note's title and path, and the passage that made it similar.
+      The note itself and anything already linked to it never appear. It lists about ten by default;
+      <code>--limit N</code> widens or narrows that.</p>
+      <div class="note tip"><span class="tag">You're the precision gate</span> B2 finds the candidates;
+      <em>you</em> supply the judgment and the type. There's no review queue and nothing "inert until
+      accepted" — a connection exists only once you author it. The intelligence is in the whole-vault
+      semantic surfacing, which is free and local; the decision stays yours.</div>
+      <p>Pick the connections worth keeping and commit them. Either write a <code>[[link]]</code> in your
+      note's body yourself, or run <code>b2 link</code>:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> link <span class="s">notes/spaced-repetition</span> <span class="s">notes/cramming</span> --type <span class="s">contradicts</span> --explanation <span class="s">"massed vs. spaced practice"</span>
+<span class="o">Linked spaced-repetition → cramming (contradicts). Wrote the typed relation into the source note's frontmatter.</span></pre>
+      <p><code>b2 link &lt;src&gt; &lt;dst&gt;</code> appends the typed relation to the <em>source</em>
+      note's frontmatter <code>relations:</code> — Markdown-first, <b>never the body</b>. <code>--type</code>
+      picks the verb from the closed vocabulary (defaults to <code>references</code>);
+      <code>--explanation</code> records the "why". Re-run <code>b2 similar</code> afterward and a note you
+      just linked drops off the list — it's connected now, so the exclusion filters it out.</p>
     </div>
   </div>
 
@@ -324,10 +317,10 @@ Spaced repetition exploits the retrieval curve.
   everything up.</p>
 
   <div class="eqcard">
-    <div class="eq">index = projection of ( Markdown ∪ log )</div>
+    <div class="eq">index = projection of ( Markdown )</div>
     <p>The mental model in one line: your Markdown is the only source of truth. The index is a
-    disposable cache you can drop and rebuild identically; the sole thing your notes can't reconstruct is
-    a tiny append-only log of your review decisions. Nothing locks you in.</p>
+    disposable cache you can drop and rebuild identically from your notes — nothing durable exists that
+    your Markdown can't reconstruct. Nothing locks you in.</p>
   </div>
 
   <!-- ============================================================= -->
@@ -344,9 +337,8 @@ Spaced repetition exploits the retrieval curve.
       <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's typed links, in and out.</td><td class="d">no</td></tr>
       <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its "why" + provenance; flags orphans.</td><td class="d">no</td></tr>
       <tr><td><code>b2 mv &lt;from&gt; &lt;to&gt;</code></td><td class="d">Move/rename a note and repair every inbound link.</td><td class="d">re-embeds touched</td></tr>
-      <tr><td><code>b2 suggest</code></td><td class="d">Generate connection suggestions; list the review queue. <code>--top N</code>.</td><td class="d">Claude (key)</td></tr>
-      <tr><td><code>b2 accept &lt;id&gt;</code></td><td class="d">Write a suggested typed link into the source note's frontmatter.</td><td class="d">re-embeds note</td></tr>
-      <tr><td><code>b2 reject &lt;id&gt;</code></td><td class="d">Tombstone a suggestion so the pair is never proposed again.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 similar &lt;note&gt;</code></td><td class="d">Surface the semantically nearest notes you haven't linked yet. <code>--limit N</code>.</td><td class="d">reads vectors</td></tr>
+      <tr><td><code>b2 link &lt;src&gt; &lt;dst&gt;</code></td><td class="d">Commit a typed relation into the source note's frontmatter. <code>--type</code>, <code>--explanation</code>.</td><td class="d">re-embeds note</td></tr>
     </tbody>
   </table>
   </div>
@@ -355,30 +347,25 @@ Spaced repetition exploits the retrieval curve.
   <h2 class="sec">Config &amp; environment</h2>
 
   <p>Zero-config is the happy path — everything above works with no config file. When you want to tune,
-  a single optional TOML at <code>~/.config/b2/config.toml</code> holds both seams:</p>
+  a single optional TOML at <code>~/.config/b2/config.toml</code> configures the embedder:</p>
 <pre><span class="c"># ~/.config/b2/config.toml  (all optional)</span>
 <span class="k">[embedder]</span>
-<span class="k">model</span> = <span class="s">"bge-base-en-v1.5"</span>
-
-<span class="k">[relator]</span>
-<span class="k">model</span> = <span class="s">"claude-opus-4-8"</span>   <span class="c"># default; set "claude-haiku-4-5" for cheaper, high-volume runs</span></pre>
+<span class="k">model</span> = <span class="s">"bge-base-en-v1.5"</span></pre>
 
   <div class="tablewrap">
   <table>
     <thead><tr><th>Environment variable</th><th>Effect</th></tr></thead>
     <tbody>
-      <tr><td><code>ANTHROPIC_API_KEY</code></td><td class="d">Required by <code>b2 suggest</code>'s real relator. Secrets live here, never in the config file.</td></tr>
       <tr><td><code>B2_EMBEDDER=fake</code></td><td class="d">Offline mode: deterministic non-semantic embedder. Search runs keyword-only.</td></tr>
-      <tr><td><code>B2_RELATOR=fake</code></td><td class="d">Use the deterministic stub relator (placeholder suggestions, no network, no key).</td></tr>
       <tr><td><code>B2_DEBUG</code></td><td class="d">Print internal error detail after the generic user-facing message.</td></tr>
     </tbody>
   </table>
   </div>
 
   <div class="note warn"><span class="tag">Honest about limits</span> Search snippets and scores come
-  from the index, so <code>reindex</code> first. <code>suggest</code> reads the vectors a prior
+  from the index, so <code>reindex</code> first. <code>similar</code> reads the vectors a prior
   <code>reindex</code> stored, so index before you discover. And under <code>B2_EMBEDDER=fake</code>
-  the semantic half of search is off — great for offline exploring, not for real recall.</div>
+  the semantic half of search and similarity is off — great for offline exploring, not for real recall.</div>
 
   <div class="more">
     <a href="index.html">⌂ <span>Docs home</span></a>

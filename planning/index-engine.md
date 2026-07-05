@@ -19,17 +19,16 @@ status: draft
 **Build our own SQLite-backed index engine; take qmd as a design reference, not a dependency.**
 
 - qmd is an excellent *blueprint* for hybrid retrieval (BM25 + vector + RRF + LLM rerank) and proves
-  the whole pipeline runs locally. But it is a **search engine**, and B2 is not — B2 is a **typed,
-  provenanced graph with hybrid retrieval over it**. qmd has no notion of typed edges, suggestion
-  lifecycle, or provenance, which are the reasons B2 exists ([vision-and-scope.md](vision-and-scope.md),
-  capability areas 3, 5, 6).
+  the whole pipeline runs locally. But it is a **search engine**, and B2 is not — B2 is a **typed graph
+  with hybrid retrieval over it**. qmd has no notion of typed edges, backlinks, or `b2id`-stable identity,
+  which are the reasons B2 exists ([vision-and-scope.md](vision-and-scope.md), capability areas 3, 5).
 - SQLite gives us **one embedded store for every *queryable* concern at once** — full-text (FTS5),
-  vectors (`sqlite-vec`), the typed graph, and the live review queue — with transactional consistency
-  across them, so candidate generation joins all four in a single query. That single-store property is
-  worth more to B2 than anything we'd inherit by depending on qmd. The index itself is a **disposable
-  cache**, though: the durable record of provenance *history* and review *decisions* is a separate
-  append-only **`.b2/` event log**, with `index = projection of (Markdown ∪ log)` (the three-tier model,
-  [data-model.md](data-model.md)).
+  vectors (`sqlite-vec`), and the typed graph — with transactional consistency across them, so
+  `b2 similar` candidate generation joins all three in a single query. That single-store property is
+  worth more to B2 than anything we'd inherit by depending on qmd. The index is a pure **disposable
+  cache**: `index = projection of (Markdown)` — drop it, reindex, get it back identical, with **no
+  durable state outside your notes** (two tiers, [data-model.md](data-model.md); the review-layer /
+  event-log tier was removed with the LLM relator, 2026-07-04).
 - Because `sqlite-vec` **does** provide vector search, the locked **engine-gated** decision resolves in
   favour of **semantic search in v1**, not as a fast follow ([vision-and-scope.md](vision-and-scope.md),
   "Decisions locked 2026-06-28").
@@ -74,20 +73,16 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 | Semantic search | ✅ `sqlite-vec` | ✅ same |
 | Rerank | ✅ cross-encoder | ✅ fast-follow |
 | **Typed graph** (`b2id→b2id` edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
-| **Provenance** (`by` human/agent, `source`, `confidence`) | ❌ none | ⭐ core (area 6) |
-| **Suggestion lifecycle** (suggested → accepted/rejected, *inert until accepted*) | ❌ none | ⭐ core (area 6) |
+| **Backlinks** (who points at X, typed, over the whole vault) | ❌ none | ⭐ core (area 5) |
 | **`b2id`-keyed identity** surviving move/rename | ❌ path-keyed, cache is disposable | ⭐ core (user-stories 1–2) |
 | **Markdown as source of truth** (index is rebuildable/derived) | ~ index *is* the artifact | ⭐ non-negotiable (principle #1) |
-| **Durable history / review state** (append-only event log + replay) | ❌ none | ⭐ three-tier ([data-model.md](data-model.md)) |
 | Distribution | npm package, Node runtime | ⭐ single binary (principle #5) |
 
-The decisive point: B2's index is a **derived projection of the vault** that holds the **typed graph +
-live review queue** *next to* the search indexes, so retrieval and connection discovery share one
-transactional store. (Durable provenance *history* and review *decisions* live in a separate append-only
-`.b2/` event log; the index replays them — `index = projection of (Markdown ∪ log)`,
-[data-model.md](data-model.md).) qmd models none of the graph/review layer and has no event log —
-wrapping it would mean maintaining a second store for everything that makes B2 *B2*, and reconciling two
-sources of truth. Rebuilding the ~300 lines of retrieval glue that we
+The decisive point: B2's index is a **derived projection of the vault** that holds the **typed graph**
+*next to* the search indexes, so retrieval and connection discovery share one transactional store —
+`index = projection of (Markdown)`, drop-and-rebuild at any time ([data-model.md](data-model.md)). qmd
+models none of the graph layer — wrapping it would mean maintaining a second store for everything that
+makes B2 *B2*, and reconciling two sources of truth. Rebuilding the ~300 lines of retrieval glue that we
 actually want is cheaper than that integration tax — and qmd's MIT license + public design make the
 rebuild low-risk.
 
@@ -97,23 +92,24 @@ not EmbeddingGemma's `task:…|query:` / `title:…|text:`), the JSON/`--explain
 agent-output discipline, and the MCP surface idea. **What we discard:** the npm/Node packaging and the
 "DB is the product" framing.
 
-## 3. The storage architecture (SQLite index + `.b2/` event log)
+## 3. The storage architecture (one disposable SQLite index)
 
-Two artifacts, per the three-tier model ([data-model.md](data-model.md)) and realizing the **"volatile
-vault over a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)): a
-**disposable** SQLite index holding every queryable concern transactionally, and a **durable**
-append-only `.b2/` event log. The
-whole index is **rebuildable from `(Markdown ∪ log)`** — drop `b2.sqlite`, re-scan the vault and replay
-the log, get back an identical index (the locked `full-reindex ≡ incremental-update` invariant). Markdown
-is the source of truth for *knowledge* (notes + accepted edges); the log is the source of truth for
-*history* (provenance + the suggestion/rejection lifecycle); the index is a cache of both.
+One artifact, per the two-tier model ([data-model.md](data-model.md)) and realizing the **"volatile vault
+over a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)): a
+**disposable** SQLite index holding every queryable concern transactionally. The whole index is
+**rebuildable from Markdown** — drop `b2.sqlite`, re-scan the vault, get back an identical index (the
+locked `full-reindex ≡ incremental-update` invariant). Markdown is the single source of truth (notes +
+every committed edge); the index is a cache of it, with **no durable state outside your notes**. *(Through
+2026-06-30 there was a second artifact — a durable `.b2/` event log holding the suggestion queue +
+rejection memory; the LLM-relator cut removed the only thing it was for, so the index now stands alone;
+[data-model.md](data-model.md) §4.)*
 
 > The precise DDL, the relations between these tables, the read/write data flows, and the build order
 > are specified in **[specs/index-engine-build.md](specs/index-engine-build.md)**. The sketch below is
 > the orientation; that doc is the buildable contract.
 
 ```
-b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown ∪ log; drop & rebuild any time)
+b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any time)
 ├── MIRROR OF MARKDOWN (source of truth for *knowledge*; lets us diff vs. disk)
 │   ├── notes(b2id PK, path, title, type, frontmatter_json, body_hash, mtime, …)  -- b2id ← frontmatter
 │   └── note_bodies(note_b2id, content)          -- optional cache of file text
@@ -123,21 +119,15 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown ∪ log; drop & rebuil
 │   ├── chunks_fts                                -- FTS5 over chunk text (BM25)
 │   └── chunks_vec                                -- sqlite-vec vec0(embedding float[768])
 │
-├── DERIVED: TYPED GRAPH
-│   └── edges(id, src_id, dst_id, type, origin,   -- 'active' rows ← Markdown (body links + FM relations:)
-│             status, explanation, …)             -- 'suggested'|'rejected' rows ← log replay
-│
-├── DERIVED FROM THE LOG: REVIEW QUEUE (replayed, never authored here)
-│   └── edge_provenance(edge_id, by, source, confidence, created, decided)  -- pending suggestions' decision fuel
+├── DERIVED FROM MARKDOWN: TYPED GRAPH
+│   └── edges(id, src_id, dst_id, type, origin,   -- every row ← Markdown (body links + FM relations:)
+│             explanation, …)                     -- origin ∈ {inline, frontmatter}; every edge active
 │
 └── CACHES (disposable)
-    └── llm_cache(key, value, created)            -- query expansion, rerank scores
-
-.b2/log/ — DURABLE, APPEND-ONLY EVENT LOG  (source of truth for *history* + review state)
-└── JSONL behind append(event) / replay();  compaction later  ([data-model.md](data-model.md) §4)
-   events: suggestion.generated|accepted|rejected · note.created|updated|moved|deleted
-         · b2id.stamped · link.rewritten_on_move        (verbose payloads: model, confidence, evidence)
+    └── llm_cache(key, value, created)            -- reserved for a future reranker (fast-follow, §5)
 ```
+
+Every table is derived from the Markdown; there is no third home. `index = projection of (Markdown)`.
 
 Why this shape fits B2 specifically:
 
@@ -147,25 +137,19 @@ Why this shape fits B2 specifically:
   `b2id` values. A move rewrites `notes.path` and inbound `[[path|title]]` text; every row in `edges`
   is untouched because it never referenced the path. "Rename keeps every backlink resolving" becomes a
   foreign-key truth, not a fix-up pass.
-- **Suggestions are `edges` rows with `status='suggested'`, replayed from the log** — *inert until
-  accepted* is a `WHERE status='active'` clause. They are never written to a note; their durable home is
-  the `.b2/` event log and the index is just the live queue. Accepting one **appends a typed-link string
-  to the source note's frontmatter `relations:`** (Markdown first; never the body — [data-model.md](data-model.md) §0);
-  the `suggested` row then **leaves the queue** and the edge **re-materializes as an
-  `origin='frontmatter'`/`status='active'` edge derived from that Markdown** — acceptance is a
-  re-projection, not an in-place status flip — and a `suggestion.accepted` event is appended. The review
-  layer is data, not a side-system.
+- **Every `edges` row derives from Markdown** — body links (`origin=inline`) ∪ frontmatter `relations:`
+  (`origin=frontmatter`), deduped inline-wins. There is **no `status` column and no suggestion queue**:
+  an edge exists iff it is authored in the Markdown. Committing with **`b2 link`** appends a typed-link
+  string to the source note's frontmatter `relations:` (Markdown first; never the body —
+  [data-model.md](data-model.md) §0), then re-projects that note — a projection of an authored line, not
+  an in-place index write.
 - **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose
   note is within 2 typed hops of note X" is a join across `chunks_vec`, `chunks`, and `edges`. This is
-  the substrate **connection discovery** (candidate generation) runs on, and it's the thing a
+  the substrate **`b2 similar`** (connection-discovery candidate generation) runs on, and it's the thing a
   qmd-as-dependency design could never give us cleanly.
-- **Provenance is decision-fuel, then history** — a pending suggestion carries `by=agent:<model>`,
-  `source`, `confidence` in `edge_provenance` (replayed from the log) for triage; once accepted the edge
-  is **pristine in Markdown** and its provenance lives on only in the log. Area 6 falls out of the
-  log + index together, and accepted notes carry no fingerprint ([data-model.md](data-model.md) §4).
-- **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `chunks_vec`;
-  a scripted relator writes `status='suggested'` rows. The whole pipeline is assertable with no live
-  model (testability stack, points 4–5).
+- **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `chunks_vec`, so
+  the whole pipeline is assertable with no live model (testability stack, points 4–5). The embedder is the
+  one AI seam left.
 
 ### Why materialize the graph at all — vs. resolving links at runtime
 
@@ -184,13 +168,11 @@ edges is what turns the following from full-vault scans (or impossibilities) int
   at runtime; over `edges` it is one SQL traversal.
 - **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a single
   join `chunks_vec ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
-  primitive (search *within* an already-related neighborhood). **Connection-discovery candidate generation
-  is its *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links
-  you *haven't* made (resolved 2026-07-01, see [tasks.md](tasks.md) ①). Both stand on the same reason the
-  graph and search indexes must live in **one** store (§2): area-5 discovery is the substrate this enables.
-- **The suggestion queue.** Suggested edges are *inert until accepted* and so are deliberately **absent
-  from the Markdown** ([data-model.md](data-model.md) §4). There is nothing on disk to parse — the live
-  queue can only be a materialized structure (replayed from the log).
+  primitive (search *within* an already-related neighborhood). **`b2 similar`'s candidate generation is its
+  *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links you
+  *haven't* made (resolved 2026-07-01, see [tasks.md](tasks.md) ①) — where the materialized graph supplies
+  the "∖ already-connected" exclusion. Both stand on the same reason the graph and search indexes must live
+  in **one** store (§2): area-5 discovery is the substrate this enables.
 
 The reframe that keeps this cheap: **runtime outbound-parsing is the correctness *definition*
 (`index = projection of Markdown`); the `edges` table is its *cache*, kept so the inverse and compositional
@@ -326,7 +308,7 @@ The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-
 
 ### Operational burden — the bill for a `b2id`-keyed graph under `[[path|title]]` links
 
-The graph buys B2 its reason to exist (typed, provenanced, `b2id`-stable edges — §2), but the decision to
+The graph buys B2 its reason to exist (typed, `b2id`-stable edges — §2), but the decision to
 keep links written as human-clickable `[[path|title]]` while the graph keys on `b2id`
 ([user-stories.md](user-stories.md), "Link format & identity") has standing operational costs. These are
 *the trade working as designed*, not defects — but they must be budgeted, tested, and watched.
@@ -344,25 +326,22 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   is the same failure surface as moving files with Obsidian closed — acceptable, but it means the index is
   load-bearing for full repair fidelity.
 - **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
-  projection of `(Markdown ∪ log)` and must never drift from them. Three locked invariants are the tripwires
+  projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
   ([vision-and-scope.md](vision-and-scope.md)): round-trip losslessness (`parse → serialize → parse`),
   `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
   (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
   diverges from the source of truth.
-- **Suggestion lifecycle carries a review cost.** Every machine-derived/agent edge is **inert until
-  accepted** and lives in the review layer (the index's live queue, durable in the `.b2/` event log);
-  provenance (`by`, `source`, `confidence`) rides in the log, and an accepted edge stays **pristine** in
-  Markdown. Editing the vault can invalidate a suggestion's *evidence basis* — e.g. deleting an authored
-  `A→B` link that a suggestion cited ([user-stories.md](user-stories.md), Story 2) — which must be
-  re-evaluated/retracted **in the review layer only**, never by silently rewriting an inbound file or an
-  accepted edge. Orphans (a deleted last-backlink) are *surfaced*, never auto-deleted — files are touched
-  only when asked.
+- **Committed edges are only ever authored, never inferred.** B2 writes an edge only on your command
+  (`b2 link`, or a body link you write) — there is no agent proposing edges and no review queue to keep
+  consistent. Editing the vault can strand a connection — e.g. deleting an authored `A→B` link
+  ([user-stories.md](user-stories.md), Story 2) — but B2 only ever *surfaces* the consequence (an orphan
+  flag in `b2 explain`), never silently rewrites an inbound file or an edge. Files are touched only when asked.
 
 ## 9. Recommendation & next steps
 
-1. **Adopt SQLite as the B2 index engine** (FTS5 + `sqlite-vec`) per the §3 schema — a disposable index
-   beside the durable `.b2/` event log, `index = projection of (Markdown ∪ log)`. Use qmd as a design
-   reference under its MIT license; do **not** depend on it.
+1. **Adopt SQLite as the B2 index engine** (FTS5 + `sqlite-vec`) per the §3 schema — one disposable
+   index, `index = projection of (Markdown)`. Use qmd as a design reference under its MIT license; do
+   **not** depend on it.
 2. **Record the engine-gated outcome:** semantic search is **in v1** (brute-force KNN; quantization
    reserved for scale). Update [vision-and-scope.md](vision-and-scope.md) / [tasks.md](tasks.md) to flip
    semantic from "engine-gated" to "in v1".
@@ -370,11 +349,11 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
 4. **Make the embedder a seam now**; build the store + indexes + typed graph against the **deterministic
    fake embedder**, so engine work proceeds before the single-binary embedding decision is made.
 5. **Sequence:** the data model is **locked** ([data-model.md](data-model.md)) and this doc is now
-   reconciled with its three-tier model, so the engine is unblocked — build the store + indexes + typed
+   reconciled with its two-tier model, so the engine is unblocked — build the store + indexes + typed
    graph against the golden-vault fixtures ([data-model.md](data-model.md) §8).
 
 > Net: qmd answers "can a great hybrid search engine run locally on Markdown?" — yes, and here's how.
-> B2's question is one layer up: "can that retrieval live inside a typed, provenanced, agent-operated
-> graph I fully own, in a single binary?" SQLite is the substrate that makes the *queryable* side one
-> store — with a durable `.b2/` event log beside it for history. We take qmd's pipeline and build the
-> graph it was never trying to be.
+> B2's question is one layer up: "can that retrieval live inside a typed, `b2id`-stable, agent-operated
+> graph I fully own, in a single binary?" SQLite is the substrate that makes every queryable concern one
+> disposable store, a pure projection of your Markdown. We take qmd's pipeline and build the graph it was
+> never trying to be.
