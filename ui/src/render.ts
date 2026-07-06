@@ -147,6 +147,30 @@ export function treePaneHtml(state: AppState): string {
 
 // --- pane builders --------------------------------------------------------------
 
+// The frontmatter drawer: a full-bleed strip across the top of the note pane (above
+// the centered reading column, not inside it), a collapsible peek at the note's raw
+// YAML (verbatim, as on disk — `relations:` and any unmodeled keys included). Sits as
+// a sibling *before* `<article class="note">` so its divider spans the pane edge to
+// edge, like the file tree's "Files" header. State-controlled (not a native
+// `<details>`) so its open/closed state survives the full-pane re-render that a toast
+// timer or a tree toggle triggers. Always rendered, so the note pane's chrome is
+// stable across notes; a note with no frontmatter unfolds to an explicit empty state.
+function frontmatterDrawerHtml(frontmatter: string | null, open: boolean): string {
+  const yaml = frontmatter?.replace(/\s+$/, "") ?? "";
+  const body = !open
+    ? ""
+    : yaml
+      ? `<pre class="frontmatter-block">${escapeHtml(yaml)}</pre>`
+      : `<p class="frontmatter-empty">No frontmatter.</p>`;
+  return `<div class="frontmatter-bar">
+      <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}">
+        <span class="tree-caret">${open ? "▾" : "▸"}</span>
+        <span class="frontmatter-label">Frontmatter</span>
+      </button>
+      ${body}
+    </div>`;
+}
+
 export function notePaneHtml(state: AppState): string {
   const n = state.current;
   if (n) {
@@ -157,7 +181,8 @@ export function notePaneHtml(state: AppState): string {
           .map((t) => `<span class="tag">${escapeHtml(t)}</span>`)
           .join("")}</div>`
       : "";
-    return `<article class="note">
+    return `${frontmatterDrawerHtml(n.frontmatter, state.frontmatterOpen)}
+      <article class="note">
         <header class="note-head">
           <h1>${escapeHtml(n.title ?? n.path)}</h1>
           <div class="note-meta">${meta}</div>

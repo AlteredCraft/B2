@@ -46,6 +46,8 @@ export interface AppState {
   expandedDirs: Set<string>;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
+  /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
+  frontmatterOpen: boolean;
   /** Similar-but-unlinked candidates for the open note. */
   similar: SimilarView[];
   /** The open note's typed edges (from explain). */
@@ -69,6 +71,7 @@ export const state: AppState = {
   notes: [],
   expandedDirs: new Set<string>(),
   current: null,
+  frontmatterOpen: false,
   similar: [],
   connections: [],
   searchQuery: "",

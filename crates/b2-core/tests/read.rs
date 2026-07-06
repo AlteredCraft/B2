@@ -49,6 +49,26 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 }
 
 #[test]
+fn read_returns_the_raw_frontmatter_block_verbatim() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = reindexed(tmp.path());
+
+    let note = vault.read("concepts/memory.md").unwrap();
+    let fm = note.frontmatter.expect("golden note has frontmatter");
+
+    // The verbatim YAML between the fences — the source keys, not a re-serialization.
+    // Byte-honest: the title keeps its source quotes here (`"Human memory"`), whereas
+    // the projected `title` field is the parsed, unquoted value.
+    assert!(fm.contains(r#"title: "Human memory""#));
+    assert_eq!(note.title.as_deref(), Some("Human memory"));
+    assert!(fm.contains(&format!("b2id: {MEMORY_ID}")));
+    assert!(fm.contains("type: concept"));
+    assert!(!fm.contains("---"), "fences are excluded from the block");
+    // …and it is genuinely separate from the body (frontmatter isn't duplicated there).
+    assert!(!note.body.contains("title:"));
+}
+
+#[test]
 fn read_body_is_verbatim_markdown_including_wikilinks() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = reindexed(tmp.path());

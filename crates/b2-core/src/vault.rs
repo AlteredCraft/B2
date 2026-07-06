@@ -130,6 +130,12 @@ pub struct NoteView {
     pub tags: Vec<String>,
     /// The note's Markdown body (frontmatter stripped), verbatim from disk.
     pub body: String,
+    /// The raw frontmatter YAML **verbatim** (the text between the `---` fences,
+    /// fences excluded), or `None` when the note has none. This is the byte-honest
+    /// block, not a re-serialization of the projected fields above — so `relations:`
+    /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
+    /// collapsible drawer (specs/desktop-ui-mvp.md §4).
+    pub frontmatter: Option<String>,
 }
 
 /// One note's identity for a listing — `b2id`, vault-relative `path`, and display
@@ -338,6 +344,7 @@ impl Vault {
             updated: fields.updated.clone(),
             tags: fields.tags.clone(),
             body: parsed.body().to_string(),
+            frontmatter: parsed.frontmatter().map(str::to_string),
         })
     }
 

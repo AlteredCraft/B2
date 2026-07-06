@@ -56,7 +56,7 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
 - [x] **Step 1 — Read a note.** The one new façade op [`Vault::read(note) → NoteView`](../crates/b2-core/src/vault.rs)
   (body from disk + display metadata; a pure model-free read) + a `read_note` command; the left pane renders
   the note (Markdown → HTML) with clickable in-app wikilinks (a `marked` inline extension → `.wikilink`
-  anchors that navigate via `read_note`). 5 `read` integration tests in [tests/read.rs](../crates/b2-core/tests/read.rs).
+  anchors that navigate via `read_note`). 6 `read` integration tests in [tests/read.rs](../crates/b2-core/tests/read.rs).
 - [x] **Step 2 — The related pane.** `similar` / `search` / `explain` / `neighbors` commands (all existing
   façade ops); the right pane shows similar-but-unlinked candidates and hybrid-search results with snippets
   (click to open), plus the open note's typed connections. Honest "semantic off (run `b2 init`)" caveat when
@@ -76,6 +76,16 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   notes the index knows, so every entry is `read`-resolvable (a click always opens); opening from search /
   wikilink auto-expands the note's ancestor folders and highlights it. **3 `list_notes` integration tests**
   ([tests/list.rs](../crates/b2-core/tests/list.rs)) + a command-layer test; clippy/fmt clean.
+- [x] **Frontmatter drawer.** A full-bleed, collapsible strip across the top of the note pane showing the
+  note's **raw frontmatter YAML verbatim** — the block between the `---` fences, so `relations:`, `aliases:`,
+  and any keys the projected fields don't model show *as written*. Extends the existing read op rather than
+  adding one: `NoteView` gains a byte-honest [`frontmatter: Option<String>`](../crates/b2-core/src/vault.rs)
+  field, sourced from a new [`ParsedNote::frontmatter()`](../crates/b2-core/src/note.rs) accessor (raw span,
+  lossless like `body()`). Always present so the pane chrome is stable; a note with no block unfolds to an
+  explicit "No frontmatter." The host is untouched — it passes the widened `NoteView` straight through
+  (dumb-adapter rule holds). **1 `read` test (verbatim block) + 3 `note` unit tests**; the drawer render is
+  state-controlled in `ui/` (survives the full-pane re-renders a toast/tree-toggle triggers). Read-only —
+  editing frontmatter arrives with the CodeMirror editor (Step 4).
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
 (Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** an in-app vault picker (today it's a launch

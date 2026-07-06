@@ -101,6 +101,11 @@ function toggleDir(path: string): void {
   render();
 }
 
+function toggleFrontmatter(): void {
+  state.frontmatterOpen = !state.frontmatterOpen;
+  render();
+}
+
 async function refreshDiscovery(): Promise<void> {
   const n = state.current;
   if (!n) return;
@@ -266,6 +271,11 @@ function wireEvents(): void {
     const linkBtn = target.closest<HTMLElement>("[data-link-path]");
     if (linkBtn) {
       openLinkModal(linkBtn.dataset.linkPath ?? "", linkBtn.dataset.linkTitle ?? "");
+      return;
+    }
+
+    if (target.closest("[data-toggle-frontmatter]")) {
+      toggleFrontmatter();
       return;
     }
 

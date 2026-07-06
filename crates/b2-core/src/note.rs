@@ -82,6 +82,16 @@ impl ParsedNote {
         }
     }
 
+    /// The raw frontmatter YAML **verbatim** — the text between the `---` fences
+    /// (fences excluded), exactly as on disk — or `None` when the note has no
+    /// frontmatter block. Byte-honest like [`body`](Self::body): the actual bytes,
+    /// not a re-serialization of the parsed [`fields`](Self::fields), so keys B2
+    /// doesn't model (`relations:`, `aliases:`, custom keys) show as written. Powers
+    /// the Desktop UI's frontmatter drawer (specs/desktop-ui-mvp.md §4).
+    pub fn frontmatter(&self) -> Option<&str> {
+        self.fm.map(|f| &self.raw[f.content_start..f.content_end])
+    }
+
     /// Stamp a missing `b2id`. A no-op if one is already present (never
     /// re-stamp). Inserts exactly one line at the top of the frontmatter, or
     /// creates a minimal frontmatter block if the note has none. This is B2's one
@@ -254,4 +264,36 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
 /// quoting the relation-append path uses.
 pub(crate) fn yaml_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontmatter_returns_raw_yaml_verbatim_between_the_fences() {
+        let raw = "---\nb2id: 01ABC\ntitle: Foo\nrelations:\n  - references [[x]]\n---\nbody\n";
+        let note = parse(raw);
+        // The exact bytes on disk, not a re-serialization — `relations:` (a key the
+        // projected fields flatten) survives verbatim.
+        assert_eq!(
+            note.frontmatter(),
+            Some("b2id: 01ABC\ntitle: Foo\nrelations:\n  - references [[x]]\n")
+        );
+        assert_eq!(note.body(), "body\n");
+    }
+
+    #[test]
+    fn frontmatter_is_none_when_there_is_no_block() {
+        let note = parse("just a body, no fences\n");
+        assert_eq!(note.frontmatter(), None);
+    }
+
+    #[test]
+    fn frontmatter_is_some_empty_for_an_empty_block() {
+        // Fences with nothing between them: the block exists (Some) but is empty —
+        // distinct from no frontmatter at all (None).
+        let note = parse("---\n---\nbody\n");
+        assert_eq!(note.frontmatter(), Some(""));
+    }
 }
