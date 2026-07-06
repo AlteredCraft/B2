@@ -4,7 +4,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-05
+updated: 2026-07-06
 status: active
 ---
 
@@ -91,12 +91,21 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   `<pre>`, HTML-escaped, wikilinks shown literally). Presentation-only — **no new façade op**, reuses the body
   `Vault::read` already returns; state-controlled and sticky across notes like the frontmatter drawer. A
   read-only peek at the on-disk Markdown ahead of the CodeMirror editor (Step 4).
+- [x] **In-app vault switcher.** A folder-icon button in the top bar opens a **native folder picker** and
+  repoints the app at the chosen vault — no relaunch, no `B2_VAULT_PATH`. **No façade op** (this is host
+  state): `AppState`'s root moves behind a `Mutex`, and a [`choose_vault`](../crates/b2-desktop/src/commands.rs)
+  command runs the picker **host-side** and swaps the root, so every later command opens over the new vault.
+  The picker is driven from Rust, so the **webview is granted no dialog permission** (least-privilege holds —
+  [capabilities/default.json](../crates/b2-desktop/capabilities/default.json)); `tauri-plugin-dialog` is a
+  host-only dep. Cancel is a clean no-op. The frontend resets the open note / discovery / search / tree on a
+  switch and reloads the listing. **+2 command-layer tests** (set-root reports the new `VaultInfo`; switching
+  repoints subsequent reads); the OS dialog itself is the untestable thin wrapper (thinness *is* the strategy).
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
-(Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** an in-app vault picker (today it's a launch
-arg / `B2_VAULT_PATH`); live reindex progress (a long reindex runs off the main thread, but with no progress
-bar — background reindex is on the Backlog). **Deferred:** packaging/signing/distribution; a `serve` HTTP
-adapter; graph visualization ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).
+(Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** live reindex progress (a long reindex runs
+off the main thread, but with no progress bar — background reindex is on the Backlog). **Deferred:**
+packaging/signing/distribution; a `serve` HTTP adapter; graph visualization
+([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).
 
 ## Done
 

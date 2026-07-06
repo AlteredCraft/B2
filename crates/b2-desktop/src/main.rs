@@ -6,8 +6,10 @@
 //!
 //! Two things this file owns, both mirroring the CLI:
 //!   * **Vault root resolution** — a launch arg or `$B2_VAULT_PATH` (the CLI's
-//!     positional / `-C`). Resolved once at startup into [`AppState`]; every command
-//!     opens a *fresh* vault from it, exactly as the one-process-per-command CLI does.
+//!     positional / `-C`), seeded once at startup into [`AppState`] and thereafter
+//!     **swappable at runtime** by the in-app vault picker (`choose_vault`). Every
+//!     command opens a *fresh* vault from the current root, exactly as the
+//!     one-process-per-command CLI does.
 //!   * **Embedder wiring** — pure reads open with the deterministic fake; anything
 //!     that embeds a query or re-projects (`search` / `link` / `reindex`) opens the
 //!     real [`LocalEmbedder`] and **fails fast** with "run `b2 init`" if it's absent.
@@ -23,15 +25,46 @@ use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
 use b2_embed::{EmbedConfig, LocalEmbedder};
 use error::CmdError;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-/// The host's shared state: the vault root, resolved once at startup. It is
-/// immutable, so no lock is needed — every command opens its own short-lived
-/// [`Vault`] over this root (SQLite WAL permits concurrent readers + one writer),
-/// the faithful mirror of the CLI opening a fresh vault per invocation. `None` means
-/// no vault was configured; commands then return an actionable [`CmdError::VaultRequired`].
+/// The host's shared state: the active vault root. Resolved once at startup, then
+/// **swappable at runtime** by the in-app vault picker (`choose_vault`) — so the root
+/// sits behind a [`Mutex`]. Every command still opens its own short-lived [`Vault`]
+/// over the *current* root (SQLite WAL permits concurrent readers + one writer), the
+/// faithful mirror of the CLI opening a fresh vault per invocation. `None` means no
+/// vault is configured; commands then return an actionable [`CmdError::VaultRequired`].
 pub struct AppState {
-    pub root: Option<PathBuf>,
+    root: Mutex<Option<PathBuf>>,
+}
+
+impl AppState {
+    pub fn new(root: Option<PathBuf>) -> Self {
+        Self {
+            root: Mutex::new(root),
+        }
+    }
+
+    /// The current vault root, cloned out so the lock is **not** held while a command
+    /// opens a vault (which may load the model — slow). `None` when unconfigured.
+    pub fn current_root(&self) -> Option<PathBuf> {
+        self.lock_root().clone()
+    }
+
+    /// Point the app at a new vault root (the vault switcher). Takes effect for every
+    /// subsequent command, since each opens a fresh vault over `current_root`.
+    pub fn set_root(&self, root: &Path) {
+        *self.lock_root() = Some(root.to_path_buf());
+    }
+
+    /// The critical sections here are a single clone or store — neither can panic —
+    /// so the lock can never be poisoned; recover the inner value rather than unwrap
+    /// (the no-panic rule) if a poison ever somehow occurs.
+    fn lock_root(&self) -> std::sync::MutexGuard<'_, Option<PathBuf>> {
+        self.root
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 /// Whether the deterministic fake embedder is forced (`B2_EMBEDDER=fake`) — the CLI's
@@ -46,14 +79,14 @@ fn use_fake_embedder() -> bool {
 /// pure reads use the fake. Returns the vault and whether its embedder is semantic
 /// (used only for honest UI). Errors with [`CmdError::VaultRequired`] if no vault is set.
 pub fn open_vault(state: &AppState, needs_semantic: bool) -> Result<(Vault, bool), CmdError> {
-    let root = state.root.as_deref().ok_or(CmdError::VaultRequired)?;
+    let root = state.current_root().ok_or(CmdError::VaultRequired)?;
     if needs_semantic && !use_fake_embedder() {
         let config = EmbedConfig::load()?;
         let embedder = LocalEmbedder::load(&config)?;
-        let vault = Vault::open_with_embedder(root, Box::new(embedder) as Box<dyn Embedder>)?;
+        let vault = Vault::open_with_embedder(&root, Box::new(embedder) as Box<dyn Embedder>)?;
         Ok((vault, true))
     } else {
-        Ok((Vault::open(root)?, false))
+        Ok((Vault::open(&root)?, false))
     }
 }
 
@@ -83,14 +116,17 @@ fn resolve_root() -> Option<PathBuf> {
 }
 
 fn main() {
-    let state = AppState {
-        root: resolve_root(),
-    };
+    let state = AppState::new(resolve_root());
     tauri::Builder::default()
+        // The dialog plugin backs the native folder picker for `choose_vault`. It is
+        // driven host-side only; the webview gets no dialog permission (capabilities/
+        // default.json), so it can never open a dialog itself.
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::vault_info,
+            commands::choose_vault,
             commands::read_note,
             commands::list_notes,
             commands::similar,

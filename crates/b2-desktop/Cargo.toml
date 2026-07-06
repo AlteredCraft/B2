@@ -21,6 +21,10 @@ tauri-build = { version = "2", features = [] }
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
 tauri = { version = "2", features = [] }
+# Native folder picker for the in-app vault switcher. Used host-side only (the
+# `choose_vault` command calls it in Rust); the webview is granted no dialog
+# permission, so it can't open a dialog itself (least-privilege, capabilities/default.json).
+tauri-plugin-dialog = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 

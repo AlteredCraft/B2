@@ -25,6 +25,9 @@ function render(): void {
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
   (el("reindex") as HTMLButtonElement).disabled = state.loading || state.vaultRoot === null;
+  // The vault switcher stays enabled with no vault open — it's the in-app way to pick
+  // the first one — but not mid-op, to avoid re-entrant switches.
+  (el("switch-vault") as HTMLButtonElement).disabled = state.loading;
 
   const toast = el("toast");
   if (state.status) {
@@ -202,6 +205,35 @@ async function commitLink(): Promise<void> {
   }
 }
 
+// Switch the active vault via the host's native folder picker. On a fresh choice the
+// open note, discovery, search, and tree-expansion all reset (they belong to the old
+// vault); a cancel is a no-op. The picker runs host-side, so all this action does is
+// re-seed state from the new `VaultInfo` and reload the tree.
+async function switchVault(): Promise<void> {
+  try {
+    const info = await api.chooseVault();
+    if (!info) return; // cancelled — leave the current vault untouched
+    state.vaultRoot = info.root;
+    state.semantic = info.semantic;
+    state.current = null;
+    state.similar = [];
+    state.connections = [];
+    state.searchQuery = "";
+    state.searchResults = [];
+    state.expandedDirs = new Set<string>();
+    const input = document.getElementById("search-input") as HTMLInputElement | null;
+    if (input) input.value = "";
+    state.loading = true;
+    render();
+    await loadNotes(); // catches its own errors → toast; empty tree on an unindexed vault
+    state.loading = false;
+    flash(`Switched to ${info.root}.`);
+  } catch (e) {
+    state.loading = false;
+    flash(errText(e));
+  }
+}
+
 async function doReindex(): Promise<void> {
   state.loading = true;
   render();
@@ -234,6 +266,11 @@ function buildShell(): void {
       </form>
       <div class="topbar-right">
         <span id="vault-root" class="vault-root" title="Active vault"></span>
+        <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1.75 4c0-.55.45-1 1-1h2.9c.32 0 .62.15.8.4L7.7 4.6h5.55c.55 0 1 .45 1 1v6.65c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1V4Z"/>
+          </svg>
+        </button>
         <button id="reindex" class="btn ghost" title="Re-project the vault into the index">Reindex</button>
       </div>
     </header>
@@ -304,6 +341,10 @@ function wireEvents(): void {
 
     if (target.closest("[data-clear-search]")) {
       clearSearch();
+      return;
+    }
+    if (target.closest("#switch-vault")) {
+      void switchVault();
       return;
     }
     if (target.closest("#reindex")) {

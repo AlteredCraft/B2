@@ -208,7 +208,7 @@ export function notePaneHtml(state: AppState): string {
   if (state.vaultRoot === null) {
     return `<div class="empty">
         <h2>No vault open</h2>
-        <p>Launch B2 with a vault path, or set <code>B2_VAULT_PATH</code> to your vault folder, then relaunch.</p>
+        <p>Click the folder icon in the top bar to choose a vault, or launch B2 with a vault path (or set <code>B2_VAULT_PATH</code>).</p>
       </div>`;
   }
   return `<div class="empty">

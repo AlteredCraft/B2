@@ -24,6 +24,10 @@ export const api = {
   /** The active vault root + whether semantic ranking is live (real model). */
   vaultInfo: (): Promise<VaultInfo> => invoke("vault_info"),
 
+  /** Open a native folder picker to switch the active vault. Resolves to the new
+   *  `VaultInfo`, or `null` if the user cancelled (the current vault stays put). */
+  chooseVault: (): Promise<VaultInfo | null> => invoke("choose_vault"),
+
   /** A note's body + metadata for the left pane (path or b2id). */
   readNote: (note: string): Promise<NoteView> => invoke("read_note", { note }),
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "B2 desktop's capability set. The frontend only calls this app's own #[tauri::command] handlers (which need no permission entry) plus the core defaults the webview requires — nothing more (least-privilege, specs/desktop-ui-mvp.md §6). No plugin, no filesystem, and no shell permissions are granted: the app reaches the vault only through the Vault façade in the Rust host, never directly from the webview.",
+  "description": "B2 desktop's capability set. The frontend only calls this app's own #[tauri::command] handlers (which need no permission entry) plus the core defaults the webview requires — nothing more (least-privilege, specs/desktop-ui-mvp.md §6). No plugin, filesystem, or shell permission is granted to the webview: the app reaches the vault only through the Vault façade in the Rust host, never directly from the webview. The dialog plugin is present but host-only — its native folder picker is driven from the `choose_vault` command in Rust, so the webview still cannot open a dialog itself.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

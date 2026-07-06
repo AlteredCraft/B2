@@ -627,6 +627,21 @@ body {
 .btn.ghost {
   background: transparent;
 }
+/* Icon-only chrome button (the vault switcher) — a square that centers its glyph and
+   matches the height of the neighbouring text buttons. Quiet by default; accents on hover. */
+.btn.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  color: var(--muted);
+}
+.btn.icon-btn:hover {
+  color: var(--accent);
+}
+.btn.icon-btn svg {
+  display: block;
+}
 
 body.is-loading {
   cursor: progress;
