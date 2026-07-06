@@ -102,8 +102,12 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   repoints subsequent reads); the OS dialog itself is the untestable thin wrapper (thinness *is* the strategy).
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
-(Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** live reindex progress (a long reindex runs
-off the main thread, but with no progress bar — background reindex is on the Backlog). **Deferred:**
+(Step 4); native fs-watch auto-reload (Step 5). **Async, cancellable indexing — specced, next up:** the
+desktop `reindex` today runs off the main thread but discards the engine's per-batch progress and can't be
+stopped, so a long cold index looks frozen; the plan (live progress via a Tauri `Channel`, cancel-only,
+non-blocking UI, plus the one small core seam — a `ControlFlow` cancel checkpoint) is
+[specs/async-indexing.md](specs/async-indexing.md) (Steps 1→3). **Deferred:** progressive keyword-first
+index + cross-process CLI background reindex (async-indexing spec §7–§8);
 packaging/signing/distribution; a `serve` HTTP adapter; graph visualization
 ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).
 
@@ -425,18 +429,11 @@ directly, since it reuses the same stored vectors.
 
 ## Backlog (later, not now)
 
-- **Non-blocking embedding — deferred approaches** (incremental reindex is *done*; these tackle the one part
-  it can't, the first cold index of a large vault, and all compose with it):
-  - **Background reindex + `b2 status`** — `b2 reindex` detaches and returns immediately; a separate process
-    embeds while `search`/`suggest` read the index live (SQLite WAL already permits one writer + concurrent
-    readers across processes). Cost: a background-process lifecycle + cross-process progress. The most direct
-    answer to "embedding can't block" for a cold index.
-  - **Progressive (keyword-first) index** — insert all chunk text + FTS up front so BM25 keyword search works
-    immediately, then embed vectors in the background so the semantic half fills in behind it. Best
-    "usable during a long cold index" feel; pairs with the background runner.
-  - **Faster / smaller embedder** — swap bge-base (768-dim) for bge-small (384-dim, ~3× faster) or a
-    quantized / ONNX path to cut per-chunk cost. A raw-speed lever behind the existing `Embedder` seam, not a
-    structural fix — measure retrieval quality (the eval) before switching the default.
+- **Non-blocking embedding — now specced in [specs/async-indexing.md](specs/async-indexing.md).** The
+  scattered "non-blocking embedding" notes were consolidated there (2026-07-06): the **desktop async +
+  progress + cancel** plan is now an active work item (see below); the **progressive keyword-first index**
+  (spec §7) and the **cross-process CLI background reindex + `b2 status`** and **faster/smaller embedder**
+  (spec §8) stay deferred behind it, with the rationale for each kept in the spec.
 - **Docs: keep the HTML + test-count badge in sync.** The 2026-07-04 pivot returns the workspace to **three**
   crates (`b2-core`/`b2-embed`/`b2-cli`), so `architecture.html`'s "Three crates" framing is correct again once
   the discovery narrative is updated (done in the pivot's Phase 0). The `index.html` test-count badge remains a
