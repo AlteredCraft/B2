@@ -74,9 +74,22 @@ and work with a vault in about ten minutes. Then go deeper:
 ## Build and run
 
 ```bash
-cargo build --release -p b2-cli
-alias b2=./target/release/b2
+cargo install --path crates/b2-cli --locked   # installs `b2` to ~/.cargo/bin (on PATH)
 b2 --help
+```
+
+This puts a real `b2` on your PATH. Re-run it (add `--force`) or `just install` to update after code changes.
+
+For engine iteration where you don't want to reinstall each time, `cargo run -p b2-cli -- …` runs in place.
+[`just`](https://github.com/casey/just) recipes wrap this and the other common commands:
+
+```bash
+just install    # build + install `b2` onto your PATH (~/.cargo/bin)
+just test       # fast, deterministic, model-free engine suite (what CI runs)
+just check      # fmt-check + clippy + tests — the pre-commit gate
+just init       # download + verify the embedding model into the shared cache
+just eval       # semantic-retrieval quality eval (real model)
+just            # list every recipe
 ```
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so

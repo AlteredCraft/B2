@@ -31,7 +31,10 @@ schema must satisfy the data model, never the reverse.
 ```bash
 # Build the workspace / the `b2` binary
 cargo build
-cargo run -p b2-cli -- --help          # run the CLI (binary is named `b2`)
+cargo run -p b2-cli -- --help          # run the CLI in place (binary is named `b2`)
+cargo install --path crates/b2-cli --locked --force   # install `b2` onto PATH (~/.cargo/bin)
+
+# `just` (optional) wraps these: `just install`, `just test`, `just check`, `just eval`, …
 
 # Fast test suite — deterministic, model-free, what CI runs
 cargo test -p b2-core                   # the engine suite (fake embedder; no ML deps)
