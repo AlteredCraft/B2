@@ -4,6 +4,7 @@
 
 import type {
   NeighborView,
+  NoteSummary,
   NoteView,
   SearchResult,
   SimilarView,
@@ -39,6 +40,10 @@ export interface AppState {
   vaultRoot: string | null;
   /** Whether semantic ranking is live (real model) — drives the honest search caveat. */
   semantic: boolean;
+  /** Every indexed note, path-ordered — the file tree's source (from `list_notes`). */
+  notes: NoteSummary[];
+  /** Folder paths (vault-relative, no trailing slash) the tree shows expanded. */
+  expandedDirs: Set<string>;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
   /** Similar-but-unlinked candidates for the open note. */
@@ -61,6 +66,8 @@ export interface AppState {
 export const state: AppState = {
   vaultRoot: null,
   semantic: true,
+  notes: [],
+  expandedDirs: new Set<string>(),
   current: null,
   similar: [],
   connections: [],

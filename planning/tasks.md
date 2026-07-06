@@ -68,6 +68,14 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   call → serialize; charter: [crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md)); errors funnel
   through a `user_message` mirror of the CLI's, never leaking internals. **4 command-layer tests** +
   clippy/fmt clean; the desktop build is a separate heavier job, out of the fast `cargo test -p b2-core` gate.
+- [x] **File-tree navigation pane.** A left-most pane that lists the vault as collapsible folders — navigate,
+  open a folder, click a file to read it — so the app is browsable, not just searchable. One new façade op
+  [`Vault::list_notes() → Vec<NoteSummary>`](../crates/b2-core/src/vault.rs) (b2id/path/title, **no body**;
+  a pure model-free read, path-ordered) + a thin `list_notes` command; the tree is folded from the flat list
+  **in `ui/`** (presentation logic stays out of the host). Index-first like `search`: it shows exactly the
+  notes the index knows, so every entry is `read`-resolvable (a click always opens); opening from search /
+  wikilink auto-expands the note's ancestor folders and highlights it. **3 `list_notes` integration tests**
+  ([tests/list.rs](../crates/b2-core/tests/list.rs)) + a command-layer test; clippy/fmt clean.
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
 (Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** an in-app vault picker (today it's a launch

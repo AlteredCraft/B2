@@ -10,6 +10,7 @@
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { RELATION_VERBS, type AppState } from "./state";
+import type { NoteSummary } from "./types";
 
 export function escapeHtml(s: string): string {
   return s
@@ -53,6 +54,97 @@ export function renderMarkdown(md: string): string {
   return marked.parse(md, { async: false }) as string;
 }
 
+// --- file tree --------------------------------------------------------------------
+//
+// The navigation pane. `list_notes` hands us a *flat*, path-ordered list; arranging
+// it into folders is pure presentation, so it lives here in `ui/` (not the host —
+// the host stays a dumb adapter). Files reuse the `[data-open]` delegation that
+// search/discovery cards already use, so a click opens the note through the same path.
+
+interface TreeDir {
+  name: string;
+  /** Vault-relative folder path, no trailing slash ("" for the root). */
+  path: string;
+  dirs: Map<string, TreeDir>;
+  files: NoteSummary[];
+}
+
+/** Fold the flat, path-ordered note list into a nested folder tree. */
+function buildTree(notes: NoteSummary[]): TreeDir {
+  const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [] };
+  for (const note of notes) {
+    const parts = note.path.split("/");
+    let dir = root;
+    for (const seg of parts.slice(0, -1)) {
+      const full = dir.path ? `${dir.path}/${seg}` : seg;
+      let child = dir.dirs.get(seg);
+      if (!child) {
+        child = { name: seg, path: full, dirs: new Map(), files: [] };
+        dir.dirs.set(seg, child);
+      }
+      dir = child;
+    }
+    dir.files.push(note);
+  }
+  return root;
+}
+
+/** A file's display label: its title, else the filename without the `.md`. */
+function fileLabel(note: NoteSummary): string {
+  if (note.title) return note.title;
+  const base = note.path.split("/").pop() ?? note.path;
+  return base.replace(/\.md$/i, "");
+}
+
+/** Render one folder's children (its sub-folders, then its files), recursively. */
+function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string {
+  const subdirs = [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const files = [...dir.files].sort((a, b) => fileLabel(a).localeCompare(fileLabel(b)));
+  // Indent by depth; a folder's own chevron occupies the same slot a file's icon does,
+  // so files sit one notch deeper than the folder header above them.
+  const pad = (d: number) => `padding-left:${8 + d * 14}px`;
+
+  const dirHtml = subdirs
+    .map((sub) => {
+      const open = state.expandedDirs.has(sub.path);
+      const header = `<button class="tree-row tree-dir" data-dir="${escapeHtml(
+        sub.path,
+      )}" style="${pad(depth)}" aria-expanded="${open}">
+          <span class="tree-caret">${open ? "▾" : "▸"}</span>
+          <span class="tree-label">${escapeHtml(sub.name)}</span>
+        </button>`;
+      const body = open ? treeChildrenHtml(sub, state, depth + 1) : "";
+      return header + body;
+    })
+    .join("");
+
+  const fileHtml = files
+    .map((note) => {
+      const active = state.current?.path === note.path ? " is-active" : "";
+      return `<button class="tree-row tree-file${active}" data-open="${escapeHtml(
+        note.path,
+      )}" style="${pad(depth)}" title="${escapeHtml(note.path)}">
+          <span class="tree-caret"></span>
+          <span class="tree-label">${escapeHtml(fileLabel(note))}</span>
+        </button>`;
+    })
+    .join("");
+
+  return dirHtml + fileHtml;
+}
+
+export function treePaneHtml(state: AppState): string {
+  const head = `<div class="tree-head">
+      <h2>Files</h2>
+      <span class="tree-count">${state.notes.length || ""}</span>
+    </div>`;
+  if (state.vaultRoot === null)
+    return head + `<p class="tree-empty">No vault open.</p>`;
+  if (state.notes.length === 0)
+    return head + `<p class="tree-empty">No notes indexed yet — Reindex to populate.</p>`;
+  return head + `<div class="tree">${treeChildrenHtml(buildTree(state.notes), state, 0)}</div>`;
+}
+
 // --- pane builders --------------------------------------------------------------
 
 export function notePaneHtml(state: AppState): string {
@@ -83,7 +175,7 @@ export function notePaneHtml(state: AppState): string {
   }
   return `<div class="empty">
       <h2>Read → discover → link</h2>
-      <p>Search above to open a note. B2 will surface its similar-but-unlinked notes on the right, so you can connect them.</p>
+      <p>Pick a note from the file tree on the left, or search above. B2 will surface its similar-but-unlinked notes on the right, so you can connect them.</p>
     </div>`;
 }
 

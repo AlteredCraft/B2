@@ -92,6 +92,7 @@ fn main() {
             commands::ping,
             commands::vault_info,
             commands::read_note,
+            commands::list_notes,
             commands::similar,
             commands::search,
             commands::neighbors,
