@@ -23,6 +23,10 @@ explained connections between them yourself.
 > to frontmatter). The LLM relator was tried and **cut 2026-07-04** — its per-pair cost didn't scale;
 > the human is the precision gate ([tasks.md](planning/tasks.md)). All green (129 tests). A tour
 > grounded in the test suite: [docs/architecture.html](docs/architecture.html).
+>
+> **Next — the first UI:** a **Tauri + CodeMirror** desktop app (the *second dumb adapter over the façade*),
+> starting **read-only** (render → discover → link). Plan:
+> [specs/desktop-ui-mvp.md](planning/specs/desktop-ui-mvp.md).
 
 ## What B2 is (the north star)
 
@@ -67,6 +71,7 @@ and work with a vault in about ten minutes. Then go deeper:
 | [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + `sqlite-vec`) as a disposable projection. The canonical *how*. |
 | [specs/index-engine-build.md](planning/specs/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
+| [specs/desktop-ui-mvp.md](planning/specs/desktop-ui-mvp.md) | The **desktop UI** build spec — Tauri + CodeMirror, the repo layout, the thin-adapter discipline, and the read→discover→link MVP. The first UI adapter. |
 | [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |
 | [tasks.md](planning/tasks.md) | The working queue — what's done, what's next. |
 

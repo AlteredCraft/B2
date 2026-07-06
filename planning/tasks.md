@@ -36,6 +36,30 @@ So several **Done** items below — *Relator seam*, *Connection-discovery ①/�
 *Suggestion-quality eval* — were **reverted in code** (commit `2cda889`, 2026-07-04; see "Shipped — the
 discovery pivot" below). They stay listed as history; only the code that implemented them was removed.
 
+## Next up — Desktop UI MVP (started 2026-07-05)
+
+The headless phase is done; the first UI begins. Full spec + rationale:
+[specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). It is the **second dumb adapter over the
+[`Vault`](../crates/b2-core/src/vault.rs) façade** — a **Tauri** desktop app (`crates/b2-desktop`, thin-host
+charter in [crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md)) + a **CodeMirror** frontend
+(`ui/`), talking to the core over Tauri IPC. The MVP is **read-only-first**: render a note, surface its
+similar-but-unlinked notes, commit a typed link — the connection-discovery loop, made visual.
+
+- [ ] **Step 0 — Scaffold & wiring.** Add `crates/b2-desktop` (Tauri host) + `ui/` (Vite + CodeMirror) to the
+  explicit workspace `members` list; an empty window boots and `invoke('ping')` round-trips a trivial command
+  — proving the Rust↔JS seam before any real surface. *(Pick the `ui/` framework here — spec §9.)*
+- [ ] **Step 1 — Read a note.** The one new façade op `Vault::read(note) → body + metadata` + a `read_note`
+  command; the left pane renders the note (Markdown → HTML) with clickable in-app wikilinks.
+- [ ] **Step 2 — The related pane.** `similar` + `search` commands; results render with snippets, click to
+  open; backlinks via `explain`.
+- [ ] **Step 3 — Commit a link (read-only MVP done).** `link` command + a verb picker over the closed
+  relation core; committing writes frontmatter through the façade and the pane refreshes. The read →
+  discover → link loop is visual end-to-end.
+
+**Fast-follow (specced, not in the MVP cut):** CodeMirror body editing + `Vault::write` + an `mtime` guard
+(Step 4); native fs-watch auto-reload (Step 5). **Deferred:** packaging/signing/distribution; a `serve` HTTP
+adapter; graph visualization ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).
+
 ## Done
 
 - [x] **Motivations & problem** — folded into [vision-and-scope.md](vision-and-scope.md)
@@ -379,4 +403,6 @@ directly, since it reuses the same stored vectors.
   distance is exclusion-only, ① resolved 2026-07-01). A possible knob: boost graph-*close* (triadic closure) or
   graph-*distant* (serendipity/bridging) candidates. With no automated accept-precision signal (the human is the
   gate), this is a dogfooding-judged experiment — add the knob only if it visibly improves the surfaced list.
-- GUI — deferred per the headless-first approach ([vision-and-scope.md](vision-and-scope.md)).
+- GUI (beyond the discovery-loop MVP) — the broader **editor + graph/review** surface stays deferred; the
+  first cut is now **active** (see "Next up — Desktop UI MVP" above and
+  [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md)).

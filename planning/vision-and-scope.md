@@ -120,6 +120,11 @@ are these tenets made mechanical; this is their canonical statement.
 
 ## Approach: headless-first (the UI comes last)
 
+> **Update 2026-07-05 — the postponement ends here.** The headless bet paid off (engine, façade, and CLI
+> ship and are fully tested), so the first UI has begun: a **Tauri + CodeMirror** desktop app — the *second
+> dumb adapter over the façade* this section describes, **not** a rewrite. Full plan:
+> [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) (and "Decisions locked (2026-07-05)" below).
+
 A custom UI **is** coming — that's settled, not in question — but it is **postponed as long as
 possible.** The priority is to push as much **capability** and, above all, **testability** into
 a headless core as we can *before* any UI exists. Obsidian is **not** the designated UI: B2 is
@@ -204,7 +209,9 @@ already said so. That is what lets the UI be deferred for a long time without fl
   stack above).
 
 **Deferred (post-v1, not now):**
-- The **GUI** — the eventual editor + graph/review surface.
+- The **GUI** — *first cut now beginning* as a **Tauri + CodeMirror** desktop app (the connection-discovery
+  loop first; body editor a fast-follow) — see the 2026-07-05 locked decision below and
+  [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). The broader editor + graph/review surface stays deferred.
 - Multi-device **sync**.
 - Multiple vaults; large-scale performance work.
 
@@ -351,6 +358,36 @@ rather than departing from them — the machinery it removes is exactly what tho
   10-verb relation vocabulary — now serving as *your* typing palette on `b2 link` rather than the
   relator's emit set. Mirrored across [data-model.md](data-model.md), [index-engine.md](index-engine.md),
   [tasks.md](tasks.md), and [user-stories.md](user-stories.md).
+
+## Decisions locked (2026-07-05) — the first UI: a Tauri desktop app
+
+The headless-first bet has paid off — engine, façade, and CLI ship and are fully tested — so the deferred UI
+now begins, as the **second dumb adapter over the [`Vault`](../crates/b2-core/src/vault.rs) façade** this
+document always promised. It adds **no new architecture**: one thin adapter crate plus a frontend. Full
+rationale and the step-by-step build plan: [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md).
+
+- **Delivery vehicle = a Tauri desktop app.** Not a TUI (the MVP is a *rendered-document* surface a terminal
+  can't do justice — no long-form Markdown, images, or clickable links), not a browser + `b2 serve` (no
+  native filesystem-watch; "a tab, not an app"), not a native-Rust GUI (no off-the-shelf editor to build on).
+  Tauri uses the **OS webview** — it bundles no browser engine — so **principle #5 relaxes** from "single
+  binary" to "single per-platform bundle, download-and-run"; the `b2` CLI stays a literal single binary, so #5
+  is still met to the letter by the CLI and in spirit by the app.
+- **Editor substrate = CodeMirror 6**, not the ProseMirror / Tiptap / Wordgard node-tree lineage. A WYSIWYG
+  tree makes Markdown a lossy serialization at the edges — frontmatter, `[[path|title]]` wikilinks, and
+  `relations:` get normalized and churn noisy diffs — a direct hit to **principle #1** ("the files *are* the
+  format; export is a no-op"). CodeMirror keeps the Markdown buffer canonical (live-preview decorations give
+  the document feel), and is what Obsidian's own editor is built on. (Wordgard — Haverbeke's ProseMirror
+  rethink — was evaluated and rejected: it borrows CodeMirror's *change model* but keeps a *node tree*, so it
+  inherits the same fidelity problem.)
+- **Transport = Tauri IPC**, not an HTTP server. The frontend calls the façade through in-process commands; a
+  `b2 serve` HTTP adapter is a *different* concern (remote / browser / agent-over-HTTP), **deferred** rather
+  than built alongside — building both is the real over-complication.
+- **One new adapter, `b2-desktop`, holds no engine logic.** A thin Tauri host (charter:
+  [crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md)) + a `ui/` CodeMirror frontend. `b2-core`
+  never learns about the UI, so the fast core suite is untouched and the GUI inherits the façade's tests —
+  the "second dumb adapter over the same contract, inheriting every test the CLI bought" promise, kept. The
+  MVP ships **read-only-first** (render → discover → link, the connection-discovery loop made visual);
+  CodeMirror editing and native fs-watch are the immediate fast-follow.
 
 ## Inspiration — not a copy
 
