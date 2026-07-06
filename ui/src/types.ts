@@ -23,6 +23,13 @@ export interface NoteView {
   body: string;
 }
 
+/** `Vault::list_notes` — one note's identity for the file tree (no body). */
+export interface NoteSummary {
+  b2id: string;
+  path: string;
+  title: string | null;
+}
+
 /** `Vault::similar` — a semantically-near, not-yet-linked candidate. */
 export interface SimilarView {
   b2id: string;

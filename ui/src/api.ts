@@ -9,6 +9,7 @@ import type {
   ExplainView,
   LinkReport,
   NeighborView,
+  NoteSummary,
   NoteView,
   ReindexReport,
   SearchResult,
@@ -25,6 +26,9 @@ export const api = {
 
   /** A note's body + metadata for the left pane (path or b2id). */
   readNote: (note: string): Promise<NoteView> => invoke("read_note", { note }),
+
+  /** Every indexed note (b2id, path, title; no body) — the file tree's source. */
+  listNotes: (): Promise<NoteSummary[]> => invoke("list_notes"),
 
   /** Semantically-near, not-yet-linked candidates for a note. */
   similar: (note: string, limit = 10): Promise<SimilarView[]> =>

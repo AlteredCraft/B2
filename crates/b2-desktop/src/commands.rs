@@ -18,7 +18,8 @@
 use crate::error::CmdError;
 use crate::{open_vault, AppState};
 use b2_core::vault::{
-    ExplainView, LinkReport, NeighborView, NoteView, ReindexReport, SearchResult, SimilarView,
+    ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ReindexReport, SearchResult,
+    SimilarView,
 };
 use serde::Serialize;
 use tauri::State;
@@ -46,6 +47,11 @@ pub fn vault_info(state: State<'_, AppState>) -> Result<VaultInfo, CmdError> {
 #[tauri::command(async)]
 pub fn read_note(state: State<'_, AppState>, note: String) -> Result<NoteView, CmdError> {
     read_note_impl(state.inner(), &note)
+}
+
+#[tauri::command(async)]
+pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdError> {
+    list_notes_impl(state.inner())
 }
 
 #[tauri::command(async)]
@@ -116,6 +122,11 @@ fn read_note_impl(state: &AppState, note: &str) -> Result<NoteView, CmdError> {
     Ok(vault.read(note)?)
 }
 
+fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.list_notes()?)
+}
+
 #[cfg(test)]
 mod tests {
     //! Thin command-layer tests: args resolve → the façade is called → a view comes
@@ -161,6 +172,22 @@ mod tests {
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         assert_eq!(note.title.as_deref(), Some("Human memory"));
         assert!(note.body.contains("The brain encodes"));
+    }
+
+    #[test]
+    fn list_notes_returns_the_vault_listing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState { root: Some(root) };
+
+        let notes = list_notes_impl(&state).unwrap();
+        let paths: Vec<&str> = notes.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["concepts/memory.md", "notes/spaced-repetition.md"]
+        );
+        assert_eq!(notes[0].title.as_deref(), Some("Human memory"));
     }
 
     #[test]

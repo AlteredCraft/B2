@@ -132,6 +132,18 @@ pub struct NoteView {
     pub body: String,
 }
 
+/// One note's identity for a listing — `b2id`, vault-relative `path`, and display
+/// `title` — with **no body** (the heavy field). This is what the desktop UI's file
+/// tree renders: enough to show and open a note, cheap enough to fetch the whole
+/// vault at once. The full body is a separate [`read`](Vault::read) when a note is
+/// opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NoteSummary {
+    pub b2id: String,
+    pub path: String,
+    pub title: Option<String>,
+}
+
 /// One search hit, resolved to the note it belongs to with a text snippet.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchResult {
@@ -327,6 +339,20 @@ impl Vault {
             tags: fields.tags.clone(),
             body: parsed.body().to_string(),
         })
+    }
+
+    /// Every indexed note as a lightweight [`NoteSummary`] (`b2id`, `path`, `title`;
+    /// no body), ordered by `path` — the vault listing the desktop UI's file tree is
+    /// built from (spec's navigation surface). A pure, model-free read like
+    /// [`read`](Self::read): the tree shows exactly the notes the index knows, and
+    /// every one is [`read`](Self::read)-resolvable, so a click always opens. A
+    /// never-reindexed vault lists nothing (no error) — reindex populates it, the same
+    /// index-first honesty as [`search`](Self::search).
+    pub fn list_notes(&self) -> Result<Vec<NoteSummary>> {
+        Ok(db::all_notes(&self.conn)?
+            .into_iter()
+            .map(|(b2id, path, title)| NoteSummary { b2id, path, title })
+            .collect())
     }
 
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at

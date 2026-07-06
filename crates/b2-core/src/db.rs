@@ -427,6 +427,21 @@ pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
         .flatten())
 }
 
+/// Every indexed note's `(b2id, path, title)`, ordered by `path` — the flat listing
+/// the desktop UI's file tree is built from (`Vault::list_notes`). Path order means
+/// the adapter can assemble the folder tree in one pass without re-sorting.
+pub fn all_notes(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>> {
+    let mut stmt = conn.prepare("SELECT b2id, path, title FROM notes ORDER BY path")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 /// Total chunk count (used to size a full KNN pool for graph-filtered search).
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)

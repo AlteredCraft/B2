@@ -122,8 +122,15 @@ body {
 .layout {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: 240px minmax(0, 1fr) 380px;
   min-height: 0;
+}
+
+.tree-pane {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  padding: 14px 8px 96px;
 }
 
 .note-pane {
@@ -138,14 +145,96 @@ body {
   padding: 20px 18px 96px;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1040px) {
+  .layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .side-pane {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
   .layout {
     grid-template-columns: 1fr;
   }
-  .side-pane {
-    border-left: none;
-    border-top: 1px solid var(--border);
+  .tree-pane {
+    display: none;
   }
+}
+
+/* --- file tree ---------------------------------------------------------------- */
+
+.tree-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 8px;
+  margin-bottom: 8px;
+}
+.tree-head h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 0;
+}
+.tree-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tree-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1.3;
+}
+.tree-row:hover {
+  background: var(--surface-2);
+}
+
+.tree-caret {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-dir .tree-label {
+  font-weight: 600;
+}
+
+.tree-file.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.tree-file.is-active .tree-label {
+  font-weight: 600;
 }
 
 /* --- the note (reading surface) ----------------------------------------------- */

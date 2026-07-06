@@ -7,7 +7,7 @@
 import "../style.css";
 import { api } from "./api";
 import { state } from "./state";
-import { modalHtml, notePaneHtml, sidePaneHtml } from "./render";
+import { modalHtml, notePaneHtml, sidePaneHtml, treePaneHtml } from "./render";
 
 // --- render ---------------------------------------------------------------------
 
@@ -18,6 +18,7 @@ function el(id: string): HTMLElement {
 }
 
 function render(): void {
+  el("tree-pane").innerHTML = treePaneHtml(state);
   el("note-pane").innerHTML = notePaneHtml(state);
   el("side-pane").innerHTML = sidePaneHtml(state);
   el("modal-root").innerHTML = modalHtml(state);
@@ -55,11 +56,34 @@ function errText(e: unknown): string {
 
 // --- actions --------------------------------------------------------------------
 
+// Expand every folder on the way to `path` so the file tree reveals it — used when a
+// note is opened from search/wikilink/discovery, not just by clicking it in the tree.
+function expandAncestors(path: string): void {
+  const parts = path.split("/");
+  let dir = "";
+  for (const seg of parts.slice(0, -1)) {
+    dir = dir ? `${dir}/${seg}` : seg;
+    state.expandedDirs.add(dir);
+  }
+}
+
+// Load the vault listing for the file tree. Non-fatal on failure (e.g. an unindexed
+// vault): the tree shows its empty state and the reason surfaces as a toast.
+async function loadNotes(): Promise<void> {
+  try {
+    state.notes = await api.listNotes();
+  } catch (e) {
+    state.notes = [];
+    flash(errText(e));
+  }
+}
+
 async function openNote(ref: string): Promise<void> {
   state.loading = true;
   render();
   try {
     state.current = await api.readNote(ref);
+    expandAncestors(state.current.path);
     state.searchQuery = "";
     state.searchResults = [];
     await refreshDiscovery();
@@ -69,6 +93,12 @@ async function openNote(ref: string): Promise<void> {
     state.loading = false;
     render();
   }
+}
+
+function toggleDir(path: string): void {
+  if (state.expandedDirs.has(path)) state.expandedDirs.delete(path);
+  else state.expandedDirs.add(path);
+  render();
 }
 
 async function refreshDiscovery(): Promise<void> {
@@ -168,6 +198,8 @@ async function doReindex(): Promise<void> {
   try {
     const r = await api.reindex();
     flash(`Indexed ${r.indexed} note(s) — ${r.embedded} embedded, ${r.stamped} stamped.`);
+    // A reindex can add, remove, or rename notes — refresh the tree to match.
+    await loadNotes();
     if (state.current) {
       // The open note may have changed on disk; re-read it and refresh discovery.
       state.current = await api.readNote(state.current.path);
@@ -196,6 +228,7 @@ function buildShell(): void {
       </div>
     </header>
     <main class="layout">
+      <nav id="tree-pane" class="tree-pane"></nav>
       <section id="note-pane" class="note-pane"></section>
       <aside id="side-pane" class="side-pane"></aside>
     </main>
@@ -233,6 +266,12 @@ function wireEvents(): void {
     const linkBtn = target.closest<HTMLElement>("[data-link-path]");
     if (linkBtn) {
       openLinkModal(linkBtn.dataset.linkPath ?? "", linkBtn.dataset.linkTitle ?? "");
+      return;
+    }
+
+    const dir = target.closest<HTMLElement>("[data-dir]");
+    if (dir) {
+      toggleDir(dir.dataset.dir ?? "");
       return;
     }
 
@@ -287,6 +326,8 @@ async function boot(): Promise<void> {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;
     state.semantic = info.semantic;
+    // Populate the file tree so the vault is navigable before anything is opened.
+    await loadNotes();
   } catch (e) {
     // No vault (or another startup failure): the note pane shows the actionable state.
     state.vaultRoot = null;
