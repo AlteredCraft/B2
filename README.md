@@ -21,12 +21,15 @@ explained connections between them yourself.
 > the fake stays the CI default). **Connection discovery** ships as **`b2 similar`** (surface the
 > nearest *unlinked* notes — local, free, no model call) **+ `b2 link`** (you commit a typed relation
 > to frontmatter). The LLM relator was tried and **cut 2026-07-04** — its per-pair cost didn't scale;
-> the human is the precision gate ([tasks.md](planning/tasks.md)). All green (129 tests). A tour
+> the human is the precision gate ([tasks.md](planning/tasks.md)). A tour
 > grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 >
-> **Next — the first UI:** a **Tauri + CodeMirror** desktop app (the *second dumb adapter over the façade*),
-> starting **read-only** (render → discover → link). Plan:
-> [specs/desktop-ui-mvp.md](planning/specs/desktop-ui-mvp.md).
+> **The first UI has shipped (read-only MVP):** a **Tauri desktop app** (`crates/b2-desktop`, the *second
+> dumb adapter over the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri
+> IPC. It renders a note on the left and its **similar-but-unlinked notes** on the right, so you can commit a
+> typed link with a click — the connection-discovery loop, made visual. Run it with `just app` (point it at a
+> vault via `B2_VAULT_PATH`). **Next:** in-editor body editing (CodeMirror) + external-edit reconciliation.
+> Plan: [specs/desktop-ui-mvp.md](planning/specs/desktop-ui-mvp.md).
 
 ## What B2 is (the north star)
 
@@ -96,6 +99,21 @@ just init       # download + verify the embedding model into the shared cache
 just eval       # semantic-retrieval quality eval (real model)
 just            # list every recipe
 ```
+
+### The desktop app (`crates/b2-desktop` + `ui/`)
+
+The read-only desktop MVP. Prerequisites: **Node + npm** (for the `ui/` frontend) and the **Tauri CLI**
+(`cargo install tauri-cli --locked`).
+
+```bash
+just ui-install                       # one-time: install the frontend's npm deps
+B2_VAULT_PATH=~/notes just app        # run the app in dev (Vite HMR + a live window)
+just app-build                        # bundle a per-platform app
+```
+
+The window opens on the vault named by `B2_VAULT_PATH` (or the first launch argument). Search to open a note,
+read it on the left, and connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake`
+for an offline, non-semantic dev mode (no `b2 init` needed).
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
 every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,

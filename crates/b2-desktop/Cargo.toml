@@ -1,0 +1,28 @@
+[package]
+name = "b2-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "B2 desktop app — the Tauri host, a dumb adapter over the b2-core Vault façade (the GUI sibling of b2-cli)"
+
+# The dependency arrow points *one way*: this crate depends on b2-core (+ b2-embed);
+# the core never learns about Tauri or the UI (specs/desktop-ui-mvp.md §2). So the
+# fast core suite (`cargo test -p b2-core`) never compiles Tauri/webview deps — the
+# same discipline that keeps b2-embed's candle deps out of the core.
+
+[[bin]]
+name = "b2-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+b2-core = { path = "../b2-core" }
+b2-embed = { path = "../b2-embed" }
+tauri = { version = "2", features = [] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tempfile = "3.27.0"

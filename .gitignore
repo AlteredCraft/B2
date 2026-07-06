@@ -12,5 +12,13 @@ Cargo.lock.orig
 *.sqlite-wal
 *.sqlite-shm
 
+# Frontend (ui/) — npm deps + the Vite build output. The bundle is generated from
+# src/, so it's never committed (the Tauri host embeds ui/dist at build time).
+ui/node_modules/
+ui/dist/
+
+# Tauri generated artifacts (schemas, gen/) under the desktop host crate.
+crates/b2-desktop/gen/
+
 # macOS
 .DS_Store

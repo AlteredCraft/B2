@@ -74,7 +74,7 @@
   <div class="grp">Orient</div>
   <a href="#overview">Overview</a>
   <a href="#equation">The governing equation</a>
-  <a href="#crates">Three crates</a>
+  <a href="#crates">Four crates</a>
   <div class="grp">One vault, end to end</div>
   <a href="#example">The example vault</a>
   <a href="#ingest"><span class="dot" style="background:var(--t1)"></span>① Ingest → the index</a>
@@ -108,7 +108,7 @@
 
   <div class="badges">
     <span class="badge green"><span class="pip"></span> <b>model-free</b>&nbsp;· deterministic suite</span>
-    <span class="badge"><b>3</b>&nbsp;crates: <b>b2-core</b> · <b>b2-embed</b> · <b>b2-cli</b></span>
+    <span class="badge"><b>4</b>&nbsp;crates: <b>b2-core</b> · <b>b2-embed</b> · <b>b2-cli</b> · <b>b2-desktop</b></span>
     <span class="badge">Rust&nbsp;<b>1.96</b>&nbsp;· edition&nbsp;2021</span>
     <span class="badge">v1 kernel: <b>reindex · search · neighbors · explain · add · mv · similar · link</b></span>
   </div>
@@ -161,10 +161,11 @@
 
 <!-- ============ THREE CRATES ============ -->
 <section id="crates">
-  <h3>Three crates, cleanly layered</h3>
-  <p class="sub">The engine owes nothing to the CLI above it or the one model beside it. The AI-heavy crate sits
-  <em>behind</em> the <code>Embedder</code> trait defined in <code>b2-core</code>, so the engine and its whole
-  fast suite never import a tensor.</p>
+  <h3>Four crates, cleanly layered</h3>
+  <p class="sub">The engine owes nothing to the two adapters above it or the one model beside it. The AI-heavy
+  crate sits <em>behind</em> the <code>Embedder</code> trait defined in <code>b2-core</code>, so the engine and
+  its whole fast suite never import a tensor — and adding the desktop UI added <em>one adapter</em>, not new
+  architecture.</p>
   <div class="grid3">
     <div class="card tight">
       <div class="kicker" style="color:var(--accent)">b2-core · the engine</div>
@@ -186,6 +187,14 @@
       internal leaks.</p>
     </div>
     <div class="card tight">
+      <div class="kicker" style="color:var(--cyan)">b2-desktop · the GUI adapter</div>
+      <p style="font-size:12.5px;color:var(--muted);margin:2px 0 0">The Tauri host — the <b>GUI sibling of
+      b2-cli</b>, equally <b>logic-free</b>: each <code>#[tauri::command]</code> is deserialize → one
+      <code>Vault</code> call → serialize, reusing the CLI's <code>--json</code> view types as the IPC contract.
+      The <code>ui/</code> frontend (Vite + vanilla&nbsp;TS) renders the read → discover → link loop; two
+      adapters over one façade can't drift.</p>
+    </div>
+    <div class="card tight">
       <div class="kicker" style="color:var(--purple)">b2-embed · the real embedder</div>
       <p style="font-size:12.5px;color:var(--muted);margin:2px 0 0"><code>LocalEmbedder</code>: candle-backed
       BERT, <b>BAAI/bge-base-en-v1.5</b> (768-dim, ungated), pure-Rust inference. <code>b2 init</code> downloads +
@@ -195,7 +204,7 @@
   <div class="ground"><b>Ground truth:</b> the layering is enforced by where deps live. <code>b2-core</code>'s
   <span class="mono">Cargo.toml</span> has no candle and no HTTP client; the whole engine suite runs on the
   deterministic fake embedder. The real model is reached only by <code>b2 init</code> + the out-of-CI retrieval
-  eval. <b>Cut 2026-07-04:</b> the fourth crate, <code>b2-relate</code> (the Claude-backed relator), was removed
+  eval. <b>Cut 2026-07-04:</b> a former crate, <code>b2-relate</code> (the Claude-backed relator), was removed
   with the LLM discovery pipeline — see <a href="#discover">Flow ③</a>.</div>
 </section>
 

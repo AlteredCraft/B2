@@ -121,8 +121,9 @@ are these tenets made mechanical; this is their canonical statement.
 ## Approach: headless-first (the UI comes last)
 
 > **Update 2026-07-05 — the postponement ends here.** The headless bet paid off (engine, façade, and CLI
-> ship and are fully tested), so the first UI has begun: a **Tauri + CodeMirror** desktop app — the *second
-> dumb adapter over the façade* this section describes, **not** a rewrite. Full plan:
+> ship and are fully tested), so the first UI's **read-only MVP has shipped**: a **Tauri** desktop app
+> (`crates/b2-desktop`) + a Vite/vanilla-TS frontend (`ui/`) — the *second dumb adapter over the façade* this
+> section describes, **not** a rewrite (CodeMirror editing is the immediate fast-follow). Full plan:
 > [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) (and "Decisions locked (2026-07-05)" below).
 
 A custom UI **is** coming — that's settled, not in question — but it is **postponed as long as
@@ -209,9 +210,10 @@ already said so. That is what lets the UI be deferred for a long time without fl
   stack above).
 
 **Deferred (post-v1, not now):**
-- The **GUI** — *first cut now beginning* as a **Tauri + CodeMirror** desktop app (the connection-discovery
-  loop first; body editor a fast-follow) — see the 2026-07-05 locked decision below and
-  [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). The broader editor + graph/review surface stays deferred.
+- The **GUI** — *read-only first cut **shipped*** as a **Tauri** desktop app (the connection-discovery loop:
+  render → discover → link; CodeMirror body editor is the immediate fast-follow) — see the 2026-07-05 locked
+  decision below and [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). The broader editor + graph/review
+  surface stays deferred.
 - Multi-device **sync**.
 - Multiple vaults; large-scale performance work.
 

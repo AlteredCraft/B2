@@ -3,9 +3,9 @@
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
-//! — `open` / `reindex` / `neighbors` / `explain` / `search` / `similar` / `link` /
-//! `add` / `mv`. Add operations when a command needs them; do not pre-build a
-//! sprawling surface.
+//! — `open` / `reindex` / `read` / `neighbors` / `explain` / `search` / `similar` /
+//! `link` / `add` / `mv`. Add operations when a command needs them; do not pre-build
+//! a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
 //! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
@@ -111,6 +111,25 @@ pub struct ExplainView {
     /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them),
     /// each with its label, target, and explanation. Empty for an isolated note.
     pub connections: Vec<NeighborView>,
+}
+
+/// A note's content + display metadata for a reader — the Desktop UI MVP's left
+/// pane (specs/desktop-ui-mvp.md §4), and the **one new façade op** that surface
+/// adds. Carries the note's identity, the frontmatter fields worth showing a human,
+/// and the **raw Markdown body read from disk** (the source of truth, not the index
+/// projection) so an adapter renders Markdown → HTML itself. A pure read — no
+/// embedding, like [`neighbors`](Vault::neighbors).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NoteView {
+    pub b2id: String,
+    pub path: String,
+    pub title: Option<String>,
+    pub r#type: Option<String>,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub tags: Vec<String>,
+    /// The note's Markdown body (frontmatter stripped), verbatim from disk.
+    pub body: String,
 }
 
 /// One search hit, resolved to the note it belongs to with a text snippet.
@@ -279,6 +298,34 @@ impl Vault {
             path,
             title,
             connections,
+        })
+    }
+
+    /// Read a note for display (`Vault::read`) — the Desktop UI MVP's left pane and
+    /// the one new façade op that surface adds (specs/desktop-ui-mvp.md §4). Resolve
+    /// `note_ref` (path **or** `b2id`) to its file and return the note's **raw
+    /// Markdown body from disk** (the source of truth, not the index projection) plus
+    /// the frontmatter metadata worth showing a reader. A pure read — no embedding,
+    /// like [`neighbors`](Self::neighbors) — so an adapter needs no model just to
+    /// render a note; path/`b2id` resolution is centralized here so the adapter never
+    /// touches the filesystem itself. Errors with [`Error::NoteNotFound`] for an
+    /// unknown ref.
+    pub fn read(&self, note_ref: &str) -> Result<NoteView> {
+        let b2id = self.resolve_ref(note_ref)?;
+        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let raw = fs::read_to_string(self.root.join(&path))?;
+        let parsed = note::parse(&raw);
+        let fields = parsed.fields();
+        Ok(NoteView {
+            b2id,
+            path,
+            title: fields.title.clone(),
+            r#type: fields.r#type.clone(),
+            created: fields.created.clone(),
+            updated: fields.updated.clone(),
+            tags: fields.tags.clone(),
+            body: parsed.body().to_string(),
         })
     }
 

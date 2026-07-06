@@ -31,10 +31,12 @@ test-all:
 fmt:
     cargo fmt
 
-# Format-check + lint + fast tests — the pre-commit gate
+# Format-check + lint + fast tests — the pre-commit gate. Excludes b2-desktop from
+# clippy: linting it embeds ui/dist (needs a frontend build), so it's a separate,
+# heavier job (`just check-app`), out of the fast gate — like b2-embed's candle build.
 check:
     cargo fmt --check
-    cargo clippy --workspace
+    cargo clippy --workspace --exclude b2-desktop
     cargo test -p b2-core
 
 # Download + verify bge-base-en-v1.5 into the shared XDG cache (needed for the real embedder)
@@ -44,3 +46,32 @@ init:
 # Semantic-retrieval quality eval (real model; never part of `cargo test`)
 eval:
     cargo run -p b2-embed --example eval
+
+# --- Desktop app (crates/b2-desktop + ui/) — heavier; needs Node + the Tauri CLI ---
+# One-time frontend prerequisites: `npm i -D @tauri-apps/cli` is *not* needed if the
+# Tauri CLI is installed via cargo: `cargo install tauri-cli --locked`.
+
+# Install the frontend's npm dependencies (run once, or after package.json changes).
+ui-install:
+    npm --prefix ui install
+
+# Vite dev server on :5173 (usually started automatically by `just app`).
+ui-dev:
+    npm --prefix ui run dev
+
+# Type-check + build the frontend bundle into ui/dist (what the Tauri host embeds).
+ui-build:
+    npm --prefix ui run build
+
+# Run the desktop app in dev: Vite HMR + a live Tauri window (beforeDevCommand starts
+# Vite). Point it at a vault with B2_VAULT_PATH, e.g. `B2_VAULT_PATH=~/notes just app`.
+app:
+    cd crates/b2-desktop && cargo tauri dev
+
+# Bundle the desktop app (per-platform); builds the frontend first (beforeBuildCommand).
+app-build:
+    cd crates/b2-desktop && cargo tauri build
+
+# Lint + type-check the desktop crate (needs ui/dist, so build the frontend first).
+check-app: ui-build
+    cargo clippy -p b2-desktop

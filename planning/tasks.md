@@ -36,28 +36,43 @@ So several **Done** items below — *Relator seam*, *Connection-discovery ①/�
 *Suggestion-quality eval* — were **reverted in code** (commit `2cda889`, 2026-07-04; see "Shipped — the
 discovery pivot" below). They stay listed as history; only the code that implemented them was removed.
 
-## Next up — Desktop UI MVP (started 2026-07-05)
+## Shipped — Desktop UI MVP, read-only (2026-07-05); editing is next
 
-The headless phase is done; the first UI begins. Full spec + rationale:
+The headless phase is done and the first UI's **read-only MVP has shipped** (Steps 0→3 below, all green).
+Full spec + rationale:
 [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). It is the **second dumb adapter over the
 [`Vault`](../crates/b2-core/src/vault.rs) façade** — a **Tauri** desktop app (`crates/b2-desktop`, thin-host
 charter in [crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md)) + a **CodeMirror** frontend
 (`ui/`), talking to the core over Tauri IPC. The MVP is **read-only-first**: render a note, surface its
 similar-but-unlinked notes, commit a typed link — the connection-discovery loop, made visual.
 
-- [ ] **Step 0 — Scaffold & wiring.** Add `crates/b2-desktop` (Tauri host) + `ui/` (Vite + CodeMirror) to the
-  explicit workspace `members` list; an empty window boots and `invoke('ping')` round-trips a trivial command
-  — proving the Rust↔JS seam before any real surface. *(Pick the `ui/` framework here — spec §9.)*
-- [ ] **Step 1 — Read a note.** The one new façade op `Vault::read(note) → body + metadata` + a `read_note`
-  command; the left pane renders the note (Markdown → HTML) with clickable in-app wikilinks.
-- [ ] **Step 2 — The related pane.** `similar` + `search` commands; results render with snippets, click to
-  open; backlinks via `explain`.
-- [ ] **Step 3 — Commit a link (read-only MVP done).** `link` command + a verb picker over the closed
-  relation core; committing writes frontmatter through the façade and the pane refreshes. The read →
-  discover → link loop is visual end-to-end.
+- [x] **Step 0 — Scaffold & wiring.** `crates/b2-desktop` (Tauri **v2** host) + `ui/` (Vite frontend) added
+  to the explicit workspace `members`; the window boots and `invoke('ping')` round-trips — the Rust↔JS seam
+  proven end-to-end (boot-smoke verified, no startup panic). **`ui/` framework resolved (spec §9): vanilla
+  TypeScript** — no framework, the thinnest dep tree and cleanest CSP story, matching the repo's
+  no-speculative-abstraction ethos. (CodeMirror is **not** pulled in yet; it enters `ui/` at Step 4 when
+  editing lands — the read-only MVP renders Markdown → HTML via `marked`, so an unused editor dep would be
+  speculative.)
+- [x] **Step 1 — Read a note.** The one new façade op [`Vault::read(note) → NoteView`](../crates/b2-core/src/vault.rs)
+  (body from disk + display metadata; a pure model-free read) + a `read_note` command; the left pane renders
+  the note (Markdown → HTML) with clickable in-app wikilinks (a `marked` inline extension → `.wikilink`
+  anchors that navigate via `read_note`). 5 `read` integration tests in [tests/read.rs](../crates/b2-core/tests/read.rs).
+- [x] **Step 2 — The related pane.** `similar` / `search` / `explain` / `neighbors` commands (all existing
+  façade ops); the right pane shows similar-but-unlinked candidates and hybrid-search results with snippets
+  (click to open), plus the open note's typed connections. Honest "semantic off (run `b2 init`)" caveat when
+  the fake embedder is active, mirroring `b2 search`.
+- [x] **Step 3 — Commit a link (read-only MVP done).** A `link` command + a modal **verb picker over the
+  closed 10-verb core**; committing writes the frontmatter `relations:` through the façade and the discovery
+  pane refreshes (the linked candidate leaves "similar", appears in "connections"). The read → discover →
+  link loop is visual end-to-end. The host stays a **dumb adapter** (each command is deserialize → one façade
+  call → serialize; charter: [crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md)); errors funnel
+  through a `user_message` mirror of the CLI's, never leaking internals. **4 command-layer tests** +
+  clippy/fmt clean; the desktop build is a separate heavier job, out of the fast `cargo test -p b2-core` gate.
 
-**Fast-follow (specced, not in the MVP cut):** CodeMirror body editing + `Vault::write` + an `mtime` guard
-(Step 4); native fs-watch auto-reload (Step 5). **Deferred:** packaging/signing/distribution; a `serve` HTTP
+**Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
+(Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** an in-app vault picker (today it's a launch
+arg / `B2_VAULT_PATH`); live reindex progress (a long reindex runs off the main thread, but with no progress
+bar — background reindex is on the Backlog). **Deferred:** packaging/signing/distribution; a `serve` HTTP
 adapter; graph visualization ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).
 
 ## Done
@@ -404,5 +419,5 @@ directly, since it reuses the same stored vectors.
   graph-*distant* (serendipity/bridging) candidates. With no automated accept-precision signal (the human is the
   gate), this is a dogfooding-judged experiment — add the knob only if it visibly improves the surfaced list.
 - GUI (beyond the discovery-loop MVP) — the broader **editor + graph/review** surface stays deferred; the
-  first cut is now **active** (see "Next up — Desktop UI MVP" above and
-  [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md)).
+  read-only first cut has **shipped** (see "Shipped — Desktop UI MVP, read-only" above and
+  [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md)). The immediate next cut is **editing** (Step 4).
