@@ -253,6 +253,15 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* The bar's head row: frontmatter toggle on the left, `</>` view-source toggle pinned
+   to the right, symmetric at the pane's padded edges. */
+.note-bar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .frontmatter-toggle {
   display: flex;
   align-items: center;
@@ -270,6 +279,31 @@ body {
 }
 .frontmatter-toggle:hover {
   color: var(--text);
+}
+
+/* `</>` — flips the note body between rendered Markdown and its raw source. Active
+   (source shown) reads as the accent so the current mode is obvious at a glance. */
+.source-toggle {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.source-toggle:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.source-toggle.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
 }
 
 .frontmatter-block {
@@ -329,6 +363,17 @@ body {
 .note-body {
   font-size: 16px;
   line-height: 1.68;
+}
+
+/* Raw Markdown source (the `</>` toggle) — the note body verbatim, unrendered. */
+.note-source {
+  margin: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
 }
 
 .note-body h1,

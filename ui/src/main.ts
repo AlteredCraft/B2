@@ -106,6 +106,11 @@ function toggleFrontmatter(): void {
   render();
 }
 
+function toggleSource(): void {
+  state.sourceOpen = !state.sourceOpen;
+  render();
+}
+
 async function refreshDiscovery(): Promise<void> {
   const n = state.current;
   if (!n) return;
@@ -276,6 +281,11 @@ function wireEvents(): void {
 
     if (target.closest("[data-toggle-frontmatter]")) {
       toggleFrontmatter();
+      return;
+    }
+
+    if (target.closest("[data-toggle-source]")) {
+      toggleSource();
       return;
     }
 

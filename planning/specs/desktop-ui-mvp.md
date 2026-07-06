@@ -159,6 +159,7 @@ surface where the human — the precision gate — can *read both notes at once*
 | Open & render a note (left pane) — Markdown → HTML, clickable in-app wikilinks | **`Vault::read(note)` → body + metadata** | **NEW — the only core addition** |
 | File-tree pane — the vault as collapsible folders; click a file to open it | **`Vault::list_notes()` → `Vec<NoteSummary>`** (path-ordered, no body; the tree is folded from the flat list in `ui/`) | added post-MVP |
 | Frontmatter drawer (top of note pane) — the note's raw YAML, verbatim & collapsible | **`Vault::read` extended: `NoteView.frontmatter`** (the byte-honest block between the fences, `None` if absent — not a re-serialization, so `relations:`/`aliases:`/unmodeled keys show as written) | added post-MVP |
+| View-source toggle (`</>`, top-right of note pane) — flip the body between rendered Markdown and raw source | **no new op** — presentation-only, reuses `NoteView.body` (the verbatim block `Vault::read` already returns) | added post-MVP |
 | Related pane — semantically nearest *unlinked* notes | `Vault::similar` | exists |
 | Related pane — hybrid keyword+semantic+graph search | `Vault::search` | exists |
 | Backlinks / typed edges with their "why" (in/out) | `Vault::explain` / `neighbors` | exists |

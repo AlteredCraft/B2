@@ -147,15 +147,20 @@ export function treePaneHtml(state: AppState): string {
 
 // --- pane builders --------------------------------------------------------------
 
-// The frontmatter drawer: a full-bleed strip across the top of the note pane (above
-// the centered reading column, not inside it), a collapsible peek at the note's raw
-// YAML (verbatim, as on disk — `relations:` and any unmodeled keys included). Sits as
-// a sibling *before* `<article class="note">` so its divider spans the pane edge to
-// edge, like the file tree's "Files" header. State-controlled (not a native
-// `<details>`) so its open/closed state survives the full-pane re-render that a toast
-// timer or a tree toggle triggers. Always rendered, so the note pane's chrome is
-// stable across notes; a note with no frontmatter unfolds to an explicit empty state.
-function frontmatterDrawerHtml(frontmatter: string | null, open: boolean): string {
+// The note-pane top bar: a full-bleed strip across the top of the note pane (above the
+// centered reading column, not inside it). Its head row carries the frontmatter drawer
+// toggle on the left and the `</>` view-source toggle on the right, symmetric at the
+// pane edges. Sits as a sibling *before* `<article class="note">` so its divider spans
+// the pane edge to edge, like the file tree's "Files" header.
+//
+// The frontmatter drawer is a collapsible peek at the note's raw YAML (verbatim, as on
+// disk — `relations:` and any unmodeled keys included). The `</>` toggle flips the note
+// body between rendered Markdown and its raw source. Both are state-controlled (not
+// native `<details>`) so their open state survives the full-pane re-render a toast timer
+// or tree toggle triggers, and both stay sticky across notes. The bar is always
+// rendered, so the note pane's chrome is stable; a note with no frontmatter unfolds to
+// an explicit empty state.
+function noteBarHtml(frontmatter: string | null, open: boolean, source: boolean): string {
   const yaml = frontmatter?.replace(/\s+$/, "") ?? "";
   const body = !open
     ? ""
@@ -163,10 +168,15 @@ function frontmatterDrawerHtml(frontmatter: string | null, open: boolean): strin
       ? `<pre class="frontmatter-block">${escapeHtml(yaml)}</pre>`
       : `<p class="frontmatter-empty">No frontmatter.</p>`;
   return `<div class="frontmatter-bar">
-      <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}">
-        <span class="tree-caret">${open ? "▾" : "▸"}</span>
-        <span class="frontmatter-label">Frontmatter</span>
-      </button>
+      <div class="note-bar-head">
+        <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}">
+          <span class="tree-caret">${open ? "▾" : "▸"}</span>
+          <span class="frontmatter-label">Frontmatter</span>
+        </button>
+        <button class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
+          source ? "Show rendered Markdown" : "Show Markdown source"
+        }">&lt;/&gt;</button>
+      </div>
       ${body}
     </div>`;
 }
@@ -181,14 +191,17 @@ export function notePaneHtml(state: AppState): string {
           .map((t) => `<span class="tag">${escapeHtml(t)}</span>`)
           .join("")}</div>`
       : "";
-    return `${frontmatterDrawerHtml(n.frontmatter, state.frontmatterOpen)}
+    const body = state.sourceOpen
+      ? `<pre class="note-source">${escapeHtml(n.body)}</pre>`
+      : renderMarkdown(n.body);
+    return `${noteBarHtml(n.frontmatter, state.frontmatterOpen, state.sourceOpen)}
       <article class="note">
         <header class="note-head">
           <h1>${escapeHtml(n.title ?? n.path)}</h1>
           <div class="note-meta">${meta}</div>
           ${tags}
         </header>
-        <div class="note-body">${renderMarkdown(n.body)}</div>
+        <div class="note-body">${body}</div>
       </article>`;
   }
   if (state.loading) return `<div class="empty"><p>Loading…</p></div>`;

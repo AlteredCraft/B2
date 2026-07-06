@@ -48,6 +48,8 @@ export interface AppState {
   current: NoteView | null;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
+  /** Whether the note body shows raw Markdown source instead of rendered (sticky). */
+  sourceOpen: boolean;
   /** Similar-but-unlinked candidates for the open note. */
   similar: SimilarView[];
   /** The open note's typed edges (from explain). */
@@ -72,6 +74,7 @@ export const state: AppState = {
   expandedDirs: new Set<string>(),
   current: null,
   frontmatterOpen: false,
+  sourceOpen: false,
   similar: [],
   connections: [],
   searchQuery: "",

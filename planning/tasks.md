@@ -86,6 +86,11 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   (dumb-adapter rule holds). **1 `read` test (verbatim block) + 3 `note` unit tests**; the drawer render is
   state-controlled in `ui/` (survives the full-pane re-renders a toast/tree-toggle triggers). Read-only —
   editing frontmatter arrives with the CodeMirror editor (Step 4).
+- [x] **View-source toggle.** A `</>` button pinned top-right of the note pane's bar (opposite the Frontmatter
+  toggle) flips the note body between rendered Markdown and its **raw source** (`NoteView.body` verbatim in a
+  `<pre>`, HTML-escaped, wikilinks shown literally). Presentation-only — **no new façade op**, reuses the body
+  `Vault::read` already returns; state-controlled and sticky across notes like the frontmatter drawer. A
+  read-only peek at the on-disk Markdown ahead of the CodeMirror editor (Step 4).
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
 (Step 4); native fs-watch auto-reload (Step 5). **Also not yet:** an in-app vault picker (today it's a launch
