@@ -165,7 +165,7 @@ surface where the human — the precision gate — can *read both notes at once*
 | Related pane — hybrid keyword+semantic+graph search | `Vault::search` | exists |
 | Backlinks / typed edges with their "why" (in/out) | `Vault::explain` / `neighbors` | exists |
 | Commit a typed relation (verb picker) → frontmatter | `Vault::link` | exists |
-| Index / refresh action + state | `Vault::reindex` / `plan_reindex` | exists (blocking); **async + live progress + cancel specced in [specs/async-indexing.md](async-indexing.md)** |
+| Index / refresh action + state | `Vault::reindex_with_progress` / `plan_reindex` | **async + live progress + Cancel, non-blocking** — a cancellable background action ([specs/async-indexing.md](async-indexing.md)) |
 
 **The one new façade op** is a read: fetch a note's raw body + metadata to render the left pane
 (`Vault::read` / `get_note`). Everything else the MVP needs already exists. This honors the façade rule —

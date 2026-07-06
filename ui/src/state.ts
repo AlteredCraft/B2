@@ -6,6 +6,7 @@ import type {
   NeighborView,
   NoteSummary,
   NoteView,
+  ReindexProgress,
   SearchResult,
   SimilarView,
 } from "./types";
@@ -63,6 +64,16 @@ export interface AppState {
   linkRelation: string;
   /** A slow op is in flight. */
   loading: boolean;
+  /**
+   * A reindex is in flight. Kept **separate** from `loading` so a reindex does NOT
+   * freeze the app (async-indexing.md §2) — only the Reindex action is disabled and a
+   * progress + Cancel affordance appears, while reading/searching/navigating stay live.
+   */
+  reindexing: boolean;
+  /** The latest per-batch progress event, or null before embedding starts (or when idle). */
+  reindexProgress: ReindexProgress | null;
+  /** The user hit Cancel; the request is in flight (disables Cancel, shows "Cancelling…"). */
+  reindexCancelling: boolean;
   /** A transient toast message (success or a generic, actionable error). */
   status: string | null;
 }
@@ -82,5 +93,8 @@ export const state: AppState = {
   linkTarget: null,
   linkRelation: "references",
   loading: false,
+  reindexing: false,
+  reindexProgress: null,
+  reindexCancelling: false,
   status: null,
 };

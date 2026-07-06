@@ -23,6 +23,11 @@ pub enum CmdError {
     /// refuse rather than guess a directory, and tell the user how to point B2 at one.
     #[error("no vault specified")]
     VaultRequired,
+    /// A `reindex` was requested while one was already running (single-in-flight,
+    /// async-indexing.md §4). The UI disables the button, so this is a belt-and-
+    /// suspenders refusal that reaches the webview only in a race.
+    #[error("a reindex is already running")]
+    ReindexInFlight,
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -51,13 +56,16 @@ pub fn user_message(err: &CmdError) -> String {
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."
                 .to_string()
         }
+        CmdError::ReindexInFlight => {
+            "A reindex is already in progress. Please wait for it to finish.".to_string()
+        }
         _ => "Something went wrong. Please check the vault and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
         let detail = match err {
             CmdError::Core(e) => e.to_string(),
             CmdError::Embed(e) => e.to_string(),
-            CmdError::VaultRequired => err.to_string(),
+            CmdError::VaultRequired | CmdError::ReindexInFlight => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {

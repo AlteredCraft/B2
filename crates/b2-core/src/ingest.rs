@@ -15,15 +15,23 @@ use crate::error::Result;
 use crate::id::IdGen;
 use crate::note;
 use rusqlite::Connection;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::Path;
 
 /// How many chunks to embed per forward pass. Batching lets the real model amortize
-/// one matmul over many texts (a large CPU win on the reindex hot path); the fake's
-/// default `embed_batch` maps 1:1 regardless. Sized to trade throughput against the
-/// padding waste of batching short chunks with long ones.
-const EMBED_BATCH: usize = 32;
+/// one matmul over many texts (a CPU win on the reindex hot path); the fake's default
+/// `embed_batch` maps 1:1 regardless. Sized to trade that amortization against the
+/// **padding waste** of batching short chunks with long ones — the tokenizer pads every
+/// chunk in a batch to the batch's *longest*, so an over-large batch runs the whole
+/// forward pass at the longest length. Measured on a real (variable-length) vault, 16
+/// beat 32 (~40% faster: less padding waste) and 8 (better amortization). It also sets
+/// the reindex **cancel granularity**: the cancel flag is checked once per batch
+/// (async-indexing.md §3), so a smaller batch means the desktop **Cancel** responds
+/// sooner — another reason not to over-size it.
+const EMBED_BATCH: usize = 16;
 
 /// Outcome of ingesting one file.
 pub struct Ingested {
@@ -61,7 +69,11 @@ pub struct PlannedNote {
 /// is the real unit of work (it equals the report's `embedded` count). Reporting
 /// position in the full note list instead would jump to e.g. "note 14/18" while only
 /// a handful of notes are doing any work.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` so the desktop host can stream it to the webview over a
+/// `tauri::ipc::Channel` (async-indexing.md §4); the field names are the JSON keys the
+/// frontend reads.
+#[derive(Debug, Clone, Serialize)]
 pub struct ReindexProgress {
     /// Vault-relative path of the note currently embedding.
     pub note_path: String,
@@ -192,25 +204,52 @@ fn would_reembed(
     Ok(!unchanged)
 }
 
+/// The result of embedding one note's pending chunks: whether a cancel was signalled
+/// at a batch boundary, and whether **every** pending chunk got a vector.
+struct EmbedOutcome {
+    /// `on_batch` returned [`ControlFlow::Break`] at a batch boundary — the caller
+    /// should stop starting new notes (a cooperative cancel, async-indexing.md §3).
+    cancelled: bool,
+    /// Every pending chunk was embedded, so the note is now fully embedded. True even
+    /// when the cancel landed on the *final* batch: each batch is written before its
+    /// cancel check, so there is nothing left to do for this note.
+    completed: bool,
+}
+
 /// Embed a note's pending `(chunk_id, text)` pairs into `chunks_vec`, in batches of
 /// [`EMBED_BATCH`] via [`Embedder::embed_batch`], calling `on_batch` with each
-/// batch's size (so a full reindex can report cumulative progress). Chunk vectors
-/// are independent, so batch boundaries never change the result.
+/// batch's size (so a full reindex can report cumulative progress **and** cooperatively
+/// cancel). Chunk vectors are independent, so batch boundaries never change the result.
+///
+/// The cancel check runs **after** a batch is fully written, so a cancel never tears a
+/// batch (async-indexing.md §5.6) — it only stops *further* batches. Returns whether a
+/// cancel was seen and whether the note finished embedding (see [`EmbedOutcome`]).
 fn embed_pending(
     conn: &Connection,
     embedder: &dyn Embedder,
     pending: &[(i64, String)],
-    mut on_batch: impl FnMut(usize),
-) -> Result<()> {
+    mut on_batch: impl FnMut(usize) -> ControlFlow<()>,
+) -> Result<EmbedOutcome> {
+    let total = pending.len();
+    let mut done = 0usize;
     for batch in pending.chunks(EMBED_BATCH) {
         let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
         let vectors = embedder.embed_batch(&texts)?;
         for ((id, _), v) in batch.iter().zip(&vectors) {
             db::set_chunk_vector(conn, *id, v)?;
         }
-        on_batch(batch.len());
+        done += batch.len();
+        if on_batch(batch.len()).is_break() {
+            return Ok(EmbedOutcome {
+                cancelled: true,
+                completed: done == total,
+            });
+        }
     }
-    Ok(())
+    Ok(EmbedOutcome {
+        cancelled: false,
+        completed: true,
+    })
 }
 
 /// Derive a note's authored edges and project them — the union of **body** links
@@ -297,7 +336,8 @@ pub fn ingest_file(
     let (b2id, stamped, body, relations, pending) =
         project_note_and_chunks(conn, vault_root, rel_path, idgen, false)?;
     let embedded = !pending.is_empty();
-    embed_pending(conn, embedder, &pending, |_| {})?;
+    // A single-note re-projection is never cancelled — always run to completion.
+    embed_pending(conn, embedder, &pending, |_| ControlFlow::Continue(()))?;
     project_edges(conn, &b2id, &body, &relations)?;
     Ok(Ingested {
         b2id,
@@ -306,31 +346,58 @@ pub fn ingest_file(
     })
 }
 
+/// The result of a (possibly cancelled) full ingest: every projected note, plus
+/// whether the embed phase was cut short by a cooperative cancel (async-indexing.md
+/// §3). A cancelled run is still **consistent** — every note has chunks + FTS + edges
+/// (Phase 1/2), only a *prefix* has vectors — so `notes` describes the partial work
+/// truthfully (its `embedded` flags count only notes that fully embedded this run) and
+/// an incremental re-run embeds the notes the cancel left unfinished. Vectors are
+/// tracked **per note**, not per chunk: a note interrupted *mid-embed* (a cancel on a
+/// non-final batch) is not fully embedded, so its resume re-embeds it in full — at most
+/// one note's worth of redo, never a correctness issue.
+pub struct IngestOutcome {
+    pub notes: Vec<Ingested>,
+    /// The embed phase stopped early because `on_progress` returned
+    /// [`ControlFlow::Break`]. Always `false` for a run that was never cancelled.
+    pub cancelled: bool,
+}
+
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
 /// incrementally (unchanged notes reuse their vectors) and with no progress
-/// reporting. Dotfolders (e.g. `.b2/`) are skipped.
+/// reporting. Dotfolders (e.g. `.b2/`) are skipped. Never cancelled, so it returns
+/// the note list directly.
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
-    ingest_vault_with_progress(conn, vault_root, idgen, embedder, false, &mut |_| {})
+    Ok(
+        ingest_vault_with_progress(conn, vault_root, idgen, embedder, false, &mut |_| {
+            ControlFlow::Continue(())
+        })?
+        .notes,
+    )
 }
 
 /// Like [`ingest_vault`], but takes `force` (re-embed every note, even unchanged
 /// ones) and calls `on_progress` after every embed batch so a slow full reindex
-/// (real model on CPU) never looks frozen. The embed phase is batched
-/// ([`embed_pending`]) and incremental unless `force`; the two-phase order,
-/// idempotency, and determinism are unchanged.
+/// (real model on CPU) never looks frozen — **and can be cooperatively cancelled**:
+/// when `on_progress` returns [`ControlFlow::Break`], the embed phase stops at that
+/// batch boundary. Phase 2 (edge projection) then still runs for *every* projected
+/// note, so a cancelled index is consistent — keyword search + graph are complete,
+/// only a prefix of notes has vectors (async-indexing.md §3/§5). The embed phase is
+/// batched ([`embed_pending`]) and incremental unless `force`; the two-phase order,
+/// idempotency, and determinism are unchanged, and a run that is never cancelled is
+/// **byte-identical** to before.
 pub fn ingest_vault_with_progress(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
     embedder: &dyn Embedder,
     force: bool,
-    on_progress: &mut dyn FnMut(ReindexProgress),
-) -> Result<Vec<Ingested>> {
+    on_progress: &mut dyn FnMut(ReindexProgress) -> ControlFlow<()>,
+) -> Result<IngestOutcome> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
 
     let mut rel_paths = Vec::new();
@@ -359,14 +426,19 @@ pub fn ingest_vault_with_progress(
         .count();
     let mut embedded_so_far = 0usize;
     let mut chunks_done = 0usize;
-    for (rel, _, _, _, _, pending) in &staged {
+    let mut cancelled = false;
+    // Did each staged note fully (re)embed *this run*? Notes with no pending work stay
+    // `false` (they reused vectors — didn't embed now), which matches the old
+    // `!pending.is_empty()` on the non-cancel path and stays honest under a cancel.
+    let mut embedded_flags = vec![false; staged.len()];
+    for (i, (rel, _, _, _, _, pending)) in staged.iter().enumerate() {
         if pending.is_empty() {
             continue;
         }
         embedded_so_far += 1;
         let notes_embedded = embedded_so_far; // immutable per-note snapshot for the closure
         let note_chunks = pending.len();
-        embed_pending(conn, embedder, pending, |n| {
+        let outcome = embed_pending(conn, embedder, pending, |n| {
             chunks_done += n;
             on_progress(ReindexProgress {
                 note_path: rel.clone(),
@@ -374,21 +446,32 @@ pub fn ingest_vault_with_progress(
                 notes_embedded,
                 notes_to_embed,
                 chunks_done,
-            });
+            })
         })?;
+        embedded_flags[i] = outcome.completed;
+        if outcome.cancelled {
+            cancelled = true;
+            break; // cooperative cancel: stop starting new notes
+        }
     }
 
-    // Phase 2: edges (resolve links against the now-complete resolver).
+    // Phase 2: edges (resolve links against the now-complete resolver). Runs for every
+    // projected note **even after a cancel**, so the keyword index + typed graph are
+    // always complete at any cancel point (async-indexing.md §5.1); only vectors are
+    // partial.
     let mut out = Vec::with_capacity(staged.len());
-    for (_, b2id, stamped, body, relations, pending) in &staged {
+    for (i, (_, b2id, stamped, body, relations, _)) in staged.iter().enumerate() {
         project_edges(conn, b2id, body, relations)?;
         out.push(Ingested {
             b2id: b2id.clone(),
             stamped: *stamped,
-            embedded: !pending.is_empty(),
+            embedded: embedded_flags[i],
         });
     }
-    Ok(out)
+    Ok(IngestOutcome {
+        notes: out,
+        cancelled,
+    })
 }
 
 /// A **read-only** preview of a reindex — the `reindex --dry-run`. Walks every `.md`

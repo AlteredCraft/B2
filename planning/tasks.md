@@ -100,13 +100,30 @@ similar-but-unlinked notes, commit a typed link — the connection-discovery loo
   host-only dep. Cancel is a clean no-op. The frontend resets the open note / discovery / search / tree on a
   switch and reloads the listing. **+2 command-layer tests** (set-root reports the new `VaultInfo`; switching
   repoints subsequent reads); the OS dialog itself is the untestable thin wrapper (thinness *is* the strategy).
+- [x] **Async, cancellable indexing.** The desktop `reindex` is now an observable, cancellable **background
+  action** — live progress + a **Cancel** button, non-blocking (reading/searching/navigating stay live), so a
+  long cold index no longer looks frozen ([specs/async-indexing.md](specs/async-indexing.md), Steps 1→3).
+  **One small core seam:** the per-batch progress callback now returns
+  [`ControlFlow`](../crates/b2-core/src/ingest.rs) so the embed loop can stop at a batch boundary; on cancel
+  it still runs Phase 2 (edges) for every note, so a cancelled index is **consistent** (keyword + graph
+  complete, a prefix embedded) and an incremental re-run finishes the rest — `ReindexReport` gains
+  `cancelled`. The core stays sync/deterministic; a run that's never cancelled is **byte-identical** to
+  before. **Host infra (still a dumb adapter):** `reindex` streams
+  [`ReindexProgress`](../crates/b2-core/src/ingest.rs) over a Tauri **`Channel`**, an `AppState` cancel-flag +
+  single-in-flight guard drive it, a `cancel_reindex` command sets the flag, and a vault switch cancels +
+  waits for the in-flight run before repointing (a reindex can never write a vault the app has left).
+  **New tests:** 2 core (cancel → consistent, resumable index; honest report) + 4 host (single-in-flight
+  guard, refuse-before-model, cancel-flag arm/request, switch-cancels-and-waits); clippy/fmt clean.
+  **Cancel-latency fix (dogfooding 2026-07-06):** cancel is observed at each embed-batch boundary, so a slow
+  batch made **Cancel** feel stuck. Root cause was the **debug** `tauri dev` host — unoptimized candle
+  embedded 123 chunks in **4m38s** (a batch ≈ 70s). Fixes: a workspace `[profile.dev.package."*"]
+  opt-level = 3` (own crates pinned to opt-0) → **~13s** (~21×), and `EMBED_BATCH` 32 → 16 (less tokenizer
+  padding waste — ~40% faster on real content — and finer cancel granularity). Net: a batch, and the cancel
+  latency, is ~2s. **Deferred (spec §7–§8):** progressive keyword-first index; cross-process CLI background
+  reindex + Ctrl-C.
 
 **Now the fast-follow (specced, next up):** CodeMirror 6 body editing + `Vault::write` + an `mtime` guard
-(Step 4); native fs-watch auto-reload (Step 5). **Async, cancellable indexing — specced, next up:** the
-desktop `reindex` today runs off the main thread but discards the engine's per-batch progress and can't be
-stopped, so a long cold index looks frozen; the plan (live progress via a Tauri `Channel`, cancel-only,
-non-blocking UI, plus the one small core seam — a `ControlFlow` cancel checkpoint) is
-[specs/async-indexing.md](specs/async-indexing.md) (Steps 1→3). **Deferred:** progressive keyword-first
+(Step 4); native fs-watch auto-reload (Step 5). **Deferred:** progressive keyword-first
 index + cross-process CLI background reindex (async-indexing spec §7–§8);
 packaging/signing/distribution; a `serve` HTTP adapter; graph visualization
 ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §9).

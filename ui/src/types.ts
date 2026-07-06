@@ -88,4 +88,29 @@ export interface ReindexReport {
   indexed: number;
   embedded: number;
   stamped: number;
+  /**
+   * The reindex was cancelled mid-embed (the user hit Cancel). The index is still
+   * consistent — keyword search + graph are complete, a prefix of notes is embedded —
+   * and re-running finishes the rest (async-indexing.md §3).
+   */
+  cancelled: boolean;
+}
+
+/**
+ * `ingest::ReindexProgress` — one per-batch progress event streamed over a Tauri
+ * `Channel` during a reindex (async-indexing.md §4). The counts describe the notes
+ * that actually (re)embed this run, not every note (an incremental reindex reuses most
+ * vectors untouched).
+ */
+export interface ReindexProgress {
+  /** Vault-relative path of the note currently embedding. */
+  note_path: string;
+  /** Number of chunks in the current note. */
+  note_chunks: number;
+  /** How many notes have begun embedding so far (1-based)… */
+  notes_embedded: number;
+  /** …out of this many notes that need (re)embedding this run — the progress denominator. */
+  notes_to_embed: number;
+  /** Chunks embedded so far, cumulative across every note this run. */
+  chunks_done: number;
 }

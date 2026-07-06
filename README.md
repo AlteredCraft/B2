@@ -27,8 +27,10 @@ explained connections between them yourself.
 > **The first UI has shipped (read-only MVP):** a **Tauri desktop app** (`crates/b2-desktop`, the *second
 > dumb adapter over the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri
 > IPC. It renders a note on the left and its **similar-but-unlinked notes** on the right, so you can commit a
-> typed link with a click — the connection-discovery loop, made visual. Run it with `just app` (point it at a
-> vault via `B2_VAULT_PATH`). **Next:** in-editor body editing (CodeMirror) + external-edit reconciliation.
+> typed link with a click — the connection-discovery loop, made visual. Reindex is a **cancellable background
+> action** — live progress, a Cancel button, and the rest of the UI stays usable while a large vault indexes
+> ([specs/async-indexing.md](planning/specs/async-indexing.md)). Run it with `just app` (point it at a vault
+> via `B2_VAULT_PATH`). **Next:** in-editor body editing (CodeMirror) + external-edit reconciliation.
 > Plan: [specs/desktop-ui-mvp.md](planning/specs/desktop-ui-mvp.md).
 
 ## What B2 is (the north star)

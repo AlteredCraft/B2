@@ -12,6 +12,7 @@ use b2_core::ingest::ingest_vault;
 use b2_core::open;
 use common::{golden_vault_copy, SRS_ID};
 use rusqlite::Connection;
+use std::ops::ControlFlow;
 
 fn ingest_golden(dir: &std::path::Path, embedder: &FakeEmbedder) -> Connection {
     let vault = dir.join("vault");
@@ -79,7 +80,10 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
         &UlidGen,
         &FakeEmbedder::new(64),
         false,
-        &mut |p| events.push(p),
+        &mut |p| {
+            events.push(p);
+            ControlFlow::Continue(())
+        },
     )
     .unwrap();
 
@@ -137,7 +141,9 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
     assert_eq!(edited.embedded, 1, "only the changed note re-embeds");
 
     // --force re-embeds everything regardless of change.
-    let forced = vault.reindex_with_progress(true, &mut |_| {}).unwrap();
+    let forced = vault
+        .reindex_with_progress(true, &mut |_| ControlFlow::Continue(()))
+        .unwrap();
     assert_eq!(forced.embedded, 2, "force re-embeds every note");
 }
 

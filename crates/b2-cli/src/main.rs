@@ -15,6 +15,7 @@ use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
 use std::io::{IsTerminal, Write};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -193,7 +194,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // never looks frozen. Only on an interactive stderr (never in --json, and
             // never when piped/captured) so machine output and tests stay clean.
             let report = if cli.json || !std::io::stderr().is_terminal() {
-                vault.reindex_with_progress(*force, &mut |_| {})?
+                vault.reindex_with_progress(*force, &mut |_| ControlFlow::Continue(()))?
             } else {
                 // Name the vault being indexed up front, then a live line that counts
                 // the notes actually (re)embedded — not every note, most of which an
@@ -214,6 +215,9 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         if p.note_chunks == 1 { "" } else { "s" },
                     );
                     let _ = std::io::stderr().flush();
+                    // The CLI never cancels — a Ctrl-C cancel is a deferred follow-on
+                    // (async-indexing.md §8). Always continue.
+                    ControlFlow::Continue(())
                 };
                 let report = vault.reindex_with_progress(*force, &mut on_progress)?;
                 if progressed {

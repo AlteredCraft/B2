@@ -17,12 +17,15 @@
 
 use crate::error::CmdError;
 use crate::{open_vault, AppState};
+use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
     ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ReindexReport, SearchResult,
     SimilarView,
 };
 use serde::Serialize;
+use std::ops::ControlFlow;
 use std::path::Path;
+use tauri::ipc::Channel;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
@@ -131,11 +134,72 @@ pub fn link(
     Ok(vault.link(&src, &dst, &relation, explanation.as_deref())?)
 }
 
+/// Re-project the vault into the index as an **observable, cancellable background
+/// action** (async-indexing.md §4). Tauri runs the `(async)` body on a worker thread,
+/// so the window stays live; progress streams to the webview over `on_event` (a typed,
+/// per-invocation [`Channel`]), and the closure returns `ControlFlow::Break` once the
+/// shared cancel flag is set — the one cancel checkpoint the core already exposes.
+///
+/// Still a dumb adapter: the body is "claim the slot → open one vault → call one
+/// façade op → serialize," with progress forwarded and a flag consulted. Task
+/// spawn/track/cancel + IPC streaming are host infrastructure (same class as the root
+/// `Mutex` and the OS dialog), not engine logic.
 #[tauri::command(async)]
-pub fn reindex(state: State<'_, AppState>) -> Result<ReindexReport, CmdError> {
+pub fn reindex(
+    state: State<'_, AppState>,
+    on_event: Channel<ReindexProgress>,
+) -> Result<ReindexReport, CmdError> {
+    reindex_impl(state.inner(), &on_event)
+}
+
+/// Ask the in-flight reindex to stop at its next embed-batch boundary. Runs on a
+/// *different* worker thread than `reindex`, so it observes/sets the shared flag
+/// concurrently; the reindex closure sees it and breaks cooperatively — no
+/// thread-killing, no torn writes (async-indexing.md §4/§5.6). A no-op if nothing is
+/// running.
+#[tauri::command(async)]
+pub fn cancel_reindex(state: State<'_, AppState>) {
+    state.request_reindex_cancel();
+}
+
+/// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
+/// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
+struct ReindexGuard<'a>(&'a AppState);
+impl Drop for ReindexGuard<'_> {
+    fn drop(&mut self) {
+        self.0.finish_reindex();
+    }
+}
+
+/// The testable core of `reindex`, split from the Tauri `State` wrapper. Guards
+/// single-in-flight, arms the cancel flag, opens the real-model vault, and streams
+/// progress while consulting the cancel flag at each batch.
+fn reindex_impl(
+    state: &AppState,
+    on_event: &Channel<ReindexProgress>,
+) -> Result<ReindexReport, CmdError> {
+    // Single-in-flight: refuse a second reindex rather than race two writers on one DB
+    // (async-indexing.md §5.4). The UI also disables the button, so this is rarely hit.
+    if !state.try_start_reindex() {
+        return Err(CmdError::ReindexInFlight);
+    }
+    let _guard = ReindexGuard(state);
+    // Clear any stale cancel now that *this* run owns the slot (a prior switch/cancel
+    // must not kill a fresh reindex).
+    state.arm_reindex();
+
     // Embeds changed chunks → needs the real model.
-    let (vault, _) = open_vault(state.inner(), true)?;
-    Ok(vault.reindex()?)
+    let (vault, _) = open_vault(state, true)?;
+    Ok(vault.reindex_with_progress(false, &mut |p| {
+        // Forward progress to the webview; a send error (the window navigated/closed)
+        // is not fatal to the index — keep embedding.
+        let _ = on_event.send(p);
+        if state.reindex_cancelled() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })?)
 }
 
 // --- thin impls (Tauri-runtime-free, so the command layer is unit-testable) -------
@@ -152,7 +216,12 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
 /// of `choose_vault`, split off from the (untestable) OS dialog. The picker only yields
 /// existing directories, so no validation is needed here; the switch takes effect for
 /// every subsequent command via [`AppState::current_root`].
+///
+/// **Cancels any in-flight reindex first**, waiting for it to wind down before
+/// repointing the root, so a reindex can never keep writing the vault the app has left
+/// (async-indexing.md §4/§5.4).
 fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdError> {
+    state.cancel_and_wait_for_reindex();
     state.set_root(root);
     vault_info_impl(state)
 }
@@ -307,5 +376,83 @@ mod tests {
         )));
         assert!(msg.contains("Note not found: 'x/y'"));
         assert!(!msg.to_lowercase().contains("sqlite"));
+    }
+
+    // --- async-indexing: the host's task-lifecycle bits (§4) ----------------------
+    //
+    // Thin host-infrastructure tests: the guard + cancel state machine and
+    // switch-cancels-first, all model-free (no reindex actually runs — the core's own
+    // suite covers the cancel *behavior*; here we prove the host's control bits).
+
+    #[test]
+    fn reindex_slot_is_single_in_flight() {
+        let state = AppState::new(None);
+        assert!(state.try_start_reindex(), "first claim wins the slot");
+        assert!(state.reindex_in_flight());
+        assert!(
+            !state.try_start_reindex(),
+            "second claim is refused while running"
+        );
+        state.finish_reindex();
+        assert!(!state.reindex_in_flight());
+        assert!(state.try_start_reindex(), "slot is reusable once released");
+    }
+
+    #[test]
+    fn a_second_reindex_is_refused_before_touching_the_model() {
+        // With the slot already held, `reindex_impl` must refuse *before* opening the
+        // real-model vault — so this needs no model and can't hang on one.
+        let state = AppState::new(None);
+        assert!(state.try_start_reindex()); // stand in for a running reindex
+        let channel = Channel::<ReindexProgress>::new(|_| Ok(()));
+        let err = reindex_impl(&state, &channel).unwrap_err();
+        assert!(matches!(err, CmdError::ReindexInFlight));
+        assert_eq!(
+            user_message(&err),
+            "A reindex is already in progress. Please wait for it to finish."
+        );
+    }
+
+    #[test]
+    fn arm_clears_a_stale_cancel_but_request_sets_it() {
+        let state = AppState::new(None);
+        state.request_reindex_cancel();
+        assert!(state.reindex_cancelled());
+        // A fresh run arming the slot clears a cancel left by a prior switch/cancel…
+        state.arm_reindex();
+        assert!(!state.reindex_cancelled());
+        // …and a new cancel request is then observable again.
+        state.request_reindex_cancel();
+        assert!(state.reindex_cancelled());
+    }
+
+    #[test]
+    fn vault_switch_cancels_and_waits_for_the_inflight_reindex() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        fs::create_dir_all(&root).unwrap();
+        let state = AppState::new(Some(root.clone()));
+
+        // Simulate a reindex holding the slot.
+        assert!(state.try_start_reindex());
+        assert!(state.reindex_in_flight());
+
+        std::thread::scope(|s| {
+            // A stand-in reindex worker: spin until asked to cancel, then wind down —
+            // exactly what the real embed-loop closure does at a batch boundary.
+            s.spawn(|| {
+                while !state.reindex_cancelled() {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                state.finish_reindex();
+            });
+
+            // Switching vaults must request cancel AND block until the worker released
+            // the slot, *before* it repoints the root and reports the new info.
+            let info = set_vault_root_impl(&state, &root).unwrap();
+            assert_eq!(info.root, root.display().to_string());
+            // If the switch returned, the in-flight run has already wound down.
+            assert!(!state.reindex_in_flight());
+        });
     }
 }

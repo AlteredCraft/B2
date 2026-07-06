@@ -6,3 +6,28 @@ members = ["crates/b2-core", "crates/b2-embed", "crates/b2-cli", "crates/b2-desk
 # Design lives in planning/; this workspace is the index engine
 # (planning/specs/index-engine-build.md), built step 0→5 against the
 # golden-vault fixtures in fixtures/golden-vault/ (planning/data-model.md §8).
+
+# Build DEPENDENCIES optimized even in dev/debug builds, while keeping our own `b2-*`
+# crates at opt-level 0 so the TDD loop and `cargo test -p b2-core` stay fast. Candle's
+# embedder forward pass (matmul + transformer ops, spread across candle *and* its gemm
+# matmul backend) is ~13× slower unoptimized, so a plain `tauri dev` / `cargo run`
+# reindex was painfully slow (a 16-chunk embed batch took ~35s instead of ~2.5s). That
+# mattered doubly for the desktop app: a reindex cancel is only observed at each embed-
+# batch boundary (planning/specs/async-indexing.md §3), so a slow batch made the
+# **Cancel** button feel stuck. The `"*"` glob optimizes every dependency (targeting
+# just the candle crates missed the matmul backend and left it ~4× slower); the per-
+# crate opt-0 overrides below exclude our own crates so their rebuilds stay instant.
+# Tradeoff: a *cold* build (or a cleared cache, e.g. fresh CI) now compiles every
+# dependency at opt-3 — a larger one-time cost, dominated by candle. It's a one-off,
+# amortized by the target cache and unmatched by any warm/incremental rebuild (ours stay
+# opt-0); `cargo test -p b2-core` stays light regardless since b2-core pulls no candle.
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev.package.b2-core]
+opt-level = 0
+[profile.dev.package.b2-embed]
+opt-level = 0
+[profile.dev.package.b2-cli]
+opt-level = 0
+[profile.dev.package.b2-desktop]
+opt-level = 0

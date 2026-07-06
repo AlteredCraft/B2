@@ -24,9 +24,10 @@ function render(): void {
   el("modal-root").innerHTML = modalHtml(state);
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
-  (el("reindex") as HTMLButtonElement).disabled = state.loading || state.vaultRoot === null;
+  paintReindex();
   // The vault switcher stays enabled with no vault open — it's the in-app way to pick
-  // the first one — but not mid-op, to avoid re-entrant switches.
+  // the first one — but not mid-op, to avoid re-entrant switches. It stays live during
+  // a reindex: switching cancels the in-flight run first (handled host-side).
   (el("switch-vault") as HTMLButtonElement).disabled = state.loading;
 
   const toast = el("toast");
@@ -38,6 +39,51 @@ function render(): void {
   }
   // Focus the explanation field the moment the modal appears.
   document.getElementById("link-explanation")?.focus();
+}
+
+// Paint just the reindex affordance — the Reindex button's disabled state and the
+// progress bar/label/Cancel. Called on every full render AND on each streamed progress
+// batch, so progress updates never rebuild the panes (which would fight scrolling and
+// churn on a large vault). The progress element lives in the persistent shell.
+function paintReindex(): void {
+  (el("reindex") as HTMLButtonElement).disabled =
+    state.loading || state.reindexing || state.vaultRoot === null;
+
+  const wrap = document.getElementById("reindex-progress");
+  if (!wrap) return;
+  wrap.hidden = !state.reindexing;
+  if (!state.reindexing) return;
+
+  const fill = document.getElementById("reindex-fill");
+  const label = document.getElementById("reindex-label");
+  const cancelBtn = document.getElementById("cancel-reindex") as HTMLButtonElement | null;
+  if (cancelBtn) {
+    cancelBtn.disabled = state.reindexCancelling;
+    cancelBtn.textContent = state.reindexCancelling ? "Cancelling…" : "Cancel";
+  }
+
+  const p = state.reindexProgress;
+  if (p && p.notes_to_embed > 0) {
+    // Determinate once embedding starts: fraction of the notes that (re)embed this run.
+    const pct = Math.min(100, Math.round((p.notes_embedded / p.notes_to_embed) * 100));
+    if (fill) {
+      fill.classList.remove("is-indeterminate");
+      (fill as HTMLElement).style.width = `${pct}%`;
+    }
+    if (label) {
+      const name = p.note_path.replace(/\.md$/, "");
+      label.textContent = state.reindexCancelling
+        ? "Cancelling…"
+        : `Embedding ${p.notes_embedded}/${p.notes_to_embed} · ${name}`;
+    }
+  } else {
+    // Before the first batch (fast projection phase): indeterminate.
+    if (fill) {
+      fill.classList.add("is-indeterminate");
+      (fill as HTMLElement).style.width = "";
+    }
+    if (label) label.textContent = state.reindexCancelling ? "Cancelling…" : "Indexing…";
+  }
 }
 
 let statusTimer: number | undefined;
@@ -234,12 +280,40 @@ async function switchVault(): Promise<void> {
   }
 }
 
+// Reindex as a cancellable background action (async-indexing.md §4). Deliberately does
+// NOT set `state.loading` — the app stays fully usable (read/search/navigate) while it
+// runs; only the Reindex button is disabled and a progress + Cancel affordance shows.
+// Progress streams in via the channel callback, which repaints only the affordance.
 async function doReindex(): Promise<void> {
-  state.loading = true;
+  if (state.reindexing) return; // single-in-flight (the host also guards this)
+  const startedRoot = state.vaultRoot; // guard against a vault switch mid-run
+  state.reindexing = true;
+  state.reindexProgress = null;
+  state.reindexCancelling = false;
   render();
   try {
-    const r = await api.reindex();
-    flash(`Indexed ${r.indexed} note(s) — ${r.embedded} embedded, ${r.stamped} stamped.`);
+    const r = await api.reindex((p) => {
+      if (state.vaultRoot !== startedRoot) return; // stray event from a vault we've left
+      state.reindexProgress = p;
+      paintReindex();
+    });
+    // If the switch already committed (vaultRoot changed), it owns the UI — bail.
+    if (state.vaultRoot !== startedRoot) return;
+    // The common ordering is subtler: the host frees the reindex slot *before* the
+    // vault-switch command returns, so this Promise usually resolves while `vaultRoot`
+    // is still `startedRoot` — the check above misses it. But a cancel we didn't
+    // initiate (`reindexCancelling` is false) can only come from a vault switch
+    // cancelling us host-side (main.rs `cancel_and_wait_for_reindex` is the sole other
+    // cancel source). In that case the switch will reload the new vault — so we must
+    // NOT toast or reload the vault we're leaving. A user-initiated cancel
+    // (`reindexCancelling` true) *does* fall through: phase 1/2 ran, so notes/edges may
+    // have changed and the tree should refresh.
+    if (r.cancelled && !state.reindexCancelling) return;
+    flash(
+      r.cancelled
+        ? `Indexed ${r.embedded}/${r.indexed} note(s) — cancelled. Re-run to finish the rest.`
+        : `Indexed ${r.indexed} note(s) — ${r.embedded} embedded, ${r.stamped} stamped.`,
+    );
     // A reindex can add, remove, or rename notes — refresh the tree to match.
     await loadNotes();
     if (state.current) {
@@ -248,10 +322,26 @@ async function doReindex(): Promise<void> {
       await refreshDiscovery();
     }
   } catch (e) {
-    flash(errText(e));
+    if (state.vaultRoot === startedRoot) flash(errText(e));
   } finally {
-    state.loading = false;
+    state.reindexing = false;
+    state.reindexProgress = null;
+    state.reindexCancelling = false;
     render();
+  }
+}
+
+// Ask the host to stop the in-flight reindex at its next batch boundary. Cooperative:
+// the reindex Promise in `doReindex` resolves shortly after with `cancelled: true`, and
+// its `finally` clears the affordance.
+async function cancelReindex(): Promise<void> {
+  if (!state.reindexing || state.reindexCancelling) return;
+  state.reindexCancelling = true;
+  paintReindex();
+  try {
+    await api.cancelReindex();
+  } catch (e) {
+    flash(errText(e));
   }
 }
 
@@ -265,6 +355,11 @@ function buildShell(): void {
         <input id="search-input" type="search" placeholder="Search the vault…" aria-label="Search" />
       </form>
       <div class="topbar-right">
+        <div id="reindex-progress" class="reindex-progress" hidden aria-live="polite">
+          <div class="reindex-track"><div id="reindex-fill" class="reindex-fill"></div></div>
+          <span id="reindex-label" class="reindex-label"></span>
+          <button id="cancel-reindex" class="btn ghost small">Cancel</button>
+        </div>
         <span id="vault-root" class="vault-root" title="Active vault"></span>
         <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -349,6 +444,10 @@ function wireEvents(): void {
     }
     if (target.closest("#reindex")) {
       void doReindex();
+      return;
+    }
+    if (target.closest("#cancel-reindex")) {
+      void cancelReindex();
       return;
     }
   });

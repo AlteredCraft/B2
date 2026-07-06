@@ -4,13 +4,14 @@
 // by mocking this module, and a future `serve`/HTTP transport swap touches ~this file
 // only. Do not call `invoke` anywhere else.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   ExplainView,
   LinkReport,
   NeighborView,
   NoteSummary,
   NoteView,
+  ReindexProgress,
   ReindexReport,
   SearchResult,
   SimilarView,
@@ -56,6 +57,18 @@ export const api = {
     explanation: string | null,
   ): Promise<LinkReport> => invoke("link", { src, dst, relation, explanation }),
 
-  /** Re-project the vault into the index (stamps missing b2ids; embeds changes). */
-  reindex: (): Promise<ReindexReport> => invoke("reindex"),
+  /**
+   * Re-project the vault into the index (stamps missing b2ids; embeds changes) as a
+   * cancellable background action. `onProgress` fires per embed batch over a typed
+   * Tauri `Channel` (async-indexing.md §4); the returned Promise resolves with the
+   * final report (its `cancelled` flag set if `cancelReindex` was called mid-run).
+   */
+  reindex: (onProgress: (p: ReindexProgress) => void): Promise<ReindexReport> => {
+    const channel = new Channel<ReindexProgress>();
+    channel.onmessage = onProgress;
+    return invoke("reindex", { onEvent: channel });
+  },
+
+  /** Ask the in-flight reindex to stop at its next batch boundary (cooperative). */
+  cancelReindex: (): Promise<void> => invoke("cancel_reindex"),
 };

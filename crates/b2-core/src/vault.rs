@@ -29,6 +29,7 @@ use crate::{ingest, note, relation, search};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 /// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
@@ -54,11 +55,19 @@ pub struct Vault {
 /// What `reindex` did: how many notes were projected, how many were actually
 /// (re)embedded (the rest reused their vectors — incremental), and how many needed
 /// a `b2id` stamped (B2's one always-allowed write to the vault, data-model.md §1).
+///
+/// `cancelled` is `true` when a cooperative cancel cut the embed phase short
+/// (async-indexing.md §3): the counts then describe the partial work truthfully
+/// (e.g. "indexed 1000, embedded 240, cancelled") — the index is still consistent
+/// (keyword + graph complete, a prefix embedded) and an incremental re-run finishes
+/// the rest. Always `false` for [`reindex`](Vault::reindex) and the CLI, which never
+/// cancel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ReindexReport {
     pub indexed: usize,
     pub embedded: usize,
     pub stamped: usize,
+    pub cancelled: bool,
 }
 
 /// What a reindex **would** do — the `reindex --dry-run` preview. The `would_*`
@@ -223,17 +232,23 @@ impl Vault {
     /// than re-embedding (see [`reindex_with_progress`](Self::reindex_with_progress)
     /// to force a full re-embed or observe progress).
     pub fn reindex(&self) -> Result<ReindexReport> {
-        self.reindex_with_progress(false, &mut |_| {})
+        self.reindex_with_progress(false, &mut |_| ControlFlow::Continue(()))
     }
 
-    /// [`reindex`](Self::reindex) with two knobs the CLI needs: `force` re-embeds
-    /// every note even if unchanged (a full rebuild without dropping the index), and
-    /// `on_progress` fires after each embed batch so a slow full reindex under the
-    /// real model shows a live progress line instead of looking frozen.
+    /// [`reindex`](Self::reindex) with three knobs its adapters need: `force`
+    /// re-embeds every note even if unchanged (a full rebuild without dropping the
+    /// index); `on_progress` fires after each embed batch so a slow full reindex under
+    /// the real model shows a live progress line instead of looking frozen; and the
+    /// callback's [`ControlFlow`] return **cooperatively cancels** the embed phase —
+    /// returning [`ControlFlow::Break`] stops embedding at that batch boundary while
+    /// Phase 2 still completes, leaving a consistent, resumable index
+    /// (async-indexing.md §3). The desktop host maps a cancel flag to `Break`; the CLI
+    /// always returns `Continue` (no behavior change for the non-cancel path, which
+    /// stays byte-identical). A cancelled run sets [`ReindexReport::cancelled`].
     pub fn reindex_with_progress(
         &self,
         force: bool,
-        on_progress: &mut dyn FnMut(ingest::ReindexProgress),
+        on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
     ) -> Result<ReindexReport> {
         let ingested = ingest::ingest_vault_with_progress(
             &self.conn,
@@ -244,9 +259,10 @@ impl Vault {
             on_progress,
         )?;
         Ok(ReindexReport {
-            indexed: ingested.len(),
-            embedded: ingested.iter().filter(|i| i.embedded).count(),
-            stamped: ingested.iter().filter(|i| i.stamped).count(),
+            indexed: ingested.notes.len(),
+            embedded: ingested.notes.iter().filter(|i| i.embedded).count(),
+            stamped: ingested.notes.iter().filter(|i| i.stamped).count(),
+            cancelled: ingested.cancelled,
         })
     }
 

@@ -98,7 +98,9 @@ Evolve the **one** progress-bearing entry point; do not proliferate variants.
 - **On cancel, still finish the cheap, model-free work.** Break out of *embedding* only; then run **Phase 2
   (edge projection) for every projected note** as a normal run would. Result: all notes have chunks + FTS +
   edges (keyword search + graph complete), a prefix of notes have vectors, and the index is fully
-  consistent — exactly the state an incremental reindex expects, so the next run embeds only the remainder.
+  consistent — exactly the state an incremental reindex expects, so the next run embeds only the notes the
+  cancel left unfinished (per-note granularity — a note interrupted mid-embed re-embeds in full, at most one
+  note's worth of redo; see §5.2).
 - **Report the outcome honestly.** [`ReindexReport`](../../crates/b2-core/src/vault.rs) gains
   **`cancelled: bool`**; its `indexed` / `embedded` / `stamped` counts then describe the partial work
   truthfully (e.g. "indexed 1000, embedded 240, cancelled"). No new outcome enum — the existing report
@@ -110,6 +112,21 @@ Evolve the **one** progress-bearing entry point; do not proliferate variants.
 
 This is the entire core change: **one callback return type + one `bool` on the report.** Everything else is
 host and frontend.
+
+**Cancel granularity = one embed batch (`ingest::EMBED_BATCH`).** The flag is checked *after* each batch
+(a batch is written before the check, so no torn writes), so a cancel is observed within the time to embed
+one batch — the forward pass is atomic and can't be interrupted mid-pass. Two levers keep that latency
+small, both surfaced by dogfooding (2026-07-06) after the "Cancel sticks" report:
+
+- **`EMBED_BATCH` was cut 32 → 16.** The tokenizer pads every chunk in a batch to the batch's longest, so
+  an over-large batch runs the whole pass at the longest length. On a real variable-length vault, 16 was
+  ~40% *faster* than 32 (less padding waste) while roughly halving cancel latency. See its doc-comment.
+- **Candle is built optimized even in dev.** `just app` is `cargo tauri dev` — a **debug** host, where
+  candle's forward pass is ~13× slower (a 123-chunk force-reindex was **4m38s**, so a batch ≈ 70s and Cancel
+  appeared frozen). A workspace `[profile.dev.package."*"] opt-level = 3` (with our own `b2-*` crates pinned
+  back to opt-0 for fast rebuilds) drops that to **~13s**, so a batch — and thus the cancel latency — is a
+  couple of seconds. This is a build-profile fix, not a code change, but it is load-bearing for the desktop
+  cancel UX; recorded here so it isn't lost.
 
 ## 4. The host — task lifecycle + IPC streaming (still a dumb adapter)
 
@@ -147,8 +164,9 @@ The plan is only worth shipping if a cancelled index is never a broken one. The 
 1. **Partial index is consistent.** Phase 1/2 give every note chunks + FTS + edges before any embedding, so
    keyword search and the graph are *complete* at any cancel point; only vectors are partial (§1).
 2. **`incremental ≡ eventual full`.** A cancelled run leaves already-embedded notes byte-identical to a
-   fresh embed; a re-run embeds exactly the remainder (`note_fully_embedded` is false for the unfinished
-   notes). No corruption, no double-work.
+   fresh embed; a re-run embeds exactly the unfinished *notes* (`note_fully_embedded` is false for them).
+   Vectors are tracked per note, not per chunk, so a note interrupted mid-embed re-embeds in full — at most
+   one note's worth of redo. No corruption; nothing already-complete is recomputed.
 3. **Determinism unchanged.** Non-cancel path is byte-identical to today; the cancel checkpoint is pure and
    deterministic (§3).
 4. **Single in-flight per process**, and **vault-switch cancels first** (§4) — a reindex can never write a

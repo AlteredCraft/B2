@@ -26,22 +26,44 @@ use b2_core::vault::Vault;
 use b2_embed::{EmbedConfig, LocalEmbedder};
 use error::CmdError;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
-/// The host's shared state: the active vault root. Resolved once at startup, then
-/// **swappable at runtime** by the in-app vault picker (`choose_vault`) — so the root
-/// sits behind a [`Mutex`]. Every command still opens its own short-lived [`Vault`]
-/// over the *current* root (SQLite WAL permits concurrent readers + one writer), the
-/// faithful mirror of the CLI opening a fresh vault per invocation. `None` means no
-/// vault is configured; commands then return an actionable [`CmdError::VaultRequired`].
+/// How often [`AppState::cancel_and_wait_for_reindex`] re-asserts the cancel flag and
+/// re-checks whether the in-flight reindex has wound down. Short enough to feel
+/// instant on a vault switch, long enough not to spin hot.
+const CANCEL_POLL: Duration = Duration::from_millis(25);
+
+/// The host's shared state: the active vault root plus the background-reindex control
+/// bits (async-indexing.md §4). Resolved once at startup, then **swappable at runtime**
+/// by the in-app vault picker (`choose_vault`) — so the root sits behind a [`Mutex`].
+/// Every command still opens its own short-lived [`Vault`] over the *current* root
+/// (SQLite WAL permits concurrent readers + one writer), the faithful mirror of the CLI
+/// opening a fresh vault per invocation. `None` means no vault is configured; commands
+/// then return an actionable [`CmdError::VaultRequired`].
+///
+/// The reindex bits are host **infrastructure**, not engine logic: *how the window
+/// drives and interrupts* the one façade op stays here; *what* to embed stays in the
+/// core (the charter's line). `reindex_running` is a single-in-flight guard; a running
+/// reindex checks `reindex_cancel` at each embed-batch boundary (via the closure it
+/// passes to `reindex_with_progress`) and stops cooperatively when it is set.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
+    /// Set by `cancel_reindex` (and a vault switch); the running reindex closure
+    /// observes it at each batch boundary and returns `ControlFlow::Break`.
+    reindex_cancel: AtomicBool,
+    /// `true` while a reindex is in flight — the single-in-flight guard (a second
+    /// `reindex` is refused; see [`AppState::try_start_reindex`]).
+    reindex_running: AtomicBool,
 }
 
 impl AppState {
     pub fn new(root: Option<PathBuf>) -> Self {
         Self {
             root: Mutex::new(root),
+            reindex_cancel: AtomicBool::new(false),
+            reindex_running: AtomicBool::new(false),
         }
     }
 
@@ -55,6 +77,60 @@ impl AppState {
     /// subsequent command, since each opens a fresh vault over `current_root`.
     pub fn set_root(&self, root: &Path) {
         *self.lock_root() = Some(root.to_path_buf());
+    }
+
+    /// Claim the single reindex slot. Returns `true` if this call won the slot (the
+    /// caller must release it via [`finish_reindex`](Self::finish_reindex)), `false`
+    /// if a reindex is already in flight — the belt-and-suspenders half of the
+    /// single-in-flight guard (the UI also disables the button).
+    pub fn try_start_reindex(&self) -> bool {
+        self.reindex_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Release the reindex slot (always, even on error — see the RAII guard in
+    /// `commands.rs`). Idempotent.
+    pub fn finish_reindex(&self) {
+        self.reindex_running.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a reindex is currently in flight.
+    pub fn reindex_in_flight(&self) -> bool {
+        self.reindex_running.load(Ordering::SeqCst)
+    }
+
+    /// Clear the cancel flag — called once a fresh reindex has claimed the slot, so a
+    /// stale cancel from a previous run (or a prior vault switch) can't kill it.
+    pub fn arm_reindex(&self) {
+        self.reindex_cancel.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether the running reindex has been asked to stop (checked at each batch).
+    pub fn reindex_cancelled(&self) -> bool {
+        self.reindex_cancel.load(Ordering::SeqCst)
+    }
+
+    /// Signal the running reindex to stop at its next batch boundary (the
+    /// `cancel_reindex` command). Cooperative — never a thread kill, so no torn writes
+    /// (async-indexing.md §5.6). A no-op if nothing is running.
+    pub fn request_reindex_cancel(&self) {
+        self.reindex_cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Cancel any in-flight reindex and **block until it winds down** — used before a
+    /// vault switch so a reindex can never keep writing the vault the app has left
+    /// (async-indexing.md §4/§5.4). Re-asserts the cancel flag on every poll so it wins
+    /// even against a reindex that armed (cleared) it a moment after starting; returns
+    /// immediately when nothing is running.
+    pub fn cancel_and_wait_for_reindex(&self) {
+        loop {
+            self.request_reindex_cancel();
+            if !self.reindex_in_flight() {
+                return;
+            }
+            std::thread::sleep(CANCEL_POLL);
+        }
     }
 
     /// The critical sections here are a single clone or store — neither can panic —
@@ -135,6 +211,7 @@ fn main() {
             commands::explain,
             commands::link,
             commands::reindex,
+            commands::cancel_reindex,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the B2 desktop app");
