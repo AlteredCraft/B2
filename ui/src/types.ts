@@ -83,13 +83,21 @@ export interface LinkReport {
   created: boolean;
 }
 
-/** `Vault::reindex` — what a reindex did. */
-export interface ReindexReport {
+/**
+ * `Vault::project` — what the fast, model-free projection pass did
+ * (projection-embedding-split.md §4). Once this resolves, the tree and keyword
+ * search are live; only vectors are missing.
+ */
+export interface ProjectReport {
   indexed: number;
-  embedded: number;
   stamped: number;
+}
+
+/** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */
+export interface EmbedReport {
+  embedded: number;
   /**
-   * The reindex was cancelled mid-embed (the user hit Cancel). The index is still
+   * The embed was cancelled mid-run (the user hit Cancel). The index is still
    * consistent — keyword search + graph are complete, a prefix of notes is embedded —
    * and re-running finishes the rest (async-indexing.md §3).
    */
@@ -98,9 +106,9 @@ export interface ReindexReport {
 
 /**
  * `ingest::ReindexProgress` — one per-batch progress event streamed over a Tauri
- * `Channel` during a reindex (async-indexing.md §4). The counts describe the notes
- * that actually (re)embed this run, not every note (an incremental reindex reuses most
- * vectors untouched).
+ * `Channel` during an embed (async-indexing.md §4). The counts describe the notes
+ * that actually (re)embed this run, not every note (an incremental run reuses most
+ * vectors untouched), and are determinate from the first batch.
  */
 export interface ReindexProgress {
   /** Vault-relative path of the note currently embedding. */

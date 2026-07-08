@@ -265,6 +265,14 @@ Re-projecting one note refreshes **all its edges** (delete those for `src_id`, r
 Markdown — both body and `relations:`) and its chunks. Every edge is Markdown-derived, so a one-note
 re-parse is exactly a one-note slice of a full rebuild — which is what makes "incremental ≡ full" hold.
 
+> **Split into two passes (2026-07-07,
+> [projection-embedding-split.md](projection-embedding-split.md)):** over the whole vault, the model-free
+> steps above (notes + chunks + FTS + edges) and the embed step are now **separately invokable** —
+> `Vault::project` and `Vault::embed` — with the fused `reindex` remaining their composition. The embed
+> pass derives its pending set from the DB (chunks with no `chunks_vec` row) rather than an in-memory
+> hand-off. No change to the invariant or the two-phase link resolution; a projected-but-unembedded index
+> is a *smaller* projection (keyword + graph complete), never a wrong one.
+
 ### ② Hybrid retrieval — reranker is a clean post-fusion seam (fast-follow)
 
 ```

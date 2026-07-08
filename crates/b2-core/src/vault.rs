@@ -3,9 +3,9 @@
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
-//! — `open` / `reindex` / `read` / `neighbors` / `explain` / `search` / `similar` /
-//! `link` / `add` / `mv`. Add operations when a command needs them; do not pre-build
-//! a sprawling surface.
+//! — `open` / `reindex` / `project` / `embed` / `read` / `neighbors` / `explain` /
+//! `search` / `similar` / `link` / `add` / `mv`. Add operations when a command needs
+//! them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
 //! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
@@ -67,6 +67,25 @@ pub struct ReindexReport {
     pub indexed: usize,
     pub embedded: usize,
     pub stamped: usize,
+    pub cancelled: bool,
+}
+
+/// What [`project`](Vault::project) did — the model-free half of a reindex
+/// (projection-embedding-split.md §4): how many notes were projected and how many
+/// needed a `b2id` stamped. No embed counts: projection never touches vectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ProjectReport {
+    pub indexed: usize,
+    pub stamped: usize,
+}
+
+/// What [`embed`](Vault::embed) did — the model-bound half of a reindex: how many
+/// notes had missing vectors filled (the rest were already complete), and whether a
+/// cooperative cancel cut the pass short (the counts then describe the partial work
+/// truthfully, and a re-run embeds exactly the remainder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EmbedReport {
+    pub embedded: usize,
     pub cancelled: bool,
 }
 
@@ -266,6 +285,47 @@ impl Vault {
         })
     }
 
+    /// The **projection pass** alone (projection-embedding-split.md §4): re-project
+    /// every `.md` note into `notes`/`chunks`(+FTS)/`edges` — stamping missing
+    /// `b2id`s — with **no model and no vector work**. After it returns, the file
+    /// tree lists, notes open, keyword search answers, and the graph resolves; only
+    /// vectors (and thus `similar` / semantic ranking) wait for
+    /// [`embed`](Self::embed). `force` re-chunks every note (clearing its stale
+    /// vectors), so `project(force)` + `embed` is a full rebuild.
+    /// [`reindex`](Self::reindex) remains the composition of the two passes.
+    ///
+    /// *(The invariant's "index = projection of Markdown" still means the* full
+    /// *index — `project` + `embed` together; this op is named for the row-projection
+    /// pass it runs.)*
+    pub fn project(&self, force: bool) -> Result<ProjectReport> {
+        let outcome = ingest::project_vault(&self.conn, &self.root, &self.idgen, force)?;
+        Ok(ProjectReport {
+            indexed: outcome.notes.len(),
+            stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
+        })
+    }
+
+    /// The **embed pass** alone: fill a vector for every chunk that lacks one — the
+    /// pending set is derived from the index itself (chunks with no `chunks_vec`
+    /// row), so this needs no prior [`project`](Self::project) call in the same
+    /// process and heals any interruption (a cancelled embed, a crash between the
+    /// passes) by embedding exactly what is still missing. Progress and cooperative
+    /// cancel behave as in [`reindex_with_progress`](Self::reindex_with_progress),
+    /// and progress is determinate from the first batch (the pending notes are
+    /// counted up front). Runs under the vault's injected embedder — semantically
+    /// useful only with the real model (the CLI/desktop wire it), deterministic
+    /// under the fake (tests).
+    pub fn embed(
+        &self,
+        on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
+    ) -> Result<EmbedReport> {
+        let outcome = ingest::embed_vault(&self.conn, self.embedder.as_ref(), on_progress)?;
+        Ok(EmbedReport {
+            embedded: outcome.embedded.len(),
+            cancelled: outcome.cancelled,
+        })
+    }
+
     /// Preview a reindex (`reindex --dry-run`): report what [`reindex`](Self::reindex)
     /// **would** do — how many notes it would index, (re)embed, and stamp — with
     /// **no** writes: no `b2id` stamped to the Markdown (B2's one vault write,
@@ -381,29 +441,40 @@ impl Vault {
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at
     /// `limit` *notes*. Results are note-level: chunk hits are deduped to the
     /// highest-scoring chunk per note, so one note never appears twice.
+    ///
+    /// **Keyword-first fallback** (projection-embedding-split.md §5): when the
+    /// vector space does not exist yet — a projected-but-unembedded vault — this
+    /// runs BM25-only (no query embedding, no model) instead of returning nothing,
+    /// so a vault is searchable the moment [`project`](Self::project) finishes.
+    /// A never-indexed vault still yields no hits, no error (its FTS index is
+    /// empty). `vault_info`-style callers should consult the `semantic` flag to
+    /// present keyword-only results honestly.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        // A never-reindexed vault has no vector space yet → no hits, no error
-        // (open() no longer shapes it). This keeps `search` honest before the first
-        // `reindex` instead of tripping over a missing `chunks_vec`.
-        if !db::embedding_space_exists(&self.conn)? {
-            return Ok(Vec::new());
-        }
-        // Fail fast if the index was built with a different model than the active
-        // one: its vectors are incomparable with the query vector we'd produce, so
-        // returning results would be silently wrong. The fix is a `reindex`.
-        if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
-            if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
-                return Err(Error::ModelMismatch {
-                    indexed: format!("{indexed_model} (dim {indexed_dim})"),
-                    active: format!("{} (dim {})", self.embedder.model_id(), self.embedder.dim()),
-                });
-            }
-        }
         // Pull a wider chunk pool than `limit` so dedup can still fill `limit`
         // distinct notes when several top chunks share a note.
         let pool = limit.saturating_mul(3).max(limit);
+        let hits = if db::embedding_space_exists(&self.conn)? {
+            // Fail fast if the index was built with a different model than the active
+            // one: its vectors are incomparable with the query vector we'd produce, so
+            // returning results would be silently wrong. The fix is a `reindex`.
+            if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
+                if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
+                    return Err(Error::ModelMismatch {
+                        indexed: format!("{indexed_model} (dim {indexed_dim})"),
+                        active: format!(
+                            "{} (dim {})",
+                            self.embedder.model_id(),
+                            self.embedder.dim()
+                        ),
+                    });
+                }
+            }
+            search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)?
+        } else {
+            search::keyword_only_search(&self.conn, query, pool)?
+        };
         let mut out: Vec<SearchResult> = Vec::new();
-        for hit in search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)? {
+        for hit in hits {
             if out.iter().any(|r| r.b2id == hit.note_b2id) {
                 continue; // note already represented by a higher-scoring chunk
             }

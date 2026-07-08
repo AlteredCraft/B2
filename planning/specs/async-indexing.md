@@ -200,6 +200,12 @@ Step 1 alone removes the "looks frozen, no progress" pain with zero core risk; S
 
 *(Was `tasks.md` Backlog → "Non-blocking embedding — progressive keyword-first index." Consolidated here.)*
 
+> **Executed (2026-07-07):** the projection/embedding split this section anticipated is owned and
+> specced by [projection-embedding-split.md](projection-embedding-split.md) — `project` / `embed` as
+> two separately-invokable façade passes (a DB-derived pending set), the keyword-first `search`
+> fallback, and the desktop's project → paint tree → embed sequencing. The honesty signal
+> ("semantic: N/M embedded", #26) and auto-index-on-open (#25) remain follow-ons, tracked there (§9).
+
 **Goal:** let the user *use* the vault in a diminished (keyword-only) state while the semantic half fills in
 behind a long cold index. §1's ordering means B2 is **already 90% there**: Phase 1 inserts all chunk text +
 FTS up front, so BM25 keyword search works the moment projection finishes — long before embedding
@@ -241,7 +247,9 @@ seam — **measure retrieval quality (the eval) before changing the default**. I
 - **Progress denominator during Phase 1.** The bar is indeterminate during projection (fast) and determinate
   once embedding starts (`notes_embedded/notes_to_embed`, already in `ReindexProgress`). An upfront
   `plan_reindex` count would make it determinate from t=0 at the cost of a double scan — not worth it unless
-  Phase 1 becomes visibly slow on huge vaults.
+  Phase 1 becomes visibly slow on huge vaults. *(Resolved by the split, 2026-07-07: the embed pass counts
+  its DB-derived pending set in one cheap query before starting —
+  [projection-embedding-split.md](projection-embedding-split.md) §2.)*
 - **Auto-index-on-open** vs. keep it a manual action (§7) — a first-run UX call, taken when §7 starts.
 - **Reranker / chunker changes** — orthogonal ([index-engine.md](../index-engine.md) §5, build spec §1.2).
 

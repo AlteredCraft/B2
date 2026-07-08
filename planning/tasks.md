@@ -4,7 +4,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-06
+updated: 2026-07-07
 status: active
 ---
 
@@ -21,7 +21,7 @@ design docs, which are the **source of truth** (the code is a projection of them
 > current focus and the design anchors that code comments cite. Shipped history is in git and in the
 > specs — it is no longer duplicated here.
 
-## Current state (2026-07-06)
+## Current state (2026-07-07)
 
 The **headless engine is complete** and **two dumb adapters over the [`Vault`](../crates/b2-core/src/vault.rs)
 façade** have shipped:
@@ -38,6 +38,13 @@ façade** have shipped:
   toggle, in-app vault switcher. Plus **async, cancellable indexing**
   ([specs/async-indexing.md](specs/async-indexing.md)) — the desktop `reindex` is a non-blocking background
   action with live progress + Cancel.
+- **Decoupled projection & embedding (2026-07-07)** — the keyword-first index
+  ([specs/projection-embedding-split.md](specs/projection-embedding-split.md), Steps 1→3): `reindex` is now
+  the composition of two separately-invokable façade passes — `Vault::project` (model-free: notes + chunks +
+  FTS + edges) and `Vault::embed` (fill DB-derived missing vectors, metered + cancellable). `search` falls
+  back to BM25-only on a projected-but-unembedded vault, and the desktop sequences project → paint tree →
+  embed, so a cold vault is browsable/searchable in seconds while embedding streams behind. Closed
+  [#15](https://github.com/AlteredCraft/B2/issues/15); follow-ons split out to #25/#26/#27.
 
 ## Active — next up
 
@@ -53,8 +60,8 @@ Everything planned-but-unstarted is tracked as an issue:
 
 | Theme | Issues |
 |---|---|
-| **Desktop** (beyond editing) | graph visualization [#22](https://github.com/AlteredCraft/B2/issues/22) · packaging/signing/distribution [#23](https://github.com/AlteredCraft/B2/issues/23) |
-| **Indexing & performance** | progressive keyword-first index (async §7) [#15](https://github.com/AlteredCraft/B2/issues/15) · cross-process CLI reindex + `b2 status` + Ctrl-C (async §8) [#16](https://github.com/AlteredCraft/B2/issues/16) · faster/smaller embedder spike (async §8) [#17](https://github.com/AlteredCraft/B2/issues/17) |
+| **Desktop** (beyond editing) | graph visualization [#22](https://github.com/AlteredCraft/B2/issues/22) · packaging/signing/distribution [#23](https://github.com/AlteredCraft/B2/issues/23) · auto-index-on-open (split §9) [#25](https://github.com/AlteredCraft/B2/issues/25) |
+| **Indexing & performance** | "semantic: N/M embedded" signal (split §9) [#26](https://github.com/AlteredCraft/B2/issues/26) · relevance-ordered embedding (split §9) [#27](https://github.com/AlteredCraft/B2/issues/27) · cross-process CLI reindex + `b2 status` + Ctrl-C (async §8) [#16](https://github.com/AlteredCraft/B2/issues/16) · faster/smaller embedder spike (async §8) [#17](https://github.com/AlteredCraft/B2/issues/17) |
 | **Engine & quality** | property tests for the invariants [#18](https://github.com/AlteredCraft/B2/issues/18) · qmd chunker upgrade [#19](https://github.com/AlteredCraft/B2/issues/19) · distance-weighting for `b2 similar` [#20](https://github.com/AlteredCraft/B2/issues/20) |
 | **Adapters & docs** | `serve` HTTP adapter [#24](https://github.com/AlteredCraft/B2/issues/24) · docs HTML + test-count badge sync [#21](https://github.com/AlteredCraft/B2/issues/21) |
 

@@ -8,7 +8,7 @@
 //! contract is nearly free (no parallel DTO layer).
 //!
 //! Every data command is `#[tauri::command(async)]` so Tauri runs it **off the main
-//! thread** — a slow `search` (model load) or `reindex` (embedding) never freezes the
+//! thread** — a slow `search` (model load) or `embed` (embedding) never freezes the
 //! window. The bodies stay fully synchronous (no `async`/`tokio` in our code, per the
 //! repo's no-speculative-async rule); `(async)` is only the "don't block the UI" knob.
 //!
@@ -19,8 +19,8 @@ use crate::error::CmdError;
 use crate::{open_vault, AppState};
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
-    ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ReindexReport, SearchResult,
-    SimilarView,
+    EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
+    SearchResult, SimilarView,
 };
 use serde::Serialize;
 use std::ops::ControlFlow;
@@ -134,29 +134,46 @@ pub fn link(
     Ok(vault.link(&src, &dst, &relation, explanation.as_deref())?)
 }
 
-/// Re-project the vault into the index as an **observable, cancellable background
-/// action** (async-indexing.md §4). Tauri runs the `(async)` body on a worker thread,
-/// so the window stays live; progress streams to the webview over `on_event` (a typed,
-/// per-invocation [`Channel`]), and the closure returns `ControlFlow::Break` once the
-/// shared cancel flag is set — the one cancel checkpoint the core already exposes.
+/// The **projection pass** — the fast, model-free half of a reindex
+/// (projection-embedding-split.md §6). One façade call over the **fake** vault (no
+/// model load on the first-paint path), so the moment it returns the file tree can
+/// repopulate and keyword search answers; `embed` then streams behind it. Fast and
+/// synchronous-feeling; nothing to stream, nothing to cancel.
+///
+/// Deliberately **outside** the single-in-flight reindex slot: the slot exists to
+/// protect the long, vector-writing embed pass, and a `project` racing a vault
+/// switch is harmless — it writes the `.b2/` of the root it captured at dispatch,
+/// idempotently, never the new vault's (§6 "why leaving `project` outside the slot
+/// is safe").
+#[tauri::command(async)]
+pub fn project(state: State<'_, AppState>) -> Result<ProjectReport, CmdError> {
+    project_impl(state.inner())
+}
+
+/// The **embed pass** — fill the missing vectors as an **observable, cancellable
+/// background action** (async-indexing.md §4). Tauri runs the `(async)` body on a
+/// worker thread, so the window stays live; progress streams to the webview over
+/// `on_event` (a typed, per-invocation [`Channel`]), and the closure returns
+/// `ControlFlow::Break` once the shared cancel flag is set — the one cancel
+/// checkpoint the core exposes. This is the old fused `reindex` command minus the
+/// projection it no longer does; the guard/cancel machinery attaches here.
 ///
 /// Still a dumb adapter: the body is "claim the slot → open one vault → call one
 /// façade op → serialize," with progress forwarded and a flag consulted. Task
 /// spawn/track/cancel + IPC streaming are host infrastructure (same class as the root
 /// `Mutex` and the OS dialog), not engine logic.
 #[tauri::command(async)]
-pub fn reindex(
+pub fn embed(
     state: State<'_, AppState>,
     on_event: Channel<ReindexProgress>,
-) -> Result<ReindexReport, CmdError> {
-    reindex_impl(state.inner(), &on_event)
+) -> Result<EmbedReport, CmdError> {
+    embed_impl(state.inner(), &on_event)
 }
 
-/// Ask the in-flight reindex to stop at its next embed-batch boundary. Runs on a
-/// *different* worker thread than `reindex`, so it observes/sets the shared flag
-/// concurrently; the reindex closure sees it and breaks cooperatively — no
-/// thread-killing, no torn writes (async-indexing.md §4/§5.6). A no-op if nothing is
-/// running.
+/// Ask the in-flight embed to stop at its next batch boundary. Runs on a *different*
+/// worker thread than `embed`, so it observes/sets the shared flag concurrently; the
+/// embed closure sees it and breaks cooperatively — no thread-killing, no torn
+/// writes (async-indexing.md §4/§5.6). A no-op if nothing is running.
 #[tauri::command(async)]
 pub fn cancel_reindex(state: State<'_, AppState>) {
     state.request_reindex_cancel();
@@ -171,26 +188,33 @@ impl Drop for ReindexGuard<'_> {
     }
 }
 
-/// The testable core of `reindex`, split from the Tauri `State` wrapper. Guards
+/// The testable core of `project`: one façade call over the fake vault (projection
+/// is model-free by construction — it never touches the embedding space).
+fn project_impl(state: &AppState) -> Result<ProjectReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.project(false)?)
+}
+
+/// The testable core of `embed`, split from the Tauri `State` wrapper. Guards
 /// single-in-flight, arms the cancel flag, opens the real-model vault, and streams
 /// progress while consulting the cancel flag at each batch.
-fn reindex_impl(
+fn embed_impl(
     state: &AppState,
     on_event: &Channel<ReindexProgress>,
-) -> Result<ReindexReport, CmdError> {
-    // Single-in-flight: refuse a second reindex rather than race two writers on one DB
+) -> Result<EmbedReport, CmdError> {
+    // Single-in-flight: refuse a second embed rather than race two writers on one DB
     // (async-indexing.md §5.4). The UI also disables the button, so this is rarely hit.
     if !state.try_start_reindex() {
         return Err(CmdError::ReindexInFlight);
     }
     let _guard = ReindexGuard(state);
     // Clear any stale cancel now that *this* run owns the slot (a prior switch/cancel
-    // must not kill a fresh reindex).
+    // must not kill a fresh embed).
     state.arm_reindex();
 
-    // Embeds changed chunks → needs the real model.
+    // Fills missing vectors → needs the real model.
     let (vault, _) = open_vault(state, true)?;
-    Ok(vault.reindex_with_progress(false, &mut |p| {
+    Ok(vault.embed(&mut |p| {
         // Forward progress to the webview; a send error (the window navigated/closed)
         // is not fatal to the index — keep embedding.
         let _ = on_event.send(p);
@@ -399,18 +423,40 @@ mod tests {
     }
 
     #[test]
-    fn a_second_reindex_is_refused_before_touching_the_model() {
-        // With the slot already held, `reindex_impl` must refuse *before* opening the
+    fn a_second_embed_is_refused_before_touching_the_model() {
+        // With the slot already held, `embed_impl` must refuse *before* opening the
         // real-model vault — so this needs no model and can't hang on one.
         let state = AppState::new(None);
-        assert!(state.try_start_reindex()); // stand in for a running reindex
+        assert!(state.try_start_reindex()); // stand in for a running embed
         let channel = Channel::<ReindexProgress>::new(|_| Ok(()));
-        let err = reindex_impl(&state, &channel).unwrap_err();
+        let err = embed_impl(&state, &channel).unwrap_err();
         assert!(matches!(err, CmdError::ReindexInFlight));
         assert_eq!(
             user_message(&err),
             "A reindex is already in progress. Please wait for it to finish."
         );
+    }
+
+    #[test]
+    fn project_is_model_free_and_runs_outside_the_reindex_slot() {
+        // A fresh (never-indexed) vault copy — no reindex in the setup, so this also
+        // proves `project` alone is what makes the tree listable.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
+        copy_dir(&src, &root);
+        let state = AppState::new(Some(root));
+
+        // Hold the slot (a stand-in for an in-flight embed): `project` is deliberately
+        // unguarded (projection-embedding-split.md §6) and must still run.
+        assert!(state.try_start_reindex());
+        let report = project_impl(&state).unwrap();
+        assert_eq!(report.indexed, 2);
+        assert_eq!(report.stamped, 0, "golden notes already carry b2ids");
+
+        // The tree is live off projection alone — no model, no vectors.
+        let notes = list_notes_impl(&state).unwrap();
+        assert_eq!(notes.len(), 2);
     }
 
     #[test]

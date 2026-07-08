@@ -11,8 +11,10 @@
 //!     command opens a *fresh* vault from the current root, exactly as the
 //!     one-process-per-command CLI does.
 //!   * **Embedder wiring** — pure reads open with the deterministic fake; anything
-//!     that embeds a query or re-projects (`search` / `link` / `reindex`) opens the
+//!     that embeds a query or writes vectors (`search` / `link` / `embed`) opens the
 //!     real [`LocalEmbedder`] and **fails fast** with "run `b2 init`" if it's absent.
+//!     `project` — the model-free half of a reindex (projection-embedding-split.md
+//!     §6) — opens the fake, so the first tree paint never waits on a model load.
 //!     `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev mode).
 
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
@@ -45,9 +47,11 @@ const CANCEL_POLL: Duration = Duration::from_millis(25);
 ///
 /// The reindex bits are host **infrastructure**, not engine logic: *how the window
 /// drives and interrupts* the one façade op stays here; *what* to embed stays in the
-/// core (the charter's line). `reindex_running` is a single-in-flight guard; a running
-/// reindex checks `reindex_cancel` at each embed-batch boundary (via the closure it
-/// passes to `reindex_with_progress`) and stops cooperatively when it is set.
+/// core (the charter's line). `reindex_running` is a single-in-flight guard for the
+/// long, vector-writing **embed** pass (the fast, model-free `project` command runs
+/// outside it by design — projection-embedding-split.md §6); a running embed checks
+/// `reindex_cancel` at each batch boundary (via the closure it passes to
+/// `Vault::embed`) and stops cooperatively when it is set.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
     /// Set by `cancel_reindex` (and a vault switch); the running reindex closure
@@ -151,9 +155,10 @@ fn use_fake_embedder() -> bool {
 
 /// Open a fresh vault over the configured root with the right embedder — the desktop
 /// mirror of the CLI's `open_vault`. `needs_semantic` commands (`search`/`link`/
-/// `reindex`) load the real [`LocalEmbedder`] (fail-fast "run `b2 init`" if absent);
-/// pure reads use the fake. Returns the vault and whether its embedder is semantic
-/// (used only for honest UI). Errors with [`CmdError::VaultRequired`] if no vault is set.
+/// `embed`) load the real [`LocalEmbedder`] (fail-fast "run `b2 init`" if absent);
+/// pure reads — and `project`, which never touches vectors — use the fake. Returns
+/// the vault and whether its embedder is semantic (used only for honest UI). Errors
+/// with [`CmdError::VaultRequired`] if no vault is set.
 pub fn open_vault(state: &AppState, needs_semantic: bool) -> Result<(Vault, bool), CmdError> {
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
     if needs_semantic && !use_fake_embedder() {
@@ -210,7 +215,8 @@ fn main() {
             commands::neighbors,
             commands::explain,
             commands::link,
-            commands::reindex,
+            commands::project,
+            commands::embed,
             commands::cancel_reindex,
         ])
         .run(tauri::generate_context!())

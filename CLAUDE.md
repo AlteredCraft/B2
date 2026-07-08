@@ -107,15 +107,18 @@ no model) + `b2 link` (the human commits). A reranker would be the next seam if/
 
 The **one typed API**. The CLI and any future adapter are its only clients; every other `b2-core`
 module is called directly only by the integration tests. Surface is intentionally minimal —
-`open` / `open_with_embedder` / `reindex` / `neighbors` / `search`. **Add operations when a command
-needs them; do not pre-build a broad surface.** The embedder is injected here: `open` defaults to the
-fake, `open_with_embedder` is how the CLI wires the real model.
+`open` / `open_with_embedder` / `reindex` / `project` / `embed` / `neighbors` / `search`. **Add
+operations when a command needs them; do not pre-build a broad surface.** The embedder is injected
+here: `open` defaults to the fake, `open_with_embedder` is how the CLI wires the real model.
 
 ### Data flows
 
 - **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
   notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
-  independent of file order.
+  independent of file order. Since 2026-07-07 it is **two separately-invokable passes**
+  (`specs/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
+  `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
+  falls back to BM25-only on a projected-but-unembedded vault.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (`chunks_vec`) fused with
   Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL queries are sanitized into a
   safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would otherwise crash the parse).

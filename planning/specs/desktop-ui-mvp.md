@@ -140,9 +140,11 @@ holds no engine logic") applies verbatim.
   having; anything more is speculative.
 - **Embedder wiring mirrors the CLI.** The host picks and injects the embedder exactly as `b2-cli` does:
   pure reads open with the fake ([`Vault::open`](../../crates/b2-core/src/vault.rs)); anything that
-  re-embeds (a body write, `link`'s re-projection, `reindex`) opens the real model
+  re-embeds (a body write, `link`'s re-projection, `embed`) opens the real model
   ([`Vault::open_with_embedder`](../../crates/b2-core/src/vault.rs)), and fails fast with the "run `b2 init`"
-  message if the model is absent — same contract as `reindex`/`link` in the CLI.
+  message if the model is absent — same contract as `reindex`/`link` in the CLI. (`project` — the
+  model-free half of a reindex — opens the fake, so the first paint never waits on a model load;
+  [projection-embedding-split.md](projection-embedding-split.md) §6.)
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages the same
   way the CLI funnels through `user_message` — never leak sqlite/io/serde internals into the UI. `B2_DEBUG`
   opts into detail for the developer, matching the repo-wide logging policy.
@@ -165,7 +167,7 @@ surface where the human — the precision gate — can *read both notes at once*
 | Related pane — hybrid keyword+semantic+graph search | `Vault::search` | exists |
 | Backlinks / typed edges with their "why" (in/out) | `Vault::explain` / `neighbors` | exists |
 | Commit a typed relation (verb picker) → frontmatter | `Vault::link` | exists |
-| Index / refresh action + state | `Vault::reindex_with_progress` / `plan_reindex` | **async + live progress + Cancel, non-blocking** — a cancellable background action ([specs/async-indexing.md](async-indexing.md)) |
+| Index / refresh action + state | **`Vault::project` then `Vault::embed`** (the frontend sequences them; `plan_reindex` unchanged) | **project-then-embed (2026-07-07)** — the model-free projection paints the tree + keyword search first, then embedding streams behind as the cancellable background action ([specs/projection-embedding-split.md](projection-embedding-split.md) §6; progress/cancel plumbing per [specs/async-indexing.md](async-indexing.md)) |
 
 **The one new façade op** is a read: fetch a note's raw body + metadata to render the left pane
 (`Vault::read` / `get_note`). Everything else the MVP needs already exists. This honors the façade rule —

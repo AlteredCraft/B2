@@ -6,13 +6,14 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  EmbedReport,
   ExplainView,
   LinkReport,
   NeighborView,
   NoteSummary,
   NoteView,
+  ProjectReport,
   ReindexProgress,
-  ReindexReport,
   SearchResult,
   SimilarView,
   VaultInfo,
@@ -58,17 +59,26 @@ export const api = {
   ): Promise<LinkReport> => invoke("link", { src, dst, relation, explanation }),
 
   /**
-   * Re-project the vault into the index (stamps missing b2ids; embeds changes) as a
-   * cancellable background action. `onProgress` fires per embed batch over a typed
-   * Tauri `Channel` (async-indexing.md §4); the returned Promise resolves with the
-   * final report (its `cancelled` flag set if `cancelReindex` was called mid-run).
+   * Phase 1 of a reindex — the fast, **model-free** projection pass
+   * (projection-embedding-split.md §6): notes + keyword index + graph, stamping
+   * missing b2ids. Once it resolves, the tree and keyword search are live; call
+   * `embed` to fill the vectors behind it.
    */
-  reindex: (onProgress: (p: ReindexProgress) => void): Promise<ReindexReport> => {
+  project: (): Promise<ProjectReport> => invoke("project"),
+
+  /**
+   * Phase 2 of a reindex — fill the missing vectors (real model) as a cancellable
+   * background action. `onProgress` fires per embed batch over a typed Tauri
+   * `Channel` (async-indexing.md §4), determinate from the first batch; the returned
+   * Promise resolves with the final report (its `cancelled` flag set if
+   * `cancelReindex` was called mid-run).
+   */
+  embed: (onProgress: (p: ReindexProgress) => void): Promise<EmbedReport> => {
     const channel = new Channel<ReindexProgress>();
     channel.onmessage = onProgress;
-    return invoke("reindex", { onEvent: channel });
+    return invoke("embed", { onEvent: channel });
   },
 
-  /** Ask the in-flight reindex to stop at its next batch boundary (cooperative). */
+  /** Ask the in-flight embed to stop at its next batch boundary (cooperative). */
   cancelReindex: (): Promise<void> => invoke("cancel_reindex"),
 };

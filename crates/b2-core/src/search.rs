@@ -91,6 +91,30 @@ fn pool_size(limit: usize) -> usize {
     (limit * 5).max(30)
 }
 
+/// Keyword-only search: BM25 over `chunks_fts` → top `limit`, resolved to notes —
+/// the fallback that makes a **projected-but-unembedded** vault searchable
+/// (projection-embedding-split.md §5): no query embedding, no model, no `chunks_vec`.
+/// Scores are the RRF of the single BM25 list, so they live on the same scale (and
+/// sort the same way) as [`hybrid_search`]'s fused scores.
+pub fn keyword_only_search(
+    conn: &rusqlite::Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Hit>> {
+    let bm25 = keyword_search(conn, query, pool_size(limit))?;
+    let mut hits = Vec::new();
+    for (chunk_id, score) in rrf_fuse(&[bm25], RRF_K).into_iter().take(limit) {
+        if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
+            hits.push(Hit {
+                chunk_id,
+                note_b2id,
+                score,
+            });
+        }
+    }
+    Ok(hits)
+}
+
 /// Hybrid search: BM25 ⊕ vector(query) → RRF → top `limit`, resolved to notes.
 pub fn hybrid_search(
     conn: &rusqlite::Connection,

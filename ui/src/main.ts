@@ -280,44 +280,65 @@ async function switchVault(): Promise<void> {
   }
 }
 
-// Reindex as a cancellable background action (async-indexing.md §4). Deliberately does
-// NOT set `state.loading` — the app stays fully usable (read/search/navigate) while it
-// runs; only the Reindex button is disabled and a progress + Cancel affordance shows.
-// Progress streams in via the channel callback, which repaints only the affordance.
+// Reindex as project → embed, sequenced here (Shape A, projection-embedding-split.md
+// §6): the fast, model-free `project` completes the keyword + graph index, the tree
+// paints immediately, and only then does the slow, cancellable `embed` stream behind
+// it. Deliberately does NOT set `state.loading` — the app stays fully usable
+// (read/search/navigate) while it runs; only the Reindex button is disabled and a
+// progress + Cancel affordance shows. Progress streams in via the channel callback,
+// which repaints only the affordance.
 async function doReindex(): Promise<void> {
-  if (state.reindexing) return; // single-in-flight (the host also guards this)
+  if (state.reindexing) return; // single-in-flight (the host also guards embed)
   const startedRoot = state.vaultRoot; // guard against a vault switch mid-run
   state.reindexing = true;
   state.reindexProgress = null;
   state.reindexCancelling = false;
   render();
   try {
-    const r = await api.reindex((p) => {
+    // Phase 1 — projection (fast, no model): notes, keyword index, and graph are
+    // complete when this resolves.
+    const p = await api.project();
+    // If a switch already committed (vaultRoot changed), it owns the UI — bail. (A
+    // late-finishing project is harmless host-side: it wrote the old vault's own
+    // .b2/, idempotently — spec §6.)
+    if (state.vaultRoot !== startedRoot) return;
+    // The tree paints HERE — a projection can add, remove, or rename notes, and the
+    // vault is browsable + keyword-searchable while embedding runs.
+    await loadNotes();
+    render();
+    if (state.reindexCancelling) {
+      // Cancel landed during the short projection window: don't start embedding (the
+      // host would clear the flag and run to completion). The projected index is
+      // complete and consistent; vectors fill on the next run.
+      flash(`Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.`);
+      return;
+    }
+    // Phase 2 — embedding (real model), metered + cancellable via the host's slot.
+    const r = await api.embed((prog) => {
       if (state.vaultRoot !== startedRoot) return; // stray event from a vault we've left
-      state.reindexProgress = p;
+      state.reindexProgress = prog;
       paintReindex();
     });
     // If the switch already committed (vaultRoot changed), it owns the UI — bail.
     if (state.vaultRoot !== startedRoot) return;
-    // The common ordering is subtler: the host frees the reindex slot *before* the
+    // The common ordering is subtler: the host frees the embed slot *before* the
     // vault-switch command returns, so this Promise usually resolves while `vaultRoot`
     // is still `startedRoot` — the check above misses it. But a cancel we didn't
     // initiate (`reindexCancelling` is false) can only come from a vault switch
     // cancelling us host-side (main.rs `cancel_and_wait_for_reindex` is the sole other
     // cancel source). In that case the switch will reload the new vault — so we must
-    // NOT toast or reload the vault we're leaving. A user-initiated cancel
-    // (`reindexCancelling` true) *does* fall through: phase 1/2 ran, so notes/edges may
-    // have changed and the tree should refresh.
+    // NOT toast or touch the vault we're leaving. A user-initiated cancel
+    // (`reindexCancelling` true) *does* fall through: the projected index is complete
+    // and a prefix embedded, worth reporting.
     if (r.cancelled && !state.reindexCancelling) return;
     flash(
       r.cancelled
-        ? `Indexed ${r.embedded}/${r.indexed} note(s) — cancelled. Re-run to finish the rest.`
-        : `Indexed ${r.indexed} note(s) — ${r.embedded} embedded, ${r.stamped} stamped.`,
+        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.`
+        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.`,
     );
-    // A reindex can add, remove, or rename notes — refresh the tree to match.
-    await loadNotes();
     if (state.current) {
-      // The open note may have changed on disk; re-read it and refresh discovery.
+      // Projection may have stamped the open note on disk; re-read it, and refresh
+      // discovery now that vectors exist for `similar` to rank with.
       state.current = await api.readNote(state.current.path);
       await refreshDiscovery();
     }
@@ -331,9 +352,10 @@ async function doReindex(): Promise<void> {
   }
 }
 
-// Ask the host to stop the in-flight reindex at its next batch boundary. Cooperative:
-// the reindex Promise in `doReindex` resolves shortly after with `cancelled: true`, and
-// its `finally` clears the affordance.
+// Ask the host to stop the in-flight embed at its next batch boundary. Cooperative:
+// the embed Promise in `doReindex` resolves shortly after with `cancelled: true`, and
+// its `finally` clears the affordance. (During the short projection window there is
+// nothing host-side to stop; `doReindex` sees `reindexCancelling` and skips embed.)
 async function cancelReindex(): Promise<void> {
   if (!state.reindexing || state.reindexCancelling) return;
   state.reindexCancelling = true;

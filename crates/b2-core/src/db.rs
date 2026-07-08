@@ -416,6 +416,27 @@ pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
     Ok(n_chunks > 0 && n_missing == 0)
 }
 
+/// Every chunk still lacking a stored vector, as `(note_b2id, path, chunk_id, text)`
+/// in `(path, seq)` order — the **DB-derived pending set** the embed pass fills
+/// (projection-embedding-split.md §2). Deriving it here is what decouples projection
+/// from embedding: nothing is handed between the two passes in memory, so any stop
+/// point (a cancelled embed, a crash between the passes) heals on the next embed.
+/// The ordering reproduces the fused reindex's per-note batching + progress.
+/// Generalizes [`note_fully_embedded`]; like it, requires `chunks_vec` to exist —
+/// callers ensure the embedding space first.
+pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<(String, String, i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.note_b2id, n.path, c.id, c.text
+         FROM chunks c
+         JOIN notes n ON n.b2id = c.note_b2id
+         LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+         WHERE v.chunk_id IS NULL
+         ORDER BY n.path, c.seq",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// A note's `title` (None if the note is absent or has no title) — the alias for a
 /// `[[path|title]]` link written by `b2 link`.
 pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {

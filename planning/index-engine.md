@@ -129,6 +129,11 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any ti
 ```
 
 Every table is derived from the Markdown; there is no third home. `index = projection of (Markdown)`.
+*(Since 2026-07-07 the projection is built in two separately-invokable passes —
+model-free `project` (notes/chunks/FTS/edges) then `embed` (vectors), with `reindex` their
+composition — so keyword search + graph are usable before embedding completes;
+[specs/projection-embedding-split.md](specs/projection-embedding-split.md). The invariant is untouched:
+a projected-but-unembedded index is a smaller projection, never a wrong one.)*
 
 Why this shape fits B2 specifically:
 
