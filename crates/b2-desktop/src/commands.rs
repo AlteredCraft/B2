@@ -20,7 +20,7 @@ use crate::{open_vault, AppState};
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
     EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
-    SearchResult, SimilarView,
+    SearchResult, SimilarView, WriteReport,
 };
 use serde::Serialize;
 use std::ops::ControlFlow;
@@ -86,6 +86,24 @@ pub fn read_note(state: State<'_, AppState>, note: String) -> Result<NoteView, C
 #[tauri::command(async)]
 pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdError> {
     list_notes_impl(state.inner())
+}
+
+/// Save a note's body — the editing surface's one write (desktop-editing.md §5).
+/// **Model-free** like `project`: `Vault::write` splices the body and re-projects
+/// without touching vectors, so this opens the fake vault (no model load; saving
+/// works with nothing provisioned) and runs **outside** the single-in-flight embed
+/// slot (short, and safe against a racing vault switch for the same
+/// captured-root reason as `project`). A stale `base_revision` surfaces as the
+/// **stable** conflict message the frontend recognizes to drive its conflict bar —
+/// change it in `error.rs` and `ui/src/api.ts` together.
+#[tauri::command(async)]
+pub fn write_note(
+    state: State<'_, AppState>,
+    note: String,
+    body: String,
+    base_revision: String,
+) -> Result<WriteReport, CmdError> {
+    write_note_impl(state.inner(), &note, &body, &base_revision)
 }
 
 #[tauri::command(async)]
@@ -258,6 +276,16 @@ fn read_note_impl(state: &AppState, note: &str) -> Result<NoteView, CmdError> {
 fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
     let (vault, _) = open_vault(state, false)?;
     Ok(vault.list_notes()?)
+}
+
+fn write_note_impl(
+    state: &AppState,
+    note: &str,
+    body: &str,
+    base_revision: &str,
+) -> Result<WriteReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.write(note, body, base_revision)?)
 }
 
 #[cfg(test)]
@@ -434,6 +462,84 @@ mod tests {
         assert_eq!(
             user_message(&err),
             "A reindex is already in progress. Please wait for it to finish."
+        );
+    }
+
+    #[test]
+    fn write_note_saves_through_the_facade_and_chains_revisions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        // Save based on the read's revision; the returned revision chains the next.
+        let note = read_note_impl(&state, "concepts/memory").unwrap();
+        let report = write_note_impl(
+            &state,
+            "concepts/memory",
+            "An edited body.\n",
+            &note.revision,
+        )
+        .unwrap();
+        assert_ne!(report.revision, note.revision);
+        let reread = read_note_impl(&state, "concepts/memory").unwrap();
+        assert_eq!(reread.body, "An edited body.\n");
+        assert_eq!(reread.revision, report.revision);
+        write_note_impl(&state, "concepts/memory", "Again.\n", &report.revision).unwrap();
+    }
+
+    #[test]
+    fn write_conflict_is_generic_and_recognizable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let note = read_note_impl(&state, "concepts/memory").unwrap();
+        // An external edit lands after the read…
+        let abs = root.join("concepts/memory.md");
+        fs::write(
+            &abs,
+            format!("{}\nexternal\n", fs::read_to_string(&abs).unwrap()),
+        )
+        .unwrap();
+
+        // …so the stale save is refused with the STABLE message the frontend
+        // string-matches to drive its conflict bar (desktop-editing.md §5) — keep
+        // this assertion in lockstep with ui/src/api.ts.
+        let err = write_note_impl(&state, "concepts/memory", "mine", &note.revision).unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::WriteConflict(_))
+        ));
+        assert_eq!(
+            user_message(&err),
+            "This note changed on disk since it was opened. Reload the note, then reapply your edit."
+        );
+    }
+
+    #[test]
+    fn write_note_runs_outside_the_reindex_slot() {
+        // Like `project`, a save is deliberately unguarded by the embed slot
+        // (desktop-editing.md §5): short, model-free, must not queue behind a
+        // long-running background embed.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        assert!(state.try_start_reindex()); // stand in for an in-flight embed
+        let note = read_note_impl(&state, "concepts/memory").unwrap();
+        write_note_impl(
+            &state,
+            "concepts/memory",
+            "Saved mid-embed.\n",
+            &note.revision,
+        )
+        .unwrap();
+        assert_eq!(
+            read_note_impl(&state, "concepts/memory").unwrap().body,
+            "Saved mid-embed.\n"
         );
     }
 

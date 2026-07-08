@@ -135,10 +135,15 @@ comes from SQLite as today, and the only id minted is a missing `b2id` through t
   (`open_vault(state, false)`: the save path is model-free by §3), calls `vault.write`, returns.
   Outside the reindex slot, like `project`: short, model-free, and safe against a racing vault switch
   for the same reason (§6 of the split spec — it writes the vault it captured at dispatch,
-  idempotently). `WriteConflict` crosses the IPC boundary as its generic message; the frontend
-  additionally needs to *recognize* conflicts to drive the bar (§6), so `CmdError` marks them
-  distinguishably (e.g. a stable message prefix or a small `{ kind: "conflict" }` payload — the one
-  place a host error is machine-read; keep it minimal).
+  idempotently).
+- **Conflict recognition — the resolved mechanism (Step 2).** `WriteConflict` crosses the IPC
+  boundary as its generic message, and the frontend recognizes it by **matching that exact string**
+  — the minimal option (no change to the string-error contract every other command uses). The
+  contract: the message is a **stable constant**, pinned host-side by the
+  `write_conflict_is_generic_and_recognizable` test
+  ([`commands.rs`](../../crates/b2-desktop/src/commands.rs)) and mirrored as a constant in
+  `ui/src/api.ts` — **change them together**. The frontend must match with `startsWith`, not
+  equality: `B2_DEBUG` appends `\n(debug: …)` to every message.
 
 ## 6. The frontend — edit mode, the save chain, the conflict bar
 
@@ -198,14 +203,21 @@ trailing embed: `refreshDiscovery()` so `similar` reflects the new vectors.
 
 ## 8. Build order
 
-Each step is a provable increment; implementers **start at Step 1**, which is entirely within
-`b2-core` (model-free, no host/UI changes) and is specified in full. Steps 2–3 get the same treatment
-when reached.
+Each step is a provable increment. **Steps 1–2 shipped 2026-07-07** (marked below, with as-built
+notes); an implementer picking this up **starts at Step 3**, which is specified in full as a
+self-contained brief — entirely in `ui/`, no Rust changes.
 
-### Step 1 — the core write op (start here)
+### Step 1 — the core write op ✅ shipped 2026-07-07 (commit `887a595`)
 
 **Goal.** Add the revision token to `read`, the model-free single-note projection, and `Vault::write`
 with the splice + guard. Pure core; fake-embedder tests only.
+
+> **As-built note:** the test list below shipped with one substitution —
+> `write_stamps_a_missing_b2id_and_the_revision_reflects_it` became
+> `write_returns_the_revision_of_the_final_on_disk_bytes`. An *indexed* note's file always carries
+> its stamp (projection stamps on first sight), so `write`'s stamp arm is defensive rather than
+> reachable; the test instead pins the contract the save chain hangs on (the returned revision
+> hashes the final on-disk bytes). Everything else landed as written.
 
 **Files & current-state anchors.**
 - [`crates/b2-core/src/note.rs`](../../crates/b2-core/src/note.rs) — add `ParsedNote::replace_body`
@@ -248,19 +260,114 @@ with the splice + guard. Pure core; fake-embedder tests only.
 `Vault::write` takes no embedder and issues no query against `chunks_vec` beyond `replace_chunks`'s
 existing stale-vector clear.
 
-### Step 2 — host command (sketch)
+### Step 2 — host command ✅ shipped 2026-07-07
 
-`write_note` command + thin impl (fake vault, outside the slot); `CmdError` conflict mapping the
-frontend can recognize; thin tests mirroring `project`'s (works with the slot held; conflict message
-is generic). Gets the full brief when picked up.
+As specced: `write_note(note, body, base_revision)` + thin `write_note_impl` (fake vault, outside
+the slot, registered in `main.rs`); conflict recognition resolved as the **stable string** (§5);
+three thin tests (`write_note_saves_through_the_facade_and_chains_revisions`,
+`write_conflict_is_generic_and_recognizable` — pins the exact message,
+`write_note_runs_outside_the_reindex_slot`). The crate charter's embedder-wiring bullet now lists
+`write_note` beside `project` as the two model-free write-side ops.
 
-### Step 3 — the editor (sketch)
+### Step 3 — the editor (start here; the one remaining step)
 
-CM6 into `ui/` behind the Edit toggle; the render carve-out; the save chain + flush points + Cmd+S;
-the conflict bar; the trailing embed + discovery refresh. Manual dogfood: edit in-app while the same
-note is open in Obsidian/vim — external edit conflicts (never clobbers), Reload and Keep-mine both
-behave; rapid typing produces ms saves and one trailing embed; editing works with `B2_EMBEDDER=fake`
-and with no model provisioned.
+**Goal.** CodeMirror 6 edit mode over the note pane, with autosave-on-idle, the serialized save
+chain, the conflict bar, and the trailing background embed — the §6 flow, verbatim. **Entirely in
+`ui/`**: Steps 1–2 delivered the whole backend; no Rust changes. TypeScript + Vite, no framework
+(vanilla TS is a locked choice), no test runner in `ui/` — verification is `npx tsc --noEmit`
+(there is no `typecheck` npm script; `npm run build` = tsc + vite) plus the dogfood checklist below.
+
+**Files & current-state anchors.**
+- [`ui/package.json`](../../ui/package.json) — add the minimal CM6 set: `@codemirror/state`,
+  `@codemirror/view`, `@codemirror/commands`, `@codemirror/language`, `@codemirror/lang-markdown`.
+  No themes, no `codemirror` meta-package.
+- [`ui/src/types.ts`](../../ui/src/types.ts) — add `WriteReport { path, revision }`
+  (`NoteView.revision` already landed with Step 1).
+- [`ui/src/api.ts`](../../ui/src/api.ts) — the one IPC seam. Add
+  `writeNote(note, body, baseRevision): Promise<WriteReport>` →
+  `invoke("write_note", { note, body, baseRevision })` — **Tauri v2 maps camelCase JS keys to the
+  command's snake_case params automatically** (`baseRevision` → `base_revision`); do not hand-write
+  snake_case keys. Also export the conflict recognizer here (it's part of the IPC contract):
+  a `WRITE_CONFLICT_MESSAGE` constant equal to the host's exact string
+  (`"This note changed on disk since it was opened. Reload the note, then reapply your edit."`)
+  and `isWriteConflict(e): boolean` = `errText(e).startsWith(WRITE_CONFLICT_MESSAGE)` —
+  **startsWith**, because `B2_DEBUG` appends `\n(debug: …)`. Pinned host-side by the
+  `write_conflict_is_generic_and_recognizable` test; change both together (§5).
+- [`ui/src/state.ts`](../../ui/src/state.ts) — add the *renderable* editing state only:
+  `editing: boolean` (edit mode owns the note pane) and `editConflict: boolean` (the bar is up).
+  Debounce timers, the in-flight/trailing save flags, and the CM6 `EditorView` instance are
+  **module-locals in main.ts**, not state — they never drive a render.
+- [`ui/src/main.ts`](../../ui/src/main.ts) — the controller: the edit-toggle action, editor
+  mount/unmount, the save chain, flush points, Cmd+S, the conflict-bar actions, the trailing embed.
+  `doReindex`/`paintReindex` are the house pattern for "background work + targeted repaint".
+- [`ui/src/render.ts`](../../ui/src/render.ts) — `noteBarHtml` builds the note pane's top bar; the
+  `</>` view-source toggle (`data-toggle-source`, in `.note-bar-head`) is the sibling the **Edit**
+  toggle sits next to. `notePaneHtml` is the builder that must **not** run while editing.
+- [`ui/style.css`](../../ui/style.css) — editor host + conflict bar styles.
+
+**The critical structural rule — the render carve-out.** `render()` rebuilds every pane by
+`innerHTML` swap, and it runs on *every* state change — including `flash()`'s toast, which triggers
+a render immediately **and again ~4.5s later** when the toast clears. Any of those would destroy a
+live `EditorView` mid-keystroke. The rule: **while `state.editing`, `render()` must not touch
+`#note-pane`** — short-circuit that one pane's swap (the other panes keep rendering; the tree,
+side pane, and toasts stay live). The editor chrome (Done button, conflict bar, editor host) is
+built once at mount by main.ts, owned imperatively until exit — the same "persistent element +
+targeted repaint" precedent as the reindex-progress affordance. Repaint the conflict bar with a
+small `paintEditor()`-style helper, never a pane rebuild.
+
+**The moves (in order).**
+1. Deps + `WriteReport` type + `api.writeNote` + `WRITE_CONFLICT_MESSAGE`/`isWriteConflict`.
+2. The **Edit** toggle in `noteBarHtml` (sibling of `data-toggle-source`; disabled when
+   `state.loading`). Entering edit mode sets `state.editing`, renders once (which now skips the
+   note pane), then mounts CM6 into `#note-pane`: doc = `state.current.body`, extensions =
+   `markdown()`, `history()`, `keymap` (default + history), and an `updateListener` whose
+   `docChanged` schedules the autosave.
+3. The save chain, exactly §6's diagram: module-locals `saveInFlight`, `trailingDirty`,
+   `autosavePaused`. `scheduleAutosave()` = debounce ~1s → `saveNow()`. `saveNow()` single-flights:
+   if a save is in flight, set `trailingDirty` and return; else call
+   `api.writeNote(state.current.path, buffer, state.current.revision)`. On success: update
+   `state.current.revision = report.revision` **and `state.current.body` = the saved buffer** (so
+   exiting edit mode renders the saved text with no re-read), fire the trailing save if dirty,
+   schedule the trailing embed, and refresh connections (`api.explain` — a body edit can change
+   edges). On `isWriteConflict`: set `autosavePaused` + `state.editConflict`, paint the bar.
+   **Autosave success is silent** — no toast per save (a toast triggers renders and trains the
+   user to ignore toasts); only conflicts and real errors surface.
+4. Flush points — an immediate `saveNow()` (skipping the debounce) on: edit-toggle off (Done),
+   `openNote` (flush **before** switching), window `blur`, and Cmd+S (`keydown` handler,
+   `preventDefault`, only while editing). Exiting edit mode: flush, unmount (`view.destroy()`),
+   clear `state.editing`, render.
+5. The conflict bar (part of the persistent editor chrome): *"This note changed on disk."* with
+   **Reload** (discard buffer: `api.readNote` fresh → remount the editor on the new body/revision →
+   clear conflict, resume autosave) and **Keep mine** (`api.readNote` fresh for the *revision only*
+   → `saveNow()` with the buffer against it → clear conflict, resume). No force flag exists — the
+   override *is* a fresh read + write, and a further external edit in that window still conflicts.
+6. The trailing embed: after the chain settles (~2s with no saves and none in flight), run the
+   guarded background embed. Client-side, skip if `state.reindexing` (already running); otherwise
+   reuse `doReindex`'s embed invocation shape (set `reindexing`, stream progress into
+   `paintReindex`, clear in `finally` — factor a small shared helper rather than duplicating). If
+   the host refuses (`ReindexInFlight` race), **skip silently** — the pending set is DB-derived, so
+   the next embed/reindex heals it (split spec §7.2). After it completes, `refreshDiscovery()` so
+   `similar` reflects the new vectors.
+7. Styles: the editor host fills the note pane below the (kept) top bar; the conflict bar is a
+   fixed strip above the editor; match the existing pane chrome.
+
+**Interactions to keep correct (learned building Steps 1–2).**
+- A save during a background embed is *by design* fine (slot-free command + `busy_timeout` in
+  `db::open`) — do not serialize saves behind `state.reindexing`.
+- A vault switch mid-edit: `switchVault` resets `state.current` — flush before it proceeds (hook
+  the same flush as `openNote`), then let its reset also clear `state.editing` (unmount first).
+- The wikilink/`data-open` click delegation stays active while editing (tree + side pane are
+  live) — that's the `openNote` flush point doing its job, not a bug.
+- `state.current.revision` is the **only** base a save may present; never re-hash or cache
+  elsewhere — one source of truth for the chain.
+
+**Definition of done.** `npx tsc --noEmit` and `npm run build` clean; `cargo test -p b2-desktop`
+still green (no Rust changes expected); and the manual dogfood passes: edit in-app while the same
+note is open in vim/Obsidian — an external save conflicts (never clobbers), **Reload** and **Keep
+mine** both behave; rapid typing produces ms saves and **one** trailing embed; a save mid-reindex
+works; editing works under `B2_EMBEDDER=fake` **and** with no model provisioned (semantic panes
+degrade honestly); exiting edit mode shows the saved text; the tree, search, toasts, and discovery
+all stay live while editing (the carve-out holds).
 
 ## 9. Open questions / deferred
 

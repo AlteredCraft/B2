@@ -210,6 +210,7 @@ fn main() {
             commands::choose_vault,
             commands::read_note,
             commands::list_notes,
+            commands::write_note,
             commands::similar,
             commands::search,
             commands::neighbors,
