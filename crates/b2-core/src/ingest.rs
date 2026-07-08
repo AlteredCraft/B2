@@ -3,7 +3,7 @@
 //! `chunks` (+FTS), and the typed `edges` graph.
 //!
 //! A full ingest is **two separately-invokable passes**
-//! (planning/specs/projection-embedding-split.md §4): [`project_vault`] — the
+//! (planning/specs/completed/projection-embedding-split.md §4): [`project_vault`] — the
 //! model-free pass, which runs in two phases so link resolution never depends on
 //! file order (phase 1 projects every note + its chunks, filling the resolver;
 //! phase 2 derives edges against the now-complete resolver) — and [`embed_vault`] —

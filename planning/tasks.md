@@ -36,10 +36,10 @@ façade** have shipped:
 - **Desktop UI** — the read-only MVP ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md), Steps 0→3): read a
   note, surface similar-but-unlinked notes, commit a typed link; file-tree, frontmatter drawer, view-source
   toggle, in-app vault switcher. Plus **async, cancellable indexing**
-  ([specs/async-indexing.md](specs/async-indexing.md)) — the desktop `reindex` is a non-blocking background
+  ([specs/completed/async-indexing.md](specs/completed/async-indexing.md)) — the desktop `reindex` is a non-blocking background
   action with live progress + Cancel.
 - **Decoupled projection & embedding (2026-07-07)** — the keyword-first index
-  ([specs/projection-embedding-split.md](specs/projection-embedding-split.md), Steps 1→3): `reindex` is now
+  ([specs/completed/projection-embedding-split.md](specs/completed/projection-embedding-split.md), Steps 1→3): `reindex` is now
   the composition of two separately-invokable façade passes — `Vault::project` (model-free: notes + chunks +
   FTS + edges) and `Vault::embed` (fill DB-derived missing vectors, metered + cancellable). `search` falls
   back to BM25-only on a projected-but-unembedded vault, and the desktop sequences project → paint tree →

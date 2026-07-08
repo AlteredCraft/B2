@@ -1,4 +1,4 @@
-//! The projection/embedding split (planning/specs/projection-embedding-split.md §8
+//! The projection/embedding split (planning/specs/completed/projection-embedding-split.md §8
 //! Step 1, plus Step 2's keyword-first fallback): `project` alone builds the complete
 //! keyword + graph index with **no** vectors and no embedding space; `embed` fills
 //! exactly the DB-derived missing vectors; and project→embed is **observably**

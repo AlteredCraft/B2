@@ -60,7 +60,7 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   ([`Vault::open`](../b2-core/src/vault.rs)); anything that re-embeds (a body write, `link`'s re-projection,
   `embed`) opens the real model ([`Vault::open_with_embedder`](../b2-core/src/vault.rs)) and fails fast
   with the "run `b2 init`" message if it's absent. `project` — the model-free half of a reindex
-  ([specs/projection-embedding-split.md](../../planning/specs/projection-embedding-split.md) §6) — opens
+  ([specs/completed/projection-embedding-split.md](../../planning/specs/completed/projection-embedding-split.md) §6) — opens
   the fake, so the first tree paint never waits on a model load.
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages exactly as
   the CLI funnels through `user_message` in [`b2-cli/src/main.rs`](../b2-cli/src/main.rs) — **never** leak

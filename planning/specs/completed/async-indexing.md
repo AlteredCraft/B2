@@ -3,7 +3,7 @@ title: "B2 — Async, cancellable indexing (desktop)"
 type: note
 tags: [b2, ui, desktop, tauri, reindex, indexing, async, spec]
 created: 2026-07-06
-status: draft
+status: implemented
 ---
 
 # B2 — Async, cancellable indexing (desktop)
@@ -11,8 +11,8 @@ status: draft
 > **The build spec for making `reindex` a first-class background action in the desktop app —
 > live progress, cancellable, and non-blocking — without pushing async, threads, or non-determinism into
 > the model-free core.** The engine already reindexes incrementally and *can* report per-batch progress
-> ([`Vault::reindex_with_progress`](../../crates/b2-core/src/vault.rs) → [`ingest::ReindexProgress`](../../crates/b2-core/src/ingest.rs));
-> the [`b2-cli`](../../crates/b2-cli) adapter renders that as a live line. The **desktop adapter throws it
+> ([`Vault::reindex_with_progress`](../../../crates/b2-core/src/vault.rs) → [`ingest::ReindexProgress`](../../../crates/b2-core/src/ingest.rs));
+> the [`b2-cli`](../../../crates/b2-cli) adapter renders that as a live line. The **desktop adapter throws it
 > away** — it calls the no-progress `Vault::reindex()` and freezes the whole UI behind one Promise. This
 > doc closes that gap.
 >
@@ -23,15 +23,15 @@ status: draft
 > embedding" discussion** (was `tasks.md` Backlog) into one place.
 >
 > **It does not own:** the engine invariant or the reindex algorithm itself
-> ([index-engine.md](../index-engine.md), [specs/index-engine-build.md](index-engine-build.md)); the desktop
-> adapter's general shape and the thin-adapter discipline ([specs/desktop-ui-mvp.md](desktop-ui-mvp.md),
-> [`crates/b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md)). The **progressive / keyword-first**
+> ([index-engine.md](../../index-engine.md), [specs/index-engine-build.md](../index-engine-build.md)); the desktop
+> adapter's general shape and the thin-adapter discipline ([specs/desktop-ui-mvp.md](../desktop-ui-mvp.md),
+> [`crates/b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). The **progressive / keyword-first**
 > index and the **cross-process CLI background reindex** are *related but separate* efforts — §7 and §8
 > record them and say why they're deferred behind this one.
 
 ## 0. Scope & ground rules
 
-The desktop MVP shipped read-only-first ([desktop-ui-mvp.md](desktop-ui-mvp.md) §4), and dogfooding a
+The desktop MVP shipped read-only-first ([desktop-ui-mvp.md](../desktop-ui-mvp.md) §4), and dogfooding a
 ~1000-note vault surfaced the gap this doc fills: **the first cold index of a large vault is slow, and the
 desktop app makes it feel broken** — a busy cursor, a disabled UI, no progress, and no way to stop it.
 
@@ -43,7 +43,7 @@ and holds every existing decision fixed:
   **host** (`b2-desktop`), which already runs commands on Tauri's worker pool. The *only* core change is a
   cooperative-cancel **checkpoint** — a function call at a boundary that already exists — which is itself
   deterministic.
-- **The host stays a dumb adapter** ([`b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md)). A
+- **The host stays a dumb adapter** ([`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). A
   background-task lifecycle (spawn / track / cancel) and IPC streaming are **host infrastructure** — the
   same category as vault-root resolution, embedder wiring, and the native folder picker the charter already
   accepts as legitimate host responsibilities. *What* to embed, the incremental decision, edge derivation,
@@ -59,9 +59,9 @@ cancel; a cross-process background reindexer; a faster/smaller embedder.
 
 | Layer | What exists today | The gap |
 |---|---|---|
-| **Core** (`b2-core`) | [`reindex_with_progress(force, on_progress)`](../../crates/b2-core/src/vault.rs) drives [`ingest_vault_with_progress`](../../crates/b2-core/src/ingest.rs), which fires [`ReindexProgress`](../../crates/b2-core/src/ingest.rs) **per embed batch** (`ingest.rs` embed loop). Incremental: unchanged, fully-embedded notes are skipped. | `on_progress` returns `()` — **no cooperative-cancel seam**. A reindex runs to completion or not at all. |
+| **Core** (`b2-core`) | [`reindex_with_progress(force, on_progress)`](../../../crates/b2-core/src/vault.rs) drives [`ingest_vault_with_progress`](../../../crates/b2-core/src/ingest.rs), which fires [`ReindexProgress`](../../../crates/b2-core/src/ingest.rs) **per embed batch** (`ingest.rs` embed loop). Incremental: unchanged, fully-embedded notes are skipped. | `on_progress` returns `()` — **no cooperative-cancel seam**. A reindex runs to completion or not at all. |
 | **CLI** (`b2-cli`) | Consumes the callback → prints a live `embedding n/N · <path> (k chunks)` line on an interactive stderr (`b2-cli/src/main.rs`). | (fine — reference implementation of *using* progress) |
-| **Desktop host** (`b2-desktop`) | [`commands::reindex`](../../crates/b2-desktop/src/commands.rs) calls the **no-progress** `vault.reindex()` and returns one `ReindexReport`. `#[tauri::command(async)]` runs it off the main thread, so the *window* paints. | **Progress is discarded** (never reaches the webview) and **there's no cancel**. The one existing seam the CLI uses is simply not wired here. |
+| **Desktop host** (`b2-desktop`) | [`commands::reindex`](../../../crates/b2-desktop/src/commands.rs) calls the **no-progress** `vault.reindex()` and returns one `ReindexReport`. `#[tauri::command(async)]` runs it off the main thread, so the *window* paints. | **Progress is discarded** (never reaches the webview) and **there's no cancel**. The one existing seam the CLI uses is simply not wired here. |
 | **Frontend** (`ui/`) | `doReindex()` flips a global `state.loading` that disables the entire UI + shows the busy cursor, then awaits one Promise (`ui/src/main.ts`). | **Blocking-by-choice**: the window is responsive but the *app* is frozen, with no signal of life and no stop button. |
 
 **Root cause, in one line:** the engine already produces the progress the UI needs — the desktop adapter
@@ -101,7 +101,7 @@ Evolve the **one** progress-bearing entry point; do not proliferate variants.
   consistent — exactly the state an incremental reindex expects, so the next run embeds only the notes the
   cancel left unfinished (per-note granularity — a note interrupted mid-embed re-embeds in full, at most one
   note's worth of redo; see §5.2).
-- **Report the outcome honestly.** [`ReindexReport`](../../crates/b2-core/src/vault.rs) gains
+- **Report the outcome honestly.** [`ReindexReport`](../../../crates/b2-core/src/vault.rs) gains
   **`cancelled: bool`**; its `indexed` / `embedded` / `stamped` counts then describe the partial work
   truthfully (e.g. "indexed 1000, embedded 240, cancelled"). No new outcome enum — the existing report
   already carries the counts.
@@ -144,11 +144,11 @@ All threading/atomics/IPC live here; none of it is engine logic.
 - **A `cancel_reindex` command.** Sets `reindex_cancel`. Because `reindex` runs on a *different* Tauri
   worker thread, `cancel_reindex` runs concurrently and the reindex closure observes the flag at its next
   batch boundary and breaks — cooperative, no thread-killing, no torn writes.
-- **Vault switch cancels first.** `choose_vault` / `set_root` ([`commands.rs`](../../crates/b2-desktop/src/commands.rs))
+- **Vault switch cancels first.** `choose_vault` / `set_root` ([`commands.rs`](../../../crates/b2-desktop/src/commands.rs))
   sets the cancel flag and waits for the in-flight run to wind down (to its next checkpoint) *before*
   repointing the root, so a reindex can never keep writing the old vault after the app has moved on.
 - **Errors stay generic.** A mid-run failure (e.g. model unload) still funnels through `CmdError` →
-  [`user_message`](../../crates/b2-desktop/src/error.rs); the channel simply stops. No sqlite/io/serde leaks
+  [`user_message`](../../../crates/b2-desktop/src/error.rs); the channel simply stops. No sqlite/io/serde leaks
   to the webview.
 
 **Why this is still "dumb":** the charter forbids *engine logic* in the host, not *infrastructure*. Task
@@ -179,7 +179,7 @@ The plan is only worth shipping if a cancelled index is never a broken one. The 
 
 ## 6. Build order
 
-Each step is a provable increment (mirrors [desktop-ui-mvp.md](desktop-ui-mvp.md) §8 / the build spec).
+Each step is a provable increment (mirrors [desktop-ui-mvp.md](../desktop-ui-mvp.md) §8 / the build spec).
 
 - **Step 1 — Stream progress (no core change).** Wire the existing `reindex_with_progress` in
   `commands::reindex` behind a `Channel<ReindexProgress>`; the frontend replaces the global freeze with a
@@ -237,7 +237,7 @@ CLI's answer. A CLI **Ctrl-C cancel** becomes trivial once §3 lands (the CLI's 
 signal flag) — a small, separate follow-on.
 
 **Also parked (a raw-speed lever, not a structural fix):** swap bge-base (768-dim) for bge-small (384-dim,
-~3× faster) or a quantized/ONNX path behind the existing [`Embedder`](../../crates/b2-core/src/embed.rs)
+~3× faster) or a quantized/ONNX path behind the existing [`Embedder`](../../../crates/b2-core/src/embed.rs)
 seam — **measure retrieval quality (the eval) before changing the default**. Independent of everything above.
 
 ## 9. Open questions / deferred (not deciding here)
@@ -251,16 +251,16 @@ seam — **measure retrieval quality (the eval) before changing the default**. I
   its DB-derived pending set in one cheap query before starting —
   [projection-embedding-split.md](projection-embedding-split.md) §2.)*
 - **Auto-index-on-open** vs. keep it a manual action (§7) — a first-run UX call, taken when §7 starts.
-- **Reranker / chunker changes** — orthogonal ([index-engine.md](../index-engine.md) §5, build spec §1.2).
+- **Reranker / chunker changes** — orthogonal ([index-engine.md](../../index-engine.md) §5, build spec §1.2).
 
 ## 10. Docs to mirror (doc-driven follow-ups)
 
 Per the design-docs-are-source-of-truth discipline:
 
-- [tasks.md](../tasks.md) — the Backlog "Non-blocking embedding — deferred approaches" bullet is **moved
+- [tasks.md](../../tasks.md) — the Backlog "Non-blocking embedding — deferred approaches" bullet is **moved
   here** (§7–§8); leave a pointer, and promote "async, cancellable indexing" to an active work item tracking
   Steps 1→3. *(Done alongside this doc.)*
-- [specs/desktop-ui-mvp.md](desktop-ui-mvp.md) — §4's `reindex` row is "exists"; add a pointer noting its
+- [specs/desktop-ui-mvp.md](../desktop-ui-mvp.md) — §4's `reindex` row is "exists"; add a pointer noting its
   async/progress/cancel behavior is specced here. *(Done alongside this doc.)*
-- [README.md](../../README.md) / `docs/architecture.html` — no change until this ships; then note the desktop
+- [README.md](../../../README.md) / `docs/architecture.html` — no change until this ships; then note the desktop
   reindex is a cancellable background action.

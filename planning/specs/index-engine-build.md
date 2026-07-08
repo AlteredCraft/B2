@@ -266,7 +266,7 @@ Markdown — both body and `relations:`) and its chunks. Every edge is Markdown-
 re-parse is exactly a one-note slice of a full rebuild — which is what makes "incremental ≡ full" hold.
 
 > **Split into two passes (2026-07-07,
-> [projection-embedding-split.md](projection-embedding-split.md)):** over the whole vault, the model-free
+> [projection-embedding-split.md](completed/projection-embedding-split.md)):** over the whole vault, the model-free
 > steps above (notes + chunks + FTS + edges) and the embed step are now **separately invokable** —
 > `Vault::project` and `Vault::embed` — with the fused `reindex` remaining their composition. The embed
 > pass derives its pending set from the DB (chunks with no `chunks_vec` row) rather than an in-memory

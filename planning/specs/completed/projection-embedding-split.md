@@ -3,7 +3,7 @@ title: "B2 — Decoupled projection & embedding (keyword-first index)"
 type: note
 tags: [b2, ui, desktop, tauri, reindex, indexing, embedding, projection, keyword-first, spec]
 created: 2026-07-07
-status: draft
+status: implemented
 ---
 
 # B2 — Decoupled projection & embedding (keyword-first index)
@@ -27,10 +27,10 @@ status: draft
 > usable; the desktop's two-command orchestration (the *Shape A* decision below); and the build order.
 >
 > **It does not own:** the engine invariant or the reindex algorithm
-> ([index-engine.md](../index-engine.md), [index-engine-build.md](index-engine-build.md)); the async
+> ([index-engine.md](../../index-engine.md), [index-engine-build.md](../index-engine-build.md)); the async
 > **progress + cancel** plumbing this reuses wholesale ([async-indexing.md](async-indexing.md) §3/§4);
-> the thin-adapter charter ([desktop-ui-mvp.md](desktop-ui-mvp.md),
-> [`b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md)). **Auto-index-on-open**, **embed
+> the thin-adapter charter ([desktop-ui-mvp.md](../desktop-ui-mvp.md),
+> [`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). **Auto-index-on-open**, **embed
 > ordering**, a **CLI background embed**, and a **faster embedder** stay deferred (§9 / async-indexing
 > §7–§8).
 
@@ -47,7 +47,7 @@ passes — and holds every existing decision fixed:
 - **The core stays model-free, synchronous, and deterministic** (root `CLAUDE.md`). Projection needs
   **no embedder at all** (it never touches `chunks_vec`); embedding keeps the one deterministic
   cancel checkpoint async-indexing.md §3 already added. No `async`/threads/wall-clock enter `b2-core`.
-- **The host stays a dumb adapter** ([`b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md)). The
+- **The host stays a dumb adapter** ([`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). The
   two passes become two textbook-dumb commands; the *sequencing* (project → refresh tree → embed)
   lives in the **frontend controller**, where UI flow belongs — not as branching engine logic in Rust.
 - **The invariant `index = projection of (Markdown)` is untouched.** A projected-but-unembedded index
@@ -69,10 +69,10 @@ remaining their composition — use those exact names.
 
 | Layer | What exists today | The gap |
 |---|---|---|
-| **Core** (`b2-core`) | [`ingest_vault_with_progress`](../../crates/b2-core/src/ingest.rs) runs Phase 1 (project notes/chunks/FTS) → Phase 1b (embed) → Phase 2 (edges) in **one call**, handing the pending vectors between 1 and 1b as an **in-memory `staged` Vec**. `ensure_embedding_space` is called at the top, so the op needs the embedder's `dim` up front. | Projection and embedding are **fused**: you cannot get the (fast, model-free) keyword+graph index without also paying for (slow, model-bound) embedding in the same call. |
-| **Façade** (`Vault`) | One [`reindex_with_progress(force, on_progress)`](../../crates/b2-core/src/vault.rs); the desktop `reindex` command opens the **real model** first, then calls it. | The single op opens the model before any projection runs, and returns only when *everything* is done. There is no "just project" entry point. |
-| **Search** (`Vault::search`) | Returns an **empty list** when `chunks_vec` doesn't exist yet (`vault.rs:388`) — because [`hybrid_search`](../../crates/b2-core/src/search.rs) unconditionally calls `db::vector_search`, which needs the table. | A projected-but-unembedded vault answers **no** search at all — even though BM25 over `chunks_fts` is fully ready. "Usable while embedding" is impossible. |
-| **Desktop** (`ui/` + host) | [`doReindex`](../../ui/src/main.ts) calls `loadNotes()` only **after** the reindex Promise resolves; the Promise resolves only after embedding. | The tree can't paint early, so the whole point of the fast first phase is thrown away. |
+| **Core** (`b2-core`) | [`ingest_vault_with_progress`](../../../crates/b2-core/src/ingest.rs) runs Phase 1 (project notes/chunks/FTS) → Phase 1b (embed) → Phase 2 (edges) in **one call**, handing the pending vectors between 1 and 1b as an **in-memory `staged` Vec**. `ensure_embedding_space` is called at the top, so the op needs the embedder's `dim` up front. | Projection and embedding are **fused**: you cannot get the (fast, model-free) keyword+graph index without also paying for (slow, model-bound) embedding in the same call. |
+| **Façade** (`Vault`) | One [`reindex_with_progress(force, on_progress)`](../../../crates/b2-core/src/vault.rs); the desktop `reindex` command opens the **real model** first, then calls it. | The single op opens the model before any projection runs, and returns only when *everything* is done. There is no "just project" entry point. |
+| **Search** (`Vault::search`) | Returns an **empty list** when `chunks_vec` doesn't exist yet (`vault.rs:388`) — because [`hybrid_search`](../../../crates/b2-core/src/search.rs) unconditionally calls `db::vector_search`, which needs the table. | A projected-but-unembedded vault answers **no** search at all — even though BM25 over `chunks_fts` is fully ready. "Usable while embedding" is impossible. |
+| **Desktop** (`ui/` + host) | [`doReindex`](../../../ui/src/main.ts) calls `loadNotes()` only **after** the reindex Promise resolves; the Promise resolves only after embedding. | The tree can't paint early, so the whole point of the fast first phase is thrown away. |
 
 **Root cause, in one line:** the two phases are fused because pending vectors are handed off in memory,
 and the desktop refreshes the tree only after the fused op returns — so the already-written keyword +
@@ -83,8 +83,8 @@ graph index is invisible until embedding finishes.
 The reason the phases *can* be split cleanly (no in-memory handoff) is one fact about the schema:
 
 > **"What still needs embedding" is exactly the chunks in `chunks` with no row in `chunks_vec`.**
-> [`replace_chunks`](../../crates/b2-core/src/db.rs) already clears a note's stale vectors when its
-> body changes; [`note_fully_embedded`](../../crates/b2-core/src/db.rs) already expresses the per-note
+> [`replace_chunks`](../../../crates/b2-core/src/db.rs) already clears a note's stale vectors when its
+> body changes; [`note_fully_embedded`](../../../crates/b2-core/src/db.rs) already expresses the per-note
 > version of this query. So the embed pass doesn't need projection to *tell* it what to embed — it can
 > **query** the DB for it.
 
@@ -128,7 +128,7 @@ Evolve `b2-core`'s ingest into two entry points plus a composing wrapper. All th
 - **`ingest::embed_vault(conn, embedder, on_progress) -> EmbedOutcome`** — `ensure_embedding_space`
   (creates `chunks_vec` at the model's `dim`; a model swap drops + resets it, so *all* chunks then
   count as missing) → query the **chunks with no vector**, grouped by note in `(path, seq)` order →
-  batch-embed via the existing [`embed_pending`](../../crates/b2-core/src/ingest.rs) machinery, firing
+  batch-embed via the existing [`embed_pending`](../../../crates/b2-core/src/ingest.rs) machinery, firing
   `ReindexProgress` per batch and honoring the `ControlFlow::Break` cancel checkpoint unchanged. No
   `force`. Returns `embedded`/`cancelled`.
 - **`ingest::ingest_vault_with_progress(...) = project_vault(force) then embed_vault(on_progress)`** —
@@ -173,7 +173,7 @@ One small change makes a projected (unembedded) vault genuinely usable:
 ## 6. The host & frontend — Shape A
 
 Two dumb commands replace the single `reindex` command; the guard/cancel machinery
-([`AppState`](../../crates/b2-desktop/src/main.rs), unchanged) attaches to the embed one.
+([`AppState`](../../../crates/b2-desktop/src/main.rs), unchanged) attaches to the embed one.
 
 - **`project(state) -> ProjectReport`** — opens the **fake** vault (`open_vault(state, false)` — no
   model load), calls `vault.project(false)`, returns. Fast; nothing to stream.
@@ -235,24 +235,24 @@ Each step is a provable increment; the desktop wiring (Step 3) is the only one t
 
 ### Step 1 — the core split (start here)
 
-**Goal.** Factor the fused [`ingest_vault_with_progress`](../../crates/b2-core/src/ingest.rs) into a
+**Goal.** Factor the fused [`ingest_vault_with_progress`](../../../crates/b2-core/src/ingest.rs) into a
 model-free `project_vault` and a model-bound `embed_vault`, expose them as `Vault::project` /
 `Vault::embed`, and keep `reindex` as their composition. Nothing user-visible changes; this is a pure
 refactor that *separates* the two passes and derives the pending set from the DB (§2). Entirely in
 `b2-core`, entirely model-free to test (fake embedder).
 
 **Files & current-state anchors.**
-- [`crates/b2-core/src/ingest.rs`](../../crates/b2-core/src/ingest.rs) — `ingest_vault_with_progress`
+- [`crates/b2-core/src/ingest.rs`](../../../crates/b2-core/src/ingest.rs) — `ingest_vault_with_progress`
   is the fused fn to split; `project_note_and_chunks` computes today's in-memory `pending`;
   `embed_pending` is the batched + `ControlFlow`-cancel loop to **reuse verbatim**; `would_reembed` is
   kept **only** for the dry-run (do not reuse it in `project`).
-- [`crates/b2-core/src/db.rs`](../../crates/b2-core/src/db.rs) — add `chunks_missing_vectors`;
+- [`crates/b2-core/src/db.rs`](../../../crates/b2-core/src/db.rs) — add `chunks_missing_vectors`;
   `note_fully_embedded` (line ~408) is its per-note ancestor; `ensure_embedding_space` /
   `embedding_space_exists` / `replace_chunks` / `set_chunk_vector` are unchanged.
-- [`crates/b2-core/src/vault.rs`](../../crates/b2-core/src/vault.rs) — add `Vault::project` /
+- [`crates/b2-core/src/vault.rs`](../../../crates/b2-core/src/vault.rs) — add `Vault::project` /
   `Vault::embed`; `reindex_with_progress` stays (now composes them).
-- Tests: [`tests/embed.rs`](../../crates/b2-core/tests/embed.rs) and
-  [`tests/cancel.rs`](../../crates/b2-core/tests/cancel.rs) must stay green; add the new tests below.
+- Tests: [`tests/embed.rs`](../../../crates/b2-core/tests/embed.rs) and
+  [`tests/cancel.rs`](../../../crates/b2-core/tests/cancel.rs) must stay green; add the new tests below.
 
 **The moves (in order).**
 1. `db::chunks_missing_vectors(conn) -> Vec<(String /*note_b2id*/, String /*path*/, i64 /*chunk_id*/, String /*text*/)>`
@@ -333,10 +333,10 @@ Per the design-docs-are-source-of-truth discipline:
 
 - [async-indexing.md](async-indexing.md) — §7 ("Progressive enhancement — keyword-first") is **being
   executed here**; add a pointer noting this doc owns the projection/embedding split it anticipated.
-- [tasks.md](../tasks.md) — promote "decouple embedding from indexing" to an active work item tracking
+- [tasks.md](../../tasks.md) — promote "decouple embedding from indexing" to an active work item tracking
   Steps 1→3, pointing here.
-- [index-engine.md](../index-engine.md) / [index-engine-build.md](index-engine-build.md) — Flow ① is
+- [index-engine.md](../../index-engine.md) / [index-engine-build.md](../index-engine-build.md) — Flow ① is
   described as one pass; note that projection and embedding are now separately invokable (the fused
   `reindex` is their composition), with no change to the invariant or the two-phase link resolution.
-- [desktop-ui-mvp.md](desktop-ui-mvp.md) — the `reindex` surface is now project-then-embed; add a
+- [desktop-ui-mvp.md](../desktop-ui-mvp.md) — the `reindex` surface is now project-then-embed; add a
   pointer once Step 3 ships.

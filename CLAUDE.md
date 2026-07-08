@@ -116,7 +116,7 @@ here: `open` defaults to the fake, `open_with_embedder` is how the CLI wires the
 - **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
   notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
   independent of file order. Since 2026-07-07 it is **two separately-invokable passes**
-  (`specs/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
+  (`specs/completed/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
   falls back to BM25-only on a projected-but-unembedded vault.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (`chunks_vec`) fused with

@@ -1,4 +1,4 @@
-//! Cooperative-cancel of a reindex (planning/specs/async-indexing.md §3): the embed
+//! Cooperative-cancel of a reindex (planning/specs/completed/async-indexing.md §3): the embed
 //! phase can be stopped at a batch boundary via `ControlFlow::Break`, and the result
 //! is a **consistent, resumable** index — every note has chunks + FTS + edges (keyword
 //! search + graph complete), only a *prefix* has vectors, and an incremental re-run
