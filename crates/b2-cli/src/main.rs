@@ -232,6 +232,15 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     "Indexed {} notes ({} embedded, {} stamped)",
                     report.indexed, report.embedded, report.stamped
                 );
+                // One unreadable file no longer aborts the reindex — it is skipped and
+                // named here (to stderr, so it never pollutes the machine-readable stdout
+                // line above) with a short, file-level reason.
+                if !report.skipped.is_empty() {
+                    eprintln!("Skipped {} unreadable file(s):", report.skipped.len());
+                    for s in &report.skipped {
+                        eprintln!("  - {} ({})", s.path, s.reason);
+                    }
+                }
             }
         }
         Command::Add {

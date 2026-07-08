@@ -331,6 +331,18 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   heuristically (e.g. via the alias); those links are **flagged for repair, not silently dropped**. This
   is the same failure surface as moving files with Obsidian closed — acceptable, but it means the index is
   load-bearing for full repair fidelity.
+- **Path ownership follows the Markdown, and a reindex never aborts on it.** `notes.path` is unique, but a
+  path can change hands out of band — a note deleted then recreated at the same path, or files renamed/
+  swapped outside `b2 mv` so a path now belongs to a different `b2id`. Projection reconciles to the current
+  truth: `db::upsert_note` drops the **stale** row that still holds the path (its chunks/edges cascade)
+  before writing the new owner, so an incremental reindex converges on the same state as a from-scratch
+  rebuild (`full-reindex ≡ incremental-update`) instead of failing on a raw `UNIQUE(notes.path)` error.
+  **Known gap:** a note file *deleted with no replacement* still leaves a ghost row until the path is reused
+  or the index is rebuilt — non-crashing, tracked in [#31](https://github.com/AlteredCraft/B2/issues/31).
+- **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
+  permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
+  file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting
+  the reindex on one file it cannot read.
 - **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
   projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
   ([vision-and-scope.md](vision-and-scope.md)): round-trip losslessness (`parse → serialize → parse`),

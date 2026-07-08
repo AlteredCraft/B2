@@ -15,6 +15,7 @@ use b2_core::open;
 use b2_core::vault::Vault;
 use common::golden_vault_copy;
 use rusqlite::Connection;
+use std::fs;
 use std::ops::ControlFlow;
 use std::path::Path;
 
@@ -180,6 +181,96 @@ fn project_then_embed_matches_reindex() {
         "identical text→vector map"
     );
     assert_eq!(split_obs.edges, fused_obs.edges, "identical typed graph");
+}
+
+// --- resilience: one unreadable file must never abort the whole reindex ----------
+//
+// A real vault holds the odd non-UTF-8 or unreadable `.md`. Before this, a single such
+// file made `fs::read_to_string` fail and took the entire projection (and thus the
+// reindex) down with a generic error. The pass must skip it and index everything else.
+
+#[test]
+fn project_skips_unreadable_file_and_indexes_the_rest() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    // A `.md` file that is not valid UTF-8 (a stray 0xFF byte). `read_to_string` fails
+    // with `InvalidData` on it — the exact shape a large primary vault trips over.
+    fs::write(vault_dir.join("bad.md"), [b'#', b' ', 0xff, b'\n']).unwrap();
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+
+    let outcome = project_vault(&conn, &vault_dir, &UlidGen, false).unwrap();
+
+    // Both readable notes projected; the bad one is skipped, not fatal.
+    assert_eq!(outcome.notes.len(), 2, "both readable notes still index");
+    assert_eq!(
+        outcome.skipped.len(),
+        1,
+        "the bad file is skipped, not fatal"
+    );
+    assert_eq!(outcome.skipped[0].path, "bad.md");
+    assert_eq!(outcome.skipped[0].reason, "not valid UTF-8 text");
+    // The good notes' keyword index is intact.
+    assert!(count(&conn, "chunks") > 0);
+}
+
+#[test]
+fn reindex_reconciles_a_path_taken_over_by_another_note() {
+    // A file renamed/replaced outside `b2 mv` can hand its path to a *different* b2id,
+    // leaving the prior holder's row stale. Projection must reconcile (drop the stale
+    // holder) rather than abort on `notes.path` UNIQUE — an incremental reindex must
+    // equal a from-scratch rebuild (index-engine's core invariant). Regression for the
+    // `UNIQUE constraint failed: notes.path` reindex crash.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("foo.md"),
+        "---\nb2id: 01AAAAAAAAAAAAAAAAAAAAAAAA\n---\n\nAlpha body.\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("bar.md"),
+        "---\nb2id: 01BBBBBBBBBBBBBBBBBBBBBBBB\n---\n\nBeta body.\n",
+    )
+    .unwrap();
+
+    let vault = Vault::open(&root).unwrap();
+    assert_eq!(vault.reindex().unwrap().indexed, 2);
+
+    // Out-of-b2 edit: delete foo.md, rename bar.md → foo.md. foo.md now carries B, and
+    // the index's (A, foo.md) row is stale — its path is taken over by B.
+    fs::remove_file(root.join("foo.md")).unwrap();
+    fs::rename(root.join("bar.md"), root.join("foo.md")).unwrap();
+
+    // The incremental reindex must succeed and converge on the current truth: one note,
+    // b2id B at foo.md — byte-identical to what a from-scratch rebuild would produce.
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 1);
+    let notes = vault.list_notes().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].path, "foo.md");
+    assert_eq!(notes[0].b2id, "01BBBBBBBBBBBBBBBBBBBBBBBB");
+}
+
+#[test]
+fn reindex_completes_and_reports_skipped_files() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    fs::write(root.join("bad.md"), [0xff, 0xfe, b'x']).unwrap();
+    let vault = Vault::open(&root).unwrap();
+
+    // The composed reindex succeeds (no abort) and reports the skip truthfully.
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 2);
+    assert_eq!(report.embedded, 2);
+    assert!(!report.cancelled);
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].path, "bad.md");
+
+    // …and the vault is fully usable: keyword search over the good notes still answers.
+    assert!(!vault.search("forgetting", 5).unwrap().is_empty());
 }
 
 // --- Step 2: a projected (unembedded) vault is a usable vault (§5 / §7.3) --------

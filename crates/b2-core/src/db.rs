@@ -192,7 +192,20 @@ pub struct NoteRow<'a> {
 
 /// Upsert a note keyed by `b2id` and replace its aliases. `indexed_at` is set by
 /// SQLite so the projection needs no wall-clock from Rust.
+///
+/// A note's `path` is `UNIQUE`, and the Markdown is the source of truth: if a
+/// *different* `b2id` currently holds this path in the index, that row is **stale** —
+/// the note there was deleted then recreated, or files were renamed/swapped outside
+/// `b2 mv` (all normal for a local-first vault edited in other tools). We drop the stale
+/// holder first (its chunks/edges cascade) so the upsert can't hit the `notes.path`
+/// UNIQUE constraint. Without this, one such collision raises a raw SQLite error that
+/// aborts the entire reindex, and an incremental reindex diverges from a from-scratch
+/// rebuild — violating the core "incremental ≡ full rebuild" invariant (index-engine.md).
 pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
+    conn.execute(
+        "DELETE FROM notes WHERE path = ?1 AND b2id <> ?2",
+        params![row.path, row.b2id],
+    )?;
     conn.execute(
         "INSERT INTO notes
            (b2id, path, type, title, description, created, updated, body_hash, mtime, indexed_at)

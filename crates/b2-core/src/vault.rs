@@ -32,6 +32,10 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+/// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
+/// nameable through the façade — the one typed contract adapters import from.
+pub use crate::ingest::SkippedNote;
+
 /// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
 /// without an injected model (tests/dev). The real model brings its own `dim` (768)
 /// through [`Vault::open_with_embedder`]; a model/dim swap re-embeds on `reindex`.
@@ -62,21 +66,29 @@ pub struct Vault {
 /// (keyword + graph complete, a prefix embedded) and an incremental re-run finishes
 /// the rest. Always `false` for [`reindex`](Vault::reindex) and the CLI, which never
 /// cancel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexReport {
     pub indexed: usize,
     pub embedded: usize,
     pub stamped: usize,
     pub cancelled: bool,
+    /// Files skipped as unreadable this run (see [`SkippedNote`]) — a whole-vault
+    /// reindex never fails on one bad file (non-UTF-8, permission-denied). Empty on a
+    /// clean vault; each entry names the file and a short, file-level reason.
+    pub skipped: Vec<SkippedNote>,
 }
 
 /// What [`project`](Vault::project) did — the model-free half of a reindex
 /// (projection-embedding-split.md §4): how many notes were projected and how many
 /// needed a `b2id` stamped. No embed counts: projection never touches vectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectReport {
     pub indexed: usize,
     pub stamped: usize,
+    /// Files skipped as unreadable this pass (see [`SkippedNote`]) — projecting a large
+    /// vault never fails on one bad file. Empty on a clean vault; surfaced so an
+    /// adapter can tell the user which files were left out and why.
+    pub skipped: Vec<SkippedNote>,
 }
 
 /// What [`embed`](Vault::embed) did — the model-bound half of a reindex: how many
@@ -298,6 +310,7 @@ impl Vault {
             embedded: ingested.notes.iter().filter(|i| i.embedded).count(),
             stamped: ingested.notes.iter().filter(|i| i.stamped).count(),
             cancelled: ingested.cancelled,
+            skipped: ingested.skipped,
         })
     }
 
@@ -318,6 +331,7 @@ impl Vault {
         Ok(ProjectReport {
             indexed: outcome.notes.len(),
             stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
+            skipped: outcome.skipped,
         })
     }
 

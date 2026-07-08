@@ -17,7 +17,7 @@
 use crate::chunk::chunk_body;
 use crate::db::{self, EdgeRow, NoteRow};
 use crate::embed::Embedder;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::id::IdGen;
 use crate::note;
 use rusqlite::Connection;
@@ -382,6 +382,9 @@ pub struct IngestOutcome {
     /// The embed phase stopped early because `on_progress` returned
     /// [`ControlFlow::Break`]. Always `false` for a run that was never cancelled.
     pub cancelled: bool,
+    /// Files the projection pass skipped as unreadable (see [`SkippedNote`]); empty on
+    /// a clean vault. A whole-vault reindex reports these rather than failing on them.
+    pub skipped: Vec<SkippedNote>,
 }
 
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
@@ -430,12 +433,41 @@ pub fn project_file(
     Ok(Projected { b2id, stamped })
 }
 
+/// A `.md` file the projection pass could **not** read, and therefore skipped, so one
+/// unreadable file never aborts a whole-vault reindex (a real vault holds the odd
+/// non-UTF-8 or unreadable file). Carries the vault-relative `path` and a short,
+/// user-appropriate `reason` — about the *file itself* ("not valid UTF-8 text",
+/// "permission denied"), never a B2 internal — so it is safe both to show and to log.
+///
+/// Only a *filesystem* failure reading one note is recoverable this way; a systemic
+/// error (SQLite, …) still aborts the pass, since it is not about a single file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedNote {
+    pub path: String,
+    pub reason: String,
+}
+
+/// Classify an I/O error hit while reading/stamping one note into a short, clean,
+/// user-appropriate reason — the file's problem stated plainly, with no raw OS jargon
+/// (e.g. "stream did not contain valid UTF-8") and no B2 internal. Anything unusual
+/// falls back to a generic "could not be read".
+fn skip_reason(err: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match err.kind() {
+        ErrorKind::InvalidData => "not valid UTF-8 text".to_string(),
+        ErrorKind::PermissionDenied => "permission denied".to_string(),
+        ErrorKind::NotFound => "file no longer exists".to_string(),
+        _ => "could not be read".to_string(),
+    }
+}
+
 /// The result of the model-free **projection pass** over the whole vault
 /// ([`project_vault`]): every projected note, in the deterministic (sorted-path)
-/// walk order.
+/// walk order, plus any files skipped as unreadable (empty on a clean vault).
 #[derive(Debug, Clone)]
 pub struct ProjectOutcome {
     pub notes: Vec<Projected>,
+    pub skipped: Vec<SkippedNote>,
 }
 
 /// The result of a (possibly cancelled) **embed pass** ([`embed_vault`]): which
@@ -479,19 +511,35 @@ pub fn project_vault(
     // pairs are deliberately dropped: the embed pass derives its work from the DB
     // (`chunks_missing_vectors`), so nothing is handed over in memory (§2).
     let mut staged = Vec::with_capacity(rel_paths.len());
+    let mut skipped = Vec::new();
     for rel in &rel_paths {
-        let (b2id, stamped, body, relations, _pending) =
-            project_note_and_chunks(conn, vault_root, rel, idgen, force, false)?;
-        staged.push((b2id, stamped, body, relations));
+        match project_note_and_chunks(conn, vault_root, rel, idgen, force, false) {
+            Ok((b2id, stamped, body, relations, _pending)) => {
+                staged.push((b2id, stamped, body, relations));
+            }
+            // A note we cannot read or stamp (non-UTF-8, permission-denied, vanished
+            // mid-walk) is *skipped*, not fatal: one bad file must never abort a
+            // whole-vault reindex. This catches only filesystem failures reading THIS
+            // note — the DB layer surfaces `Error::Sqlite`, a systemic failure that
+            // still aborts. No partial row is written for a skipped note, since the
+            // read/stamp fails before any `upsert` (§ — the invariant holds).
+            Err(Error::Io(e)) => skipped.push(SkippedNote {
+                path: rel.clone(),
+                reason: skip_reason(&e),
+            }),
+            Err(other) => return Err(other),
+        }
     }
 
-    // Phase 2: edges (resolve links against the now-complete resolver).
+    // Phase 2: edges (resolve links against the now-complete resolver). Only the notes
+    // that projected are here, so a skipped note simply has no rows and no edges; a
+    // link pointing at it stays unresolved, exactly as for any absent target.
     let mut notes = Vec::with_capacity(staged.len());
     for (b2id, stamped, body, relations) in staged {
         project_edges(conn, &b2id, &body, &relations)?;
         notes.push(Projected { b2id, stamped });
     }
-    Ok(ProjectOutcome { notes })
+    Ok(ProjectOutcome { notes, skipped })
 }
 
 /// The **embed pass** (projection-embedding-split.md §4): fill a vector for every
@@ -578,14 +626,16 @@ pub fn ingest_vault_with_progress(
     force: bool,
     on_progress: &mut dyn FnMut(ReindexProgress) -> ControlFlow<()>,
 ) -> Result<IngestOutcome> {
-    let projected = project_vault(conn, vault_root, idgen, force)?;
+    let ProjectOutcome {
+        notes: projected_notes,
+        skipped,
+    } = project_vault(conn, vault_root, idgen, force)?;
     let embed = embed_vault(conn, embedder, on_progress)?;
 
     // Merge the two outcomes into the per-note report shape `reindex` has always
     // returned: a note "embedded this run" iff the embed pass fully filled it.
     let embedded: HashSet<&str> = embed.embedded.iter().map(String::as_str).collect();
-    let notes = projected
-        .notes
+    let notes = projected_notes
         .into_iter()
         .map(|p| {
             let was_embedded = embedded.contains(p.b2id.as_str());
@@ -599,6 +649,7 @@ pub fn ingest_vault_with_progress(
     Ok(IngestOutcome {
         notes,
         cancelled: embed.cancelled,
+        skipped,
     })
 }
 
@@ -621,7 +672,13 @@ pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result
 
     let mut out = Vec::with_capacity(rel_paths.len());
     for rel in rel_paths {
-        let raw = fs::read_to_string(vault_root.join(&rel))?;
+        // Skip an unreadable file rather than abort the preview — a real reindex would
+        // skip it too (see [`project_vault`]), so the dry-run must not be the one place
+        // a non-UTF-8 or unreadable note still crashes the whole run.
+        let raw = match fs::read_to_string(vault_root.join(&rel)) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
         let parsed = note::parse(&raw);
         let would_stamp = parsed.fields().b2id.is_none();
         let body_hash = blake3::hash(parsed.body().as_bytes()).to_hex().to_string();

@@ -69,8 +69,11 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages exactly as
   the CLI funnels through `user_message` in [`b2-cli/src/main.rs`](../b2-cli/src/main.rs) — **never** leak
   sqlite/io/serde internals into the UI. Use a `thiserror` enum for this crate's errors (matched → mapped),
-  never `anyhow` for anything the UI presents. `B2_DEBUG` opts into developer detail. (Root CLAUDE.md error
-  policy + parent `Projects/CLAUDE.md` logging policy.)
+  never `anyhow` for anything the UI presents. `B2_DEBUG` opts into developer detail. The **full** internal
+  detail is *always* logged server-side to stderr (`log_internal`, called from `CmdError`'s `Serialize`
+  impl — the one boundary every command error crosses to the webview), so a failed command is diagnosable
+  under `tauri dev` without `B2_DEBUG`: the log carries everything, the webview only the generic string.
+  (Root CLAUDE.md error policy + parent `Projects/CLAUDE.md` logging policy.)
 - **Determinism unchanged.** Push no wall-clock or randomness into `b2-core`; timestamps come from the
   façade clock (`now()` / `today()`), same as the CLI.
 

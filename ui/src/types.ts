@@ -100,13 +100,25 @@ export interface LinkReport {
 }
 
 /**
+ * A `.md` file the projection pass couldn't read and skipped (see `ProjectReport`).
+ * `reason` is a short, file-level phrase — "not valid UTF-8 text", "permission
+ * denied" — safe to show; never a B2 internal.
+ */
+export interface SkippedNote {
+  path: string;
+  reason: string;
+}
+
+/**
  * `Vault::project` — what the fast, model-free projection pass did
  * (projection-embedding-split.md §4). Once this resolves, the tree and keyword
- * search are live; only vectors are missing.
+ * search are live; only vectors are missing. `skipped` names any unreadable files the
+ * pass left out — one bad file never aborts the whole reindex (empty on a clean vault).
  */
 export interface ProjectReport {
   indexed: number;
   stamped: number;
+  skipped: SkippedNote[];
 }
 
 /** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */

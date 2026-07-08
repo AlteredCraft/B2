@@ -337,6 +337,14 @@ async function doReindex(): Promise<void> {
     // late-finishing project is harmless host-side: it wrote the old vault's own
     // .b2/, idempotently — spec §6.)
     if (state.vaultRoot !== startedRoot) return;
+    // A projection can skip files it can't read (non-UTF-8, permission-denied) rather
+    // than abort — appended to every reindex flash below so the user knows some files
+    // were left out, and why, instead of silently missing them.
+    const skipped = p.skipped.length
+      ? ` — skipped ${p.skipped.length} unreadable file(s): ${p.skipped
+          .map((s) => `${s.path} (${s.reason})`)
+          .join(", ")}`
+      : "";
     // The tree paints HERE — a projection can add, remove, or rename notes, and the
     // vault is browsable + keyword-searchable while embedding runs.
     await loadNotes();
@@ -345,7 +353,9 @@ async function doReindex(): Promise<void> {
       // Cancel landed during the short projection window: don't start embedding (the
       // host would clear the flag and run to completion). The projected index is
       // complete and consistent; vectors fill on the next run.
-      flash(`Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.`);
+      flash(
+        `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}`,
+      );
       return;
     }
     // Phase 2 — embedding (real model), metered + cancellable via the host's slot.
@@ -364,8 +374,8 @@ async function doReindex(): Promise<void> {
     if (r.cancelled && !state.reindexCancelling) return;
     flash(
       r.cancelled
-        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.`
-        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.`,
+        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}`
+        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.${skipped}`,
     );
     if (state.current) {
       // Projection may have stamped the open note on disk; re-read it, and refresh

@@ -577,6 +577,29 @@ mod tests {
     }
 
     #[test]
+    fn project_skips_unreadable_files_and_still_reports() {
+        // A real vault holds the odd non-UTF-8 file; projecting it must skip that file
+        // and index the rest, not fail the whole pass (the "reindex fails on a large
+        // vault" bug). The skip flows through the report to the UI, no logic added here.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
+        copy_dir(&src, &root);
+        fs::write(root.join("bad.md"), [b'#', 0xff, b'\n']).unwrap();
+        let state = AppState::new(Some(root));
+
+        let report = project_impl(&state).unwrap();
+        assert_eq!(
+            report.indexed, 2,
+            "the two readable golden notes still project"
+        );
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].path, "bad.md");
+        // The tree lists the good notes; the bad file is absent, not fatal.
+        assert_eq!(list_notes_impl(&state).unwrap().len(), 2);
+    }
+
+    #[test]
     fn arm_clears_a_stale_cancel_but_request_sets_it() {
         let state = AppState::new(None);
         state.request_reindex_cancel();

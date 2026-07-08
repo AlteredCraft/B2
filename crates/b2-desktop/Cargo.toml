@@ -30,3 +30,6 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Test-only: exercise the `CmdError` → webview serialization boundary the way Tauri
+# does (already in the tree via b2-core, so no new build cost).
+serde_json = "1.0.150"

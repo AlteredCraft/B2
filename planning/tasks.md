@@ -58,6 +58,16 @@ façade** have shipped:
   bullets, HR, fenced code) over the byte-honest buffer — hybrid reveal, a `</>` source escape hatch,
   Cmd/Ctrl+click wikilink follow, zero new deps, **no Rust changes**. Closes
   [#30](https://github.com/AlteredCraft/B2/issues/30).
+- **Reindex robustness (2026-07-08)** — a whole-vault reindex no longer aborts on a single bad file or a
+  path collision (both surfaced by dogfooding `~/_PRIMARY_VAULT`). `ingest::project_vault` **skips**
+  unreadable files (non-UTF-8 / permission-denied), reporting them as `skipped` through
+  `ProjectReport`/`ReindexReport` (CLI stderr + desktop flash) instead of failing; `db::upsert_note`
+  **reconciles path ownership** — it drops a stale row still holding a path now owned by a different
+  `b2id` — so an incremental reindex equals a from-scratch rebuild rather than crashing on
+  `UNIQUE(notes.path)` when files are renamed/replaced outside `b2 mv`. The desktop host also now **logs
+  full error detail server-side** (the webview still gets only the generic message). Residual deleted-file
+  ghost rows tracked in [#31](https://github.com/AlteredCraft/B2/issues/31). See
+  [index-engine.md](index-engine.md) §8.
 
 ## Active — next up
 

@@ -77,10 +77,54 @@ pub fn user_message(err: &CmdError) -> String {
     }
 }
 
+/// Log an error's **full internal detail** to stderr — the sqlite/io/serde specifics
+/// the webview must never see (repo logging policy: the server log carries everything,
+/// the client only the generic message). The desktop mirror of the CLI writing detail
+/// to stderr; under `tauri dev` it lands in the terminal running the host, so a failing
+/// command is diagnosable without a rebuild or `B2_DEBUG`. Called from the one place
+/// every command error crosses to the webview — [`CmdError`]'s `Serialize` impl — so
+/// logging stays uniform and out of the dumb command handlers.
+fn log_internal(err: &CmdError) {
+    let detail = match err {
+        CmdError::Core(e) => e.to_string(),
+        CmdError::Embed(e) => e.to_string(),
+        CmdError::VaultRequired | CmdError::ReindexInFlight => err.to_string(),
+    };
+    eprintln!("[b2] command failed: {detail}");
+}
+
 /// Serialize the error **as its user-facing message** — the whole point of the type:
-/// the webview receives a generic, actionable string, never an internal.
+/// the webview receives a generic, actionable string, never an internal. This is also
+/// the single boundary where an error reaches the client, so it is where the full
+/// detail is logged server-side ([`log_internal`]) before the generic string goes out.
 impl Serialize for CmdError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        log_internal(self);
         serializer.serialize_str(&user_message(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializing an error — the one path by which a command failure reaches the
+    /// webview — yields the **generic** user-facing string, never the internal detail.
+    /// (It also runs `log_internal`, which writes the full detail to stderr; the
+    /// harness captures that, so this exercises the server-log boundary too.)
+    #[test]
+    fn serializes_to_the_generic_message_and_hides_internals() {
+        // An unmapped Core error is the exact "Something went wrong" case the reindex
+        // bug hit — the client sees the generic message, not the io/utf-8 detail.
+        let err = CmdError::Core(b2_core::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )));
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(
+            json,
+            "\"Something went wrong. Please check the vault and try again.\""
+        );
+        assert!(!json.to_lowercase().contains("utf-8"), "no internal leaks");
     }
 }
