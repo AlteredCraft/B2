@@ -6,11 +6,13 @@
 
 import "../style.css";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state } from "./state";
+import { livePreview, wikilink } from "./livepreview";
 import { escapeHtml, modalHtml, notePaneHtml, sidePaneHtml, treePaneHtml } from "./render";
 
 // --- render ---------------------------------------------------------------------
@@ -159,9 +161,19 @@ function toggleFrontmatter(): void {
   render();
 }
 
+// The `</>` toggle serves two surfaces off the one sticky `sourceOpen` (spec §3
+// "Escape hatch"). In the reading view it flips rendered ↔ raw via a full re-render.
+// While editing, the carve-out forbids rebuilding the pane, so it reconfigures the
+// live-preview compartment in place — decorations off = raw + syntax colors, monospace
+// (today's editor) — with cursor and undo intact, then repaints just the bar button.
 function toggleSource(): void {
   state.sourceOpen = !state.sourceOpen;
-  render();
+  if (state.editing) {
+    editorView?.dispatch({ effects: lpCompartment.reconfigure(livePreviewConf()) });
+    paintEditor();
+  } else {
+    render();
+  }
 }
 
 async function refreshDiscovery(): Promise<void> {
@@ -399,6 +411,15 @@ async function cancelReindex(): Promise<void> {
 let editorView: EditorView | null = null;
 let autosaveTimer: number | undefined;
 let embedTimer: number | undefined;
+// Live-preview lives in a Compartment (spec §5) so `</>` can swap it for raw source
+// mode with no remount. Two configs off the sticky `sourceOpen`: decorated (the
+// document feel) or raw + today's syntax colors.
+const lpCompartment = new Compartment();
+function livePreviewConf(): Extension {
+  return state.sourceOpen
+    ? syntaxHighlighting(defaultHighlightStyle, { fallback: true })
+    : livePreview((target) => void openNote(target));
+}
 /** The in-flight save chain — resolves only when it settles (trailing saves included). */
 let inFlight: Promise<void> | null = null;
 /** A save arrived while one was in flight; run one more against the latest buffer. */
@@ -426,7 +447,14 @@ function mountEditor(body: string): void {
   el("note-pane").innerHTML = `
     <div class="editor-bar">
       <span class="editor-title">Editing · ${escapeHtml(n.path)}</span>
-      <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+      <div class="note-bar-actions">
+        <button id="edit-source" class="source-toggle${
+          state.sourceOpen ? " is-active" : ""
+        }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
+          state.sourceOpen ? "Show live preview" : "Show Markdown source"
+        }">&lt;/&gt;</button>
+        <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+      </div>
     </div>
     <div id="edit-conflict" class="conflict-bar" hidden>
       <span>This note changed on disk.</span>
@@ -439,11 +467,14 @@ function mountEditor(body: string): void {
   editorView = new EditorView({
     doc: body,
     extensions: [
-      markdown(),
+      // GFM base + the wikilink node: the reading view's `gfm: true` twin, and without
+      // `markdownLanguage` there's no `Strikethrough` node (the default base is
+      // CommonMark-only). Always on — the parser feeds both live preview and source mode.
+      markdown({ base: markdownLanguage, extensions: [wikilink] }),
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      lpCompartment.of(livePreviewConf()),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) scheduleAutosave();
       }),
@@ -454,11 +485,17 @@ function mountEditor(body: string): void {
   paintEditor();
 }
 
-// Repaint just the editor's conflict bar — never a pane rebuild (the same targeted-
-// repaint pattern as paintReindex).
+// Repaint just the editor's conflict bar and the `</>` source-toggle button — never a
+// pane rebuild (the same targeted-repaint pattern as paintReindex).
 function paintEditor(): void {
   const bar = document.getElementById("edit-conflict");
   if (bar) bar.hidden = !state.editConflict;
+  const src = document.getElementById("edit-source");
+  if (src) {
+    src.classList.toggle("is-active", state.sourceOpen);
+    src.setAttribute("aria-pressed", String(state.sourceOpen));
+    src.title = state.sourceOpen ? "Show live preview" : "Show Markdown source";
+  }
 }
 
 function scheduleAutosave(): void {

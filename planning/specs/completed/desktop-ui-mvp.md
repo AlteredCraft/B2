@@ -62,7 +62,7 @@ so #5 is still satisfied to the letter by the CLI while the GUI honors its spiri
 
 ### 1.2 The editor's "document feel" without WYSIWYG
 
-> **Specced 2026-07-08** → [../desktop-live-preview.md](../desktop-live-preview.md) (#30): the
+> **Shipped 2026-07-08** → [desktop-live-preview.md](desktop-live-preview.md) (#30): the
 > live-preview decorations described below, scoped to edit mode (the rendered reading view stays
 > the default surface), hybrid reveal, hand-rolled over the Lezer tree with zero new deps.
 

@@ -4,7 +4,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-07
+updated: 2026-07-08
 status: active
 ---
 
@@ -21,7 +21,7 @@ design docs, which are the **source of truth** (the code is a projection of them
 > current focus and the design anchors that code comments cite. Shipped history is in git and in the
 > specs — it is no longer duplicated here.
 
-## Current state (2026-07-07)
+## Current state (2026-07-08)
 
 The **headless engine is complete** and **two dumb adapters over the [`Vault`](../crates/b2-core/src/vault.rs)
 façade** have shipped:
@@ -51,15 +51,17 @@ façade** have shipped:
   `write_note` host command, and CodeMirror 6 edit mode with autosave-on-idle, a single-flight save
   chain, the conflict bar (Reload / Keep mine), and the trailing background embed. Closes
   [#13](https://github.com/AlteredCraft/B2/issues/13).
+- **Live-preview decorations (2026-07-08)** — the document feel over the same CM6 pane
+  ([specs/completed/desktop-live-preview.md](specs/completed/desktop-live-preview.md), dogfooded):
+  a hand-rolled decoration engine (`ui/src/livepreview.ts`) that conceals Markdown markup away from
+  the cursor and styles content in place (headings, emphasis, code, links, wikilinks, blockquote,
+  bullets, HR, fenced code) over the byte-honest buffer — hybrid reveal, a `</>` source escape hatch,
+  Cmd/Ctrl+click wikilink follow, zero new deps, **no Rust changes**. Closes
+  [#30](https://github.com/AlteredCraft/B2/issues/30).
 
 ## Active — next up
 
-Editing follow-ons, in whichever order the friction says:
-
-1. **Live-preview decorations** — the document feel over the same CM6 pane — **specced 2026-07-08
-   in [specs/desktop-live-preview.md](specs/desktop-live-preview.md)** (edit-mode-only, hybrid
-   reveal, hand-rolled engine, zero new deps) — [#30](https://github.com/AlteredCraft/B2/issues/30).
-2. **Step 5 — native fs-watch auto-reload** (replaces "stale until conflict" with live
+1. **Step 5 — native fs-watch auto-reload** (replaces "stale until conflict" with live
    reconciliation; revisit frontend save-chain test extraction when this is specced) —
    [#14](https://github.com/AlteredCraft/B2/issues/14).
 

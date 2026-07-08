@@ -3,23 +3,23 @@ title: "B2 — Live-preview decorations: a document feel over the byte-honest bu
 type: note
 tags: [b2, ui, desktop, editor, codemirror, live-preview, decorations, spec]
 created: 2026-07-08
-status: draft
+status: complete
 ---
 
 # B2 — Live-preview decorations: a document feel over the byte-honest buffer
 
 > **The build spec for [#30](https://github.com/AlteredCraft/B2/issues/30)** — the follow-on
-> [completed/desktop-editing.md](completed/desktop-editing.md) §9 deferred. Edit mode today shows raw
+> [desktop-editing.md](desktop-editing.md) §9 deferred. Edit mode today shows raw
 > Markdown with syntax colors; this doc upgrades it to **live preview**: markup concealed away from
 > the cursor, content styled in place, markup revealed exactly where you're working — the
 > "byte-honest buffer that *renders* like a document" the MVP's editor-substrate decision promised
-> ([completed/desktop-ui-mvp.md](completed/desktop-ui-mvp.md) §1.2).
+> ([desktop-ui-mvp.md](desktop-ui-mvp.md) §1.2).
 >
 > **This doc owns:** the decoration engine (`ui/src/livepreview.ts` — the wikilink tree extension,
 > the ViewPlugin, the reveal policy); its integration into the Step-3 editor (the Compartment, the
 > `</>` source toggle, mod-click navigation, styles); and the build order. **It does not own:** the
 > save path, the conflict guard, or any façade/host surface
-> ([completed/desktop-editing.md](completed/desktop-editing.md) — untouched end to end: **pure
+> ([desktop-editing.md](desktop-editing.md) — untouched end to end: **pure
 > frontend, no Rust changes**); the reading view (unchanged — see §3 *Role*).
 
 ## 0. Scope & ground rules
@@ -173,9 +173,9 @@ panes are pixel-unchanged; mode-switching read ↔ edit doesn't jar (typography 
 
 ## 9. Docs to mirror
 
-- [tasks.md](../tasks.md) — Active item 1 (#30) points here. *(Done alongside this doc.)*
-- [completed/desktop-editing.md](completed/desktop-editing.md) §9 — the live-preview deferral gains
+- [tasks.md](../../tasks.md) — Active item 1 (#30) points here. *(Done alongside this doc.)*
+- [desktop-editing.md](desktop-editing.md) §9 — the live-preview deferral gains
   a "specced →" pointer. *(Done alongside this doc.)*
-- [completed/desktop-ui-mvp.md](completed/desktop-ui-mvp.md) §1.2 — the document-feel rationale
+- [desktop-ui-mvp.md](desktop-ui-mvp.md) §1.2 — the document-feel rationale
   gains its execution pointer. *(Done alongside this doc.)*
 - [#30](https://github.com/AlteredCraft/B2/issues/30) — link this spec when it lands on main.

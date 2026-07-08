@@ -611,6 +611,91 @@ body {
   caret-color: var(--accent);
 }
 
+/* --- live-preview decorations (desktop-live-preview.md §5) ----------------------- */
+/* The `.lp-*` block mirrors `.note-body`'s scale so mode-switching read ↔ edit doesn't
+   jar (spec §7). Light/dark ride the existing CSS vars — no highlight-theme dependency.
+   The `lp-body` class (from the live-preview compartment) swaps the editor to the
+   reading view's proportional voice; source mode (`</>` on) drops the class and the
+   `.cm-scroller` monospace default returns. Code spans/fences stay monospace in both. */
+.editor-host .cm-content.lp-body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.68;
+}
+
+/* Headings — the reading view's `.note-body` scale (relative to the 16px body). */
+.editor-host .lp-h1,
+.editor-host .lp-h2,
+.editor-host .lp-h3,
+.editor-host .lp-h4,
+.editor-host .lp-h5,
+.editor-host .lp-h6 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.editor-host .lp-h1 { font-size: 1.55em; }
+.editor-host .lp-h2 { font-size: 1.3em; }
+.editor-host .lp-h3 { font-size: 1.1em; }
+
+.editor-host .lp-strong { font-weight: 700; }
+.editor-host .lp-em { font-style: italic; }
+.editor-host .lp-strike { text-decoration: line-through; }
+
+/* Inline code — the reading view's chip; monospace even inside the proportional body. */
+.editor-host .lp-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+}
+
+.editor-host .lp-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Wikilinks — the reading view's dashed accent; Cmd/Ctrl+click follows (spec §3). */
+.editor-host .lp-wikilink {
+  color: var(--accent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: pointer;
+}
+
+/* Blockquote — the reading view's border + muted, applied per concealed-`>` line. */
+.editor-host .lp-quote {
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  padding-left: 1em;
+}
+
+/* Fenced code — a block background per line; the fences stay visible (spec §3). */
+.editor-host .lp-fence {
+  background: var(--surface-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13.5px;
+}
+.editor-host .lp-fence:first-child,
+.editor-host .lp-fence + .lp-fence {
+  border-radius: 0;
+}
+
+.editor-host .lp-bullet {
+  color: var(--muted);
+}
+
+/* Horizontal rule widget — a full-bleed line in place of `---`. */
+.editor-host .lp-hr {
+  display: inline-block;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
 /* --- empty states ------------------------------------------------------------- */
 
 .empty {

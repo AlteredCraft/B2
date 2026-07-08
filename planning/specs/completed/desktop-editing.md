@@ -385,9 +385,9 @@ all stay live while editing (the carve-out holds).
 ## 9. Open questions / deferred
 
 - **Live-preview decorations** (desktop-ui-mvp §1.2's document feel) — pure frontend, slots into the
-  same pane; sized as its own effort. **Tracked:
-  [#30](https://github.com/AlteredCraft/B2/issues/30); specced 2026-07-08 →
-  [../desktop-live-preview.md](../desktop-live-preview.md).**
+  same pane; sized as its own effort. **Shipped 2026-07-08 →
+  [desktop-live-preview.md](desktop-live-preview.md)
+  ([#30](https://github.com/AlteredCraft/B2/issues/30)).**
 - **fs-watch auto-reload** (Step 5) — replaces "stale until conflict" with live reconciliation; the
   conflict bar remains the fallback for unwatchable cases. **Tracked:
   [#14](https://github.com/AlteredCraft/B2/issues/14).**
