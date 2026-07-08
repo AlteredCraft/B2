@@ -226,7 +226,23 @@ Slot it exactly where qmd puts it: **after RRF fusion, before final ranking**, b
   separate eval suite, never in CI).
 - This is why the reranker is genuinely deferrable with no architectural debt: it changes *ordering*,
   not the store, the schema, or the candidate set. "Eventually add a reranker" is a one-stage insertion,
-  not a redesign.
+  not a redesign. It is also **store-agnostic** — a model-side seam above the index, not a property of it,
+  so no vector-store choice simplifies or blocks it ([research/vector-store-alternatives.md](research/vector-store-alternatives.md) §5).
+
+**Scope — this reranks `b2 search`, not `b2 similar`.** The seam signature `(query, candidates) → scores`
+is the tell: it needs *query text*, so it reorders **query search** (`b2 search`). **`b2 similar` has no
+query** — it is passage↔passage KNN, "near ∖ connected" (§3, [tasks.md](tasks.md) ①) — so this reranker
+does **not** apply to it; the discovery-side ranking levers are the qmd chunker upgrade
+([#19](https://github.com/AlteredCraft/B2/issues/19)) and distance-weighting
+([#20](https://github.com/AlteredCraft/B2/issues/20)), not this.
+
+**Gate the decision on the eval, not intuition** ([specs/eval-strategy.md](specs/eval-strategy.md)). RRF
+is a strong baseline; the reranker buys **top-k precision**, whose value *grows with vault size* (semantic
+near-misses crowd the top past ~1k notes) and is *highest when an agent consumes top-1/top-3 without a
+human eye* (the `serve` adapter, [#24](https://github.com/AlteredCraft/B2/issues/24)). Vault size changes
+whether the precision is *worth* it, not the reranker's cost — that is fixed at the top-N it rescores. So
+measure RRF precision@k / MRR on a representative set first and ship the reranker only on a measured gap;
+this is the deferral §5 is built to allow. Tracked in [#28](https://github.com/AlteredCraft/B2/issues/28).
 
 Query expansion (qmd's third model, the fine-tuned 1.7B) is **optional and lowest priority** — it's the
 heaviest model for the smallest, most variable win. Treat it as a later, off-by-default flag.
