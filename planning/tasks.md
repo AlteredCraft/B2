@@ -48,10 +48,14 @@ façade** have shipped:
 
 ## Active — next up
 
-The desktop's next cut is **editing**, per [specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §8:
+The desktop's next cut is **editing** — specced 2026-07-07 in
+[specs/desktop-editing.md](specs/desktop-editing.md) (executes
+[specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §8 Step 4):
 
-1. **Step 4 — in-editor body editing** (CodeMirror 6 + `Vault::write` + mtime guard) —
-   [#13](https://github.com/AlteredCraft/B2/issues/13).
+1. **In-editor body editing** — `Vault::write` (byte-honest body splice, content-hash revision guard,
+   model-free save + trailing background embed), CodeMirror 6 edit mode, autosave-on-idle —
+   [#13](https://github.com/AlteredCraft/B2/issues/13). Live-preview decorations are the follow-on
+   ([#30](https://github.com/AlteredCraft/B2/issues/30)).
 2. **Step 5 — native fs-watch auto-reload** — [#14](https://github.com/AlteredCraft/B2/issues/14).
 
 ## Backlog → GitHub Issues
