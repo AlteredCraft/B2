@@ -27,6 +27,10 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
+# Platform data dir for the "last opened vault" state file, so the app reopens the
+# vault that was open when it was last closed. Same crate/convention b2-embed uses for
+# its XDG model cache (`dirs::data_dir()/b2/…`), so both live under one vendor dir.
+dirs = "6"
 
 [dev-dependencies]
 tempfile = "3.27.0"

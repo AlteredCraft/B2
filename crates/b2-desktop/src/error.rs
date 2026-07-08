@@ -19,8 +19,9 @@ pub enum CmdError {
     Core(#[from] b2_core::Error),
     #[error(transparent)]
     Embed(#[from] EmbedError),
-    /// A command ran with no vault configured (no launch arg, no `$B2_VAULT_PATH`) —
-    /// refuse rather than guess a directory, and tell the user how to point B2 at one.
+    /// A command ran with no vault configured (no launch arg, no remembered pick, no
+    /// `$B2_VAULT_PATH`) — refuse rather than guess a directory, and tell the user how to
+    /// point B2 at one.
     #[error("no vault specified")]
     VaultRequired,
     /// A `reindex` was requested while one was already running (single-in-flight,

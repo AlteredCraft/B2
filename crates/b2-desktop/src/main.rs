@@ -5,11 +5,15 @@
 //! that keep it a *dumb* adapter live in this crate's charter, `CLAUDE.md`.
 //!
 //! Two things this file owns, both mirroring the CLI:
-//!   * **Vault root resolution** — a launch arg or `$B2_VAULT_PATH` (the CLI's
-//!     positional / `-C`), seeded once at startup into [`AppState`] and thereafter
-//!     **swappable at runtime** by the in-app vault picker (`choose_vault`). Every
-//!     command opens a *fresh* vault from the current root, exactly as the
-//!     one-process-per-command CLI does.
+//!   * **Vault root resolution** — an explicit launch arg (the CLI's positional), else
+//!     the **last vault the user opened** (persisted across launches, see
+//!     [`read_last_vault`]), else `$B2_VAULT_PATH` (the CLI's `-C` / env). Seeded once
+//!     at startup into [`AppState`] and thereafter **swappable at runtime** by the
+//!     in-app vault picker (`choose_vault`), which also **remembers** the pick so the
+//!     next launch reopens it. Every command opens a *fresh* vault from the current
+//!     root, exactly as the one-process-per-command CLI does. (The remembered choice is
+//!     desktop-only state — a long-lived window's "reopen what I had"; the stateless CLI
+//!     has no equivalent, so this is a legitimate host responsibility, not engine logic.)
 //!   * **Embedder wiring** — pure reads open with the deterministic fake; anything
 //!     that embeds a query or writes vectors (`search` / `link` / `embed`) opens the
 //!     real [`LocalEmbedder`] and **fails fast** with "run `b2 init`" if it's absent.
@@ -185,15 +189,84 @@ pub fn semantic_available() -> bool {
     }
 }
 
-/// Resolve the vault root once at startup: the first launch argument wins (the CLI's
-/// positional), then `$B2_VAULT_PATH` (the CLI's `-C` / env). A leading-`-` first arg
-/// is ignored so a macOS `-psn_…` Finder argument is never mistaken for a path.
+/// Resolve the vault root once at startup. Precedence, most-explicit first:
+///   1. an explicit **launch argument** (the CLI's positional) — a per-launch override;
+///   2. the **last vault the user opened** via the picker, remembered across launches
+///      ([`read_last_vault`]) — so the app reopens what was open when it was last closed;
+///   3. `$B2_VAULT_PATH` (the CLI's `-C` / env) — the first-run / never-picked default.
+///
+/// The remembered choice deliberately beats `$B2_VAULT_PATH`: on a GUI the picker is the
+/// primary way you choose a vault, and "remember my choice" is the expected behavior; the
+/// env var seeds the *first* run, and a launch arg remains the escape hatch to force a
+/// specific vault for one session without disturbing the remembered pick. A leading-`-`
+/// first arg is ignored so a macOS `-psn_…` Finder argument is never mistaken for a path.
 fn resolve_root() -> Option<PathBuf> {
-    std::env::args()
+    let arg = std::env::args()
         .nth(1)
         .filter(|a| !a.starts_with('-'))
-        .or_else(|| std::env::var("B2_VAULT_PATH").ok())
-        .map(PathBuf::from)
+        .map(PathBuf::from);
+    let env = std::env::var("B2_VAULT_PATH").ok().map(PathBuf::from);
+    pick_root(arg, read_last_vault(), env)
+}
+
+/// The pure precedence rule behind [`resolve_root`], split out so it is unit-testable
+/// without touching process args, the environment, or the filesystem: launch arg, then
+/// the remembered pick, then the env fallback.
+fn pick_root(
+    arg: Option<PathBuf>,
+    remembered: Option<PathBuf>,
+    env: Option<PathBuf>,
+) -> Option<PathBuf> {
+    arg.or(remembered).or(env)
+}
+
+/// Path of the "last opened vault" state file: `<data-dir>/b2/last-vault` (macOS:
+/// `~/Library/Application Support/b2/…`, Linux: `~/.local/share/b2/…`) — the same
+/// `dirs`-resolved `b2/` vendor dir b2-embed uses for its model cache. `None` only if the
+/// platform has no data dir, in which case remembering is silently skipped.
+fn last_vault_file() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("b2").join("last-vault"))
+}
+
+/// The remembered vault root from the last picker choice, or `None` if there is none,
+/// the file is unreadable/empty, **or the remembered directory no longer exists** (moved
+/// or deleted). Falling through on a stale entry lets startup drop back to the env
+/// default rather than opening a vault whose every command would then error.
+fn read_last_vault() -> Option<PathBuf> {
+    read_last_vault_from(&last_vault_file()?)
+}
+
+/// [`read_last_vault`] against an explicit file path — the testable core (a tempfile
+/// stands in for the real state file). Strips only trailing newline(s), so a path is
+/// preserved verbatim, and requires the target to be an existing directory.
+fn read_last_vault_from(file: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(file).ok()?;
+    let path = PathBuf::from(contents.trim_end_matches(['\n', '\r']));
+    path.is_dir().then_some(path)
+}
+
+/// Remember `root` as the last opened vault so the next launch reopens it. **Best-effort
+/// host state**: a write failure (no data dir, unwritable disk) is logged to stderr and
+/// swallowed — remembering must never fail the vault switch the user just made. Called
+/// only from the `choose_vault` command wrapper (an explicit user pick), never from the
+/// unit-tested state transition, so tests don't touch the real data dir.
+fn persist_last_vault(root: &Path) {
+    let Some(file) = last_vault_file() else {
+        eprintln!("[b2] could not remember last vault: no platform data directory");
+        return;
+    };
+    if let Err(e) = persist_last_vault_to(&file, root) {
+        eprintln!("[b2] could not remember last vault: {e}");
+    }
+}
+
+/// [`persist_last_vault`] against an explicit file path — the testable core. Creates the
+/// parent dir if needed and writes the path as the file's sole line.
+fn persist_last_vault_to(file: &Path, root: &Path) -> std::io::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(file, root.to_string_lossy().as_bytes())
 }
 
 fn main() {
@@ -222,4 +295,84 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running the B2 desktop app");
+}
+
+#[cfg(test)]
+mod tests {
+    //! Host-side vault-resolution tests: the pure precedence rule and the "last opened
+    //! vault" state file's persist/read round-trip. All hermetic — `pick_root` touches
+    //! nothing global, and the file helpers run against a tempdir, never the real data
+    //! dir (which only the `choose_vault` wrapper writes, in production).
+
+    use super::*;
+    use std::path::PathBuf;
+
+    fn p(s: &str) -> Option<PathBuf> {
+        Some(PathBuf::from(s))
+    }
+
+    #[test]
+    fn pick_root_precedence_arg_then_remembered_then_env() {
+        // (arg, remembered, env) → the chosen root. Arg wins outright; the remembered
+        // pick beats the env fallback; env is used only when nothing more explicit is set.
+        let cases = [
+            (p("/arg"), p("/mem"), p("/env"), p("/arg")),
+            (None, p("/mem"), p("/env"), p("/mem")),
+            (None, None, p("/env"), p("/env")),
+            (p("/arg"), None, None, p("/arg")),
+            (p("/arg"), None, p("/env"), p("/arg")),
+            (None, p("/mem"), None, p("/mem")),
+            (None, None, None, None),
+        ];
+        for (arg, remembered, env, want) in cases {
+            assert_eq!(
+                pick_root(arg.clone(), remembered.clone(), env.clone()),
+                want,
+                "pick_root({arg:?}, {remembered:?}, {env:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn persist_then_read_round_trips_an_existing_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path().join("my vault"); // a space proves we don't trim it
+        std::fs::create_dir_all(&vault).unwrap();
+        // The state file sits under a not-yet-created subdir — persist must `mkdir -p`.
+        let file = tmp.path().join("state/b2/last-vault");
+
+        persist_last_vault_to(&file, &vault).unwrap();
+        assert_eq!(read_last_vault_from(&file), Some(vault));
+    }
+
+    #[test]
+    fn read_last_vault_ignores_a_stale_or_missing_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("last-vault");
+        // A remembered vault that has since been deleted must not be reopened.
+        std::fs::write(&file, tmp.path().join("gone").to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(read_last_vault_from(&file), None);
+    }
+
+    #[test]
+    fn read_last_vault_ignores_missing_or_empty_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // No file at all.
+        assert_eq!(read_last_vault_from(&tmp.path().join("absent")), None);
+        // An empty file (whitespace only) is not a path.
+        let empty = tmp.path().join("empty");
+        std::fs::write(&empty, "\n").unwrap();
+        assert_eq!(read_last_vault_from(&empty), None);
+    }
+
+    #[test]
+    fn read_last_vault_strips_only_trailing_newlines() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let file = tmp.path().join("last-vault");
+        // A trailing newline (as `persist` never writes, but a hand-edit might) is fine.
+        std::fs::write(&file, format!("{}\n", vault.display())).unwrap();
+        assert_eq!(read_last_vault_from(&file), Some(vault));
+    }
 }

@@ -50,14 +50,20 @@ pub fn vault_info(state: State<'_, AppState>) -> Result<VaultInfo, CmdError> {
 }
 
 /// The in-app vault switcher: open a **native folder picker** and, if the user picks a
-/// folder, point the app at it (every later command opens over the new root). Returns
-/// the new [`VaultInfo`] on success, or `None` when the user cancels — the UI then
-/// leaves the current vault untouched.
+/// folder, point the app at it (every later command opens over the new root) and
+/// **remember** it so the next launch reopens it. Returns the new [`VaultInfo`] on
+/// success, or `None` when the user cancels — the UI then leaves the current vault
+/// untouched.
 ///
 /// Host-owned by design: vault-root resolution is this crate's job (main.rs), and the
 /// picker is an OS concern, so this is a legitimate host responsibility, not engine
 /// logic (there is nothing here to push behind the façade). Running the dialog in Rust
 /// (not the webview) is also what keeps the webview dialog-permission-free.
+///
+/// The `persist_last_vault` call lives here in the (untestable) dialog wrapper, not in
+/// [`set_vault_root_impl`], so the unit-tested state transition never writes to the real
+/// user data dir. It is best-effort: a failed write is logged and swallowed, never
+/// blocking the switch the user just made.
 ///
 /// `(async)` runs this off the main thread, which is *required*: `blocking_pick_folder`
 /// waits on the main thread to show the panel, so calling it from the main thread would
@@ -75,7 +81,9 @@ pub fn choose_vault(
     let Ok(path) = picked.into_path() else {
         return Ok(None);
     };
-    Ok(Some(set_vault_root_impl(state.inner(), &path)?))
+    let info = set_vault_root_impl(state.inner(), &path)?;
+    crate::persist_last_vault(&path); // remember it for the next launch (best-effort)
+    Ok(Some(info))
 }
 
 #[tauri::command(async)]
