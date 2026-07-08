@@ -81,6 +81,16 @@ export interface ExplainView {
   connections: NeighborView[];
 }
 
+/**
+ * `Vault::write` — the completed body save (desktop-editing.md §4): the note's path
+ * plus the new `revision` (blake3 of the final on-disk bytes), the token the editor
+ * chains the next save on so its own saves never self-conflict.
+ */
+export interface WriteReport {
+  path: string;
+  revision: string;
+}
+
 /** `Vault::link` — the committed edge (idempotent: `created=false` if it existed). */
 export interface LinkReport {
   src_path: string;

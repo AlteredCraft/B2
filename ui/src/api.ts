@@ -17,7 +17,31 @@ import type {
   SearchResult,
   SimilarView,
   VaultInfo,
+  WriteReport,
 } from "./types";
+
+// A rejected `invoke` resolves to the host's user-facing string (CmdError serializes
+// to `user_message`), so surface it directly — it's already generic and actionable.
+export function errText(e: unknown): string {
+  return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * The host's exact `WriteConflict` message — part of the IPC contract
+ * (desktop-editing.md §5): the frontend recognizes a save conflict by matching this
+ * stable constant. Pinned host-side by the `write_conflict_is_generic_and_recognizable`
+ * test in `b2-desktop/src/commands.rs` — change them together.
+ */
+export const WRITE_CONFLICT_MESSAGE =
+  "This note changed on disk since it was opened. Reload the note, then reapply your edit.";
+
+/**
+ * Whether an IPC rejection is the save guard refusing a stale revision.
+ * `startsWith`, not equality: `B2_DEBUG` appends `\n(debug: …)` to every message.
+ */
+export function isWriteConflict(e: unknown): boolean {
+  return errText(e).startsWith(WRITE_CONFLICT_MESSAGE);
+}
 
 export const api = {
   /** Step 0's seam proof: round-trips a trivial command through the Rust host. */
@@ -43,6 +67,16 @@ export const api = {
   /** Hybrid keyword+semantic search across the vault. */
   search: (query: string, limit = 20): Promise<SearchResult[]> =>
     invoke("search", { query, limit }),
+
+  /**
+   * Save a note's body — Markdown-first through `Vault::write` (desktop-editing.md
+   * §4): a byte-honest body splice guarded by the `revision` captured at read, then
+   * a model-free re-projection. Rejects with `WRITE_CONFLICT_MESSAGE` when the file
+   * changed on disk since. (Tauri v2 maps camelCase keys to the command's snake_case
+   * params — `baseRevision` → `base_revision` — so no hand-written snake_case here.)
+   */
+  writeNote: (note: string, body: string, baseRevision: string): Promise<WriteReport> =>
+    invoke("write_note", { note, body, baseRevision }),
 
   /** A note's typed neighbors (both directions). */
   neighbors: (note: string): Promise<NeighborView[]> => invoke("neighbors", { note }),

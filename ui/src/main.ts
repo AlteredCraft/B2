@@ -5,9 +5,13 @@
 // flow, never engine logic.
 
 import "../style.css";
-import { api } from "./api";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown } from "@codemirror/lang-markdown";
+import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { EditorView, keymap } from "@codemirror/view";
+import { api, errText, isWriteConflict } from "./api";
 import { state } from "./state";
-import { modalHtml, notePaneHtml, sidePaneHtml, treePaneHtml } from "./render";
+import { escapeHtml, modalHtml, notePaneHtml, sidePaneHtml, treePaneHtml } from "./render";
 
 // --- render ---------------------------------------------------------------------
 
@@ -19,7 +23,10 @@ function el(id: string): HTMLElement {
 
 function render(): void {
   el("tree-pane").innerHTML = treePaneHtml(state);
-  el("note-pane").innerHTML = notePaneHtml(state);
+  // The carve-out (desktop-editing.md §6): while editing, the note pane belongs to
+  // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
+  // the editor mid-keystroke. Everything else keeps rendering.
+  if (!state.editing) el("note-pane").innerHTML = notePaneHtml(state);
   el("side-pane").innerHTML = sidePaneHtml(state);
   el("modal-root").innerHTML = modalHtml(state);
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
@@ -97,12 +104,6 @@ function flash(msg: string): void {
   }, 4500);
 }
 
-// A rejected `invoke` resolves to the host's user-facing string (CmdError serializes
-// to `user_message`), so surface it directly — it's already generic and actionable.
-function errText(e: unknown): string {
-  return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
-}
-
 // --- actions --------------------------------------------------------------------
 
 // Expand every folder on the way to `path` so the file tree reveals it — used when a
@@ -128,6 +129,9 @@ async function loadNotes(): Promise<void> {
 }
 
 async function openNote(ref: string): Promise<void> {
+  // Mid-edit navigation (tree, side pane, search) flushes the buffer and leaves edit
+  // mode first; a conflict keeps the editor — and the user's buffer — alive instead.
+  if (!(await closeEditor())) return;
   state.loading = true;
   render();
   try {
@@ -234,7 +238,18 @@ async function commitLink(): Promise<void> {
   state.loading = true;
   render();
   try {
+    // A link rewrites the open note's frontmatter on disk. Mid-edit: flush the buffer
+    // first (so the link isn't racing an autosave), then chain the post-link revision —
+    // otherwise the next autosave would false-conflict with our own link write.
+    if (state.editing) await saveNow();
     const report = await api.link(src.path, target.path, relation, explanation);
+    if (state.editing && !state.editConflict && state.current?.path === src.path) {
+      // Skipped while the conflict bar is up: adopting a fresh revision there would
+      // let a later save silently clobber the external edit the bar is guarding.
+      const fresh = await api.readNote(src.path);
+      state.current.revision = fresh.revision;
+      state.current.frontmatter = fresh.frontmatter;
+    }
     closeModal();
     await refreshDiscovery();
     flash(
@@ -256,6 +271,14 @@ async function commitLink(): Promise<void> {
 // vault); a cancel is a no-op. The picker runs host-side, so all this action does is
 // re-seed state from the new `VaultInfo` and reload the tree.
 async function switchVault(): Promise<void> {
+  // Flush + leave edit mode before the picker (same hook as openNote); then drop any
+  // pending trailing embed — it belongs to the vault we may be about to leave, and
+  // its DB-derived pending set heals on that vault's next embed/reindex anyway.
+  if (!(await closeEditor())) return;
+  if (embedTimer !== undefined) {
+    clearTimeout(embedTimer);
+    embedTimer = undefined;
+  }
   try {
     const info = await api.chooseVault();
     if (!info) return; // cancelled — leave the current vault untouched
@@ -314,11 +337,7 @@ async function doReindex(): Promise<void> {
       return;
     }
     // Phase 2 — embedding (real model), metered + cancellable via the host's slot.
-    const r = await api.embed((prog) => {
-      if (state.vaultRoot !== startedRoot) return; // stray event from a vault we've left
-      state.reindexProgress = prog;
-      paintReindex();
-    });
+    const r = await embedWithProgress(startedRoot);
     // If the switch already committed (vaultRoot changed), it owns the UI — bail.
     if (state.vaultRoot !== startedRoot) return;
     // The common ordering is subtler: the host frees the embed slot *before* the
@@ -338,8 +357,11 @@ async function doReindex(): Promise<void> {
     );
     if (state.current) {
       // Projection may have stamped the open note on disk; re-read it, and refresh
-      // discovery now that vectors exist for `similar` to rank with.
-      state.current = await api.readNote(state.current.path);
+      // discovery now that vectors exist for `similar` to rank with. Not mid-edit:
+      // the editor's revision chain owns the note then (an indexed note is already
+      // stamped), and adopting a re-read racing an in-flight save could regress the
+      // chain into a false conflict.
+      if (!state.editing) state.current = await api.readNote(state.current.path);
       await refreshDiscovery();
     }
   } catch (e) {
@@ -365,6 +387,274 @@ async function cancelReindex(): Promise<void> {
   } catch (e) {
     flash(errText(e));
   }
+}
+
+// --- editing (desktop-editing.md §6/§8) -------------------------------------------
+//
+// Edit mode hands the note pane to a CodeMirror 6 editor and autosaves on idle
+// through the guarded, model-free `write_note`. Everything here that never drives a
+// render is a module-local, not AppState: the EditorView, the debounce timers, and
+// the single-flight save flags.
+
+let editorView: EditorView | null = null;
+let autosaveTimer: number | undefined;
+let embedTimer: number | undefined;
+/** The in-flight save chain — resolves only when it settles (trailing saves included). */
+let inFlight: Promise<void> | null = null;
+/** A save arrived while one was in flight; run one more against the latest buffer. */
+let trailingDirty = false;
+/** Set on WriteConflict: no save fires until the conflict bar's action resumes. */
+let autosavePaused = false;
+
+const AUTOSAVE_MS = 1000;
+const TRAILING_EMBED_MS = 2000;
+
+// Enter edit mode: one render (which now skips the note pane — the carve-out), then
+// the pane is ours: chrome built once here, owned imperatively until exit.
+function enterEdit(): void {
+  const n = state.current;
+  if (!n || state.editing || state.loading) return;
+  state.editing = true;
+  state.editConflict = false;
+  render();
+  mountEditor(n.body);
+}
+
+function mountEditor(body: string): void {
+  const n = state.current;
+  if (!n) return;
+  el("note-pane").innerHTML = `
+    <div class="editor-bar">
+      <span class="editor-title">Editing · ${escapeHtml(n.path)}</span>
+      <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+    </div>
+    <div id="edit-conflict" class="conflict-bar" hidden>
+      <span>This note changed on disk.</span>
+      <span class="conflict-actions">
+        <button id="conflict-reload" class="btn small" title="Discard my edits and load the note from disk">Reload</button>
+        <button id="conflict-keep" class="btn small" title="Overwrite the note on disk with my edits">Keep mine</button>
+      </span>
+    </div>
+    <div id="editor-host" class="editor-host"></div>`;
+  editorView = new EditorView({
+    doc: body,
+    extensions: [
+      markdown(),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.lineWrapping,
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) scheduleAutosave();
+      }),
+    ],
+    parent: el("editor-host"),
+  });
+  editorView.focus();
+  paintEditor();
+}
+
+// Repaint just the editor's conflict bar — never a pane rebuild (the same targeted-
+// repaint pattern as paintReindex).
+function paintEditor(): void {
+  const bar = document.getElementById("edit-conflict");
+  if (bar) bar.hidden = !state.editConflict;
+}
+
+function scheduleAutosave(): void {
+  if (autosavePaused) return; // the conflict bar is up — the user decides first
+  if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = undefined;
+    void saveNow();
+  }, AUTOSAVE_MS);
+}
+
+/**
+ * The save chain's entry — an immediate flush (skips the debounce). Single-flight:
+ * one save in flight, at most one trailing marked; the returned promise resolves
+ * when the whole chain settles, so flush points can await it.
+ */
+function saveNow(): Promise<void> {
+  if (autosaveTimer !== undefined) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+  }
+  if (!state.editing || !editorView || !state.current || autosavePaused)
+    return Promise.resolve();
+  if (inFlight) {
+    trailingDirty = true; // the trailing save reads the latest buffer when it fires
+    return inFlight;
+  }
+  inFlight = runSaveChain().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function runSaveChain(): Promise<void> {
+  do {
+    trailingDirty = false;
+    const cur = state.current;
+    const view = editorView;
+    if (!cur || !view || autosavePaused) return;
+    const buffer = view.state.doc.toString();
+    if (buffer === cur.body) continue; // nothing new since the last save — settle
+    try {
+      const report = await api.writeNote(cur.path, buffer, cur.revision);
+      // The chain: the next save bases on the revision this one returned, so our own
+      // saves never self-conflict (spec §3 "last save wins"). Mirroring the buffer
+      // into `body` means exiting edit mode renders the saved text with no re-read.
+      cur.revision = report.revision;
+      cur.body = buffer;
+      scheduleTrailingEmbed();
+      void refreshConnections(); // a body edit can add/remove [[wikilink]] edges
+    } catch (e) {
+      if (isWriteConflict(e)) {
+        // Pause the chain and put the decision to the user — never re-fire into a
+        // conflict, never silently clobber.
+        autosavePaused = true;
+        state.editConflict = true;
+        paintEditor();
+      } else {
+        flash(errText(e)); // real errors surface; autosave *success* stays silent
+      }
+      return;
+    }
+  } while (trailingDirty);
+}
+
+// Post-save connection refresh (spec §6 "what refreshes"). Quiet on failure —
+// autosave is a background hum, and the pane corrects on the next open/discovery.
+async function refreshConnections(): Promise<void> {
+  const cur = state.current;
+  if (!cur) return;
+  try {
+    const explain = await api.explain(cur.path);
+    if (state.current?.path !== cur.path) return; // navigated away meanwhile
+    state.connections = explain.connections;
+    render();
+  } catch {
+    // deliberately silent
+  }
+}
+
+// After the save chain settles (~2s with no saves), fill the vectors the saves
+// invalidated. Keyword search and the graph are current from the save itself;
+// `similar`/semantic lag by these seconds (spec §6).
+function scheduleTrailingEmbed(): void {
+  if (embedTimer !== undefined) clearTimeout(embedTimer);
+  embedTimer = window.setTimeout(() => {
+    embedTimer = undefined;
+    void runTrailingEmbed();
+  }, TRAILING_EMBED_MS);
+}
+
+async function runTrailingEmbed(): Promise<void> {
+  if (inFlight) {
+    scheduleTrailingEmbed(); // the chain hasn't settled — come back after it has
+    return;
+  }
+  // A full run is already live (its embed covers our note), or no vault: skip — the
+  // missing-vector set is DB-derived, so any later embed/reindex heals it (split §7.2).
+  if (state.reindexing || state.vaultRoot === null) return;
+  const startedRoot = state.vaultRoot;
+  state.reindexing = true;
+  state.reindexProgress = null;
+  state.reindexCancelling = false;
+  paintReindex();
+  try {
+    await embedWithProgress(startedRoot);
+    // Vectors are fresh — let `similar` rank with them.
+    if (state.vaultRoot === startedRoot) await refreshDiscovery();
+  } catch {
+    // Refused (ReindexInFlight race) or failed (e.g. no model provisioned): skip
+    // silently — the user didn't ask for this run, and the pending set heals.
+  } finally {
+    state.reindexing = false;
+    state.reindexProgress = null;
+    state.reindexCancelling = false;
+    render();
+  }
+}
+
+// The one embed invocation shape, shared by doReindex's phase 2 and the trailing
+// embed: stream per-batch progress into the persistent affordance, ignoring stray
+// events from a vault we've switched away from.
+function embedWithProgress(startedRoot: string | null) {
+  return api.embed((prog) => {
+    if (state.vaultRoot !== startedRoot) return;
+    state.reindexProgress = prog;
+    paintReindex();
+  });
+}
+
+// Conflict bar: Reload — discard the buffer; read fresh, remount on the new
+// body/revision, resume autosave.
+async function conflictReload(): Promise<void> {
+  const cur = state.current;
+  if (!cur) return;
+  try {
+    const fresh = await api.readNote(cur.path);
+    state.current = fresh;
+    editorView?.destroy();
+    editorView = null;
+    trailingDirty = false;
+    autosavePaused = false;
+    state.editConflict = false;
+    mountEditor(fresh.body);
+    void refreshConnections(); // the external edit may have changed edges too
+  } catch (e) {
+    flash(errText(e));
+  }
+}
+
+// Conflict bar: Keep mine — read fresh for the *current* revision, then write the
+// buffer against it: an explicit, informed overwrite through the same guarded op (no
+// force flag exists; a further external edit in this window still conflicts).
+async function conflictKeepMine(): Promise<void> {
+  const cur = state.current;
+  if (!cur || !editorView) return;
+  try {
+    const fresh = await api.readNote(cur.path);
+    // Adopt the disk state (revision to chain on; frontmatter/metadata the external
+    // writer may have changed — the splice preserves *disk* frontmatter, so mirror it).
+    state.current = fresh;
+    autosavePaused = false;
+    state.editConflict = false;
+    paintEditor();
+    await saveNow();
+  } catch (e) {
+    flash(errText(e));
+  }
+}
+
+/**
+ * Flush and leave edit mode. Returns false when the buffer could not be saved — a
+ * conflict (the bar is up) or a failed save — so the caller must abandon whatever
+ * navigation triggered the close rather than drop the user's edits.
+ */
+async function closeEditor(): Promise<boolean> {
+  if (!state.editing) return true;
+  await saveNow();
+  if (state.editConflict) return false;
+  if (editorView && state.current && editorView.state.doc.toString() !== state.current.body)
+    return false; // the flush failed (its error already toasted) — keep the buffer alive
+  if (autosaveTimer !== undefined) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+  }
+  editorView?.destroy();
+  editorView = null;
+  trailingDirty = false;
+  autosavePaused = false;
+  state.editing = false;
+  state.editConflict = false;
+  return true;
+}
+
+async function exitEdit(): Promise<void> {
+  if (await closeEditor()) render(); // shows the saved text — no re-read needed
 }
 
 // --- shell + events -------------------------------------------------------------
@@ -443,6 +733,23 @@ function wireEvents(): void {
       return;
     }
 
+    if (target.closest("[data-toggle-edit]")) {
+      enterEdit();
+      return;
+    }
+    if (target.closest("#edit-done")) {
+      void exitEdit();
+      return;
+    }
+    if (target.closest("#conflict-reload")) {
+      void conflictReload();
+      return;
+    }
+    if (target.closest("#conflict-keep")) {
+      void conflictKeepMine();
+      return;
+    }
+
     const dir = target.closest<HTMLElement>("[data-dir]");
     if (dir) {
       toggleDir(dir.dataset.dir ?? "");
@@ -493,9 +800,20 @@ function wireEvents(): void {
     }
   });
 
-  // Escape closes the modal.
+  // Escape closes the modal; Cmd/Ctrl+S forces an immediate flush while editing
+  // (autosave means it's never *required* — this is for the reflex).
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.linkTarget) closeModal();
+    if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void saveNow();
+    }
+  });
+
+  // Losing window focus is a flush point: the buffer lands on disk before the user
+  // looks at (or edits in) anything else.
+  window.addEventListener("blur", () => {
+    if (state.editing) void saveNow();
   });
 }
 

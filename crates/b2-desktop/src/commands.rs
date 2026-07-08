@@ -512,9 +512,20 @@ mod tests {
             err,
             CmdError::Core(b2_core::Error::WriteConflict(_))
         ));
-        assert_eq!(
-            user_message(&err),
-            "This note changed on disk since it was opened. Reload the note, then reapply your edit."
+        let msg = "This note changed on disk since it was opened. Reload the note, then reapply your edit.";
+        assert_eq!(user_message(&err), msg);
+
+        // …and the frontend's mirror constant (`WRITE_CONFLICT_MESSAGE`) carries the
+        // exact same bytes — the recognizer string-matches on it, so a drifted copy
+        // would silently demote every conflict to a generic error toast. This assert
+        // automates the "change them together" discipline instead of trusting it.
+        let api_ts = fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/api.ts"),
+        )
+        .expect("ui/src/api.ts is part of this repo — the IPC seam the contract pins");
+        assert!(
+            api_ts.contains(&format!("\"{msg}\"")),
+            "ui/src/api.ts WRITE_CONFLICT_MESSAGE must equal the host's conflict message"
         );
     }
 

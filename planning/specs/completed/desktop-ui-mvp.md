@@ -187,6 +187,12 @@ transport (§1); packaging, signing, and distribution (§9).
 
 ## 5. Editing & external-edit reconciliation (the fast-follow, specced now)
 
+> **Executed 2026-07-07** by [desktop-editing.md](desktop-editing.md), which holds this section's
+> shape with one upgrade: the interim `mtime` guard below shipped as a **content-hash revision**
+> (blake3 of the raw file bytes — see its §3 for why mtime lost), and the save is **model-free**
+> (project-only; a trailing background embed fills vectors). fs-watch remains
+> [#14](https://github.com/AlteredCraft/B2/issues/14).
+
 Editing is a near fast-follow, so its shape is fixed here even though it's out of the MVP cut.
 
 - **Writes route through the façade, Markdown-first.** A save is `Vault::write` / `update_body(note,

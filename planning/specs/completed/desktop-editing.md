@@ -3,13 +3,13 @@ title: "B2 — Desktop editing: model-free saves over a byte-honest splice"
 type: note
 tags: [b2, ui, desktop, editing, codemirror, autosave, write, spec]
 created: 2026-07-07
-status: draft
+status: implemented
 ---
 
 # B2 — Desktop editing: model-free saves over a byte-honest splice
 
 > **The build spec for Step 4 of the desktop plan — in-editor body editing**
-> ([completed/desktop-ui-mvp.md](completed/desktop-ui-mvp.md) §8, tracked as
+> ([desktop-ui-mvp.md](desktop-ui-mvp.md) §8, tracked as
 > [#13](https://github.com/AlteredCraft/B2/issues/13)). The read-only MVP renders, navigates,
 > discovers, and links; this doc adds the first **write** surface: edit a note's body in the app and
 > have the save land Markdown-first through the façade. The shape §5 of the MVP spec fixed is held —
@@ -20,9 +20,9 @@ status: draft
 > re-projection); the `NoteView.revision` read token; the host `write_note` command; the editor UX cut
 > (edit mode, autosave, the save chain, the conflict bar, the trailing background embed); and the build
 > order. **It does not own:** the engine invariant or the projection/embedding split
-> ([index-engine.md](../index-engine.md), [completed/projection-embedding-split.md](completed/projection-embedding-split.md));
-> the editor-substrate decision ([completed/desktop-ui-mvp.md](completed/desktop-ui-mvp.md) §1); the
-> thin-adapter charter ([`b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md)).
+> ([index-engine.md](../../index-engine.md), [projection-embedding-split.md](projection-embedding-split.md));
+> the editor-substrate decision ([desktop-ui-mvp.md](desktop-ui-mvp.md) §1); the
+> thin-adapter charter ([`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)).
 > **Live-preview decorations** and **fs-watch reconciliation** stay deferred (§9 /
 > [#14](https://github.com/AlteredCraft/B2/issues/14)).
 
@@ -40,7 +40,7 @@ Held fixed, per the MVP spec (§5) and the workspace rules:
   writes the `.md` and re-projects it, so `index = projection of (Markdown)` is never bypassed.
 - **The core stays model-free, synchronous, deterministic.** The save path takes **no embedder** —
   it projects (chunks + FTS + edges) and leaves vectors to the embed pass, exactly the split
-  [completed/projection-embedding-split.md](completed/projection-embedding-split.md) §4 built.
+  [projection-embedding-split.md](projection-embedding-split.md) §4 built.
 - **The host stays a dumb adapter.** `write_note` is deserialize → one façade call → serialize; the
   autosave/debounce/conflict *flow* lives in the frontend controller, where UI flow belongs.
 
@@ -54,9 +54,9 @@ frontmatter editing in-app; `updated:` stamping (decided *against*, §3 — list
 
 | Layer | What exists today | The gap |
 |---|---|---|
-| **Note parse/serialize** ([`note.rs`](../../crates/b2-core/src/note.rs)) | `ParsedNote` is byte-honest: raw text verbatim + exact frontmatter/body spans (`body_start`). Its only mutations are surgical inserts (`stamp_b2id`, `add_relation`). | No body mutation exists — but the spans make one a **splice**: `raw[..body_start] + new_body`. Frontmatter bytes are untouched by construction. |
-| **Façade** ([`vault.rs`](../../crates/b2-core/src/vault.rs)) | `read` returns `NoteView` (body + metadata, verbatim from disk). Write ops exist for *other* mutations: `add` (new file), `link` (frontmatter append), `move_note` (rename + rewrite) — all Markdown-first → re-project via [`ingest_file`](../../crates/b2-core/src/ingest.rs). | No body-write op, and `NoteView` carries **no token** a later save could validate against — the app cannot detect "the file changed under me". |
-| **Ingest** ([`ingest.rs`](../../crates/b2-core/src/ingest.rs)) | The split factored the vault-wide passes (`project_vault` model-free / `embed_vault` model-bound), but the single-note path `ingest_file` still embeds **inline** (it takes the embedder). | No model-free single-note re-projection. Reusing `ingest_file` for save would put the model on the save path — latency per save, and editing would *hard-require* a provisioned model. |
+| **Note parse/serialize** ([`note.rs`](../../../crates/b2-core/src/note.rs)) | `ParsedNote` is byte-honest: raw text verbatim + exact frontmatter/body spans (`body_start`). Its only mutations are surgical inserts (`stamp_b2id`, `add_relation`). | No body mutation exists — but the spans make one a **splice**: `raw[..body_start] + new_body`. Frontmatter bytes are untouched by construction. |
+| **Façade** ([`vault.rs`](../../../crates/b2-core/src/vault.rs)) | `read` returns `NoteView` (body + metadata, verbatim from disk). Write ops exist for *other* mutations: `add` (new file), `link` (frontmatter append), `move_note` (rename + rewrite) — all Markdown-first → re-project via [`ingest_file`](../../../crates/b2-core/src/ingest.rs). | No body-write op, and `NoteView` carries **no token** a later save could validate against — the app cannot detect "the file changed under me". |
+| **Ingest** ([`ingest.rs`](../../../crates/b2-core/src/ingest.rs)) | The split factored the vault-wide passes (`project_vault` model-free / `embed_vault` model-bound), but the single-note path `ingest_file` still embeds **inline** (it takes the embedder). | No model-free single-note re-projection. Reusing `ingest_file` for save would put the model on the save path — latency per save, and editing would *hard-require* a provisioned model. |
 | **Desktop** (`ui/` + host) | The note pane renders body → HTML (`marked`), with a view-source toggle; `render()` rebuilds panes by `innerHTML` swap. | No editor, no save command — and the innerHTML-swap render would destroy a live editor, so edit mode needs an explicit carve-out (§6). |
 
 **Root cause, in one line:** the vault has every write path *except* the human's most common one — and
@@ -72,7 +72,7 @@ Three existing properties make this slice small:
    no frontmatter has `body == whole file`, and the splice degenerates correctly to "replace the file".
 2. **Projection is already model-free and convergent.** The save re-projects with the same machinery
    `project_vault` uses per note: re-chunk on body change (stale vectors cleared by
-   [`replace_chunks`](../../crates/b2-core/src/db.rs)), FTS via triggers, edges re-derived. Missing
+   [`replace_chunks`](../../../crates/b2-core/src/db.rs)), FTS via triggers, edges re-derived. Missing
    vectors are healed by **any** later embed pass, because the pending set is DB-derived
    (projection-embedding-split.md §2) — so a save needs no embedder and no coordination with one.
 3. **Durability is the file write.** Markdown is the source of truth and the index is disposable — a
@@ -141,7 +141,7 @@ comes from SQLite as today, and the only id minted is a missing `b2id` through t
   — the minimal option (no change to the string-error contract every other command uses). The
   contract: the message is a **stable constant**, pinned host-side by the
   `write_conflict_is_generic_and_recognizable` test
-  ([`commands.rs`](../../crates/b2-desktop/src/commands.rs)) and mirrored as a constant in
+  ([`commands.rs`](../../../crates/b2-desktop/src/commands.rs)) and mirrored as a constant in
   `ui/src/api.ts` — **change them together**. The frontend must match with `startsWith`, not
   equality: `B2_DEBUG` appends `\n(debug: …)` to every message.
 
@@ -203,9 +203,8 @@ trailing embed: `refreshDiscovery()` so `similar` reflects the new vectors.
 
 ## 8. Build order
 
-Each step is a provable increment. **Steps 1–2 shipped 2026-07-07** (marked below, with as-built
-notes); an implementer picking this up **starts at Step 3**, which is specified in full as a
-self-contained brief — entirely in `ui/`, no Rust changes.
+Each step is a provable increment. **All three steps shipped 2026-07-07** (marked below, with
+as-built notes); the doc is retained as the editing surface's design record.
 
 ### Step 1 — the core write op ✅ shipped 2026-07-07 (commit `887a595`)
 
@@ -220,14 +219,14 @@ with the splice + guard. Pure core; fake-embedder tests only.
 > hashes the final on-disk bytes). Everything else landed as written.
 
 **Files & current-state anchors.**
-- [`crates/b2-core/src/note.rs`](../../crates/b2-core/src/note.rs) — add `ParsedNote::replace_body`
+- [`crates/b2-core/src/note.rs`](../../../crates/b2-core/src/note.rs) — add `ParsedNote::replace_body`
   (the splice; sibling of `stamp_b2id`/`add_relation`, same reparse-after-mutate discipline).
-- [`crates/b2-core/src/ingest.rs`](../../crates/b2-core/src/ingest.rs) — add `project_file` (compose
+- [`crates/b2-core/src/ingest.rs`](../../../crates/b2-core/src/ingest.rs) — add `project_file` (compose
   `project_note_and_chunks(…, consult_vectors: false)` + `project_edges`); `ingest_file` unchanged.
-- [`crates/b2-core/src/vault.rs`](../../crates/b2-core/src/vault.rs) — `NoteView.revision`;
+- [`crates/b2-core/src/vault.rs`](../../../crates/b2-core/src/vault.rs) — `NoteView.revision`;
   `Vault::write`; `WriteReport`.
-- [`crates/b2-core/src/error.rs`](../../crates/b2-core/src/error.rs) — `WriteConflict` variant.
-- [`crates/b2-core/src/db.rs`](../../crates/b2-core/src/db.rs) — `busy_timeout` pragma in `open`.
+- [`crates/b2-core/src/error.rs`](../../../crates/b2-core/src/error.rs) — `WriteConflict` variant.
+- [`crates/b2-core/src/db.rs`](../../../crates/b2-core/src/db.rs) — `busy_timeout` pragma in `open`.
 - Adapters' error maps (`b2-cli` `user_message`, `b2-desktop` `error.rs`) gain the one generic
   conflict message (they match exhaustively-with-intent; a new variant must not fall into a debug arm).
 
@@ -269,7 +268,7 @@ three thin tests (`write_note_saves_through_the_facade_and_chains_revisions`,
 `write_note_runs_outside_the_reindex_slot`). The crate charter's embedder-wiring bullet now lists
 `write_note` beside `project` as the two model-free write-side ops.
 
-### Step 3 — the editor (start here; the one remaining step)
+### Step 3 — the editor ✅ shipped 2026-07-07 (dogfood passed same day)
 
 **Goal.** CodeMirror 6 edit mode over the note pane, with autosave-on-idle, the serialized save
 chain, the conflict bar, and the trailing background embed — the §6 flow, verbatim. **Entirely in
@@ -277,13 +276,27 @@ chain, the conflict bar, and the trailing background embed — the §6 flow, ver
 (vanilla TS is a locked choice), no test runner in `ui/` — verification is `npx tsc --noEmit`
 (there is no `typecheck` npm script; `npm run build` = tsc + vite) plus the dogfood checklist below.
 
+> **As-built notes.** Landed as specced, plus three protective touches learned wiring it:
+> (1) the close-of-edit flush **refuses to unmount on failure** — a conflict (bar up) or a failed
+> save keeps the editor and buffer alive and aborts the navigation that triggered it, so leaving
+> edit mode can never drop unsaved work; (2) `commitLink` mid-edit flushes the buffer first and then
+> adopts the post-link revision (B2's own `relations:` append changes the file bytes and would
+> otherwise false-conflict the next autosave — skipped while the conflict bar is up, where adopting
+> would let a resume clobber the external edit the bar guards); (3) `errText` moved from main.ts
+> into api.ts beside `WRITE_CONFLICT_MESSAGE`/`isWriteConflict` — the recognizer is part of the IPC
+> contract, so its pieces live together. Post-dogfood, two tests were added out of a coverage
+> audit: `write_an_empty_body_and_recover` (b2-core — select-all-delete under autosave: zero-chunk
+> projection + chain recovery) and a cross-language assert in
+> `write_conflict_is_generic_and_recognizable` (b2-desktop) that reads `ui/src/api.ts` and pins the
+> mirrored constant to the host's exact string, automating §5's "change them together".
+
 **Files & current-state anchors.**
-- [`ui/package.json`](../../ui/package.json) — add the minimal CM6 set: `@codemirror/state`,
+- [`ui/package.json`](../../../ui/package.json) — add the minimal CM6 set: `@codemirror/state`,
   `@codemirror/view`, `@codemirror/commands`, `@codemirror/language`, `@codemirror/lang-markdown`.
   No themes, no `codemirror` meta-package.
-- [`ui/src/types.ts`](../../ui/src/types.ts) — add `WriteReport { path, revision }`
+- [`ui/src/types.ts`](../../../ui/src/types.ts) — add `WriteReport { path, revision }`
   (`NoteView.revision` already landed with Step 1).
-- [`ui/src/api.ts`](../../ui/src/api.ts) — the one IPC seam. Add
+- [`ui/src/api.ts`](../../../ui/src/api.ts) — the one IPC seam. Add
   `writeNote(note, body, baseRevision): Promise<WriteReport>` →
   `invoke("write_note", { note, body, baseRevision })` — **Tauri v2 maps camelCase JS keys to the
   command's snake_case params automatically** (`baseRevision` → `base_revision`); do not hand-write
@@ -293,17 +306,17 @@ chain, the conflict bar, and the trailing background embed — the §6 flow, ver
   and `isWriteConflict(e): boolean` = `errText(e).startsWith(WRITE_CONFLICT_MESSAGE)` —
   **startsWith**, because `B2_DEBUG` appends `\n(debug: …)`. Pinned host-side by the
   `write_conflict_is_generic_and_recognizable` test; change both together (§5).
-- [`ui/src/state.ts`](../../ui/src/state.ts) — add the *renderable* editing state only:
+- [`ui/src/state.ts`](../../../ui/src/state.ts) — add the *renderable* editing state only:
   `editing: boolean` (edit mode owns the note pane) and `editConflict: boolean` (the bar is up).
   Debounce timers, the in-flight/trailing save flags, and the CM6 `EditorView` instance are
   **module-locals in main.ts**, not state — they never drive a render.
-- [`ui/src/main.ts`](../../ui/src/main.ts) — the controller: the edit-toggle action, editor
+- [`ui/src/main.ts`](../../../ui/src/main.ts) — the controller: the edit-toggle action, editor
   mount/unmount, the save chain, flush points, Cmd+S, the conflict-bar actions, the trailing embed.
   `doReindex`/`paintReindex` are the house pattern for "background work + targeted repaint".
-- [`ui/src/render.ts`](../../ui/src/render.ts) — `noteBarHtml` builds the note pane's top bar; the
+- [`ui/src/render.ts`](../../../ui/src/render.ts) — `noteBarHtml` builds the note pane's top bar; the
   `</>` view-source toggle (`data-toggle-source`, in `.note-bar-head`) is the sibling the **Edit**
   toggle sits next to. `notePaneHtml` is the builder that must **not** run while editing.
-- [`ui/style.css`](../../ui/style.css) — editor host + conflict bar styles.
+- [`ui/style.css`](../../../ui/style.css) — editor host + conflict bar styles.
 
 **The critical structural rule — the render carve-out.** `render()` rebuilds every pane by
 `innerHTML` swap, and it runs on *every* state change — including `flash()`'s toast, which triggers
@@ -384,12 +397,12 @@ all stay live while editing (the carve-out holds).
 
 ## 10. Docs to mirror (doc-driven follow-ups)
 
-- [tasks.md](../tasks.md) — point the Active "Step 4" item here (it currently cites the MVP spec §8).
+- [tasks.md](../../tasks.md) — point the Active "Step 4" item here (it currently cites the MVP spec §8).
   *(Done alongside this doc.)*
-- [completed/desktop-ui-mvp.md](completed/desktop-ui-mvp.md) — §5 sketched editing ("mtime guard");
+- [desktop-ui-mvp.md](desktop-ui-mvp.md) — §5 sketched editing ("mtime guard");
   add a pointer that this doc executes it, with the guard upgraded to a content-hash revision.
-- [index-engine.md](../index-engine.md) / [completed/index-engine-build.md](completed/index-engine-build.md) —
+- [index-engine.md](../../index-engine.md) / [index-engine-build.md](index-engine-build.md) —
   no invariant change; note the new single-note model-free projection entry point if Flow ① prose
   warrants it when Step 1 lands.
-- [`b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md) — `write_note` joins `project` in the
+- [`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md) — `write_note` joins `project` in the
   "opens the fake vault" column once Step 2 ships.

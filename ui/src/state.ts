@@ -51,6 +51,15 @@ export interface AppState {
   frontmatterOpen: boolean;
   /** Whether the note body shows raw Markdown source instead of rendered (sticky). */
   sourceOpen: boolean;
+  /**
+   * Edit mode: the note pane belongs to the live CodeMirror editor, and `render()`
+   * must NOT rebuild it (the carve-out, desktop-editing.md §6) — everything else
+   * (tree, side pane, toasts) keeps rendering. Only the *renderable* editing state
+   * lives here; timers, save flags, and the EditorView are module-locals in main.ts.
+   */
+  editing: boolean;
+  /** A save hit WriteConflict: autosave is paused and the conflict bar is up. */
+  editConflict: boolean;
   /** Similar-but-unlinked candidates for the open note. */
   similar: SimilarView[];
   /** The open note's typed edges (from explain). */
@@ -86,6 +95,8 @@ export const state: AppState = {
   current: null,
   frontmatterOpen: false,
   sourceOpen: false,
+  editing: false,
+  editConflict: false,
   similar: [],
   connections: [],
   searchQuery: "",

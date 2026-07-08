@@ -178,6 +178,50 @@ fn write_needs_no_embedding_space() {
 }
 
 #[test]
+fn write_an_empty_body_and_recover() {
+    // Select-all-delete under autosave is a real input: an empty buffer must save
+    // (a frontmatter-only file; zero chunks replace the note's old rows) without
+    // upsetting the index, and the revision chain must continue out of the empty
+    // state. `chunk_body` documents the empty case; this pins it end to end.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed(tmp.path());
+
+    let note = vault.read(SRS_PATH).unwrap();
+    let report = vault.write(SRS_PATH, "", &note.revision).unwrap();
+
+    // The file is frontmatter only, verbatim; a fresh read round-trips it.
+    let on_disk = fs::read_to_string(root.join(SRS_PATH)).unwrap();
+    assert!(on_disk.ends_with("---\n"), "frontmatter only: {on_disk:?}");
+    let reread = vault.read(SRS_PATH).unwrap();
+    assert_eq!(reread.body, "");
+    assert_eq!(reread.revision, report.revision);
+
+    // The note projected to zero chunks but is still indexed and searchable-around.
+    let conn = index_conn(&root);
+    let chunks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chunks c JOIN notes n ON n.b2id = c.note_b2id WHERE n.path = ?1",
+            [SRS_PATH],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(chunks, 0, "an empty body projects zero chunks");
+    assert!(vault
+        .list_notes()
+        .unwrap()
+        .iter()
+        .any(|n| n.path == SRS_PATH));
+    vault.search("memory", 10).unwrap();
+
+    // …and the chain continues out of the empty state.
+    let next = vault
+        .write(SRS_PATH, "Recovered.\n", &report.revision)
+        .unwrap();
+    assert_ne!(next.revision, report.revision);
+    assert_eq!(vault.read(SRS_PATH).unwrap().body, "Recovered.\n");
+}
+
+#[test]
 fn write_returns_the_revision_of_the_final_on_disk_bytes() {
     // The contract the save chain hangs on (§4 step 5): whatever the save left on
     // disk — body splice, and any ordinary-path work like a `b2id` stamp — the

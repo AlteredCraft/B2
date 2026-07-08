@@ -64,7 +64,7 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   `project` — the model-free half of a reindex
   ([specs/completed/projection-embedding-split.md](../../planning/specs/completed/projection-embedding-split.md) §6),
   so the first tree paint never waits on a model load — and `write_note` — the save path
-  ([specs/desktop-editing.md](../../planning/specs/desktop-editing.md) §3), so editing works with no
+  ([specs/completed/desktop-editing.md](../../planning/specs/completed/desktop-editing.md) §3), so editing works with no
   model provisioned and saved chunks are healed by the trailing background embed.
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages exactly as
   the CLI funnels through `user_message` in [`b2-cli/src/main.rs`](../b2-cli/src/main.rs) — **never** leak

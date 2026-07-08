@@ -149,9 +149,11 @@ export function treePaneHtml(state: AppState): string {
 
 // The note-pane top bar: a full-bleed strip across the top of the note pane (above the
 // centered reading column, not inside it). Its head row carries the frontmatter drawer
-// toggle on the left and the `</>` view-source toggle on the right, symmetric at the
-// pane edges. Sits as a sibling *before* `<article class="note">` so its divider spans
-// the pane edge to edge, like the file tree's "Files" header.
+// toggle on the left and, grouped on the right, the `</>` view-source toggle and the
+// **Edit** toggle (desktop-editing.md §6 — entering edit mode hands the whole pane to
+// the CodeMirror editor, so this bar isn't rendered again until edit mode exits). Sits
+// as a sibling *before* `<article class="note">` so its divider spans the pane edge to
+// edge, like the file tree's "Files" header.
 //
 // The frontmatter drawer is a collapsible peek at the note's raw YAML (verbatim, as on
 // disk — `relations:` and any unmodeled keys included). The `</>` toggle flips the note
@@ -160,7 +162,9 @@ export function treePaneHtml(state: AppState): string {
 // or tree toggle triggers, and both stay sticky across notes. The bar is always
 // rendered, so the note pane's chrome is stable; a note with no frontmatter unfolds to
 // an explicit empty state.
-function noteBarHtml(frontmatter: string | null, open: boolean, source: boolean): string {
+function noteBarHtml(state: AppState, frontmatter: string | null): string {
+  const open = state.frontmatterOpen;
+  const source = state.sourceOpen;
   const yaml = frontmatter?.replace(/\s+$/, "") ?? "";
   const body = !open
     ? ""
@@ -173,9 +177,14 @@ function noteBarHtml(frontmatter: string | null, open: boolean, source: boolean)
           <span class="tree-caret">${open ? "▾" : "▸"}</span>
           <span class="frontmatter-label">Frontmatter</span>
         </button>
-        <button class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
-          source ? "Show rendered Markdown" : "Show Markdown source"
-        }">&lt;/&gt;</button>
+        <div class="note-bar-actions">
+          <button class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
+            source ? "Show rendered Markdown" : "Show Markdown source"
+          }">&lt;/&gt;</button>
+          <button class="edit-toggle" data-toggle-edit${
+            state.loading ? " disabled" : ""
+          } title="Edit this note (autosaves as you type)">Edit</button>
+        </div>
       </div>
       ${body}
     </div>`;
@@ -194,7 +203,7 @@ export function notePaneHtml(state: AppState): string {
     const body = state.sourceOpen
       ? `<pre class="note-source">${escapeHtml(n.body)}</pre>`
       : renderMarkdown(n.body);
-    return `${noteBarHtml(n.frontmatter, state.frontmatterOpen, state.sourceOpen)}
+    return `${noteBarHtml(state, n.frontmatter)}
       <article class="note">
         <header class="note-head">
           <h1>${escapeHtml(n.title ?? n.path)}</h1>

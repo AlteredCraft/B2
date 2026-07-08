@@ -45,18 +45,22 @@ façade** have shipped:
   back to BM25-only on a projected-but-unembedded vault, and the desktop sequences project → paint tree →
   embed, so a cold vault is browsable/searchable in seconds while embedding streams behind. Closed
   [#15](https://github.com/AlteredCraft/B2/issues/15); follow-ons split out to #25/#26/#27.
+- **In-editor body editing (2026-07-07)** — the desktop's first write surface
+  ([specs/completed/desktop-editing.md](specs/completed/desktop-editing.md), Steps 1→3, dogfooded):
+  `Vault::write` (byte-honest body splice, content-hash revision guard, model-free save), the
+  `write_note` host command, and CodeMirror 6 edit mode with autosave-on-idle, a single-flight save
+  chain, the conflict bar (Reload / Keep mine), and the trailing background embed. Closes
+  [#13](https://github.com/AlteredCraft/B2/issues/13).
 
 ## Active — next up
 
-The desktop's next cut is **editing** — specced 2026-07-07 in
-[specs/desktop-editing.md](specs/desktop-editing.md) (executes
-[specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §8 Step 4):
+Editing follow-ons, in whichever order the friction says:
 
-1. **In-editor body editing** — `Vault::write` (byte-honest body splice, content-hash revision guard,
-   model-free save + trailing background embed), CodeMirror 6 edit mode, autosave-on-idle —
-   [#13](https://github.com/AlteredCraft/B2/issues/13). Live-preview decorations are the follow-on
-   ([#30](https://github.com/AlteredCraft/B2/issues/30)).
-2. **Step 5 — native fs-watch auto-reload** — [#14](https://github.com/AlteredCraft/B2/issues/14).
+1. **Live-preview decorations** — the document feel over the same CM6 pane —
+   [#30](https://github.com/AlteredCraft/B2/issues/30).
+2. **Step 5 — native fs-watch auto-reload** (replaces "stale until conflict" with live
+   reconciliation; revisit frontend save-chain test extraction when this is specced) —
+   [#14](https://github.com/AlteredCraft/B2/issues/14).
 
 ## Backlog → GitHub Issues
 

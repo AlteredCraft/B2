@@ -345,9 +345,19 @@ body {
   color: var(--text);
 }
 
-/* `</>` — flips the note body between rendered Markdown and its raw source. Active
-   (source shown) reads as the accent so the current mode is obvious at a glance. */
-.source-toggle {
+/* The bar's right-side action group: the `</>` view-source toggle and the Edit
+   toggle, sharing one quiet-chip recipe. `</>` flips the note body between rendered
+   Markdown and its raw source (active reads as the accent); Edit hands the pane to
+   the CodeMirror editor (desktop-editing.md §6). */
+.note-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.source-toggle,
+.edit-toggle {
   flex: 0 0 auto;
   background: none;
   border: 1px solid transparent;
@@ -360,7 +370,8 @@ body {
   cursor: pointer;
   padding: 2px 6px;
 }
-.source-toggle:hover {
+.source-toggle:hover,
+.edit-toggle:hover {
   color: var(--text);
   background: var(--surface-2);
 }
@@ -368,6 +379,10 @@ body {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: var(--accent-soft);
+}
+.edit-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .frontmatter-block {
@@ -517,6 +532,83 @@ body {
 .note-body td {
   border: 1px solid var(--border);
   padding: 6px 10px;
+}
+
+/* --- edit mode (desktop-editing.md §6) ------------------------------------------ */
+
+/* The editor's top bar mirrors the frontmatter bar's full-bleed strip (same
+   negative-margin recipe) so the pane chrome doesn't jump when edit mode swaps in. */
+.editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -40px -48px 24px; /* cancel .note-pane's top (40px) + side (48px) padding */
+  padding: 10px 48px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-title {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The conflict strip: sticky above the editor so it's visible wherever the user is
+   in the document when autosave pauses. */
+.conflict-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: var(--reading);
+  margin: 0 auto 16px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+/* Same UA-override lesson as .reindex-progress: our `display: flex` beats the UA's
+   `[hidden] { display: none }`, so re-assert it. */
+.conflict-bar[hidden] {
+  display: none;
+}
+.conflict-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* The CodeMirror host: the same centered column the rendered note reads in, with the
+   raw-source view's monospace voice. */
+.editor-host {
+  max-width: var(--reading);
+  margin: 0 auto;
+}
+.editor-host .cm-editor {
+  background: transparent;
+}
+.editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+.editor-host .cm-scroller {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+/* Generous tail padding: a click target below a short document's last line. */
+.editor-host .cm-content {
+  padding: 0 0 30vh;
+  caret-color: var(--accent);
 }
 
 /* --- empty states ------------------------------------------------------------- */
