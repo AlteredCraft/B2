@@ -146,9 +146,10 @@ pub fn hybrid_search(
 /// `hops` typed hops of `anchor` (the vector⨝graph discovery join).
 ///
 /// Reachability is undirected over `active` edges (a note related to the anchor
-/// either way is a candidate). Filtering is done by pulling a full KNN pool and
-/// keeping reachable notes — exact at vault scale; the precise scale lever is a
-/// partition column on `note_b2id` for filtered KNN (build spec §1.2 / §4).
+/// either way is a candidate). Filtering is done by scanning the full ranked space
+/// and keeping reachable notes — exact at vault scale (a full brute-force scan); the
+/// precise scale lever is a partition column on `note_b2id` for filtered KNN (build
+/// spec §1.2 / §4).
 pub fn graph_filtered_search(
     conn: &rusqlite::Connection,
     embedder: &dyn Embedder,
@@ -158,10 +159,9 @@ pub fn graph_filtered_search(
     limit: usize,
 ) -> Result<Vec<Hit>> {
     let reachable = graph::reachable_within(conn, anchor, hops)?;
-    let pool = db::chunk_count(conn)?.max(1) as usize;
 
     let mut hits = Vec::new();
-    for (chunk_id, distance) in db::vector_search(conn, &embedder.embed_query(query)?, pool)? {
+    for (chunk_id, distance) in db::vector_search_all(conn, &embedder.embed_query(query)?)? {
         let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? else {
             continue;
         };

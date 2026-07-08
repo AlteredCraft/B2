@@ -481,11 +481,6 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<(String, String, Option<String
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// Total chunk count (used to size a full KNN pool for graph-filtered search).
-pub fn chunk_count(conn: &Connection) -> Result<i64> {
-    Ok(conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)
-}
-
 /// A chunk's stored embedding, unpacked from `chunks_vec` (`None` if the chunk has
 /// no vector row). Reading a note's own vectors back is what lets discovery KNN from
 /// them without re-embedding — passage↔passage, no `embed_query` (tasks.md ①). Call
@@ -502,14 +497,37 @@ pub fn chunk_vector(conn: &Connection, chunk_id: i64) -> Result<Option<Vec<f32>>
     Ok(blob.map(|b| crate::embed::unpack_f32(&b)))
 }
 
-/// Brute-force KNN over `chunks_vec`: the `k` nearest chunk ids to `query`, with
-/// their distances, nearest first (build spec §1.2 / Flow ②).
+/// Brute-force nearest-neighbour search over `chunks_vec`: the `k` nearest chunk ids
+/// to `query`, with their distances, nearest first (ties broken by `chunk_id` for
+/// determinism). A full linear scan with a **computed** distance — deliberately *not*
+/// the `vec0` KNN (`… MATCH … LIMIT k`) operator, whose `k` is hard-capped at 4096
+/// ("k value in knn query too large") — so any `k` is honoured exactly, no silent
+/// truncation. This is the brute-force KNN index-engine.md §4 specs as comfortable at
+/// vault scale (SQLite keeps only the top `k` for `ORDER BY … LIMIT`). Distance is L2
+/// over the embeddings, which ranks by cosine — b2-embed L2-normalizes, and
+/// `chunks_vec` declares no explicit metric so `vec_distance_l2` matches its default.
+/// [`vector_search_all`] is the same scan without the `k` bound.
 pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
     let mut stmt = conn.prepare(
-        "SELECT chunk_id, distance FROM chunks_vec
-         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+        "SELECT chunk_id, vec_distance_l2(embedding, ?1) AS distance FROM chunks_vec
+         ORDER BY distance, chunk_id LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![pack_f32(query), k as i64], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
+/// nearest first (same computed-L2 scan, same `chunk_id` tie-break). The whole-space
+/// callers — graph-filtered search and discovery candidate generation — rank the
+/// entire vault, so they take this rather than pass a sentinel `k`.
+pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT chunk_id, vec_distance_l2(embedding, ?1) AS distance FROM chunks_vec
+         ORDER BY distance, chunk_id",
+    )?;
+    let rows = stmt.query_map(params![pack_f32(query)], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

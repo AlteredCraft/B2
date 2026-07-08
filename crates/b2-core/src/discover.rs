@@ -67,18 +67,16 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
     // anchor and everything within 1 hop (self + direct neighbors).
     let exclude = graph::reachable_within(conn, anchor, EXCLUDE_HOPS)?;
 
-    // A full KNN pool per anchor chunk keeps max-sim exact at vault scale — the same
-    // brute-force pool graph_filtered_search uses. The scale lever (a note-partition
-    // column on chunks_vec for filtered KNN) is deferred (build spec §1.2 / §4).
-    let pool = db::chunk_count(conn)?.max(1) as usize;
-
     // note_b2id → (best score so far, the chunk of that note which achieved it).
     let mut best: HashMap<String, (f64, i64)> = HashMap::new();
     for anchor_chunk in anchor_chunks {
         let Some(vector) = db::chunk_vector(conn, anchor_chunk)? else {
             continue; // a chunk with no stored vector (shouldn't occur post-embed)
         };
-        for (hit_chunk, distance) in db::vector_search(conn, &vector, pool)? {
+        // A full brute-force scan per anchor chunk keeps max-sim exact at vault scale,
+        // the same whole-space scan graph_filtered_search uses (which carries the
+        // deferred scale-lever note).
+        for (hit_chunk, distance) in db::vector_search_all(conn, &vector)? {
             let Some(note) = db::note_for_chunk(conn, hit_chunk)? else {
                 continue;
             };
