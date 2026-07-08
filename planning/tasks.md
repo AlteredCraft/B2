@@ -56,8 +56,9 @@ façade** have shipped:
 
 Editing follow-ons, in whichever order the friction says:
 
-1. **Live-preview decorations** — the document feel over the same CM6 pane —
-   [#30](https://github.com/AlteredCraft/B2/issues/30).
+1. **Live-preview decorations** — the document feel over the same CM6 pane — **specced 2026-07-08
+   in [specs/desktop-live-preview.md](specs/desktop-live-preview.md)** (edit-mode-only, hybrid
+   reveal, hand-rolled engine, zero new deps) — [#30](https://github.com/AlteredCraft/B2/issues/30).
 2. **Step 5 — native fs-watch auto-reload** (replaces "stale until conflict" with live
    reconciliation; revisit frontend save-chain test extraction when this is specced) —
    [#14](https://github.com/AlteredCraft/B2/issues/14).
