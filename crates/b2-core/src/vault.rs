@@ -3,9 +3,9 @@
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
-//! — `open` / `reindex` / `project` / `embed` / `read` / `neighbors` / `explain` /
-//! `search` / `similar` / `link` / `add` / `mv`. Add operations when a command needs
-//! them; do not pre-build a sprawling surface.
+//! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
+//! `explain` / `search` / `similar` / `link` / `add` / `mv`. Add operations when a
+//! command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
 //! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
@@ -164,6 +164,12 @@ pub struct NoteView {
     /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
     /// collapsible drawer (specs/completed/desktop-ui-mvp.md §4).
     pub frontmatter: Option<String>,
+    /// blake3 of the **raw file bytes** at read time — the save-guard token
+    /// (desktop-editing.md §3/§4): [`write`](Vault::write) refuses when the file on
+    /// disk no longer hashes to the revision the edit was based on, so a save can
+    /// never silently clobber an external edit. Whole-file (not just the body), so
+    /// *any* out-of-band change conflicts honestly.
+    pub revision: String,
 }
 
 /// One note's identity for a listing — `b2id`, vault-relative `path`, and display
@@ -205,6 +211,16 @@ pub struct SimilarView {
     /// A one-line excerpt of the candidate chunk that achieved `score` — the
     /// evidence for *why* it surfaced.
     pub evidence: String,
+}
+
+/// What [`write`](Vault::write) did: the saved note's vault-relative path and the
+/// **new revision** (blake3 of the final on-disk bytes) — the token the editor
+/// chains its next save on, so sequential saves never self-conflict
+/// (desktop-editing.md §3, "last save wins — by construction").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WriteReport {
+    pub path: String,
+    pub revision: String,
 }
 
 /// What `b2 link` did: the committed typed edge, resolved for display. `created` is
@@ -409,6 +425,7 @@ impl Vault {
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
         let raw = fs::read_to_string(self.root.join(&path))?;
+        let revision = revision_of(&raw);
         let parsed = note::parse(&raw);
         let fields = parsed.fields();
         Ok(NoteView {
@@ -421,6 +438,50 @@ impl Vault {
             tags: fields.tags.clone(),
             body: parsed.body().to_string(),
             frontmatter: parsed.frontmatter().map(str::to_string),
+            revision,
+        })
+    }
+
+    /// Save a note's **body** (`Vault::write`, desktop-editing.md §4) — the editing
+    /// surface's one write op. Markdown-first and **model-free**: validate that the
+    /// file on disk still hashes to `base_revision` (else [`Error::WriteConflict`] —
+    /// an external editor changed it; nothing is written), splice `body` in
+    /// **verbatim** after the untouched frontmatter ([`note::ParsedNote::replace_body`]),
+    /// write the file, and re-project the note ([`ingest::project_file`] — chunks +
+    /// FTS + edges; a changed body's stale vectors are cleared and join the
+    /// DB-derived pending set for any later [`embed`](Self::embed) to fill). No
+    /// embedder is touched, so saving works with no model provisioned.
+    ///
+    /// Returns the **new revision** (hashing the *final* on-disk bytes — a
+    /// missing-`b2id` stamp, the one write beyond the body, is reflected), which the
+    /// editor chains its next save on: sequential saves never self-conflict, and
+    /// only an external write trips the guard ("last save wins — by construction",
+    /// desktop-editing.md §3).
+    pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
+        let b2id = self.resolve_ref(note_ref)?;
+        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let abs = self.root.join(&path);
+        let raw = fs::read_to_string(&abs)?;
+
+        // The guard: the bytes the edit was based on must still be the bytes on disk.
+        if revision_of(&raw) != base_revision {
+            return Err(Error::WriteConflict(path));
+        }
+
+        // Markdown first: the byte-honest splice (frontmatter bytes untouched).
+        let mut parsed = note::parse(&raw);
+        parsed.replace_body(body);
+        fs::write(&abs, parsed.as_str())?;
+
+        // Re-project model-free; stamps a missing b2id through the ordinary path.
+        ingest::project_file(&self.conn, &self.root, &path, &self.idgen)?;
+
+        // Hash the FINAL on-disk bytes (a stamp re-wrote the file after our splice).
+        let final_raw = fs::read_to_string(&abs)?;
+        Ok(WriteReport {
+            path,
+            revision: revision_of(&final_raw),
         })
     }
 
@@ -681,6 +742,12 @@ impl Vault {
         db::resolve_link_target(&self.conn, note_ref)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))
     }
+}
+
+/// A file's save-guard revision: blake3 of its raw bytes (desktop-editing.md §3).
+/// One tiny fn so `read` (capture) and `write` (validate + return) can never drift.
+fn revision_of(raw: &str) -> String {
+    blake3::hash(raw.as_bytes()).to_hex().to_string()
 }
 
 /// Collapse a chunk's text to a single-line, length-bounded snippet.

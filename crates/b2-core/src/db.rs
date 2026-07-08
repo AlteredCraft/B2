@@ -50,9 +50,14 @@ pub fn open(path: &Path) -> Result<Connection> {
     register_sqlite_vec();
     let conn = Connection::open(path)?;
     // execute_batch tolerates the row PRAGMA journal_mode returns.
+    // busy_timeout: WAL allows one writer at a time, and two short-statement
+    // writers can now legitimately race (a save during the background embed —
+    // desktop-editing.md §4). A modest wait turns that contention into a few-ms
+    // stall instead of an immediate SQLITE_BUSY error.
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;",
+         PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;",
     )?;
     migrate(&conn)?;
     Ok(conn)

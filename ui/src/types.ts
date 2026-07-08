@@ -28,6 +28,12 @@ export interface NoteView {
    * note pane renders it in a collapsible drawer.
    */
   frontmatter: string | null;
+  /**
+   * blake3 of the raw file bytes at read time — the save-guard token
+   * (desktop-editing.md §3): a save presents it, and the host refuses if the file
+   * changed on disk since, so an external edit is never silently clobbered.
+   */
+  revision: string;
 }
 
 /** `Vault::list_notes` — one note's identity for the file tree (no body). */

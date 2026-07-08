@@ -52,6 +52,10 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),
+        CmdError::Core(b2_core::Error::WriteConflict(_)) => {
+            "This note changed on disk since it was opened. Reload the note, then reapply your edit."
+                .to_string()
+        }
         CmdError::VaultRequired => {
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."
                 .to_string()

@@ -56,6 +56,14 @@ pub enum Error {
     #[error("note already exists: {0}")]
     AddTargetExists(String),
 
+    /// `Vault::write` was handed a `base_revision` that no longer matches the file
+    /// on disk — an external editor changed the note since it was read. Refused
+    /// rather than clobbered (desktop-editing.md §3): the caller re-reads (getting
+    /// the current revision) and either reloads or knowingly re-writes. The path is
+    /// carried for the debug detail, never for the user-facing message.
+    #[error("write conflict: {0} changed on disk since it was read")]
+    WriteConflict(String),
+
     /// `b2 link` was given a `--type` that is not a core relation verb
     /// (data-model.md §2). The core is the palette `b2 link` offers; a tail verb can
     /// still be hand-authored in the Markdown, but the command validates to the core

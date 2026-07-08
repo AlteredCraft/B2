@@ -410,6 +410,26 @@ pub struct Projected {
     pub stamped: bool,
 }
 
+/// Re-project a single note at `vault_root/rel_path` **model-free** — the
+/// single-note sibling of [`project_vault`], and the pass `Vault::write` runs after
+/// its body splice (desktop-editing.md §4): note + chunks (+FTS) + edges, stamping
+/// a missing `b2id`, never touching the embedding space. A changed body re-chunks
+/// (clearing its stale vectors), and the chunks join the DB-derived pending set for
+/// **any** later embed pass to fill — so the save path needs no embedder and no
+/// coordination with one. Contrast [`ingest_file`], which embeds inline (the
+/// `add`/`link`/`mv` path — those ops already require the model).
+pub fn project_file(
+    conn: &Connection,
+    vault_root: &Path,
+    rel_path: &str,
+    idgen: &dyn IdGen,
+) -> Result<Projected> {
+    let (b2id, stamped, body, relations, _pending) =
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, false, false)?;
+    project_edges(conn, &b2id, &body, &relations)?;
+    Ok(Projected { b2id, stamped })
+}
+
 /// The result of the model-free **projection pass** over the whole vault
 /// ([`project_vault`]): every projected note, in the deterministic (sorted-path)
 /// walk order.

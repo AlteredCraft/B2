@@ -112,6 +112,31 @@ impl ParsedNote {
         self.fields = reparsed.fields;
     }
 
+    /// Replace the note's **body** with `new_body`, verbatim — the byte-honest
+    /// splice behind `Vault::write` (desktop-editing.md §4). Everything up to
+    /// `body_start` (the frontmatter block and its fences — every byte, including
+    /// keys B2 doesn't model) is preserved *by construction*; a note with no
+    /// frontmatter is replaced wholesale (its body **is** the file). No newline
+    /// normalization or trimming: the editor buffer is the user's text.
+    pub fn replace_body(&mut self, new_body: &str) {
+        match self.fm {
+            Some(f) => {
+                self.raw.truncate(f.body_start);
+                self.raw.push_str(new_body);
+            }
+            None => {
+                self.raw.clear();
+                self.raw.push_str(new_body);
+            }
+        }
+        // Re-derive spans + fields from the mutated text so state stays exact
+        // (the same discipline as stamp_b2id/add_relation; a body could even
+        // introduce a frontmatter block if it starts with `---`).
+        let reparsed = parse(&self.raw);
+        self.fm = reparsed.fm;
+        self.fields = reparsed.fields;
+    }
+
     /// Append a typed-link `spec` (e.g. `contradicts [[path|title]] — why`) to the
     /// frontmatter `relations:` list, creating the block (or the whole frontmatter)
     /// if absent. **Frontmatter only — never the body** (data-model §0). The single
