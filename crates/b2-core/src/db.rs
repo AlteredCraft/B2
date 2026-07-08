@@ -4,7 +4,7 @@
 //!
 //! `sqlite-vec` is registered as a SQLite *auto-extension* (statically linked, no
 //! runtime `load_extension`), and every connection is opened `WAL` +
-//! `foreign_keys=ON` per planning/specs/index-engine-build.md §0. Every table here
+//! `foreign_keys=ON` per planning/specs/completed/index-engine-build.md §0. Every table here
 //! is a derived projection of `Markdown` — nothing is a source of truth.
 
 use crate::chunk::Chunk;
@@ -61,7 +61,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 /// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
 /// no-op on reopen; a `schema_version` mismatch drops the derived tables first so the
 /// next `reindex` rebuilds them (the index is disposable). The DDL mirrors
-/// planning/specs/index-engine-build.md §1 (chunks_vec is created at embed time).
+/// planning/specs/completed/index-engine-build.md §1 (chunks_vec is created at embed time).
 fn migrate(conn: &Connection) -> Result<()> {
     // `meta` must exist before we can read the schema version the index was built at.
     conn.execute_batch(

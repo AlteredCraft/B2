@@ -3,31 +3,31 @@ title: "B2 — Desktop UI MVP: the first adapter with pixels"
 type: note
 tags: [b2, ui, desktop, tauri, codemirror, adapter, spec]
 created: 2026-07-05
-status: draft
+status: implemented
 ---
 
 # B2 — Desktop UI MVP: the first adapter with pixels
 
 > **The build spec for B2's first graphical surface.** The headless-first phase is done — the
-> [`Vault`](../../crates/b2-core/src/vault.rs) façade is the one typed contract and
-> [`b2-cli`](../../crates/b2-cli) is a dumb adapter over it. This doc specs the **second dumb adapter**:
+> [`Vault`](../../../crates/b2-core/src/vault.rs) façade is the one typed contract and
+> [`b2-cli`](../../../crates/b2-cli) is a dumb adapter over it. This doc specs the **second dumb adapter**:
 > a **Tauri** desktop app with a **CodeMirror** frontend, realizing the "when the GUI finally arrives it's
 > a second dumb adapter over the same contract" promise in
-> [vision-and-scope.md](../vision-and-scope.md#approach-headless-first-the-ui-comes-last).
+> [vision-and-scope.md](../../vision-and-scope.md#approach-headless-first-the-ui-comes-last).
 >
 > **This doc owns:** the delivery-vehicle and editor-substrate decisions (and *why* the rejected
 > alternatives lost), the repo layout, the adapter discipline the new crate must uphold, the MVP surface,
 > the transport, the editing / external-edit-reconciliation plan, and the security posture. **It does not
-> own:** the engine or the façade contract ([data-model.md](../data-model.md),
-> [index-engine.md](../index-engine.md), [specs/index-engine-build.md](index-engine-build.md)); the `ui/`
+> own:** the engine or the façade contract ([data-model.md](../../data-model.md),
+> [index-engine.md](../../index-engine.md), [specs/completed/index-engine-build.md](index-engine-build.md)); the `ui/`
 > framework choice (deferred — §9); or packaging/distribution (deferred — §9). The thin-adapter directives
 > the host crate must follow live in its own charter,
-> [`crates/b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md); this doc is *why*, that file is the
+> [`crates/b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md); this doc is *why*, that file is the
 > in-crate *rule*.
 
 ## 0. Scope & ground rules
 
-B2 was built **headless-first on purpose** ([vision-and-scope.md](../vision-and-scope.md#approach-headless-first-the-ui-comes-last)):
+B2 was built **headless-first on purpose** ([vision-and-scope.md](../../vision-and-scope.md#approach-headless-first-the-ui-comes-last)):
 push all capability and testability into a core exercised through one typed façade, ship a CLI as the
 "UI before the UI," and defer the GUI as long as possible so progress is measured in green scenarios, not
 screens. That phase paid off — the engine, the façade, and the CLI all ship and are covered by a fast,
@@ -73,8 +73,8 @@ takes the former.
 
 Three layers. The first two already exist; the UI adds to the second and introduces the third.
 
-- **Engine (pure Rust, the contract):** [`b2-core`](../../crates/b2-core) (the [`Vault`](../../crates/b2-core/src/vault.rs) façade + engine) and [`b2-embed`](../../crates/b2-embed) (the embedder seam). *Unchanged.*
-- **Adapters (dumb Rust clients of the façade):** [`b2-cli`](../../crates/b2-cli) (terminal) and **`b2-desktop`** (Tauri host). *One new crate.*
+- **Engine (pure Rust, the contract):** [`b2-core`](../../../crates/b2-core) (the [`Vault`](../../../crates/b2-core/src/vault.rs) façade + engine) and [`b2-embed`](../../../crates/b2-embed) (the embedder seam). *Unchanged.*
+- **Adapters (dumb Rust clients of the façade):** [`b2-cli`](../../../crates/b2-cli) (terminal) and **`b2-desktop`** (Tauri host). *One new crate.*
 - **Presentation (JS toolchain):** **`ui/`** — Vite + CodeMirror, talks to `b2-desktop` over Tauri IPC. *New.*
 
 ```
@@ -114,13 +114,13 @@ B2/
 - **`.gitignore` gains** `ui/node_modules/`, `ui/dist/`, and Tauri's generated artifacts.
 
 The rules the host crate must follow to stay a *dumb* adapter live in
-[`crates/b2-desktop/CLAUDE.md`](../../crates/b2-desktop/CLAUDE.md) — §3 summarizes the argument; that file
+[`crates/b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md) — §3 summarizes the argument; that file
 is the enforceable in-crate charter.
 
 ## 3. The one seam that matters — a dumb adapter over the façade
 
 The single discipline that makes all of this safe: **`b2-desktop` holds no engine logic.** It is the GUI
-sibling of the CLI, and the CLI's rule ([root CLAUDE.md](../../CLAUDE.md): the CLI is "a *dumb* adapter …
+sibling of the CLI, and the CLI's rule ([root CLAUDE.md](../../../CLAUDE.md): the CLI is "a *dumb* adapter …
 holds no engine logic") applies verbatim.
 
 - **Each command is deserialize → call `Vault` → serialize.** A `#[tauri::command]` parses its args, calls
@@ -139,12 +139,12 @@ holds no engine logic") applies verbatim.
   (mock the module), and keeps a future `serve`/HTTP transport swap to ~one file. This *one* seam is worth
   having; anything more is speculative.
 - **Embedder wiring mirrors the CLI.** The host picks and injects the embedder exactly as `b2-cli` does:
-  pure reads open with the fake ([`Vault::open`](../../crates/b2-core/src/vault.rs)); anything that
+  pure reads open with the fake ([`Vault::open`](../../../crates/b2-core/src/vault.rs)); anything that
   re-embeds (a body write, `link`'s re-projection, `embed`) opens the real model
-  ([`Vault::open_with_embedder`](../../crates/b2-core/src/vault.rs)), and fails fast with the "run `b2 init`"
+  ([`Vault::open_with_embedder`](../../../crates/b2-core/src/vault.rs)), and fails fast with the "run `b2 init`"
   message if the model is absent — same contract as `reindex`/`link` in the CLI. (`project` — the
   model-free half of a reindex — opens the fake, so the first paint never waits on a model load;
-  [projection-embedding-split.md](completed/projection-embedding-split.md) §6.)
+  [projection-embedding-split.md](projection-embedding-split.md) §6.)
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages the same
   way the CLI funnels through `user_message` — never leak sqlite/io/serde internals into the UI. `B2_DEBUG`
   opts into detail for the developer, matching the repo-wide logging policy.
@@ -152,7 +152,7 @@ holds no engine logic") applies verbatim.
 ## 4. The MVP surface
 
 **The first screen is the vision, made visual: a document on the left, its unlinked-but-similar notes on
-the right.** This is [connection discovery](../vision-and-scope.md#capability-areas-the-surface-high-level)
+the right.** This is [connection discovery](../../vision-and-scope.md#capability-areas-the-surface-high-level)
 (capability area 5 — "the reason B2 exists"), lifted out of the terminal into a side-by-side, point-and-click
 surface where the human — the precision gate — can *read both notes at once* before committing a link.
 
@@ -167,7 +167,7 @@ surface where the human — the precision gate — can *read both notes at once*
 | Related pane — hybrid keyword+semantic+graph search | `Vault::search` | exists |
 | Backlinks / typed edges with their "why" (in/out) | `Vault::explain` / `neighbors` | exists |
 | Commit a typed relation (verb picker) → frontmatter | `Vault::link` | exists |
-| Index / refresh action + state | **`Vault::project` then `Vault::embed`** (the frontend sequences them; `plan_reindex` unchanged) | **project-then-embed (2026-07-07)** — the model-free projection paints the tree + keyword search first, then embedding streams behind as the cancellable background action ([specs/completed/projection-embedding-split.md](completed/projection-embedding-split.md) §6; progress/cancel plumbing per [specs/completed/async-indexing.md](completed/async-indexing.md)) |
+| Index / refresh action + state | **`Vault::project` then `Vault::embed`** (the frontend sequences them; `plan_reindex` unchanged) | **project-then-embed (2026-07-07)** — the model-free projection paints the tree + keyword search first, then embedding streams behind as the cancellable background action ([specs/completed/projection-embedding-split.md](projection-embedding-split.md) §6; progress/cancel plumbing per [specs/completed/async-indexing.md](async-indexing.md)) |
 
 **The one new façade op** is a read: fetch a note's raw body + metadata to render the left pane
 (`Vault::read` / `get_note`). Everything else the MVP needs already exists. This honors the façade rule —
@@ -251,32 +251,49 @@ Sequenced like the [build spec](index-engine-build.md)'s step 0→N — each ste
   core; committing writes frontmatter through the façade and the related pane updates. The discovery loop —
   read → discover → link — is now visual end-to-end.
 - **Step 4 — Editing (fast-follow).** CodeMirror editing + `Vault::write` + save-through-façade + the `mtime`
-  guard (§5).
+  guard (§5). **Tracked: [#13](https://github.com/AlteredCraft/B2/issues/13).**
 - **Step 5 — Reconciliation (fast-follow).** Native fs-watch → auto-reload on external edits.
-- **Later.** Packaging / signing / notarization / distribution; a `serve` adapter *if* a remote or
-  agent-over-HTTP need appears.
+  **Tracked: [#14](https://github.com/AlteredCraft/B2/issues/14).**
+- **Later.** Packaging / signing / notarization / distribution
+  (**[#23](https://github.com/AlteredCraft/B2/issues/23)**); a `serve` adapter *if* a remote or
+  agent-over-HTTP need appears (**[#24](https://github.com/AlteredCraft/B2/issues/24)**).
+
+> **Shipped through Step 3 (2026-07-05) — the MVP this doc specs is complete**, plus post-MVP additions
+> recorded in §4 (file tree, frontmatter drawer, view-source toggle, in-app vault switcher) and the two
+> indexing follow-ons ([async-indexing.md](async-indexing.md),
+> [projection-embedding-split.md](projection-embedding-split.md)). Steps 4–5 are the
+> issue-tracked fast-follows above; §5 remains the shape they build to.
 
 ## 9. Open questions / deferred (not deciding here)
 
 - **The `ui/` framework** (Svelte / Solid / React, or none). A `ui/`-internal choice that does not touch
-  this layout — its own decision, taken when Step 0 starts.
+  this layout — its own decision, taken when Step 0 starts. *(Resolved at Step 0, 2026-07-05: **vanilla
+  TypeScript + Vite, no framework** — thinnest deps, cleanest CSP; recorded in
+  [tasks.md](../../tasks.md) / `ui/package.json`.)*
 - **TS ↔ Rust type sharing.** Hand-write the handful of view types first; adopt `ts-rs` / `tauri-specta`
-  codegen only if they churn. No speculative codegen.
+  codegen only if they churn. No speculative codegen. *(Still hand-written; a contingency, not planned
+  work.)*
 - **Packaging & distribution.** Per-OS bundles, code signing, macOS notarization — principle #5's
-  "download and run" endgame, deferred until the surface earns it.
+  "download and run" endgame, deferred until the surface earns it. **Tracked:
+  [#23](https://github.com/AlteredCraft/B2/issues/23).**
 - **The `serve`/HTTP adapter.** Kept as a documented future adapter, added the day a concrete remote /
   browser / agent-over-HTTP need exists (the `api.ts` seam keeps it cheap). Not built alongside Tauri.
+  **Tracked: [#24](https://github.com/AlteredCraft/B2/issues/24).**
 - **Graph visualization, multi-vault, sync.** Out of scope, per the vision-and-scope deferred list.
+  *(Graph visualization tracked: [#22](https://github.com/AlteredCraft/B2/issues/22); an in-app vault*
+  switcher *shipped post-MVP — simultaneous multi-vault and sync stay out of scope.)*
 
 ## 10. Docs to mirror (doc-driven follow-ups)
+
+*(All executed when the MVP shipped — kept as the record of what was mirrored where.)*
 
 Per the design-docs-are-source-of-truth discipline, this decision should be reflected outward once the
 shape is agreed:
 
-- [vision-and-scope.md](../vision-and-scope.md) — the "headless-first / the UI comes last" and "GUI
+- [vision-and-scope.md](../../vision-and-scope.md) — the "headless-first / the UI comes last" and "GUI
   deferred" language is now being *acted on*; add a "Decisions locked (2026-07-05)" entry pointing here and
   reframe the GUI from "deferred, not now" to "in progress via Tauri."
-- [tasks.md](../tasks.md) — promote "GUI — deferred" from Backlog to an active work item tracking Steps 0→3.
-- [README.md](../../README.md) — add `b2-desktop` (and `ui/`) to the crate map / docs table once the crate
+- [tasks.md](../../tasks.md) — promote "GUI — deferred" from Backlog to an active work item tracking Steps 0→3.
+- [README.md](../../../README.md) — add `b2-desktop` (and `ui/`) to the crate map / docs table once the crate
   lands.
 - `docs/architecture.html` — "three crates" → four once `b2-desktop` ships.

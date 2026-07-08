@@ -23,15 +23,15 @@ status: implemented
 > embedding" discussion** (was `tasks.md` Backlog) into one place.
 >
 > **It does not own:** the engine invariant or the reindex algorithm itself
-> ([index-engine.md](../../index-engine.md), [specs/index-engine-build.md](../index-engine-build.md)); the desktop
-> adapter's general shape and the thin-adapter discipline ([specs/desktop-ui-mvp.md](../desktop-ui-mvp.md),
+> ([index-engine.md](../../index-engine.md), [specs/completed/index-engine-build.md](index-engine-build.md)); the desktop
+> adapter's general shape and the thin-adapter discipline ([specs/completed/desktop-ui-mvp.md](desktop-ui-mvp.md),
 > [`crates/b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). The **progressive / keyword-first**
 > index and the **cross-process CLI background reindex** are *related but separate* efforts — §7 and §8
 > record them and say why they're deferred behind this one.
 
 ## 0. Scope & ground rules
 
-The desktop MVP shipped read-only-first ([desktop-ui-mvp.md](../desktop-ui-mvp.md) §4), and dogfooding a
+The desktop MVP shipped read-only-first ([desktop-ui-mvp.md](desktop-ui-mvp.md) §4), and dogfooding a
 ~1000-note vault surfaced the gap this doc fills: **the first cold index of a large vault is slow, and the
 desktop app makes it feel broken** — a busy cursor, a disabled UI, no progress, and no way to stop it.
 
@@ -179,7 +179,7 @@ The plan is only worth shipping if a cancelled index is never a broken one. The 
 
 ## 6. Build order
 
-Each step is a provable increment (mirrors [desktop-ui-mvp.md](../desktop-ui-mvp.md) §8 / the build spec).
+Each step is a provable increment (mirrors [desktop-ui-mvp.md](desktop-ui-mvp.md) §8 / the build spec).
 
 - **Step 1 — Stream progress (no core change).** Wire the existing `reindex_with_progress` in
   `commands::reindex` behind a `Channel<ReindexProgress>`; the frontend replaces the global freeze with a
@@ -260,7 +260,7 @@ Per the design-docs-are-source-of-truth discipline:
 - [tasks.md](../../tasks.md) — the Backlog "Non-blocking embedding — deferred approaches" bullet is **moved
   here** (§7–§8); leave a pointer, and promote "async, cancellable indexing" to an active work item tracking
   Steps 1→3. *(Done alongside this doc.)*
-- [specs/desktop-ui-mvp.md](../desktop-ui-mvp.md) — §4's `reindex` row is "exists"; add a pointer noting its
+- [specs/completed/desktop-ui-mvp.md](desktop-ui-mvp.md) — §4's `reindex` row is "exists"; add a pointer noting its
   async/progress/cancel behavior is specced here. *(Done alongside this doc.)*
 - [README.md](../../../README.md) / `docs/architecture.html` — no change until this ships; then note the desktop
   reindex is a cancellable background action.

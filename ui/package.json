@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "B2 desktop frontend — the presentation layer over the Tauri host (specs/desktop-ui-mvp.md §2). Vanilla TS + Vite; talks to b2-core only through the b2-desktop IPC commands, all via the one seam src/api.ts.",
+  "description": "B2 desktop frontend — the presentation layer over the Tauri host (specs/completed/desktop-ui-mvp.md §2). Vanilla TS + Vite; talks to b2-core only through the b2-desktop IPC commands, all via the one seam src/api.ts.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

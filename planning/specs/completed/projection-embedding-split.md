@@ -27,9 +27,9 @@ status: implemented
 > usable; the desktop's two-command orchestration (the *Shape A* decision below); and the build order.
 >
 > **It does not own:** the engine invariant or the reindex algorithm
-> ([index-engine.md](../../index-engine.md), [index-engine-build.md](../index-engine-build.md)); the async
+> ([index-engine.md](../../index-engine.md), [index-engine-build.md](index-engine-build.md)); the async
 > **progress + cancel** plumbing this reuses wholesale ([async-indexing.md](async-indexing.md) §3/§4);
-> the thin-adapter charter ([desktop-ui-mvp.md](../desktop-ui-mvp.md),
+> the thin-adapter charter ([desktop-ui-mvp.md](desktop-ui-mvp.md),
 > [`b2-desktop/CLAUDE.md`](../../../crates/b2-desktop/CLAUDE.md)). **Auto-index-on-open**, **embed
 > ordering**, a **CLI background embed**, and a **faster embedder** stay deferred (§9 / async-indexing
 > §7–§8).
@@ -335,8 +335,8 @@ Per the design-docs-are-source-of-truth discipline:
   executed here**; add a pointer noting this doc owns the projection/embedding split it anticipated.
 - [tasks.md](../../tasks.md) — promote "decouple embedding from indexing" to an active work item tracking
   Steps 1→3, pointing here.
-- [index-engine.md](../../index-engine.md) / [index-engine-build.md](../index-engine-build.md) — Flow ① is
+- [index-engine.md](../../index-engine.md) / [index-engine-build.md](index-engine-build.md) — Flow ① is
   described as one pass; note that projection and embedding are now separately invokable (the fused
   `reindex` is their composition), with no change to the invariant or the two-phase link resolution.
-- [desktop-ui-mvp.md](../desktop-ui-mvp.md) — the `reindex` surface is now project-then-embed; add a
+- [desktop-ui-mvp.md](desktop-ui-mvp.md) — the `reindex` surface is now project-then-embed; add a
   pointer once Step 3 ships.

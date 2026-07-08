@@ -3,7 +3,7 @@
 Guidance for Claude Code (and humans) working in this crate. It **inherits** the workspace rules in the
 [root CLAUDE.md](../../CLAUDE.md) (idiomatic Rust, error policy, determinism, user-facing-error policy) and
 **adds** the one rule that defines this crate's existence: **stay a dumb adapter.** The full rationale and
-the MVP plan live in [planning/specs/desktop-ui-mvp.md](../../planning/specs/desktop-ui-mvp.md); this file
+the MVP plan live in [planning/specs/completed/desktop-ui-mvp.md](../../planning/specs/completed/desktop-ui-mvp.md); this file
 is the enforceable in-crate rule.
 
 ## What this crate is
@@ -74,4 +74,4 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
 
 **Tauri IPC only** — the frontend `invoke`s these commands. This crate runs **no HTTP server**. An
 HTTP/`serve` transport is a *different, deferred adapter* for a *different need* (remote / browser /
-agent-over-HTTP); it does not belong here. See [the spec §1/§9](../../planning/specs/desktop-ui-mvp.md).
+agent-over-HTTP); it does not belong here. See [the spec §1/§9](../../planning/specs/completed/desktop-ui-mvp.md).

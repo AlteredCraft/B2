@@ -1,4 +1,4 @@
-// THE ONE IPC SEAM (specs/desktop-ui-mvp.md §3). Every `invoke()` in the frontend
+// THE ONE IPC SEAM (specs/completed/desktop-ui-mvp.md §3). Every `invoke()` in the frontend
 // lives here — the presentation-side mirror of the `Vault` façade. Keeping it in one
 // module means the rest of the UI never imports Tauri directly: it can be unit-tested
 // by mocking this module, and a future `serve`/HTTP transport swap touches ~this file

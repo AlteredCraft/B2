@@ -142,7 +142,7 @@ pub struct ExplainView {
 }
 
 /// A note's content + display metadata for a reader — the Desktop UI MVP's left
-/// pane (specs/desktop-ui-mvp.md §4), and the **one new façade op** that surface
+/// pane (specs/completed/desktop-ui-mvp.md §4), and the **one new façade op** that surface
 /// adds. Carries the note's identity, the frontmatter fields worth showing a human,
 /// and the **raw Markdown body read from disk** (the source of truth, not the index
 /// projection) so an adapter renders Markdown → HTML itself. A pure read — no
@@ -162,7 +162,7 @@ pub struct NoteView {
     /// fences excluded), or `None` when the note has none. This is the byte-honest
     /// block, not a re-serialization of the projected fields above — so `relations:`
     /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
-    /// collapsible drawer (specs/desktop-ui-mvp.md §4).
+    /// collapsible drawer (specs/completed/desktop-ui-mvp.md §4).
     pub frontmatter: Option<String>,
 }
 
@@ -396,7 +396,7 @@ impl Vault {
     }
 
     /// Read a note for display (`Vault::read`) — the Desktop UI MVP's left pane and
-    /// the one new façade op that surface adds (specs/desktop-ui-mvp.md §4). Resolve
+    /// the one new façade op that surface adds (specs/completed/desktop-ui-mvp.md §4). Resolve
     /// `note_ref` (path **or** `b2id`) to its file and return the note's **raw
     /// Markdown body from disk** (the source of truth, not the index projection) plus
     /// the frontmatter metadata worth showing a reader. A pure read — no embedding,

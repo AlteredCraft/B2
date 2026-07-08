@@ -1,7 +1,7 @@
 //! Step 0 — DB skeleton & the substrate bet.
 //!
 //! Green-scenario assertions for build-plan step 0
-//! (planning/specs/index-engine-build.md §4):
+//! (planning/specs/completed/index-engine-build.md §4):
 //!   - `sqlite-vec` statically links; FTS5 is compiled in (the `bundled` SQLite).
 //!   - open→reopen is stable; `WAL` + `foreign_keys=ON` hold; `schema_version` seeded.
 //!

@@ -124,7 +124,7 @@ are these tenets made mechanical; this is their canonical statement.
 > ship and are fully tested), so the first UI's **read-only MVP has shipped**: a **Tauri** desktop app
 > (`crates/b2-desktop`) + a Vite/vanilla-TS frontend (`ui/`) — the *second dumb adapter over the façade* this
 > section describes, **not** a rewrite (CodeMirror editing is the immediate fast-follow). Full plan:
-> [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) (and "Decisions locked (2026-07-05)" below).
+> [specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) (and "Decisions locked (2026-07-05)" below).
 
 A custom UI **is** coming — that's settled, not in question — but it is **postponed as long as
 possible.** The priority is to push as much **capability** and, above all, **testability** into
@@ -212,7 +212,7 @@ already said so. That is what lets the UI be deferred for a long time without fl
 **Deferred (post-v1, not now):**
 - The **GUI** — *read-only first cut **shipped*** as a **Tauri** desktop app (the connection-discovery loop:
   render → discover → link; CodeMirror body editor is the immediate fast-follow) — see the 2026-07-05 locked
-  decision below and [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md). The broader editor + graph/review
+  decision below and [specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md). The broader editor + graph/review
   surface stays deferred.
 - Multi-device **sync**.
 - Multiple vaults; large-scale performance work.
@@ -366,7 +366,7 @@ rather than departing from them — the machinery it removes is exactly what tho
 The headless-first bet has paid off — engine, façade, and CLI ship and are fully tested — so the deferred UI
 now begins, as the **second dumb adapter over the [`Vault`](../crates/b2-core/src/vault.rs) façade** this
 document always promised. It adds **no new architecture**: one thin adapter crate plus a frontend. Full
-rationale and the step-by-step build plan: [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md).
+rationale and the step-by-step build plan: [specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md).
 
 - **Delivery vehicle = a Tauri desktop app.** Not a TUI (the MVP is a *rendered-document* surface a terminal
   can't do justice — no long-form Markdown, images, or clickable links), not a browser + `b2 serve` (no

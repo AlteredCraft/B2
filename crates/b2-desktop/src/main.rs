@@ -1,7 +1,7 @@
 //! `b2-desktop` — the Tauri host, B2's **second dumb adapter** over the
 //! [`Vault`](b2_core::vault::Vault) façade (the GUI sibling of `b2-cli`). It holds
 //! **no engine logic**: each `#[tauri::command]` deserializes its args, calls one
-//! façade method, and serializes the result (specs/desktop-ui-mvp.md §3). The rules
+//! façade method, and serializes the result (specs/completed/desktop-ui-mvp.md §3). The rules
 //! that keep it a *dumb* adapter live in this crate's charter, `CLAUDE.md`.
 //!
 //! Two things this file owns, both mirroring the CLI:

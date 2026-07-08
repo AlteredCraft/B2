@@ -1,6 +1,6 @@
 //! The host's error type + the generic, actionable, no-internals-leaked mapping to a
 //! user-facing string — the desktop mirror of the CLI's `user_message`
-//! (specs/desktop-ui-mvp.md §3; the repo-wide logging policy in the parent CLAUDE.md).
+//! (specs/completed/desktop-ui-mvp.md §3; the repo-wide logging policy in the parent CLAUDE.md).
 //!
 //! [`CmdError`] **serializes to that string**, so a `#[tauri::command]` returning
 //! `Result<T, CmdError>` hands the webview a safe, actionable message and never a

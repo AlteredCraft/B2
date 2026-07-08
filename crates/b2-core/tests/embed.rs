@@ -1,5 +1,5 @@
 //! Step 3 — `sqlite-vec` + the embedder seam
-//! (planning/specs/index-engine-build.md step 3): a deterministic fake embedder
+//! (planning/specs/completed/index-engine-build.md step 3): a deterministic fake embedder
 //! produces reproducible KNN; `embed_model_id`/`embed_dim` are recorded; a
 //! model/dim swap recreates the vector space.
 

@@ -1,4 +1,4 @@
-//! Minimal body chunker (planning/specs/index-engine-build.md step 2).
+//! Minimal body chunker (planning/specs/completed/index-engine-build.md step 2).
 //!
 //! Splits a body into paragraphs — maximal runs of non-blank lines, separated by
 //! blank lines — one chunk each. `char_start..char_end` always addresses the

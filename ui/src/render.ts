@@ -3,7 +3,7 @@
 //
 // Safety: output comes from the user's *own* local notes, and the webview CSP
 // (script-src 'self', no 'unsafe-inline') neutralizes inline `<script>`/`onclick`
-// from a note and blocks remote script/style loads (specs/desktop-ui-mvp.md §6). We
+// from a note and blocks remote script/style loads (specs/completed/desktop-ui-mvp.md §6). We
 // still HTML-escape every value B2 itself interpolates (titles, paths, snippets) so
 // UI chrome can't be broken by note content. A DOMPurify pass is a later hardening,
 // not needed for a local-first, own-content MVP.

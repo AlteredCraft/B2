@@ -87,7 +87,7 @@ impl ParsedNote {
     /// frontmatter block. Byte-honest like [`body`](Self::body): the actual bytes,
     /// not a re-serialization of the parsed [`fields`](Self::fields), so keys B2
     /// doesn't model (`relations:`, `aliases:`, custom keys) show as written. Powers
-    /// the Desktop UI's frontmatter drawer (specs/desktop-ui-mvp.md §4).
+    /// the Desktop UI's frontmatter drawer (specs/completed/desktop-ui-mvp.md §4).
     pub fn frontmatter(&self) -> Option<&str> {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
     }

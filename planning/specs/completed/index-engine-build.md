@@ -4,28 +4,28 @@ title: "B2 — Index Engine: Build Plan & Schema"
 type: note
 tags: [b2, index-engine, sqlite, fts5, sqlite-vec, schema, build-plan, spec]
 created: 2026-06-29
-status: draft
+status: implemented
 ---
 
 # B2 — Index Engine: Build Plan & Schema
 
-> **The build spec for the SQLite index engine.** Where [index-engine.md](../index-engine.md) decides
+> **The build spec for the SQLite index engine.** Where [index-engine.md](../../index-engine.md) decides
 > *why* we build our own SQLite store (and takes qmd as a reference, not a dependency), and
-> [data-model.md](../data-model.md) defines *what* a note and an edge are in plain Markdown, this doc is
+> [data-model.md](../../data-model.md) defines *what* a note and an edge are in plain Markdown, this doc is
 > the precise *how*: exact table definitions, their relations, the data flows that must hold the locked
 > invariants, and the build order. The schema here is a **derived projection** of
-> [data-model.md](../data-model.md) — it must satisfy that model, never the reverse. Everything below is
+> [data-model.md](../../data-model.md) — it must satisfy that model, never the reverse. Everything below is
 > **language-agnostic** (SQLite + FTS5 + `sqlite-vec`), which is exactly why it can be locked *before*
-> the Rust/Go stack gate ([index-engine.md](../index-engine.md) §7).
+> the Rust/Go stack gate ([index-engine.md](../../index-engine.md) §7).
 
 ## 0. Scope & ground rules
 
 **This doc owns:** the precise DDL, the relations between tables, the read/write data flows, and the
-build sequence. **It does not own:** the *why* of SQLite ([index-engine.md](../index-engine.md)), the
-note/edge model it projects ([data-model.md](../data-model.md)), or the language/packaging choice
-([index-engine.md](../index-engine.md) §6–§7).
+build sequence. **It does not own:** the *why* of SQLite ([index-engine.md](../../index-engine.md)), the
+note/edge model it projects ([data-model.md](../../data-model.md)), or the language/packaging choice
+([index-engine.md](../../index-engine.md) §6–§7).
 
-Recap of the two tiers it sits in ([data-model.md](../data-model.md)): **Markdown** is the single source
+Recap of the two tiers it sits in ([data-model.md](../../data-model.md)): **Markdown** is the single source
 of truth; **`b2.sqlite`** (this doc) is a **disposable cache** of every queryable concern, with no
 durable state outside the notes. The law that binds them, and the yardstick every flow below is measured
 against:
@@ -33,7 +33,7 @@ against:
 > **`index = projection of (Markdown)`.** Drop `b2.sqlite`, re-scan the vault → a byte-identical index
 > (the locked `full-reindex ≡ incremental-update` invariant). *(Through 2026-06-30 a durable `.b2/log/`
 > event log was a second source of truth for review state; the LLM-relator cut removed it — see
-> [data-model.md](../data-model.md) §4.)*
+> [data-model.md](../../data-model.md) §4.)*
 
 **Conventions used throughout the DDL:**
 
@@ -41,7 +41,7 @@ against:
   `updated`, `indexed_at`, …). `mtime` is an integer epoch for fast change detection only.
 - The DB is opened with `PRAGMA journal_mode = WAL` and `PRAGMA foreign_keys = ON`. `sqlite-vec` is
   statically linked (no runtime `load_extension`, removing the macOS friction noted in
-  [index-engine.md](../index-engine.md) §8).
+  [index-engine.md](../../index-engine.md) §8).
 - Every table is rebuildable from `Markdown`; nothing here is a source of truth.
 
 ---
@@ -198,15 +198,22 @@ CREATE TABLE llm_cache (
 > **Removed 2026-07-04:** the `edge_provenance` table (the log-derived review queue holding a pending
 > suggestion's `by`/`source`/`confidence`). With the LLM relator and its suggestion lifecycle cut, there
 > is no review queue and no edge provenance — a committed edge is a pristine authored line
-> ([data-model.md](../data-model.md) §4).
+> ([data-model.md](../../data-model.md) §4).
 
 ### 1.5 Deliberately deferred (out of v1, no invariant depends on them)
 
-- **`dst_alias_raw`** (edges column, §1.3) — cosmetic alias-refresh only.
+- **`dst_alias_raw`** (edges column, §1.3) — cosmetic alias-refresh only. **Tracked:
+  [#29](https://github.com/AlteredCraft/B2/issues/29).**
 - **`note_bodies(note_b2id, content)`** — a cache of each file's text; re-readable from disk anytime.
 - **`notes.frontmatter_json`** — a blob of all frontmatter; round-trip losslessness is owned by the file
   parser, so the DB only needs the queryable columns above.
 - **`note_tags(note_b2id, tag)`** — fast structured `--tag` filtering; FTS already covers tag *text*.
+
+*(The other deferred work this doc names is also issue-tracked: the qmd chunker upgrade — §1.2 build
+note — is [#19](https://github.com/AlteredCraft/B2/issues/19); the reranker + query-expansion seam —
+Flow ② / §1.4's reserved `llm_cache` — is [#28](https://github.com/AlteredCraft/B2/issues/28). The
+`note_bodies`/`frontmatter_json`/`note_tags` caches and §1.2's KNN scale levers are contingencies, not
+planned work — add them the day a feature or a measurement demands them.)*
 
 ---
 
@@ -266,7 +273,7 @@ Markdown — both body and `relations:`) and its chunks. Every edge is Markdown-
 re-parse is exactly a one-note slice of a full rebuild — which is what makes "incremental ≡ full" hold.
 
 > **Split into two passes (2026-07-07,
-> [projection-embedding-split.md](completed/projection-embedding-split.md)):** over the whole vault, the model-free
+> [projection-embedding-split.md](projection-embedding-split.md)):** over the whole vault, the model-free
 > steps above (notes + chunks + FTS + edges) and the embed step are now **separately invokable** —
 > `Vault::project` and `Vault::embed` — with the fused `reindex` remaining their composition. The embed
 > pass derives its pending set from the DB (chunks with no `chunks_vec` row) rather than an in-memory
@@ -286,7 +293,7 @@ query ─ (opt) expansion SEAM ─┐ llm_cache
 
 RRF formula/`k`, the position-aware blend, and the asymmetric query/document prompt discipline (the
 concrete prefix is the model's own — B2 ships bge's) are borrowed from qmd
-([index-engine.md](../index-engine.md) §1, §5). The reranker and query expansion are deferred behind
+([index-engine.md](../../index-engine.md) §1, §5). The reranker and query expansion are deferred behind
 seams — they change *ordering*, not the store or the candidate set.
 
 ### ③ Commit a connection (`b2 link`) — B2 never authors the body
@@ -302,7 +309,7 @@ b2 link <src> <dst> [--type <verb>=references] [--explanation …]
 
 This is why every edge always traces to an authored line in the file (body or frontmatter), never to a
 bespoke index row — keeping `index = projection of (Markdown)` exact. There is no queue, no status flip,
-and no provenance: a committed edge is pristine ([data-model.md](../data-model.md) §4). `--type` defaults
+and no provenance: a committed edge is pristine ([data-model.md](../../data-model.md) §4). `--type` defaults
 to `references`; its palette is the core vocabulary (data-model §2).
 
 ### ④ Move / rename — *rename keeps every backlink resolving*
@@ -319,7 +326,7 @@ b2 mv old/path.md → new/path.md            (b2id unchanged ⇒ ZERO edge rows 
 A **title-only** rename leaves `path` resolving, so every backlink still works with **no rewrite**;
 refreshing the stale `|title` alias is the deferred cosmetic path (needs `dst_alias_raw`, §1.3). An
 **out-of-band** move (Finder/`git mv`) is repaired on the next reindex via the frontmatter `b2id`, with
-the cold-no-prior-state caveat from [user-stories.md](../user-stories.md) Story 1 (dangling links are
+the cold-no-prior-state caveat from [user-stories.md](../../user-stories.md) Story 1 (dangling links are
 *flagged*, not dropped).
 
 ### ⑤ Drop & rebuild — the disposability proof; `index = projection of (Markdown)`
@@ -337,24 +344,24 @@ state lives anywhere but your notes.
 
 ---
 
-## 4. Build plan (expands [tasks.md](../tasks.md)'s 5 steps; each ends on a golden-vault assertion)
+## 4. Build plan (expands [tasks.md](../../tasks.md)'s 5 steps; each ends on a golden-vault assertion)
 
-The **language gate** (Rust vs Go, [index-engine.md](../index-engine.md) §7) precedes writing engine
+The **language gate** (Rust vs Go, [index-engine.md](../../index-engine.md) §7) precedes writing engine
 code, but the schema and flows above are language-neutral and can be locked now.
 
-| # | Step | Tables it lands | Seam | Green-scenario assertion ([data-model.md](../data-model.md) §8) |
+| # | Step | Tables it lands | Seam | Green-scenario assertion ([data-model.md](../../data-model.md) §8) |
 |---|------|-----------------|------|------------------|
 | **0** | DB skeleton & migrations | `meta` | — | open→reopen stable; WAL + `foreign_keys=ON`; `sqlite-vec` links; `schema_version` gate seeded |
 | **1** | Vault parse/serialize + resolver | `notes`, `note_aliases` | — | golden vault round-trips byte-identical; a missing `b2id` is stamped + logged; resolver maps `memory ⇄ path` both ways |
 | **2** | Markdown-derived tables (**minimal paragraph chunker**, §1.2 build note) | `chunks` (+`chunks_fts`), `edges` | — | golden graph: `references` + `elaborates` spaced-rep→memory (inline/active); a bare link ⇒ `references`; `neighbors memory` = {referenced-by, elaborated-by}; one-note re-index ≡ full |
 | **3** | sqlite-vec + embedder seam | `chunks_vec` | **embedder** (fake→real) | deterministic fake vectors → reproducible KNN; `embed_model_id`/`embed_dim` recorded; real local model deferred behind the seam (§6 of index-engine.md) |
-| ~~**4**~~ | ~~`.b2/` event log + replay~~ **— built, then removed 2026-07-04** | — | — | the log tier + replay were cut with the LLM relator; there is no suggestion queue ([data-model.md](../data-model.md) §4) |
+| ~~**4**~~ | ~~`.b2/` event log + replay~~ **— built, then removed 2026-07-04** | — | — | the log tier + replay were cut with the LLM relator; there is no suggestion queue ([data-model.md](../../data-model.md) §4) |
 | **5** | Hybrid retrieval (on the **minimal** chunker; qmd-chunker upgrade **deferred** past step 5 — §1.2 build note) | reads fts+vec (no new tables; `llm_cache` defers with the reranker) | **reranker** (fast-follow), expansion (off) | hybrid beats either alone on a fixture query set; RRF `k=60`; the graph-filtered retrieval join works |
 
 Steps 1–2 establish the Markdown-derived tables; there is no log-derived tier (step 4 was removed
 2026-07-04), so `index = projection of (Markdown)` asserts on the Markdown alone. The embedder (step 3)
 and reranker (step 5) are the two model seams — both exercised with deterministic fakes so the plumbing
-is provable with no live model ([vision-and-scope.md](../vision-and-scope.md), testability stack).
+is provable with no live model ([vision-and-scope.md](../../vision-and-scope.md), testability stack).
 
 ---
 
@@ -365,8 +372,8 @@ is provable with no live model ([vision-and-scope.md](../vision-and-scope.md), t
   source note's frontmatter `relations:`, and the edge materializes as `origin='frontmatter'` from that
   Markdown (Flow ③). The graph is the **union** of body (`inline`) + frontmatter relations
   (`frontmatter`), deduped **inline-wins** on overlap (Flow ①). Mirrored into
-  [data-model.md](../data-model.md) §0, §2–§4, §7 and [index-engine.md](../index-engine.md) §3.
-- **Schema additions over [index-engine.md](../index-engine.md) §3's sketch (#2), adopted:** `meta`
+  [data-model.md](../../data-model.md) §0, §2–§4, §7 and [index-engine.md](../../index-engine.md) §3.
+- **Schema additions over [index-engine.md](../../index-engine.md) §3's sketch (#2), adopted:** `meta`
   (model/dim/version), `note_aliases` (resolution + cold repair), `occurrence_index` (the data-model §2
   identity tuple), and `dst_path_raw` (the move-rewrite + dangling-repair anchor). **Deferred:**
   `dst_alias_raw` and the `note_bodies` / `frontmatter_json` / `note_tags` caches (§1.5) — no invariant
@@ -378,8 +385,10 @@ is provable with no live model ([vision-and-scope.md](../vision-and-scope.md), t
   dst_id | dst_path_raw, type, occurrence_index)` — no minted ULIDs, no provenance side-table.
 - **Review layer removed (2026-07-04).** The `edge_provenance` table, the `status` column, the
   `origin='suggested'` value, the origin/status `CHECK`, and the `.b2/log/` replay are all gone with the
-  LLM relator. What remains is a pure projection of Markdown ([data-model.md](../data-model.md) §4).
+  LLM relator. What remains is a pure projection of Markdown ([data-model.md](../../data-model.md) §4).
 
-> Next ([tasks.md](../tasks.md)): pick the language (the immediate gate), then build steps 0→5 against
-> the golden-vault fixtures. The schema and flows in this doc are the language-agnostic contract that
-> work implements.
+> **Built.** The language gate resolved to Rust and steps 0→5 all shipped against the golden-vault
+> fixtures (step 4 was built, then removed with the 2026-07-04 relator cut); the split of Flow ① into
+> `project` + `embed` (2026-07-07) is specced in
+> [projection-embedding-split.md](projection-embedding-split.md). The schema and flows in this
+> doc remain the contract the code implements; the deferred items are issue-tracked (§1.5).

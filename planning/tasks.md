@@ -26,14 +26,14 @@ design docs, which are the **source of truth** (the code is a projection of them
 The **headless engine is complete** and **two dumb adapters over the [`Vault`](../crates/b2-core/src/vault.rs)
 façade** have shipped:
 
-- **Engine** — index-engine build steps 0→5 ([specs/index-engine-build.md](specs/index-engine-build.md));
+- **Engine** — index-engine build steps 0→5 ([specs/completed/index-engine-build.md](specs/completed/index-engine-build.md));
   the real candle-backed embedder + out-of-CI eval ([specs/eval-strategy.md](specs/eval-strategy.md)); the
   note-authoring CLI (`add` / `mv` / `link` / `explain` / `similar` / `search` / `reindex` incl. `--dry-run`).
 - **The discovery pivot (2026-07-04)** — cut the LLM relator, the `b2-relate` crate, and the `.b2/log/`
   tier; discovery is now `b2 similar` (surface near-but-unlinked) + `b2 link` (the human commits). The
   invariant simplified to **`index = projection of (Markdown)`** (two tiers). See
   [vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-04)".
-- **Desktop UI** — the read-only MVP ([specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md), Steps 0→3): read a
+- **Desktop UI** — the read-only MVP ([specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md), Steps 0→3): read a
   note, surface similar-but-unlinked notes, commit a typed link; file-tree, frontmatter drawer, view-source
   toggle, in-app vault switcher. Plus **async, cancellable indexing**
   ([specs/completed/async-indexing.md](specs/completed/async-indexing.md)) — the desktop `reindex` is a non-blocking background
@@ -48,7 +48,7 @@ façade** have shipped:
 
 ## Active — next up
 
-The desktop's next cut is **editing**, per [specs/desktop-ui-mvp.md](specs/desktop-ui-mvp.md) §8:
+The desktop's next cut is **editing**, per [specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §8:
 
 1. **Step 4 — in-editor body editing** (CodeMirror 6 + `Vault::write` + mtime guard) —
    [#13](https://github.com/AlteredCraft/B2/issues/13).
@@ -80,6 +80,6 @@ linked doc.
   fake embedder); real-model work (`b2 init`, `--example eval`, the retrieval eval) runs **out of CI**.
   Canonical: [CLAUDE.md](../CLAUDE.md) + [specs/eval-strategy.md](specs/eval-strategy.md).
 - **"Next up" / build plan** — the execution order other docs point to is this file's **Active** section
-  above (build steps themselves: [specs/index-engine-build.md](specs/index-engine-build.md) §4).
+  above (build steps themselves: [specs/completed/index-engine-build.md](specs/completed/index-engine-build.md) §4).
 - **Typed relations in Markdown** — the authored-reference layer (`relations:` frontmatter + body links).
   Canonical: [data-model.md](data-model.md) §0/§3.

@@ -1,5 +1,5 @@
 //! `Vault::read` — the one façade op the Desktop UI MVP adds
-//! (planning/specs/desktop-ui-mvp.md §4). Its contract: resolve a note by path
+//! (planning/specs/completed/desktop-ui-mvp.md §4). Its contract: resolve a note by path
 //! **or** `b2id`, return the note's raw Markdown body **from disk** (source of
 //! truth, frontmatter stripped) plus the display metadata. A pure read, model-free
 //! (FakeEmbedder), against the golden-vault fixture.

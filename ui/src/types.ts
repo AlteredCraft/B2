@@ -1,6 +1,6 @@
 // TypeScript mirrors of the `b2-core` façade's `Serialize` view types — the IPC
 // contract. These are the SAME shapes the CLI's `--json` mode emits (the desktop
-// host reuses them verbatim as command payloads, specs/desktop-ui-mvp.md §3), so a
+// host reuses them verbatim as command payloads, specs/completed/desktop-ui-mvp.md §3), so a
 // field here corresponds 1:1 to a Rust struct field. Hand-written for now; if they
 // ever churn, `ts-rs`/`tauri-specta` codegen is the later lever (spec §9).
 

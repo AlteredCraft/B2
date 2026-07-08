@@ -1,5 +1,5 @@
 //! The `#[tauri::command]` handlers — B2's IPC surface, and the frontend's mirror of
-//! the [`Vault`](b2_core::vault::Vault) façade (specs/desktop-ui-mvp.md §3). Each
+//! the [`Vault`](b2_core::vault::Vault) façade (specs/completed/desktop-ui-mvp.md §3). Each
 //! handler is **deserialize → call one façade method → serialize**: no branch, no
 //! loop, no rule. If a handler ever needs one, that logic belongs behind the façade
 //! in `b2-core` (add a façade op, not host logic) — that is the whole discipline that
@@ -263,7 +263,7 @@ fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
 #[cfg(test)]
 mod tests {
     //! Thin command-layer tests: args resolve → the façade is called → a view comes
-    //! back (specs/desktop-ui-mvp.md §7 — "thinness *is* the test strategy"; the
+    //! back (specs/completed/desktop-ui-mvp.md §7 — "thinness *is* the test strategy"; the
     //! façade's own suite covers behavior). Model-free: read-path commands open with
     //! the fake, and setup reindexes with the fake directly, so no model is needed.
 

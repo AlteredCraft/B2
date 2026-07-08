@@ -106,7 +106,7 @@ rejection memory; the LLM-relator cut removed the only thing it was for, so the 
 [data-model.md](data-model.md) §4.)*
 
 > The precise DDL, the relations between these tables, the read/write data flows, and the build order
-> are specified in **[specs/index-engine-build.md](specs/index-engine-build.md)**. The sketch below is
+> are specified in **[specs/completed/index-engine-build.md](specs/completed/index-engine-build.md)**. The sketch below is
 > the orientation; that doc is the buildable contract.
 
 ```

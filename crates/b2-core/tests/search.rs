@@ -1,4 +1,4 @@
-//! Step 5 — hybrid retrieval (planning/specs/index-engine-build.md step 5):
+//! Step 5 — hybrid retrieval (planning/specs/completed/index-engine-build.md step 5):
 //! BM25 ⊕ vector → RRF fusion (k=60), resolved to notes, plus the graph-filtered
 //! vector⨝edge join (index-engine.md §3) — the substrate connection discovery
 //! runs on.

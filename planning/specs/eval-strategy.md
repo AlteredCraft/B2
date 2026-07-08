@@ -11,7 +11,7 @@ status: draft
 # B2 — Eval Strategy: measuring model quality
 
 > **How B2 measures the quality of its one AI seam — the [`Embedder`](../../crates/b2-core/src/embed.rs)
-> — without letting a real model into the CI suite.** The [build spec](index-engine-build.md) covers the
+> — without letting a real model into the CI suite.** The [build spec](completed/index-engine-build.md) covers the
 > deterministic engine; this doc covers the *non-deterministic* half: a hand-labelled eval that scores
 > model output, lives **out of CI**, and is run on demand. It owns the eval philosophy, the labelled-set
 > format, the metrics, and how to read and grow it. It does **not** own the seam itself
@@ -71,6 +71,6 @@ floor `p@1 ≥ 0.75`. See [`examples/eval.rs`](../../crates/b2-embed/examples/ev
   multi-hop meaning, and the keyword/stopword noise the first eval pass surfaced.
 - **What this eval unlocks.** With a real embedder scoring retrieval, two deferred items can finally be
   *measured* rather than guessed ([tasks.md](../tasks.md) backlog): the **qmd chunker upgrade** (paragraph
-  vs. qmd chunking, [build spec](index-engine-build.md) §1.2), and ranking-quality tuning of the hybrid
+  vs. qmd chunking, [build spec](completed/index-engine-build.md) §1.2), and ranking-quality tuning of the hybrid
   pipeline. Since `b2 similar` reuses the same stored vectors, better retrieval quality lifts
   candidate-surfacing quality directly.

@@ -20,7 +20,7 @@ schema must satisfy the data model, never the reverse.
 
 - `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
 - `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
-- `planning/index-engine.md` + `planning/specs/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the build order, data flows.
+- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
 - `planning/user-stories.md` — kernel behavior as testable scenarios.
 - `planning/specs/eval-strategy.md` — how model quality (the `Embedder` seam) is measured out-of-CI:

@@ -1,4 +1,4 @@
-//! Ingest (Flow ① of planning/specs/index-engine-build.md): parse → stamp a
+//! Ingest (Flow ① of planning/specs/completed/index-engine-build.md): parse → stamp a
 //! missing `b2id` (write file + log) → project into `notes`/`note_aliases`,
 //! `chunks` (+FTS), and the typed `edges` graph.
 //!
