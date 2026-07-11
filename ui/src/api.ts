@@ -5,6 +5,7 @@
 // only. Do not call `invoke` anywhere else.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   EmbedReport,
   ExplainView,
@@ -42,6 +43,16 @@ export const WRITE_CONFLICT_MESSAGE =
 export function isWriteConflict(e: unknown): boolean {
   return errText(e).startsWith(WRITE_CONFLICT_MESSAGE);
 }
+
+/**
+ * The host's filesystem-watch pulse (desktop-ui-mvp.md §5 / #14): the Rust watcher emits
+ * this event, debounced, whenever the vault's Markdown changes on disk from outside the app
+ * (an external editor, a `git pull`). Must equal the host's `VAULT_CHANGED_EVENT`
+ * (`b2-desktop/src/watch.rs`) — pinned by the `vault_changed_event_matches_the_frontend`
+ * test there; change both together. The pulse carries no payload: it's a bare "reconcile
+ * now" signal, and the frontend re-reads through the façade to see *what* changed.
+ */
+export const VAULT_CHANGED_EVENT = "vault-changed";
 
 export const api = {
   /** Step 0's seam proof: round-trips a trivial command through the Rust host. */
@@ -115,4 +126,13 @@ export const api = {
 
   /** Ask the in-flight embed to stop at its next batch boundary (cooperative). */
   cancelReindex: (): Promise<void> => invoke("cancel_reindex"),
+
+  /**
+   * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once
+   * per burst of external Markdown changes; the returned promise resolves to an unlisten
+   * function (unused here — the subscription lives for the window's lifetime). This is the
+   * only `listen` in the app, kept behind the seam like every `invoke`.
+   */
+  onVaultChanged: (handler: () => void): Promise<UnlistenFn> =>
+    listen(VAULT_CHANGED_EVENT, () => handler()),
 };

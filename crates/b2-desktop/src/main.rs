@@ -26,6 +26,7 @@
 
 mod commands;
 mod error;
+mod watch;
 
 use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
@@ -35,6 +36,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
+use tauri::Manager;
+use watch::VaultWatcher;
 
 /// How often [`AppState::cancel_and_wait_for_reindex`] re-asserts the cancel flag and
 /// re-checks whether the in-flight reindex has wound down. Short enough to feel
@@ -277,6 +280,20 @@ fn main() {
         // default.json), so it can never open a dialog itself.
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        // Filesystem auto-reload (#14 / desktop-ui-mvp §5): its own managed state so the
+        // pure `AppState` machine stays free of an OS watch handle. Started below once the
+        // app handle exists, and re-pointed on a vault switch (`choose_vault`).
+        .manage(VaultWatcher::default())
+        .setup(|app| {
+            // Watch the startup vault, if one resolved. Best-effort: `watch` swallows and
+            // logs a failure, so a platform without a watch backend still launches (the
+            // conflict bar remains the fallback). No vault configured → nothing to watch;
+            // the first `choose_vault` starts it.
+            if let Some(root) = app.state::<AppState>().current_root() {
+                app.state::<VaultWatcher>().watch(app.handle(), &root);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::vault_info,

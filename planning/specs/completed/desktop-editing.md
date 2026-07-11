@@ -389,8 +389,10 @@ all stay live while editing (the carve-out holds).
   [desktop-live-preview.md](desktop-live-preview.md)
   ([#30](https://github.com/AlteredCraft/B2/issues/30)).**
 - **fs-watch auto-reload** (Step 5) — replaces "stale until conflict" with live reconciliation; the
-  conflict bar remains the fallback for unwatchable cases. **Tracked:
-  [#14](https://github.com/AlteredCraft/B2/issues/14).**
+  conflict bar (§5/§6) remains the fallback for the note you're actively editing. **Shipped 2026-07-11**
+  → [desktop-ui-mvp.md](desktop-ui-mvp.md) §5 as-built note + §8 Step 5
+  ([#14](https://github.com/AlteredCraft/B2/issues/14)): a host-side `notify` watcher emits a debounced
+  `vault-changed` pulse and the frontend reconciles through the existing façade ops, revision-guarded.
 - **CLI `b2 write`** — the façade op is adapter-ready; add the command the day a CLI/agent need
   appears (piped stdin → body). Not this slice.
 - **Frontmatter editing in-app** — a different write site with different safety questions (YAML
