@@ -704,6 +704,77 @@ async function exitEdit(): Promise<void> {
   if (await closeEditor()) render(); // shows the saved text — no re-read needed
 }
 
+// --- external-edit reconciliation (desktop-ui-mvp.md §5 / #14) --------------------
+//
+// The host watches the vault and emits a debounced `vault-changed` pulse whenever the
+// Markdown changes on disk from outside the app (an external editor, a `git pull`). We
+// reconcile by re-reading through the façade — never by trusting event paths — so this
+// stays honest against `index = projection of (Markdown)` and reuses the exact ops the
+// rest of the UI uses. Our *own* writes also pulse, but they're no-ops here: a save keeps
+// `state.current.revision` in lockstep with disk, so the revision compare below sees "no
+// change" and skips (the guard that stops a self-inflicted reload loop).
+
+let reconcileInFlight = false;
+let reconcilePending = false;
+
+// Serialize reconciles: pulses can arrive faster than a reconcile completes (a big `git
+// pull`), so coalesce overlaps into one trailing run rather than racing reads against state.
+async function onVaultChanged(): Promise<void> {
+  if (reconcileInFlight) {
+    reconcilePending = true;
+    return;
+  }
+  reconcileInFlight = true;
+  try {
+    do {
+      reconcilePending = false;
+      await reconcileExternalChange();
+    } while (reconcilePending);
+  } finally {
+    reconcileInFlight = false;
+  }
+}
+
+async function reconcileExternalChange(): Promise<void> {
+  if (state.vaultRoot === null) return;
+  // The tree first — an external add / remove / rename shows up immediately. Safe in every
+  // mode: `render()` rebuilds the tree and side panes but skips the note pane while editing
+  // (the carve-out), so a live editor is never touched.
+  await loadNotes();
+
+  // The open note. Two cases are deliberately left alone:
+  //   • editing — the live buffer is the user's unsaved work; never clobber it. An external
+  //     edit to the note being typed in surfaces through the save chain's conflict bar
+  //     instead (desktop-editing.md §5), the one case live reload can't own safely.
+  //   • reindexing — our own project/embed run owns the open note's refresh (doReindex);
+  //     reconciling here would fight it. Its own writes don't pulse anyway (sqlite under
+  //     `.b2/`, filtered host-side), but a projection can rewrite `.md` (b2id stamp).
+  if (state.current && !state.editing && !state.reindexing) {
+    const cur = state.current;
+    try {
+      const fresh = await api.readNote(cur.path);
+      // The read is async: apply only if this note still owns the pane and we're still in
+      // reading mode (the user may have navigated or started editing meanwhile).
+      if (state.current?.path === cur.path && !state.editing) {
+        // Unchanged bytes (our own save's echo, or a touch that didn't alter content):
+        // skip — no discovery churn, no flicker.
+        if (fresh.revision !== cur.revision) {
+          state.current = fresh;
+          await refreshDiscovery(); // the edit may have changed similar/edges
+          flash("Reloaded — this note changed on disk.");
+        }
+      }
+    } catch {
+      // The open note was moved or removed on disk. Keep the (now stale) pane rather than
+      // blanking it, but say so — the freshly reloaded tree lets the user navigate away.
+      if (state.current?.path === cur.path) {
+        flash("This note is no longer on disk — it was moved or removed.");
+      }
+    }
+  }
+  render();
+}
+
 // --- shell + events -------------------------------------------------------------
 
 function buildShell(): void {
@@ -869,6 +940,10 @@ function wireEvents(): void {
 async function boot(): Promise<void> {
   buildShell();
   wireEvents();
+  // Auto-reload on external edits (#14): subscribe once for the window's lifetime. The
+  // host only pulses when the *watched* vault's Markdown changes, and re-points the watch
+  // on a vault switch, so this single subscription always tracks the active vault.
+  void api.onVaultChanged(() => void onVaultChanged());
   try {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;

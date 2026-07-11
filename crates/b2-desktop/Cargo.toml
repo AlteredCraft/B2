@@ -31,6 +31,11 @@ thiserror = "2.0.18"
 # vault that was open when it was last closed. Same crate/convention b2-embed uses for
 # its XDG model cache (`dirs::data_dir()/b2/…`), so both live under one vendor dir.
 dirs = "6"
+# Native filesystem watch for auto-reload on external edits (#14 / desktop-ui-mvp §5).
+# Host-owned infrastructure: the watcher coalesces raw OS events into one debounced
+# `vault-changed` pulse to the webview, which reconciles via existing façade ops — the
+# webview itself is granted no filesystem permission (least-privilege, capabilities/).
+notify = "8"
 
 [dev-dependencies]
 tempfile = "3.27.0"

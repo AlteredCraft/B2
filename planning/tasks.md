@@ -68,12 +68,22 @@ façade** have shipped:
   full error detail server-side** (the webview still gets only the generic message). Residual deleted-file
   ghost rows tracked in [#31](https://github.com/AlteredCraft/B2/issues/31). See
   [index-engine.md](index-engine.md) §8.
+- **Native fs-watch auto-reload (2026-07-11)** — Step 5 of the desktop plan
+  ([specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §5/§8), replacing "stale until you
+  try to save" with live reconciliation. The Tauri host watches the vault (`b2-desktop/src/watch.rs`,
+  the `notify` crate) and emits a **debounced `vault-changed` pulse** whenever the Markdown changes on
+  disk from outside the app (external editor, `git pull`); the frontend reconciles the file tree + open
+  note through the **existing** façade ops (`list_notes`/`read_note`/`similar`/`explain`), revision-guarded
+  so B2's own writes don't loop and a live editor buffer is never clobbered — the conflict bar remains the
+  fallback for the note you're actively typing in. Host-owned infrastructure: the webview gets **no**
+  filesystem permission and there is **no new façade op** (the watcher is a dumb signal, like the reindex
+  task lifecycle and the OS dialog). Closes [#14](https://github.com/AlteredCraft/B2/issues/14).
 
 ## Active — next up
 
-1. **Step 5 — native fs-watch auto-reload** (replaces "stale until conflict" with live
-   reconciliation; revisit frontend save-chain test extraction when this is specced) —
-   [#14](https://github.com/AlteredCraft/B2/issues/14).
+The desktop's **read → discover → link → edit → reconcile** arc is complete (Step 5 shipped 2026-07-11,
+above). No single focus is queued next — the remaining work is the tracked
+[backlog](#backlog--github-issues) below; pick per priority.
 
 ## Backlog → GitHub Issues
 

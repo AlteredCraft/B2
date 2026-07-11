@@ -16,6 +16,7 @@
 //! without a Tauri runtime (the `State` wrapper is only in the one-line `#[command]`).
 
 use crate::error::CmdError;
+use crate::watch::VaultWatcher;
 use crate::{open_vault, AppState};
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
@@ -26,7 +27,7 @@ use serde::Serialize;
 use std::ops::ControlFlow;
 use std::path::Path;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 /// The active vault's root + whether semantic ranking is live (real model), for the
@@ -82,7 +83,11 @@ pub fn choose_vault(
         return Ok(None);
     };
     let info = set_vault_root_impl(state.inner(), &path)?;
-    crate::persist_last_vault(&path); // remember it for the next launch (best-effort)
+    // Remember it for the next launch (best-effort).
+    crate::persist_last_vault(&path);
+    // Re-point filesystem auto-reload at the new vault (#14): the old watch is dropped and a
+    // fresh one starts, so pulses now reflect the vault the app is on.
+    app.state::<VaultWatcher>().watch(&app, &path);
     Ok(Some(info))
 }
 

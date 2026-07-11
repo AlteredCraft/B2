@@ -194,8 +194,9 @@ transport (§1); packaging, signing, and distribution (§9).
 > **Executed 2026-07-07** by [desktop-editing.md](desktop-editing.md), which holds this section's
 > shape with one upgrade: the interim `mtime` guard below shipped as a **content-hash revision**
 > (blake3 of the raw file bytes — see its §3 for why mtime lost), and the save is **model-free**
-> (project-only; a trailing background embed fills vectors). fs-watch remains
-> [#14](https://github.com/AlteredCraft/B2/issues/14).
+> (project-only; a trailing background embed fills vectors). **fs-watch shipped 2026-07-11**
+> (Step 5, [#14](https://github.com/AlteredCraft/B2/issues/14)) — see the as-built note on the
+> filesystem-watch bullet below and §8.
 
 Editing is a near fast-follow, so its shape is fixed here even though it's out of the MVP cut.
 
@@ -208,6 +209,18 @@ Editing is a near fast-follow, so its shape is fixed here even though it's out o
   **filesystem-watch** answers this directly: watch the vault, and on external change re-read and reload
   the affected note (and re-run `similar`/`explain` for the open note). This is a primary reason the
   desktop shell was chosen over a browser tab, which has no native fs-watch.
+  > **As-built (Step 5, shipped 2026-07-11, #14).** The watch runs **host-side** (`b2-desktop/src/watch.rs`,
+  > the `notify` crate), not in the webview — so the webview keeps its zero-filesystem-permission posture
+  > (§6). The host coalesces a burst of raw OS events into **one debounced `vault-changed` pulse** (filtered
+  > to `.md` changes, so the trailing-embed's sqlite churn under `.b2/` never triggers it) and emits it to
+  > the frontend, which reconciles the tree + open note through the **existing** façade ops — **no new
+  > façade op, no engine logic in the host** (the pulse is a dumb signal, reconciliation is `list_notes` +
+  > `read_note` + `similar`/`explain`). Reconciliation is **revision-guarded**: the open note reloads only
+  > when its on-disk blake3 differs from `NoteView.revision`, so B2's own writes (whose revision the editor
+  > already tracks) are no-ops and can't loop. The one case live reload deliberately does **not** own is an
+  > external edit to the note you're *actively typing in* — the buffer is unsaved work, never clobbered; the
+  > save chain's conflict bar (desktop-editing.md §5) stays the fallback there. The watch re-points on a
+  > vault switch (`choose_vault`).
 - **Interim guard if editing lands before fs-watch:** an `mtime` check on save — if the file changed on
   disk since it was opened, prompt to reload rather than clobber. Covers the common case cheaply until the
   watch lands.
@@ -262,8 +275,11 @@ Sequenced like the [build spec](index-engine-build.md)'s step 0→N — each ste
   read → discover → link — is now visual end-to-end.
 - **Step 4 — Editing (fast-follow).** CodeMirror editing + `Vault::write` + save-through-façade + the `mtime`
   guard (§5). **Tracked: [#13](https://github.com/AlteredCraft/B2/issues/13).**
-- **Step 5 — Reconciliation (fast-follow).** Native fs-watch → auto-reload on external edits.
-  **Tracked: [#14](https://github.com/AlteredCraft/B2/issues/14).**
+- **Step 5 — Reconciliation (fast-follow). ✅ shipped 2026-07-11 ([#14](https://github.com/AlteredCraft/B2/issues/14)).**
+  Native fs-watch → auto-reload on external edits: a host-side `notify` watcher (`b2-desktop/src/watch.rs`)
+  emits a debounced `vault-changed` pulse; the frontend reconciles the tree + open note through the existing
+  façade ops, revision-guarded (own writes are no-ops), leaving a live editor buffer to the §5 conflict bar.
+  Webview stays filesystem-permission-free; no new façade op. As-built note in §5.
 - **Later.** Packaging / signing / notarization / distribution
   (**[#23](https://github.com/AlteredCraft/B2/issues/23)**); a `serve` adapter *if* a remote or
   agent-over-HTTP need appears (**[#24](https://github.com/AlteredCraft/B2/issues/24)**).
@@ -271,8 +287,9 @@ Sequenced like the [build spec](index-engine-build.md)'s step 0→N — each ste
 > **Shipped through Step 3 (2026-07-05) — the MVP this doc specs is complete**, plus post-MVP additions
 > recorded in §4 (file tree, frontmatter drawer, view-source toggle, in-app vault switcher) and the two
 > indexing follow-ons ([async-indexing.md](async-indexing.md),
-> [projection-embedding-split.md](projection-embedding-split.md)). Steps 4–5 are the
-> issue-tracked fast-follows above; §5 remains the shape they build to.
+> [projection-embedding-split.md](projection-embedding-split.md)). **Steps 4–5 have since shipped too**:
+> editing 2026-07-07 ([desktop-editing.md](desktop-editing.md), #13) and fs-watch reconciliation
+> 2026-07-11 (§5 as-built note, #14) — §5 was the shape both built to.
 
 ## 9. Open questions / deferred (not deciding here)
 
