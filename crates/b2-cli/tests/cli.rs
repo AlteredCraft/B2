@@ -645,3 +645,54 @@ fn link_invalid_type_fails_cleanly() {
     );
     assert!(!err.contains("panicked"), "no stack trace: {err}");
 }
+
+// ---------------------------------------------------------------------------
+// structured debug logging (B2_LOG)
+// ---------------------------------------------------------------------------
+
+/// Run `b2 -C <vault> <args...>` with `B2_LOG` set — the structured-logging path.
+fn run_with_log(vault: &Path, log: &str, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_LOG", log)
+        .arg("-C")
+        .arg(vault)
+        .args(args)
+        .output()
+        .expect("b2 binary runs")
+}
+
+#[test]
+fn b2_log_emits_jsonl_on_stderr_and_stdout_stays_pure() {
+    let (_g, root) = golden_vault();
+
+    let out = run_with_log(&root, "debug", &["--json", "reindex"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // stdout is still pure machine-readable data — no log line leaks into it.
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["indexed"], 2);
+
+    // stderr is JSON Lines: every line one flat JSON object (the reporting
+    // contract — pipeable into jq/DuckDB/pandas as-is).
+    let err = stderr(&out);
+    assert!(!err.is_empty(), "B2_LOG=debug produced no log output");
+    let mut sqlite_events = 0usize;
+    for line in err.lines() {
+        let v: Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("non-JSON stderr line ({e}): {line}"));
+        if v["target"] == "b2::sqlite" {
+            sqlite_events += 1;
+            assert!(v["duration_us"].is_u64(), "no numeric timing: {line}");
+        }
+    }
+    assert!(
+        sqlite_events > 10,
+        "expected per-query timing events, got {sqlite_events}"
+    );
+
+    // Without B2_LOG/B2_DEBUG nothing is logged — stderr is silent on success.
+    let quiet = run_in(&root, &["--json", "reindex"]);
+    assert!(quiet.status.success());
+    assert_eq!(stderr(&quiet), "", "logging must stay opt-in");
+}

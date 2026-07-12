@@ -137,6 +137,7 @@ impl Cli {
 }
 
 fn main() -> ExitCode {
+    init_logging();
     let cli = Cli::parse();
     match dispatch(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -145,6 +146,47 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Opt-in structured debug logging: the kernel's `tracing` events — per-statement
+/// SQLite timings from SQLite's own profiler (`b2::sqlite`, with `duration_us` and
+/// `slow=true` on anything at/over `B2_SLOW_QUERY_MS`, default 100), façade-op
+/// spans (`b2::vault`), and flow milestones (`b2::search`/`b2::ingest`) — rendered
+/// as **JSON Lines on stderr**, one flat object per line, so a run's log pipes
+/// straight into jq/DuckDB/pandas for reporting and plotting while `--json` stdout
+/// stays pure data.
+///
+/// `B2_LOG` holds a tracing filter directive (e.g. `debug`, `b2::sqlite=debug`,
+/// `warn` for slow queries only); setting `B2_DEBUG` (which already opts into error
+/// detail) without `B2_LOG` implies `debug`. With neither set, no subscriber is
+/// installed and the kernel's instrumentation stays inert.
+fn init_logging() {
+    let directive = match std::env::var("B2_LOG") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ if std::env::var_os("B2_DEBUG").is_some() => "debug".to_string(),
+        _ => return,
+    };
+    let filter = match tracing_subscriber::EnvFilter::try_new(&directive) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("warning: invalid B2_LOG filter '{directive}' ({e}); using 'debug'");
+            tracing_subscriber::EnvFilter::new("debug")
+        }
+    };
+    tracing_subscriber::fmt()
+        .json()
+        // Event fields at the top level of each object (not nested under "fields")
+        // — what makes `jq '.duration_us'`-style reporting one-liners work.
+        .flatten_event(true)
+        // Close events give each façade-op span its measured duration; the clock
+        // lives here in the adapter, keeping b2-core itself wall-clock-free.
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_current_span(true)
+        .with_span_list(false)
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_env_filter(filter)
+        .init();
 }
 
 fn dispatch(cli: &Cli) -> Result<(), CliError> {

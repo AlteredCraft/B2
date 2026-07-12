@@ -262,6 +262,12 @@ impl Vault {
     /// wipe vectors on the next command — a mismatch is caught, and fixed, at
     /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
     pub fn open_with_embedder(vault_root: &Path, embedder: Box<dyn Embedder>) -> Result<Self> {
+        // Every façade op opens a `tracing` span (target `b2::vault`): under a
+        // subscriber with span-close events, each op reports its own duration, and
+        // the per-query `b2::sqlite` events carry which op they ran under. Inert
+        // (near-zero cost) until an adapter installs a subscriber — the determinism
+        // boundary is unchanged, since the core itself never reads a clock for this.
+        let _op = tracing::debug_span!(target: "b2::vault", "open").entered();
         // `Connection::open` creates the DB file but not its parent; make `.b2/` first.
         fs::create_dir_all(vault_root.join(".b2"))?;
         let conn = db::open(&vault_root.join(".b2").join("b2.sqlite"))?;
@@ -297,6 +303,7 @@ impl Vault {
         force: bool,
         on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
     ) -> Result<ReindexReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "reindex", force).entered();
         let ingested = ingest::ingest_vault_with_progress(
             &self.conn,
             &self.root,
@@ -327,6 +334,7 @@ impl Vault {
     /// *index — `project` + `embed` together; this op is named for the row-projection
     /// pass it runs.)*
     pub fn project(&self, force: bool) -> Result<ProjectReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "project", force).entered();
         let outcome = ingest::project_vault(&self.conn, &self.root, &self.idgen, force)?;
         Ok(ProjectReport {
             indexed: outcome.notes.len(),
@@ -349,6 +357,7 @@ impl Vault {
         &self,
         on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
     ) -> Result<EmbedReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "embed").entered();
         let outcome = ingest::embed_vault(&self.conn, self.embedder.as_ref(), on_progress)?;
         Ok(EmbedReport {
             embedded: outcome.embedded.len(),
@@ -363,6 +372,7 @@ impl Vault {
     /// full rebuild (every note would re-embed). A pure read, so it needs no model
     /// (the CLI opens with the fake for it, like `neighbors`).
     pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
+        let _op = tracing::debug_span!(target: "b2::vault", "plan_reindex", force).entered();
         let planned = ingest::plan_reindex(&self.conn, &self.root, force)?;
         Ok(ReindexPlan {
             would_index: planned.len(),
@@ -376,6 +386,7 @@ impl Vault {
     /// [`Error::NoteNotFound`] when the ref matches no indexed note (distinct from
     /// a found note that simply has no neighbors → an empty list).
     pub fn neighbors(&self, note_ref: &str) -> Result<Vec<NeighborView>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "neighbors", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
         self.neighbors_of(&b2id)
     }
@@ -413,6 +424,7 @@ impl Vault {
     /// with no edges returns an [`ExplainView`] with an empty `connections`. A pure
     /// graph read — no embedding, like [`neighbors`](Self::neighbors).
     pub fn explain(&self, note_ref: &str) -> Result<ExplainView> {
+        let _op = tracing::debug_span!(target: "b2::vault", "explain", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?.unwrap_or_default();
         let title = db::note_title(&self.conn, &b2id)?;
@@ -435,6 +447,7 @@ impl Vault {
     /// touches the filesystem itself. Errors with [`Error::NoteNotFound`] for an
     /// unknown ref.
     pub fn read(&self, note_ref: &str) -> Result<NoteView> {
+        let _op = tracing::debug_span!(target: "b2::vault", "read", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
@@ -472,6 +485,7 @@ impl Vault {
     /// only an external write trips the guard ("last save wins — by construction",
     /// desktop-editing.md §3).
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "write", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
@@ -507,6 +521,7 @@ impl Vault {
     /// never-reindexed vault lists nothing (no error) — reindex populates it, the same
     /// index-first honesty as [`search`](Self::search).
     pub fn list_notes(&self) -> Result<Vec<NoteSummary>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "list_notes").entered();
         Ok(db::all_notes(&self.conn)?
             .into_iter()
             .map(|(b2id, path, title)| NoteSummary { b2id, path, title })
@@ -525,6 +540,7 @@ impl Vault {
     /// empty). `vault_info`-style callers should consult the `semantic` flag to
     /// present keyword-only results honestly.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "search", query, limit).entered();
         // Pull a wider chunk pool than `limit` so dedup can still fill `limit`
         // distinct notes when several top chunks share a note.
         let pool = limit.saturating_mul(3).max(limit);
@@ -582,6 +598,8 @@ impl Vault {
     /// `limit` bounds the count. Errors with [`Error::NoteNotFound`] for an unknown
     /// ref; returns an empty list for a known note with no vectors or no candidates.
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let mut out = Vec::new();
         for c in discover::candidates(&self.conn, &b2id, limit)? {
@@ -620,6 +638,11 @@ impl Vault {
         edge_type: &str,
         explanation: Option<&str>,
     ) -> Result<LinkReport> {
+        let _op = tracing::debug_span!(
+            target: "b2::vault", "link",
+            src = src_ref, dst = dst_ref, edge_type
+        )
+        .entered();
         if !relation::is_core(edge_type) {
             return Err(Error::InvalidRelation(edge_type.to_string()));
         }
@@ -693,6 +716,7 @@ impl Vault {
     /// files: the CLI opens the vault with the real model for `mv`, as for
     /// `reindex`/`link`.
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "mv", from = note_ref, to).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let old_rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
@@ -723,6 +747,7 @@ impl Vault {
         title: Option<&str>,
         content: Option<&str>,
     ) -> Result<AddReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "add", path).entered();
         let created = self.today()?;
         add::add_note(
             &self.conn,
