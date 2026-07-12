@@ -152,18 +152,25 @@ fn main() -> ExitCode {
 /// SQLite timings from SQLite's own profiler (`b2::sqlite`, with `duration_us` and
 /// `slow=true` on anything at/over `B2_SLOW_QUERY_MS`, default 100), façade-op
 /// spans (`b2::vault`), and flow milestones (`b2::search`/`b2::ingest`) — rendered
-/// as **JSON Lines on stderr**, one flat object per line, so a run's log pipes
-/// straight into jq/DuckDB/pandas for reporting and plotting while `--json` stdout
-/// stays pure data.
+/// as **JSON Lines**, one flat object per line, so a run's log pipes straight into
+/// jq/DuckDB/pandas for reporting and plotting while `--json` stdout stays pure data.
+///
+/// The sink is stderr by default; `B2_LOG_FILE=<path>` writes the log there instead
+/// (**append** mode, so successive runs accumulate into one reportable dataset —
+/// every event carries its own timestamp). A file is also the guaranteed-pure
+/// capture: stderr can interleave human notices (progress lines, skipped-file
+/// lists) with the JSONL in non-`--json` runs.
 ///
 /// `B2_LOG` holds a tracing filter directive (e.g. `debug`, `b2::sqlite=debug`,
 /// `warn` for slow queries only); setting `B2_DEBUG` (which already opts into error
-/// detail) without `B2_LOG` implies `debug`. With neither set, no subscriber is
-/// installed and the kernel's instrumentation stays inert.
+/// detail) or `B2_LOG_FILE` without `B2_LOG` implies `debug`. With none of the
+/// three set, no subscriber is installed and the kernel's instrumentation stays
+/// inert.
 fn init_logging() {
+    let log_file = std::env::var_os("B2_LOG_FILE");
     let directive = match std::env::var("B2_LOG") {
         Ok(v) if !v.trim().is_empty() => v,
-        _ if std::env::var_os("B2_DEBUG").is_some() => "debug".to_string(),
+        _ if std::env::var_os("B2_DEBUG").is_some() || log_file.is_some() => "debug".to_string(),
         _ => return,
     };
     let filter = match tracing_subscriber::EnvFilter::try_new(&directive) {
@@ -173,7 +180,7 @@ fn init_logging() {
             tracing_subscriber::EnvFilter::new("debug")
         }
     };
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .json()
         // Event fields at the top level of each object (not nested under "fields")
         // — what makes `jq '.duration_us'`-style reporting one-liners work.
@@ -183,10 +190,27 @@ fn init_logging() {
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_current_span(true)
         .with_span_list(false)
-        .with_writer(std::io::stderr)
         .with_ansi(false)
-        .with_env_filter(filter)
-        .init();
+        .with_env_filter(filter);
+    // A CLI run is short-lived and single-threaded at the log site, so a plain
+    // `Mutex<File>` writer suffices — no async appender needed.
+    match log_file.map(|p| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&p))
+            .map_err(|e| (p, e))
+    }) {
+        Some(Ok(file)) => builder.with_writer(std::sync::Mutex::new(file)).init(),
+        Some(Err((path, e))) => {
+            eprintln!(
+                "warning: cannot open B2_LOG_FILE '{}' ({e}); logging to stderr",
+                path.to_string_lossy()
+            );
+            builder.with_writer(std::io::stderr).init();
+        }
+        None => builder.with_writer(std::io::stderr).init(),
+    }
 }
 
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
