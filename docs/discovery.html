@@ -105,7 +105,7 @@
     over the embeddings your index already holds, surfacing the notes most similar in meaning to one you name
     — <b>minus the ones you've already linked</b> — each with the passage that made it similar.
     <b>No model call, no network, no cost.</b> You read the list; <code>b2 link</code> commits the ones worth
-    keeping. A companion to the architecture's <a href="architecture.html#discovery">candidate engine</a>.</p>
+    keeping. A companion to the architecture's <a href="architecture.html#discover">candidate engine</a>.</p>
   </header>
 
   <div class="goodbox">
@@ -279,13 +279,12 @@ b2 similar espresso-extraction.md
       Temperature stability matters as much as the target — a swing mid-shot muddies the cup…
   <span class="n">0.7614</span>  Tamping (notes/tamping.md)
       An even tamp keeps the puck flat so water can't channel down one side…
-<span class="c"># stderr: 3 candidate(s) · a local KNN over stored vectors · no model call.</span>
+<span class="c"># stderr: Commit one with:  b2 link espresso-extraction.md &lt;note&gt; --type &lt;verb&gt;</span>
 
 <span class="c"># 2 — commit the one worth keeping; you pick the type (defaults to `references`)</span>
 b2 link espresso-extraction.md notes/dialing-in-grind.md <span class="a">--type supports</span> \
         <span class="a">--explanation</span> <span class="g">"grind size sets the extraction pressure"</span>
-  linked   espresso-extraction.md  <span class="g">supports→</span>  Grind size
-  wrote    frontmatter relations: (body byte-identical) · reindexed · 1 edge active</pre>
+Linked espresso-extraction.md —<span class="g">supports</span>→ notes/dialing-in-grind.md. Wrote the relation into the source note's frontmatter.</pre>
 
     <p class="cap">What changed on disk is one line, in the <b>source</b> note's frontmatter — the body is
     untouched:</p>
@@ -303,7 +302,7 @@ b2 link espresso-extraction.md notes/dialing-in-grind.md <span class="a">--type 
     refutes · contradicts · example-of · part-of · supersedes · derived-from</span> — now your typing palette on
     <span class="mono">b2 link</span>. Mirrored across <span class="mono">data-model.md §4</span>,
     <span class="mono">index-engine.md §3</span>, and <span class="mono">user-stories.md</span> Story 3.
-    <b>(129 workspace tests, model-free.)</b></div>
+    <b>(192 workspace tests, model-free.)</b></div>
   </section>
 
   <footer>

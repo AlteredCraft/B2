@@ -88,7 +88,7 @@
     <p class="lead">How <code>reindex</code> turns a Markdown vault into the searchable
     <span class="eq">b2.sqlite</span> index — the chunking, the embedder seam, and the heuristics that keep a
     routine reindex cheap without ever letting the index drift from the Markdown it projects. A companion to
-    the <a href="architecture.html#ingest">ingest</a> and <a href="architecture.html#embed">embedder</a>
+    the <a href="architecture.html#ingest">ingest</a> and <a href="architecture.html#seams">embedder</a>
     sections of the architecture.</p>
   </header>
 
@@ -96,21 +96,30 @@
   <section id="shape">
     <h2><span class="num">1</span>The shape of a reindex</h2>
     <p class="sub">Ingest is the write path that realizes the governing equation
-    <span class="eq">index = projection of (Markdown)</span>. It runs in <b>two phases</b> so link
-    resolution never depends on file order: phase 1 projects every note + its chunks (filling the
-    <code>path → b2id</code> resolver for the whole vault), phase 2 derives edges against that now-complete
-    resolver. Everything expensive — embedding — happens in phase 1, and that is where the heuristics live.</p>
+    <span class="eq">index = projection of (Markdown)</span>. Since 2026-07-07 a reindex composes <b>two
+    separately-invokable passes</b>: model-free <b>projection</b> (<code>project_vault</code> — notes, chunks,
+    FTS, edges), then the <b>embed pass</b> (<code>embed_vault</code> — fill the DB-derived set of chunks still
+    missing a vector). Projection itself runs in <b>two phases</b> so link resolution never depends on file
+    order: phase 1 projects every note + its chunks (filling the <code>path → b2id</code> resolver for the
+    whole vault), phase 2 derives edges against that now-complete resolver. Everything expensive — embedding —
+    happens in the embed pass, and the heuristics below decide how little of it a routine reindex must redo.
+    Because FTS lands at projection time, a projected-but-unembedded vault is already keyword-searchable
+    (<code>search</code> degrades to BM25-only), and the desktop uses exactly this: project → paint the tree →
+    embed in the background.</p>
 
     <div class="card tight">
-      <div class="kickerlbl">Per note, phase 1 does four things</div>
+      <div class="kickerlbl">Per note, projection does three things; the embed pass does the fourth</div>
       <ul class="tidy" style="margin:6px 0 0;font-size:13.5px">
         <li><b>Parse &amp; stamp.</b> Read the file losslessly; if it has no <code>b2id</code>, mint a ULID
         and write one surgical frontmatter line (B2's <em>one</em> always-allowed write during ingest) —
-        logged as <code>b2id.stamped</code>.</li>
+        logged as <code>b2id.stamped</code>. An unreadable file (non-UTF-8, permission denied) is <b>skipped
+        and reported</b>, never fatal to the whole vault.</li>
         <li><b>Project the note row</b> — <code>upsert_note</code>, which records the body's
         <code>body_hash</code> (the incremental signal used next time).</li>
-        <li><b>Decide whether to (re)embed</b> — the heuristic below.</li>
-        <li><b>Embed the pending chunks</b>, batched, writing vectors into <code>chunks_vec</code>.</li>
+        <li><b>Re-chunk only if the body changed</b> (or <code>--force</code>) — the heuristic below; chunk
+        text reaches <code>chunks_fts</code> immediately.</li>
+        <li><b>Embed pass: fill the missing vectors</b> — every chunk without a <code>chunks_vec</code> row,
+        batched, metered, cancellable.</li>
       </ul>
     </div>
   </section>
@@ -121,7 +130,10 @@
     <p class="sub">A full re-embed of a large vault is the one genuinely slow step (a real transformer, on
     CPU). So a routine reindex must not redo finished work. Per note, the decision is: <b>if the body is
     unchanged and its chunks already all have vectors, reuse them and embed nothing.</b> Otherwise re-chunk
-    and re-embed. <code>--force</code> bypasses the skip; a model swap forces it implicitly (see §4).</p>
+    and re-embed. <code>--force</code> bypasses the skip; a model swap forces it implicitly (see §5). The two
+    signals live one per pass: projection consults only <code>body_hash</code> (re-chunk or not); the embed
+    pass fills whatever chunks lack vectors, whyever they lack them (new note, edited body, model swap, or an
+    interrupted earlier run — which is also why a cancelled embed heals on the next reindex).</p>
 
     <div class="diagram">
       <svg viewBox="0 0 1000 500" xmlns="http://www.w3.org/2000/svg" role="img"
@@ -154,7 +166,7 @@
 
         <!-- embed (no) -->
         <rect class="node" style="stroke:var(--purple)" x="572" y="330" width="372" height="62" rx="10"/>
-        <text class="title" x="758" y="356" text-anchor="middle">re-chunk → embed_batch(32)</text>
+        <text class="title" x="758" y="356" text-anchor="middle">re-chunk → embed_batch(16)</text>
         <text class="sub mono-t" x="758" y="374" text-anchor="middle">replace_chunks · write chunks_vec</text>
 
         <!-- edges -->
@@ -203,8 +215,8 @@
     fresh embed would reproduce <em>byte-for-byte</em> (the embedder is a pure function of chunk text). So a
     drop-&amp;-rebuild and a long run of incremental reindexes converge on the identical index — the fast path
     is an optimization, never a divergence. <code>reindex</code> reports what it did:
-    <span class="eq">indexed · embedded · stamped</span>, where <code>embedded</code> is the count that
-    actually re-ran.</div>
+    <span class="eq">indexed · embedded · stamped</span> (plus any unreadable files it <em>skipped</em>),
+    where <code>embedded</code> is the count that actually re-ran.</div>
 
     <div class="ground"><b>Ground truth:</b>
     <span class="mono">reindex_is_incremental_and_force_reembeds_everything</span> (embed.rs) — a fresh index
@@ -257,7 +269,7 @@
     </div>
 
     <p class="sub" style="margin-top:18px">Embedding is the reindex hot path, so the write side hands whole
-    <b>batches</b> of chunks to <code>embed_batch</code> (up to <code>EMBED_BATCH = 32</code>). The real model
+    <b>batches</b> of chunks to <code>embed_batch</code> (up to <code>EMBED_BATCH = 16</code>). The real model
     turns a batch into <b>one</b> padded forward pass instead of N single ones — a large CPU win — and on
     macOS candle's matmuls run on Apple's <b>Accelerate</b> BLAS.</p>
 
@@ -273,7 +285,7 @@
           <text class="sub mono-t" x="100" y="90" text-anchor="middle">(id, text)…</text>
 
           <rect class="node" x="214" y="44" width="132" height="60" rx="9"/>
-          <text class="title" x="280" y="72" text-anchor="middle">batch ≤ 32</text>
+          <text class="title" x="280" y="72" text-anchor="middle">batch ≤ 16</text>
           <text class="sub mono-t" x="280" y="90" text-anchor="middle">EMBED_BATCH</text>
 
           <rect class="node" x="376" y="44" width="176" height="60" rx="9"/>
@@ -363,13 +375,14 @@ b2 reindex --force</pre>
   <!-- ========================================================= -->
   <section id="later">
     <h2><span class="num">7</span>What's deferred (and why it's clean)</h2>
-    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap. Making the first <em>cold</em>
-    index of a large vault non-blocking is a separate, composable step — documented in the task backlog:</p>
+    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap, and two former entries here have
+    since shipped: the <b>keyword-first progressive index</b> (the projection/embedding split above — FTS lands
+    instantly, vectors stream in behind) and, on the desktop, a <b>background reindex</b> with live progress and
+    a Cancel button. Still open, tracked in GitHub Issues:</p>
     <ul class="tidy" style="font-size:13.5px">
-      <li><b>Background reindex + <code>b2 status</code></b> — detach and return immediately; search/similar
-      read the index live (SQLite WAL already permits one writer + concurrent readers across processes).</li>
-      <li><b>Progressive (keyword-first) index</b> — chunk text + FTS land instantly (keyword search works at
-      once); vectors fill in behind so the semantic half improves over time.</li>
+      <li><b>Cross-process CLI background reindex + <code>b2 status</code></b> — detach and return immediately;
+      search/similar read the index live (SQLite WAL already permits one writer + concurrent readers across
+      processes).</li>
       <li><b>Faster / smaller embedder</b> — bge-small (384-dim) or a quantized/ONNX path behind the same
       <code>Embedder</code> seam; a raw-speed lever, measured against the eval before it becomes the default.</li>
     </ul>
