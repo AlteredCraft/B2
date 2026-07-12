@@ -4,7 +4,7 @@ title: "B2 — Tasks"
 type: note
 tags: [b2, tasks, planning]
 created: 2026-06-28
-updated: 2026-07-08
+updated: 2026-07-12
 status: active
 ---
 
@@ -94,7 +94,7 @@ Everything planned-but-unstarted is tracked as an issue:
 | **Desktop** (beyond editing) | graph visualization [#22](https://github.com/AlteredCraft/B2/issues/22) · packaging/signing/distribution [#23](https://github.com/AlteredCraft/B2/issues/23) · auto-index-on-open (split §9) [#25](https://github.com/AlteredCraft/B2/issues/25) |
 | **Indexing & performance** | "semantic: N/M embedded" signal (split §9) [#26](https://github.com/AlteredCraft/B2/issues/26) · relevance-ordered embedding (split §9) [#27](https://github.com/AlteredCraft/B2/issues/27) · cross-process CLI reindex + `b2 status` + Ctrl-C (async §8) [#16](https://github.com/AlteredCraft/B2/issues/16) · faster/smaller embedder spike (async §8) [#17](https://github.com/AlteredCraft/B2/issues/17) |
 | **Engine & quality** | property tests for the invariants [#18](https://github.com/AlteredCraft/B2/issues/18) · qmd chunker upgrade [#19](https://github.com/AlteredCraft/B2/issues/19) · distance-weighting for `b2 similar` [#20](https://github.com/AlteredCraft/B2/issues/20) |
-| **Adapters & docs** | `serve` HTTP adapter [#24](https://github.com/AlteredCraft/B2/issues/24) · docs HTML + test-count badge sync [#21](https://github.com/AlteredCraft/B2/issues/21) |
+| **Adapters & docs** | `serve` HTTP adapter [#24](https://github.com/AlteredCraft/B2/issues/24) |
 
 ## Design anchors referenced from code
 
