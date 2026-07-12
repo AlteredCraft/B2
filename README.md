@@ -24,14 +24,17 @@ explained connections between them yourself.
 > the human is the precision gate ([tasks.md](planning/tasks.md)). A tour
 > grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 >
-> **The first UI has shipped (read-only MVP):** a **Tauri desktop app** (`crates/b2-desktop`, the *second
-> dumb adapter over the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri
-> IPC. It renders a note on the left and its **similar-but-unlinked notes** on the right, so you can commit a
-> typed link with a click — the connection-discovery loop, made visual. Reindex is a **cancellable background
-> action** — live progress, a Cancel button, and the rest of the UI stays usable while a large vault indexes
-> ([specs/completed/async-indexing.md](planning/specs/completed/async-indexing.md)). Run it with `just app` (point it at a vault
-> via `B2_VAULT_PATH`). **Next:** in-editor body editing (CodeMirror) + external-edit reconciliation.
-> Plan: [specs/completed/desktop-ui-mvp.md](planning/specs/completed/desktop-ui-mvp.md).
+> **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
+> the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri IPC. The
+> **read → discover → link → edit → reconcile** arc is complete: read a note on the left, commit a typed
+> link to its **similar-but-unlinked notes** on the right with a click, edit the body in place
+> (CodeMirror 6 with live preview, autosave, and a revision-guarded conflict bar), and a native fs-watch
+> reconciles external edits live. Reindex is a **cancellable background action** — live progress, a Cancel
+> button, and the UI stays usable while a large vault indexes; projection and embedding are decoupled, so
+> a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
+> ([specs/completed/](planning/specs/completed/)). Run it with `just app` (point it at a vault via
+> `B2_VAULT_PATH`). **Next:** no single focus queued — the backlog lives in
+> [GitHub Issues](https://github.com/AlteredCraft/B2/issues) ([tasks.md](planning/tasks.md)).
 
 ## What B2 is (the north star)
 
@@ -104,7 +107,7 @@ just            # list every recipe
 
 ### The desktop app (`crates/b2-desktop` + `ui/`)
 
-The read-only desktop MVP. Prerequisites: **Node + npm** (for the `ui/` frontend) and the **Tauri CLI**
+The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend) and the **Tauri CLI**
 (`cargo install tauri-cli --locked`).
 
 ```bash
@@ -113,8 +116,9 @@ B2_VAULT_PATH=~/notes just app        # run the app in dev (Vite HMR + a live wi
 just app-build                        # bundle a per-platform app
 ```
 
-The window opens on the vault named by `B2_VAULT_PATH` (or the first launch argument). Search to open a note,
-read it on the left, and connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake`
+The window opens on the vault named by `B2_VAULT_PATH` (or the first launch argument, or the in-app vault
+switcher). Search or use the file tree to open a note, read or edit it on the left (live-preview Markdown,
+autosave), and connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake`
 for an offline, non-semantic dev mode (no `b2 init` needed).
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so

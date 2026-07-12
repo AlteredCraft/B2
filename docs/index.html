@@ -73,7 +73,9 @@
     <p class="lead">A personal, local-first Markdown knowledge vault with an AI layer that surfaces the
     <em>semantically nearest</em> notes — for you to connect.</p>
     <p class="sublead">The Markdown stays plain and yours — B2 is the intelligence layer <em>over</em> your
-    notes, not a container around them. This repository is the index engine + <code>b2</code> CLI.</p>
+    notes, not a container around them. This repository is the index engine plus its two adapters: the
+    <code>b2</code> CLI and a Tauri desktop app (read, edit, discover, link — with live external-edit
+    reconciliation).</p>
 
     <div class="eqcard">
       <div class="eq">index = projection of ( Markdown )</div>
@@ -82,10 +84,10 @@
     </div>
 
     <div class="badges">
-      <span class="badge green"><span class="pip"></span><b>129</b>&nbsp;tests passing</span>
+      <span class="badge green"><span class="pip"></span><b>192</b>&nbsp;tests passing</span>
       <span class="badge"><b>Rust</b>&nbsp;· one static binary</span>
-      <span class="badge"><b>3</b> crates · SQLite (FTS5 + sqlite-vec)</span>
-      <span class="badge">status: <b>index engine + CLI</b> · connection discovery via <code>b2 similar</code> + <code>b2 link</code></span>
+      <span class="badge"><b>4</b> crates · SQLite (FTS5 + sqlite-vec)</span>
+      <span class="badge">status: <b>engine + CLI + desktop app</b> · connection discovery via <code>b2 similar</code> + <code>b2 link</code></span>
     </div>
   </header>
 
@@ -138,8 +140,8 @@
   </div>
 
   <footer>
-    B2 · index engine + CLI · Rust. The design docs in <code>planning/</code> are the source of truth; the
-    code is a projection of the spec. Built in the open.
+    B2 · index engine + CLI + desktop app · Rust. The design docs in <code>planning/</code> are the source
+    of truth; the code is a projection of the spec. Built in the open.
   </footer>
 
 </div>

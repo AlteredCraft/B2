@@ -97,13 +97,14 @@
 
 <main>
 <header class="hero" id="overview">
-  <div class="kicker">System architecture · v1 kernel complete · updated 2026-07-04</div>
+  <div class="kicker">System architecture · v1 kernel + desktop app · updated 2026-07-12</div>
   <h2>B2 — how the system is built</h2>
   <p class="lead">B2 is a local-first Markdown vault with an AI layer that surfaces <em>semantically similar,
-  not-yet-linked</em> notes for you to connect. This repo is the <strong>index engine + CLI</strong>: a SQLite
+  not-yet-linked</em> notes for you to connect. This repo is the <strong>index engine + its two adapters</strong>
+  (the <code>b2</code> CLI and a Tauri desktop app): a SQLite
   store treated as a <em>disposable projection</em> of your Markdown — nothing durable outside your notes — a
-  real local <strong>embedder</strong> behind the one AI seam, and the typed <code>Vault</code> API the
-  <code>b2</code> binary drives. This page traces the whole architecture through <strong>one real vault</strong>
+  real local <strong>embedder</strong> behind the one AI seam, and the typed <code>Vault</code> API both
+  adapters drive. This page traces the whole architecture through <strong>one real vault</strong>
   — the two-note fixture the test suite runs on — so every claim is concrete and checkable.</p>
 
   <div class="badges">
@@ -249,21 +250,25 @@ retrieval curve.
 <section id="ingest">
   <h3><span class="step" style="background:var(--t1)">FLOW ①</span> &nbsp;Ingest — vault becomes index</h3>
   <div class="filetag">crates/b2-core/src/ingest.rs</div>
-  <p class="sub"><code>b2 reindex</code> is the write path that realizes the governing equation. Its one subtlety:
-  a note can link to one the walker hasn't reached yet, so link resolution must not depend on file order. Ingest
-  runs in <b>two phases</b>.</p>
+  <p class="sub"><code>b2 reindex</code> is the write path that realizes the governing equation. Since
+  2026-07-07 it composes <b>two separately-invokable passes</b>: model-free <code>project_vault</code>
+  (notes, chunks, FTS, edges) and <code>embed_vault</code> (fill the DB-derived set of chunks still missing a
+  vector). Projection's one subtlety: a note can link to one the walker hasn't reached yet, so link resolution
+  must not depend on file order — it runs in <b>two phases</b>.</p>
   <div class="flow">
     <span class="box">walk *.md (dotfolders skipped, sorted)</span>
     <span class="arrow">→</span>
-    <span class="box" style="border-color:var(--t1)">Phase 1 · notes + chunks + vectors</span>
+    <span class="box" style="border-color:var(--t1)">Phase 1 · notes + chunks (+FTS)</span>
     <span class="arrow">→ fills the resolver →</span>
     <span class="box" style="border-color:var(--t1)">Phase 2 · edges</span>
+    <span class="arrow">→</span>
+    <span class="box" style="border-color:var(--t3)">embed pass · fill missing vectors</span>
   </div>
   <ul class="tidy" style="font-size:13.5px;margin-top:12px">
-    <li><b>Phase 1</b> projects each note's frontmatter, chunks its body (a minimal paragraph splitter, one chunk
-    per maximal run of non-blank lines), and embeds each chunk through the seam. This fills
-    <code>notes(b2id, path)</code> — the <code>path ⇄ b2id</code> resolver — for the <em>whole</em> vault. Our two
-    notes yield one chunk each; <code>memory.md</code>'s chunk lands in <code>chunks_vec</code> ready to be found.</li>
+    <li><b>Phase 1</b> projects each note's frontmatter and chunks its body (a minimal paragraph splitter, one
+    chunk per maximal run of non-blank lines); chunk text lands in <code>chunks_fts</code> immediately, so
+    keyword search works before anything is embedded. This fills
+    <code>notes(b2id, path)</code> — the <code>path ⇄ b2id</code> resolver — for the <em>whole</em> vault.</li>
     <li><b>Phase 2</b> derives edges by parsing each body + frontmatter <code>relations:</code> and resolving every
     <code>[[path]]</code> against the now-complete resolver. From <code>spaced-repetition.md</code> that's two
     directed edges to <code>memory.md</code>: a bare <code>references</code> and a typed <code>elaborates</code>.
@@ -272,6 +277,11 @@ retrieval curve.
     into the note's frontmatter. That's the whole record: the id travels <em>in the file</em>, so there is no
     separate log to keep. B2's one always-allowed write during ingest. (Both fixture notes are pre-stamped, so
     nothing is written here.)</li>
+    <li><b>The embed pass</b> then batches every chunk still missing a vector through the seam into
+    <code>chunks_vec</code> — metered (per-batch progress) and cooperatively cancellable, which is what lets the
+    desktop run it in the background. Our two notes yield one chunk each; <code>memory.md</code>'s chunk lands in
+    <code>chunks_vec</code> ready to be found. A projected-but-unembedded vault is already browsable: keyword
+    search works, and <code>search</code> degrades to BM25-only rather than failing.</li>
   </ul>
   <p style="font-size:13px;color:var(--muted);margin:10px 0 0"><b>Incremental by default, ≡ a full rebuild.</b>
   A note whose <code>body_hash</code> is unchanged and whose chunks all still have vectors reuses them verbatim —
@@ -284,6 +294,8 @@ retrieval curve.
   incremental re-index of one note yields a byte-identical edge set to a full rebuild, and a second reindex is
   identical again (idempotent). <span class="mono">chunks.rs</span> proves replace-not-accumulate;
   <span class="mono">ingest_resolver.rs</span> confirms the two-phase resolver works both directions;
+  <span class="mono">project_embed.rs</span> pins the projection/embedding split (project touches no vectors;
+  embed fills exactly the missing set; project→embed ≡ a fused reindex);
   <span class="mono">dry_run.rs</span> proves the preview writes nothing.
   ↳ <a href="indexing.html">the indexing deep dive</a> covers incremental skip, <code>--force</code>, batching.</div>
 </section>
@@ -323,8 +335,10 @@ retrieval curve.
   <h3><span class="step" style="background:var(--t3)">FLOW ②</span> &nbsp;Search — hybrid retrieval</h3>
   <div class="filetag">crates/b2-core/src/search.rs</div>
   <p class="sub">BM25 keyword search and brute-force vector KNN run in parallel and fuse with <b>Reciprocal Rank
-  Fusion</b> (<code>Σ 1/(k + rank + 1)</code>, k=60). Results resolve up from chunks to notes.</p>
-<pre><span class="c"># keyword + semantic + graph, one command</span>
+  Fusion</b> (<code>Σ 1/(k + rank + 1)</code>, k=60). Results resolve up from chunks to notes. On a
+  projected-but-unembedded vault the vector half is skipped and results are BM25-only — degraded honestly,
+  never an error.</p>
+<pre><span class="c"># keyword + semantic, fused — one command</span>
 $ b2 search <span class="s">"how does forgetting affect recall"</span>
 <span class="u">notes/spaced-repetition.md</span>  Spaced repetition
     …exploits the [[concepts/memory|Human memory]] retrieval curve.
@@ -375,7 +389,7 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       <span class="box">KNN over chunks_vec</span><span class="arrow">→</span>
       <span class="box">max-sim per candidate note</span><span class="arrow">−</span>
       <span class="box" style="border-color:var(--green)">reachable_within(anchor, 1)</span><span class="arrow">→</span>
-      <span class="box" style="border-color:var(--amber)">rank → top-N (default ~10)</span>
+      <span class="box" style="border-color:var(--amber)">rank → top-N (default 10)</span>
     </div>
     <ul class="tidy" style="font-size:13px;margin:12px 0 0">
       <li><b>No re-embedding, no model call.</b> Each anchor chunk's <em>already-stored</em> vector is the KNN query
@@ -552,18 +566,20 @@ relations:
   <h3>The command surface — a dumb adapter over one typed façade</h3>
   <div class="filetag">crates/b2-core/src/vault.rs · crates/b2-cli/src/main.rs</div>
   <p class="sub">Every engine module is called directly only by the integration tests. The <b><code>Vault</code>
-  façade</b> is the single typed entry point the CLI (and any future GUI) is the sole client of — it owns the
+  façade</b> is the single typed entry point whose only clients are the two adapters — the CLI and the Tauri
+  desktop host — it owns the
   connection, the injected embedder, and the id generator, and returns display-ready view structs
   (<code>NeighborView</code>, <code>SearchResult</code>, <code>ExplainView</code>, the discovery candidate view, …).
   The <code>b2</code> binary parses args, picks the embedder, calls the façade, and prints — human, or
-  <code>--json</code> for agents.</p>
+  <code>--json</code> for agents; each desktop <code>#[tauri::command]</code> is deserialize → one façade call →
+  serialize, reusing the same view types as its IPC contract.</p>
   <table>
     <tr><th>Command</th><th>Does</th><th>Model needed</th></tr>
     <tr><td class="mono">init</td><td>download + verify the embedder into the shared cache</td><td>—</td></tr>
     <tr><td class="mono">reindex</td><td>re-project the vault (incremental; <code>--force</code>, <code>--dry-run</code>)</td><td>embedder</td></tr>
     <tr><td class="mono">add</td><td>create a note, project it (stamps the b2id)</td><td>embedder</td></tr>
     <tr><td class="mono">mv</td><td>move/rename + repair inbound link text</td><td>embedder</td></tr>
-    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic ⊕ graph</td><td>embedder</td></tr>
+    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault)</td><td>embedder</td></tr>
     <tr><td class="mono">neighbors</td><td>a note's typed neighbors</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every typed edge + its "why", with an orphan flag</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes (path/title/score/evidence)</td><td>— (stored vectors)</td></tr>
@@ -607,19 +623,23 @@ relations:
   assertable. Determinism is a hard requirement of the core — no wall clock, no randomness; timestamps and ids are
   passed in.</p>
   <div class="card">
-    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(129 tests under <code>cargo test</code>)</span></div>
+    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(192 tests under <code>cargo test</code>, as of 2026-07-12)</span></div>
     <table>
       <tr><th>Property</th><th>Pinned by</th><th class="mono" style="text-align:right">tests</th></tr>
       <tr><td>Substrate — FTS5 + sqlite-vec coexist; pragmas persist</td><td class="mono">substrate.rs</td><td class="mono" style="text-align:right">2</td></tr>
       <tr><td>Lossless parse · b2id stamp · resolver</td><td class="mono">roundtrip · stamp · ingest_resolver</td><td class="mono" style="text-align:right">10</td></tr>
       <tr><td>Chunks (+FTS) · link classification · typed graph</td><td class="mono">chunks · links · graph</td><td class="mono" style="text-align:right">15</td></tr>
-      <tr><td>Vectors &amp; the embedder seam</td><td class="mono">embed.rs</td><td class="mono" style="text-align:right">8</td></tr>
+      <tr><td>Vectors, the embedder seam &amp; the projection/embedding split (incl. cancel)</td><td class="mono">embed · project_embed · cancel · vector_pool_scale</td><td class="mono" style="text-align:right">20</td></tr>
       <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>Candidate generation (near ∖ connected)</td><td class="mono">discover.rs</td><td class="mono" style="text-align:right">7</td></tr>
-      <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter · graph</td><td class="mono" style="text-align:right">10</td></tr>
-      <tr><td>Note-authoring CRUD — add · mv · explain · dry-run</td><td class="mono">add · mv · explain · dry_run · pathspec</td><td class="mono" style="text-align:right">39</td></tr>
-      <tr><td>The <code>Vault</code> façade · the <code>b2</code> CLI (<code>similar</code>/<code>link</code> included)</td><td class="mono">vault.rs · cli.rs</td><td class="mono" style="text-align:right">31</td></tr>
+      <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter.rs</td><td class="mono" style="text-align:right">6</td></tr>
+      <tr><td>Explain (orphan flag) · dry-run previews</td><td class="mono">explain · dry_run</td><td class="mono" style="text-align:right">10</td></tr>
+      <tr><td>Note-authoring CRUD — add · mv (unit + integration)</td><td class="mono">add · mv · pathspec · note</td><td class="mono" style="text-align:right">31</td></tr>
+      <tr><td>The desktop-editing façade ops — read · write (revision guard) · list</td><td class="mono">read · write · list</td><td class="mono" style="text-align:right">16</td></tr>
+      <tr><td>Structured logging is parseable JSONL</td><td class="mono">logging.rs</td><td class="mono" style="text-align:right">2</td></tr>
+      <tr><td>The <code>Vault</code> façade · the <code>b2</code> CLI (<code>similar</code>/<code>link</code> included)</td><td class="mono">vault.rs · cli.rs</td><td class="mono" style="text-align:right">36</td></tr>
       <tr><td>Embedder config &amp; provisioning</td><td class="mono">b2-embed</td><td class="mono" style="text-align:right">4</td></tr>
+      <tr><td>The Tauri host stays a dumb adapter — commands · errors · fs-watch</td><td class="mono">b2-desktop</td><td class="mono" style="text-align:right">25</td></tr>
     </table>
     <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Run under <code>cargo test</code> (rustc 1.96,
     the fake embedder). One <code>#[ignore]</code> test — a batched-embed equality check (<code>b2-embed</code>) —
@@ -640,9 +660,10 @@ relations:
       <li><b>Semantic quality in CI.</b> The engine suite runs on the deterministic fake embedder, so it proves
       plumbing, not ranking quality. The real model is measured by one separate out-of-CI eval — retrieval
       precision/MRR (<code>cargo run -p b2-embed --example eval</code>). Model quality never flakes CI.</li>
-      <li><b>Cold-index scale.</b> Incremental reindex is done; the first embed of a large vault still blocks.
-      Deferred approaches — a background reindex + <code>b2 status</code>, a keyword-first progressive index, a
-      smaller/quantized embedder — all compose behind the existing seam.</li>
+      <li><b>Cold-index scale, CLI side.</b> Incremental reindex is done, projection and embedding are decoupled
+      (keyword-first: a cold vault is searchable before it's embedded), and the desktop runs the embed pass as a
+      cancellable background task. Still open: a cross-process CLI background reindex + <code>b2 status</code>,
+      and a smaller/quantized embedder — both compose behind the existing seam.</li>
       <li><b>Deferred, behind clean seams.</b> A cross-encoder reranker (the likely <em>next</em> seam — changes
       <em>ordering</em>, not the store), query expansion, the qmd-style ~900-token overlap-aware chunker (a pure
       re-projection — the <code>chunks</code> schema already carries <code>token_count</code> +
@@ -652,12 +673,14 @@ relations:
 </section>
 
 <div class="foot">
-  <p>Describes the repository as of the 2026-07-04 pivot — the v1 kernel across three crates, discovery as
-  <code>similar</code> + <code>link</code>. Source of truth for every claim: <code>crates/{b2-core,b2-embed,b2-cli}/src/</code>
+  <p>Describes the repository as of 2026-07-12 — the v1 kernel across four crates, discovery as
+  <code>similar</code> + <code>link</code>, and the shipped Tauri + CodeMirror desktop app (<code>b2-desktop</code> +
+  <code>ui/</code>, the second dumb adapter over the façade: read → discover → link → edit → reconcile, with
+  async cancellable indexing and fs-watch reconciliation). Source of truth for every claim:
+  <code>crates/{b2-core,b2-embed,b2-cli,b2-desktop}/src/</code>
   and the test suite under each crate's <code>tests/</code>. Design rationale lives in <code>planning/</code>
-  (<code>data-model.md</code> · <code>index-engine.md</code> · <code>specs/</code>). <b>Next phase:</b> the
-  first UI — a Tauri + CodeMirror desktop app (a fourth crate, <code>b2-desktop</code>, as the second dumb
-  adapter over the façade), speced in <code>planning/specs/completed/desktop-ui-mvp.md</code>. ·
+  (<code>data-model.md</code> · <code>index-engine.md</code> · <code>specs/completed/</code>); the backlog is
+  GitHub Issues. ·
   <a href="index.html">Home</a> · <a href="quickstart.html">Quick start</a> ·
   <a href="indexing.html">Indexing pipeline</a> · <a href="discovery.html">Connection discovery</a></p>
 </div>

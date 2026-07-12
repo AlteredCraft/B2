@@ -9,8 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A personal, local-first Markdown knowledge vault with an AI layer that **surfaces semantically similar
 notes** for you to connect. The Markdown files stay plain and yours; B2 is the intelligence layer
-over them, not a container around them. This Cargo workspace is the **index engine + CLI**; the
-design lives in `planning/`.
+over them, not a container around them. This Cargo workspace is the **index engine + its two dumb
+adapters** — the `b2` CLI and the Tauri desktop app (with the `ui/` frontend); the design lives in
+`planning/`.
 
 ## Design docs are the source of truth
 
@@ -22,6 +23,8 @@ schema must satisfy the data model, never the reverse.
 - `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
 - `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
+  Planned-but-unstarted work lives in GitHub Issues; shipped build specs live in `planning/specs/completed/`
+  (index engine, desktop MVP, async indexing, projection/embedding split, desktop editing, live preview).
 - `planning/user-stories.md` — kernel behavior as testable scenarios.
 - `planning/specs/eval-strategy.md` — how model quality (the `Embedder` seam) is measured out-of-CI:
   the hand-labelled retrieval eval, its metrics, and how to run/grow it.
@@ -38,16 +41,22 @@ cargo install --path crates/b2-cli --locked --force   # install `b2` onto PATH (
 
 # Fast test suite — deterministic, model-free, what CI runs
 cargo test -p b2-core                   # the engine suite (fake embedder; no ML deps)
-cargo test                              # whole workspace (compiles candle in b2-embed — slower)
-cargo test -p b2-core --test relate     # one integration-test file (targets in tests/*.rs)
-cargo test -p b2-core same_pair         # filter by test-name substring
+cargo test                              # whole workspace (compiles candle in b2-embed, and b2-desktop
+                                        # embeds ui/dist — run `just ui-build` once first)
+cargo test -p b2-core --test discover   # one integration-test file (targets in tests/*.rs)
+cargo test -p b2-core one_note_reindex  # filter by test-name substring
 
 # Real embedder (out of CI; needs the model provisioned first)
 cargo run -p b2-cli -- init             # download + verify bge-base-en-v1.5 into the XDG cache
 cargo run -p b2-embed --example eval    # semantic-retrieval quality eval (never in `cargo test`)
 
+# Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
+just ui-install                         # one-time: install the frontend's npm deps
+B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
+just check-app                          # clippy for b2-desktop (builds ui/dist first)
+
 cargo fmt
-cargo clippy --workspace
+cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)
 ```
 
 Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
@@ -84,8 +93,10 @@ the instrumentation is inert unless an adapter opts in.
    lives outside the Markdown.**
 
 Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
-edge is re-derived from Markdown on every reindex; the only write B2 ever makes to a note is stamping a
-missing `b2id` (a ULID) or, on `b2 link`, appending a frontmatter `relations:` entry.
+edge is re-derived from Markdown on every reindex; the only writes B2 makes to a note *of its own accord*
+are stamping a missing `b2id` (a ULID) and, on `b2 link`, appending a frontmatter `relations:` entry.
+(The desktop editor's saves go through `Vault::write` — a byte-honest splice of the **human's own** body
+edit, guarded by a content-hash revision; B2 still never authors body content itself.)
 
 *(Through 2026-06-30 there was a third tier — a durable `.b2/log/` event log holding the suggestion queue
 + rejection memory — and the invariant was `(Markdown ∪ log)`. The 2026-07-04 relator cut removed it;
@@ -115,14 +126,23 @@ no model) + `b2 link` (the human commits). A reranker would be the next seam if/
   `LocalEmbedder::load` fails fast with "run `b2 init`" if absent.
 - **`b2-cli`** — the `b2` binary. A *dumb* adapter over the façade: parse args, pick + inject the
   embedder, call `Vault`, print (human-readable, or `--json` for agents). Holds no engine logic.
+- **`b2-desktop`** — the Tauri host: the *second* dumb adapter, the GUI sibling of `b2-cli`. Each
+  `#[tauri::command]` is deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view
+  types as the IPC contract; it also owns host-only infrastructure (the async cancellable reindex task,
+  the fs-watch `vault-changed` pulse, the OS folder dialog). Has its own `CLAUDE.md` with the
+  thin-adapter rules — read it before touching this crate.
+- **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
+  toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
 
-The **one typed API**. The CLI and any future adapter are its only clients; every other `b2-core`
-module is called directly only by the integration tests. Surface is intentionally minimal —
-`open` / `open_with_embedder` / `reindex` / `project` / `embed` / `neighbors` / `search`. **Add
-operations when a command needs them; do not pre-build a broad surface.** The embedder is injected
-here: `open` defaults to the fake, `open_with_embedder` is how the CLI wires the real model.
+The **one typed API**. The CLI and the desktop host are its only clients; every other `b2-core`
+module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
+`open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
+reads (`read` / `list_notes` / `neighbors` / `explain` / `search` / `similar`), writes (`add_note` /
+`move_note` / `link` / `write`). **Add operations when a command needs them; do not pre-build a broad
+surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
+adapters wire the real model.
 
 ### Data flows
 

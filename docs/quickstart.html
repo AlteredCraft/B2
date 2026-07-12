@@ -285,12 +285,13 @@ Spaced repetition exploits the retrieval curve.
       the vectors <code>reindex</code> already stored. <b>No model call, no network, no cost:</b> the
       ranking and the "∖ already-connected" exclusion happen locally over your whole vault.</p>
 <pre><span class="p">$</span> <span class="k">b2</span> similar <span class="s">notes/spaced-repetition</span>
-<span class="o">0.71  Cramming works       (notes/cramming.md)</span>
+<span class="o">0.7132  Cramming works (notes/cramming.md)</span>
 <span class="o">    Massed practice yields only short-term recall.</span>
-<span class="o">0.63  The forgetting curve  (concepts/forgetting-curve.md)</span>
-<span class="o">    Retention decays exponentially without review.</span></pre>
+<span class="o">0.6318  The forgetting curve (concepts/forgetting-curve.md)</span>
+<span class="o">    Retention decays exponentially without review.</span>
+<span class="c"># stderr: Commit one with:  b2 link notes/spaced-repetition &lt;note&gt; --type &lt;verb&gt;</span></pre>
       <p>Each row is a similarity score, the note's title and path, and the passage that made it similar.
-      The note itself and anything already linked to it never appear. It lists about ten by default;
+      The note itself and anything already linked to it never appear. It lists ten by default;
       <code>--limit N</code> widens or narrows that.</p>
       <div class="note tip"><span class="tag">You're the precision gate</span> B2 finds the candidates;
       <em>you</em> supply the judgment and the type. There's no review queue and nothing "inert until
@@ -299,7 +300,7 @@ Spaced repetition exploits the retrieval curve.
       <p>Pick the connections worth keeping and commit them. Either write a <code>[[link]]</code> in your
       note's body yourself, or run <code>b2 link</code>:</p>
 <pre><span class="p">$</span> <span class="k">b2</span> link <span class="s">notes/spaced-repetition</span> <span class="s">notes/cramming</span> --type <span class="s">contradicts</span> --explanation <span class="s">"massed vs. spaced practice"</span>
-<span class="o">Linked spaced-repetition → cramming (contradicts). Wrote the typed relation into the source note's frontmatter.</span></pre>
+<span class="o">Linked notes/spaced-repetition.md —contradicts→ notes/cramming.md. Wrote the relation into the source note's frontmatter.</span></pre>
       <p><code>b2 link &lt;src&gt; &lt;dst&gt;</code> appends the typed relation to the <em>source</em>
       note's frontmatter <code>relations:</code> — Markdown-first, <b>never the body</b>. <code>--type</code>
       picks the verb from the closed vocabulary (defaults to <code>references</code>);
@@ -320,6 +321,14 @@ Spaced repetition exploits the retrieval curve.
   B2 also repairs the human-readable link text in every note that pointed at it. Refactor fearlessly:
   move, split, merge, rename. After a batch of hand-edits, a quick <code>b2 reindex</code> catches
   everything up.</p>
+
+  <div class="note tip"><span class="tag">Prefer a window?</span> The same engine drives a <b>desktop app</b>
+  (Tauri + CodeMirror, <code>crates/b2-desktop</code> + <code>ui/</code>): read and edit notes with
+  live-preview Markdown and autosave, see the similar-but-unlinked notes beside what you're reading, and
+  commit a typed link with a click — with reindex as a cancellable background action and external edits
+  reconciled live. From a checkout: <code>just ui-install</code> once, then
+  <code>B2_VAULT_PATH=~/vault just app</code>. Details in the
+  <a href="https://github.com/AlteredCraft/B2#the-desktop-app-cratesb2-desktop--ui">README</a>.</div>
 
   <div class="eqcard">
     <div class="eq">index = projection of ( Markdown )</div>
@@ -352,8 +361,10 @@ Spaced repetition exploits the retrieval curve.
   <h2 class="sec">Config &amp; environment</h2>
 
   <p>Zero-config is the happy path — everything above works with no config file. When you want to tune,
-  a single optional TOML at <code>~/.config/b2/config.toml</code> configures the embedder:</p>
-<pre><span class="c"># ~/.config/b2/config.toml  (all optional)</span>
+  a single optional TOML in your platform's config dir configures the embedder —
+  <code>~/.config/b2/config.toml</code> on Linux, <code>~/Library/Application&nbsp;Support/b2/config.toml</code>
+  on macOS:</p>
+<pre><span class="c"># &lt;config dir&gt;/b2/config.toml  (all optional)</span>
 <span class="k">[embedder]</span>
 <span class="k">model</span> = <span class="s">"bge-base-en-v1.5"</span></pre>
 
