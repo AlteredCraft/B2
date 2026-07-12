@@ -22,6 +22,14 @@ The model has exactly **two source-of-truth objects**, both plain Markdown:
 2. **A connection (edge)** — a typed, directed link from one note to another, written by a human in the
    body, or committed by B2 to frontmatter `relations:` on `b2 link` (§0).
 
+Both are **authored** — a human (or B2, in its one managed zone) writes their structure in Markdown. A
+real vault also holds **resources** — every non-`.md` file (a PDF, a PNG, a `.csv`, an `.html` clipping).
+A resource is a **peer vault member**, *not* a third authored object: B2 can *read* it (metadata,
+extracted text, inbound links) but cannot *author* structure into it, because Markdown is the only format
+whose bytes B2 may write. So the source *tier* widens from "the `.md` files" to **the whole vault
+directory**, while the two authored objects stay note + edge. Resources are defined in **§10**; §0–§9 are
+about the authored objects and are unchanged by them.
+
 ### Two storage tiers
 
 These two objects are the *knowledge*. B2 keeps just two storage tiers with sharply different durability
@@ -45,6 +53,11 @@ The crucial relationship between them:
 > third tier — a durable `.b2/log/` event log holding pending suggestions + rejection memory. With the
 > LLM relator and its suggestion queue gone, that tier had nothing left to hold and was removed;
 > [vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-04)".)*
+
+*(With **resources** in scope (§10) this generalizes to **`index = projection of (the vault directory)`** —
+a resource contributes only *derived* rows (metadata, extracted text, inbound edges) and, like the index,
+holds no durable authored state, so the guarantee is unchanged: drop `b2.sqlite`, reindex, get it back
+identical.)*
 
 ---
 
@@ -306,6 +319,10 @@ table holds; the Markdown is the source, this is the index.
   `(src, dst, type)` is authored in **both** the body and frontmatter (a human re-typing a committed
   edge), projection keeps the body row and drops the redundant frontmatter row — **inline-wins** —
   surfacing it via `b2 explain`, never auto-editing the file.
+- **A `dst` may be a resource, not a note.** A body embed/link to a non-`.md` file (`![[photo.png]]`,
+  `[[papers/x.pdf]]`) resolves against the `resources` table, not `notes`; the edge records a
+  `dst_resource_path` instead of a `dst_id`, and `src` is still a note (resources author no outbound edges
+  in v1, §10). Full model in §10; schema in [index-engine.md](index-engine.md) §3.
 
 > **Why this projection is materialized, not computed on read.** A note's *outbound* edges are
 > re-derivable by parsing that one file — which is exactly why this table is **disposable**. It is kept
@@ -506,3 +523,64 @@ fixtures ([index-engine.md](index-engine.md), now reconciled with this two-tier 
 > Next ([tasks.md](tasks.md)): this model is the yardstick for the **index-engine evaluation** — whose
 > recommendation ([index-engine.md](index-engine.md)) already targets this exact note/edge/provenance
 > shape. With the data model fixed, the engine can be built against golden-vault fixtures.
+
+---
+
+## 10. Resources — the second kind of vault member (2026-07-08)
+
+§0–§9 define the **authored** objects — note and edge — whose structure a human (or B2, in frontmatter)
+writes in Markdown. A real vault also holds **resources**: every non-`.md` file — a PDF, a PNG, a `.csv`,
+an `.html` clipping. This section defines what a resource *is* in the model; the full findings, taxonomy,
+rendering, and build plan live in [research/file-type-support.md](research/file-type-support.md) (locked
+2026-07-08), and the schema in [index-engine.md](index-engine.md) §3.
+
+A resource is a **peer vault member** — not a lesser one, and not a generalized note. The single
+asymmetry is **authoring surface, not status**:
+
+> **A note is where structure is *authored*; a resource is a peer document B2 cannot write.** Notes have
+> frontmatter, authored edges, a durable `b2id`, and B2's write guarantees — because Markdown is the one
+> format whose bytes B2 may touch. Resources have bytes, a vault-relative path, *derivable* text and
+> vectors, and *inbound* links.
+
+What the asymmetry does **not** mean: a resource is never *required* to be attached to a note. An unlinked
+resource fully exists — walked, classified, in the file tree, in the index, openable. `text`/`html`/`pdf`
+resources are **semantically self-sufficient**: their own content is chunked, keyword-searchable, and
+embedded with no note involved (a vault of only PDFs is a searchable, `b2 similar`-navigable vault).
+
+**Identity — path-keyed, index-only.** A resource has **no `b2id`**: there is nowhere to stamp one (binary
+bytes are not B2's to edit; a sidecar file would be durable state outside Markdown, violating the two-tier
+tenet) and nothing it would protect (a resource's inbound links are plain path text B2 can rewrite
+mechanically). It is keyed by its vault-relative path, recorded only in the disposable index.
+
+- **`b2 mv` on a resource** works like a note move minus the identity step: rewrite the inbound `[[path]]` /
+  `![alt](path)` text, move the file, re-project. "Rename keeps every backlink resolving" holds *when B2
+  does the move*.
+- **An out-of-band move degrades one notch further than a note's.** A Finder-moved note re-binds by its
+  stamped `b2id`; a Finder-moved resource cannot. Mitigation: the index stores a **blake3 content hash**
+  per resource, so a dangling link whose old target vanished and whose hash reappears at **exactly one**
+  new path is surfaced as a *proposed* repair — flagged, never silently rewritten (duplicate files →
+  ambiguous → flag only). Same posture as the note out-of-band case ([index-engine.md](index-engine.md) §8).
+
+**Edges — `src` is a note in v1; `dst` may be anything.** A *consequence* of the invariant, not a status
+rule: every edge must trace to an authored line in Markdown (§3), and a resource has no writable home for
+one — no frontmatter, no body B2 may touch. So in v1 resources are edge **targets** only. Two relief valves
+keep this from hardening into an expressiveness wall: **(a) today**, the tolerated tail already authors the
+inverse direction from the note side (`- "supported-by [[papers/x.pdf]]"` in `relations:` — stored,
+displayed, queryable as a tail verb); **(b) if needed**, resource-sourced edges get a designed future home
+— a **vault-level B2-managed relations file** (the frontmatter managed-zone concept lifted to one
+clearly-B2-owned Markdown file), so the edge is still authored Markdown and the invariant holds. Deferred
+until the need is real.
+
+**Derived text — one embedding space in v1.** Every resource class funnels to *text* — native (`text`),
+extracted (`html` tag-strip, `pdf` text layer), or, for an `image`, the aggregated alt-text/captions from
+the notes that embed it (a pure projection of authored Markdown). That text flows through the **existing**
+bge space with zero new discipline, so `b2 search` and `b2 similar` cover the whole vault. Multimodal image
+embedding (a second `vec0` space) and an LLM/OCR **Describer** (intrinsic text for `image`/`media`/`binary`)
+are **documented future seams**, default-off — the same Bitter-Lesson posture that cut the relator (§4).
+Schema, the per-class extraction step, and the taxonomy: [index-engine.md](index-engine.md) §3.
+
+**Why a separate object, not a `kind` column on the note.** Two tables, two contracts, zero "unless it's a
+resource" clauses. Generalizing `notes` to hold resources would staple a caveat onto every invariant, write
+guarantee, and frontmatter behavior in §0–§9; a distinct `resources` table isolates the different *write*
+contract instead of threading it through the note rules
+([research/file-type-support.md](research/file-type-support.md) §7).

@@ -82,8 +82,15 @@ façade** have shipped:
 ## Active — next up
 
 The desktop's **read → discover → link → edit → reconcile** arc is complete (Step 5 shipped 2026-07-11,
-above). No single focus is queued next — the remaining work is the tracked
-[backlog](#backlog--github-issues) below; pick per priority.
+above). The next feature is **file-type support (resources)** — teaching the vault about its non-`.md`
+files (PDFs, images, HTML, code). The design is **locked**
+([research/file-type-support.md](research/file-type-support.md), 2026-07-08) and mirrored into the
+canonical docs ([data-model.md](data-model.md) §10, [index-engine.md](index-engine.md) §3,
+[vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-08)"). It ships in value-ordered
+slices (research §8); **slice 1 — inventory & graph** (model-free, no new deps: walk all files →
+`resources` table, classify, parse resource links, file tree + fallback card, `b2 explain` / `b2 mv` over
+resources) is next and gets its own build spec under [specs/](specs/). The tracked
+[backlog](#backlog--github-issues) below is otherwise pick-per-priority.
 
 ## Backlog → GitHub Issues
 

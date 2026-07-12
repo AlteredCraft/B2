@@ -135,6 +135,32 @@ composition — so keyword search + graph are usable before embedding completes;
 [specs/completed/projection-embedding-split.md](specs/completed/projection-embedding-split.md). The invariant is untouched:
 a projected-but-unembedded index is a smaller projection, never a wrong one.)*
 
+**Resources widen the projection (designed 2026-07-08, build slice 1).** A real vault also holds
+non-`.md` files; the walk currently ignores them (`ingest.rs` filters `extension == "md"`). The locked
+design ([data-model.md](data-model.md) §10, [research/file-type-support.md](research/file-type-support.md))
+adds them as **path-keyed peers** without disturbing any statement above — the source *tier* becomes the
+whole vault directory, so **`index = projection of (the vault directory)`**:
+
+- **A `resources` table** — `(path PK, class, size, mtime, content_hash, indexed_at)` — a **separate**
+  table from `notes`, not a `kind` column on it (two tables, two contracts, zero "unless it's a resource"
+  clauses). Class is by **extension only** (deterministic; misclassification degrades, never mis-executes):
+  `note` · `text` · `html` · `pdf` · `image` · `media` · `binary` (the total fallback), each answering the
+  same three questions — what index text, can it be a graph endpoint, how does it render.
+- **`chunks` generalizes** from `note_b2id` to a **document reference** (a note `b2id` *or* a resource
+  path); search resolves hits up to the owning document and results carry a `kind`. Every class funnels to
+  *text* — native, extracted (`html` strip / `pdf` text layer), or, for an `image`, aggregated inbound
+  alt-text — embedded through the **existing** bge space: one embedding space in v1, the multimodal seam
+  documented for later (§6 posture, [data-model.md](data-model.md) §10).
+- **`edges.dst` may be a resource** — a body `![[photo.png]]` / `[[papers/x.pdf]]` resolves against
+  `resources` and records a `dst_resource_path`; `src` stays a note (resources author no outbound edges in
+  v1). The existing `dst_path_raw` + dangling-edge index (`db.rs`) is already half of this; the `link.rs`
+  parser learns the two Markdown-native forms `![alt](path)` / `[text](path)` (relative paths only) and the
+  `![[file.ext]]` embed, capturing the alt/caption text on the edge (it becomes the image's index text).
+- **No migration, ever.** Because the index is disposable this is a `schema_version` bump + rebuild — the
+  disposable-index tenet paying rent. The exact DDL and the per-class extraction step land in the
+  **slice-1 build spec** ([tasks.md](tasks.md)); the PDF text-extraction *dependency* (which crate, and
+  its home) is deferred to slice 4 by design.
+
 Why this shape fits B2 specifically:
 
 - **Edges key on `b2id`, never path** — directly implements the link-identity decision
@@ -365,6 +391,9 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   rebuild (`full-reindex ≡ incremental-update`) instead of failing on a raw `UNIQUE(notes.path)` error.
   **Known gap:** a note file *deleted with no replacement* still leaves a ghost row until the path is reused
   or the index is rebuilt — non-crashing, tracked in [#31](https://github.com/AlteredCraft/B2/issues/31).
+  *(Resources will churn more than notes — images/PDFs get added and deleted freely — so the resource
+  inventory pass (slice 1) includes pruning, which also bounds this gap's blast radius;
+  [research/file-type-support.md](research/file-type-support.md) §8.)*
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
   file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting

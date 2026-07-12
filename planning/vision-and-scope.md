@@ -391,6 +391,42 @@ rationale and the step-by-step build plan: [specs/completed/desktop-ui-mvp.md](s
   MVP ships **read-only-first** (render → discover → link, the connection-discovery loop made visual);
   CodeMirror editing and native fs-watch are the immediate fast-follow.
 
+## Decisions locked (2026-07-08) — file-type support (resources)
+
+The vault already *contains* non-`.md` files (any real Obsidian vault does); B2 pretended it didn't — the
+walk was `.md`-only. This settles how B2 treats them. Full design, taxonomy, rendering, and build plan:
+[research/file-type-support.md](research/file-type-support.md); mirrored into
+[data-model.md](data-model.md) §10 (the resource object) and [index-engine.md](index-engine.md) §3 (the
+`resources` table + extraction step).
+
+- **Markdown is the vault's only *authoring surface*; every other file is a *resource*** — a first-class
+  peer vault member: indexed, searchable, linkable, renderable, and **never required to be referenced by
+  any note**. The invariant generalizes from `index = projection of (the .md files)` to
+  **`index = projection of (the vault directory)`**; resources contribute only *derived* rows (metadata,
+  extracted text, inbound edges) — **no new tier, no sidecar files**, both tenets intact.
+- **The one asymmetry is authoring surface, not status.** A resource has bytes, a path, derivable text +
+  vectors, and inbound links, but **no `b2id`** (nothing to stamp; sidecars would be durable state outside
+  Markdown) and **no outbound edges in v1** (B2 authors structure only in Markdown, and a PNG has no home
+  for it) — each consequence carrying a named relief valve (hash-assisted move repair; tail-verb inverse
+  authoring; a future vault-level B2-managed relations file). *Not* subordination: an unlinked resource
+  fully exists, and `text`/`html`/`pdf` are semantically self-sufficient.
+- **Polymorphism = a closed class table with a total fallback**, not a trait hierarchy. Every file maps by
+  **extension only** to one of `note` · `text` · `html` · `pdf` · `image` · `media`, with **`binary`** as
+  the catch-all — so the taxonomy is *total* ("any file GitHub could store"), degrading gracefully, never
+  refusing.
+- **One embedding space in v1.** Every class funnels to *text* through the existing bge space; multimodal
+  image embedding and an LLM/OCR **Describer** are **documented future seams, default-off** — the same
+  Bitter-Lesson posture that cut the relator (2026-07-04), applied again.
+- **Rendering = a viewer registry keyed by class, with a "No viewer available" fallback card** (metadata +
+  backlinks + *Open in system default*). The one infrastructure key is the **Tauri asset protocol**
+  (scoped, read-only) — which also unblocks inline images in the reading view, the gap
+  [specs/completed/desktop-live-preview.md](specs/completed/desktop-live-preview.md) §8 named. Foreign
+  **HTML is source-first in v1** (zero script-execution surface next to the IPC bridge); a sandboxed
+  preview is a later slice.
+- **Shipped in value-ordered slices** ([research/file-type-support.md](research/file-type-support.md) §8):
+  ① inventory & graph (model-free, no new deps) → ② render mechanisms → ③ searchable resources → ④ PDF
+  text → ⑤ semantic seams (future). Each independently shippable; later slices never rework earlier ones.
+
 ## Inspiration — not a copy
 
 We take *ideas*, not implementations:
