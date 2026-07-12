@@ -26,6 +26,7 @@
 
 mod commands;
 mod error;
+mod logging;
 mod watch;
 
 use b2_core::embed::Embedder;
@@ -273,6 +274,11 @@ fn persist_last_vault_to(file: &Path, root: &Path) -> std::io::Result<()> {
 }
 
 fn main() {
+    // Opt-in structured logging (B2_LOG/B2_DEBUG/B2_LOG_FILE), the GUI mirror of the
+    // CLI. Bind the guard for the whole run: it owns the non-blocking writer thread's
+    // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
+    // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
+    let _guard = logging::init_logging();
     let state = AppState::new(resolve_root());
     tauri::Builder::default()
         // The dialog plugin backs the native folder picker for `choose_vault`. It is

@@ -36,6 +36,12 @@ dirs = "6"
 # `vault-changed` pulse to the webview, which reconciles via existing façade ops — the
 # webview itself is granted no filesystem permission (least-privilege, capabilities/).
 notify = "8"
+# Opt-in structured-log sink (B2_LOG/B2_DEBUG/B2_LOG_FILE), the GUI mirror of the CLI's
+# — same JSONL shape (see src/logging.rs). `tracing-appender` adds the non-blocking
+# writer this long-lived, multi-threaded host needs (the CLI's Mutex<File> is fine for a
+# one-shot process; here it would block GUI/reindex threads on log I/O).
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"

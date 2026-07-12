@@ -75,6 +75,12 @@ fn slow_query_threshold() -> Duration {
 /// a high fullscan count means a missing index). Statements at or over
 /// [`slow_query_threshold`] log at WARN with `slow=true`; the rest at DEBUG.
 ///
+/// **`duration_us` precision is platform-bound.** SQLite's profiler clock is only as
+/// fine as the host's; on some platforms (macOS observed) it quantizes to ~1ms, so
+/// `duration_us` comes back as a multiple of 1000 and sub-millisecond statements read
+/// as `0`. Treat it as coarse wall-clock. For fine-grained per-statement cost use
+/// `vm_steps` — it counts VDBE opcodes, so it's deterministic and clock-independent.
+///
 /// A plain `fn` because `trace_v2` registers a function pointer (no captured
 /// state). Emitting through `tracing` costs nothing until an adapter installs a
 /// subscriber (the CLI's is opt-in via `B2_LOG`/`B2_DEBUG`).

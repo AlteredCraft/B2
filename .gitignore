@@ -22,3 +22,8 @@ crates/b2-desktop/gen/
 
 # macOS
 .DS_Store
+
+# local logs
+/logs/
+# don't ignore logs/.keep
+!/logs/.keep

@@ -53,6 +53,7 @@ cargo run -p b2-embed --example eval    # semantic-retrieval quality eval (never
 # Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
 just ui-install                         # one-time: install the frontend's npm deps
 B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
+B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structured JSONL log ($PWD: cwd is crates/b2-desktop)
 just check-app                          # clippy for b2-desktop (builds ui/dist first)
 
 cargo fmt
@@ -77,8 +78,14 @@ emits: per-statement SQLite timings from SQLite's own profiler (`sqlite3_trace_v
 + `vm_steps`/`fullscan_steps`; statements at/over `B2_SLOW_QUERY_MS` (default 100) log at WARN with
 `slow=true`), a span per `Vault` façade op (`b2::vault`; close events carry the op's duration), and
 flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the subscriber (and its clock)
-lives in the adapter (`init_logging`, `b2-cli/src/main.rs`), so `b2-core` stays wall-clock-free and
-the instrumentation is inert unless an adapter opts in.
+lives in the adapter (`init_logging`, in **both** `b2-cli/src/main.rs` and `b2-desktop/src/logging.rs`),
+so `b2-core` stays wall-clock-free and the instrumentation is inert unless an adapter opts in. The two
+sinks emit the same JSONL shape; they differ only where the host demands it — the desktop uses a
+non-blocking writer (long-lived, multi-threaded) and, for the *implied* default, scopes to `b2=debug`
+so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored verbatim in both).
+**Desktop path quirk:** `just app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a *relative*
+`B2_LOG_FILE=./logs/x.jsonl` lands under that crate dir, not the repo root — pass an **absolute** path
+(e.g. `B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app`) to write where you expect.
 
 ## Architecture
 

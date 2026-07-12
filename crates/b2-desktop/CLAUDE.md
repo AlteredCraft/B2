@@ -76,6 +76,13 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   (Root CLAUDE.md error policy + parent `Projects/CLAUDE.md` logging policy.)
 - **Determinism unchanged.** Push no wall-clock or randomness into `b2-core`; timestamps come from the
   façade clock (`now()` / `today()`), same as the CLI.
+- **Structured logging installed here, like the CLI.** `logging::init_logging` (called first in `main`)
+  is the desktop's opt-in `B2_LOG`/`B2_DEBUG`/`B2_LOG_FILE` subscriber — the GUI sibling of the CLI's, same
+  JSONL shape (b2-core only emits; the subscriber + clock live in the adapter, keeping the core
+  wall-clock-free). Two host-driven differences, both documented in `logging.rs`: a `tracing-appender`
+  **non-blocking** writer (this process is long-lived + multi-threaded, so log I/O must not block the
+  GUI/reindex threads), and the *implied* default scoped to `b2=debug` (not bare `debug`) so Tauri/wry/hyper
+  tracing stays out of the file. `main` must hold the returned `WorkerGuard` for the whole run.
 
 ## Transport
 
