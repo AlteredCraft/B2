@@ -113,3 +113,20 @@ pub fn unpack_f32(bytes: &[u8]) -> Vec<f32> {
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect()
 }
+
+/// Squared Euclidean distance between two equal-length vectors. This is the ranking
+/// key `sqlite-vec`'s `vec_distance_l2` sorts by, minus the final `sqrt` — `sqrt` is
+/// monotonic, so dropping it never changes an ordering. Scoring off the squared
+/// distance (and applying `sqrt` once per surfaced candidate, not per comparison) is
+/// what lets discovery rank the *whole* vector space in one in-process pass instead of
+/// one SQL KNN scan per anchor chunk. A length mismatch (impossible for a fixed
+/// `FLOAT[N]` column) scores the shared prefix rather than panicking.
+pub fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| {
+            let d = x - y;
+            d * d
+        })
+        .sum()
+}

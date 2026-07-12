@@ -13,6 +13,7 @@ use crate::error::Result;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use rusqlite::{ffi, params, Connection, OptionalExtension, StatementStatus};
 use sqlite_vec::sqlite3_vec_init;
+use std::collections::HashMap;
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::sync::{Once, OnceLock};
@@ -476,6 +477,23 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
+/// The whole `chunk_id → note_b2id` map in one scan — the bulk form of
+/// [`note_for_chunk`] for hot loops that resolve *many* hits to their notes. The
+/// full-space discovery scan (`discover::candidates`) visits every vault chunk for
+/// each anchor chunk, so a per-hit `note_for_chunk` there is an O(anchor × vault)
+/// query storm (~463k round-trips, a ~130s `b2 similar`, on a real vault); one map
+/// load turns the inner loop into a pointer chase.
+pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
+    let mut stmt = conn.prepare("SELECT id, note_b2id FROM chunks")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, note) = row?;
+        map.insert(id, note);
+    }
+    Ok(map)
+}
+
 /// A chunk's text (None if the chunk id is unknown) — the search-hit → snippet
 /// resolution the CLI shows.
 pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
@@ -596,10 +614,32 @@ pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Stream every stored `(chunk_id, embedding_blob)` through `f`, one row at a time —
+/// a single full scan of `chunks_vec` that never materializes the whole vector space
+/// at once. Discovery's whole-space max-sim (`discover::candidates`) scores every chunk
+/// against the anchor's vectors in this one pass, instead of the former one full
+/// [`vector_search_all`] scan **per anchor chunk** (which reread — and re-sorted — the
+/// entire ~100k-vector space once per anchor chunk: O(anchor × vault) blob reads, the
+/// dominant cost of a slow `b2 similar`). The blob is *borrowed* for the callback
+/// (`get_ref`), so scoring it adds no per-row allocation.
+pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT chunk_id, embedding FROM chunks_vec")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let chunk_id: i64 = row.get(0)?;
+        // Match the ValueRef rather than `as_blob()?` — its `FromSqlError` isn't in our
+        // error enum, and a vec0 embedding is always a Blob, so a non-blob is skipped.
+        if let rusqlite::types::ValueRef::Blob(blob) = row.get_ref(1)? {
+            f(chunk_id, blob);
+        }
+    }
+    Ok(())
+}
+
 /// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
 /// nearest first (same computed-L2 scan, same `chunk_id` tie-break). The whole-space
-/// callers — graph-filtered search and discovery candidate generation — rank the
-/// entire vault, so they take this rather than pass a sentinel `k`.
+/// caller — graph-filtered search — ranks the entire vault, so it takes this rather
+/// than pass a sentinel `k`.
 pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
     let mut stmt = conn.prepare(
         "SELECT chunk_id, vec_distance_l2(embedding, ?1) AS distance FROM chunks_vec

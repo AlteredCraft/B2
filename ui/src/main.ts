@@ -141,11 +141,21 @@ async function openNote(ref: string): Promise<void> {
     expandAncestors(state.current.path);
     state.searchQuery = "";
     state.searchResults = [];
+    // Paint the note the instant its body is read — the body is already in hand.
+    // Discovery (`similar` + `explain`) is a slower, independent side-pane read; gating
+    // the middle pane on it made note-open feel as slow as the whole discovery scan.
+    // Clear the prior note's discovery so its cards don't linger under the new note.
+    state.similar = [];
+    state.connections = [];
+    state.loading = false;
+    state.discovering = true;
+    render();
     await refreshDiscovery();
   } catch (e) {
     flash(errText(e));
   } finally {
     state.loading = false;
+    state.discovering = false;
     render();
   }
 }
@@ -184,11 +194,15 @@ async function refreshDiscovery(): Promise<void> {
       api.similar(n.path),
       api.explain(n.path),
     ]);
+    // Now that discovery is awaited off the render path, the user can navigate away
+    // while it's in flight — don't clobber the new note's side pane with a stale result.
+    if (state.current?.path !== n.path) return;
     state.similar = similar;
     state.connections = explain.connections;
   } catch (e) {
     // Discovery failing (e.g. an unembedded vault) is non-fatal — show the note,
     // empty the panes, and surface the reason.
+    if (state.current?.path !== n.path) return;
     state.similar = [];
     state.connections = [];
     flash(errText(e));
