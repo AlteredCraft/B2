@@ -645,3 +645,101 @@ fn link_invalid_type_fails_cleanly() {
     );
     assert!(!err.contains("panicked"), "no stack trace: {err}");
 }
+
+// ---------------------------------------------------------------------------
+// structured debug logging (B2_LOG)
+// ---------------------------------------------------------------------------
+
+/// Run `b2 -C <vault> <args...>` with `B2_LOG` set — the structured-logging path.
+fn run_with_log(vault: &Path, log: &str, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_LOG", log)
+        .arg("-C")
+        .arg(vault)
+        .args(args)
+        .output()
+        .expect("b2 binary runs")
+}
+
+#[test]
+fn b2_log_emits_jsonl_on_stderr_and_stdout_stays_pure() {
+    let (_g, root) = golden_vault();
+
+    let out = run_with_log(&root, "debug", &["--json", "reindex"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // stdout is still pure machine-readable data — no log line leaks into it.
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["indexed"], 2);
+
+    // stderr is JSON Lines: every line one flat JSON object (the reporting
+    // contract — pipeable into jq/DuckDB/pandas as-is).
+    let err = stderr(&out);
+    assert!(!err.is_empty(), "B2_LOG=debug produced no log output");
+    let mut sqlite_events = 0usize;
+    for line in err.lines() {
+        let v: Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("non-JSON stderr line ({e}): {line}"));
+        if v["target"] == "b2::sqlite" {
+            sqlite_events += 1;
+            assert!(v["duration_us"].is_u64(), "no numeric timing: {line}");
+        }
+    }
+    assert!(
+        sqlite_events > 10,
+        "expected per-query timing events, got {sqlite_events}"
+    );
+
+    // Without B2_LOG/B2_DEBUG nothing is logged — stderr is silent on success.
+    let quiet = run_in(&root, &["--json", "reindex"]);
+    assert!(quiet.status.success());
+    assert_eq!(stderr(&quiet), "", "logging must stay opt-in");
+}
+
+#[test]
+fn b2_log_file_captures_pure_jsonl_and_implies_debug() {
+    let (_g, root) = golden_vault();
+    let log_path = root.join("run-log.jsonl");
+
+    // B2_LOG_FILE alone (no B2_LOG) implies `debug` and routes the log to the file.
+    let run = |args: &[&str]| {
+        let mut full = vec!["-C", root.to_str().unwrap()];
+        full.extend_from_slice(args);
+        Command::new(env!("CARGO_BIN_EXE_b2"))
+            .env("B2_EMBEDDER", "fake")
+            .env("B2_LOG_FILE", &log_path)
+            .args(&full)
+            .output()
+            .expect("b2 binary runs")
+    };
+
+    let first = run(&["reindex"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    // Human mode + file sink: stderr carries no JSONL (the file is the pure capture).
+    assert!(
+        !stderr(&first).contains("\"target\""),
+        "log lines leaked to stderr: {}",
+        stderr(&first)
+    );
+
+    let text = std::fs::read_to_string(&log_path).unwrap();
+    let sqlite_events = text
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l)
+                .unwrap_or_else(|e| panic!("non-JSON log-file line ({e}): {l}"))
+        })
+        .filter(|v| v["target"] == "b2::sqlite")
+        .count();
+    assert!(sqlite_events > 10, "got {sqlite_events} sqlite events");
+
+    // Append mode: a second run accumulates rather than truncates.
+    let second = run(&["search", "memory"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    let grown = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        grown.len() > text.len() && grown.starts_with(&text),
+        "second run must append to the log file"
+    );
+}

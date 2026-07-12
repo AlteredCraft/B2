@@ -57,6 +57,19 @@ silently touch the wrong dir (`Cli::require_vault`).
 `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
 (offline/dev mode, and what the test suite runs under); `B2_DEBUG` makes the CLI print internal error
 detail after the generic message.
+`B2_LOG` turns on structured debug logging: **JSON Lines** (stdout stays pure data), one flat object
+per event — pipe into jq/DuckDB/pandas for reporting/plotting. Sink is stderr by default;
+`B2_LOG_FILE=<path>` writes there instead (append mode, so runs accumulate into one reportable
+dataset, and the capture is pure JSONL even when stderr carries human notices). Its value is a tracing
+filter directive (`debug`, `b2::sqlite=debug`, `warn`, …); `B2_DEBUG` or `B2_LOG_FILE` alone implies
+`B2_LOG=debug`. The kernel
+emits: per-statement SQLite timings from SQLite's own profiler (`sqlite3_trace_v2` +
+`SQLITE_TRACE_PROFILE`, wired in `db::open` — target `b2::sqlite`, SQL template + numeric `duration_us`
++ `vm_steps`/`fullscan_steps`; statements at/over `B2_SLOW_QUERY_MS` (default 100) log at WARN with
+`slow=true`), a span per `Vault` façade op (`b2::vault`; close events carry the op's duration), and
+flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the subscriber (and its clock)
+lives in the adapter (`init_logging`, `b2-cli/src/main.rs`), so `b2-core` stays wall-clock-free and
+the instrumentation is inert unless an adapter opts in.
 
 ## Architecture
 

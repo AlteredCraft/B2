@@ -10,11 +10,13 @@
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
 use crate::error::Result;
-use rusqlite::{ffi, params, Connection, OptionalExtension};
+use rusqlite::trace::{TraceEvent, TraceEventCodes};
+use rusqlite::{ffi, params, Connection, OptionalExtension, StatementStatus};
 use sqlite_vec::sqlite3_vec_init;
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
+use std::time::Duration;
 
 /// The B2 index schema version stamped into `meta.schema_version`. Bumping it is
 /// the migration gate: on a mismatch `migrate()` drops the derived tables and lets
@@ -44,11 +46,81 @@ fn register_sqlite_vec() {
     });
 }
 
+/// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
+/// overrides; see [`slow_query_threshold`]).
+const SLOW_QUERY_MS_DEFAULT: u64 = 100;
+
+/// The duration at or above which a statement logs as a **slow query** (WARN
+/// instead of DEBUG). Read once from `B2_SLOW_QUERY_MS` (milliseconds), defaulting
+/// to [`SLOW_QUERY_MS_DEFAULT`]. Observability config only — it never changes what
+/// any operation computes, so the core's determinism guarantee is untouched.
+fn slow_query_threshold() -> Duration {
+    static THRESHOLD: OnceLock<Duration> = OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        let ms = std::env::var("B2_SLOW_QUERY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SLOW_QUERY_MS_DEFAULT);
+        Duration::from_millis(ms)
+    })
+}
+
+/// SQLite's own per-statement profiler, surfaced as structured `tracing` events:
+/// `sqlite3_trace_v2(SQLITE_TRACE_PROFILE)` fires this when a statement finishes,
+/// with the statement and its execution time measured by SQLite itself. Each event
+/// (target `b2::sqlite`) carries the SQL **template** (`?N` placeholders, never the
+/// bound values — so no note content or embedding blobs land in the log, and events
+/// group cleanly by statement for reporting), a numeric `duration_us`, and the
+/// statement's `vm_steps`/`fullscan_steps` counters (the "why was it slow" signal —
+/// a high fullscan count means a missing index). Statements at or over
+/// [`slow_query_threshold`] log at WARN with `slow=true`; the rest at DEBUG.
+///
+/// A plain `fn` because `trace_v2` registers a function pointer (no captured
+/// state). Emitting through `tracing` costs nothing until an adapter installs a
+/// subscriber (the CLI's is opt-in via `B2_LOG`/`B2_DEBUG`).
+fn on_sqlite_profile(event: TraceEvent<'_>) {
+    let TraceEvent::Profile(stmt, elapsed) = event else {
+        return; // only SQLITE_TRACE_PROFILE is masked in, but TraceEvent is non-exhaustive
+    };
+    let slow = elapsed >= slow_query_threshold();
+    // Skip the string work when nobody is listening at the level this would emit at.
+    if !(slow && tracing::enabled!(target: "b2::sqlite", tracing::Level::WARN))
+        && !tracing::enabled!(target: "b2::sqlite", tracing::Level::DEBUG)
+    {
+        return;
+    }
+    // Collapse the multi-line SQL literals used in this file to one line, so each
+    // event stays a single clean record with a stable, groupable `sql` key.
+    let sql = stmt.sql().split_whitespace().collect::<Vec<_>>().join(" ");
+    let duration_us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+    let vm_steps = stmt.get_status(StatementStatus::VmStep);
+    let fullscan_steps = stmt.get_status(StatementStatus::FullscanStep);
+    if slow {
+        tracing::warn!(
+            target: "b2::sqlite",
+            sql, duration_us, vm_steps, fullscan_steps, slow,
+            "slow sqlite query"
+        );
+    } else {
+        tracing::debug!(
+            target: "b2::sqlite",
+            sql, duration_us, vm_steps, fullscan_steps, slow,
+            "sqlite query"
+        );
+    }
+}
+
 /// Open (creating if needed) the B2 index at `path` with the locked pragmas and an
 /// idempotent migration. Safe to call on a fresh or an already-built index.
 pub fn open(path: &Path) -> Result<Connection> {
     register_sqlite_vec();
     let conn = Connection::open(path)?;
+    // Profile every statement on this connection through SQLite's trace_v2 hook —
+    // the source of the `b2::sqlite` query-timing events (see `on_sqlite_profile`).
+    conn.trace_v2(
+        TraceEventCodes::SQLITE_TRACE_PROFILE,
+        Some(on_sqlite_profile),
+    );
     // execute_batch tolerates the row PRAGMA journal_mode returns.
     // busy_timeout: WAL allows one writer at a time, and two short-statement
     // writers can now legitimately race (a save during the background embed —

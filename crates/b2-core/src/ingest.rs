@@ -539,6 +539,14 @@ pub fn project_vault(
         project_edges(conn, &b2id, &body, &relations)?;
         notes.push(Projected { b2id, stamped });
     }
+    tracing::debug!(
+        target: "b2::ingest",
+        notes = notes.len(),
+        stamped = notes.iter().filter(|n| n.stamped).count(),
+        skipped = skipped.len(),
+        force,
+        "projection pass complete"
+    );
     Ok(ProjectOutcome { notes, skipped })
 }
 
@@ -574,10 +582,23 @@ pub fn embed_vault(
     }
 
     let notes_to_embed = by_note.len();
+    tracing::debug!(
+        target: "b2::ingest",
+        notes_to_embed,
+        pending_chunks = by_note.iter().map(|(_, _, p)| p.len()).sum::<usize>(),
+        "embed pass starting (DB-derived pending set)"
+    );
     let mut embedded = Vec::new();
     let mut chunks_done = 0usize;
     let mut cancelled = false;
     for (i, (b2id, path, pending)) in by_note.iter().enumerate() {
+        // Per-note span: under a span-close subscriber each note reports how long
+        // its embed took — the kernel's slowest step, hence the one worth plotting.
+        let _note_span = tracing::debug_span!(
+            target: "b2::ingest", "embed_note",
+            path = path.as_str(), chunks = pending.len()
+        )
+        .entered();
         let notes_embedded = i + 1; // 1-based position for the progress line
         let note_chunks = pending.len();
         let outcome = embed_pending(conn, embedder, pending, |n| {
@@ -598,6 +619,13 @@ pub fn embed_vault(
             break; // cooperative cancel: stop starting new notes
         }
     }
+    tracing::debug!(
+        target: "b2::ingest",
+        notes_embedded = embedded.len(),
+        chunks_embedded = chunks_done,
+        cancelled,
+        "embed pass complete"
+    );
     Ok(EmbedOutcome {
         embedded,
         cancelled,

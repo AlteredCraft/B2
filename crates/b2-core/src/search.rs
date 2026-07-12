@@ -102,6 +102,12 @@ pub fn keyword_only_search(
     limit: usize,
 ) -> Result<Vec<Hit>> {
     let bm25 = keyword_search(conn, query, pool_size(limit))?;
+    tracing::debug!(
+        target: "b2::search",
+        bm25_hits = bm25.len(),
+        pool = pool_size(limit),
+        "keyword-only retrieval (no embedding space yet)"
+    );
     let mut hits = Vec::new();
     for (chunk_id, score) in rrf_fuse(&[bm25], RRF_K).into_iter().take(limit) {
         if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
@@ -128,6 +134,13 @@ pub fn hybrid_search(
         .into_iter()
         .map(|(id, _)| id)
         .collect();
+    tracing::debug!(
+        target: "b2::search",
+        bm25_hits = bm25.len(),
+        vector_hits = vector.len(),
+        pool,
+        "hybrid retrieval fusing BM25 ⊕ vector via RRF"
+    );
 
     let mut hits = Vec::new();
     for (chunk_id, score) in rrf_fuse(&[bm25, vector], RRF_K).into_iter().take(limit) {
