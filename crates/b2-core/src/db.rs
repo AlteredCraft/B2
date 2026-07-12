@@ -1,22 +1,27 @@
 //! Opening the index, the schema migration, and the projection helpers for the
-//! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), and the
-//! typed `edges` graph, plus the `b2id ⇄ path` resolver.
+//! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), the
+//! `embeddings`/`note_centroids` vector tables, and the typed `edges` graph, plus
+//! the `b2id ⇄ path` resolver.
 //!
-//! `sqlite-vec` is registered as a SQLite *auto-extension* (statically linked, no
-//! runtime `load_extension`), and every connection is opened `WAL` +
-//! `foreign_keys=ON` per planning/specs/completed/index-engine-build.md §0. Every table here
-//! is a derived projection of `Markdown` — nothing is a source of truth.
+//! Every connection is opened `WAL` + `foreign_keys=ON` per
+//! planning/specs/completed/index-engine-build.md §0. Every table here is a derived
+//! projection of `Markdown` — nothing is a source of truth.
+//!
+//! Vectors live in **plain tables** and every distance is computed in-process
+//! (schema v3, #38). The previous store — `sqlite-vec`'s `chunks_vec` `vec0`
+//! virtual table — charged a per-row shadow-table probe on every scan (~38.6k
+//! internal statements per `b2 similar` on a real vault) while its only shipped
+//! search was the same brute force we compute ourselves; a plain-table scan is one
+//! sequential statement.
 
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
 use crate::error::Result;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
-use rusqlite::{ffi, params, Connection, OptionalExtension, StatementStatus};
-use sqlite_vec::sqlite3_vec_init;
+use rusqlite::{params, Connection, OptionalExtension, StatementStatus};
 use std::collections::HashMap;
-use std::os::raw::{c_char, c_int};
 use std::path::Path;
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The B2 index schema version stamped into `meta.schema_version`. Bumping it is
@@ -24,28 +29,12 @@ use std::time::Duration;
 /// the next `reindex` rebuild them (the index is disposable). **2** dropped the
 /// suggestion machinery — the `status` column, the `origin='suggested'` value, and
 /// the `edge_provenance` table — with the 2026-07-04 relator cut (data-model.md §4).
-pub const SCHEMA_VERSION: i64 = 2;
-
-static REGISTER_VEC: Once = Once::new();
-
-/// Register `sqlite-vec` exactly once per process so every later `Connection`
-/// exposes the `vec0` virtual table with no runtime `load_extension`.
-fn register_sqlite_vec() {
-    // sqlite-vec and rusqlite each declare their own (ABI-identical) SQLite FFI
-    // types, so the init fn must be transmuted to the signature rusqlite's
-    // `sqlite3_auto_extension` expects — this mirrors the official sqlite-vec Rust
-    // example. The explicit annotation is the type clippy would otherwise ask for.
-    type InitFn = unsafe extern "C" fn(
-        *mut ffi::sqlite3,
-        *mut *mut c_char,
-        *const ffi::sqlite3_api_routines,
-    ) -> c_int;
-    REGISTER_VEC.call_once(|| unsafe {
-        ffi::sqlite3_auto_extension(Some(std::mem::transmute::<*const (), InitFn>(
-            sqlite3_vec_init as *const (),
-        )));
-    });
-}
+/// **3** replaced the `chunks_vec` vec0 virtual table with the plain `embeddings` +
+/// `note_centroids` tables and dropped the `sqlite-vec` dependency (#38); a pre-3
+/// index's orphaned `chunks_vec` entry is left inert in `sqlite_master` (its module
+/// is no longer linked, so it can't be dropped) — delete `.b2/b2.sqlite` for a
+/// byte-clean slate; either way the next `reindex` rebuilds everything queried.
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
@@ -120,7 +109,6 @@ fn on_sqlite_profile(event: TraceEvent<'_>) {
 /// Open (creating if needed) the B2 index at `path` with the locked pragmas and an
 /// idempotent migration. Safe to call on a fresh or an already-built index.
 pub fn open(path: &Path) -> Result<Connection> {
-    register_sqlite_vec();
     let conn = Connection::open(path)?;
     // Profile every statement on this connection through SQLite's trace_v2 hook —
     // the source of the `b2::sqlite` query-timing events (see `on_sqlite_profile`).
@@ -128,15 +116,22 @@ pub fn open(path: &Path) -> Result<Connection> {
         TraceEventCodes::SQLITE_TRACE_PROFILE,
         Some(on_sqlite_profile),
     );
-    // execute_batch tolerates the row PRAGMA journal_mode returns.
+    // execute_batch tolerates the rows PRAGMA journal_mode / mmap_size return.
     // busy_timeout: WAL allows one writer at a time, and two short-statement
     // writers can now legitimately race (a save during the background embed —
     // desktop-editing.md §4). A modest wait turns that contention into a few-ms
     // stall instead of an immediate SQLITE_BUSY error.
+    // mmap_size + cache_size: the whole-space vector scans stream ~100+ MB of blob
+    // rows per call on a real vault; under the 2 MB default cache with no mmap that
+    // read path was pread/syscall-bound — the bulk of `b2 similar`'s ~4.4 s (#38).
+    // mmap_size is a *cap*, not an allocation (the OS page cache does the work — the
+    // one cache B2 is happy to lean on); cache_size is in KiB when negative (32 MiB).
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
+         PRAGMA busy_timeout = 5000;
+         PRAGMA mmap_size = 1073741824;
+         PRAGMA cache_size = -32768;",
     )?;
     migrate(&conn)?;
     Ok(conn)
@@ -145,7 +140,8 @@ pub fn open(path: &Path) -> Result<Connection> {
 /// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
 /// no-op on reopen; a `schema_version` mismatch drops the derived tables first so the
 /// next `reindex` rebuilds them (the index is disposable). The DDL mirrors
-/// planning/specs/completed/index-engine-build.md §1 (chunks_vec is created at embed time).
+/// planning/specs/completed/index-engine-build.md §1 (the vector tables are created at
+/// embed time — see [`ensure_embedding_space`]).
 fn migrate(conn: &Connection) -> Result<()> {
     // `meta` must exist before we can read the schema version the index was built at.
     conn.execute_batch(
@@ -164,11 +160,17 @@ fn migrate(conn: &Connection) -> Result<()> {
         )
         .optional()?
         .and_then(|s| s.parse().ok());
+    // The legacy vec0 `chunks_vec` (schema ≤ 2) is deliberately absent from this
+    // list: its module is no longer linked, so SQLite cannot DROP it — any orphaned
+    // entry stays inert in `sqlite_master` and nothing ever queries it (delete the
+    // index file for a byte-clean slate). `DELETE FROM meta` clears the recorded
+    // embedder, so the next embed pass recreates the vector tables from nothing.
     if prior.is_some_and(|v| v != SCHEMA_VERSION) {
         conn.execute_batch(
             "DROP TABLE IF EXISTS edge_provenance;
              DROP TABLE IF EXISTS edges;
-             DROP TABLE IF EXISTS chunks_vec;
+             DROP TABLE IF EXISTS note_centroids;
+             DROP TABLE IF EXISTS embeddings;
              DROP TABLE IF EXISTS chunks_fts;
              DROP TABLE IF EXISTS chunks;
              DROP TABLE IF EXISTS note_aliases;
@@ -327,20 +329,20 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Replace a note's chunks (delete + reinsert) and return the new chunk ids in
-/// `seq` order. The FTS triggers emit the `'delete'` sentinel for the removed
-/// rows; `chunks_vec` has no FK/trigger back to `chunks`, so its stale rows are
-/// cleared here explicitly. Together this is what makes an incremental re-index
-/// equal a full rebuild. The caller embeds the returned ids (Flow ①).
+/// `seq` order. The FTS triggers emit the `'delete'` sentinel for the removed rows,
+/// and any stored vectors cascade with them (`embeddings.chunk_id` is an
+/// `ON DELETE CASCADE` FK). The note's centroid summarizes the *old* chunk set, so
+/// it is dropped here too — the next embed pass recomputes it. Together this is
+/// what makes an incremental re-index equal a full rebuild. The caller embeds the
+/// returned ids (Flow ①).
 pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> Result<Vec<i64>> {
+    // Guarded on existence so the model-free projection pass still never *creates*
+    // the embedding space (projection-embedding-split.md §4).
     if embedding_space_exists(conn)? {
-        let old_ids: Vec<i64> = {
-            let mut stmt = conn.prepare("SELECT id FROM chunks WHERE note_b2id = ?1")?;
-            let rows = stmt.query_map([note_b2id], |r| r.get(0))?;
-            rows.collect::<rusqlite::Result<Vec<i64>>>()?
-        };
-        for id in old_ids {
-            conn.execute("DELETE FROM chunks_vec WHERE chunk_id = ?1", [id])?;
-        }
+        conn.execute(
+            "DELETE FROM note_centroids WHERE note_b2id = ?1",
+            [note_b2id],
+        )?;
     }
     conn.execute("DELETE FROM chunks WHERE note_b2id = ?1", [note_b2id])?;
 
@@ -364,25 +366,28 @@ pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> R
 }
 
 // ---------------------------------------------------------------------------
-// embeddings — chunks_vec is created at the embedder's dim (not in migrate()),
-// because the vec0 dimension is a DDL literal pinned to meta.embed_dim (§1.0).
+// embeddings — the vector tables are created at embed time (not in migrate()):
+// their *existence* is the "this vault has an embedding space" signal the
+// projected-but-unembedded fallbacks key on (projection-embedding-split.md §5).
 // ---------------------------------------------------------------------------
 
-/// Whether the `chunks_vec` virtual table currently exists.
+/// Whether the embedding space (the `embeddings` table) currently exists.
 pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'",
         [],
         |r| r.get(0),
     )?;
     Ok(n > 0)
 }
 
-/// Ensure `chunks_vec` exists at `dim`, recording `(embed_model_id, embed_dim)`
-/// in `meta`. If either differs from what is recorded — a model swap — the table
-/// is dropped and recreated empty, so a full re-embed follows (index-engine.md
-/// §8). `meta` is the only place a swap can be detected, so vectors never go
-/// silently stale.
+/// Ensure the vector tables (`embeddings` + `note_centroids`) exist, recording
+/// `(embed_model_id, embed_dim)` in `meta`. If either differs from what is recorded
+/// — a model swap — the tables are dropped and recreated empty, so a full re-embed
+/// follows (index-engine.md §8). `meta` is the only place a swap can be detected,
+/// so vectors never go silently stale. (`dim` is bookkeeping only now — a plain
+/// BLOB column needs no `FLOAT[N]` DDL literal — but it still gates the swap and
+/// the read-time fail-fast.)
 pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> Result<()> {
     let cur_model: Option<String> = conn
         .query_row(
@@ -403,21 +408,25 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
         return Ok(());
     }
 
-    // dim is an integer we control (never user input) → safe to interpolate.
-    conn.execute_batch(&format!(
-        "DROP TABLE IF EXISTS chunks_vec;
-         CREATE VIRTUAL TABLE chunks_vec USING vec0(
-           chunk_id  INTEGER PRIMARY KEY,
-           embedding FLOAT[{dim}]
-         );"
-    ))?;
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS note_centroids;
+         DROP TABLE IF EXISTS embeddings;
+         CREATE TABLE embeddings (
+           chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+           vector   BLOB NOT NULL
+         );
+         CREATE TABLE note_centroids (
+           note_b2id TEXT PRIMARY KEY REFERENCES notes(b2id) ON DELETE CASCADE,
+           centroid  BLOB NOT NULL
+         );",
+    )?;
     upsert_meta(conn, "embed_model_id", model_id)?;
     upsert_meta(conn, "embed_dim", &dim.to_string())?;
     Ok(())
 }
 
 /// The `(embed_model_id, embed_dim)` a prior ingest recorded in `meta`, if any.
-/// `None` means the vault has never been embedded (no `chunks_vec` yet). This is
+/// `None` means the vault has never been embedded (no vector tables yet). This is
 /// the only place a model swap is detectable, so a read compares it to the active
 /// embedder and fails fast on a mismatch (index-engine.md §8).
 pub fn recorded_embedder(conn: &Connection) -> Result<Option<(String, usize)>> {
@@ -452,18 +461,10 @@ fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// insert never conflicts).
 pub fn set_chunk_vector(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> Result<()> {
     conn.execute(
-        "INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
+        "INSERT INTO embeddings(chunk_id, vector) VALUES (?1, ?2)",
         params![chunk_id, pack_f32(embedding)],
     )?;
     Ok(())
-}
-
-/// A note's chunk ids in `seq` order — the note's own vectors/text, e.g. the queries
-/// discovery candidate generation runs from (each chunk KNN-searches `chunks_vec`).
-pub fn chunks_for_note(conn: &Connection, note_b2id: &str) -> Result<Vec<i64>> {
-    let mut stmt = conn.prepare("SELECT id FROM chunks WHERE note_b2id = ?1 ORDER BY seq")?;
-    let rows = stmt.query_map([note_b2id], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// The note a chunk belongs to (the search-hit → note resolution).
@@ -478,11 +479,11 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
 }
 
 /// The whole `chunk_id → note_b2id` map in one scan — the bulk form of
-/// [`note_for_chunk`] for hot loops that resolve *many* hits to their notes. The
-/// full-space discovery scan (`discover::candidates`) visits every vault chunk for
-/// each anchor chunk, so a per-hit `note_for_chunk` there is an O(anchor × vault)
-/// query storm (~463k round-trips, a ~130s `b2 similar`, on a real vault); one map
-/// load turns the inner loop into a pointer chase.
+/// [`note_for_chunk`] for hot loops that resolve *many* hits to their notes
+/// (graph-filtered search walks the full ranked space; a per-hit `note_for_chunk`
+/// there is an O(vault) round-trip storm in the worst case — the same N+1 shape
+/// that once made `b2 similar` a ~130s stall, #37). One map load turns the inner
+/// loop into a pointer chase.
 pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare("SELECT id, note_b2id FROM chunks")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
@@ -516,13 +517,14 @@ pub fn note_body_hash(conn: &Connection, b2id: &str) -> Result<Option<String>> {
 }
 
 /// Whether every chunk of `b2id` already has a stored vector (and it has at least
-/// one chunk). False after a model swap emptied `chunks_vec`, so an unchanged-body
-/// note is still re-embedded then. Requires `chunks_vec` to exist — callers ensure
-/// the embedding space first.
+/// one chunk). False after a model swap emptied the vector tables, so an
+/// unchanged-body note is still re-embedded then. Requires the embedding space to
+/// exist — callers ensure it first. A plain indexed anti-join — the vec0 version
+/// paid a virtual-table shadow probe per chunk here (#36).
 pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
     let (n_chunks, n_missing): (i64, i64) = conn.query_row(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE v.chunk_id IS NULL)
-         FROM chunks c LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+         FROM chunks c LEFT JOIN embeddings v ON v.chunk_id = c.id
          WHERE c.note_b2id = ?1",
         [b2id],
         |r| Ok((r.get(0)?, r.get(1)?)),
@@ -536,14 +538,14 @@ pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
 /// from embedding: nothing is handed between the two passes in memory, so any stop
 /// point (a cancelled embed, a crash between the passes) heals on the next embed.
 /// The ordering reproduces the fused reindex's per-note batching + progress.
-/// Generalizes [`note_fully_embedded`]; like it, requires `chunks_vec` to exist —
-/// callers ensure the embedding space first.
+/// Generalizes [`note_fully_embedded`]; like it, requires the embedding space to
+/// exist — callers ensure it first.
 pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<(String, String, i64, String)>> {
     let mut stmt = conn.prepare(
         "SELECT c.note_b2id, n.path, c.id, c.text
          FROM chunks c
          JOIN notes n ON n.b2id = c.note_b2id
-         LEFT JOIN chunks_vec v ON v.chunk_id = c.id
+         LEFT JOIN embeddings v ON v.chunk_id = c.id
          WHERE v.chunk_id IS NULL
          ORDER BY n.path, c.seq",
     )?;
@@ -577,58 +579,93 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<(String, String, Option<String
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// A chunk's stored embedding, unpacked from `chunks_vec` (`None` if the chunk has
-/// no vector row). Reading a note's own vectors back is what lets discovery KNN from
-/// them without re-embedding — passage↔passage, no `embed_query` (tasks.md ①). Call
-/// only when the embedding space exists (`embedding_space_exists`), else the read
-/// hits a missing table.
-pub fn chunk_vector(conn: &Connection, chunk_id: i64) -> Result<Option<Vec<f32>>> {
-    let blob: Option<Vec<u8>> = conn
-        .query_row(
-            "SELECT embedding FROM chunks_vec WHERE chunk_id = ?1",
-            [chunk_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(blob.map(|b| crate::embed::unpack_f32(&b)))
-}
-
-/// Brute-force nearest-neighbour search over `chunks_vec`: the `k` nearest chunk ids
-/// to `query`, with their distances, nearest first (ties broken by `chunk_id` for
-/// determinism). A full linear scan with a **computed** distance — deliberately *not*
-/// the `vec0` KNN (`… MATCH … LIMIT k`) operator, whose `k` is hard-capped at 4096
-/// ("k value in knn query too large") — so any `k` is honoured exactly, no silent
-/// truncation. This is the brute-force KNN index-engine.md §4 specs as comfortable at
-/// vault scale (SQLite keeps only the top `k` for `ORDER BY … LIMIT`). Distance is L2
-/// over the embeddings, which ranks by cosine — b2-embed L2-normalizes, and
-/// `chunks_vec` declares no explicit metric so `vec_distance_l2` matches its default.
-/// [`vector_search_all`] is the same scan without the `k` bound.
-pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
-    let mut stmt = conn.prepare(
-        "SELECT chunk_id, vec_distance_l2(embedding, ?1) AS distance FROM chunks_vec
-         ORDER BY distance, chunk_id LIMIT ?2",
+/// A note's stored chunk vectors as `(chunk_id, vector)` in `seq` order — one
+/// indexed join, not a per-chunk round-trip. Reading a note's own vectors back is
+/// what lets discovery search from them without re-embedding — passage↔passage, no
+/// `embed_query` (tasks.md ①); it is also discovery's second-stage rescore unit and
+/// the input to a centroid refresh. Call only when the embedding space exists
+/// (`embedding_space_exists`), else the read hits a missing table. `prepare_cached`
+/// because discovery calls this once per shortlisted note.
+pub fn note_chunk_vectors(conn: &Connection, note_b2id: &str) -> Result<Vec<(i64, Vec<f32>)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT c.id, e.vector FROM chunks c
+         JOIN embeddings e ON e.chunk_id = c.id
+         WHERE c.note_b2id = ?1 ORDER BY c.seq",
     )?;
-    let rows = stmt.query_map(params![pack_f32(query), k as i64], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32))
+    let rows = stmt.query_map([note_b2id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            crate::embed::unpack_f32(&r.get::<_, Vec<u8>>(1)?),
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Stream every stored `(chunk_id, embedding_blob)` through `f`, one row at a time —
-/// a single full scan of `chunks_vec` that never materializes the whole vector space
-/// at once. Discovery's whole-space max-sim (`discover::candidates`) scores every chunk
-/// against the anchor's vectors in this one pass, instead of the former one full
-/// [`vector_search_all`] scan **per anchor chunk** (which reread — and re-sorted — the
-/// entire ~100k-vector space once per anchor chunk: O(anchor × vault) blob reads, the
-/// dominant cost of a slow `b2 similar`). The blob is *borrowed* for the callback
-/// (`get_ref`), so scoring it adds no per-row allocation.
+/// Recompute and store `note_b2id`'s centroid from its currently stored chunk
+/// vectors (the row is deleted when it has none). The embed pass calls this after
+/// finishing a note, so a centroid row exists exactly for embedded notes and always
+/// summarizes their *current* vectors — the derived-projection discipline, no
+/// separate invalidation. Requires the embedding space to exist.
+pub fn refresh_note_centroid(conn: &Connection, note_b2id: &str) -> Result<()> {
+    let vectors: Vec<Vec<f32>> = note_chunk_vectors(conn, note_b2id)?
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
+    match crate::embed::centroid_of(&vectors) {
+        Some(c) => {
+            conn.execute(
+                "INSERT INTO note_centroids(note_b2id, centroid) VALUES (?1, ?2)
+                 ON CONFLICT(note_b2id) DO UPDATE SET centroid = excluded.centroid",
+                params![note_b2id, pack_f32(&c)],
+            )?;
+        }
+        None => {
+            conn.execute(
+                "DELETE FROM note_centroids WHERE note_b2id = ?1",
+                [note_b2id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Stream every stored `(note_b2id, centroid_blob)` through `f`, one row at a time —
+/// discovery's first-stage coarse scan. O(notes), the whole point of the two-stage
+/// shape (#38): the O(chunks) work happens only for the shortlisted notes. The blob
+/// is *borrowed* for the callback (`get_ref`), so scoring adds no per-row allocation.
+pub fn for_each_note_centroid(conn: &Connection, mut f: impl FnMut(&str, &[u8])) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT note_b2id, centroid FROM note_centroids")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        // Match the ValueRefs rather than `.as_str()?`/`.as_blob()?` — their
+        // `FromSqlError` isn't in our error enum, and the column types are fixed by
+        // our own DDL, so a mismatched row is skipped rather than an error.
+        let rusqlite::types::ValueRef::Text(text) = row.get_ref(0)? else {
+            continue;
+        };
+        let Ok(note) = std::str::from_utf8(text) else {
+            continue;
+        };
+        if let rusqlite::types::ValueRef::Blob(blob) = row.get_ref(1)? {
+            f(note, blob);
+        }
+    }
+    Ok(())
+}
+
+/// Stream every stored `(chunk_id, vector_blob)` through `f`, one row at a time — a
+/// single sequential scan of the plain `embeddings` table that never materializes
+/// the whole vector space at once. One SQL statement for the whole space: the vec0
+/// version of this scan cost a shadow-table probe per row (~38.6k internal
+/// statements — and O(vault) log lines — per call on a real vault, #38). The blob is
+/// *borrowed* for the callback (`get_ref`), so scoring it adds no per-row allocation.
 pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) -> Result<()> {
-    let mut stmt = conn.prepare("SELECT chunk_id, embedding FROM chunks_vec")?;
+    let mut stmt = conn.prepare("SELECT chunk_id, vector FROM embeddings")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let chunk_id: i64 = row.get(0)?;
         // Match the ValueRef rather than `as_blob()?` — its `FromSqlError` isn't in our
-        // error enum, and a vec0 embedding is always a Blob, so a non-blob is skipped.
+        // error enum, and a stored vector is always a Blob, so a non-blob is skipped.
         if let rusqlite::types::ValueRef::Blob(blob) = row.get_ref(1)? {
             f(chunk_id, blob);
         }
@@ -636,19 +673,46 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
     Ok(())
 }
 
-/// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
-/// nearest first (same computed-L2 scan, same `chunk_id` tie-break). The whole-space
-/// caller — graph-filtered search — ranks the entire vault, so it takes this rather
-/// than pass a sentinel `k`.
-pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
-    let mut stmt = conn.prepare(
-        "SELECT chunk_id, vec_distance_l2(embedding, ?1) AS distance FROM chunks_vec
-         ORDER BY distance, chunk_id",
-    )?;
-    let rows = stmt.query_map(params![pack_f32(query)], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32))
+/// Every chunk's squared-L2 distance to `query`, sorted nearest first (ties broken
+/// by `chunk_id` for determinism) — the shared scan behind [`vector_search`] /
+/// [`vector_search_all`]. Distances are computed **in-process** over the
+/// [`for_each_stored_vector`] stream: one sequential statement, one reused decode
+/// buffer, the unrolled [`l2_sq`](crate::embed::l2_sq) — the #38 read-path shape.
+fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
+    let mut out: Vec<(i64, f32)> = Vec::new();
+    let mut scratch: Vec<f32> = Vec::new();
+    for_each_stored_vector(conn, |chunk_id, blob| {
+        crate::embed::unpack_f32_into(blob, &mut scratch);
+        out.push((chunk_id, crate::embed::l2_sq(query, &scratch)));
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    out.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    Ok(out)
+}
+
+/// Brute-force nearest-neighbour search: the `k` nearest chunk ids to `query`, with
+/// their L2 distances, nearest first (ties broken by `chunk_id` for determinism).
+/// A full linear scan — exact, no silent truncation at any `k` — which is the
+/// brute force index-engine.md §4 specs as comfortable at vault scale. L2 over the
+/// stored embeddings ranks by cosine (b2-embed L2-normalizes). The `sqrt` is applied
+/// once per *returned* hit; ranking happens on the squared distance (monotonic).
+/// [`vector_search_all`] is the same scan without the `k` bound.
+pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
+    let mut hits = scan_vector_distances(conn, query)?;
+    hits.truncate(k);
+    Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
+}
+
+/// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
+/// nearest first (same scan, same `chunk_id` tie-break). The whole-space caller —
+/// graph-filtered search — ranks the entire vault, so it takes this rather than
+/// pass a sentinel `k`.
+pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
+    let hits = scan_vector_distances(conn, query)?;
+    Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
 }
 
 // ---------------------------------------------------------------------------

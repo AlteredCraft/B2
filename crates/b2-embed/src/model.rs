@@ -99,7 +99,7 @@ impl LocalEmbedder {
     }
 
     /// The pooled, L2-normalized embedding of `text`. CLS pooling (row 0) — what
-    /// bge is trained for; normalized so `sqlite-vec`'s L2 distance ranks by cosine.
+    /// bge is trained for; normalized so the index's L2 distance ranks by cosine.
     fn embed_inner(&self, text: &str) -> candle_core::Result<Vec<f32>> {
         let enc = self
             .tokenizer

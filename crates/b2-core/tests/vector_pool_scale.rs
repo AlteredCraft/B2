@@ -1,13 +1,13 @@
-//! Regression: the full-space vector callers must not trip `sqlite-vec`'s KNN
-//! `k` ceiling. `discover::candidates` and `search::graph_filtered_search` scan
-//! the *whole* embedding space (index-engine.md §4 promises brute-force is
-//! comfortable at 50–100k chunks). The `vec0` `MATCH … LIMIT k` operator refuses
-//! `k > 4096` ("k value in knn query too large"), so past ~4096 chunks those two
-//! commands — and a `search` with a large `--limit` — crashed. They must instead
-//! degrade to a full brute-force scan and return results.
+//! Scale smoke: discovery, graph-filtered search, and an oversized `--limit` must
+//! all survive a vault of thousands of chunks and return sane, un-truncated
+//! results. Historically this locked the fix for `sqlite-vec`'s `vec0`
+//! `MATCH … LIMIT k` ceiling (`k > 4096` → "k value in knn query too large", which
+//! crashed all three); the vec0 store is gone (schema v3, #38 — plain tables,
+//! in-process scoring, two-stage discovery), but the boundary stays exercised so no
+//! silent cap ever returns to these paths.
 //!
 //! Scope: with the deterministic *fake* embedder this proves the plumbing (no
-//! crash, sane results) across the 4096-chunk boundary, not model quality.
+//! crash, sane results) well past that historical boundary, not model quality.
 
 mod common;
 
@@ -19,7 +19,8 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 
-/// `sqlite-vec`'s hard KNN cap; we build a vault comfortably past it.
+/// The retired vec0 store's hard KNN cap; we keep building vaults comfortably past
+/// it so these whole-space paths stay proven at thousands of chunks.
 const KNN_CAP: usize = 4096;
 
 /// Build a vault of `notes` unlinked notes, each with `paras` blank-line-separated

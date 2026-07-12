@@ -257,7 +257,7 @@ impl Vault {
     /// to inject the real candle model while tests keep the fake.
     ///
     /// `open` **never mutates the embedding space** (the `open()`-time-drop fix,
-    /// tasks.md / index-engine.md §8): shaping `chunks_vec` and any re-embed happen
+    /// tasks.md / index-engine.md §8): shaping the vector tables and any re-embed happen
     /// only on `reindex`. That way changing the configured model can never silently
     /// wipe vectors on the next command — a mismatch is caught, and fixed, at
     /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
@@ -344,7 +344,7 @@ impl Vault {
     }
 
     /// The **embed pass** alone: fill a vector for every chunk that lacks one — the
-    /// pending set is derived from the index itself (chunks with no `chunks_vec`
+    /// pending set is derived from the index itself (chunks with no `embeddings`
     /// row), so this needs no prior [`project`](Self::project) call in the same
     /// process and heals any interruption (a cancelled embed, a crash between the
     /// passes) by embedding exactly what is still missing. Progress and cooperative

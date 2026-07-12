@@ -32,7 +32,7 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
     // Projection alone: no embedder anywhere near the call. If it issued any query
-    // against `chunks_vec` (which does not exist yet), this would error.
+    // against `embeddings` (which does not exist yet), this would error.
     let outcome = project_vault(&conn, &vault_dir, &UlidGen, false).unwrap();
     assert_eq!(outcome.notes.len(), 2);
 
@@ -48,7 +48,7 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
     // …and the embedding space was never created (that is the embed pass's job).
     assert!(
         !db::embedding_space_exists(&conn).unwrap(),
-        "projection must not create chunks_vec"
+        "projection must not create the vector tables"
     );
 }
 
@@ -66,13 +66,13 @@ fn embed_fills_exactly_the_missing_vectors() {
     let first = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!first.cancelled);
     assert_eq!(first.embedded.len(), 2, "both projected notes embed");
-    assert_eq!(count(&conn, "chunks_vec"), count(&conn, "chunks"));
+    assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
     // Second embed: the DB-derived pending set is empty → fills 0, changes nothing.
     let second = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!second.cancelled);
     assert!(second.embedded.is_empty(), "a second embed fills nothing");
-    assert_eq!(count(&conn, "chunks_vec"), count(&conn, "chunks"));
+    assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 }
 
 /// The observable projection of an index: note count, `(note, seq) → chunk text`,
@@ -105,8 +105,8 @@ fn observable_state(root: &Path) -> Observable {
     let text_to_vector = {
         let mut stmt = conn
             .prepare(
-                "SELECT c.text, v.embedding FROM chunks c
-                 JOIN chunks_vec v ON v.chunk_id = c.id
+                "SELECT c.text, v.vector FROM chunks c
+                 JOIN embeddings v ON v.chunk_id = c.id
                  ORDER BY c.note_b2id, c.seq",
             )
             .unwrap();

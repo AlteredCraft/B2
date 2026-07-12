@@ -21,7 +21,7 @@ schema must satisfy the data model, never the reverse.
 
 - `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
 - `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
-- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + `sqlite-vec`) projection, table DDL, the build order, data flows.
+- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + in-process vector scan; `sqlite-vec` until 2026-07-12, see `research/discovery-scan-strategy.md`) projection, table DDL, the build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
   Planned-but-unstarted work lives in GitHub Issues; shipped build specs live in `planning/specs/completed/`
   (index engine, desktop MVP, async indexing, projection/embedding split, desktop editing, live preview).
@@ -95,7 +95,7 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
 
 1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable. Every committed
    connection lives here: a body `[[link]]`, or a frontmatter `relations:` entry (written by `b2 link`).
-2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + `sqlite-vec` + the typed `edges` graph.
+2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings` + `note_centroids`, scored in-process) + the typed `edges` graph.
    Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable state
    lives outside the Markdown.**
 
@@ -127,7 +127,8 @@ no model) + `b2 link` (the human commits). A reranker would be the next seam if/
 
 - **`b2-core`** — the whole index engine and the typed `Vault` façade. Deliberately **model-free**
   (no candle) so its test suite stays fast and deterministic. Deps: rusqlite (bundled SQLite + FTS5),
-  `sqlite-vec`, blake3, ulid, yaml-rust2.
+  blake3, ulid, yaml-rust2. (No vector extension: vectors are plain BLOB tables scored in-process —
+  `embed::l2_sq` over `db::for_each_stored_vector`/`for_each_note_centroid` — since #38.)
 - **`b2-embed`** — the real candle-backed embedder. Heavy ML deps (candle, tokenizers, hf-hub) live
   **only here**. `provision` (`b2 init`) downloads + verifies the model into a shared XDG cache;
   `LocalEmbedder::load` fails fast with "run `b2 init`" if absent.
@@ -159,12 +160,15 @@ adapters wire the real model.
   (`specs/completed/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
   falls back to BM25-only on a projected-but-unembedded vault.
-- **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (`chunks_vec`) fused with
-  Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL queries are sanitized into a
-  safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would otherwise crash the parse).
+- **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (an exact in-process scan
+  of `embeddings`) fused with Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL
+  queries are sanitized into a safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would
+  otherwise crash the parse).
 - **Flow ③ connection discovery** — **`b2 similar`** (`discover::candidates`) surfaces the semantically
-  nearest *unlinked* notes (vector KNN over stored embeddings, minus the anchor's 1-hop graph neighbors —
-  no model call); **`b2 link`** appends a typed `relations:` entry to the source note's frontmatter
+  nearest *unlinked* notes in **two stages** (#38): a coarse O(notes) scan over per-note centroids
+  (`note_centroids`, maintained by the embed pass) shortlists candidates, then exact max-sim over only
+  the shortlist's chunk vectors — minus the anchor's 1-hop graph neighbors, no model call;
+  **`b2 link`** appends a typed `relations:` entry to the source note's frontmatter
   (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
   active edge. No suggestion queue — a connection exists only once you author it.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
@@ -183,12 +187,17 @@ display-only.
 
 ### Embedding-space discipline
 
-`chunks_vec` (a `vec0` virtual table) is created at **embed time**, not in the base migration, because
-its dimension is a DDL literal pinned to the embedder's `dim`. `meta` records `(embed_model_id,
-embed_dim)` — the only place a model swap is detectable. A swap drops `chunks_vec` and re-embeds on
+Vectors live in **plain tables** — `embeddings(chunk_id, vector)` and `note_centroids(note_b2id,
+centroid)` — created at **embed time**, not in the base migration: their existence is the "this vault
+has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
+computed **in-process** (`embed::l2_sq`, one sequential scan statement — the former `sqlite-vec`
+`vec0` table charged a per-row shadow probe on every scan, #36/#38). `meta` records `(embed_model_id,
+embed_dim)` — the only place a model swap is detectable. A swap drops both tables and re-embeds on
 `reindex`; `search` **fails fast** on a mismatch rather than returning silently-wrong results. `open`
 never mutates the vector space (so changing the configured model can't wipe vectors on the next
-command).
+command). Centroids are derived data with the vectors' own lifecycle: the embed pass refreshes a
+note's centroid after filling its vectors; a re-chunk drops it (`db::replace_chunks`) — no separate
+invalidation exists or is needed.
 
 ## Conventions
 
@@ -222,6 +231,6 @@ command).
 - Signatures: accept `&str` not `&String`, `&[T]` not `&Vec<T>`. Return owned types and let callers borrow.
 - Prefer iterator chains over manual index loops (`for x in &items`, not `for i in 0..items.len()`).
 - Do NOT introduce `async`/`tokio`, generics, traits, or macros until there's a concrete need. No speculative abstraction.
-- `unsafe` requires an explicit `// SAFETY:` comment stating the invariant that makes it sound (see `db.rs`'s `sqlite-vec` registration and `model.rs`'s weights mmap); otherwise disallowed.
+- `unsafe` requires an explicit `// SAFETY:` comment stating the invariant that makes it sound (see `model.rs`'s weights mmap); otherwise disallowed.
 - Derive `Debug` on public data types (and `Clone`/`PartialEq` where it makes sense).
 - Keep modules small and domain-named; document public items with `///` comments stating intent, not mechanics.

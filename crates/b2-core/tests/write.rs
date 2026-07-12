@@ -116,7 +116,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed(tmp.path());
     let conn = index_conn(&root);
-    assert_eq!(count(&conn, "chunks_vec"), count(&conn, "chunks"));
+    assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
     // The golden SRS note links memory twice (references + elaborates). Save a body
     // that keeps ONE link and adds fresh text.
@@ -145,12 +145,12 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     assert!(missing.iter().all(|(_, path, _, _)| path == SRS_PATH));
     let embed = vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
     assert_eq!(embed.embedded, 1, "the embed pass fills the saved note");
-    assert_eq!(count(&conn, "chunks_vec"), count(&conn, "chunks"));
+    assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 }
 
 #[test]
 fn write_needs_no_embedding_space() {
-    // A projected-only vault (no chunks_vec, no model anywhere): saving works — the
+    // A projected-only vault (no vector tables, no model anywhere): saving works — the
     // model-free proof (§7 invariant 4).
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");

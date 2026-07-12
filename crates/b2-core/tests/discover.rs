@@ -148,6 +148,88 @@ fn a_directly_connected_pair_yields_no_candidates() {
         .is_empty());
 }
 
+/// Two-stage discovery (coarse centroid shortlist → exact rescore, #38) must equal
+/// the **exhaustive** whole-space max-sim whenever the shortlist covers the
+/// candidate set — which it always does at test scale (the shortlist floor is 200
+/// notes). Ground truth is recomputed here straight from the stored vectors,
+/// independent of `discover`'s code path: same max-sim, same tie rules, over every
+/// chunk in the vault. With the fake embedder the *ordering* is arbitrary (random
+/// vectors), which is exactly why full equality — notes, scores, evidence chunks —
+/// is a strong plumbing check.
+#[test]
+fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
+    use b2_core::embed::{l2_sq, unpack_f32};
+    use std::collections::HashMap;
+
+    const NOTES: usize = 40;
+    const PARAS: usize = 4;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let mut ids = Vec::new();
+    for n in 0..NOTES {
+        let b2id = format!("01JN{n:022}");
+        let body = (0..PARAS)
+            .map(|p| format!("note {n} para {p}: topic {}", (n * 31 + p * 7) % 97))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        write_note(&vault, &format!("n{n}.md"), &b2id, &body);
+        ids.push(b2id);
+    }
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+
+    let anchor = &ids[0];
+    let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(&conn, anchor)
+        .unwrap()
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
+
+    // Exhaustive ground truth: every stored vector, min over the anchor's vectors,
+    // best chunk per note (strictly-less keeps the first-seen chunk, as discover does).
+    let chunk_note = db::chunk_note_map(&conn).unwrap();
+    let mut best: HashMap<String, (f32, i64)> = HashMap::new();
+    db::for_each_stored_vector(&conn, |chunk_id, blob| {
+        let note = &chunk_note[&chunk_id];
+        if note == anchor {
+            return; // no links in this vault → the anchor is the whole exclusion set
+        }
+        let v = unpack_f32(blob);
+        for a in &anchor_vecs {
+            let d = l2_sq(a, &v);
+            let cur = best.entry(note.clone()).or_insert((f32::INFINITY, 0));
+            if d < cur.0 {
+                *cur = (d, chunk_id);
+            }
+        }
+    })
+    .unwrap();
+    let mut expected: Vec<CandidateNote> = best
+        .into_iter()
+        .map(|(note_b2id, (d, evidence_chunk_id))| CandidateNote {
+            note_b2id,
+            score: -(d.sqrt() as f64),
+            evidence_chunk_id,
+        })
+        .collect();
+    expected.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap()
+            .then(a.note_b2id.cmp(&b.note_b2id))
+    });
+
+    let got = discover::candidates(&conn, anchor, NOTES).unwrap();
+    assert_eq!(got.len(), NOTES - 1, "every other note is a candidate");
+    assert_eq!(
+        got, expected,
+        "two-stage discovery must reproduce the exhaustive scan exactly \
+         (notes, scores, and evidence chunks)"
+    );
+}
+
 #[test]
 fn unknown_or_chunkless_anchor_and_zero_limit_yield_no_candidates() {
     let tmp = tempfile::TempDir::new().unwrap();

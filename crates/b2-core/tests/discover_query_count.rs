@@ -1,10 +1,10 @@
-//! Regression: `discover::candidates` must resolve chunk→note in **one bulk query**,
-//! not a per-hit `note_for_chunk` round-trip. The full-space scan visits every vault
-//! chunk for *each* anchor chunk, so a per-hit lookup was O(anchor_chunks × vault_chunks)
-//! — on a real ~38k-chunk vault a 12-chunk anchor fired ~463k of these, turning
-//! `b2 similar` (the desktop's note-open discovery) into a ~130s stall and a 277 MB
-//! `B2_LOG` file. This locks the fix: per-hit note resolution must not scale with the
-//! product.
+//! Regression: `discover::candidates` must not issue O(chunks) SQL — neither a
+//! per-hit `note_for_chunk` round-trip (#37's N+1: ~463k statements, a ~130s
+//! `b2 similar` on a real vault) nor a whole-space chunk-vector scan per open
+//! (#38: exact brute force over every stored vector — ~38.6k rows read, and under
+//! the old vec0 store ~38.6k shadow-probe log lines — per note-open). This locks the
+//! two-stage shape: **one** O(notes) centroid scan, then one bounded per-note vector
+//! fetch per shortlisted note.
 //!
 //! Sole test in its binary on purpose: it installs a scoped tracing subscriber to read
 //! SQLite's per-statement profiler back, and tracing's global callsite-interest cache
@@ -44,14 +44,21 @@ impl<'a> MakeWriter<'a> for Capture {
 
 /// The exact template `db::note_for_chunk` emits — a per-hit chunk→note resolution.
 const PER_HIT_SQL: &str = "SELECT note_b2id FROM chunks WHERE id = ?1";
-/// The whole-space scan `db::for_each_stored_vector` emits — must run **once** for the
-/// whole call, not once per anchor chunk (the old per-anchor KNN scan storm).
-const SPACE_SCAN_SQL: &str = "SELECT chunk_id, embedding FROM chunks_vec";
+/// The stage-1 coarse scan `db::for_each_note_centroid` emits — must run **once**
+/// per call: it is the only whole-space read discovery is allowed.
+const CENTROID_SCAN_SQL: &str = "SELECT note_b2id, centroid FROM note_centroids";
+/// The whole-space chunk-vector scan (`db::for_each_stored_vector`) — search's
+/// primitive, which discovery must **never** run: reading every stored vector per
+/// note-open is exactly the O(vault) cost #38 removed.
+const SPACE_SCAN_SQL: &str = "SELECT chunk_id, vector FROM embeddings";
+/// The per-note vector fetch (`db::note_chunk_vectors`) — stage 2's unit, allowed
+/// once for the anchor plus once per *shortlisted note*, never per chunk.
+const PER_NOTE_SQL: &str = "SELECT c.id, e.vector FROM chunks c JOIN embeddings e";
 
 #[test]
-fn candidates_resolves_notes_without_a_per_hit_query() {
-    // A multi-chunk anchor plus several multi-chunk notes: a per-hit resolution would
-    // fire anchor_chunks × total_chunks times (a scaled-down mirror of the real vault).
+fn candidates_issues_bounded_sql_never_o_chunks() {
+    // Multi-chunk notes so any per-chunk statement pattern would visibly exceed the
+    // note count (a scaled-down mirror of the real vault).
     const NOTES: usize = 12;
     const PARAS: usize = 5; // blank-line-separated paragraphs → ~1 chunk each
 
@@ -86,13 +93,13 @@ fn candidates_resolves_notes_without_a_per_hit_query() {
         )
         .unwrap();
     assert!(
-        anchor_chunks > 1 && total_chunks > anchor_chunks,
-        "the N+1 only shows with a multi-chunk anchor over a larger vault \
+        anchor_chunks > 1 && total_chunks > NOTES as i64,
+        "O(chunks) patterns only show with multi-chunk notes \
          (anchor={anchor_chunks}, total={total_chunks})"
     );
 
     // Run candidates under a DEBUG JSON subscriber so SQLite's per-statement profiler
-    // (target b2::sqlite) is captured; count the per-hit resolution template.
+    // (target b2::sqlite) is captured; count the statement templates.
     let capture = Capture::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -108,22 +115,34 @@ fn candidates_resolves_notes_without_a_per_hit_query() {
 
     let text = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
 
-    // (1) chunk→note resolution is one bulk load, not a per-hit query.
+    // (1) chunk→note resolution never happens per hit (stage 2 works note-by-note,
+    // so it needs no resolution at all).
     let per_hit = text.matches(PER_HIT_SQL).count();
-    let n_plus_1 = (anchor_chunks * total_chunks) as usize;
-    assert!(
-        per_hit <= 1,
-        "chunk→note resolution must be one bulk query, not per hit: saw {per_hit} \
-         `note_for_chunk` statements (an N+1 would be anchor×vault = \
-         {anchor_chunks}×{total_chunks} = {n_plus_1})"
+    assert_eq!(
+        per_hit, 0,
+        "discovery must not resolve chunk→note per hit (saw {per_hit})"
     );
 
-    // (2) the vector space is scanned exactly once, not once per anchor chunk — the
-    // old per-anchor KNN scan reread the whole ~100k-vector space `anchor_chunks` times.
+    // (2) exactly one whole-space read, and it is the O(notes) centroid scan.
+    let centroid_scans = text.matches(CENTROID_SCAN_SQL).count();
+    assert_eq!(
+        centroid_scans, 1,
+        "the coarse centroid scan must run exactly once per call"
+    );
+
+    // (3) the O(chunks) whole-space vector scan never runs on the note-open path.
     let space_scans = text.matches(SPACE_SCAN_SQL).count();
     assert_eq!(
-        space_scans, 1,
-        "the whole-space scan must run once for the call, not once per anchor chunk \
-         (anchor_chunks = {anchor_chunks})"
+        space_scans, 0,
+        "discovery must not scan every stored chunk vector (#38): saw {space_scans}"
+    );
+
+    // (4) per-note vector fetches are bounded by the shortlist (≤ one per note in
+    // this small vault: the anchor + every candidate), never by the chunk count.
+    let per_note = text.matches(PER_NOTE_SQL).count();
+    assert!(
+        (1..=NOTES).contains(&per_note),
+        "stage-2 fetches must be one per shortlisted note (≤ {NOTES}), got {per_note} \
+         (an O(chunks) pattern would approach {total_chunks})"
     );
 }

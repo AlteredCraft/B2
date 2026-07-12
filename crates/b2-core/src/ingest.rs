@@ -111,8 +111,8 @@ pub struct ReindexProgress {
 /// `consult_vectors` selects the re-chunk predicate. The full-vault projection pass
 /// passes `false`: it reads only `notes` (`force || body changed || note is new`),
 /// because "unchanged body but missing vectors" is [`embed_vault`]'s job, not a
-/// reason to re-chunk — and this is what keeps [`project_vault`] free of
-/// `chunks_vec` (projection-embedding-split.md §4). [`ingest_file`] passes `true`
+/// reason to re-chunk — and this is what keeps [`project_vault`] free of the
+/// vector tables (projection-embedding-split.md §4). [`ingest_file`] passes `true`
 /// (it embeds inline and has ensured the space exists), so a note left mid-embed is
 /// also healed by [`would_reembed`]'s vector-state check, exactly as before.
 fn project_note_and_chunks(
@@ -181,7 +181,7 @@ fn project_note_and_chunks(
 
     // Incremental fast path: an unchanged body means identical chunks — reuse them
     // and return no pending work (`rechunk = false`). `force` bypasses this; on the
-    // inline path so does a model swap, which emptied `chunks_vec`
+    // inline path so does a model swap, which emptied the vector tables
     // (note_fully_embedded then returns false).
     let pending = if rechunk {
         // Chunk → project rows; hand the (id, text) pairs back for a batched embed
@@ -203,13 +203,13 @@ fn project_note_and_chunks(
 /// incremental "unchanged" fast path: true when `force`, when the vault has no
 /// embedding space yet (`space_exists = false` → a pristine/never-embedded index),
 /// when the stored body hash differs (content changed), or when the note is not
-/// fully embedded (a fresh note, or a model swap emptied `chunks_vec`). Shared by
-/// the inline single-note ingest ([`ingest_file`]) and the [`plan_reindex`] dry-run.
+/// fully embedded (a fresh note, or a model swap emptied the vector tables). Shared
+/// by the inline single-note ingest ([`ingest_file`]) and the [`plan_reindex`] dry-run.
 /// [`project_vault`] deliberately does **not** use it (projection never reads vector
 /// state); the dry-run's `would_embed` still predicts the composed project+embed run
 /// correctly, since a body-changed *or* vector-missing note both end up embedded.
-/// `space_exists` lets a pristine vault short-circuit without querying a
-/// `chunks_vec` that does not exist yet (which would error).
+/// `space_exists` lets a pristine vault short-circuit without querying an
+/// `embeddings` table that does not exist yet (which would error).
 fn would_reembed(
     conn: &Connection,
     b2id: &str,
@@ -237,7 +237,7 @@ struct NoteEmbedOutcome {
     completed: bool,
 }
 
-/// Embed a note's pending `(chunk_id, text)` pairs into `chunks_vec`, in batches of
+/// Embed a note's pending `(chunk_id, text)` pairs into `embeddings`, in batches of
 /// [`EMBED_BATCH`] via [`Embedder::embed_batch`], calling `on_batch` with each
 /// batch's size (so a full reindex can report cumulative progress **and** cooperatively
 /// cancel). Chunk vectors are independent, so batch boundaries never change the result.
@@ -245,14 +245,25 @@ struct NoteEmbedOutcome {
 /// The cancel check runs **after** a batch is fully written, so a cancel never tears a
 /// batch (async-indexing.md §5.6) — it only stops *further* batches. Returns whether a
 /// cancel was seen and whether the note finished embedding (see [`NoteEmbedOutcome`]).
+///
+/// A note that finishes has its **centroid** refreshed from its now-complete stored
+/// vectors (`note_centroids` — discovery's coarse stage, #38): the centroid is
+/// derived data with the same lifecycle as the vectors themselves, so maintaining it
+/// here — the one place vectors are written — means no other pass ever reconciles
+/// it. A note cut off mid-embed skips the refresh; its resume completes the vectors
+/// and refreshes then. Running this even when `pending` is empty is deliberate: it
+/// costs one indexed read and re-derives (or heals a missing) centroid for an
+/// already-embedded note.
 fn embed_pending(
     conn: &Connection,
     embedder: &dyn Embedder,
+    note_b2id: &str,
     pending: &[(i64, String)],
     mut on_batch: impl FnMut(usize) -> ControlFlow<()>,
 ) -> Result<NoteEmbedOutcome> {
     let total = pending.len();
     let mut done = 0usize;
+    let mut cancelled = false;
     for batch in pending.chunks(EMBED_BATCH) {
         let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
         let vectors = embedder.embed_batch(&texts)?;
@@ -261,15 +272,17 @@ fn embed_pending(
         }
         done += batch.len();
         if on_batch(batch.len()).is_break() {
-            return Ok(NoteEmbedOutcome {
-                cancelled: true,
-                completed: done == total,
-            });
+            cancelled = true;
+            break;
         }
     }
+    let completed = done == total;
+    if completed {
+        db::refresh_note_centroid(conn, note_b2id)?;
+    }
     Ok(NoteEmbedOutcome {
-        cancelled: false,
-        completed: true,
+        cancelled,
+        completed,
     })
 }
 
@@ -359,7 +372,9 @@ pub fn ingest_file(
         project_note_and_chunks(conn, vault_root, rel_path, idgen, false, true)?;
     let embedded = !pending.is_empty();
     // A single-note re-projection is never cancelled — always run to completion.
-    embed_pending(conn, embedder, &pending, |_| ControlFlow::Continue(()))?;
+    embed_pending(conn, embedder, &b2id, &pending, |_| {
+        ControlFlow::Continue(())
+    })?;
     project_edges(conn, &b2id, &body, &relations)?;
     Ok(Ingested {
         b2id,
@@ -485,8 +500,8 @@ pub struct EmbedOutcome {
 /// The **projection pass** (projection-embedding-split.md §4): project every `.md`
 /// file under `vault_root` — Phase 1 (note + chunks + FTS, stamping missing
 /// `b2id`s) then Phase 2 (the typed edges) — with **no embedder and no embedding
-/// space**: it never touches `chunks_vec`, so it needs neither the model nor its
-/// `dim`, and a projected-but-unembedded index is already complete for keyword
+/// space**: it never creates the vector tables, so it needs neither the model nor
+/// its `dim`, and a projected-but-unembedded index is already complete for keyword
 /// search and the graph. Incremental: unless `force`, a note is re-chunked only
 /// when its body changed or it is new — read purely from `notes`, never from vector
 /// state (missing vectors are [`embed_vault`]'s job). Re-chunking a previously
@@ -551,9 +566,10 @@ pub fn project_vault(
 }
 
 /// The **embed pass** (projection-embedding-split.md §4): fill a vector for every
-/// chunk that lacks one. Ensures the embedding space first (creates `chunks_vec` at
-/// the embedder's `dim`; a model swap drops + resets it, so *all* chunks then count
-/// as missing), then works the DB-derived pending set ([`db::chunks_missing_vectors`])
+/// chunk that lacks one. Ensures the embedding space first (creates the
+/// `embeddings` + `note_centroids` tables; a model swap drops + resets them, so
+/// *all* chunks then count as missing), then works the DB-derived pending set
+/// ([`db::chunks_missing_vectors`])
 /// note by note through the batched [`embed_pending`] loop — firing `on_progress`
 /// per batch and honoring its [`ControlFlow::Break`] as the cooperative cancel
 /// checkpoint (async-indexing.md §3). Takes **no `force`**: re-chunking (which
@@ -601,7 +617,7 @@ pub fn embed_vault(
         .entered();
         let notes_embedded = i + 1; // 1-based position for the progress line
         let note_chunks = pending.len();
-        let outcome = embed_pending(conn, embedder, pending, |n| {
+        let outcome = embed_pending(conn, embedder, b2id, pending, |n| {
             chunks_done += n;
             on_progress(ReindexProgress {
                 note_path: path.clone(),

@@ -1,7 +1,8 @@
-//! Step 3 — `sqlite-vec` + the embedder seam
+//! Step 3 — the vector store + the embedder seam
 //! (planning/specs/completed/index-engine-build.md step 3): a deterministic fake embedder
 //! produces reproducible KNN; `embed_model_id`/`embed_dim` are recorded; a
-//! model/dim swap recreates the vector space.
+//! model/dim swap recreates the vector space; note centroids (discovery's coarse
+//! stage, #38) track the stored chunk vectors.
 
 mod common;
 
@@ -90,7 +91,7 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     // Batched embed still populates a vector for every chunk.
     let total = count(&conn, "chunks");
     assert!(total > 0);
-    assert_eq!(count(&conn, "chunks_vec"), total);
+    assert_eq!(count(&conn, "embeddings"), total);
 
     // Progress: reported, per-note fields populated, notes_embedded within the
     // stable denominator and monotonic, chunks_done non-decreasing and ending
@@ -148,19 +149,81 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
 }
 
 #[test]
-fn ingest_populates_chunks_vec_and_records_meta() {
+fn ingest_populates_embeddings_and_records_meta() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     // one vector per chunk
     assert!(count(&conn, "chunks") > 0);
-    assert_eq!(count(&conn, "chunks"), count(&conn, "chunks_vec"));
+    assert_eq!(count(&conn, "chunks"), count(&conn, "embeddings"));
 
     assert_eq!(
         meta(&conn, "embed_model_id").as_deref(),
         Some("fake-deterministic-v1")
     );
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
+}
+
+/// `note_centroids` is derived data with the vectors' own lifecycle: after any embed
+/// pass, every note with stored vectors carries a centroid, and it equals
+/// `centroid_of` over exactly those vectors — including after a body edit re-chunks
+/// and re-embeds the note (the stale centroid must not survive).
+#[test]
+fn centroids_track_the_stored_chunk_vectors() {
+    use b2_core::embed::{centroid_of, pack_f32};
+    use b2_core::vault::Vault;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+
+    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let assert_centroids_current = |conn: &Connection| {
+        let notes_with_vectors: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT c.note_b2id) FROM chunks c
+                 JOIN embeddings e ON e.chunk_id = c.id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count(conn, "note_centroids"),
+            notes_with_vectors,
+            "one centroid per embedded note"
+        );
+        let mut stmt = conn
+            .prepare("SELECT note_b2id, centroid FROM note_centroids")
+            .unwrap();
+        let rows: Vec<(String, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for (note, stored) in rows {
+            let vectors: Vec<Vec<f32>> = db::note_chunk_vectors(conn, &note)
+                .unwrap()
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect();
+            let expected = centroid_of(&vectors).expect("an embedded note has vectors");
+            assert_eq!(
+                stored,
+                pack_f32(&expected),
+                "centroid of {note} summarizes its current vectors"
+            );
+        }
+    };
+    assert_centroids_current(&conn);
+
+    // Edit one note's body → re-project + re-embed → its centroid must follow.
+    let srs = root.join("notes/spaced-repetition.md");
+    let text = std::fs::read_to_string(&srs).unwrap();
+    std::fs::write(&srs, format!("{text}\n\nFreshly appended centroid bait.")).unwrap();
+    vault.reindex().unwrap();
+    assert_centroids_current(&conn);
 }
 
 #[test]
@@ -198,7 +261,7 @@ fn reindex_yields_identical_vectors() {
 
     let vec_for_srs_seq0 = |c: &Connection| -> Vec<u8> {
         c.query_row(
-            "SELECT v.embedding FROM chunks_vec v
+            "SELECT v.vector FROM embeddings v
              JOIN chunks c ON c.id = v.chunk_id
              WHERE c.note_b2id = ?1 AND c.seq = 0",
             [SRS_ID],
@@ -219,15 +282,21 @@ fn reindex_yields_identical_vectors() {
 fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
-    assert!(count(&conn, "chunks_vec") > 0);
+    assert!(count(&conn, "embeddings") > 0);
 
     // A model/dim swap: the only place it can be detected is meta. Vectors are
-    // dropped (a full re-embed is required) and the dim is updated.
+    // dropped (a full re-embed is required) and the dim is updated. Centroids share
+    // the vectors' lifecycle, so the swap empties them too.
     db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128).unwrap();
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
     assert_eq!(
-        count(&conn, "chunks_vec"),
+        count(&conn, "embeddings"),
         0,
         "swap drops vectors; re-embed needed"
+    );
+    assert_eq!(
+        count(&conn, "note_centroids"),
+        0,
+        "swap drops centroids with the vectors they summarize"
     );
 }

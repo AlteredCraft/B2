@@ -53,7 +53,7 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
     );
 
     // …only VECTORS are partial: a prefix of chunks embedded, the rest pending.
-    let vecs_after_cancel = count(&conn, "chunks_vec");
+    let vecs_after_cancel = count(&conn, "embeddings");
     assert!(
         vecs_after_cancel > 0 && vecs_after_cancel < chunks,
         "a prefix embedded, the remainder pending: {vecs_after_cancel}/{chunks}"
@@ -68,7 +68,7 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
         .unwrap();
     assert!(!resumed.cancelled);
     assert_eq!(
-        count(&conn, "chunks_vec"),
+        count(&conn, "embeddings"),
         chunks,
         "resume fills the remaining vectors — the index is now fully embedded"
     );

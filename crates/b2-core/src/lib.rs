@@ -2,8 +2,9 @@
 //!
 //! Built step 0→5 per `planning/specs/completed/index-engine-build.md`; the schema is a
 //! derived projection of `planning/data-model.md` and must satisfy it, never the
-//! reverse. Step 0 is the substrate: open the DB with the locked pragmas and prove
-//! FTS5 (BM25) and `sqlite-vec` (KNN) coexist in one statically-linked connection.
+//! reverse. Step 0 is the substrate: open the DB with the locked pragmas over the
+//! bundled, statically-linked SQLite (FTS5 compiled in; vectors are plain BLOB
+//! tables scored in-process since schema v3, #38 — no extension needed).
 
 pub mod add;
 pub mod chunk;

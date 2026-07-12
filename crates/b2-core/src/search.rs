@@ -1,8 +1,9 @@
 //! Hybrid retrieval (planning/index-engine.md §1, §5; build spec Flow ②).
 //!
-//! BM25 (over `chunks_fts`) and brute-force vector KNN (over `chunks_vec`) are
-//! retrieved in parallel and fused with **Reciprocal Rank Fusion** (`Σ 1/(k+rank+1)`,
-//! k=60), borrowed wholesale from qmd. Results resolve up from chunks to notes.
+//! BM25 (over `chunks_fts`) and brute-force vector KNN (an in-process scan over the
+//! stored `embeddings`) are retrieved in parallel and fused with **Reciprocal Rank
+//! Fusion** (`Σ 1/(k+rank+1)`, k=60), borrowed wholesale from qmd. Results resolve
+//! up from chunks to notes.
 //!
 //! The graph-filtered variant is B2's reason to exist: "nearest chunks whose note
 //! is within k typed hops of note X" — the vector⨝graph join (index-engine.md §3)
@@ -93,7 +94,7 @@ fn pool_size(limit: usize) -> usize {
 
 /// Keyword-only search: BM25 over `chunks_fts` → top `limit`, resolved to notes —
 /// the fallback that makes a **projected-but-unembedded** vault searchable
-/// (projection-embedding-split.md §5): no query embedding, no model, no `chunks_vec`.
+/// (projection-embedding-split.md §5): no query embedding, no model, no vectors.
 /// Scores are the RRF of the single BM25 list, so they live on the same scale (and
 /// sort the same way) as [`hybrid_search`]'s fused scores.
 pub fn keyword_only_search(
@@ -160,9 +161,11 @@ pub fn hybrid_search(
 ///
 /// Reachability is undirected over `active` edges (a note related to the anchor
 /// either way is a candidate). Filtering is done by scanning the full ranked space
-/// and keeping reachable notes — exact at vault scale (a full brute-force scan); the
-/// precise scale lever is a partition column on `note_b2id` for filtered KNN (build
-/// spec §1.2 / §4).
+/// and keeping reachable notes — exact at vault scale (a full brute-force scan).
+/// Chunk→note resolution is one bulk map load, not a per-ranked-row query: the walk
+/// visits ranked chunks until `limit` reachable ones are found, which in the worst
+/// case (a small neighborhood ranked deep) is the whole vault — the same N+1 shape
+/// that once stalled `b2 similar` (#37).
 pub fn graph_filtered_search(
     conn: &rusqlite::Connection,
     embedder: &dyn Embedder,
@@ -172,16 +175,17 @@ pub fn graph_filtered_search(
     limit: usize,
 ) -> Result<Vec<Hit>> {
     let reachable = graph::reachable_within(conn, anchor, hops)?;
+    let chunk_note = db::chunk_note_map(conn)?;
 
     let mut hits = Vec::new();
     for (chunk_id, distance) in db::vector_search_all(conn, &embedder.embed_query(query)?)? {
-        let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? else {
+        let Some(note_b2id) = chunk_note.get(&chunk_id) else {
             continue;
         };
-        if reachable.contains(&note_b2id) {
+        if reachable.contains(note_b2id) {
             hits.push(Hit {
                 chunk_id,
-                note_b2id,
+                note_b2id: note_b2id.clone(),
                 score: -(distance as f64), // closer = higher
             });
             if hits.len() == limit {

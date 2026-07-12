@@ -214,6 +214,16 @@ Reality check on `sqlite-vec` so we don't over-promise:
 So: **semantic search ships in v1**, brute-force KNN, 768-dim float vectors, with quantization in our
 back pocket. This is the headline consequence of choosing SQLite.
 
+**Update (2026-07-12, [#38](https://github.com/AlteredCraft/B2/issues/38)).** The brute-force *math*
+scaled as predicted; `sqlite-vec`'s **read path** did not — every `vec0` scan probes a shadow table
+per row (~38.6k internal statements per `b2 similar` on the primary vault, ~4.4 s per note-open).
+Since its only shipped search was brute force we already compute, the dependency was **removed**:
+vectors now live in plain tables (`embeddings`, plus per-note `note_centroids`) scored in-process,
+and discovery is two-stage (O(notes) centroid shortlist → exact max-sim rescore). Same SQLite store,
+same single-store property, same exact results at test scale. Full analysis + options:
+[research/discovery-scan-strategy.md](research/discovery-scan-strategy.md). Quantization and ANN keep
+their standby order, now behind the centroid stage.
+
 ## 5. The reranker as a fast follow
 
 Slot it exactly where qmd puts it: **after RRF fusion, before final ranking**, behind a swappable seam.

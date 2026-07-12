@@ -2,19 +2,18 @@
 //!
 //! Green-scenario assertions for build-plan step 0
 //! (planning/specs/completed/index-engine-build.md §4):
-//!   - `sqlite-vec` statically links; FTS5 is compiled in (the `bundled` SQLite).
-//!   - open→reopen is stable; `WAL` + `foreign_keys=ON` hold; `schema_version` seeded.
-//!
-//! This is the riskiest integration in the whole design (index-engine.md §3): if
-//! FTS5 (BM25) and `sqlite-vec` (KNN) can't live in one connection, the
-//! single-store premise is wrong. So it is the first thing we prove.
+//!   - FTS5 is compiled in (the `bundled` SQLite). *(Vectors need no substrate proof
+//!     since schema v3, #38: they are plain BLOB tables scored in-process — the
+//!     `sqlite-vec` half of the original bet was retired with the dependency.)*
+//!   - open→reopen is stable; `WAL` + `foreign_keys=ON` hold; the #38 scan pragmas
+//!     (`mmap_size`/`cache_size`) are applied; `schema_version` seeded.
 
 use b2_core::{open, SCHEMA_VERSION};
 
-/// The load-bearing bet: BM25 full-text search AND brute-force vector KNN, in the
-/// *same* statically-linked connection, no runtime `load_extension`.
+/// The load-bearing bet: BM25 full-text search in the statically-linked bundled
+/// SQLite, no runtime `load_extension`.
 #[test]
-fn fts5_and_sqlite_vec_coexist_in_one_connection() {
+fn fts5_works_in_the_bundled_connection() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
@@ -33,22 +32,6 @@ fn fts5_and_sqlite_vec_coexist_in_one_connection() {
         )
         .unwrap();
     assert_eq!(hit, 1, "BM25 should rank the memory note first");
-
-    // sqlite-vec present, brute-force KNN over a vec0 virtual table works.
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE v USING vec0(embedding FLOAT[3]);
-         INSERT INTO v(rowid, embedding) VALUES (1, '[0.10, 0.20, 0.30]');
-         INSERT INTO v(rowid, embedding) VALUES (2, '[0.90, 0.80, 0.70]');",
-    )
-    .unwrap();
-    let nearest: i64 = conn
-        .query_row(
-            "SELECT rowid FROM v WHERE embedding MATCH '[0.11, 0.19, 0.31]' ORDER BY distance LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(nearest, 1, "KNN should return the nearest vector");
 }
 
 /// The locked pragmas and the `meta` bookkeeping survive a close/reopen, and the
@@ -68,6 +51,16 @@ fn pragmas_and_schema_version_persist_across_reopen() {
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .unwrap();
         assert_eq!(foreign_keys, 1, "foreign_keys must be ON");
+        // The #38 read-path pragmas: whole-space vector scans must stream through
+        // the OS page cache (mmap), not a pread-per-page under the 2 MB default.
+        let mmap_size: i64 = conn
+            .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+            .unwrap();
+        assert!(mmap_size > 0, "mmap_size must be engaged, got {mmap_size}");
+        let cache_size: i64 = conn
+            .query_row("PRAGMA cache_size", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cache_size, -32768, "cache_size must be raised (KiB units)");
     } // connection dropped → file closed
 
     // Reopen: schema_version is stable and not duplicated.

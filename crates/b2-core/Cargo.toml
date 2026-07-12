@@ -12,7 +12,6 @@ blake3 = "1.8.5"
 rusqlite = { version = "0.40.1", features = ["bundled", "trace"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-sqlite-vec = "0.1.9"
 thiserror = "2.0.18"
 # Structured debug logging (facade only — emitting events costs nothing until an
 # adapter installs a subscriber; the CLI's is opt-in via B2_LOG/B2_DEBUG).

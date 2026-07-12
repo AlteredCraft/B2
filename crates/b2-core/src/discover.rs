@@ -10,30 +10,51 @@
 //! a scoped-traversal primitive, the wrong tool here.) Generation is deliberately
 //! **permissive**: it over-produces, and the human decides which are worth a link.
 //!
-//! Mechanics (tasks.md ①): score every stored chunk by its similarity to the anchor's
-//! **nearest** stored chunk vector, keep each note's **best** such chunk (max-sim), and
-//! subtract the anchor and its **direct (1-hop)** neighbors. This is one whole-space
-//! pass over `chunks_vec` (`db::for_each_stored_vector`), computing squared-L2 in
-//! process — *not* one SQL KNN scan per anchor chunk, which reread and re-sorted the
-//! entire vector space once per anchor chunk (O(anchor × vault), the old `b2 similar`
-//! stall). It is vector-only and **re-embeds nothing** — discovery is passage↔passage,
-//! so the anchor is represented by the vectors already in `chunks_vec`, never by an
-//! `embed_query` of its text (bge's asymmetric query prefix is the wrong side).
-//! Graph distance beyond the 1-hop exclusion is **not** a ranking signal — graph-
-//! distant "bridge" candidates ride along unboosted; weighting distance (closure vs.
-//! serendipity) is a deferred, eval-gated experiment (tasks.md backlog).
+//! Mechanics are **two-stage** (#38; planning/research/discovery-scan-strategy.md):
+//!
+//! 1. **Coarse, O(notes):** rank every note by the distance of its stored *centroid*
+//!    (`note_centroids`, maintained by the embed pass) to the anchor's centroid,
+//!    minus the anchor and its direct (1-hop) neighbors, and keep a shortlist many
+//!    times larger than `limit`.
+//! 2. **Exact, O(shortlist):** for each shortlisted note, load its chunk vectors and
+//!    score the exact max-sim — the best pair across the anchor's chunks × that
+//!    note's chunks — keeping the chunk that achieved it as evidence.
+//!
+//! Only the shortlist changes with stage 1; stage 2's scoring is the same exact
+//! max-sim the previous whole-space scan computed, so a shortlist that covers the
+//! vault (any small/test vault) reproduces it exactly. What the shape buys: the
+//! per-open heavy pass reads N_notes centroid rows instead of N_chunks vector rows —
+//! effectively flat as the vault grows (the previous exact scan was ~4.4 s at ~38.6k
+//! chunks, #38). Discovery is vector-only and **re-embeds nothing** — the anchor is
+//! represented by the vectors already stored, never by an `embed_query` of its text
+//! (bge's asymmetric query prefix is the wrong side). Graph distance beyond the
+//! 1-hop exclusion is **not** a ranking signal — graph-distant "bridge" candidates
+//! ride along unboosted; weighting distance (closure vs. serendipity) is a deferred,
+//! eval-gated experiment (tasks.md backlog).
 
 use crate::db;
-use crate::embed::{l2_sq, unpack_f32};
+use crate::embed::{centroid_of, l2_sq, unpack_f32_into};
 use crate::error::Result;
 use crate::graph;
 use rusqlite::Connection;
-use std::collections::HashMap;
 
 /// The exclusion radius: a candidate must not already be *directly* linked to the
 /// anchor. Fixed at 1 by decision (tasks.md ①) so triadic-closure candidates — a note
 /// two hops away, transitively related but with no direct edge — stay in the pool.
 const EXCLUDE_HOPS: usize = 1;
+
+/// Floor on the stage-1 shortlist. Generous relative to any `limit` a human-facing
+/// surface asks for: discovery is recall-oriented (the human is the precision gate),
+/// so the coarse stage must never be the reason a nearby note goes missing. On any
+/// vault at or below this many candidate notes the two-stage result is *exactly*
+/// the old whole-space scan's.
+const SHORTLIST_MIN: usize = 200;
+
+/// Stage-1 shortlist size per requested result: `limit × this`, floored at
+/// [`SHORTLIST_MIN`]. A wide margin over `limit` because a note's centroid can rank
+/// a few places below where its single best chunk deserves (the centroid smooths
+/// over the note's chunks); the exact stage re-ranks whatever survives.
+const SHORTLIST_PER_RESULT: usize = 20;
 
 /// One discovery candidate: a note near the anchor and not already connected, ranked
 /// by `score`. Owned, so the façade can resolve it to a [`SimilarView`](crate::vault::SimilarView)
@@ -43,8 +64,7 @@ pub struct CandidateNote {
     /// The candidate note's `b2id`.
     pub note_b2id: String,
     /// Best chunk-pair similarity across the anchor's chunks × this note's chunks —
-    /// higher is nearer (negated `sqlite-vec` distance, matching
-    /// [`Hit`](crate::search::Hit)).
+    /// higher is nearer (negated L2 distance, matching [`Hit`](crate::search::Hit)).
     pub score: f64,
     /// The candidate's chunk that achieved `score` — the passage that made this note
     /// similar, surfaced by `b2 similar` as the evidence for *why* it appeared.
@@ -55,83 +75,76 @@ pub struct CandidateNote {
 /// first (ties broken by `note_b2id` for determinism).
 ///
 /// Returns empty when the vault has no embedding space yet, when the anchor has no
-/// chunks (unknown or empty note), or when `limit` is 0 — there is nothing to search
-/// from. Excludes the anchor itself and its direct neighbors; everything else near in
-/// vector space is a candidate.
+/// stored vectors (unknown, empty, or not-yet-embedded note), or when `limit` is 0 —
+/// there is nothing to search from. Excludes the anchor itself and its direct
+/// neighbors; everything else near in vector space is a candidate.
 pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<CandidateNote>> {
     if limit == 0 || !db::embedding_space_exists(conn)? {
         return Ok(Vec::new());
     }
-    let anchor_chunks = db::chunks_for_note(conn, anchor)?;
-    if anchor_chunks.is_empty() {
+    // The anchor's own stored vectors, loaded once (re-embeds nothing — tasks.md ①);
+    // none ⇒ nothing to search from. Its centroid is computed in-process from them
+    // rather than read back, so an anchor mid-embed still discovers from what it has.
+    let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(conn, anchor)?
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
+    let Some(anchor_centroid) = centroid_of(&anchor_vecs) else {
         return Ok(Vec::new());
-    }
+    };
 
     // The only use of the graph in generation: subtract what's already linked — the
     // anchor and everything within 1 hop (self + direct neighbors).
     let exclude = graph::reachable_within(conn, anchor, EXCLUDE_HOPS)?;
 
-    // The anchor's own stored vectors (re-embeds nothing — tasks.md ①), unpacked once
-    // so the hot scan below reuses them across every stored chunk. A chunk with no
-    // stored vector (shouldn't occur post-embed) is skipped; none at all ⇒ nothing to
-    // search from.
-    let mut anchor_vecs: Vec<Vec<f32>> = Vec::new();
-    for chunk in anchor_chunks {
-        if let Some(v) = db::chunk_vector(conn, chunk)? {
-            anchor_vecs.push(v);
-        }
-    }
-    if anchor_vecs.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Resolve chunk→note once, up front — the scan visits every vault chunk, so a
-    // per-hit note_for_chunk query would be an O(vault) round-trip storm.
-    let chunk_note = db::chunk_note_map(conn)?;
-
-    // One whole-space pass (not one KNN scan per anchor chunk): score every stored
-    // chunk by its nearest anchor vector and keep, per note, its best chunk — exact
-    // max-sim, the brute force index-engine.md §4 specs as comfortable at vault scale.
-    // `best`: note_b2id → (smallest squared L2 seen, the chunk that achieved it).
-    // Squared L2 is the same ranking key as `vec_distance_l2` without the per-hit
-    // `sqrt` (monotonic); the `sqrt` is applied once per candidate below.
-    let mut best: HashMap<String, (f32, i64)> = HashMap::new();
-    db::for_each_stored_vector(conn, |chunk_id, blob| {
-        let Some(note) = chunk_note.get(&chunk_id) else {
-            return;
-        };
-        if exclude.contains(note.as_str()) {
+    // Stage 1 — coarse shortlist over note centroids: one O(notes) scan, excluded
+    // notes skipped up front so they never occupy a shortlist slot.
+    let mut coarse: Vec<(f32, String)> = Vec::new();
+    let mut scratch: Vec<f32> = Vec::new();
+    db::for_each_note_centroid(conn, |note, blob| {
+        if exclude.contains(note) {
             return; // the anchor or a direct neighbor — already connected
         }
-        // Decode this stored chunk once, then take its nearest anchor vector (min over
-        // the anchor's chunks) — max-sim's inner min.
-        let v = unpack_f32(blob);
-        let Some(dist_sq) = anchor_vecs
-            .iter()
-            .map(|a| l2_sq(a, &v))
-            .min_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
-        else {
-            return;
-        };
-        // Look up before inserting so the note id is cloned only on first sighting
-        // (≤ once per distinct note), not on every one of the vault-many hits.
-        match best.get_mut(note) {
-            Some(cur) if dist_sq < cur.0 => *cur = (dist_sq, chunk_id),
-            Some(_) => {}
-            None => {
-                best.insert(note.clone(), (dist_sq, chunk_id));
+        unpack_f32_into(blob, &mut scratch);
+        coarse.push((l2_sq(&anchor_centroid, &scratch), note.to_string()));
+    })?;
+    coarse.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    coarse.truncate(
+        limit
+            .saturating_mul(SHORTLIST_PER_RESULT)
+            .max(SHORTLIST_MIN),
+    );
+
+    // Stage 2 — exact max-sim over the shortlist only: per note, the best (smallest
+    // squared-L2) pair across the anchor's chunks × its chunks. Squared L2 is the
+    // same ranking key as L2 without the per-comparison `sqrt` (monotonic); the
+    // `sqrt` is applied once per surfaced candidate below. Strictly-less keeps the
+    // earliest (lowest-`seq`) chunk on ties, deterministically. A shortlisted note
+    // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
+    let mut out: Vec<CandidateNote> = Vec::new();
+    for (_, note_b2id) in coarse {
+        let mut best: Option<(f32, i64)> = None;
+        for (chunk_id, v) in db::note_chunk_vectors(conn, &note_b2id)? {
+            for a in &anchor_vecs {
+                let dist_sq = l2_sq(a, &v);
+                if best.is_none_or(|(cur, _)| dist_sq < cur) {
+                    best = Some((dist_sq, chunk_id));
+                }
             }
         }
-    })?;
+        if let Some((dist_sq, evidence_chunk_id)) = best {
+            out.push(CandidateNote {
+                note_b2id,
+                score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
+                evidence_chunk_id,
+            });
+        }
+    }
 
-    let mut out: Vec<CandidateNote> = best
-        .into_iter()
-        .map(|(note_b2id, (dist_sq, evidence_chunk_id))| CandidateNote {
-            note_b2id,
-            score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
-            evidence_chunk_id,
-        })
-        .collect();
     // Best score first; ties broken by id so the ranking (and thus `limit`'s prefix)
     // is deterministic.
     out.sort_by(|a, b| {
