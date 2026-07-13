@@ -27,9 +27,19 @@ slices (§8). Tracked here so state survives across sessions:
       per-class extraction step → [index-engine.md](../index-engine.md) §3; the locked decisions →
       [vision-and-scope.md](../vision-and-scope.md) "Decisions locked (2026-07-08)"; the working-queue
       pointer → [tasks.md](../tasks.md).
+- [x] **Reconcile with [#38](https://github.com/AlteredCraft/B2/issues/38)** (2026-07-12) — the design
+      predates the vector-store rewrite that landed 2026-07-12 (`sqlite-vec` dropped; plain
+      `embeddings` + `note_centroids` tables scored in-process; **two-stage discovery** — centroid
+      shortlist → exact rescore; [discovery-scan-strategy.md](discovery-scan-strategy.md)). Absorbed
+      here: the multimodal seam is a second *plain* vector table set, not a `vec0` table (§5); and
+      **centroids generalize alongside chunks** — discovery's coarse stage scans only centroids, so
+      `b2 similar` over resources requires document-keyed centroids, not just document-keyed chunks
+      (§5). No locked decision changes.
 - [ ] **Stage B — slice-1 build spec** under `specs/` — inventory & graph (§8 slice 1): walk all files
       → `resources` table, classify by extension, parse `![alt](…)` / `[…](…)` / `![[…]]` → resource
-      edges, file tree + fallback card, `b2 explain` / `b2 mv` over resources. **Model-free, no new deps.**
+      edges, file tree + fallback card, `b2 explain` / `b2 mv` over resources. **Model-free; no new
+      engine deps** (the desktop gains the Tauri opener plugin for *Open in system default* — the one
+      new adapter dep).
 - [ ] **Slices 2–4** — render mechanisms · searchable resources · PDF text (§8); spec each when reached.
 - [ ] **Slice 5** — semantic seams (Describer, multimodal embedder), future/unscheduled (§8, §5).
 
@@ -55,8 +65,9 @@ required to be referenced by any note.**
   with named relief valves if resource-sourced edges ever prove needed (§4).
 - **One embedding space in v1.** Every class funnels to *text* (native, extracted, or — for images —
   aggregated alt-text/captions from the notes that embed them), embedded in the existing bge space.
-  Multimodal image embedding is a **documented future seam** (a second `vec0` table under the same
-  `meta` discipline), not a v1 build — the Bitter-Lesson posture that cut the relator (§7).
+  Multimodal image embedding is a **documented future seam** (a second plain vector table set under
+  the same `meta` discipline, #38-style), not a v1 build — the Bitter-Lesson posture that cut the
+  relator (§7).
 - **Rendering = a viewer registry keyed by class, with a fallback card.** Selecting any file in the
   tree opens *something*: the note pane for `.md`, an `<img>`/`<audio>`/`<video>`/PDF/text viewer per
   class (§6), and for everything else a **"No viewer available"** card showing metadata + backlinks +
@@ -74,15 +85,15 @@ behavior. Collected:
 **Code reality (what the engine does now):**
 
 - **The walk is `.md`-only.** `ingest.rs` filters `extension == "md"`
-  (`crates/b2-core/src/ingest.rs:712`); every other file is invisible — not in `notes`, not in the
+  (`crates/b2-core/src/ingest.rs:756`); every other file is invisible — not in `notes`, not in the
   file tree (`list_notes` reads the DB), not searchable, not a graph endpoint.
 - **Only wikilinks are parsed.** `link.rs` reads bare `[[path|alias]]` and typed
   `- <verb> [[..]]` lines. Markdown's own `![alt](path)` / `[text](path)` syntax is not parsed at
   all; an Obsidian-style `![[img.png]]` embed is scanned as a bare wikilink.
 - **Non-note targets become dangling edges.** `resolve_link_target` tries the exact path then
-  `path + ".md"` (`db.rs:623`); a `[[photo.png]]` target resolves to nothing, so the edge row keeps
+  `path + ".md"` (`db.rs:805`); a `[[photo.png]]` target resolves to nothing, so the edge row keeps
   `dst_id = NULL` with `dst_path_raw` retained (there is already a partial index on dangling edges,
-  `db.rs:165`). Downstream surfaces drop these — the same UX hole as folder wikilinks
+  `db.rs:246`). Downstream surfaces drop these — the same UX hole as folder wikilinks
   ([#12](https://github.com/AlteredCraft/B2/issues/12)).
 - **The desktop can't render a vault image even inside a note.** The webview CSP is locked down with
   all assets bundled ([desktop-ui-mvp.md](../specs/completed/desktop-ui-mvp.md) §security), and no
@@ -246,7 +257,18 @@ walk vault → classify (extension) → per class:
 - **Chunks generalize from `note_b2id` to a document reference** (note b2id *or* resource path).
   Search resolves hits up to the owning document; results now carry a `kind`. Since the index is
   disposable, this is a `schema_version` bump + rebuild — **no migration code, ever**. That is the
-  disposable-index tenet paying rent.
+  disposable-index tenet paying rent. *(The concrete DDL — today `chunks.note_b2id` is a `NOT NULL`
+  FK into `notes` with `UNIQUE(note_b2id, seq)`, plus the FTS triggers keyed off it — is a slice-3
+  spec decision: two nullable one-of columns vs. a `(doc_kind, doc_key)` pair. Slice 1 touches no
+  chunk.)*
+- **Centroids generalize the same way — this is load-bearing, not optional** (#38 reconcile,
+  2026-07-12). Discovery is now two-stage, and its **coarse stage scans only `note_centroids`**
+  (today `PRIMARY KEY note_b2id REFERENCES notes(b2id)`; maintained by the embed pass, dropped on
+  re-chunk). A resource that only has chunks but no centroid can be *found by search* yet is
+  **invisible to `b2 similar`** — as anchor and as candidate. So the centroid table becomes
+  document-keyed alongside `chunks`, and a text-bearing resource gets a centroid through the exact
+  existing lifecycle (embed-pass refresh, re-chunk drop). An image's single caption chunk *is* its
+  centroid. Same `schema_version` bump, same rebuild.
 - **One embedding space.** Extracted text embeds through the existing bge space — it *is* text, so
   the `meta (embed_model_id, embed_dim)` discipline is untouched. Nothing multimodal in v1.
 - **The image trick — model-free semantics from authored context.** An image's index text =
@@ -257,6 +279,10 @@ walk vault → classify (extension) → per class:
   gives an image *intrinsic* index text, with no note involved (§2, §9 addendum). Nonempty caption text is **embedded too** (locked, §9 #6) — it
   is ordinary authored text, so it flows through the bge space with zero new discipline, and it is
   what lets `b2 similar` surface a captioned image next to related notes.
+  *(One locality caveat the incremental path must own: an image's index text is a function of
+  **other files** — editing note A's caption must re-project and re-embed `img.png`'s chunk, the one
+  cross-file trigger in the projection. The `full-reindex ≡ incremental-update` property test
+  extends over exactly this case; §8.)*
 - **Two seams documented for tomorrow's model, built never-earlier-than-needed:**
   1. **Describer** (`file bytes → text`): an OCR pass, an LLM captioner, a PDF-figure summarizer —
      each is "better extraction," slotting into the extraction step per class. One-time per file,
@@ -266,14 +292,14 @@ walk vault → classify (extension) → per class:
      durable across index drops *and* file renames, never a vault write (see the ghost-md
      rejection, §7). Deterministic extraction (PDF text layer, HTML strip) is cheap enough to redo
      at reindex and needs no cache.
-  2. **Multimodal embedder** (`image → vector`): a *second* vector space — a separate `vec0` table
-     with its own `(model_id, dim)` in `meta`, because CLIP-style image vectors are not comparable
-     to bge text vectors. Same fail-fast-on-mismatch discipline. `b2 similar` over images joins the
-     party only when this lands.
+  2. **Multimodal embedder** (`image → vector`): a *second* vector space — its own plain
+     vector + centroid tables (the #38 shape) with their own `(model_id, dim)` in `meta`, because
+     CLIP-style image vectors are not comparable to bge text vectors. Same fail-fast-on-mismatch
+     discipline. `b2 similar` over images joins the party only when this lands.
 - **Payoff already at v1:** `b2 similar papers/attention.pdf` works as soon as PDFs have text
-  chunks — nearest *unlinked notes* to a paper is exactly the discovery loop, extended to material
-  you didn't write. Search, `b2 explain <file>` (backlinks), and the graph all get resources "for
-  free" from the same plumbing.
+  chunks **and a centroid** (the two-stage prerequisite above) — nearest *unlinked notes* to a paper
+  is exactly the discovery loop, extended to material you didn't write. Search, `b2 explain <file>`
+  (backlinks), and the graph all get resources "for free" from the same plumbing.
 
 Extraction is deterministic and model-free, so it lives in the fast suite with fixtures — no change
 to the testability stack. (The PDF-parsing *dependency* — which crate, and whether it lives in
@@ -374,17 +400,24 @@ grows only what these commands need, per its charter.
 
 Each slice is independently shippable and dogfoodable; later slices never rework earlier ones.
 
-1. **Inventory & graph (model-free, no new deps).** Walk all files → `resources` table (+ pruning,
+1. **Inventory & graph (model-free, no new engine deps).** Walk all files → `resources` table (+ pruning,
    which also bounds [#31](https://github.com/AlteredCraft/B2/issues/31)'s blast radius); classify;
    parse `![alt](…)`, `[…](…)`, `![[…]]` → resource-resolved edges with captured alt text; file
    tree shows resources; **fallback card** with backlinks + *Open in system default*; `b2 explain`
-   / `b2 mv` cover resources. *The vault stops lying about its own contents.*
+   / `b2 mv` cover resources. One adapter consequence: the desktop watcher's `vault-changed` pulse
+   currently **allowlists `.md`** (`watch.rs` `touches_markdown` — deliberately, to exclude `.b2/`
+   sqlite churn and `.git/`); with resources in the tree it must invert to a **denylist**
+   (dotfolders + `.b2/` + `.git/`) so a Finder-dropped PNG pulses. *The vault stops lying about its
+   own contents.*
 2. **Render mechanisms.** Asset protocol (scoped, read-only) → image + media viewers, **inline
    images in the note reading view**; read-only text viewer; HTML source view + *Open in browser*.
    *Selecting anything shows something.*
 3. **Searchable resources (still model-free).** Extraction for `text`/`html`; chunks → FTS +
-   vectors through the existing space; image alt-text aggregation; typed search results in CLI +
-   desktop. *`b2 search` and `b2 similar` see the whole vault.*
+   vectors through the existing space, **and document-keyed centroids** (the two-stage discovery
+   prerequisite — without a centroid a resource is invisible to `b2 similar`, §5); image alt-text
+   aggregation; typed search results in CLI + desktop. The chunk/centroid DDL generalization
+   (`note_b2id` → document reference) is this slice's spec decision. *`b2 search` and `b2 similar`
+   see the whole vault.*
 4. **PDF text.** The extraction-dependency decision (§9 #5) lands here, not before; then PDFs join
    slice 3's pipeline. Optionally the pdf.js viewer upgrade.
 5. **Semantic seams (future, unscheduled).** Describer (OCR/captioning), multimodal embedder as a
@@ -393,7 +426,8 @@ Each slice is independently shippable and dogfoodable; later slices never rework
 Testing follows the house pattern: golden-vault fixtures gain a `resources/` folder (an image, a
 snippet of HTML, a tiny text file, a binary blob); every slice asserts against the fake embedder;
 extraction fixtures are deterministic. `full-reindex ≡ incremental-update` property extends over
-resource add/change/delete.
+resource add/change/delete — **including the one cross-file trigger**: editing a note's caption of
+an embedded image must leave the image's chunk/vector identical to a full rebuild (§5).
 
 ---
 

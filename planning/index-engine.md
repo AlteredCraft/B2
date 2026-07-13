@@ -147,19 +147,23 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   `note` · `text` · `html` · `pdf` · `image` · `media` · `binary` (the total fallback), each answering the
   same three questions — what index text, can it be a graph endpoint, how does it render.
 - **`chunks` generalizes** from `note_b2id` to a **document reference** (a note `b2id` *or* a resource
-  path); search resolves hits up to the owning document and results carry a `kind`. Every class funnels to
-  *text* — native, extracted (`html` strip / `pdf` text layer), or, for an `image`, aggregated inbound
-  alt-text — embedded through the **existing** bge space: one embedding space in v1, the multimodal seam
-  documented for later (§6 posture, [data-model.md](data-model.md) §10).
+  path); search resolves hits up to the owning document and results carry a `kind`. **`note_centroids`
+  generalizes with it** — two-stage discovery's coarse stage scans only centroids (#38, §4 update), so a
+  resource with chunks but no centroid would be searchable yet invisible to `b2 similar`; a text-bearing
+  resource gets its centroid through the existing lifecycle (embed-pass refresh, re-chunk drop). Every
+  class funnels to *text* — native, extracted (`html` strip / `pdf` text layer), or, for an `image`,
+  aggregated inbound alt-text — embedded through the **existing** bge space: one embedding space in v1,
+  the multimodal seam documented for later (§6 posture, [data-model.md](data-model.md) §10).
 - **`edges.dst` may be a resource** — a body `![[photo.png]]` / `[[papers/x.pdf]]` resolves against
   `resources` and records a `dst_resource_path`; `src` stays a note (resources author no outbound edges in
   v1). The existing `dst_path_raw` + dangling-edge index (`db.rs`) is already half of this; the `link.rs`
   parser learns the two Markdown-native forms `![alt](path)` / `[text](path)` (relative paths only) and the
   `![[file.ext]]` embed, capturing the alt/caption text on the edge (it becomes the image's index text).
 - **No migration, ever.** Because the index is disposable this is a `schema_version` bump + rebuild — the
-  disposable-index tenet paying rent. The exact DDL and the per-class extraction step land in the
-  **slice-1 build spec** ([tasks.md](tasks.md)); the PDF text-extraction *dependency* (which crate, and
-  its home) is deferred to slice 4 by design.
+  disposable-index tenet paying rent. The `resources` DDL lands in the **slice-1 build spec**
+  ([tasks.md](tasks.md)); the chunk/centroid generalization and the per-class extraction step land in
+  slice 3's; the PDF text-extraction *dependency* (which crate, and its home) is deferred to slice 4 by
+  design.
 
 Why this shape fits B2 specifically:
 

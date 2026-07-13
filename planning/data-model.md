@@ -574,10 +574,13 @@ until the need is real.
 **Derived text — one embedding space in v1.** Every resource class funnels to *text* — native (`text`),
 extracted (`html` tag-strip, `pdf` text layer), or, for an `image`, the aggregated alt-text/captions from
 the notes that embed it (a pure projection of authored Markdown). That text flows through the **existing**
-bge space with zero new discipline, so `b2 search` and `b2 similar` cover the whole vault. Multimodal image
-embedding (a second `vec0` space) and an LLM/OCR **Describer** (intrinsic text for `image`/`media`/`binary`)
-are **documented future seams**, default-off — the same Bitter-Lesson posture that cut the relator (§4).
-Schema, the per-class extraction step, and the taxonomy: [index-engine.md](index-engine.md) §3.
+bge space with zero new discipline — chunks *and* a per-document **centroid** (discovery's coarse stage
+scans only centroids, [#38](https://github.com/AlteredCraft/B2/issues/38)) — so `b2 search` and
+`b2 similar` cover the whole vault. Multimodal image embedding (a second vector space — its own plain
+vector/centroid tables and `meta` entry, the #38 shape) and an LLM/OCR **Describer** (intrinsic text for
+`image`/`media`/`binary`) are **documented future seams**, default-off — the same Bitter-Lesson posture
+that cut the relator (§4). Schema, the per-class extraction step, and the taxonomy:
+[index-engine.md](index-engine.md) §3.
 
 **Why a separate object, not a `kind` column on the note.** Two tables, two contracts, zero "unless it's a
 resource" clauses. Generalizing `notes` to hold resources would staple a caveat onto every invariant, write
