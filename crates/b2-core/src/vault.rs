@@ -35,6 +35,9 @@ use std::path::{Path, PathBuf};
 /// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
 /// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
+/// Re-exported for the same reason: [`move_resource`](Vault::move_resource)'s
+/// report is part of the façade contract.
+pub use crate::mv::ResourceMoveReport;
 
 /// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
 /// without an injected model (tests/dev). The real model brings its own `dim` (768)
@@ -202,6 +205,39 @@ pub struct NoteSummary {
     pub b2id: String,
     pub path: String,
     pub title: Option<String>,
+}
+
+/// One resource's identity for the file tree (`Vault::list_resources`) — the
+/// per-kind sibling of [`NoteSummary`], never a union type (research §9b #10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceSummary {
+    pub path: String,
+    pub class: String,
+    pub size: i64,
+    pub mtime: Option<i64>,
+}
+
+/// The fallback card's data (`Vault::explain_resource`, slice-1 spec §4):
+/// the resource's inventory metadata plus its inbound backlinks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceExplainView {
+    pub path: String,
+    pub class: String,
+    pub size: i64,
+    pub mtime: Option<i64>,
+    pub content_hash: String,
+    pub backlinks: Vec<ResourceBacklink>,
+}
+
+/// One note that links at a resource, with the edge's authored context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceBacklink {
+    pub b2id: String,
+    pub path: String,
+    pub title: Option<String>,
+    pub r#type: String,
+    pub caption: Option<String>,
+    pub embed: bool,
 }
 
 /// One search hit, resolved to the note it belongs to with a text snippet.
@@ -540,6 +576,77 @@ impl Vault {
             .collect())
     }
 
+    /// Every inventoried resource as a lightweight [`ResourceSummary`], ordered by
+    /// `path` — the file tree's resource half (research §9b #10: a sibling of
+    /// [`list_notes`](Self::list_notes), never a widened union; the adapters
+    /// compose the tree). A pure, model-free read; a never-projected vault lists
+    /// nothing, same index-first honesty as notes.
+    pub fn list_resources(&self) -> Result<Vec<ResourceSummary>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "list_resources").entered();
+        Ok(db::list_resources(&self.conn)?
+            .into_iter()
+            .map(|(path, class, size, mtime)| ResourceSummary {
+                path,
+                class,
+                size,
+                mtime,
+            })
+            .collect())
+    }
+
+    /// The fallback card's data for one resource (`b2 explain <file>`, the desktop
+    /// card — slice-1 spec §4/§6): inventory metadata plus the backlinks panel,
+    /// straight off the materialized graph. `path` is a vault-relative path (the
+    /// adapters dispatched here via [`crate::resource::doc_kind`]); errors with
+    /// [`Error::ResourceNotFound`] when it is not inventoried.
+    pub fn explain_resource(&self, path: &str) -> Result<ResourceExplainView> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
+        let (class, size, mtime, content_hash) = db::resource_detail(&self.conn, path)?
+            .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
+        let backlinks = db::inbound_resource_edges(&self.conn, path)?
+            .into_iter()
+            .map(|(b2id, note_path, title, r#type, caption, embed)| ResourceBacklink {
+                b2id,
+                path: note_path,
+                title,
+                r#type,
+                caption,
+                embed,
+            })
+            .collect();
+        Ok(ResourceExplainView {
+            path: path.to_string(),
+            class,
+            size,
+            mtime,
+            content_hash,
+            backlinks,
+        })
+    }
+
+    /// Move/rename a resource (`b2 mv <file> <to>`) — the note move minus the
+    /// identity step (data-model.md §10): rewrite every inbound link's authored
+    /// text (both syntaxes, each keeping its own relative-vs-root convention),
+    /// move the file, update the inventory, re-project the touched notes. Errors
+    /// with [`Error::ResourceNotFound`] for an uninventoried source; destination
+    /// errors mirror [`move_note`](Self::move_note).
+    pub fn move_resource(&self, path: &str, to: &str) -> Result<ResourceMoveReport> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "mv_resource", from = path, to).entered();
+        if db::resource_detail(&self.conn, path)?.is_none() {
+            return Err(Error::ResourceNotFound(path.to_string()));
+        }
+        mv::move_resource(
+            &self.conn,
+            &self.idgen,
+            self.embedder.as_ref(),
+            &self.root,
+            path,
+            to,
+        )
+    }
+
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at
     /// `limit` *notes*. Results are note-level: chunk hits are deduped to the
     /// highest-scoring chunk per note, so one note never appears twice.
@@ -612,6 +719,15 @@ impl Vault {
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
+        // A resource anchor is honest, not silent: resources become discoverable
+        // when slice 3 gives them chunks + centroids (research §9b #7). Until
+        // then an inventoried resource errs "not yet" — never an empty result —
+        // and an unknown path falls through to the usual not-found.
+        if crate::resource::doc_kind(note_ref) == crate::resource::DocKind::Resource
+            && db::resource_detail(&self.conn, note_ref)?.is_some()
+        {
+            return Err(Error::ResourceUnsupported(note_ref.to_string()));
+        }
         let b2id = self.resolve_ref(note_ref)?;
         let mut out = Vec::new();
         for c in discover::candidates(&self.conn, &b2id, limit)? {

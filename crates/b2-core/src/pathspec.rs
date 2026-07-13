@@ -4,11 +4,12 @@
 //! so each authoring op maps the reason onto its own [`crate::Error`] variant and
 //! its own user-facing phrasing, without the two coupling through a shared error.
 
-/// Normalize + validate `input` into a vault-relative `.md` path. Trims, switches
-/// backslashes to `/` (so `notes.path` stays in the index's one separator
-/// convention), and appends `.md` if the user omitted it. Rejects an empty,
-/// absolute, or vault-escaping (`..`) path, returning the reason as `Err(String)`.
-pub(crate) fn normalize_rel_md(input: &str) -> Result<String, String> {
+/// Normalize + validate `input` into a vault-relative path (any file kind).
+/// Trims, and switches backslashes to `/` (so the index stays in its one
+/// separator convention). Rejects an empty, absolute, or vault-escaping (`..`)
+/// path, returning the reason as `Err(String)`. The resource-move destination
+/// check (file-type support slice 1) — the extension is left exactly as given.
+pub(crate) fn normalize_rel(input: &str) -> Result<String, String> {
     let s = input.trim().replace('\\', "/");
     if s.is_empty() {
         return Err("destination is empty".into());
@@ -19,6 +20,13 @@ pub(crate) fn normalize_rel_md(input: &str) -> Result<String, String> {
     if s.split('/').any(|c| c == "..") {
         return Err(format!("{s} escapes the vault"));
     }
+    Ok(s)
+}
+
+/// Normalize + validate `input` into a vault-relative `.md` path — the note
+/// variant of [`normalize_rel`]: same checks, plus `.md` appended if omitted.
+pub(crate) fn normalize_rel_md(input: &str) -> Result<String, String> {
+    let s = normalize_rel(input)?;
     Ok(if s.ends_with(".md") {
         s
     } else {

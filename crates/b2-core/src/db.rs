@@ -392,6 +392,80 @@ pub fn resource_stat(conn: &Connection, path: &str) -> Result<Option<(i64, Optio
         .optional()?)
 }
 
+/// One `list_resources` row: `(path, class, size, mtime)`.
+pub type ResourceListing = (String, String, i64, Option<i64>);
+/// One `resource_detail` row: `(class, size, mtime, content_hash)`.
+pub type ResourceDetail = (String, i64, Option<i64>, String);
+
+/// Every inventoried resource — [`ResourceListing`] rows, path-ordered — the
+/// file tree's resource half (`Vault::list_resources`, research §9b #10).
+pub fn list_resources(conn: &Connection) -> Result<Vec<ResourceListing>> {
+    let mut stmt =
+        conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// One resource's full inventory row — [`ResourceDetail`] — the fallback card's
+/// metadata. `None` when the path is not inventoried.
+pub fn resource_detail(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<ResourceDetail>> {
+    Ok(conn
+        .query_row(
+            "SELECT class, size, mtime, content_hash FROM resources WHERE path = ?1",
+            [path],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?)
+}
+
+/// Every active edge pointing *at* the resource: the source note's identity plus
+/// the edge's `type`/`caption`/`embed` — the fallback card's backlinks panel,
+/// straight off the materialized graph. Ordered for deterministic display.
+#[allow(clippy::type_complexity)]
+pub fn inbound_resource_edges(
+    conn: &Connection,
+    path: &str,
+) -> Result<Vec<(String, String, Option<String>, String, Option<String>, bool)>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.src_id, n.path, n.title, e.type, e.caption, e.embed
+         FROM edges e JOIN notes n ON n.b2id = e.src_id
+         WHERE e.dst_resource_path = ?1
+         ORDER BY n.path, e.occurrence_index",
+    )?;
+    let rows = stmt.query_map([path], |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get::<_, i64>(5)? != 0,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The bounded inbound set a **resource move** must rewrite — for each active
+/// edge at the resource, its source file and the exact authored link text
+/// (`dst_path_raw`). The resource sibling of [`inbound_edge_targets`]; ordered
+/// for deterministic rewriting.
+pub fn inbound_resource_edge_targets(
+    conn: &Connection,
+    path: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.src_id, n.path, e.dst_path_raw
+         FROM edges e JOIN notes n ON n.b2id = e.src_id
+         WHERE e.dst_resource_path = ?1
+         ORDER BY n.path, e.dst_path_raw",
+    )?;
+    let rows = stmt.query_map([path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Delete every `resources` row whose path is not in `seen` (the walk's survivors)
 /// and return how many were pruned. Inbound edges **re-dangle** automatically —
 /// `edges.dst_resource_path` is `ON DELETE SET NULL`, `dst_path_raw` retained —

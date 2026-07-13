@@ -148,6 +148,196 @@ fn normalize_dest(input: &str) -> Result<String> {
     crate::pathspec::normalize_rel_md(input).map_err(Error::MoveDestination)
 }
 
+/// What [`move_resource`] did — the resource sibling of [`MoveReport`], minus the
+/// identity field (a resource has no `b2id` to carry; data-model.md §10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceMoveReport {
+    pub from: String,
+    pub to: String,
+    /// Vault-relative paths of the inbound notes whose link text was rewritten
+    /// (sorted, deduped). Empty when nothing linked to the moved resource.
+    pub rewrote: Vec<String>,
+    /// Total individual link targets rewritten across `rewrote`.
+    pub links_rewritten: usize,
+}
+
+/// Move the resource at `old_rel` to `new_rel_input` — the note move minus the
+/// identity step (slice-1 spec §4): rewrite every inbound link's authored text
+/// (wikilink and Markdown forms alike, each keeping its own relative-vs-root
+/// convention), move the file, update the inventory, and re-project the touched
+/// notes (their bodies changed, so their chunks re-embed through the usual flow).
+/// B2 never touches the resource's bytes — the move is path-only.
+///
+/// Errors mirror [`move_note`]: [`Error::MoveDestination`] /
+/// [`Error::MoveTargetExists`]; the caller resolved `old_rel` against the
+/// inventory first ([`Error::ResourceNotFound`] lives in the façade).
+pub fn move_resource(
+    conn: &Connection,
+    idgen: &dyn IdGen,
+    embedder: &dyn Embedder,
+    vault_root: &Path,
+    old_rel: &str,
+    new_rel_input: &str,
+) -> Result<ResourceMoveReport> {
+    let new_rel = crate::pathspec::normalize_rel(new_rel_input).map_err(Error::MoveDestination)?;
+    if new_rel == old_rel {
+        return Err(Error::MoveDestination(format!(
+            "{new_rel} is the resource's current path"
+        )));
+    }
+    let old_abs = vault_root.join(old_rel);
+    let new_abs = vault_root.join(&new_rel);
+    if new_abs.exists() {
+        return Err(Error::MoveTargetExists(new_rel));
+    }
+
+    // The graph names the bounded inbound set. Each authored target is rewritten
+    // in its own convention: a note-relative Markdown target stays note-relative
+    // (re-relativized against its note's directory), a vault-root target stays
+    // vault-root; a `#fragment` suffix survives untouched.
+    let mut by_file: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (_src_id, src_path, dst_raw) in db::inbound_resource_edge_targets(conn, old_rel)? {
+        let src_dir = src_path
+            .rsplit_once('/')
+            .map(|(dir, _)| dir.to_string())
+            .unwrap_or_default();
+        let (base, fragment) = match dst_raw.split_once('#') {
+            Some((b, f)) => (b, Some(f)),
+            None => (dst_raw.as_str(), None),
+        };
+        let new_base = if base.trim() == old_rel {
+            new_rel.clone() // authored vault-root — keep it vault-root
+        } else {
+            relativize(&src_dir, &new_rel) // authored note-relative — keep it relative
+        };
+        let replacement = match fragment {
+            Some(f) => format!("{new_base}#{f}"),
+            None => new_base,
+        };
+        by_file
+            .entry(src_path)
+            .or_default()
+            .insert(dst_raw, replacement);
+    }
+
+    // 1. Markdown first: rewrite inbound link text in place, both syntaxes.
+    let mut rewrote = Vec::new();
+    let mut links_rewritten = 0usize;
+    for (src_path, targets) in &by_file {
+        let abs = vault_root.join(src_path);
+        let raw = fs::read_to_string(&abs)?;
+        let (pass1, n1) = rewrite_links(&raw, targets);
+        let (pass2, n2) = rewrite_md_targets(&pass1, targets);
+        if n1 + n2 > 0 {
+            fs::write(&abs, pass2)?;
+            rewrote.push(src_path.clone());
+            links_rewritten += n1 + n2;
+        }
+    }
+
+    // 2. Move the file on disk (creating any missing parent directories).
+    if let Some(parent) = new_abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&old_abs, &new_abs)?;
+
+    // 3. Update the inventory: same bytes at a new path (the hash is untouched;
+    //    class re-derives from the new extension), then drop the old row — its
+    //    inbound edges re-dangle (ON DELETE SET NULL) until the re-projection
+    //    below re-resolves them at the new path.
+    let (_, size, _, content_hash) =
+        db::resource_detail(conn, old_rel)?.ok_or_else(|| Error::ResourceNotFound(
+            old_rel.to_string(),
+        ))?;
+    let mtime = fs::metadata(&new_abs)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    let class = crate::resource::ResourceClass::of_path(&new_rel)
+        .map(|c| c.as_str().to_string())
+        .unwrap_or_else(|| "binary".to_string());
+    db::upsert_resource(
+        conn,
+        &db::ResourceRow {
+            path: &new_rel,
+            class: &class,
+            size,
+            mtime,
+            content_hash: &content_hash,
+        },
+    )?;
+    conn.execute("DELETE FROM resources WHERE path = ?1", [old_rel])?;
+
+    // 4. Re-project the rewritten notes from the now-current Markdown (their
+    //    changed chunks re-embed inline, exactly like a note move's inbound set).
+    for src_path in &rewrote {
+        ingest::ingest_file(conn, vault_root, src_path, idgen, embedder)?;
+    }
+
+    Ok(ResourceMoveReport {
+        from: old_rel.to_string(),
+        to: new_rel,
+        rewrote,
+        links_rewritten,
+    })
+}
+
+/// The relative path from `base_dir` (a vault-relative directory, `""` = root)
+/// to `to_path` (a vault-relative file): shared prefix dropped, one `..` per
+/// remaining base segment — the inverse of resolution's note-relative join.
+fn relativize(base_dir: &str, to_path: &str) -> String {
+    let base: Vec<&str> = if base_dir.is_empty() {
+        Vec::new()
+    } else {
+        base_dir.split('/').collect()
+    };
+    let to: Vec<&str> = to_path.split('/').collect();
+    let shared = base
+        .iter()
+        .zip(to.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut out: Vec<&str> = Vec::with_capacity(base.len() - shared + to.len() - shared);
+    out.extend(std::iter::repeat_n("..", base.len() - shared));
+    out.extend(&to[shared..]);
+    out.join("/")
+}
+
+/// Rewrite every Markdown-form target (`[text](target)` / `![alt](target)`)
+/// whose *trimmed* target is a key in `targets` — the `[…](…)` sibling of
+/// [`rewrite_links`], same contract: only the target token changes, every other
+/// byte (text, whitespace, the `](` frame) is preserved.
+fn rewrite_md_targets(raw: &str, targets: &BTreeMap<String, String>) -> (String, usize) {
+    let mut out = String::with_capacity(raw.len());
+    let mut count = 0usize;
+    let mut rest = raw;
+    while let Some(open) = rest.find("](") {
+        out.push_str(&rest[..open + 2]);
+        let after = &rest[open + 2..];
+        let Some(close) = after.find(')') else {
+            out.push_str(after);
+            return (out, count);
+        };
+        let inner = &after[..close];
+        match targets.get(inner.trim()) {
+            Some(replacement) => {
+                let lead = inner.len() - inner.trim_start().len();
+                let trail = inner.len() - inner.trim_end().len();
+                out.push_str(&inner[..lead]);
+                out.push_str(replacement);
+                out.push_str(&inner[inner.len() - trail..]);
+                count += 1;
+            }
+            None => out.push_str(inner),
+        }
+        out.push(')');
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    (out, count)
+}
+
 /// Rewrite every wikilink whose *trimmed* target is a key in `targets` to that
 /// key's replacement, preserving all other bytes — surrounding whitespace inside
 /// the brackets, the `|alias`, and the `[[`/`]]` themselves. The match is bounded

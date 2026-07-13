@@ -425,3 +425,138 @@ fn markdown_note_links_resolve_with_fragment_stripped() {
     // occurrence disambiguates the two edges to the same (target, type)
     assert!(edges.iter().any(|e| e.2 == "../concepts/memory.md#retrieval"));
 }
+
+// ---------------------------------------------------------------------------
+// Step 5 — the façade: list_resources / explain_resource / move_resource (§4)
+// ---------------------------------------------------------------------------
+
+/// `list_resources` mirrors the inventory, path-ordered, with class + stat.
+#[test]
+fn list_resources_returns_the_inventory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let listed = vault.list_resources().unwrap();
+    let brief: Vec<(&str, &str)> = listed
+        .iter()
+        .map(|r| (r.path.as_str(), r.class.as_str()))
+        .collect();
+    assert_eq!(
+        brief,
+        vec![
+            ("resources/blob.bin", "binary"),
+            ("resources/clipping.html", "html"),
+            ("resources/data.txt", "text"),
+            ("resources/diagram.png", "image"),
+        ]
+    );
+    assert!(listed.iter().all(|r| r.size > 0));
+}
+
+/// The fallback card: metadata + backlinks with authored context; an unknown
+/// path errors ResourceNotFound.
+#[test]
+fn explain_resource_carries_metadata_and_backlinks() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    fs::write(
+        tmp.path().join("notes/card.md"),
+        "---\ntitle: Card\n---\n![a tiny diagram](../resources/diagram.png)\n",
+    )
+    .unwrap();
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let view = vault.explain_resource("resources/diagram.png").unwrap();
+    assert_eq!(view.class, "image");
+    assert_eq!(view.size, 67);
+    assert_eq!(view.content_hash.len(), 64, "blake3 hex");
+    assert_eq!(view.backlinks.len(), 1);
+    let b = &view.backlinks[0];
+    assert_eq!(b.path, "notes/card.md");
+    assert_eq!(b.title.as_deref(), Some("Card"));
+    assert_eq!(b.r#type, "references");
+    assert_eq!(b.caption.as_deref(), Some("a tiny diagram"));
+    assert!(b.embed);
+
+    let missing = vault.explain_resource("resources/nope.pdf");
+    assert!(matches!(
+        missing,
+        Err(b2_core::Error::ResourceNotFound(_))
+    ));
+}
+
+/// A resource move rewrites inbound links in BOTH syntaxes, each keeping its own
+/// convention (note-relative stays relative, vault-root stays root), moves the
+/// file, and leaves the index equal to a fresh rebuild.
+#[test]
+fn move_resource_rewrites_inbound_links_and_reprojects() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    fs::write(
+        tmp.path().join("notes/uses-diagram.md"),
+        "---\ntitle: Uses\n---\n\
+         ![d](../resources/diagram.png)\n\
+         see ![[resources/diagram.png|hero]] too\n",
+    )
+    .unwrap();
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let report = vault
+        .move_resource("resources/diagram.png", "img/diagram.png")
+        .unwrap();
+    assert_eq!(report.from, "resources/diagram.png");
+    assert_eq!(report.to, "img/diagram.png");
+    assert_eq!(report.rewrote, vec!["notes/uses-diagram.md".to_string()]);
+    assert_eq!(report.links_rewritten, 2);
+
+    // Each authored form kept its convention.
+    let body = fs::read_to_string(tmp.path().join("notes/uses-diagram.md")).unwrap();
+    assert!(body.contains("![d](../img/diagram.png)"), "md form re-relativized: {body}");
+    assert!(body.contains("![[img/diagram.png|hero]]"), "wikilink stays vault-root: {body}");
+
+    // File moved; inventory + edges follow.
+    assert!(tmp.path().join("img/diagram.png").exists());
+    assert!(!tmp.path().join("resources/diagram.png").exists());
+    let edges = edges_from(tmp.path(), "notes/uses-diagram.md");
+    assert!(
+        edges
+            .iter()
+            .all(|(_, dst, _, _, _, _)| dst.as_deref() == Some("img/diagram.png")),
+        "all edges resolve at the new path: {edges:?}"
+    );
+
+    // Refuses to clobber, refuses unknown source.
+    fs::write(tmp.path().join("img/other.png"), "x").unwrap();
+    vault.project(false).unwrap();
+    assert!(matches!(
+        vault.move_resource("img/diagram.png", "img/other.png"),
+        Err(b2_core::Error::MoveTargetExists(_))
+    ));
+    assert!(matches!(
+        vault.move_resource("resources/diagram.png", "elsewhere.png"),
+        Err(b2_core::Error::ResourceNotFound(_))
+    ));
+}
+
+/// `similar` on a resource anchor is honest: "not yet" for an inventoried
+/// resource (never a silent empty), the usual not-found for an unknown path.
+#[test]
+fn similar_on_a_resource_errs_not_yet() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    assert!(matches!(
+        vault.similar("resources/diagram.png", 5),
+        Err(b2_core::Error::ResourceUnsupported(_))
+    ));
+    assert!(matches!(
+        vault.similar("resources/nope.png", 5),
+        Err(b2_core::Error::NoteNotFound(_))
+    ));
+}

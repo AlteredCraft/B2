@@ -70,6 +70,19 @@ pub enum Error {
     /// so a typo (`elaborate` for `elaborates`) is caught rather than silently stored.
     #[error("not a core relation verb: {0}")]
     InvalidRelation(String),
+
+    /// A resource reference (vault-relative path) did not resolve to any
+    /// inventoried resource — the resource sibling of [`Error::NoteNotFound`]
+    /// (file-type support slice 1).
+    #[error("resource not found: {0}")]
+    ResourceNotFound(String),
+
+    /// The operation exists for notes but not (yet) for resources — e.g.
+    /// `b2 similar <resource>` before slice 3 gives resources chunks and
+    /// centroids. Distinct from [`Error::ResourceNotFound`] so the adapters can
+    /// say "not yet" rather than "no such file".
+    #[error("not supported for resources yet: {0}")]
+    ResourceUnsupported(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
