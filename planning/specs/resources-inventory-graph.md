@@ -140,8 +140,10 @@ resolution stays independent of file order.
 Per the charter (grow only what commands need) and the locked calls (§9b #8, #10):
 
 ```rust
-/// Pure dispatch rule, in core so adapters can't drift (research §9b #8):
-/// ends with ".md" → Note; syntactically a ULID → Note (b2id ref); else → Resource.
+/// Pure dispatch rule, in core so adapters can't drift (research §9b #8), the
+/// SAME rule link resolution uses: an extension other than `md` → Resource;
+/// `.md` or no extension → Note. Extensionless covers both the wikilink habit
+/// (`b2 explain concepts/memory`) and a b2id (ULIDs carry no dot).
 pub fn doc_kind(arg: &str) -> DocKind;
 
 impl Vault {
@@ -163,9 +165,10 @@ impl Vault {
 - `list_notes`, `explain`, `read`, `similar` are **untouched** — note semantics guaranteed, per
   §9b #10. `b2 similar <resource>` errors with a clear "resources become discoverable in a later
   release" message until slice 3 (never a silent empty result).
-- Known ambiguity, resolved by rule: an extensionless filename that is also a syntactically valid
-  26-char ULID dispatches as a b2id. Documented on `doc_kind`; vanishingly rare, and the error
-  message on a miss names both interpretations.
+- Known limit, accepted: an extensionless *file* (`Makefile`, `LICENSE`) dispatches as a note ref
+  in CLI arguments — it is still walked, inventoried, and reachable through surfaces that know its
+  kind (the desktop tree calls `explain_resource` directly). Documented on `doc_kind`; revisit if a
+  real vault hurts.
 
 ## 5. CLI
 
@@ -202,7 +205,7 @@ House pattern throughout — fast suite, fake embedder, fixtures:
   `.txt`, and an unknown-extension blob (`binary`) — plus notes exercising every parser form
   (embed with alt, plain link, `![[…]]`, a dangling resource target, an external URL to skip).
 - **Unit:** classification table (parameterized over extensions, per the testing convention);
-  `doc_kind` dispatch incl. the ULID ambiguity; parser forms/captions/fragment-stripping;
+  `doc_kind` dispatch incl. the extensionless cases; parser forms/captions/fragment-stripping;
   watcher predicate.
 - **Integration:** inventory walk + counts; `(size, mtime)` short-circuit vs. hash refresh;
   pruning on delete (edges re-dangle); resolution note-relative → root-relative laddering;

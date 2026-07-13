@@ -11,6 +11,7 @@
 //! that needs no model, and what the CLI test suite uses to stay fast and model-free.
 
 use b2_core::embed::Embedder;
+use b2_core::resource::{doc_kind, DocKind};
 use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
@@ -362,6 +363,33 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // Explain is a pure graph read (edges + their explanations), no embed —
             // like `neighbors`, it opens with the fake and needs no `b2 init`.
             let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
+            // Kind dispatch by the argument's own shape (core's one rule, §9b #8):
+            // a resource arg gets the fallback card's view — metadata + backlinks.
+            if doc_kind(note) == DocKind::Resource {
+                let view = vault.explain_resource(note)?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&view)?);
+                } else {
+                    println!("{} ({}, {} bytes)", view.path, view.class, view.size);
+                    if view.backlinks.is_empty() {
+                        println!("No backlinks yet.");
+                    } else {
+                        println!("Backlinks:");
+                        for b in &view.backlinks {
+                            let name = b.title.as_deref().unwrap_or(&b.path);
+                            let mut line = format!("  ← {name} ({})  {}", b.path, b.r#type);
+                            if b.embed {
+                                line.push_str(" (embed)");
+                            }
+                            if let Some(c) = &b.caption {
+                                line.push_str(&format!(" — \"{c}\""));
+                            }
+                            println!("{line}");
+                        }
+                    }
+                }
+                return Ok(());
+            }
             let view = vault.explain(note)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&view)?);
@@ -402,16 +430,37 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // explicit vault (no silent cwd), and it needs the real model the index was
             // built with, like `reindex`/`add`/`link`.
             let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
-            let report = vault.move_note(from, to)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("Moved {} → {}", report.from, report.to);
-                if report.links_rewritten > 0 {
-                    println!(
-                        "Rewrote {} inbound link(s) across {} file(s).",
+            // Kind dispatch (§9b #8): the two arms differ only in the report type
+            // (a resource has no b2id to carry); the human line is the same shape.
+            let (from_path, to_path, links_rewritten, rewrote_files, json) =
+                if doc_kind(from) == DocKind::Resource {
+                    let report = vault.move_resource(from, to)?;
+                    let json = serde_json::to_string_pretty(&report)?;
+                    (
+                        report.from,
+                        report.to,
                         report.links_rewritten,
-                        report.rewrote.len()
+                        report.rewrote.len(),
+                        json,
+                    )
+                } else {
+                    let report = vault.move_note(from, to)?;
+                    let json = serde_json::to_string_pretty(&report)?;
+                    (
+                        report.from,
+                        report.to,
+                        report.links_rewritten,
+                        report.rewrote.len(),
+                        json,
+                    )
+                };
+            if cli.json {
+                println!("{json}");
+            } else {
+                println!("Moved {from_path} → {to_path}");
+                if links_rewritten > 0 {
+                    println!(
+                        "Rewrote {links_rewritten} inbound link(s) across {rewrote_files} file(s)."
                     );
                 } else {
                     println!("No inbound links to rewrite.");
@@ -575,6 +624,12 @@ fn user_message(err: &CliError) -> String {
         ),
         CliError::Core(b2_core::Error::WriteConflict(_)) => {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit.".to_string()
+        }
+        CliError::Core(b2_core::Error::ResourceNotFound(r)) => format!(
+            "File not found in the vault: '{r}'. Check the path, and run `b2 reindex` first."
+        ),
+        CliError::Core(b2_core::Error::ResourceUnsupported(_)) => {
+            "Similarity for non-Markdown files isn't available yet — it arrives in a later release. `b2 explain <file>` shows its backlinks today.".to_string()
         }
         CliError::VaultRequired => {
             "No vault specified. Point B2 at your vault with `-C <path>`, or set B2_VAULT_PATH.".to_string()

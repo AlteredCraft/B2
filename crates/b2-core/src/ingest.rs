@@ -392,7 +392,11 @@ fn resolve_target(
         candidates.push(lookup.to_string());
     }
 
-    let is_resource = target_is_resource(lookup);
+    // Extension-only kind dispatch — the one rule, shared with the adapters'
+    // argument dispatch (research §9b #8): an extension other than `md` means
+    // resource; `.md` or none means note (the wikilink habit writes
+    // `[[concepts/memory]]` — extensionless — and the note ladder appends `.md`).
+    let is_resource = crate::resource::doc_kind(lookup) == crate::resource::DocKind::Resource;
     for candidate in &candidates {
         if is_resource {
             if let Some(path) = db::resolve_resource_target(conn, candidate)? {
@@ -403,19 +407,6 @@ fn resolve_target(
         }
     }
     Ok((None, None))
-}
-
-/// Extension-only kind dispatch for a link target: an extension other than `md`
-/// means resource; `.md` or no extension means note (the wikilink habit writes
-/// `[[concepts/memory]]` — extensionless — and the note ladder appends `.md`).
-fn target_is_resource(lookup: &str) -> bool {
-    let name = lookup.rsplit('/').next().unwrap_or(lookup);
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
-            !ext.eq_ignore_ascii_case("md")
-        }
-        _ => false,
-    }
 }
 
 /// Join a relative `target` onto `base_dir` (both vault-relative, `/`-separated),

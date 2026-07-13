@@ -67,18 +67,25 @@ pub enum DocKind {
     Resource,
 }
 
-/// Dispatch an adapter argument (`b2 explain <arg>`, `b2 mv <arg> …`, a `similar`
-/// anchor) to the note or resource arm — by the argument's own shape, never by
-/// DB state. Known ambiguity, resolved by rule: an extensionless filename that
-/// happens to be a valid 26-char ULID dispatches as a `b2id`.
+/// Dispatch a document reference — an adapter argument (`b2 explain <arg>`,
+/// `b2 mv <arg> …`, a `similar` anchor) or a link target — to the note or
+/// resource arm, by the reference's own shape, never by DB state: **an
+/// extension other than `md` means resource; `.md` or no extension means
+/// note.** Extensionless covers both the wikilink habit (`concepts/memory`)
+/// and a `b2id` (ULIDs carry no dot), so no separate ULID rule is needed.
+/// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a
+/// note ref here — it is still walked, inventoried, and reachable through
+/// surfaces that know its kind (the tree); revisit if a real vault hurts.
 pub fn doc_kind(arg: &str) -> DocKind {
-    if arg.to_ascii_lowercase().ends_with(".md") {
-        return DocKind::Note;
+    let name = arg.rsplit('/').next().unwrap_or(arg);
+    match name.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty() && !ext.is_empty() && !ext.eq_ignore_ascii_case("md") =>
+        {
+            DocKind::Resource
+        }
+        _ => DocKind::Note,
     }
-    if ulid::Ulid::from_string(arg).is_ok() {
-        return DocKind::Note;
-    }
-    DocKind::Resource
 }
 
 #[cfg(test)]
@@ -116,12 +123,13 @@ mod tests {
         let cases: &[(&str, DocKind)] = &[
             ("notes/a.md", DocKind::Note),
             ("A.MD", DocKind::Note),
-            ("01JMEM0000000000000000000A", DocKind::Note), // valid ULID → b2id ref
+            ("concepts/memory", DocKind::Note), // the wikilink habit: extensionless
+            ("01JMEM0000000000000000000A", DocKind::Note), // a b2id: extensionless
             ("papers/attention.pdf", DocKind::Resource),
             ("img/photo.png", DocKind::Resource),
-            ("LICENSE", DocKind::Resource),           // extensionless, not a ULID
-            ("01JMEM000000000000000000", DocKind::Resource), // 24 chars: not a ULID
+            ("archive.tar.gz", DocKind::Resource),
             ("notes/a.md.bak", DocKind::Resource),
+            ("LICENSE", DocKind::Note), // extensionless file: the documented limit
         ];
         for (arg, expected) in cases {
             assert_eq!(doc_kind(arg), *expected, "arg: {arg}");

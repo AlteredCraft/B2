@@ -743,3 +743,83 @@ fn b2_log_file_captures_pure_jsonl_and_implies_debug() {
         "second run must append to the log file"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Resources slice 1 — explain/mv dispatch by argument shape (spec §5)
+// ---------------------------------------------------------------------------
+
+/// `b2 explain <resource>` renders the fallback card: metadata + backlinks,
+/// and `--json` emits the ResourceExplainView verbatim.
+#[test]
+fn explain_dispatches_to_the_resource_card() {
+    let (_tmp, vault) = golden_vault();
+    std::fs::write(
+        vault.join("notes/card.md"),
+        "---\ntitle: Card\n---\n![a tiny diagram](../resources/diagram.png)\n",
+    )
+    .unwrap();
+    let r = run_in(&vault, &["reindex"]);
+    assert!(r.status.success(), "{}", stderr(&r));
+
+    let human = run_in(&vault, &["explain", "resources/diagram.png"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let out = stdout(&human);
+    assert!(out.contains("resources/diagram.png (image, 67 bytes)"), "{out}");
+    assert!(out.contains("Backlinks:"), "{out}");
+    assert!(out.contains("Card (notes/card.md)  references (embed) — \"a tiny diagram\""), "{out}");
+
+    let json = run_in(&vault, &["--json", "explain", "resources/diagram.png"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_str(&stdout(&json)).unwrap();
+    assert_eq!(v["class"], "image");
+    assert_eq!(v["backlinks"][0]["caption"], "a tiny diagram");
+    assert_eq!(v["backlinks"][0]["embed"], true);
+
+    // Unknown resource path → generic, actionable message; nonzero exit.
+    let missing = run_in(&vault, &["explain", "resources/nope.pdf"]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("File not found in the vault"),
+        "{}",
+        stderr(&missing)
+    );
+}
+
+/// `b2 mv <resource> <to>` moves the file and rewrites inbound links; the
+/// human line matches the note-move shape.
+#[test]
+fn mv_dispatches_to_the_resource_move() {
+    let (_tmp, vault) = golden_vault();
+    std::fs::write(
+        vault.join("notes/uses.md"),
+        "---\ntitle: Uses\n---\n![d](../resources/diagram.png)\n",
+    )
+    .unwrap();
+    let r = run_in(&vault, &["reindex"]);
+    assert!(r.status.success(), "{}", stderr(&r));
+
+    let mv = run_in(&vault, &["mv", "resources/diagram.png", "img/diagram.png"]);
+    assert!(mv.status.success(), "{}", stderr(&mv));
+    let out = stdout(&mv);
+    assert!(out.contains("Moved resources/diagram.png → img/diagram.png"), "{out}");
+    assert!(out.contains("Rewrote 1 inbound link(s) across 1 file(s)."), "{out}");
+    assert!(vault.join("img/diagram.png").exists());
+    let body = std::fs::read_to_string(vault.join("notes/uses.md")).unwrap();
+    assert!(body.contains("![d](../img/diagram.png)"), "{body}");
+}
+
+/// `b2 similar <resource>` says "not yet" — honest, actionable, nonzero exit.
+#[test]
+fn similar_on_a_resource_is_honest() {
+    let (_tmp, vault) = golden_vault();
+    let r = run_in(&vault, &["reindex"]);
+    assert!(r.status.success(), "{}", stderr(&r));
+
+    let sim = run_in(&vault, &["similar", "resources/diagram.png"]);
+    assert!(!sim.status.success());
+    assert!(
+        stderr(&sim).contains("isn't available yet"),
+        "{}",
+        stderr(&sim)
+    );
+}
