@@ -743,6 +743,28 @@ body {
   margin: 4px 0 8px;
 }
 
+/* Subtle inline spinner for an in-flight side-pane fetch (discovery's whole-vault
+   `similar` scan) — better than static "Loading…" text, which can read as stuck. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 1.6s;
+  }
+}
+
 .cards {
   display: flex;
   flex-direction: column;

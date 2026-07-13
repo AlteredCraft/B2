@@ -148,14 +148,17 @@ async function openNote(ref: string): Promise<void> {
     state.similar = [];
     state.connections = [];
     state.loading = false;
-    state.discovering = true;
+    state.discoveringSimilar = true;
+    state.discoveringConnections = true;
     render();
     await refreshDiscovery();
   } catch (e) {
     flash(errText(e));
   } finally {
+    // The discovery flags are owned by refreshDiscovery (it clears each section's when
+    // that read settles, guarded against a superseding open) — clearing them here would
+    // race a newer note's in-flight load, so only the middle-pane spinner is ours.
     state.loading = false;
-    state.discovering = false;
     render();
   }
 }
@@ -189,24 +192,45 @@ function toggleSource(): void {
 async function refreshDiscovery(): Promise<void> {
   const n = state.current;
   if (!n) return;
-  try {
-    const [similar, explain] = await Promise.all([
-      api.similar(n.path),
-      api.explain(n.path),
-    ]);
-    // Now that discovery is awaited off the render path, the user can navigate away
-    // while it's in flight — don't clobber the new note's side pane with a stale result.
-    if (state.current?.path !== n.path) return;
-    state.similar = similar;
-    state.connections = explain.connections;
-  } catch (e) {
-    // Discovery failing (e.g. an unembedded vault) is non-fatal — show the note,
-    // empty the panes, and surface the reason.
-    if (state.current?.path !== n.path) return;
-    state.similar = [];
-    state.connections = [];
-    flash(errText(e));
-  }
+  // Two independent reads with independent repaints: `explain` (Connections) is a
+  // near-instant graph read, `similar` is the slower whole-vault discovery scan. A
+  // Promise.all would gate the fast one on the slow one — so each settles and paints on
+  // its own. Both guard against the user having navigated away before they resolved
+  // (don't clobber the new note's pane) and clear only their own section's loading flag.
+  const stale = () => state.current?.path !== n.path;
+  const connections = api
+    .explain(n.path)
+    .then((explain) => {
+      if (!stale()) state.connections = explain.connections;
+    })
+    .catch((e) => {
+      if (!stale()) {
+        state.connections = [];
+        flash(errText(e));
+      }
+    })
+    .finally(() => {
+      if (stale()) return;
+      state.discoveringConnections = false;
+      render();
+    });
+  const similar = api
+    .similar(n.path)
+    .then((cands) => {
+      if (!stale()) state.similar = cands;
+    })
+    .catch((e) => {
+      if (!stale()) {
+        state.similar = [];
+        flash(errText(e));
+      }
+    })
+    .finally(() => {
+      if (stale()) return;
+      state.discoveringSimilar = false;
+      render();
+    });
+  await Promise.all([connections, similar]);
 }
 
 async function doSearch(raw: string): Promise<void> {

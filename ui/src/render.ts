@@ -264,8 +264,11 @@ function discoverySectionHtml(state: AppState): string {
 function similarSectionHtml(state: AppState): string {
   const head = `<div class="side-head"><h2>Similar &amp; unlinked</h2></div>`;
   if (state.similar.length === 0) {
-    if (state.discovering)
-      return head + `<p class="side-empty">Finding similar notes…</p>`;
+    if (state.discoveringSimilar)
+      return (
+        head +
+        `<div class="side-empty" role="status" aria-label="Finding similar notes"><span class="spinner"></span></div>`
+      );
     const hint = state.semantic
       ? "Nothing similar-but-unlinked, or the vault isn’t embedded yet (Reindex)."
       : "Semantic similarity is off — run <code>b2 init</code> then Reindex.";
@@ -294,7 +297,7 @@ function connectionsSectionHtml(state: AppState): string {
     return (
       head +
       `<p class="side-empty">${
-        state.discovering ? "Loading connections…" : "No connections yet."
+        state.discoveringConnections ? "Loading connections…" : "No connections yet."
       }</p>`
     );
   const items = state.connections

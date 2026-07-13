@@ -65,12 +65,14 @@ export interface AppState {
   /** The open note's typed edges (from explain). */
   connections: NeighborView[];
   /**
-   * Discovery (`similar` + `explain`) is in flight for the open note. Kept separate
-   * from `loading` so the note body paints the instant it's read — discovery is a
-   * slower, independent side-pane read and must not gate the middle pane. Drives the
-   * side pane's "finding…" hint so an empty pane mid-load doesn't read as "nothing found".
+   * Discovery reads in flight for the open note, tracked **per side-pane section** so
+   * the fast graph read (`explain` → Connections) paints without waiting on the slower
+   * whole-vault scan (`similar` → Similar & unlinked). Both are kept separate from
+   * `loading` so the note body paints the instant it's read. Each flag drives its
+   * section's "loading…" hint so an empty section mid-load doesn't read as "nothing found".
    */
-  discovering: boolean;
+  discoveringSimilar: boolean;
+  discoveringConnections: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
   searchResults: SearchResult[];
@@ -106,7 +108,8 @@ export const state: AppState = {
   editConflict: false,
   similar: [],
   connections: [],
-  discovering: false,
+  discoveringSimilar: false,
+  discoveringConnections: false,
   searchQuery: "",
   searchResults: [],
   linkTarget: null,
