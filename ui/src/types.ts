@@ -25,9 +25,11 @@ export interface ModelChoice {
 }
 
 /**
- * `embed_stats` — one model's cumulative embedding cost (b2-desktop `stats.rs`),
- * accumulated across sessions and shown in Settings so a model swap can be judged on
- * real speed. `total_ms / chunks` is throughput; `runs` counts contributing embed passes.
+ * `embed_stats` — one model's cumulative embedding cost (b2-desktop `stats.rs`): a running
+ * total summed across every reindex since the model was selected, shown in Settings so a
+ * model swap can be judged on real speed. Switching *to* a model restarts its total, so a
+ * bucket covers only the model's current stint. `total_ms / chunks` is throughput; `runs`
+ * counts contributing embed passes.
  */
 export interface EmbedStat {
   model: string;

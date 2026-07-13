@@ -5,10 +5,14 @@
 //! Host-owned state, exactly like [`persist_last_vault`](crate::persist_last_vault):
 //! `b2-core` stays **wall-clock-free** (the determinism rule), so the *adapter* times the
 //! embed pass and accumulates the total here. Keyed by model id — switch models and each
-//! bucket fills independently, so their totals (and derived throughput) are directly
-//! comparable. It lives under the same `dirs` data dir as `last-vault` and the model
-//! cache. Purely diagnostic: **best-effort**, and a read/write failure never fails an
-//! embed (a corrupt/missing file just reads as "no history").
+//! bucket fills independently, so their totals (and derived throughput) stay directly
+//! comparable. A bucket is a **running total for the model's current stint**: [`reset`]
+//! drops it when the user switches *to* that model, because the swap re-embeds the whole
+//! corpus (`ensure_embedding_space` drops the vectors), so the ledger must restart with
+//! the vectors rather than stack a second corpus onto the old total. It lives under the
+//! same `dirs` data dir as `last-vault` and the model cache. Purely diagnostic:
+//! **best-effort**, and a read/write failure never fails an embed (a corrupt/missing file
+//! just reads as "no history").
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -89,6 +93,36 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
     std::fs::write(path, text)
 }
 
+/// Forget `model`'s accumulated total, so its bucket restarts from zero on the next
+/// [`record`]. Called when the user **switches to** this model in Settings: the swap
+/// drops the vault's vectors, so the next reindex re-embeds the whole corpus and the
+/// cumulative ledger must restart with it (otherwise a switch back and forth would stack
+/// corpus after corpus onto the same bucket). Only the switched-to model is touched — the
+/// *other* models' history survives so the Settings pane can still compare them.
+/// Best-effort like [`record`]: a missing data dir or write failure is logged and
+/// swallowed, never failing the model switch the user actually asked for.
+pub fn reset(model: &str) {
+    let Some(path) = stats_file() else {
+        return; // no data dir ⇒ nothing was ever recorded ⇒ nothing to reset
+    };
+    if let Err(e) = reset_in(&path, model) {
+        eprintln!("[b2] embed stats: could not reset ({e})");
+    }
+}
+
+/// [`reset`] against an explicit path — the testable core. Drops `model`'s bucket and
+/// rewrites the ledger; a **no-op with no write** when the model has no history (a
+/// never-embedded model, or no file yet), so switching to it can't create an empty ledger
+/// or churn the file.
+fn reset_in(path: &Path, model: &str) -> std::io::Result<()> {
+    let mut file = read_from(path);
+    if file.models.remove(model).is_none() {
+        return Ok(()); // nothing recorded for this model — leave the file untouched
+    }
+    let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
+    std::fs::write(path, text)
+}
+
 #[cfg(test)]
 mod tests {
     //! Hermetic: every case runs against a tempfile, never the real data dir (which only
@@ -115,6 +149,59 @@ mod tests {
         let small = &ledger["m/small"];
         assert_eq!(small.total_ms, 300);
         assert_eq!(small.runs, 1);
+    }
+
+    #[test]
+    fn reset_drops_only_the_switched_to_models_bucket() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("state/b2/embed-stats.json");
+
+        record_to(&path, "m/base", 1000, 40).unwrap();
+        record_to(&path, "m/small", 300, 50).unwrap();
+
+        // Switching *to* base restarts its stint; small's history is untouched so the two
+        // models stay side-by-side comparable in the Settings pane.
+        reset_in(&path, "m/base").unwrap();
+
+        let ledger = read_from(&path).models;
+        assert!(
+            !ledger.contains_key("m/base"),
+            "reset model's bucket is gone"
+        );
+        assert_eq!(
+            ledger["m/small"].chunks, 50,
+            "other model survives the reset"
+        );
+
+        // The next run rebuilds base from zero — a full re-embed after the swap, not
+        // stacked onto the old 40 (this is the accumulation bug the reset fixes).
+        record_to(&path, "m/base", 2000, 60).unwrap();
+        let base = &read_from(&path).models["m/base"];
+        assert_eq!(base.chunks, 60);
+        assert_eq!(base.runs, 1);
+    }
+
+    #[test]
+    fn reset_is_a_noop_for_unknown_model_or_missing_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // No file yet: nothing to reset, and we must not create an empty ledger.
+        let absent = tmp.path().join("absent/embed-stats.json");
+        reset_in(&absent, "m/base").unwrap();
+        assert!(
+            !absent.exists(),
+            "reset must not create a file when there's no history"
+        );
+
+        // Existing ledger, but the model has no bucket → the file is left untouched.
+        let path = tmp.path().join("embed-stats.json");
+        record_to(&path, "m/base", 1000, 40).unwrap();
+        reset_in(&path, "m/never-embedded").unwrap();
+        assert_eq!(
+            read_from(&path).models["m/base"].chunks,
+            40,
+            "an unrelated bucket is intact after a no-op reset"
+        );
     }
 
     #[test]

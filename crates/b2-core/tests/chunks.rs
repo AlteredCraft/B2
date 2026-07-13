@@ -1,4 +1,4 @@
-//! The qmd-heuristic chunker (planning/specs/qmd-chunker.md, issue #19): size-targeted,
+//! The qmd-heuristic chunker (planning/specs/completed/qmd-chunker.md, issue #19): size-targeted,
 //! overlapping, Markdown-aware chunks carrying a `heading_path`. Two DB-level tests keep
 //! the projection wiring honest; the rest exercise `chunk_body` as the pure function it is.
 

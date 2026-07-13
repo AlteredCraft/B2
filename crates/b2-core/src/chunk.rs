@@ -1,5 +1,5 @@
 //! Body chunker — the qmd heuristic (index-engine.md §1; spec
-//! planning/specs/qmd-chunker.md, issue #19).
+//! planning/specs/completed/qmd-chunker.md, issue #19).
 //!
 //! Splits a note body into **size-targeted, overlapping, Markdown-aware** chunks
 //! that each carry a `heading_path` breadcrumb (the H1 › H2 › H3 stack the chunk

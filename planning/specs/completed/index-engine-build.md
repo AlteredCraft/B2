@@ -116,7 +116,7 @@ CREATE INDEX chunks_note_idx ON chunks(note_b2id);
 -- overlap, Markdown-aware boundary scoring. Chunk ids are NOT stable across a re-index (a note's chunks
 -- are deleted + reinserted); that is fine because its FTS and vec rows are deleted with them.
 --
--- BUILD NOTE (the qmd heuristic SHIPPED, #19 / specs/qmd-chunker.md, 2026-07-13): chunk.rs now sizes
+-- BUILD NOTE (the qmd heuristic SHIPPED, #19 / specs/completed/qmd-chunker.md, 2026-07-13): chunk.rs now sizes
 -- chunks toward a ~450-token target (under bge's 512 truncation), cuts at the best-scoring Markdown break
 -- within a backward scan, carries ~15% overlap, and stamps token_count (a chars/4 estimate) + heading_path
 -- (the H1 › H2 › H3 breadcrumb, this column). It replaced the step-2 MINIMAL paragraph splitter, which was

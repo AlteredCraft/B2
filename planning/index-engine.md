@@ -52,7 +52,7 @@ A local CLI search engine for Markdown, all on-device. The shape worth stealing:
 - **Chunking:** ~900-token chunks, ~15% overlap, Markdown-aware break-point scoring (H1=100, H2=90,
   code-fence=80, … blank-line=20, list-item=5), with a 200-token backward scan and quadratic distance
   decay to pick the cleanest boundary. Optional tree-sitter AST chunking for code files.
-  **Implemented in B2** (`chunk.rs`, #19 / [specs/qmd-chunker.md](specs/qmd-chunker.md), 2026-07-13),
+  **Implemented in B2** (`chunk.rs`, #19 / [specs/completed/qmd-chunker.md](specs/completed/qmd-chunker.md), 2026-07-13),
   with four model-free adaptations: a **~450**-token target (headroom under bge's 512 truncation), a
   `chars/4` proxy for token sizing (the core stays tokenizer-free), an unconditional `heading_path`
   breadcrumb, and every lever on a `ChunkConfig`. Tree-sitter code chunking stays deferred (#41 / spec §8).

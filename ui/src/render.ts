@@ -429,17 +429,20 @@ function formatDuration(ms: number): string {
   return `${s}s`;
 }
 
-// The per-model embedding-time ledger (b2-desktop stats.rs), accumulated across sessions
-// so a model swap can be judged on real speed. One row per model that has history —
-// total time, chunks, and derived throughput — the current model marked. Empty until the
-// first embed run completes.
+// The per-model embedding-time ledger (b2-desktop stats.rs): a running total per model,
+// summed across every reindex since you selected it, so a model swap can be judged on
+// real speed. Switching to a model restarts its total (the swap re-embeds the whole
+// corpus), so each row covers only that model's current stint — the copy says so. One row
+// per model that has history: total time, chunks, and derived throughput, current marked.
 function embedStatsHtml(state: AppState): string {
   const byModel = new Map(state.embedStats.map((s) => [s.model, s]));
   // Order by the picker so rows are stable; only models with recorded time appear.
   const rows = state.models
     .map((m) => ({ model: m, stat: byModel.get(m.id) }))
     .filter((r) => r.stat && r.stat.chunks > 0);
-  const head = `<div class="settings-subhead">Embedding time</div>`;
+  const head =
+    `<div class="settings-subhead">Embedding time</div>` +
+    `<p class="settings-detail muted">Running total per model, summed across every reindex since you selected it. Switching models restarts the total.</p>`;
   if (rows.length === 0) {
     return (
       head +

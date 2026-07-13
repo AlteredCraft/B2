@@ -3,14 +3,14 @@ title: "B2 — qmd chunker upgrade (replace the minimal paragraph splitter)"
 type: note
 tags: [b2, core, chunking, embedding, retrieval, indexing, spec]
 created: 2026-07-13
-status: draft
+status: implemented
 ---
 
 # B2 — qmd chunker upgrade (replace the minimal paragraph splitter)
 
 > **The build spec for replacing the placeholder paragraph chunker
-> ([`b2-core/src/chunk.rs`](../../crates/b2-core/src/chunk.rs)) with the qmd-heuristic chunker
-> ([index-engine.md](../index-engine.md) §1): size-targeted, overlapping, Markdown-aware chunks that
+> ([`b2-core/src/chunk.rs`](../../../crates/b2-core/src/chunk.rs)) with the qmd-heuristic chunker
+> ([index-engine.md](../../index-engine.md) §1): size-targeted, overlapping, Markdown-aware chunks that
 > carry a `heading_path` breadcrumb.** The current chunker emits **one chunk per blank-line-separated
 > block**, so every heading becomes its own standalone embedding. Measured on a real vault, **62% of
 > chunks are ≤20 words** (mostly bare headings and one-line list items). This is a three-way loss —
@@ -19,9 +19,9 @@ status: draft
 > **This doc owns:** the new chunker algorithm and its B2 adaptations (the 512-token target, model-free
 > token estimation, `heading_path`, overlap); the `heading_path` plumbing; the re-projection + the
 > measurement gate. **It does not own:** the engine invariant or the reindex algorithm
-> ([index-engine.md](../index-engine.md), [index-engine-build.md](completed/index-engine-build.md)); the
-> projection/embedding split it reuses ([projection-embedding-split.md](completed/projection-embedding-split.md));
-> the eval harness it scores against ([eval-strategy.md](eval-strategy.md)). Tree-sitter AST chunking for
+> ([index-engine.md](../../index-engine.md), [index-engine-build.md](index-engine-build.md)); the
+> projection/embedding split it reuses ([projection-embedding-split.md](projection-embedding-split.md));
+> the eval harness it scores against ([eval-strategy.md](../eval-strategy.md)). Tree-sitter AST chunking for
 > code files (qmd optional), per-model token budgets, and embed-order changes stay **deferred** (§8).
 
 ## 0. Scope & ground rules
@@ -55,7 +55,7 @@ so it is unit-testable in isolation before any re-projection.
 
 ## 1. The problem, grounded in the code
 
-[`chunk_body`](../../crates/b2-core/src/chunk.rs) splits the body into **paragraphs** — maximal runs of
+[`chunk_body`](../../../crates/b2-core/src/chunk.rs) splits the body into **paragraphs** — maximal runs of
 non-blank lines separated by blank lines, one `Chunk` each, no size target, no merging, `heading_path`
 left `NULL`, `token_count` = whitespace word count. In Markdown that means **every heading, list item,
 and table is its own chunk.**
@@ -77,7 +77,7 @@ chunks holding the *same content*. The loss is three-way:
 
 1. **Speed** — inflated embedding *count* (∝ embed time via fixed-per-pass overhead + padding waste;
    content FLOPs are ~constant, so realistically a few-× embed speedup, stacking on a smaller model /
-   Metal). It also makes ["batching across notes"](../../crates/b2-core/src/ingest.rs) largely moot:
+   Metal). It also makes ["batching across notes"](../../../crates/b2-core/src/ingest.rs) largely moot:
    fewer, larger, more-uniform chunks fill batches naturally and vary less in length.
 2. **Scans + storage** — discovery/search scan `embed::l2_sq` over **all** vectors is O(vectors); ~10×
    fewer vectors → proportionally cheaper scans and DB.
@@ -108,7 +108,7 @@ Four adaptations port qmd onto B2's model-free core and bge-family embedder. All
 - **D2 — size by a `chars/4` proxy (model-free); truncation is the net.** The core cannot call the real
   tokenizer: it lives in `b2-embed`, and `b2-core` is model-free by rule. The sharper reason —
   **chunking runs in the model-free `project_vault` pass**
-  ([projection-embedding-split.md](completed/projection-embedding-split.md)): a real tokenizer would force
+  ([projection-embedding-split.md](projection-embedding-split.md)): a real tokenizer would force
   the model to load *during projection* and make first-paint wait on it again, undoing that split. So
   estimate tokens as `chars / chars_per_token` (a `ChunkConfig` field, default 4.0 — English ≈ 4
   chars/token; **code and tables run denser**, so it is a lever, not a law, D5). Approximation is safe: boundaries are soft
@@ -211,10 +211,14 @@ for the retrieval win). Confirm FTS triggers still fire on the reshaped chunks.
 ### Step 3 — re-project & measure (the gate, sketch)
 Drop & rebuild the dogfood vault. Capture, before vs after: **chunk count** and **embed throughput**
 (the shipped per-model timer in Settings), and the **retrieval-quality delta** via
-[`cargo run -p b2-embed --example eval`](eval-strategy.md) under paragraph vs qmd chunking. If D3's
+[`cargo run -p b2-embed --example eval`](../eval-strategy.md) under paragraph vs qmd chunking. If D3's
 prepend toggle is worth it, A/B it here.
 
 ## 7. Acceptance / the eval gate
+
+> **Status (2026-07-13):** the implementation (Steps 1–2) shipped and merged — **#19 is closed**. This
+> retrieval-eval gate is **not yet run**; it is split out and tracked in **#44** so "implementation
+> shipped" and "quality validated" stay separate. The bar below is unchanged — #44 owns running it.
 
 Per **#19**, the upgrade is *unlocked by the eval*. Ship qmd chunking only if, on the hand-labelled
 retrieval eval, it **does not regress** (target: **improves**) quality vs. the paragraph chunker — and it
@@ -248,10 +252,12 @@ is not a gate.
 
 ## 9. Docs to mirror (on ship)
 
-- [`chunk.rs`](../../crates/b2-core/src/chunk.rs) top comment — drop the "minimal placeholder / UPGRADE
+- [`chunk.rs`](../../../crates/b2-core/src/chunk.rs) top comment — drop the "minimal placeholder / UPGRADE
   PLAN" note; describe the shipped heuristic.
-- [index-engine-build.md](completed/index-engine-build.md) §1.2 **BUILD NOTE** — "minimal chunker STILL
+- [index-engine-build.md](index-engine-build.md) §1.2 **BUILD NOTE** — "minimal chunker STILL
   ships" → "qmd heuristic shipped."
-- [index-engine.md](../index-engine.md) §1 — mark the chunking heuristic as implemented, not aspirational.
-- [tasks.md](../tasks.md) — reflect the ship; **close #19** with the before/after numbers.
-- This spec moves to `planning/specs/completed/` on ship (per the repo convention).
+- [index-engine.md](../../index-engine.md) §1 — mark the chunking heuristic as implemented, not aspirational.
+- [tasks.md](../../tasks.md) — reflect the ship; **#19 closed** (implementation), the eval gate carried
+  forward as **#44** (§7). The before/after numbers land there when the gate runs.
+- This spec **moved to `planning/specs/completed/`** with the Steps 1–2 ship (per the repo convention);
+  `status: implemented`. The §7 eval gate remains open under #44.

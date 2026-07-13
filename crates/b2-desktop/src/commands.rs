@@ -428,8 +428,17 @@ fn write_note_impl(
 /// the registry *before* any filesystem write, so the unknown-model path is hermetic (no
 /// file touched); the real-config write itself is exercised by `b2-embed`'s `write_model`
 /// tests against a tempfile, not here (same posture as `persist_last_vault` in main.rs).
+///
+/// A *changed* model also restarts that model's embed-time ledger ([`stats::reset`]): the
+/// swap drops the vault's vectors, so the next reindex re-embeds the whole corpus and the
+/// cumulative stat must restart with it rather than stack a second corpus onto the old
+/// total. Re-selecting the current model is a no-op that keeps its accumulated history.
 fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
+    let previous = EmbedConfig::load().ok().map(|c| c.model);
     EmbedConfig::set_model(model)?;
+    if previous.as_deref() != Some(model) {
+        crate::stats::reset(model);
+    }
     Ok(EmbedConfig::load()?.model_choices())
 }
 
