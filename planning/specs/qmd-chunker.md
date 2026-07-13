@@ -103,14 +103,15 @@ Four adaptations port qmd onto B2's model-free core and bge-family embedder. All
   (`model.rs` `MAX_TOKENS = 512`, itself capped by the model's `max_position_embeddings`). A 900-token
   chunk would be silently truncated at embed time — its tail is never embedded, so retrieval on that
   content is simply lost. ~450 sits under 512 with headroom for the D2 proxy's error and any D3
-  breadcrumb. Encoded as a module constant, like `EMBED_BATCH`.
+  breadcrumb. A `ChunkConfig` field (`target_tokens`, default 450) — see **D5**.
 
 - **D2 — size by a `chars/4` proxy (model-free); truncation is the net.** The core cannot call the real
   tokenizer: it lives in `b2-embed`, and `b2-core` is model-free by rule. The sharper reason —
   **chunking runs in the model-free `project_vault` pass**
   ([projection-embedding-split.md](completed/projection-embedding-split.md)): a real tokenizer would force
   the model to load *during projection* and make first-paint wait on it again, undoing that split. So
-  estimate tokens as `chars / 4` (English ≈ 4 chars/token). Approximation is safe: boundaries are soft
+  estimate tokens as `chars / chars_per_token` (a `ChunkConfig` field, default 4.0 — English ≈ 4
+  chars/token; **code and tables run denser**, so it is a lever, not a law, D5). Approximation is safe: boundaries are soft
   (±tens of tokens is irrelevant to retrieval — the boundary *score* matters far more), and the embedder
   already **truncates at 512** as a hard backstop, so a proxy under-estimate merely clips the tail of one
   unusually dense chunk (a table, code), never corrupts the index. Target conservatively for headroom.
@@ -122,22 +123,54 @@ Four adaptations port qmd onto B2's model-free core and bge-family embedder. All
   replacing today's `NULL`. Whether to *also* **prepend** that breadcrumb into the **embedded text**
   (contextual chunk headers — injects the section's topic into the vector, so a heading-less table becomes
   findable by its section, §1's failure case) is a real retrieval knob with a token cost: it ships as a
-  toggle, **default off**, and Step 3 A/Bs it on the eval. Storing is unconditional — cheap, useful for
+  `ChunkConfig` field (`prepend_heading_path`, **default off**, see **D5**), and Step 3 A/Bs it on the
+  eval. This is the deterministic, structural cousin of **contextual retrieval** (prepend section context
+  before embedding); the LLM-generated per-chunk context is the richer someday-upgrade, but it needs a
+  model and so stays out of this model-free pass (§8). Storing is unconditional — cheap, useful for
   display, and required for the toggle to be possible.
 
 - **D4 — ~15% overlap, tunable.** Consecutive chunks share ~15% of content, so `char_start..char_end`
   ranges **overlap** (they no longer partition the body). Fine: each range still addresses the exact
   slice that produced its `text` (anchoring for explain/highlight holds), and `UNIQUE(note_b2id, seq)` is
-  unaffected. A **module constant, tuned against the eval**, not fixed by fiat.
+  unaffected. A `ChunkConfig` field (`overlap_frac`, default 0.15), tuned against the eval, not fixed by
+  fiat — see **D5**.
+
+- **D5 — every lever lives on a `ChunkConfig` struct; `chunk_body` takes `&ChunkConfig`.** D1–D4 are
+  *defaults*, not literals baked into the algorithm: `chunk_body(body: &str, cfg: &ChunkConfig) ->
+  Vec<Chunk>`, where `ChunkConfig` carries the whole tuning surface and its `Default` reproduces the
+  shipped values (so CLI/desktop callers pass `&ChunkConfig::default()` and nothing about their ergonomics
+  changes).
+
+  | field | default | lever |
+  |---|---|---|
+  | `target_tokens` | 450 | chunk size (D1) |
+  | `overlap_frac` | 0.15 | overlap (D4) |
+  | `chars_per_token` | 4.0 | the D2 token proxy |
+  | `backscan_tokens` | 200 | boundary-search window |
+  | `weights` | qmd's H1=100…list=5 | the boundary scorer |
+  | `prepend_heading_path` | false | D3 contextual header |
+
+  *Reason:* this component will be **tuned for some time**, and the boundary weights + backscan window are
+  as consequential to cut quality as size/overlap — leaving them as hardcoded literals hides the levers
+  that matter most. With a config: (a) the Step-3 eval **sweeps parameters in one process** (a loop over
+  configs) instead of one recompile per cell — and Step 3 already A/Bs the D3 toggle and size; (b) unit
+  tests construct configs instead of depending on ambient constants; (c) later exposure (a settings knob,
+  a per-vault override) is trivial. D3's toggle already had to be threaded *somewhere*, so the
+  "keep `chunk_body` argumentless" simplification was already spent — this collects every knob in one place
+  rather than scattering a lone bool. It stays **pure, deterministic, and model-free**: a plain params
+  struct with `Default` is no async/generics/traits/macros, so it satisfies the root `CLAUDE.md`
+  "no speculative abstraction" rule — the concrete need (repeated tuning + the eval sweep) is present
+  today, not speculative.
 
 ## 4. What changes in the code (surface)
 
-- **`chunk.rs`** — `chunk_body(body: &str) -> Vec<Chunk>` keeps its **pure signature** (target/overlap as
-  module constants, so it stays trivially testable). New internals: a line/block scan that accumulates
-  toward the token target, a boundary scorer over the ~200-token backward window, overlap carry-over, and
-  a running heading stack. `Chunk` gains **`heading_path: Option<String>`**; `token_count` now holds the
-  **`chars/4` token estimate** used for sizing (D2), documented as an estimate — not exact tokens (it was
-  a whitespace word count under the paragraph splitter).
+- **`chunk.rs`** — `chunk_body(body: &str, cfg: &ChunkConfig) -> Vec<Chunk>` stays a **pure function**
+  (all tuning on `cfg`, whose `Default` = the shipped values (D5), so it stays trivially testable *and*
+  sweepable). New public type **`ChunkConfig`**. New internals: a line/block scan that accumulates toward
+  `cfg.target_tokens`, a boundary scorer over the `cfg.backscan_tokens` backward window, overlap
+  carry-over, and a running heading stack. `Chunk` gains **`heading_path: Option<String>`**; `token_count`
+  now holds the **`chars / cfg.chars_per_token` token estimate** used for sizing (D2), documented as an
+  estimate — not exact tokens (it was a whitespace word count under the paragraph splitter).
 - **`db.rs`** — `replace_chunks` writes the `heading_path` column (today it inserts `NULL`); the schema
   already has it, so **no migration**.
 - **`ingest.rs`** — **unchanged.** It calls `chunk_body` and hands `(id, text)` pairs to the embed pass
@@ -146,8 +179,8 @@ Four adaptations port qmd onto B2's model-free core and bge-family embedder. All
 
 ## 5. Correctness & determinism invariants (unchanged)
 
-- **Pure & deterministic.** `chunk_body` is a total function of the body string — no wall-clock, no
-  randomness (root `CLAUDE.md`). Same body ⇒ same chunks ⇒ reproducible index.
+- **Pure & deterministic.** `chunk_body` is a total function of `(body, ChunkConfig)` — no wall-clock, no
+  randomness (root `CLAUDE.md`). Same body + config ⇒ same chunks ⇒ reproducible index.
 - **Idempotent re-projection.** Drop `.b2/` and rebuild ⇒ identical chunks/FTS/edges; vectors + centroids
   re-derive on the embed pass. An incremental reindex re-chunks only changed notes (`would_reembed`).
 - **The embedder is the truncation safety net.** `model.rs` already truncates >512 tokens, so a proxy
@@ -156,14 +189,20 @@ Four adaptations port qmd onto B2's model-free core and bge-family embedder. All
 ## 6. Build order
 
 ### Step 1 — the chunker (start here)
-Implement the qmd heuristic in `chunk.rs` behind the unchanged `chunk_body` seam: token-target
-accumulation (D1/D2 proxy), the Markdown boundary scorer (H1..list-item weights + quadratic backward
-decay over ~200 tokens), ~15% overlap (D4), and the running `heading_path` stack (D3). Add
-`heading_path` to `Chunk`. **Deterministic unit tests** (extend `crates/b2-core/tests/chunks.rs`): chunk
+Implement the qmd heuristic in `chunk.rs` behind the `chunk_body(body, &cfg)` seam (D5): token-target
+accumulation (D1/D2 proxy), the Markdown boundary scorer (`cfg.weights`, H1..list-item, + quadratic
+backward decay over `cfg.backscan_tokens`), `cfg.overlap_frac` overlap (D4), and the running
+`heading_path` stack (D3). Add `heading_path` to `Chunk` and the `ChunkConfig` struct (D5). **Deterministic unit tests** (extend `crates/b2-core/tests/chunks.rs`): chunk
 sizes cluster near the target and never exceed the proxy cap; a heading + its section land in **one**
 chunk (the regression this fixes — assert `## Threat model` is not its own chunk); `heading_path` is
 correct through nested headings; overlap present and bounded; empty/all-blank body ⇒ empty; a giant
 single paragraph splits at the target. Golden-vault b2ids stay fixed; only chunk rows change.
+**Update the two existing paragraph-splitter assertions** in the same file: `chunks_are_projected_for_each_note`
+asserts `srs_chunks == 2` (spaced-repetition splits into two blank-line paragraphs) — under qmd sizing that
+small note coalesces into **one** chunk, so the expectation becomes `== 1` (its `seq == 0` /
+`starts_with("Spaced repetition exploits")` check still holds); `fts_index_tracks_chunks_and_matches_body_text`
+keys on `note_b2id`, not `seq`, so it survives the reshape unchanged. Splitting inside a fenced code block
+or table is a **separate guard tracked in #41** (a follow-up to §8, not Step 1).
 
 ### Step 2 — wire `heading_path` (sketch)
 Populate the column via `db::replace_chunks`; surface it where it helps (explain/UI later — not required
@@ -182,13 +221,30 @@ retrieval eval, it **does not regress** (target: **improves**) quality vs. the p
 should cut chunk count and embed time. The eval is the arbiter (eval-strategy.md); the embed timer
 quantifies the speed win. A quality regression means retune (target size, overlap, D3 prepend) or hold.
 
+**Caveat — make the gate sensitive *before* trusting it.** The eval's metric is *note-rank* ("does hybrid
+search rank the right note first?", eval-strategy.md §1), but chunking's wins are mostly **sub-note**:
+tighter intra-section retrieval and making a heading-less table/section findable by its topic (D3's whole
+point). On a small corpus of easily-separable notes, note-rank can read **"no change"** even when
+retrieval genuinely improved — so a naive D3 A/B may come back a coin-flip because the metric cannot *see*
+what it changed. Before leaning on the eval as arbiter: **add queries that probe exactly these failure
+modes** — content buried in a table, a heading-less subsection, a paraphrase that must resolve into a deep
+section — and confirm the corpus is large/varied enough that a chunking delta moves the score rather than
+overfitting a handful of labels (eval-strategy.md §3, "grow the set"). A gate the change is invisible to
+is not a gate.
+
 ## 8. Open questions / deferred
 
 - **Tree-sitter / code-aware chunking** (qmd optional) — defer; prose-oriented boundary scoring first.
+- **Don't-split-inside-a-fence/table guard** (#41) — a small prose-mode guard against a forced cut
+  bisecting a code block or table; near-term follow-up, distinct from the deferred tree-sitter work above.
 - **Per-model token budget** (D2 alternative: `Embedder::max_tokens()` threaded into chunking) — defer;
   the hardcoded ~450 target covers every current + registry model (all 512-window bge).
 - **`heading_path`-into-embedded-text** (D3 sub-decision) — an eval knob, decided in Step 3, not up front.
-- **Overlap / target-size tuning** — constants; tune against the eval, not by guess.
+- **Overlap / target-size / boundary-weight / backscan tuning** — all `ChunkConfig` fields (D5); tune
+  against the eval, not by guess.
+- **Eval sensitivity to chunking** — the note-rank metric may be blind to sub-note improvements; grow
+  `queries.json` with buried-in-table / heading-less-section / deep-paraphrase probes **before** Step 3,
+  or the D3 A/B is uninformative (§7).
 
 ## 9. Docs to mirror (on ship)
 
