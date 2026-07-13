@@ -295,8 +295,16 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Indexed {} notes ({} embedded, {} stamped)",
-                    report.indexed, report.embedded, report.stamped
+                    "Indexed {} notes ({} embedded, {} stamped) and {} resources{}",
+                    report.indexed,
+                    report.embedded,
+                    report.stamped,
+                    report.resources_indexed,
+                    if report.resources_pruned > 0 {
+                        format!(" ({} pruned)", report.resources_pruned)
+                    } else {
+                        String::new()
+                    }
                 );
                 // One unreadable file no longer aborts the reindex — it is skipped and
                 // named here (to stderr, so it never pollutes the machine-readable stdout

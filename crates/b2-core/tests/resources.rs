@@ -5,8 +5,27 @@
 //! resource-target columns (`dst_resource_path`, `embed`, `caption`), dangling
 //! means *neither* target resolved, and the version gate drops a v3 index.
 
-use b2_core::{open, SCHEMA_VERSION};
+use b2_core::{open, Vault, SCHEMA_VERSION};
 use rusqlite::Connection;
+use std::fs;
+use std::path::Path;
+
+mod common;
+
+/// `(path, class, size, content_hash)` rows, path-ordered — the comparable
+/// projection of `resources` (mtime/indexed_at are host state, not projection).
+fn resource_rows(root: &Path) -> Vec<(String, String, i64, String)> {
+    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT path, class, size, content_hash FROM resources ORDER BY path")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    rows
+}
 
 /// Column names of `table` via `pragma table_info`, for shape assertions.
 fn columns(conn: &Connection, table: &str) -> Vec<String> {
@@ -134,4 +153,149 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
         .unwrap();
     assert_eq!(dst_resource, None, "prune must re-dangle the edge");
     assert_eq!(raw, "img.png", "the authored raw target must survive the prune");
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 — the generalized walk: inventory, hashing, pruning (spec §2)
+// ---------------------------------------------------------------------------
+
+/// The walk inventories every non-`.md` file, classified by extension, and skips
+/// dot-prefixed files and folders (`.DS_Store` is not vault material).
+#[test]
+fn walk_inventories_and_classifies_resources() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    fs::write(tmp.path().join("resources/.hidden.txt"), "nope").unwrap();
+
+    let vault = Vault::open(tmp.path()).unwrap();
+    let report = vault.project(false).unwrap();
+
+    let rows = resource_rows(tmp.path());
+    let classes: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|(p, c, _, _)| (p.as_str(), c.as_str()))
+        .collect();
+    assert_eq!(
+        classes,
+        vec![
+            ("resources/blob.bin", "binary"),
+            ("resources/clipping.html", "html"),
+            ("resources/data.txt", "text"),
+            ("resources/diagram.png", "image"),
+        ],
+        "inventory must cover exactly the non-dot resources, classified"
+    );
+    assert_eq!(report.resources_indexed, 4);
+    assert_eq!(report.resources_pruned, 0);
+    assert!(report.skipped.is_empty(), "a clean vault skips nothing");
+}
+
+/// An unchanged `(size, mtime)` short-circuits the byte read: the stored hash is
+/// only recomputed when the stat changes (hashing is the pass's one byte-read).
+#[test]
+fn unchanged_stat_short_circuits_the_rehash() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let txt = tmp.path().join("resources/data.txt");
+    let before = resource_rows(tmp.path());
+    let original_mtime = fs::metadata(&txt).unwrap().modified().unwrap();
+
+    // Same-length different bytes, mtime restored: the stat is identical, so the
+    // pass must not re-read — the stored hash stays (observably) stale.
+    let stale_bytes = "PLAIN text resource for the inventory tests\n";
+    fs::write(&txt, stale_bytes).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&txt)
+        .unwrap()
+        .set_modified(original_mtime)
+        .unwrap();
+    vault.project(false).unwrap();
+    assert_eq!(
+        resource_rows(tmp.path()),
+        before,
+        "matching (size, mtime) must not re-hash"
+    );
+
+    // A touched mtime re-reads and refreshes the hash.
+    fs::File::options()
+        .write(true)
+        .open(&txt)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now())
+        .unwrap();
+    vault.project(false).unwrap();
+    let after = resource_rows(tmp.path());
+    let hash_of = |rows: &[(String, String, i64, String)]| {
+        rows.iter()
+            .find(|(p, _, _, _)| p == "resources/data.txt")
+            .map(|(_, _, _, h)| h.clone())
+            .unwrap()
+    };
+    assert_ne!(
+        hash_of(&after),
+        hash_of(&before),
+        "a changed stat must re-hash the bytes"
+    );
+    assert_eq!(
+        hash_of(&after),
+        blake3::hash(stale_bytes.as_bytes()).to_hex().to_string()
+    );
+}
+
+/// A deleted file's inventory row is pruned on the next projection pass.
+#[test]
+fn pruning_deletes_rows_the_walk_no_longer_sees() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    fs::remove_file(tmp.path().join("resources/blob.bin")).unwrap();
+    let report = vault.project(false).unwrap();
+
+    assert_eq!(report.resources_indexed, 3);
+    assert_eq!(report.resources_pruned, 1);
+    assert!(
+        !resource_rows(tmp.path())
+            .iter()
+            .any(|(p, _, _, _)| p == "resources/blob.bin"),
+        "the deleted file's row must be pruned"
+    );
+}
+
+/// `full-reindex ≡ incremental-update`, extended over resource add/change/delete
+/// (spec §7): a vault mutated then incrementally re-projected matches a fresh
+/// build of the same tree.
+#[test]
+fn incremental_resource_update_equals_full_rebuild() {
+    let mutate = |root: &Path| {
+        fs::write(root.join("resources/new-note-data.csv"), "a,b\n1,2\n").unwrap();
+        fs::write(root.join("resources/data.txt"), "changed content, new length\n").unwrap();
+        fs::remove_file(root.join("resources/blob.bin")).unwrap();
+    };
+
+    // Incremental: project, mutate, project again.
+    let a = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(a.path());
+    let vault_a = Vault::open(a.path()).unwrap();
+    vault_a.project(false).unwrap();
+    mutate(a.path());
+    vault_a.project(false).unwrap();
+
+    // Fresh: the same final tree, projected once from scratch.
+    let b = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(b.path());
+    mutate(b.path());
+    let vault_b = Vault::open(b.path()).unwrap();
+    vault_b.project(false).unwrap();
+
+    assert_eq!(
+        resource_rows(a.path()),
+        resource_rows(b.path()),
+        "incremental resource update must equal a full rebuild"
+    );
 }

@@ -76,6 +76,10 @@ pub struct ReindexReport {
     /// reindex never fails on one bad file (non-UTF-8, permission-denied). Empty on a
     /// clean vault; each entry names the file and a short, file-level reason.
     pub skipped: Vec<SkippedNote>,
+    /// The resource inventory's counts (file-type support slice 1): resources seen
+    /// this run, and stale inventory rows pruned.
+    pub resources_indexed: usize,
+    pub resources_pruned: usize,
 }
 
 /// What [`project`](Vault::project) did — the model-free half of a reindex
@@ -89,6 +93,10 @@ pub struct ProjectReport {
     /// vault never fails on one bad file. Empty on a clean vault; surfaced so an
     /// adapter can tell the user which files were left out and why.
     pub skipped: Vec<SkippedNote>,
+    /// The resource inventory's counts (file-type support slice 1): resources seen
+    /// this pass, and stale inventory rows pruned.
+    pub resources_indexed: usize,
+    pub resources_pruned: usize,
 }
 
 /// What [`embed`](Vault::embed) did — the model-bound half of a reindex: how many
@@ -318,6 +326,8 @@ impl Vault {
             stamped: ingested.notes.iter().filter(|i| i.stamped).count(),
             cancelled: ingested.cancelled,
             skipped: ingested.skipped,
+            resources_indexed: ingested.resources_indexed,
+            resources_pruned: ingested.resources_pruned,
         })
     }
 
@@ -340,6 +350,8 @@ impl Vault {
             indexed: outcome.notes.len(),
             stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
             skipped: outcome.skipped,
+            resources_indexed: outcome.resources_indexed,
+            resources_pruned: outcome.resources_pruned,
         })
     }
 

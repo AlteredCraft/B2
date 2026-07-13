@@ -1,0 +1,1 @@
+plain text resource for the inventory tests

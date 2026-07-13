@@ -20,6 +20,7 @@ use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::id::IdGen;
 use crate::note;
+use crate::resource::ResourceClass;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -400,6 +401,9 @@ pub struct IngestOutcome {
     /// Files the projection pass skipped as unreadable (see [`SkippedNote`]); empty on
     /// a clean vault. A whole-vault reindex reports these rather than failing on them.
     pub skipped: Vec<SkippedNote>,
+    /// The resource inventory's counts (see [`ProjectOutcome`]).
+    pub resources_indexed: usize,
+    pub resources_pruned: usize,
 }
 
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
@@ -448,7 +452,8 @@ pub fn project_file(
     Ok(Projected { b2id, stamped })
 }
 
-/// A `.md` file the projection pass could **not** read, and therefore skipped, so one
+/// A vault file (a note **or** a resource) the projection pass could **not** read,
+/// and therefore skipped, so one
 /// unreadable file never aborts a whole-vault reindex (a real vault holds the odd
 /// non-UTF-8 or unreadable file). Carries the vault-relative `path` and a short,
 /// user-appropriate `reason` — about the *file itself* ("not valid UTF-8 text",
@@ -483,6 +488,10 @@ fn skip_reason(err: &std::io::Error) -> String {
 pub struct ProjectOutcome {
     pub notes: Vec<Projected>,
     pub skipped: Vec<SkippedNote>,
+    /// Resources inventoried this pass (unchanged ones included), and stale
+    /// inventory rows pruned — the slice-1 resource pass (spec §2).
+    pub resources_indexed: usize,
+    pub resources_pruned: usize,
 }
 
 /// The result of a (possibly cancelled) **embed pass** ([`embed_vault`]): which
@@ -518,8 +527,10 @@ pub fn project_vault(
     force: bool,
 ) -> Result<ProjectOutcome> {
     let mut rel_paths = Vec::new();
-    collect_md_files(vault_root, vault_root, &mut rel_paths)?;
+    let mut resource_files = Vec::new();
+    collect_vault_files(vault_root, vault_root, &mut rel_paths, &mut resource_files)?;
     rel_paths.sort();
+    resource_files.sort_by(|a, b| a.0.cmp(&b.0)); // paths are unique — a total order
 
     // Phase 1: project every note + its chunks (this fills the link resolver for
     // every note, so phase 2 never depends on file order). The returned pending
@@ -546,6 +557,12 @@ pub fn project_vault(
         }
     }
 
+    // Resource inventory — between the phases so the rows exist before phase 2
+    // resolves links (a `![[img.png]]` edge resolves against `resources`, spec §3).
+    let (resources_indexed, resources_pruned, mut resource_skips) =
+        project_resources(conn, vault_root, &resource_files)?;
+    skipped.append(&mut resource_skips);
+
     // Phase 2: edges (resolve links against the now-complete resolver). Only the notes
     // that projected are here, so a skipped note simply has no rows and no edges; a
     // link pointing at it stays unresolved, exactly as for any absent target.
@@ -559,10 +576,17 @@ pub fn project_vault(
         notes = notes.len(),
         stamped = notes.iter().filter(|n| n.stamped).count(),
         skipped = skipped.len(),
+        resources = resources_indexed,
+        resources_pruned,
         force,
         "projection pass complete"
     );
-    Ok(ProjectOutcome { notes, skipped })
+    Ok(ProjectOutcome {
+        notes,
+        skipped,
+        resources_indexed,
+        resources_pruned,
+    })
 }
 
 /// The **embed pass** (projection-embedding-split.md §4): fill a vector for every
@@ -673,6 +697,8 @@ pub fn ingest_vault_with_progress(
     let ProjectOutcome {
         notes: projected_notes,
         skipped,
+        resources_indexed,
+        resources_pruned,
     } = project_vault(conn, vault_root, idgen, force)?;
     let embed = embed_vault(conn, embedder, on_progress)?;
 
@@ -694,6 +720,8 @@ pub fn ingest_vault_with_progress(
         notes,
         cancelled: embed.cancelled,
         skipped,
+        resources_indexed,
+        resources_pruned,
     })
 }
 
@@ -711,7 +739,10 @@ pub fn ingest_vault_with_progress(
 pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result<Vec<PlannedNote>> {
     let space_exists = db::embedding_space_exists(conn)?;
     let mut rel_paths = Vec::new();
-    collect_md_files(vault_root, vault_root, &mut rel_paths)?;
+    // The dry-run previews *notes* (stamp/embed decisions); the resource inventory
+    // has no per-file decisions to preview, so its walk output is unused here.
+    let mut resource_files = Vec::new();
+    collect_vault_files(vault_root, vault_root, &mut rel_paths, &mut resource_files)?;
     rel_paths.sort();
 
     let mut out = Vec::with_capacity(rel_paths.len());
@@ -741,7 +772,19 @@ pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result
     Ok(out)
 }
 
-fn collect_md_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
+/// Walk the vault once, routing every file: `.md` (case-insensitive) → `notes`,
+/// everything else → `resources` with its class, per
+/// [`ResourceClass::of_path`] — the `index = projection of (the vault directory)`
+/// walk (planning/specs/resources-inventory-graph.md §2). Dot-prefixed
+/// **directories** are skipped as always (`.b2/`, `.git/`); dot-prefixed **files**
+/// are skipped from the resource inventory (`.DS_Store`, `.gitignore` are not
+/// vault material) while the note route keeps its historical behavior.
+fn collect_vault_files(
+    root: &Path,
+    dir: &Path,
+    notes: &mut Vec<String>,
+    resources: &mut Vec<(String, ResourceClass)>,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -751,15 +794,99 @@ fn collect_md_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with('.'));
             if !is_dotdir {
-                collect_md_files(root, &path, out)?;
+                collect_vault_files(root, &path, notes, resources)?;
             }
-        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            // `path` was produced by walking `root`, so `strip_prefix` cannot fail;
-            // handle it gracefully anyway rather than panic on the invariant.
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
+            continue;
+        }
+        // `path` was produced by walking `root`, so `strip_prefix` cannot fail;
+        // handle it gracefully anyway rather than panic on the invariant.
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        match ResourceClass::of_path(&rel) {
+            None => notes.push(rel),
+            Some(class) => {
+                let is_dotfile = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with('.'));
+                if !is_dotfile {
+                    resources.push((rel, class));
+                }
             }
         }
     }
     Ok(())
+}
+
+/// The **resource inventory pass** (slice-1 spec §2): stat every walked resource,
+/// short-circuit on an unchanged `(size, mtime)`, otherwise read the bytes once to
+/// blake3 them, and upsert the row; then prune the rows the walk no longer saw
+/// (inbound edges re-dangle via the schema's `ON DELETE SET NULL`). Model-free and
+/// chunk-free — hashing is the only byte-read. An unreadable file is *skipped*
+/// (reported, never fatal), and any prior row it had survives: the file was seen
+/// on disk, so pruning it would lie.
+///
+/// Returns `(indexed, pruned, skipped)` where `indexed` counts the resources
+/// inventoried this pass (unchanged ones included — the mirror of the note
+/// `indexed` count).
+fn project_resources(
+    conn: &Connection,
+    vault_root: &Path,
+    resources: &[(String, ResourceClass)],
+) -> Result<(usize, usize, Vec<SkippedNote>)> {
+    let mut skipped = Vec::new();
+    let mut seen: HashSet<String> = HashSet::with_capacity(resources.len());
+    let mut indexed = 0;
+    for (rel, class) in resources {
+        // The walk saw the file, so it exists: it is never pruned this pass, even
+        // if reading it fails below.
+        seen.insert(rel.clone());
+        let abs = vault_root.join(rel);
+        let meta = match fs::metadata(&abs) {
+            Ok(m) => m,
+            Err(e) => {
+                skipped.push(SkippedNote {
+                    path: rel.clone(),
+                    reason: skip_reason(&e),
+                });
+                continue;
+            }
+        };
+        let size = meta.len() as i64;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        if db::resource_stat(conn, rel)? == Some((size, mtime)) {
+            indexed += 1; // unchanged — inventoried without touching the bytes
+            continue;
+        }
+        let bytes = match fs::read(&abs) {
+            Ok(b) => b,
+            Err(e) => {
+                skipped.push(SkippedNote {
+                    path: rel.clone(),
+                    reason: skip_reason(&e),
+                });
+                continue;
+            }
+        };
+        let content_hash = blake3::hash(&bytes).to_hex().to_string();
+        db::upsert_resource(
+            conn,
+            &db::ResourceRow {
+                path: rel,
+                class: class.as_str(),
+                size,
+                mtime,
+                content_hash: &content_hash,
+            },
+        )?;
+        indexed += 1;
+    }
+    let pruned = db::prune_resources_except(conn, &seen)?;
+    Ok((indexed, pruned, skipped))
 }

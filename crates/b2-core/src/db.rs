@@ -19,7 +19,7 @@ use crate::embed::pack_f32;
 use crate::error::Result;
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use rusqlite::{params, Connection, OptionalExtension, StatementStatus};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -346,6 +346,68 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// resources (file-type support slice 1 — planning/specs/resources-inventory-graph.md §2)
+// ---------------------------------------------------------------------------
+
+/// One resource's projection into `resources`. Borrowed view like [`NoteRow`] —
+/// passed straight from the walk, never stored.
+pub struct ResourceRow<'a> {
+    pub path: &'a str,
+    pub class: &'a str,
+    pub size: i64,
+    pub mtime: Option<i64>,
+    pub content_hash: &'a str,
+}
+
+/// Upsert a resource keyed by its vault-relative path. `indexed_at` is set by
+/// SQLite, like [`upsert_note`]'s — the projection needs no wall-clock from Rust.
+pub fn upsert_resource(conn: &Connection, row: &ResourceRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO resources (path, class, size, mtime, content_hash, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+         ON CONFLICT(path) DO UPDATE SET
+           class        = excluded.class,
+           size         = excluded.size,
+           mtime        = excluded.mtime,
+           content_hash = excluded.content_hash,
+           indexed_at   = excluded.indexed_at",
+        params![row.path, row.class, row.size, row.mtime, row.content_hash],
+    )?;
+    Ok(())
+}
+
+/// The stored `(size, mtime)` for an inventoried resource — the change-detection
+/// short-circuit: a matching stat means the bytes are not re-read or re-hashed
+/// (hashing is the only byte-read the inventory pass performs).
+pub fn resource_stat(conn: &Connection, path: &str) -> Result<Option<(i64, Option<i64>)>> {
+    Ok(conn
+        .query_row(
+            "SELECT size, mtime FROM resources WHERE path = ?1",
+            [path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+/// Delete every `resources` row whose path is not in `seen` (the walk's survivors)
+/// and return how many were pruned. Inbound edges **re-dangle** automatically —
+/// `edges.dst_resource_path` is `ON DELETE SET NULL`, `dst_path_raw` retained —
+/// so a stale inventory row never outlives its file (the resource half of #31).
+pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Result<usize> {
+    let mut stmt = conn.prepare("SELECT path FROM resources")?;
+    let stored = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut pruned = 0;
+    for path in stored {
+        if !seen.contains(&path) {
+            pruned += conn.execute("DELETE FROM resources WHERE path = ?1", [&path])?;
+        }
+    }
+    Ok(pruned)
 }
 
 // ---------------------------------------------------------------------------
