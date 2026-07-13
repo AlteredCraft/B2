@@ -506,13 +506,14 @@ pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> R
     for c in chunks {
         conn.execute(
             "INSERT INTO chunks(note_b2id, seq, char_start, char_end, token_count, heading_path, text)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 note_b2id,
                 c.seq as i64,
                 c.char_start as i64,
                 c.char_end as i64,
                 c.token_count as i64,
+                c.heading_path,
                 c.text,
             ],
         )?;

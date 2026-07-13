@@ -14,7 +14,7 @@
 //! edges, inline) against an already-built index — the incremental path, which
 //! equals a full rebuild for that note's rows.
 
-use crate::chunk::chunk_body;
+use crate::chunk::{chunk_body, ChunkConfig};
 use crate::db::{self, EdgeRow, NoteRow};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
@@ -187,7 +187,7 @@ fn project_note_and_chunks(
     let pending = if rechunk {
         // Chunk → project rows; hand the (id, text) pairs back for a batched embed
         // (Flow ①). replace_chunks also clears any stale vectors for this note.
-        let chunks = chunk_body(&body);
+        let chunks = chunk_body(&body, &ChunkConfig::default());
         let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
         chunk_ids
             .into_iter()
