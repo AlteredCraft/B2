@@ -147,10 +147,12 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   `note` · `text` · `html` · `pdf` · `image` · `media` · `binary` (the total fallback), each answering the
   same three questions — what index text, can it be a graph endpoint, how does it render.
 - **`chunks` generalizes** from `note_b2id` to a **document reference** (a note `b2id` *or* a resource
-  path); search resolves hits up to the owning document and results carry a `kind`. **`note_centroids`
-  generalizes with it** — two-stage discovery's coarse stage scans only centroids (#38, §4 update), so a
-  resource with chunks but no centroid would be searchable yet invisible to `b2 similar`; a text-bearing
-  resource gets its centroid through the existing lifecycle (embed-pass refresh, re-chunk drop). Every
+  path — as one-of nullable FKs on the single table, CASCADE intact for both parents; locked,
+  [research/file-type-support.md](research/file-type-support.md) §9b #7); search resolves hits up to the
+  owning document and results carry a `kind`. **Centroids follow** — two-stage discovery's coarse stage
+  scans only centroids (#38, §4 update), so a resource with chunks but no centroid would be searchable yet
+  invisible to `b2 similar`; a sibling `resource_centroids` table (same locked call) is maintained through
+  the existing lifecycle (embed-pass refresh, re-chunk drop) and the coarse stage scans both. Every
   class funnels to *text* — native, extracted (`html` strip / `pdf` text layer), or, for an `image`,
   aggregated inbound alt-text — embedded through the **existing** bge space: one embedding space in v1,
   the multimodal seam documented for later (§6 posture, [data-model.md](data-model.md) §10).

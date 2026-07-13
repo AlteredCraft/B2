@@ -35,11 +35,16 @@ slices (§8). Tracked here so state survives across sessions:
       **centroids generalize alongside chunks** — discovery's coarse stage scans only centroids, so
       `b2 similar` over resources requires document-keyed centroids, not just document-keyed chunks
       (§5). No locked decision changes.
-- [ ] **Stage B — slice-1 build spec** under `specs/` — inventory & graph (§8 slice 1): walk all files
-      → `resources` table, classify by extension, parse `![alt](…)` / `[…](…)` / `![[…]]` → resource
-      edges, file tree + fallback card, `b2 explain` / `b2 mv` over resources. **Model-free; no new
-      engine deps** (the desktop gains the Tauri opener plugin for *Open in system default* — the one
-      new adapter dep).
+- [x] **Slice-prep decisions locked** (2026-07-12, §9b #7–#10) — chunk/centroid DDL (one-of FKs +
+      sibling `resource_centroids`), anchor dispatch by extension, direction-agnostic 1-hop
+      exclusion, `Vault::list_resources`.
+- [x] **Stage B — slice-1 build spec** (2026-07-12) —
+      [specs/resources-inventory-graph.md](../specs/resources-inventory-graph.md): inventory & graph
+      (§8 slice 1) — the v4 schema (`resources` + `edges` widening), the generalized walk with
+      pruning + hashing, the parser forms with caption capture, the façade additions
+      (`list_resources` / `explain_resource` / `move_resource` / `doc_kind`), CLI dispatch, desktop
+      tree + fallback card + watcher inversion. **Model-free; no new engine deps** (the desktop
+      gains the Tauri opener plugin — the one new adapter dep). Next: build it.
 - [ ] **Slices 2–4** — render mechanisms · searchable resources · PDF text (§8); spec each when reached.
 - [ ] **Slice 5** — semantic seams (Describer, multimodal embedder), future/unscheduled (§8, §5).
 
@@ -257,18 +262,17 @@ walk vault → classify (extension) → per class:
 - **Chunks generalize from `note_b2id` to a document reference** (note b2id *or* resource path).
   Search resolves hits up to the owning document; results now carry a `kind`. Since the index is
   disposable, this is a `schema_version` bump + rebuild — **no migration code, ever**. That is the
-  disposable-index tenet paying rent. *(The concrete DDL — today `chunks.note_b2id` is a `NOT NULL`
-  FK into `notes` with `UNIQUE(note_b2id, seq)`, plus the FTS triggers keyed off it — is a slice-3
-  spec decision: two nullable one-of columns vs. a `(doc_kind, doc_key)` pair. Slice 1 touches no
-  chunk.)*
+  disposable-index tenet paying rent. *(DDL locked, §9b #7: `note_b2id` and `resource_path` as
+  one-of nullable FKs on the single `chunks` table — `chunks_fts` and `embeddings(chunk_id)` hang
+  off one rowid space, and CASCADE stays intact for both parents. Slice 1 touches no chunk.)*
 - **Centroids generalize the same way — this is load-bearing, not optional** (#38 reconcile,
   2026-07-12). Discovery is now two-stage, and its **coarse stage scans only `note_centroids`**
   (today `PRIMARY KEY note_b2id REFERENCES notes(b2id)`; maintained by the embed pass, dropped on
   re-chunk). A resource that only has chunks but no centroid can be *found by search* yet is
-  **invisible to `b2 similar`** — as anchor and as candidate. So the centroid table becomes
-  document-keyed alongside `chunks`, and a text-bearing resource gets a centroid through the exact
-  existing lifecycle (embed-pass refresh, re-chunk drop). An image's single caption chunk *is* its
-  centroid. Same `schema_version` bump, same rebuild.
+  **invisible to `b2 similar`** — as anchor and as candidate. So resources get centroids too — a
+  **sibling `resource_centroids`** table (locked, §9b #7), maintained through the exact existing
+  lifecycle (embed-pass refresh, re-chunk drop); discovery's coarse stage scans both tables. An
+  image's single caption chunk *is* its centroid. Same `schema_version` bump, same rebuild.
 - **One embedding space.** Extracted text embeds through the existing bge space — it *is* text, so
   the `meta (embed_model_id, embed_dim)` discipline is untouched. Nothing multimodal in v1.
 - **The image trick — model-free semantics from authored context.** An image's index text =
@@ -413,11 +417,11 @@ Each slice is independently shippable and dogfoodable; later slices never rework
    images in the note reading view**; read-only text viewer; HTML source view + *Open in browser*.
    *Selecting anything shows something.*
 3. **Searchable resources (still model-free).** Extraction for `text`/`html`; chunks → FTS +
-   vectors through the existing space, **and document-keyed centroids** (the two-stage discovery
+   vectors through the existing space, **and resource centroids** (the two-stage discovery
    prerequisite — without a centroid a resource is invisible to `b2 similar`, §5); image alt-text
-   aggregation; typed search results in CLI + desktop. The chunk/centroid DDL generalization
-   (`note_b2id` → document reference) is this slice's spec decision. *`b2 search` and `b2 similar`
-   see the whole vault.*
+   aggregation; typed search results in CLI + desktop. The chunk/centroid DDL is locked (§9b #7),
+   as are anchor dispatch and exclusion semantics (§9b #8–#9). *`b2 search` and `b2 similar` see
+   the whole vault.*
 4. **PDF text.** The extraction-dependency decision (§9 #5) lands here, not before; then PDFs join
    slice 3's pipeline. Optionally the pdf.js viewer upgrade.
 5. **Semantic seams (future, unscheduled).** Describer (OCR/captioning), multimodal embedder as a
@@ -464,8 +468,36 @@ is a data-availability stopgap the Describer erases with intrinsic text (§5); `
 v1 mechanics, with tail-verb inverse authoring today and the vault-level B2-managed relations file
 as the designed future home for resource-sourced edges (§4, §7). None of decisions 1–6 change.
 
-**Still open: none — the design is locked.** Next: mirror into the canonical docs —
-[data-model.md](../data-model.md) gains the resource object + the widened projection statement,
-[index-engine.md](../index-engine.md) §3 gains the `resources` table + extraction step,
-[vision-and-scope.md](../vision-and-scope.md) records the locked decisions — and slice 1 gets a
-build spec under `specs/`.
+## 9b. Judgment calls — resolved (2026-07-12, post-#38 reconcile)
+
+Four decisions the #38 reconcile surfaced, locked ahead of their slices so the specs inherit them:
+
+7. **Chunk/centroid DDL = one-of FKs on `chunks`, sibling table for centroids** (slice 3). `chunks`
+   stays **one table** — `note_b2id` and `resource_path` both nullable FKs (`ON DELETE CASCADE`) with
+   a `CHECK` that exactly one is set, and two partial unique indexes replacing `UNIQUE(note_b2id,
+   seq)` — because `chunks_fts` (external-content) and `embeddings(chunk_id)` hang off a single
+   rowid space, and FK CASCADE is the machinery that keeps derived rows consistent
+   ([#31](https://github.com/AlteredCraft/B2/issues/31) is what manual cleanup buys). Centroids get
+   a **sibling `resource_centroids`** table (`resource_path` PK, FK into `resources`) rather than a
+   generalized one — no dependents hang off centroids, so the split costs nothing and keeps clean
+   PK/FK; discovery scans both tables (same total rows). Rejected: a `(doc_kind, doc_key)` pair
+   (no FK possible → manual cleanup everywhere); fully split chunk tables (doubles the FTS/search
+   plumbing).
+8. **Anchor resolution = dispatch by extension.** `b2 similar <anchor>` (and any doc-ref
+   resolution): `.md` → notes lookup (path or b2id, as today); any other extension → `resources`
+   lookup by vault-relative path; absent → "not indexed". The same extension-only classification
+   doctrine as §3 — one rule everywhere, no DB-state-dependent fallback order.
+9. **"Unlinked" for a resource anchor = the same 1-hop rule, direction-agnostic.** Exclude the
+   anchor plus every document within one typed hop regardless of edge direction — for a resource
+   that is exactly its inbound referencing notes (it has no outbound edges by construction). No
+   sibling (2-hop) exclusion: a note citing this paper often cites the genuinely related ones —
+   exactly what discovery should surface.
+10. **Façade listing = a new `Vault::list_resources`** (own view type: path, class, size, mtime);
+    `list_notes` untouched. Adapters compose the file tree (the desktop host may merge both in one
+    `#[tauri::command]`); per-kind view types stay clean as the shared CLI-JSON/IPC contract.
+    Rejected: a unified `list_documents` union type (mostly-null fields per kind — the "unless it's
+    a resource" clause smell, in the API) and widening `list_notes` (breaks its guaranteed
+    note semantics).
+
+**Still open: none — the design is locked.** Canonical-doc mirror: done (Stage A, 2026-07-12).
+Next: slice 1 gets a build spec under `specs/`.

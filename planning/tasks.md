@@ -84,13 +84,15 @@ façade** have shipped:
 The desktop's **read → discover → link → edit → reconcile** arc is complete (Step 5 shipped 2026-07-11,
 above). The next feature is **file-type support (resources)** — teaching the vault about its non-`.md`
 files (PDFs, images, HTML, code). The design is **locked**
-([research/file-type-support.md](research/file-type-support.md), 2026-07-08) and mirrored into the
-canonical docs ([data-model.md](data-model.md) §10, [index-engine.md](index-engine.md) §3,
+([research/file-type-support.md](research/file-type-support.md), 2026-07-08; reconciled with #38 and
+slice-prep decisions §9b locked 2026-07-12) and mirrored into the canonical docs
+([data-model.md](data-model.md) §10, [index-engine.md](index-engine.md) §3,
 [vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-08)"). It ships in value-ordered
-slices (research §8); **slice 1 — inventory & graph** (model-free, no new deps: walk all files →
-`resources` table, classify, parse resource links, file tree + fallback card, `b2 explain` / `b2 mv` over
-resources) is next and gets its own build spec under [specs/](specs/). The tracked
-[backlog](#backlog--github-issues) below is otherwise pick-per-priority.
+slices (research §8); **slice 1 — inventory & graph** is specced —
+[specs/resources-inventory-graph.md](specs/resources-inventory-graph.md) (v4 schema, generalized walk,
+parser forms + captions, `list_resources`/`explain_resource`/`move_resource`, fallback card, watcher
+inversion) — and is the next build. The tracked [backlog](#backlog--github-issues) below is otherwise
+pick-per-priority.
 
 ## Backlog → GitHub Issues
 
