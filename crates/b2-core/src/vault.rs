@@ -600,20 +600,21 @@ impl Vault {
     /// adapters dispatched here via [`crate::resource::doc_kind`]); errors with
     /// [`Error::ResourceNotFound`] when it is not inventoried.
     pub fn explain_resource(&self, path: &str) -> Result<ResourceExplainView> {
-        let _op =
-            tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
+        let _op = tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
         let (class, size, mtime, content_hash) = db::resource_detail(&self.conn, path)?
             .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
         let backlinks = db::inbound_resource_edges(&self.conn, path)?
             .into_iter()
-            .map(|(b2id, note_path, title, r#type, caption, embed)| ResourceBacklink {
-                b2id,
-                path: note_path,
-                title,
-                r#type,
-                caption,
-                embed,
-            })
+            .map(
+                |(b2id, note_path, title, r#type, caption, embed)| ResourceBacklink {
+                    b2id,
+                    path: note_path,
+                    title,
+                    r#type,
+                    caption,
+                    embed,
+                },
+            )
             .collect();
         Ok(ResourceExplainView {
             path: path.to_string(),

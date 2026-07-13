@@ -174,17 +174,32 @@ mod tests {
         let root = Path::new("/v");
         // A note edit anywhere in the tree is relevant — and, since file-type slice 1,
         // so is any resource the walk would inventory (a Finder-dropped PNG must pulse).
-        assert!(touches_vault(root, &[PathBuf::from("/v/notes/spaced-repetition.md")]));
+        assert!(touches_vault(
+            root,
+            &[PathBuf::from("/v/notes/spaced-repetition.md")]
+        ));
         assert!(touches_vault(root, &[PathBuf::from("/v/memory.MD")]));
-        assert!(touches_vault(root, &[PathBuf::from("/v/assets/diagram.png")]));
+        assert!(touches_vault(
+            root,
+            &[PathBuf::from("/v/assets/diagram.png")]
+        ));
         assert!(touches_vault(root, &[PathBuf::from("/v/no-extension")]));
         // …but the disposable sqlite index (the trailing-embed write storm) is not…
         assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite")]));
-        assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite-wal")]));
-        assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite-shm")]));
+        assert!(!touches_vault(
+            root,
+            &[PathBuf::from("/v/.b2/b2.sqlite-wal")]
+        ));
+        assert!(!touches_vault(
+            root,
+            &[PathBuf::from("/v/.b2/b2.sqlite-shm")]
+        ));
         // …nor `.git` internals from a pull, `.obsidian/` churn, or dotfiles.
         assert!(!touches_vault(root, &[PathBuf::from("/v/.git/index")]));
-        assert!(!touches_vault(root, &[PathBuf::from("/v/.obsidian/workspace.json")]));
+        assert!(!touches_vault(
+            root,
+            &[PathBuf::from("/v/.obsidian/workspace.json")]
+        ));
         assert!(!touches_vault(root, &[PathBuf::from("/v/notes/.DS_Store")]));
         assert!(!touches_vault(root, &[]));
     }

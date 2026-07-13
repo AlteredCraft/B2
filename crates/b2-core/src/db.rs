@@ -400,18 +400,14 @@ pub type ResourceDetail = (String, i64, Option<i64>, String);
 /// Every inventoried resource — [`ResourceListing`] rows, path-ordered — the
 /// file tree's resource half (`Vault::list_resources`, research §9b #10).
 pub fn list_resources(conn: &Connection) -> Result<Vec<ResourceListing>> {
-    let mut stmt =
-        conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
+    let mut stmt = conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// One resource's full inventory row — [`ResourceDetail`] — the fallback card's
 /// metadata. `None` when the path is not inventoried.
-pub fn resource_detail(
-    conn: &Connection,
-    path: &str,
-) -> Result<Option<ResourceDetail>> {
+pub fn resource_detail(conn: &Connection, path: &str) -> Result<Option<ResourceDetail>> {
     Ok(conn
         .query_row(
             "SELECT class, size, mtime, content_hash FROM resources WHERE path = ?1",

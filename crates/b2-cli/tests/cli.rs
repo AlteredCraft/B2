@@ -764,9 +764,15 @@ fn explain_dispatches_to_the_resource_card() {
     let human = run_in(&vault, &["explain", "resources/diagram.png"]);
     assert!(human.status.success(), "{}", stderr(&human));
     let out = stdout(&human);
-    assert!(out.contains("resources/diagram.png (image, 67 bytes)"), "{out}");
+    assert!(
+        out.contains("resources/diagram.png (image, 67 bytes)"),
+        "{out}"
+    );
     assert!(out.contains("Backlinks:"), "{out}");
-    assert!(out.contains("Card (notes/card.md)  references (embed) — \"a tiny diagram\""), "{out}");
+    assert!(
+        out.contains("Card (notes/card.md)  references (embed) — \"a tiny diagram\""),
+        "{out}"
+    );
 
     let json = run_in(&vault, &["--json", "explain", "resources/diagram.png"]);
     assert!(json.status.success(), "{}", stderr(&json));
@@ -801,8 +807,14 @@ fn mv_dispatches_to_the_resource_move() {
     let mv = run_in(&vault, &["mv", "resources/diagram.png", "img/diagram.png"]);
     assert!(mv.status.success(), "{}", stderr(&mv));
     let out = stdout(&mv);
-    assert!(out.contains("Moved resources/diagram.png → img/diagram.png"), "{out}");
-    assert!(out.contains("Rewrote 1 inbound link(s) across 1 file(s)."), "{out}");
+    assert!(
+        out.contains("Moved resources/diagram.png → img/diagram.png"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Rewrote 1 inbound link(s) across 1 file(s)."),
+        "{out}"
+    );
     assert!(vault.join("img/diagram.png").exists());
     let body = std::fs::read_to_string(vault.join("notes/uses.md")).unwrap();
     assert!(body.contains("![d](../img/diagram.png)"), "{body}");

@@ -245,10 +245,8 @@ pub fn move_resource(
     //    class re-derives from the new extension), then drop the old row — its
     //    inbound edges re-dangle (ON DELETE SET NULL) until the re-projection
     //    below re-resolves them at the new path.
-    let (_, size, _, content_hash) =
-        db::resource_detail(conn, old_rel)?.ok_or_else(|| Error::ResourceNotFound(
-            old_rel.to_string(),
-        ))?;
+    let (_, size, _, content_hash) = db::resource_detail(conn, old_rel)?
+        .ok_or_else(|| Error::ResourceNotFound(old_rel.to_string()))?;
     let mtime = fs::metadata(&new_abs)
         .ok()
         .and_then(|m| m.modified().ok())

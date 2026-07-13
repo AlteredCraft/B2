@@ -46,8 +46,18 @@ fn v4_schema_has_resources_table_and_widened_edges() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
     let resources = columns(&conn, "resources");
-    for col in ["path", "class", "size", "mtime", "content_hash", "indexed_at"] {
-        assert!(resources.iter().any(|c| c == col), "resources.{col} missing");
+    for col in [
+        "path",
+        "class",
+        "size",
+        "mtime",
+        "content_hash",
+        "indexed_at",
+    ] {
+        assert!(
+            resources.iter().any(|c| c == col),
+            "resources.{col} missing"
+        );
     }
 
     let edges = columns(&conn, "edges");
@@ -81,13 +91,20 @@ fn v3_index_is_dropped_and_rebuilt_at_v4() {
         )
         .unwrap();
         // Simulate an index built by the previous schema.
-        conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
     }
 
     let conn = open(&db_path).unwrap();
     let version: String = conn
-        .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0))
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION.to_string());
     let notes: i64 = conn
@@ -139,7 +156,10 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
                  'references', 'inline')",
         [],
     );
-    assert!(dup.is_err(), "duplicate resource edge must violate the partial unique index");
+    assert!(
+        dup.is_err(),
+        "duplicate resource edge must violate the partial unique index"
+    );
 
     // Prune the resource: the edge survives as dangling, raw text retained.
     conn.execute("DELETE FROM resources WHERE path = 'img.png'", [])
@@ -152,7 +172,10 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
         )
         .unwrap();
     assert_eq!(dst_resource, None, "prune must re-dangle the edge");
-    assert_eq!(raw, "img.png", "the authored raw target must survive the prune");
+    assert_eq!(
+        raw, "img.png",
+        "the authored raw target must survive the prune"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +297,11 @@ fn pruning_deletes_rows_the_walk_no_longer_sees() {
 fn incremental_resource_update_equals_full_rebuild() {
     let mutate = |root: &Path| {
         fs::write(root.join("resources/new-note-data.csv"), "a,b\n1,2\n").unwrap();
-        fs::write(root.join("resources/data.txt"), "changed content, new length\n").unwrap();
+        fs::write(
+            root.join("resources/data.txt"),
+            "changed content, new length\n",
+        )
+        .unwrap();
         fs::remove_file(root.join("resources/blob.bin")).unwrap();
     };
 
@@ -325,7 +352,14 @@ fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
         .unwrap();
     let rows = stmt
         .query_map([src_path], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
         })
         .unwrap()
         .map(Result::unwrap)
@@ -423,7 +457,9 @@ fn markdown_note_links_resolve_with_fragment_stripped() {
         assert_eq!(r#type, "references");
     }
     // occurrence disambiguates the two edges to the same (target, type)
-    assert!(edges.iter().any(|e| e.2 == "../concepts/memory.md#retrieval"));
+    assert!(edges
+        .iter()
+        .any(|e| e.2 == "../concepts/memory.md#retrieval"));
 }
 
 // ---------------------------------------------------------------------------
@@ -482,10 +518,7 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert!(b.embed);
 
     let missing = vault.explain_resource("resources/nope.pdf");
-    assert!(matches!(
-        missing,
-        Err(b2_core::Error::ResourceNotFound(_))
-    ));
+    assert!(matches!(missing, Err(b2_core::Error::ResourceNotFound(_))));
 }
 
 /// A resource move rewrites inbound links in BOTH syntaxes, each keeping its own
@@ -515,8 +548,14 @@ fn move_resource_rewrites_inbound_links_and_reprojects() {
 
     // Each authored form kept its convention.
     let body = fs::read_to_string(tmp.path().join("notes/uses-diagram.md")).unwrap();
-    assert!(body.contains("![d](../img/diagram.png)"), "md form re-relativized: {body}");
-    assert!(body.contains("![[img/diagram.png|hero]]"), "wikilink stays vault-root: {body}");
+    assert!(
+        body.contains("![d](../img/diagram.png)"),
+        "md form re-relativized: {body}"
+    );
+    assert!(
+        body.contains("![[img/diagram.png|hero]]"),
+        "wikilink stays vault-root: {body}"
+    );
 
     // File moved; inventory + edges follow.
     assert!(tmp.path().join("img/diagram.png").exists());

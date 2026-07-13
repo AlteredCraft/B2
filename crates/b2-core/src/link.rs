@@ -231,9 +231,7 @@ fn is_external_target(target: &str) -> bool {
         return true;
     }
     match target.split_once(':') {
-        Some((scheme, _)) => {
-            !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic())
-        }
+        Some((scheme, _)) => !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphabetic()),
         None => false,
     }
 }
@@ -273,35 +271,77 @@ mod tests {
             // ![alt](path) — embed with caption
             (
                 "See ![a sailboat](img/IMG_2041.jpg) here.",
-                &[("references", "img/IMG_2041.jpg", Some("a sailboat"), true, false)],
+                &[(
+                    "references",
+                    "img/IMG_2041.jpg",
+                    Some("a sailboat"),
+                    true,
+                    false,
+                )],
             ),
             // [text](path) — plain link with caption
             (
                 "Read [the paper](papers/attention.pdf).",
-                &[("references", "papers/attention.pdf", Some("the paper"), false, false)],
+                &[(
+                    "references",
+                    "papers/attention.pdf",
+                    Some("the paper"),
+                    false,
+                    false,
+                )],
             ),
             // empty alt: still an edge, no caption
-            ("![](img/x.png)", &[("references", "img/x.png", None, true, false)]),
+            (
+                "![](img/x.png)",
+                &[("references", "img/x.png", None, true, false)],
+            ),
             // ![[file.ext]] embed, with and without alias
-            ("![[img/photo.png]]", &[("references", "img/photo.png", None, true, false)]),
+            (
+                "![[img/photo.png]]",
+                &[("references", "img/photo.png", None, true, false)],
+            ),
             (
                 "![[img/photo.png|hero shot]]",
-                &[("references", "img/photo.png", Some("hero shot"), true, false)],
+                &[(
+                    "references",
+                    "img/photo.png",
+                    Some("hero shot"),
+                    true,
+                    false,
+                )],
             ),
             // bare wikilink to a resource: alias doubles as caption
             (
                 "[[papers/x.pdf|the paper]]",
-                &[("references", "papers/x.pdf", Some("the paper"), false, false)],
+                &[(
+                    "references",
+                    "papers/x.pdf",
+                    Some("the paper"),
+                    false,
+                    false,
+                )],
             ),
             // a .md markdown link is parsed too — resolution dispatches by extension
             (
                 "[background](concepts/memory.md)",
-                &[("references", "concepts/memory.md", Some("background"), false, false)],
+                &[(
+                    "references",
+                    "concepts/memory.md",
+                    Some("background"),
+                    false,
+                    false,
+                )],
             ),
             // fragment kept raw (stripped at resolution, not here)
             (
                 "[sec](notes/a.md#history)",
-                &[("references", "notes/a.md#history", Some("sec"), false, false)],
+                &[(
+                    "references",
+                    "notes/a.md#history",
+                    Some("sec"),
+                    false,
+                    false,
+                )],
             ),
             // document order across mixed forms on one line
             (
@@ -357,7 +397,13 @@ mod tests {
         // an unclosed wikilink on one line never hides the next line's links
         assert_eq!(
             parsed("broken [[x\nfine [ok](a.png)"),
-            vec![("references".into(), "a.png".into(), Some("ok".into()), false, false)]
+            vec![(
+                "references".into(),
+                "a.png".into(),
+                Some("ok".into()),
+                false,
+                false
+            )]
         );
         // same-line recovery: the link is still found (its caption may swallow
         // the stray bracket — the documented first-`]` minimalism)
