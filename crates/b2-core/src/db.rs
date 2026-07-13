@@ -34,7 +34,10 @@ use std::time::Duration;
 /// index's orphaned `chunks_vec` entry is left inert in `sqlite_master` (its module
 /// is no longer linked, so it can't be dropped) — delete `.b2/b2.sqlite` for a
 /// byte-clean slate; either way the next `reindex` rebuilds everything queried.
-pub const SCHEMA_VERSION: i64 = 3;
+/// **4** added the `resources` inventory and widened `edges` with resource targets
+/// (`dst_resource_path`/`embed`/`caption`) — file-type support slice 1
+/// (planning/specs/resources-inventory-graph.md §1).
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
@@ -169,6 +172,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "DROP TABLE IF EXISTS edge_provenance;
              DROP TABLE IF EXISTS edges;
+             DROP TABLE IF EXISTS resources;
              DROP TABLE IF EXISTS note_centroids;
              DROP TABLE IF EXISTS embeddings;
              DROP TABLE IF EXISTS chunks_fts;
@@ -230,20 +234,40 @@ fn migrate(conn: &Connection) -> Result<()> {
            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
          END;
 
+         CREATE TABLE IF NOT EXISTS resources (
+           path         TEXT PRIMARY KEY,
+           class        TEXT NOT NULL CHECK (class IN
+                          ('text','html','pdf','image','media','binary')),
+           size         INTEGER NOT NULL,
+           mtime        INTEGER,
+           content_hash TEXT NOT NULL,
+           indexed_at   TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS resources_class_idx ON resources(class);
+
          CREATE TABLE IF NOT EXISTS edges (
-           id               TEXT PRIMARY KEY,
-           src_id           TEXT NOT NULL REFERENCES notes(b2id) ON DELETE CASCADE,
-           dst_id           TEXT,
-           dst_path_raw     TEXT NOT NULL,
-           type             TEXT NOT NULL,
-           origin           TEXT NOT NULL CHECK (origin IN ('inline','frontmatter')),
-           explanation      TEXT,
-           occurrence_index INTEGER NOT NULL DEFAULT 0,
+           id                TEXT PRIMARY KEY,
+           src_id            TEXT NOT NULL REFERENCES notes(b2id) ON DELETE CASCADE,
+           dst_id            TEXT,
+           dst_resource_path TEXT REFERENCES resources(path) ON DELETE SET NULL,
+           dst_path_raw      TEXT NOT NULL,
+           type              TEXT NOT NULL,
+           origin            TEXT NOT NULL CHECK (origin IN ('inline','frontmatter')),
+           explanation       TEXT,
+           embed             INTEGER NOT NULL DEFAULT 0,
+           caption           TEXT,
+           occurrence_index  INTEGER NOT NULL DEFAULT 0,
            UNIQUE (src_id, dst_id, type, occurrence_index)
          );
          CREATE INDEX IF NOT EXISTS edges_src_idx      ON edges(src_id);
          CREATE INDEX IF NOT EXISTS edges_dst_type_idx ON edges(dst_id, type);
-         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw) WHERE dst_id IS NULL;",
+         CREATE INDEX IF NOT EXISTS edges_dst_resource_idx ON edges(dst_resource_path)
+           WHERE dst_resource_path IS NOT NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS edges_resource_unique_idx
+           ON edges(src_id, dst_resource_path, type, occurrence_index)
+           WHERE dst_resource_path IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS edges_dangling_idx ON edges(dst_path_raw)
+           WHERE dst_id IS NULL AND dst_resource_path IS NULL;",
     )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
