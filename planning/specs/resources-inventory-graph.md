@@ -3,7 +3,7 @@ title: "B2 — Resources slice 1: inventory & graph"
 type: note
 tags: [b2, resources, file-types, ingest, edges, schema, fallback-card, spec]
 created: 2026-07-12
-status: draft
+status: built — pending desktop dogfood
 ---
 
 # B2 — Resources slice 1: inventory & graph
@@ -229,6 +229,16 @@ House pattern throughout — fast suite, fake embedder, fixtures:
 
 Each step compiles green with the full suite passing before the next begins; steps 0–6 never touch
 `b2-desktop`, so `cargo clippy --workspace --exclude b2-desktop` stays the fast gate until step 7.
+
+**Build state (2026-07-12): steps 0–7 built and green** — whole-workspace suite passing (13 new
+core integration tests, 4 parser + 2 classification unit tests, 3 CLI tests, reworked watcher
+tests), CLI smoke verified end-to-end (inventory counts, the card with captioned backlinks, the
+honest `similar` refusal, a convention-preserving resource move, idempotent re-projection). One
+deviation from §4 as written: `doc_kind`'s rule was corrected during build to *extension ≠ md →
+resource; `.md` or extensionless → note* (extensionless is the wikilink habit and covers b2ids;
+the ULID special-case dissolved) — §4 above reflects the corrected rule. Remaining before this
+moves to `completed/`: a live desktop dogfood pass (tree glyphs, card, *Open in system default*,
+drop-a-PNG watcher pulse).
 
 ## 9. Out of scope (owned by later slices)
 

@@ -90,27 +90,32 @@ fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> {
         let _ = tx.send(res);
     })?;
     watcher.watch(root, RecursiveMode::Recursive)?;
-    std::thread::spawn(move || debounce_loop(rx, app));
+    // Canonicalize once so event paths (which the OS reports canonicalized — e.g.
+    // `/private/var` for a `/var` root on macOS) strip cleanly against it. A root
+    // that can't canonicalize falls back to itself; the filter fails open anyway.
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    std::thread::spawn(move || debounce_loop(rx, app, canonical_root));
     Ok(watcher)
 }
 
 /// Coalesce bursts of raw filesystem events into one `vault-changed` pulse per quiet period.
 /// Blocks for the first event of a burst, then drains until [`DEBOUNCE`] passes with no new
-/// event, emitting a single pulse iff the burst touched a Markdown note (index churn under
-/// `.b2/` is sqlite, never `.md`, so it's filtered out — see [`touches_markdown`]). Ends when
-/// the watcher (and thus the sending half) is dropped.
-fn debounce_loop(rx: mpsc::Receiver<notify::Result<Event>>, app: AppHandle) {
+/// event, emitting a single pulse iff the burst touched a **vault member** — any file the
+/// walk would see (index churn under `.b2/`, `.git/` internals, and other dot-prefixed
+/// paths are filtered out — see [`touches_vault`]). Ends when the watcher (and thus the
+/// sending half) is dropped.
+fn debounce_loop(rx: mpsc::Receiver<notify::Result<Event>>, app: AppHandle, root: PathBuf) {
     loop {
         // Block for the first event of a fresh burst; a receive error means the watcher was
         // dropped (vault switch / shutdown) — stop the thread.
         let mut relevant = match rx.recv() {
-            Ok(ev) => event_touches_markdown(&ev),
+            Ok(ev) => event_touches_vault(&root, &ev),
             Err(_) => return,
         };
         // Drain the rest of the burst until the stream goes quiet for DEBOUNCE.
         loop {
             match rx.recv_timeout(DEBOUNCE) {
-                Ok(ev) => relevant |= event_touches_markdown(&ev),
+                Ok(ev) => relevant |= event_touches_vault(&root, &ev),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => {
                     emit_if(&app, relevant);
@@ -130,26 +135,33 @@ fn emit_if(app: &AppHandle, relevant: bool) {
     }
 }
 
-fn event_touches_markdown(ev: &notify::Result<Event>) -> bool {
+fn event_touches_vault(root: &Path, ev: &notify::Result<Event>) -> bool {
     match ev {
-        Ok(e) => touches_markdown(&e.paths),
+        Ok(e) => touches_vault(root, &e.paths),
         Err(_) => false,
     }
 }
 
-/// Whether a filesystem event touches a Markdown note — the one filter that keeps the watch
-/// from firing on its own index writes. The disposable index lives entirely under `<vault>/
-/// .b2/` and is **only** sqlite files (`b2.sqlite`, `-wal`, `-shm`); a save's trailing embed
-/// rewrites them continuously, so reacting to them would be a self-inflicted pulse storm.
-/// Filtering on the `.md` extension alone excludes every one of them — and `.git/` internals
-/// on a `git pull`, and image/attachment writes — while still catching the note adds,
-/// removes, renames, and body edits that actually change what B2 projects. Cheaper and more
-/// robust than stripping the vault root off each path (no canonicalization pitfalls), because
-/// nothing B2 writes to the index ever carries a `.md` extension.
-fn touches_markdown(paths: &[PathBuf]) -> bool {
-    paths.iter().any(|p| {
-        p.extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+/// Whether a filesystem event touches a **vault member** — the watch mirror of the
+/// walk's routing rule (b2-core `collect_vault_files`, file-type slice 1 spec §6):
+/// any path with **no dot-prefixed component below the vault root** counts, so a
+/// Finder-dropped PNG pulses like a note edit, while the self-inflicted noise stays
+/// filtered — the index (`.b2/` sqlite, rewritten continuously by a save's trailing
+/// embed), `.git/` internals on a pull, `.obsidian/` workspace churn.
+///
+/// The dot rule needs *vault-relative* components (a dot-dir **above** the root —
+/// `~/.config/vaults/…` — must not mute everything), so each path is stripped
+/// against the pre-canonicalized root. The former `.md`-allowlist avoided that
+/// stripping; the price of covering resources is taking it on — mitigated by
+/// canonicalizing the root once at watch start, and by **failing open**: a path
+/// that won't strip (an unexpected mount/symlink shape) counts as relevant, costing
+/// at most one extra debounced pulse (a cheap re-list), never a silently dead reload.
+fn touches_vault(root: &Path, paths: &[PathBuf]) -> bool {
+    paths.iter().any(|p| match p.strip_prefix(root) {
+        Ok(rel) => !rel
+            .components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.'))),
+        Err(_) => true, // fail open — see above
     })
 }
 
@@ -158,33 +170,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn markdown_paths_are_relevant_index_and_dotdir_churn_is_not() {
-        // A note edit anywhere in the tree is relevant (extension match is case-insensitive)…
-        assert!(touches_markdown(&[PathBuf::from(
-            "/v/notes/spaced-repetition.md"
-        )]));
-        assert!(touches_markdown(&[PathBuf::from("/v/memory.MD")]));
+    fn vault_member_paths_are_relevant_dot_prefixed_churn_is_not() {
+        let root = Path::new("/v");
+        // A note edit anywhere in the tree is relevant — and, since file-type slice 1,
+        // so is any resource the walk would inventory (a Finder-dropped PNG must pulse).
+        assert!(touches_vault(root, &[PathBuf::from("/v/notes/spaced-repetition.md")]));
+        assert!(touches_vault(root, &[PathBuf::from("/v/memory.MD")]));
+        assert!(touches_vault(root, &[PathBuf::from("/v/assets/diagram.png")]));
+        assert!(touches_vault(root, &[PathBuf::from("/v/no-extension")]));
         // …but the disposable sqlite index (the trailing-embed write storm) is not…
-        assert!(!touches_markdown(&[PathBuf::from("/v/.b2/b2.sqlite")]));
-        assert!(!touches_markdown(&[PathBuf::from("/v/.b2/b2.sqlite-wal")]));
-        assert!(!touches_markdown(&[PathBuf::from("/v/.b2/b2.sqlite-shm")]));
-        // …nor `.git` internals from a pull, nor attachments.
-        assert!(!touches_markdown(&[PathBuf::from("/v/.git/index")]));
-        assert!(!touches_markdown(&[PathBuf::from("/v/assets/diagram.png")]));
-        assert!(!touches_markdown(&[PathBuf::from("/v/no-extension")]));
-        assert!(!touches_markdown(&[]));
+        assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite")]));
+        assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite-wal")]));
+        assert!(!touches_vault(root, &[PathBuf::from("/v/.b2/b2.sqlite-shm")]));
+        // …nor `.git` internals from a pull, `.obsidian/` churn, or dotfiles.
+        assert!(!touches_vault(root, &[PathBuf::from("/v/.git/index")]));
+        assert!(!touches_vault(root, &[PathBuf::from("/v/.obsidian/workspace.json")]));
+        assert!(!touches_vault(root, &[PathBuf::from("/v/notes/.DS_Store")]));
+        assert!(!touches_vault(root, &[]));
     }
 
     #[test]
-    fn a_burst_touching_any_markdown_file_is_relevant() {
+    fn the_dot_rule_is_vault_relative_and_fails_open() {
+        // A dot-dir ABOVE the root must not mute the vault it contains…
+        let dotted_root = Path::new("/home/u/.config/vaults/v");
+        assert!(touches_vault(
+            dotted_root,
+            &[PathBuf::from("/home/u/.config/vaults/v/notes/a.md")]
+        ));
+        assert!(!touches_vault(
+            dotted_root,
+            &[PathBuf::from("/home/u/.config/vaults/v/.b2/b2.sqlite")]
+        ));
+        // …and a path that doesn't strip against the root counts as relevant (fail
+        // open): one extra debounced pulse beats a silently dead auto-reload.
+        assert!(touches_vault(
+            Path::new("/v"),
+            &[PathBuf::from("/elsewhere/x.bin")]
+        ));
+    }
+
+    #[test]
+    fn a_burst_touching_any_vault_member_is_relevant() {
         // A rename fires create+remove; a pull touches many files at once. As long as one
-        // path in the coalesced burst is a note, the burst earns a single pulse.
+        // path in the coalesced burst is a vault member, the burst earns a single pulse.
         let burst = [
             PathBuf::from("/v/.b2/b2.sqlite-wal"),
             PathBuf::from("/v/.git/ORIG_HEAD"),
             PathBuf::from("/v/concepts/memory.md"),
         ];
-        assert!(touches_markdown(&burst));
+        assert!(touches_vault(Path::new("/v"), &burst));
     }
 
     #[test]

@@ -43,6 +43,37 @@ export interface NoteSummary {
   title: string | null;
 }
 
+/**
+ * `Vault::list_resources` — one non-`.md` vault file for the file tree (file-type
+ * slice 1). The per-kind sibling of `NoteSummary`; the tree merges the two lists.
+ */
+export interface ResourceSummary {
+  path: string;
+  class: string; // "text" | "html" | "pdf" | "image" | "media" | "binary"
+  size: number;
+  mtime: number | null;
+}
+
+/** One note linking at a resource, with the edge's authored context. */
+export interface ResourceBacklink {
+  b2id: string;
+  path: string;
+  title: string | null;
+  type: string;
+  caption: string | null;
+  embed: boolean;
+}
+
+/** `Vault::explain_resource` — the fallback card: inventory metadata + backlinks. */
+export interface ResourceExplainView {
+  path: string;
+  class: string;
+  size: number;
+  mtime: number | null;
+  content_hash: string;
+  backlinks: ResourceBacklink[];
+}
+
 /** `Vault::similar` — a semantically-near, not-yet-linked candidate. */
 export interface SimilarView {
   b2id: string;
@@ -119,6 +150,9 @@ export interface ProjectReport {
   indexed: number;
   stamped: number;
   skipped: SkippedNote[];
+  /** Resources inventoried this pass, and stale inventory rows pruned (slice 1). */
+  resources_indexed: number;
+  resources_pruned: number;
 }
 
 /** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */

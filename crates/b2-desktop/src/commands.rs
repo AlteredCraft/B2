@@ -21,7 +21,7 @@ use crate::{open_vault, AppState};
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
     EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
-    SearchResult, SimilarView, WriteReport,
+    ResourceExplainView, ResourceSummary, SearchResult, SimilarView, WriteReport,
 };
 use serde::Serialize;
 use std::ops::ControlFlow;
@@ -99,6 +99,40 @@ pub fn read_note(state: State<'_, AppState>, note: String) -> Result<NoteView, C
 #[tauri::command(async)]
 pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdError> {
     list_notes_impl(state.inner())
+}
+
+/// The file tree's resource half (file-type slice 1, spec §6): every inventoried
+/// non-`.md` file. The frontend merges this with `list_notes` into one tree — the
+/// per-kind composition the locked design prefers over a union type (research §9b #10).
+#[tauri::command(async)]
+pub fn list_resources(state: State<'_, AppState>) -> Result<Vec<ResourceSummary>, CmdError> {
+    let (vault, _) = open_vault(state.inner(), false)?;
+    Ok(vault.list_resources()?)
+}
+
+/// The fallback card's data: a resource's inventory metadata + backlinks. A pure
+/// graph/inventory read, model-free like `explain`.
+#[tauri::command(async)]
+pub fn explain_resource(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ResourceExplainView, CmdError> {
+    let (vault, _) = open_vault(state.inner(), false)?;
+    Ok(vault.explain_resource(&path)?)
+}
+
+/// *Open in system default* on the fallback card — an **OS handoff**, never
+/// in-webview execution (spec §6 security posture). Host infrastructure like the
+/// folder dialog: the webview holds no opener permission; this command validates
+/// the path against the inventory (so only an indexed vault file can be opened)
+/// and hands the absolute path to the OS.
+#[tauri::command(async)]
+pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), CmdError> {
+    let (vault, _) = open_vault(state.inner(), false)?;
+    vault.explain_resource(&path)?; // inventory check: unknown paths refuse, never open
+    let root = state.current_root().ok_or(CmdError::VaultRequired)?;
+    tauri_plugin_opener::open_path(root.join(&path), None::<&str>)
+        .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
 /// Save a note's body — the editing surface's one write (desktop-editing.md §5).

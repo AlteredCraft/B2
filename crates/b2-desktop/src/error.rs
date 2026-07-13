@@ -29,6 +29,11 @@ pub enum CmdError {
     /// suspenders refusal that reaches the webview only in a race.
     #[error("a reindex is already running")]
     ReindexInFlight,
+    /// The OS refused to open a resource in its default app (`open_resource`, the
+    /// fallback card's one action). The message is the opener plugin's detail —
+    /// logged in full server-side, generic to the webview like everything else.
+    #[error("open in system default failed: {0}")]
+    OpenFailed(String),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -57,6 +62,17 @@ pub fn user_message(err: &CmdError) -> String {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit."
                 .to_string()
         }
+        CmdError::Core(b2_core::Error::ResourceNotFound(r)) => {
+            format!("File not found in the vault: '{r}'. Check the path, and reindex first.")
+        }
+        CmdError::Core(b2_core::Error::ResourceUnsupported(_)) => {
+            "Similarity for non-Markdown files isn't available yet — it arrives in a later release."
+                .to_string()
+        }
+        CmdError::OpenFailed(_) => {
+            "Couldn't open the file in its default app. Try opening it from your file manager."
+                .to_string()
+        }
         CmdError::VaultRequired => {
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."
                 .to_string()
@@ -70,7 +86,9 @@ pub fn user_message(err: &CmdError) -> String {
         let detail = match err {
             CmdError::Core(e) => e.to_string(),
             CmdError::Embed(e) => e.to_string(),
-            CmdError::VaultRequired | CmdError::ReindexInFlight => err.to_string(),
+            CmdError::VaultRequired | CmdError::ReindexInFlight | CmdError::OpenFailed(_) => {
+                err.to_string()
+            }
         };
         format!("{msg}\n(debug: {detail})")
     } else {
@@ -89,7 +107,9 @@ fn log_internal(err: &CmdError) {
     let detail = match err {
         CmdError::Core(e) => e.to_string(),
         CmdError::Embed(e) => e.to_string(),
-        CmdError::VaultRequired | CmdError::ReindexInFlight => err.to_string(),
+        CmdError::VaultRequired | CmdError::ReindexInFlight | CmdError::OpenFailed(_) => {
+            err.to_string()
+        }
     };
     eprintln!("[b2] command failed: {detail}");
 }

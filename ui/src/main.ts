@@ -124,8 +124,10 @@ function expandAncestors(path: string): void {
 async function loadNotes(): Promise<void> {
   try {
     state.notes = await api.listNotes();
+    state.resources = await api.listResources();
   } catch (e) {
     state.notes = [];
+    state.resources = [];
     flash(errText(e));
   }
 }
@@ -138,6 +140,7 @@ async function openNote(ref: string): Promise<void> {
   render();
   try {
     state.current = await api.readNote(ref);
+    state.currentResource = null; // one document owns the pane
     expandAncestors(state.current.path);
     state.searchQuery = "";
     state.searchResults = [];
@@ -158,6 +161,32 @@ async function openNote(ref: string): Promise<void> {
     // The discovery flags are owned by refreshDiscovery (it clears each section's when
     // that read settles, guarded against a superseding open) — clearing them here would
     // race a newer note's in-flight load, so only the middle-pane spinner is ours.
+    state.loading = false;
+    render();
+  }
+}
+
+// Select a resource in the tree → the fallback card (file-type slice 1, spec §6):
+// metadata + backlinks + *Open in system default*. The note-pane sibling of
+// openNote — same edit-mode flush, same one-document-owns-the-pane rule; discovery
+// doesn't apply (resources have no chunks until slice 3), so the side pane clears.
+async function openResource(path: string): Promise<void> {
+  if (!(await closeEditor())) return;
+  state.loading = true;
+  render();
+  try {
+    state.currentResource = await api.explainResource(path);
+    state.current = null;
+    expandAncestors(path);
+    state.searchQuery = "";
+    state.searchResults = [];
+    state.similar = [];
+    state.connections = [];
+    state.discoveringSimilar = false;
+    state.discoveringConnections = false;
+  } catch (e) {
+    flash(errText(e));
+  } finally {
     state.loading = false;
     render();
   }
@@ -810,6 +839,20 @@ async function reconcileExternalChange(): Promise<void> {
       }
     }
   }
+
+  // The open resource card, same posture: refresh in place (its metadata/backlinks
+  // may have changed), and if the file vanished keep the stale card but say so.
+  if (state.currentResource && !state.reindexing) {
+    const cur = state.currentResource;
+    try {
+      const fresh = await api.explainResource(cur.path);
+      if (state.currentResource?.path === cur.path) state.currentResource = fresh;
+    } catch {
+      if (state.currentResource?.path === cur.path) {
+        flash("This file is no longer on disk — it was moved or removed.");
+      }
+    }
+  }
   render();
 }
 
@@ -909,6 +952,20 @@ function wireEvents(): void {
     const dir = target.closest<HTMLElement>("[data-dir]");
     if (dir) {
       toggleDir(dir.dataset.dir ?? "");
+      return;
+    }
+
+    const openRes = target.closest<HTMLElement>("[data-open-resource]");
+    if (openRes) {
+      const p = openRes.dataset.openResource;
+      if (p) void openResource(p);
+      return;
+    }
+
+    const openSystem = target.closest<HTMLElement>("[data-open-system]");
+    if (openSystem) {
+      const p = openSystem.dataset.openSystem;
+      if (p) api.openResource(p).catch((e) => flash(errText(e)));
       return;
     }
 

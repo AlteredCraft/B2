@@ -10,7 +10,7 @@
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { RELATION_VERBS, type AppState } from "./state";
-import type { NoteSummary } from "./types";
+import type { NoteSummary, ResourceExplainView, ResourceSummary } from "./types";
 
 export function escapeHtml(s: string): string {
   return s
@@ -56,24 +56,45 @@ export function renderMarkdown(md: string): string {
 
 // --- file tree --------------------------------------------------------------------
 //
-// The navigation pane. `list_notes` hands us a *flat*, path-ordered list; arranging
-// it into folders is pure presentation, so it lives here in `ui/` (not the host —
-// the host stays a dumb adapter). Files reuse the `[data-open]` delegation that
-// search/discovery cards already use, so a click opens the note through the same path.
+// The navigation pane. `list_notes` + `list_resources` hand us *flat*, path-ordered
+// per-kind lists (research §9b #10 — two contracts, composed here); arranging them
+// into one folder tree is pure presentation, so it lives here in `ui/` (not the host —
+// the host stays a dumb adapter). Note rows reuse the `[data-open]` delegation that
+// search/discovery cards already use; resource rows get `[data-open-resource]`, which
+// opens the fallback card.
+
+/** One tree leaf — a note or a resource, normalized for display. */
+interface TreeFile {
+  kind: "note" | "resource";
+  path: string;
+  label: string;
+  /** The resource class glyph slot ("" for notes). */
+  glyph: string;
+}
 
 interface TreeDir {
   name: string;
   /** Vault-relative folder path, no trailing slash ("" for the root). */
   path: string;
   dirs: Map<string, TreeDir>;
-  files: NoteSummary[];
+  files: TreeFile[];
 }
 
-/** Fold the flat, path-ordered note list into a nested folder tree. */
-function buildTree(notes: NoteSummary[]): TreeDir {
+/** A small, unobtrusive per-class marker so a resource reads as "not a note". */
+const CLASS_GLYPHS: Record<string, string> = {
+  image: "▣",
+  media: "▶",
+  pdf: "▤",
+  html: "◇",
+  text: "≡",
+  binary: "◆",
+};
+
+/** Fold the flat, path-ordered note + resource lists into one nested folder tree. */
+function buildTree(notes: NoteSummary[], resources: ResourceSummary[]): TreeDir {
   const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [] };
-  for (const note of notes) {
-    const parts = note.path.split("/");
+  const insert = (file: TreeFile) => {
+    const parts = file.path.split("/");
     let dir = root;
     for (const seg of parts.slice(0, -1)) {
       const full = dir.path ? `${dir.path}/${seg}` : seg;
@@ -84,12 +105,23 @@ function buildTree(notes: NoteSummary[]): TreeDir {
       }
       dir = child;
     }
-    dir.files.push(note);
+    dir.files.push(file);
+  };
+  for (const note of notes) {
+    insert({ kind: "note", path: note.path, label: fileLabel(note), glyph: "" });
+  }
+  for (const r of resources) {
+    insert({
+      kind: "resource",
+      path: r.path,
+      label: r.path.split("/").pop() ?? r.path,
+      glyph: CLASS_GLYPHS[r.class] ?? CLASS_GLYPHS.binary,
+    });
   }
   return root;
 }
 
-/** A file's display label: its title, else the filename without the `.md`. */
+/** A note's display label: its title, else the filename without the `.md`. */
 function fileLabel(note: NoteSummary): string {
   if (note.title) return note.title;
   const base = note.path.split("/").pop() ?? note.path;
@@ -99,7 +131,7 @@ function fileLabel(note: NoteSummary): string {
 /** Render one folder's children (its sub-folders, then its files), recursively. */
 function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string {
   const subdirs = [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const files = [...dir.files].sort((a, b) => fileLabel(a).localeCompare(fileLabel(b)));
+  const files = [...dir.files].sort((a, b) => a.label.localeCompare(b.label));
   // Indent by depth; a folder's own chevron occupies the same slot a file's icon does,
   // so files sit one notch deeper than the folder header above them.
   const pad = (d: number) => `padding-left:${8 + d * 14}px`;
@@ -119,13 +151,22 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
     .join("");
 
   const fileHtml = files
-    .map((note) => {
-      const active = state.current?.path === note.path ? " is-active" : "";
+    .map((file) => {
+      if (file.kind === "resource") {
+        const active = state.currentResource?.path === file.path ? " is-active" : "";
+        return `<button class="tree-row tree-file tree-resource${active}" data-open-resource="${escapeHtml(
+          file.path,
+        )}" style="${pad(depth)}" title="${escapeHtml(file.path)}">
+            <span class="tree-caret tree-glyph">${file.glyph}</span>
+            <span class="tree-label">${escapeHtml(file.label)}</span>
+          </button>`;
+      }
+      const active = state.current?.path === file.path ? " is-active" : "";
       return `<button class="tree-row tree-file${active}" data-open="${escapeHtml(
-        note.path,
-      )}" style="${pad(depth)}" title="${escapeHtml(note.path)}">
+        file.path,
+      )}" style="${pad(depth)}" title="${escapeHtml(file.path)}">
           <span class="tree-caret"></span>
-          <span class="tree-label">${escapeHtml(fileLabel(note))}</span>
+          <span class="tree-label">${escapeHtml(file.label)}</span>
         </button>`;
     })
     .join("");
@@ -134,15 +175,19 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
 }
 
 export function treePaneHtml(state: AppState): string {
+  const total = state.notes.length + state.resources.length;
   const head = `<div class="tree-head">
       <h2>Files</h2>
-      <span class="tree-count">${state.notes.length || ""}</span>
+      <span class="tree-count">${total || ""}</span>
     </div>`;
   if (state.vaultRoot === null)
     return head + `<p class="tree-empty">No vault open.</p>`;
-  if (state.notes.length === 0)
-    return head + `<p class="tree-empty">No notes indexed yet — Reindex to populate.</p>`;
-  return head + `<div class="tree">${treeChildrenHtml(buildTree(state.notes), state, 0)}</div>`;
+  if (total === 0)
+    return head + `<p class="tree-empty">No files indexed yet — Reindex to populate.</p>`;
+  return (
+    head +
+    `<div class="tree">${treeChildrenHtml(buildTree(state.notes, state.resources), state, 0)}</div>`
+  );
 }
 
 // --- pane builders --------------------------------------------------------------
@@ -190,7 +235,62 @@ function noteBarHtml(state: AppState, frontmatter: string | null): string {
     </div>`;
 }
 
+/** Human-readable byte count for the card ("67 B", "1.4 KB", "3.2 MB"). */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// The resource **fallback card** (file-type slice 1, spec §6): selecting any file in
+// the tree opens *something*. Slice 1 shows the card for every resource class —
+// filename, class, size, modified, content hash — plus the backlinks panel (which
+// notes reference this file, with their authored captions) and one action, *Open in
+// system default* (an OS handoff performed host-side). Per-class viewers replace the
+// card's body in slice 2; the card remains the `binary` catch-all.
+function resourceCardHtml(r: ResourceExplainView): string {
+  const modified = r.mtime ? new Date(r.mtime * 1000).toLocaleString() : "—";
+  const backlinks = r.backlinks.length
+    ? `<div class="cards">${r.backlinks
+        .map((b) => {
+          const context = [
+            b.type + (b.embed ? " (embed)" : ""),
+            b.caption ? `“${b.caption}”` : "",
+          ]
+            .filter(Boolean)
+            .join(" — ");
+          return `<button class="card" data-open="${escapeHtml(b.path)}">
+              <div class="card-title">${escapeHtml(b.title ?? b.path)}</div>
+              <div class="card-path">${escapeHtml(b.path)}</div>
+              <div class="card-snip">${escapeHtml(context)}</div>
+            </button>`;
+        })
+        .join("")}</div>`
+    : `<p class="side-empty">No notes link to this file yet.</p>`;
+  const name = r.path.split("/").pop() ?? r.path;
+  return `<article class="note resource-card">
+      <header class="note-head">
+        <h1>${escapeHtml(name)}</h1>
+        <div class="note-meta">${escapeHtml(r.path)} · ${escapeHtml(r.class)} · ${formatSize(
+          r.size,
+        )} · modified ${escapeHtml(modified)}</div>
+      </header>
+      <div class="resource-card-body">
+        <p class="resource-no-viewer">No viewer available for this file type yet.</p>
+        <button class="resource-open" data-open-system="${escapeHtml(r.path)}">
+          Open in system default
+        </button>
+        <div class="resource-hash" title="${escapeHtml(r.content_hash)}">
+          blake3 ${escapeHtml(r.content_hash.slice(0, 16))}…
+        </div>
+        <h2 class="resource-backlinks-head">Backlinks</h2>
+        ${backlinks}
+      </div>
+    </article>`;
+}
+
 export function notePaneHtml(state: AppState): string {
+  if (state.currentResource) return resourceCardHtml(state.currentResource);
   const n = state.current;
   if (n) {
     const metaBits = [n.type, n.created].filter(Boolean).map((s) => escapeHtml(s as string));

@@ -285,6 +285,10 @@ fn main() {
         // driven host-side only; the webview gets no dialog permission (capabilities/
         // default.json), so it can never open a dialog itself.
         .plugin(tauri_plugin_dialog::init())
+        // The opener plugin backs the fallback card's *Open in system default*
+        // (`open_resource`, file-type slice 1). Same posture: host-side only, the
+        // webview holds no opener permission.
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         // Filesystem auto-reload (#14 / desktop-ui-mvp §5): its own managed state so the
         // pure `AppState` machine stays free of an OS watch handle. Started below once the
@@ -306,6 +310,9 @@ fn main() {
             commands::choose_vault,
             commands::read_note,
             commands::list_notes,
+            commands::list_resources,
+            commands::explain_resource,
+            commands::open_resource,
             commands::write_note,
             commands::similar,
             commands::search,

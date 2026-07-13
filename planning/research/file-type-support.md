@@ -45,6 +45,8 @@ slices (§8). Tracked here so state survives across sessions:
       (`list_resources` / `explain_resource` / `move_resource` / `doc_kind`), CLI dispatch, desktop
       tree + fallback card + watcher inversion. **Model-free; no new engine deps** (the desktop
       gains the Tauri opener plugin — the one new adapter dep). Next: build it.
+- [x] **Slice 1 built** (2026-07-12) — steps 0–7 of the spec, whole-workspace green + CLI smoke;
+      pending a live desktop dogfood before the spec moves to `completed/`.
 - [ ] **Slices 2–4** — render mechanisms · searchable resources · PDF text (§8); spec each when reached.
 - [ ] **Slice 5** — semantic seams (Describer, multimodal embedder), future/unscheduled (§8, §5).
 

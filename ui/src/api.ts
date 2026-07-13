@@ -15,6 +15,8 @@ import type {
   NoteView,
   ProjectReport,
   ReindexProgress,
+  ResourceExplainView,
+  ResourceSummary,
   SearchResult,
   SimilarView,
   VaultInfo,
@@ -70,6 +72,19 @@ export const api = {
 
   /** Every indexed note (b2id, path, title; no body) — the file tree's source. */
   listNotes: (): Promise<NoteSummary[]> => invoke("list_notes"),
+
+  /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
+  listResources: (): Promise<ResourceSummary[]> => invoke("list_resources"),
+
+  /** The fallback card's data: a resource's metadata + backlinks. */
+  explainResource: (path: string): Promise<ResourceExplainView> =>
+    invoke("explain_resource", { path }),
+
+  /**
+   * *Open in system default* — an OS handoff performed host-side (the webview holds
+   * no opener permission); the host validates the path against the inventory first.
+   */
+  openResource: (path: string): Promise<void> => invoke("open_resource", { path }),
 
   /** Semantically-near, not-yet-linked candidates for a note. */
   similar: (note: string, limit = 10): Promise<SimilarView[]> =>

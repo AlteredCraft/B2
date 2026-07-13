@@ -7,6 +7,8 @@ import type {
   NoteSummary,
   NoteView,
   ReindexProgress,
+  ResourceExplainView,
+  ResourceSummary,
   SearchResult,
   SimilarView,
 } from "./types";
@@ -43,10 +45,17 @@ export interface AppState {
   semantic: boolean;
   /** Every indexed note, path-ordered — the file tree's source (from `list_notes`). */
   notes: NoteSummary[];
+  /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
+  resources: ResourceSummary[];
   /** Folder paths (vault-relative, no trailing slash) the tree shows expanded. */
   expandedDirs: Set<string>;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
+  /**
+   * The selected resource's fallback card (mutually exclusive with `current`:
+   * selecting either kind clears the other — the note pane shows one document).
+   */
+  currentResource: ResourceExplainView | null;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
   /** Whether the note body shows raw Markdown source instead of rendered (sticky). */
@@ -100,8 +109,10 @@ export const state: AppState = {
   vaultRoot: null,
   semantic: true,
   notes: [],
+  resources: [],
   expandedDirs: new Set<string>(),
   current: null,
+  currentResource: null,
   frontmatterOpen: false,
   sourceOpen: false,
   editing: false,

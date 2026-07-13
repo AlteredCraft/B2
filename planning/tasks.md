@@ -88,11 +88,12 @@ files (PDFs, images, HTML, code). The design is **locked**
 slice-prep decisions §9b locked 2026-07-12) and mirrored into the canonical docs
 ([data-model.md](data-model.md) §10, [index-engine.md](index-engine.md) §3,
 [vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-08)"). It ships in value-ordered
-slices (research §8); **slice 1 — inventory & graph** is specced —
+slices (research §8); **slice 1 — inventory & graph is built** (2026-07-12) —
 [specs/resources-inventory-graph.md](specs/resources-inventory-graph.md) (v4 schema, generalized walk,
 parser forms + captions, `list_resources`/`explain_resource`/`move_resource`, fallback card, watcher
-inversion) — and is the next build. The tracked [backlog](#backlog--github-issues) below is otherwise
-pick-per-priority.
+inversion), whole-workspace suite + CLI smoke green; a live desktop dogfood pass is the remaining
+gate before the spec moves to `completed/`. Then slice 2 (render mechanisms) gets its spec. The
+tracked [backlog](#backlog--github-issues) below is otherwise pick-per-priority.
 
 ## Backlog → GitHub Issues
 
