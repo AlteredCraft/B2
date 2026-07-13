@@ -692,7 +692,7 @@ impl Vault {
             let path = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)?.unwrap_or_default();
             let title = db::note_title(&self.conn, &hit.note_b2id)?;
             let snippet = db::chunk_text(&self.conn, hit.chunk_id)?
-                .map(|t| snippet(&t))
+                .map(|t| query_snippet(&t, query))
                 .unwrap_or_default();
             out.push(SearchResult {
                 b2id: hit.note_b2id,
@@ -918,13 +918,59 @@ fn revision_of(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()
 }
 
-/// Collapse a chunk's text to a single-line, length-bounded snippet.
-fn snippet(text: &str) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+/// Flatten a chunk's text to a single whitespace-collapsed line.
+fn flatten(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The head of a flattened chunk, bounded to one line.
+fn head_snippet(flat: &str) -> String {
     if flat.chars().count() <= SNIPPET_CHARS {
-        flat
+        flat.to_string()
     } else {
         let cut: String = flat.chars().take(SNIPPET_CHARS).collect();
         format!("{}…", cut.trim_end())
     }
+}
+
+/// Collapse a chunk's text to a single-line, length-bounded snippet (its head). Used
+/// where there is no query to center on (e.g. `similar`'s evidence passage).
+fn snippet(text: &str) -> String {
+    head_snippet(&flatten(text))
+}
+
+/// Like [`snippet`] but windows the excerpt around the first query-term match, so a
+/// section-sized chunk (qmd chunking, #19) still surfaces the matched text instead of
+/// only its head. Falls back to the head when no term matches or the match is already
+/// in view — a pure vector hit (query words absent from the chunk) keeps the head.
+fn query_snippet(text: &str, query: &str) -> String {
+    let flat = flatten(text);
+    if flat.chars().count() <= SNIPPET_CHARS {
+        return flat;
+    }
+    let lower = flat.to_lowercase();
+    let match_pos = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= 2)
+        .filter_map(|t| {
+            let byte = lower.find(&t.to_lowercase())?;
+            Some(lower[..byte].chars().count())
+        })
+        .min();
+    // A little lead-in so the match is not flush against the ellipsis.
+    const LEAD: usize = 24;
+    let Some(pos) = match_pos.filter(|p| *p > LEAD) else {
+        return head_snippet(&flat);
+    };
+    let chars: Vec<char> = flat.chars().collect();
+    // `pos` is a char index into the lowercased text, whose length can differ from
+    // `flat` for exotic Unicode; clamp so the slice below can never go out of range.
+    let start = (pos - LEAD).min(chars.len());
+    let end = (start + SNIPPET_CHARS).min(chars.len());
+    let mut out = String::from("…");
+    out.extend(&chars[start..end]);
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
 }

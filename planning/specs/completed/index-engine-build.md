@@ -112,16 +112,17 @@ CREATE TABLE chunks (
   UNIQUE (note_b2id, seq)
 );
 CREATE INDEX chunks_note_idx ON chunks(note_b2id);
--- Chunking heuristic is borrowed wholesale from qmd (index-engine.md §1): ~900-token chunks, ~15%
+-- Chunking heuristic is borrowed wholesale from qmd (index-engine.md §1): size-targeted, ~15%
 -- overlap, Markdown-aware boundary scoring. Chunk ids are NOT stable across a re-index (a note's chunks
 -- are deleted + reinserted); that is fine because its FTS and vec rows are deleted with them.
 --
--- BUILD NOTE (step 2 ships a MINIMAL chunker — and it is STILL what ships): the first cut is a paragraph
--- splitter (maximal runs of non-blank lines), token_count = whitespace word count, heading_path left NULL.
--- It populates this exact schema and exercises the FTS triggers. Folding in the qmd heuristic above was
--- planned for step 5 but DEFERRED past it: scoring paragraph-vs-qmd needs a real embedder + eval, which
--- didn't land until 2026-07-01 (after step 5) — now unblocked (tasks.md backlog). Swapping it is a pure
--- re-projection (drop & rebuild) — no schema or invariant change — so deferring it costs nothing.
+-- BUILD NOTE (the qmd heuristic SHIPPED, #19 / specs/qmd-chunker.md, 2026-07-13): chunk.rs now sizes
+-- chunks toward a ~450-token target (under bge's 512 truncation), cuts at the best-scoring Markdown break
+-- within a backward scan, carries ~15% overlap, and stamps token_count (a chars/4 estimate) + heading_path
+-- (the H1 › H2 › H3 breadcrumb, this column). It replaced the step-2 MINIMAL paragraph splitter, which was
+-- deferred past step 5 because scoring paragraph-vs-qmd needs a real embedder + eval; every lever lives on
+-- a `ChunkConfig` (target/overlap/proxy/backscan/weights/prepend). Swapping chunkers was a pure
+-- re-projection (drop & rebuild) — no schema or invariant change, exactly as planned.
 
 -- FTS5 over chunk text. external-content (content='chunks') stores the text once; BM25 ranking is built in.
 CREATE VIRTUAL TABLE chunks_fts USING fts5(

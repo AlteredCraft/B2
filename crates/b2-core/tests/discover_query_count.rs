@@ -58,9 +58,10 @@ const PER_NOTE_SQL: &str = "SELECT c.id, e.vector FROM chunks c JOIN embeddings 
 #[test]
 fn candidates_issues_bounded_sql_never_o_chunks() {
     // Multi-chunk notes so any per-chunk statement pattern would visibly exceed the
-    // note count (a scaled-down mirror of the real vault).
+    // note count (a scaled-down mirror of the real vault). Each paragraph is sized
+    // well past the qmd ~450-token target, so every note splits into several chunks.
     const NOTES: usize = 12;
-    const PARAS: usize = 5; // blank-line-separated paragraphs → ~1 chunk each
+    const PARAS: usize = 6;
 
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
@@ -69,7 +70,7 @@ fn candidates_issues_bounded_sql_never_o_chunks() {
     for n in 0..NOTES {
         let b2id = format!("01JN{n:022}"); // ULID-shaped, unique, all-valid
         let body = (0..PARAS)
-            .map(|p| format!("note {n} paragraph {p}: shared topic alpha beta gamma"))
+            .map(|p| format!("note {n} paragraph {p}: shared topic alpha beta gamma. ").repeat(40))
             .collect::<Vec<_>>()
             .join("\n\n");
         fs::write(
