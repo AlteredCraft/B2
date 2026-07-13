@@ -24,7 +24,9 @@ mod config;
 mod model;
 mod provision;
 
-pub use config::{EmbedConfig, Source};
+pub use config::{
+    find_model, EmbedConfig, ModelChoice, ModelInfo, Source, AVAILABLE_MODELS, DEFAULT_MODEL,
+};
 pub use model::LocalEmbedder;
 pub use provision::{provision, ProvisionReport};
 
@@ -49,6 +51,13 @@ pub enum EmbedError {
 
     #[error("model load failed: {0}")]
     Load(String),
+
+    /// A model id that isn't in [`AVAILABLE_MODELS`] was passed to
+    /// [`EmbedConfig::set_model`] — refuse rather than write a config the loader could
+    /// never provision. Reachable only from the desktop settings picker (the CLI never
+    /// sets the model), so it maps to a generic "pick one from the list" message there.
+    #[error("unknown embedding model '{0}'")]
+    UnknownModel(String),
 }
 
 pub type Result<T> = std::result::Result<T, EmbedError>;

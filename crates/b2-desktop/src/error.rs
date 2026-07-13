@@ -55,6 +55,13 @@ pub fn user_message(err: &CmdError) -> String {
             "Could not download the embedding model. Check your network and run `b2 init` again."
                 .to_string()
         }
+        CmdError::Embed(EmbedError::UnknownModel(_)) => {
+            "That isn't a model B2 offers. Pick one from the list in Settings.".to_string()
+        }
+        CmdError::Embed(EmbedError::Load(_)) => {
+            "The embedding model failed to load. Try downloading it again, or pick a different model in Settings."
+                .to_string()
+        }
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),

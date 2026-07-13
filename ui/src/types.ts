@@ -10,6 +10,32 @@ export interface VaultInfo {
   semantic: boolean;
 }
 
+/**
+ * `list_models` / `set_model` — one embedding model the settings picker offers
+ * (b2-embed `ModelChoice`). `current` is the model B2 is configured to use now;
+ * `installed` is whether it's been downloaded (`b2 init`) yet.
+ */
+export interface ModelChoice {
+  id: string;
+  label: string;
+  dim: number;
+  description: string;
+  current: boolean;
+  installed: boolean;
+}
+
+/**
+ * `embed_stats` — one model's cumulative embedding cost (b2-desktop `stats.rs`),
+ * accumulated across sessions and shown in Settings so a model swap can be judged on
+ * real speed. `total_ms / chunks` is throughput; `runs` counts contributing embed passes.
+ */
+export interface EmbedStat {
+  model: string;
+  total_ms: number;
+  chunks: number;
+  runs: number;
+}
+
 /** `Vault::read` — a note's body + display metadata for the left pane. */
 export interface NoteView {
   b2id: string;

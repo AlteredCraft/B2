@@ -3,6 +3,8 @@
 // full-pane re-render on change is imperceptible and keeps the model honest.
 
 import type {
+  EmbedStat,
+  ModelChoice,
   NeighborView,
   NoteSummary,
   NoteView,
@@ -89,6 +91,16 @@ export interface AppState {
   linkTarget: LinkTarget | null;
   /** The verb selected in the link modal. */
   linkRelation: string;
+  /** The settings modal (⌘,) is open. */
+  settingsOpen: boolean;
+  /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
+  models: ModelChoice[];
+  /** Per-model cumulative embedding time — loaded alongside `models`, shown in Settings. */
+  embedStats: EmbedStat[];
+  /** A model download (in-app `b2 init`) is in flight — disables the button, shows a spinner. */
+  provisioning: boolean;
+  /** The shared directory where model files are saved — loaded with Settings, else null. */
+  modelsDir: string | null;
   /** A slow op is in flight. */
   loading: boolean;
   /**
@@ -125,6 +137,11 @@ export const state: AppState = {
   searchResults: [],
   linkTarget: null,
   linkRelation: "references",
+  settingsOpen: false,
+  models: [],
+  embedStats: [],
+  provisioning: false,
+  modelsDir: null,
   loading: false,
   reindexing: false,
   reindexProgress: null,

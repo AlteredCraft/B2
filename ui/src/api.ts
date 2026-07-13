@@ -8,8 +8,10 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   EmbedReport,
+  EmbedStat,
   ExplainView,
   LinkReport,
+  ModelChoice,
   NeighborView,
   NoteSummary,
   NoteView,
@@ -141,6 +143,30 @@ export const api = {
 
   /** Ask the in-flight embed to stop at its next batch boundary (cooperative). */
   cancelReindex: (): Promise<void> => invoke("cancel_reindex"),
+
+  /** The embedding models B2 offers, flagged current + installed (Settings picker). */
+  listModels: (): Promise<ModelChoice[]> => invoke("list_models"),
+
+  /**
+   * Persist the chosen embedding model into the shared config B2 reads. Returns the
+   * refreshed list. Selecting a *different* model is a model swap — it takes effect only
+   * after that model is downloaded (`b2 init`) and the vault is reindexed; this call
+   * just records the choice.
+   */
+  setModel: (model: string): Promise<ModelChoice[]> => invoke("set_model", { model }),
+
+  /**
+   * Download + verify the currently-selected model into the shared cache — the in-app
+   * `b2 init`. Idempotent, network-bound (can take minutes). Resolves with the refreshed
+   * model list, the just-installed model now flagged `installed`.
+   */
+  provisionModel: (): Promise<ModelChoice[]> => invoke("provision_model"),
+
+  /** Per-model cumulative embedding time (Settings), accumulated across sessions. */
+  embedStats: (): Promise<EmbedStat[]> => invoke("embed_stats"),
+
+  /** The shared directory where downloaded model files are saved (shown in Settings). */
+  modelsDir: (): Promise<string> => invoke("models_dir"),
 
   /**
    * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once

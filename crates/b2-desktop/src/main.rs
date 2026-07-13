@@ -27,6 +27,7 @@
 mod commands;
 mod error;
 mod logging;
+mod stats;
 mod watch;
 
 use b2_core::embed::Embedder;
@@ -322,6 +323,11 @@ fn main() {
             commands::project,
             commands::embed,
             commands::cancel_reindex,
+            commands::list_models,
+            commands::set_model,
+            commands::provision_model,
+            commands::models_dir,
+            commands::embed_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the B2 desktop app");

@@ -77,6 +77,9 @@ impl LocalEmbedder {
             ..Default::default()
         }));
 
+        // CPU inference (with Accelerate BLAS, see Cargo.toml). Moving the forward pass to
+        // the Metal GPU on Apple Silicon is the biggest untried perf lever — deferred with
+        // a fallback plan in AlteredCraft/B2#40; measure the cheaper smaller-model swap first.
         let device = Device::Cpu;
         // SAFETY: memory-maps the safetensors weights. Sound as long as the file is
         // not mutated while mapped; it is a read-only file in our XDG cache, written

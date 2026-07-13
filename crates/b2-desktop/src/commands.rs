@@ -23,6 +23,7 @@ use b2_core::vault::{
     EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
     ResourceExplainView, ResourceSummary, SearchResult, SimilarView, WriteReport,
 };
+use b2_embed::{EmbedConfig, ModelChoice};
 use serde::Serialize;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -244,6 +245,77 @@ pub fn cancel_reindex(state: State<'_, AppState>) {
     state.request_reindex_cancel();
 }
 
+/// The settings picker's model list: every model B2 offers ([`b2_embed::AVAILABLE_MODELS`]),
+/// annotated with which is configured now and which are already downloaded. Global
+/// (per-machine) config, not per-vault — like `b2 init`, so it needs no vault open.
+///
+/// Thin like the rest: one `EmbedConfig` read → the shared `model_choices` view →
+/// serialize. The registry and the current/installed logic live in `b2-embed`, not here.
+#[tauri::command(async)]
+pub fn list_models() -> Result<Vec<ModelChoice>, CmdError> {
+    Ok(EmbedConfig::load()?.model_choices())
+}
+
+/// Persist the chosen embedding model into the shared `config.toml` (the same file the
+/// CLI reads), then return the refreshed list. Selecting a *different* model is a model
+/// swap: it takes effect only after the model is provisioned (`b2 init`) and the vault
+/// is reindexed — the UI surfaces that; this command just records the choice. Refuses an
+/// id outside the registry (`EmbedError::UnknownModel`, mapped generic in `error.rs`).
+#[tauri::command(async)]
+pub fn set_model(model: String) -> Result<Vec<ModelChoice>, CmdError> {
+    set_model_impl(&model)
+}
+
+/// Provision (download + verify) the **currently-selected** model into the shared cache —
+/// the in-app equivalent of `b2 init`, driven from the Settings panel so a freshly-picked
+/// model can be installed without dropping to a terminal. Idempotent (an already-present,
+/// loadable model is a no-op) and network-bound, so it runs `(async)` off the main thread.
+/// Returns the refreshed model list, with the just-installed model's `installed` flag now
+/// true. Still thin: it drives [`b2_embed::provision`] — exactly what `b2 init` runs — and
+/// reprojects the choices; the download/verify logic lives in `b2-embed`, not here.
+#[tauri::command(async)]
+pub fn provision_model() -> Result<Vec<ModelChoice>, CmdError> {
+    let config = EmbedConfig::load()?;
+    // Full progress detail to the server log (repo policy); the webview gets only the
+    // generic outcome. The line sink mirrors the CLI's `eprintln!` progress.
+    b2_embed::provision(&config, |line| eprintln!("[b2] init: {line}"))?;
+    Ok(config.model_choices())
+}
+
+/// The shared cache directory where downloaded model files live (each model in its own
+/// `<dir>/<sanitized-id>` subfolder) — shown in Settings so the user knows where the
+/// (large) files are saved. Per-machine, config-resolved (`EmbedConfig::cache_dir`).
+#[tauri::command(async)]
+pub fn models_dir() -> Result<String, CmdError> {
+    Ok(EmbedConfig::load()?.cache_dir.display().to_string())
+}
+
+/// One model's cumulative embedding cost, for the Settings pane (`stats.rs`). Flat view
+/// over [`crate::stats::ModelStat`] so it crosses IPC as a plain payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbedStat {
+    pub model: String,
+    pub total_ms: u64,
+    pub chunks: u64,
+    pub runs: u64,
+}
+
+/// The per-model embedding-time ledger (`stats.rs`) — what the Settings pane renders so a
+/// model swap can be judged on real speed. Infallible: no data / an unreadable ledger is
+/// an empty list, never an error (the totals are diagnostic, never load-bearing).
+#[tauri::command(async)]
+pub fn embed_stats() -> Vec<EmbedStat> {
+    crate::stats::read_all()
+        .into_iter()
+        .map(|(model, s)| EmbedStat {
+            model,
+            total_ms: s.total_ms,
+            chunks: s.chunks,
+            runs: s.runs,
+        })
+        .collect()
+}
+
 /// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
 /// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
 struct ReindexGuard<'a>(&'a AppState);
@@ -277,9 +349,20 @@ fn embed_impl(
     // must not kill a fresh embed).
     state.arm_reindex();
 
-    // Fills missing vectors → needs the real model.
-    let (vault, _) = open_vault(state, true)?;
-    Ok(vault.embed(&mut |p| {
+    // Fills missing vectors → needs the real model. `semantic` is false only under
+    // `B2_EMBEDDER=fake` (dev/offline): don't attribute fake-embed time to the real model.
+    let (vault, semantic) = open_vault(state, true)?;
+    // Attribute the time to whatever model this vault embeds with (config.toml / default).
+    let model = EmbedConfig::load()
+        .map(|c| c.model)
+        .unwrap_or_else(|_| b2_embed::DEFAULT_MODEL.to_string());
+    // Time the embed pass itself — the clock starts *after* the model load above, so the
+    // recorded total is embedding throughput, not one-time setup. `chunks_done` is
+    // cumulative, so its last value is this run's chunk count (async-indexing.md §4).
+    let start = std::time::Instant::now();
+    let mut chunks_this_run = 0u64;
+    let report = vault.embed(&mut |p| {
+        chunks_this_run = chunks_this_run.max(p.chunks_done as u64);
         // Forward progress to the webview; a send error (the window navigated/closed)
         // is not fatal to the index — keep embedding.
         let _ = on_event.send(p);
@@ -288,7 +371,13 @@ fn embed_impl(
         } else {
             ControlFlow::Continue(())
         }
-    })?)
+    })?;
+    // Record the run's cost (best-effort). Skip when nothing embedded (an up-to-date
+    // vault) or under the fake embedder, so the ledger stays clean and correctly attributed.
+    if semantic && chunks_this_run > 0 {
+        crate::stats::record(&model, start.elapsed().as_millis() as u64, chunks_this_run);
+    }
+    Ok(report)
 }
 
 // --- thin impls (Tauri-runtime-free, so the command layer is unit-testable) -------
@@ -333,6 +422,15 @@ fn write_note_impl(
 ) -> Result<WriteReport, CmdError> {
     let (vault, _) = open_vault(state, false)?;
     Ok(vault.write(note, body, base_revision)?)
+}
+
+/// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against
+/// the registry *before* any filesystem write, so the unknown-model path is hermetic (no
+/// file touched); the real-config write itself is exercised by `b2-embed`'s `write_model`
+/// tests against a tempfile, not here (same posture as `persist_last_vault` in main.rs).
+fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
+    EmbedConfig::set_model(model)?;
+    Ok(EmbedConfig::load()?.model_choices())
 }
 
 #[cfg(test)]
@@ -465,6 +563,31 @@ mod tests {
     #[test]
     fn ping_round_trips() {
         assert_eq!(ping(), "pong");
+    }
+
+    #[test]
+    fn list_models_returns_the_registry() {
+        // Global config, no vault needed. Deterministic w.r.t. ambient config only in the
+        // ways asserted: the picker offers exactly the registry, by id (the current flag
+        // depends on the machine's config.toml and is covered by b2-embed's own tests).
+        let choices = list_models().unwrap();
+        assert_eq!(choices.len(), b2_embed::AVAILABLE_MODELS.len());
+        let ids: Vec<&str> = choices.iter().map(|c| c.id.as_str()).collect();
+        for m in b2_embed::AVAILABLE_MODELS {
+            assert!(ids.contains(&m.id), "registry model {} is offered", m.id);
+        }
+    }
+
+    #[test]
+    fn set_model_rejects_unknown_without_writing() {
+        // Validation happens before any filesystem write (b2-embed `write_model`), so this
+        // touches no real config file — it just proves the command refuses and stays generic.
+        let err = set_model_impl("definitely/not-a-real-model").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Embed(b2_embed::EmbedError::UnknownModel(_))
+        ));
+        assert!(user_message(&err).to_lowercase().contains("settings"));
     }
 
     #[test]

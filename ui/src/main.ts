@@ -345,6 +345,82 @@ async function commitLink(): Promise<void> {
   }
 }
 
+// --- settings (⌘,) ----------------------------------------------------------------
+//
+// A small modal over the global embedder config. Its one setting today is the model
+// picker; selecting a model persists to the shared config the CLI also reads, and a real
+// switch is completed by the user (b2 init + Reindex), which the flashed guidance names.
+
+async function openSettings(): Promise<void> {
+  state.settingsOpen = true;
+  render(); // show the modal shell immediately; the list fills when it resolves
+  try {
+    // Models, their embedding-time history, and where model files live — parallel reads.
+    const [models, stats, dir] = await Promise.all([
+      api.listModels(),
+      api.embedStats(),
+      api.modelsDir(),
+    ]);
+    state.models = models;
+    state.embedStats = stats;
+    state.modelsDir = dir;
+  } catch (e) {
+    flash(errText(e));
+  }
+  render();
+  document.getElementById("settings-model")?.focus();
+}
+
+function closeSettings(): void {
+  state.settingsOpen = false;
+  render();
+}
+
+// Download + verify the selected model in-app (the `b2 init` button). Single-flight via
+// `state.provisioning` (the webview is single-threaded, so the sync guard + button-disable
+// fully prevent a concurrent download — no host guard needed). On success the model's
+// `installed` flag flips and the Download button disappears.
+async function provisionModel(): Promise<void> {
+  if (state.provisioning) return;
+  state.provisioning = true;
+  render();
+  try {
+    state.models = await api.provisionModel();
+    const now = state.models.find((m) => m.current);
+    flash(`Downloaded ${now?.label ?? "model"}. Reindex to embed your vault with it.`);
+  } catch (e) {
+    flash(errText(e));
+  } finally {
+    state.provisioning = false;
+    render();
+  }
+}
+
+// Persist a model choice. A no-op if it's already current; otherwise record it and tell
+// the user what still has to happen for the swap to take effect (download, then Reindex).
+async function changeModel(model: string): Promise<void> {
+  if (state.models.find((m) => m.current)?.id === model) return;
+  try {
+    state.models = await api.setModel(model);
+    const now = state.models.find((m) => m.current);
+    const label = now?.label ?? model;
+    flash(
+      now && !now.installed
+        ? `Model set to ${label}. Download it with \`b2 init\`, then Reindex to re-embed.`
+        : `Model set to ${label}. Reindex to re-embed your vault with it.`,
+    );
+  } catch (e) {
+    // The write was refused; re-sync the picker to the unchanged config and surface why.
+    flash(errText(e));
+    try {
+      state.models = await api.listModels();
+    } catch {
+      /* leave the stale list; the toast already explains */
+    }
+  }
+  render();
+}
+
 // Switch the active vault via the host's native folder picker. On a fresh choice the
 // open note, discovery, search, and tree-expansion all reset (they belong to the old
 // vault); a cancel is a no-op. The picker runs host-side, so all this action does is
@@ -878,6 +954,12 @@ function buildShell(): void {
           </svg>
         </button>
         <button id="reindex" class="btn ghost" title="Re-project the vault into the index">Reindex</button>
+        <button id="open-settings" class="btn ghost icon-btn" title="Settings (⌘,)" aria-label="Settings">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.1"/>
+            <path d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1"/>
+          </svg>
+        </button>
       </div>
     </header>
     <main class="layout">
@@ -893,6 +975,27 @@ function wireEvents(): void {
   // Delegated clicks for everything that renders dynamically.
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
+
+    if (target.closest("#open-settings")) {
+      void openSettings();
+      return;
+    }
+    // Settings modal: the Download button (in-app `b2 init`), else the Done button or a
+    // click on the backdrop itself closes it. Checked before the link-modal backdrop
+    // branch so settings wins when it's up.
+    if (state.settingsOpen) {
+      if (target.closest("#settings-provision")) {
+        void provisionModel();
+        return;
+      }
+      if (
+        target.closest("[data-settings-close]") ||
+        target.classList.contains("modal-backdrop")
+      ) {
+        closeSettings();
+      }
+      return; // clicks inside the settings modal do nothing else
+    }
 
     const cancel = target.closest<HTMLElement>("[data-cancel]");
     if (cancel) {
@@ -1011,12 +1114,29 @@ function wireEvents(): void {
       const preview = document.getElementById("modal-verb");
       if (preview) preview.textContent = state.linkRelation;
     }
+    if (t.id === "settings-model") {
+      void changeModel((t as HTMLSelectElement).value);
+    }
   });
 
-  // Escape closes the modal; Cmd/Ctrl+S forces an immediate flush while editing
-  // (autosave means it's never *required* — this is for the reflex).
+  // ⌘, toggles Settings (the macOS Preferences reflex); Escape closes whichever modal is
+  // up; Cmd/Ctrl+S forces an immediate flush while editing (autosave means it's never
+  // *required* — this is for the reflex).
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && state.linkTarget) closeModal();
+    if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      e.preventDefault();
+      if (state.settingsOpen) closeSettings();
+      else void openSettings();
+      return;
+    }
+    if (e.key === "Escape") {
+      if (state.settingsOpen) {
+        closeSettings();
+        return;
+      }
+      if (state.linkTarget) closeModal();
+      return;
+    }
     if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void saveNow();

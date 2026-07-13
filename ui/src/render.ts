@@ -418,7 +418,108 @@ function connectionsSectionHtml(state: AppState): string {
   return head + `<div class="cards">${items}</div>`;
 }
 
+/** A cumulative-duration label from milliseconds: "3h 25m", "12m 04s", "45s", "0s". */
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+// The per-model embedding-time ledger (b2-desktop stats.rs), accumulated across sessions
+// so a model swap can be judged on real speed. One row per model that has history —
+// total time, chunks, and derived throughput — the current model marked. Empty until the
+// first embed run completes.
+function embedStatsHtml(state: AppState): string {
+  const byModel = new Map(state.embedStats.map((s) => [s.model, s]));
+  // Order by the picker so rows are stable; only models with recorded time appear.
+  const rows = state.models
+    .map((m) => ({ model: m, stat: byModel.get(m.id) }))
+    .filter((r) => r.stat && r.stat.chunks > 0);
+  const head = `<div class="settings-subhead">Embedding time</div>`;
+  if (rows.length === 0) {
+    return (
+      head +
+      `<p class="settings-detail muted">No embedding runs recorded yet — Reindex to start measuring.</p>`
+    );
+  }
+  const list = rows
+    .map(({ model, stat }) => {
+      const s = stat!;
+      const perSec = s.total_ms > 0 ? (s.chunks / (s.total_ms / 1000)).toFixed(1) : "—";
+      const marker = model.current ? ` <span class="settings-current">current</span>` : "";
+      return `<div class="settings-stat">
+          <span class="settings-stat-model">${escapeHtml(model.label)}${marker}</span>
+          <span class="settings-stat-nums">${formatDuration(s.total_ms)} · ${s.chunks.toLocaleString()} chunks · ${perSec} chunks/sec</span>
+        </div>`;
+    })
+    .join("");
+  return head + `<div class="settings-stats">${list}</div>`;
+}
+
+// The Settings modal (⌘,). Reuses the link modal's `.modal-*`/`.field` chrome. Today it
+// holds the embedding model picker + the per-model embedding-time ledger; built to hold
+// more settings later. Mutually exclusive with the link modal in practice, so it takes
+// precedence in `modalHtml`.
+function settingsModalHtml(state: AppState): string {
+  const models = state.models;
+  const current = models.find((m) => m.current) ?? models[0];
+  const options = models
+    .map(
+      (m) =>
+        `<option value="${escapeHtml(m.id)}"${m.current ? " selected" : ""}>${escapeHtml(
+          m.label,
+        )}${m.installed ? "" : " — not installed"}</option>`,
+    )
+    .join("");
+  const detail = current
+    ? `<p class="settings-detail">${escapeHtml(current.description)} · ${current.dim}-dim · ${
+        current.installed ? "installed" : "not installed"
+      }</p>`
+    : `<p class="settings-detail muted">Loading models…</p>`;
+  // In-app `b2 init`: a Download button appears when the selected model isn't installed,
+  // and a spinner while it downloads (network-bound, can take minutes).
+  const provisionRow =
+    current && !current.installed
+      ? state.provisioning
+        ? `<div class="settings-provision"><span class="spinner"></span><span class="muted">Downloading ${escapeHtml(
+            current.label,
+          )}… this can take a few minutes.</span></div>`
+        : `<div class="settings-provision"><button class="btn small primary" id="settings-provision">Download model</button><span class="muted">Required before this model can embed.</span></div>`
+      : "";
+  return `<div class="modal-backdrop" data-settings-backdrop>
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
+        <h3>Settings</h3>
+        <label class="field">Embedding model
+          <select id="settings-model"${
+            models.length && !state.provisioning ? "" : " disabled"
+          }>${options}</select>
+        </label>
+        ${detail}
+        ${provisionRow}
+        <p class="settings-note">Changing the model re-embeds the whole vault on the next
+          Reindex. A newly-chosen model is downloaded with the button above.</p>
+        ${embedStatsHtml(state)}
+        ${
+          state.modelsDir
+            ? `<div class="settings-subhead">Model files</div>
+               <p class="settings-path" title="${escapeHtml(state.modelsDir)}">${escapeHtml(
+                 state.modelsDir,
+               )}</p>`
+            : ""
+        }
+        <div class="modal-actions">
+          <button class="btn primary" data-settings-close>Done</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 export function modalHtml(state: AppState): string {
+  if (state.settingsOpen) return settingsModalHtml(state);
   const t = state.linkTarget;
   if (!t) return "";
   const src = state.current;
