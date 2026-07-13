@@ -299,3 +299,129 @@ fn incremental_resource_update_equals_full_rebuild() {
         "incremental resource update must equal a full rebuild"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Step 4 — resolution: kind dispatch, dst_resource_path, dangling (spec §3)
+// ---------------------------------------------------------------------------
+
+/// All edges out of one source path: `(dst_id, dst_resource_path, dst_path_raw,
+/// type, embed, caption)`, in raw-target order.
+type EdgeTuple = (
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    i64,
+    Option<String>,
+);
+fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
+    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.dst_id, e.dst_resource_path, e.dst_path_raw, e.type, e.embed, e.caption
+             FROM edges e JOIN notes n ON n.b2id = e.src_id
+             WHERE n.path = ?1 ORDER BY e.dst_path_raw, e.occurrence_index",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([src_path], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    rows
+}
+
+/// Resource links resolve to `dst_resource_path` (never `dst_id`), capture the
+/// authored caption + embed marker, and a missing target dangles with both
+/// resolution columns NULL and the raw text retained.
+#[test]
+fn resource_links_resolve_capture_and_dangle() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    fs::write(
+        tmp.path().join("notes/with-resources.md"),
+        "---\ntitle: With resources\n---\n\
+         ![a tiny diagram](../resources/diagram.png)\n\
+         [the data](../resources/data.txt)\n\
+         ![[resources/blob.bin]]\n\
+         [gone](../resources/nope.png)\n\
+         [ext](https://example.com/x.png)\n",
+    )
+    .unwrap();
+
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let edges = edges_from(tmp.path(), "notes/with-resources.md");
+    assert_eq!(
+        edges,
+        vec![
+            // note-relative Markdown targets resolve against resources/
+            (
+                None,
+                Some("resources/data.txt".into()),
+                "../resources/data.txt".into(),
+                "references".into(),
+                0,
+                Some("the data".into()),
+            ),
+            (
+                None,
+                Some("resources/diagram.png".into()),
+                "../resources/diagram.png".into(),
+                "references".into(),
+                1,
+                Some("a tiny diagram".into()),
+            ),
+            // a missing target dangles: both columns NULL, raw retained
+            (
+                None,
+                None,
+                "../resources/nope.png".into(),
+                "references".into(),
+                0,
+                Some("gone".into()),
+            ),
+            // wikilink embeds resolve vault-root
+            (
+                None,
+                Some("resources/blob.bin".into()),
+                "resources/blob.bin".into(),
+                "references".into(),
+                1,
+                None,
+            ),
+        ],
+        "external URL yields nothing; the rest resolve or dangle as authored"
+    );
+}
+
+/// Markdown-form links to notes are edges too (extension dispatch), and a
+/// `#fragment` is stripped for the lookup while `dst_path_raw` keeps it.
+#[test]
+fn markdown_note_links_resolve_with_fragment_stripped() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    fs::write(
+        tmp.path().join("notes/md-note-links.md"),
+        "---\ntitle: md links\n---\n\
+         [background](../concepts/memory.md)\n\
+         [section](../concepts/memory.md#retrieval)\n",
+    )
+    .unwrap();
+
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let edges = edges_from(tmp.path(), "notes/md-note-links.md");
+    assert_eq!(edges.len(), 2);
+    for (dst_id, dst_resource, raw, r#type, _, _) in &edges {
+        assert_eq!(dst_id.as_deref(), Some(common::MEMORY_ID), "raw: {raw}");
+        assert_eq!(*dst_resource, None);
+        assert_eq!(r#type, "references");
+    }
+    // occurrence disambiguates the two edges to the same (target, type)
+    assert!(edges.iter().any(|e| e.2 == "../concepts/memory.md#retrieval"));
+}

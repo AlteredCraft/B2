@@ -41,6 +41,10 @@ pub struct ParsedLink {
     /// True for an embed form (`![alt](path)` / `![[file]]`) — recorded on the
     /// edge as a display nicety, never a distinct verb (spec §3).
     pub embed: bool,
+    /// True when the target came from a Markdown-form link (`[…](target)`).
+    /// Resolution treats these with standard Markdown semantics — note-relative
+    /// first, then vault-root — while wikilink targets stay vault-root (spec §3).
+    pub md_form: bool,
     /// The authored display text — `![alt](…)`'s alt, `[text](…)`'s text, or a
     /// wikilink's alias. Captured on the edge; it becomes an image's index text
     /// (slice 3).
@@ -101,6 +105,7 @@ pub fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
         explanation: extract_explanation(tail),
         typed: true,
         embed: false,
+        md_form: false,
     })
 }
 
@@ -170,6 +175,7 @@ fn scan_inline_links(line: &str, out: &mut Vec<ParsedLink>) {
                     explanation: None,
                     typed: false,
                     embed,
+                    md_form: false,
                 });
             }
             i += marker + 2 + close + 2;
@@ -188,6 +194,7 @@ fn scan_inline_links(line: &str, out: &mut Vec<ParsedLink>) {
                     explanation: None,
                     typed: false,
                     embed,
+                    md_form: true,
                 });
             }
             i += marker + consumed;

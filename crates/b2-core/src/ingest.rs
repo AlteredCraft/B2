@@ -293,6 +293,13 @@ fn embed_pending(
 /// `(target, type)` authored in both homes) the **body wins** and the redundant
 /// frontmatter entry is dropped (data-model §0/§3). Occurrence is assigned per
 /// `(target, type)` over the kept set.
+///
+/// Resolution dispatches by the target's **extension** (slice-1 spec §3,
+/// research §9b #8): a `.md` or extensionless target resolves against `notes`
+/// (the wikilink `+ ".md"` ladder), any other extension against `resources`. A
+/// `#fragment` suffix is stripped for the lookup only (`dst_path_raw` keeps the
+/// authored text). Markdown-form targets (`[…](path)`) additionally try
+/// **note-relative first** — standard Markdown semantics — before vault-root.
 fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[String]) -> Result<()> {
     // Gather authored links: body first (inline), then frontmatter (frontmatter).
     let mut staged: Vec<(crate::link::ParsedLink, &'static str)> = Vec::new();
@@ -305,21 +312,30 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
         }
     }
 
+    // The source note's directory — the base for a Markdown-form relative target.
+    let src_dir = db::resolve_b2id_to_path(conn, src_id)?
+        .as_deref()
+        .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.to_string()))
+        .unwrap_or_default();
+
     // Resolve targets; record which (target, type) the body already authors.
     let mut body_keys: HashSet<(String, String)> = HashSet::new();
     let mut resolved = Vec::with_capacity(staged.len());
     for (link, origin) in staged {
-        let dst_id = db::resolve_link_target(conn, &link.target_path)?;
-        let target_key = dst_id.clone().unwrap_or_else(|| link.target_path.clone());
+        let (dst_id, dst_resource_path) = resolve_target(conn, &src_dir, &link)?;
+        let target_key = dst_id
+            .clone()
+            .or_else(|| dst_resource_path.clone())
+            .unwrap_or_else(|| link.target_path.clone());
         if origin == "inline" {
             body_keys.insert((target_key.clone(), link.edge_type.clone()));
         }
-        resolved.push((link, origin, dst_id, target_key));
+        resolved.push((link, origin, dst_id, dst_resource_path, target_key));
     }
 
     let mut occ: HashMap<(String, String), i64> = HashMap::new();
     let mut rows = Vec::with_capacity(resolved.len());
-    for (link, origin, dst_id, target_key) in resolved {
+    for (link, origin, dst_id, dst_resource_path, target_key) in resolved {
         let key = (target_key.clone(), link.edge_type.clone());
         if origin == "frontmatter" && body_keys.contains(&key) {
             continue; // inline wins — drop the redundant frontmatter dup
@@ -331,15 +347,96 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
             id: derive_edge_id(src_id, &target_key, &link.edge_type, occurrence_index),
             src_id: src_id.to_string(),
             dst_id,
+            dst_resource_path,
             dst_path_raw: link.target_path.clone(),
             r#type: link.edge_type.clone(),
             origin: origin.to_string(),
             explanation: link.explanation.clone(),
+            embed: link.embed,
+            caption: link.caption.clone(),
             occurrence_index,
         });
     }
 
     db::replace_authored_edges(conn, src_id, &rows)
+}
+
+/// Resolve one parsed link to `(dst_id, dst_resource_path)` — at most one is
+/// `Some`; both `None` means dangling. The lookup path is the authored target
+/// minus any `#fragment`; kind dispatch is extension-only (see [`project_edges`]).
+fn resolve_target(
+    conn: &Connection,
+    src_dir: &str,
+    link: &crate::link::ParsedLink,
+) -> Result<(Option<String>, Option<String>)> {
+    let lookup = link
+        .target_path
+        .split('#')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if lookup.is_empty() {
+        return Ok((None, None)); // fragment-only wikilink — dangling
+    }
+
+    // Candidate paths, most specific first: a Markdown-form target is
+    // note-relative per standard Markdown, falling back to vault-root (the
+    // wikilink habit); wikilinks are vault-root only, as today.
+    let mut candidates: Vec<String> = Vec::with_capacity(2);
+    if link.md_form {
+        if let Some(joined) = join_vault_relative(src_dir, lookup) {
+            candidates.push(joined);
+        }
+    }
+    if !candidates.iter().any(|c| c == lookup) {
+        candidates.push(lookup.to_string());
+    }
+
+    let is_resource = target_is_resource(lookup);
+    for candidate in &candidates {
+        if is_resource {
+            if let Some(path) = db::resolve_resource_target(conn, candidate)? {
+                return Ok((None, Some(path)));
+            }
+        } else if let Some(id) = db::resolve_link_target(conn, candidate)? {
+            return Ok((Some(id), None));
+        }
+    }
+    Ok((None, None))
+}
+
+/// Extension-only kind dispatch for a link target: an extension other than `md`
+/// means resource; `.md` or no extension means note (the wikilink habit writes
+/// `[[concepts/memory]]` — extensionless — and the note ladder appends `.md`).
+fn target_is_resource(lookup: &str) -> bool {
+    let name = lookup.rsplit('/').next().unwrap_or(lookup);
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            !ext.eq_ignore_ascii_case("md")
+        }
+        _ => false,
+    }
+}
+
+/// Join a relative `target` onto `base_dir` (both vault-relative, `/`-separated),
+/// normalizing `.` and `..` segments. `None` when the target escapes the vault
+/// root — such a path can never resolve, and the vault-root fallback still runs.
+fn join_vault_relative(base_dir: &str, target: &str) -> Option<String> {
+    let mut segments: Vec<&str> = if base_dir.is_empty() {
+        Vec::new()
+    } else {
+        base_dir.split('/').collect()
+    };
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            s => segments.push(s),
+        }
+    }
+    (!segments.is_empty()).then(|| segments.join("/"))
 }
 
 /// Deterministic id for an authored edge from its identity tuple (data-model.md

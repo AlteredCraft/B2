@@ -811,10 +811,18 @@ pub struct EdgeRow {
     pub id: String,
     pub src_id: String,
     pub dst_id: Option<String>,
+    /// The resolved **resource** target (vault-relative path into `resources`),
+    /// when the link names a non-`.md` file — mutually exclusive with `dst_id`
+    /// in practice (a target resolves as a note or a resource, never both).
+    pub dst_resource_path: Option<String>,
     pub dst_path_raw: String,
     pub r#type: String,
     pub origin: String,
     pub explanation: Option<String>,
+    /// An embed form (`![alt](…)` / `![[…]]`) — display nicety, not a verb.
+    pub embed: bool,
+    /// The authored alt/link/alias text — an image's index text (slice 3).
+    pub caption: Option<String>,
     pub occurrence_index: i64,
 }
 
@@ -827,16 +835,20 @@ pub fn replace_authored_edges(conn: &Connection, src_id: &str, edges: &[EdgeRow]
     for e in edges {
         conn.execute(
             "INSERT INTO edges
-               (id, src_id, dst_id, dst_path_raw, type, origin, explanation, occurrence_index)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+               (id, src_id, dst_id, dst_resource_path, dst_path_raw, type, origin,
+                explanation, embed, caption, occurrence_index)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 e.id,
                 e.src_id,
                 e.dst_id,
+                e.dst_resource_path,
                 e.dst_path_raw,
                 e.r#type,
                 e.origin,
                 e.explanation,
+                e.embed,
+                e.caption,
                 e.occurrence_index,
             ],
         )?;
@@ -893,6 +905,18 @@ pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<
         return Ok(Some(id));
     }
     resolve_path_to_b2id(conn, &format!("{link_path}.md"))
+}
+
+/// Resolve a link target against the **resource inventory** — an exact
+/// vault-relative path match (extension-only dispatch decided the target is a
+/// resource before calling this; slice-1 spec §3). Returns the stored path, or
+/// `None` for dangling.
+pub fn resolve_resource_target(conn: &Connection, path: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT path FROM resources WHERE path = ?1", [path], |r| {
+            r.get(0)
+        })
+        .optional()?)
 }
 
 // ---------------------------------------------------------------------------
