@@ -243,12 +243,15 @@ fn unchanged_stat_short_circuits_the_rehash() {
         "matching (size, mtime) must not re-hash"
     );
 
-    // A touched mtime re-reads and refreshes the hash.
+    // A touched mtime re-reads and refreshes the hash. Bump it a clear +2s past the
+    // original: stored mtime is whole-second granularity (ingest.rs `as_secs`), so
+    // `now()` can land in the *same second* as `original_mtime` and (correctly) not
+    // re-hash — a flake. A fixed offset makes the stat change deterministically.
     fs::File::options()
         .write(true)
         .open(&txt)
         .unwrap()
-        .set_modified(std::time::SystemTime::now())
+        .set_modified(original_mtime + std::time::Duration::from_secs(2))
         .unwrap();
     vault.project(false).unwrap();
     let after = resource_rows(tmp.path());
