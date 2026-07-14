@@ -4,10 +4,18 @@
 // field here corresponds 1:1 to a Rust struct field. Hand-written for now; if they
 // ever churn, `ts-rs`/`tauri-specta` codegen is the later lever (spec §9).
 
-/** `vault_info` — the active vault + whether semantic ranking is live. */
+/**
+ * `vault_info` — the active vault, whether the real model is installed (`semantic`),
+ * and how much of the vault is actually embedded (`notes_embedded`/`notes_total`, #26).
+ * The fraction is the precise honesty signal: `semantic` says a model *exists*, the
+ * fraction says how much semantic ranking is *live*, so the UI can flag search
+ * "keyword-only for now" while a projected vault embeds behind the first tree paint.
+ */
 export interface VaultInfo {
   root: string;
   semantic: boolean;
+  notes_embedded: number;
+  notes_total: number;
 }
 
 /**

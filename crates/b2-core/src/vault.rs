@@ -112,6 +112,22 @@ pub struct EmbedReport {
     pub cancelled: bool,
 }
 
+/// The vault's semantic-embedding coverage — how many of its notes are fully
+/// embedded — for the honest "N/M embedded" signal (#26, projection-embedding-split.md
+/// §5). Model-free: a pure count over the projection, so an adapter can surface
+/// "keyword-only for now" *precisely* (not just via the binary "is a model installed"
+/// flag) without loading the model. `embedded == total` (and `total > 0`) means
+/// semantic ranking is complete; `embedded < total` means [`search`](Vault::search) is
+/// running keyword-first over the unembedded remainder (`embedded == 0` = fully
+/// keyword-only, a projected-but-unembedded vault).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EmbedStatus {
+    /// Notes whose every chunk has a stored vector.
+    pub embedded: usize,
+    /// Every projected note (the denominator).
+    pub total: usize,
+}
+
 /// What a reindex **would** do — the `reindex --dry-run` preview. The `would_*`
 /// keys (vs [`ReindexReport`]'s past-tense `indexed`/`embedded`/`stamped`) are the
 /// honesty signal: this is a projection, computed read-only with **no** writes —
@@ -766,6 +782,19 @@ impl Vault {
             }
         }
         Ok(out)
+    }
+
+    /// The vault's semantic-embedding coverage as an [`EmbedStatus`] — the honest
+    /// "N/M embedded" read (#26). A **pure model-free count** over the projection
+    /// (`db::embed_progress`), so an adapter can tell the user semantic ranking is
+    /// *partial* — flag results "keyword-only for now" — rather than silently
+    /// under-ranking while a vault embeds behind the first tree paint
+    /// (projection-embedding-split.md §5). `embedded == 0` on a projected-but-unembedded
+    /// vault; `embedded == total` (with `total > 0`) once every note has vectors.
+    pub fn embed_status(&self) -> Result<EmbedStatus> {
+        let _op = tracing::debug_span!(target: "b2::vault", "embed_status").entered();
+        let (embedded, total) = db::embed_progress(&self.conn)?;
+        Ok(EmbedStatus { embedded, total })
     }
 
     /// Surface the notes most semantically similar to `note_ref` (path **or** `b2id`)

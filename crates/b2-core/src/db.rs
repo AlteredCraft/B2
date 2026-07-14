@@ -689,6 +689,38 @@ pub fn note_fully_embedded(conn: &Connection, b2id: &str) -> Result<bool> {
     Ok(n_chunks > 0 && n_missing == 0)
 }
 
+/// The vault's embedding coverage as `(notes_embedded, notes_total)` — the honest
+/// "N/M embedded" signal (#26). `notes_total` is every projected note; `notes_embedded`
+/// counts notes whose every chunk already has a stored vector (the aggregate of
+/// [`note_fully_embedded`]). It is `0` when the embedding space doesn't exist yet — a
+/// projected-but-unembedded vault — so this reads cleanly before any embed. **Model-free:**
+/// a pure count over the projection, so an adapter can report coverage without loading the
+/// model. `notes_embedded == notes_total` (with `notes_total > 0`) means semantic ranking
+/// is complete; a smaller `notes_embedded` means search is running keyword-first over the
+/// unembedded remainder.
+pub fn embed_progress(conn: &Connection) -> Result<(usize, usize)> {
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+    // No embeddings table → nothing is embedded (it's created at embed time, not in the
+    // base migration), and the join below would reference a missing table.
+    if !embedding_space_exists(conn)? {
+        return Ok((0, total as usize));
+    }
+    // A note counts as embedded iff it has ≥1 chunk and none of its chunks lack a vector —
+    // the same predicate as `note_fully_embedded`, aggregated over the whole vault.
+    let embedded: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM notes n
+         WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.note_b2id = n.b2id)
+           AND NOT EXISTS (
+             SELECT 1 FROM chunks c
+             LEFT JOIN embeddings v ON v.chunk_id = c.id
+             WHERE c.note_b2id = n.b2id AND v.chunk_id IS NULL
+           )",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((embedded as usize, total as usize))
+}
+
 /// Every chunk still lacking a stored vector, as `(note_b2id, path, chunk_id, text)`
 /// in `(path, seq)` order — the **DB-derived pending set** the embed pass fills
 /// (projection-embedding-split.md §2). Deriving it here is what decouples projection

@@ -330,14 +330,30 @@ export function sidePaneHtml(state: AppState): string {
   return state.searchQuery ? searchSectionHtml(state) : discoverySectionHtml(state);
 }
 
+// The honest search-ranking caveat (#26). Search always answers over the keyword (BM25)
+// index; this says how much *semantic* ranking is mixed in, so a projected-but-unembedded
+// vault never silently under-ranks:
+//   • no real model            → "keyword only (run `b2 init`)"
+//   • model, nothing embedded  → "keyword-only for now (0/M embedded — Reindex)"
+//   • model, partly embedded   → "keyword-first (N/M embedded)" (vector half still filling)
+//   • model, fully embedded    → "" (ranking is fully semantic; no caveat)
+function searchCaveat(state: AppState): string {
+  if (!state.semantic)
+    return " · keyword only (run <code>b2 init</code> for semantic)";
+  const n = state.notesEmbedded;
+  const m = state.notesTotal;
+  if (m === 0 || n >= m) return ""; // empty vault, or every note embedded — semantic is live
+  return n === 0
+    ? ` · keyword-only for now (0/${m} embedded — Reindex)`
+    : ` · keyword-first (${n}/${m} embedded)`;
+}
+
 function searchSectionHtml(state: AppState): string {
   const head = `<div class="side-head">
       <h2>Results</h2>
       <button class="linklike" data-clear-search>clear</button>
     </div>
-    <p class="side-sub">for “${escapeHtml(state.searchQuery)}”${
-      state.semantic ? "" : " · keyword only (run <code>b2 init</code> for semantic)"
-    }</p>`;
+    <p class="side-sub">for “${escapeHtml(state.searchQuery)}”${searchCaveat(state)}</p>`;
   if (state.loading) return head + `<p class="side-empty">Searching…</p>`;
   if (state.searchResults.length === 0)
     return head + `<p class="side-empty">No matches.</p>`;

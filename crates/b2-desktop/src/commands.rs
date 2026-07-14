@@ -33,10 +33,18 @@ use tauri_plugin_dialog::DialogExt;
 
 /// The active vault's root + whether semantic ranking is live (real model), for the
 /// UI header and honest empty states (mirrors `b2 search`'s "semantic off" caveat).
+///
+/// `semantic` answers "is the real model installed"; `notes_embedded`/`notes_total`
+/// answer the *precise* "how much of this vault is actually embedded" (#26), so the UI
+/// can flag search as "keyword-only for now" while a projected vault embeds behind the
+/// first tree paint — not just under the fake embedder. A model-free count (the façade's
+/// `embed_status` read).
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultInfo {
     pub root: String,
     pub semantic: bool,
+    pub notes_embedded: usize,
+    pub notes_total: usize,
 }
 
 /// Step 0's seam-proving command: the frontend `invoke('ping')` round-trips this to
@@ -393,9 +401,16 @@ fn embed_impl(
 
 fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
+    // Model-free read: open the fake vault only to count embedding coverage (#26). The
+    // real model is never loaded here — `semantic` stays "is a model installed", while
+    // `notes_embedded/total` is the precise fraction the UI flags keyword-only from.
+    let (vault, _) = open_vault(state, false)?;
+    let status = vault.embed_status()?;
     Ok(VaultInfo {
         root: root.display().to_string(),
         semantic: crate::semantic_available(),
+        notes_embedded: status.embedded,
+        notes_total: status.total,
     })
 }
 
@@ -577,6 +592,37 @@ mod tests {
         let notes = list_notes_impl(&state).unwrap();
         let paths: Vec<&str> = notes.iter().map(|n| n.path.as_str()).collect();
         assert_eq!(paths, vec!["solo.md"]);
+    }
+
+    #[test]
+    fn vault_info_reports_embedding_coverage() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // A fully-indexed vault (setup reindexes with the fake) reads as M/M embedded —
+        // the "N/M embedded" honesty signal (#26) surfaced through the command layer.
+        let full = tmp.path().join("full");
+        golden_indexed(&full);
+        let state = AppState::new(Some(full));
+        let info = vault_info_impl(&state).unwrap();
+        assert_eq!(
+            (info.notes_embedded, info.notes_total),
+            (2, 2),
+            "a fully-indexed vault reads as M/M embedded"
+        );
+
+        // A projected-but-unembedded vault reads as 0/M — the command surfaces the precise
+        // fraction model-free (it never loads the real model to answer vault_info).
+        let projected = tmp.path().join("projected");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
+        copy_dir(&src, &projected);
+        Vault::open(&projected).unwrap().project(false).unwrap();
+        let state = AppState::new(Some(projected));
+        let info = vault_info_impl(&state).unwrap();
+        assert_eq!(
+            (info.notes_embedded, info.notes_total),
+            (0, 2),
+            "a projected-but-unembedded vault reads as 0/M"
+        );
     }
 
     #[test]
