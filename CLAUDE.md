@@ -222,6 +222,14 @@ invalidation exists or is needed.
   `tests/common/mod.rs`).
 - **Keep `cargo test` fast, deterministic, and model-free.** Real-model work belongs out of CI —
   behind `b2 init`, `--example eval`, or manual runs. Never add candle/tokenizers deps to `b2-core`.
+- **Never `#[ignore]` a test, and a hard-to-write test is a signal, not a chore.** `#[ignore]` hides a
+  test from the suite while leaving it looking present — a silent gap. If a test is difficult to write,
+  keep faithful, or make pass, *stop and reflect*: is the test valuable; are we testing the right thing;
+  is the fault in the test or in the system under test? A test that fights you is usually coupled to an
+  implementation detail (a retired dependency's constant, a since-changed fixture assumption) rather than
+  a real invariant — re-anchor it on the invariant, or fix the system. When the resolution isn't obvious,
+  **open a conversation with the user** to work through it; do not reach for `#[ignore]`, a slow/brittle
+  fixture, or a weakened assertion to move on. 
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
   CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
   This matches the repo-wide logging policy in the parent `CLAUDE.md`.
