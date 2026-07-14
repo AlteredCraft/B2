@@ -13,6 +13,9 @@
 //!   *near* the target, not an arbitrary slice;
 //! - carry `cfg.overlap_frac` of the tail forward, so `char_start..char_end` ranges
 //!   **overlap** (they no longer partition the body — D4);
+//! - never cut *inside* a fenced code block or a Markdown table — a forced cut with no
+//!   clean break in the window is pushed past the block's end so it stays whole (#41),
+//!   trading a slightly oversized chunk for a coherent one (`protected_regions`);
 //! - track a running heading stack and stamp each chunk's `heading_path` (D3).
 //!
 //! The core is **model-free** (root `CLAUDE.md`): there is no tokenizer here (it
@@ -134,6 +137,12 @@ pub fn chunk_body(body: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
     let overlap_chars =
         ((cfg.target_tokens as f64) * (cfg.overlap_frac as f64) * cpt).round() as usize;
 
+    // #41: byte ranges (balanced code fences, GFM tables) a boundary must not cut
+    // *inside* — a forced cut with no clean break in the window is exactly where a
+    // bisected block would otherwise happen (this dense content is what the D2 proxy
+    // mis-sizes, spec §5).
+    let regions = protected_regions(body);
+
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut start = 0usize;
 
@@ -153,11 +162,19 @@ pub fn chunk_body(body: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
             cfg.backscan_tokens,
             cpt,
         );
+        // If that cut lands inside a fence/table, push it past the block's end so the
+        // whole block stays in one chunk. An oversized chunk (the embedder truncates
+        // at 512, D2/§5) is fine; a half-fence / header-less table is not.
+        let end = snap_past_region(end, &regions);
         push_chunk(&mut chunks, body, &line_paths, start, end, cfg);
         if end >= body_len {
             break;
         }
-        start = choose_overlap_start(&breaks, start, end, overlap_chars);
+        // The next chunk's overlap tail must not start inside a block either — skip
+        // such a start to just past the block (no overlap into it, rather than a chunk
+        // that opens mid-fence).
+        let overlap_start = choose_overlap_start(&breaks, start, end, overlap_chars);
+        start = snap_past_region(overlap_start, &regions);
     }
 
     // Re-number after the fact: an all-whitespace span is skipped by `push_chunk`,
@@ -365,6 +382,114 @@ fn choose_overlap_start(breaks: &[Break], start: usize, end: usize, overlap_char
         }
     }
     best.map(|(_, o)| o).unwrap_or(end)
+}
+
+/// If `off` falls **strictly inside** one of the protected `regions` (a balanced
+/// fenced code block or a GFM table, from [`protected_regions`]), return that region's
+/// end so the boundary clears the block; otherwise return `off` unchanged. A cut
+/// exactly at a region edge is already clean and left as-is. `regions` is sorted by
+/// start and non-overlapping, so the first region reaching past `off` decides it.
+fn snap_past_region(off: usize, regions: &[(usize, usize)]) -> usize {
+    for &(rs, re) in regions {
+        if rs >= off {
+            break;
+        }
+        if off < re {
+            return re;
+        }
+    }
+    off
+}
+
+/// Byte ranges `[start, end)` a chunk boundary must not fall **strictly inside**
+/// (issue #41): a balanced fenced code block and a GFM table. Cutting at either edge
+/// (before the opening fence / table header, or after the closing fence / final row)
+/// is clean; cutting in the interior would bisect the block — embedding a code chunk
+/// with an unbalanced ```` ``` ```` fence, or orphaning a table's header from its rows.
+///
+/// Fence tracking mirrors [`scan`]'s (any ```` ``` ````/`~~~` line toggles the state);
+/// an **unterminated** fence is left unprotected (treated as prose) rather than
+/// swallowing the whole tail into one chunk. A table is a header row directly above a
+/// delimiter row (`| --- | :-: |`) plus the contiguous rows beneath it. Regions come
+/// out sorted by start and never overlap (table scanning is suppressed inside a fence).
+fn protected_regions(body: &str) -> Vec<(usize, usize)> {
+    let mut regions: Vec<(usize, usize)> = Vec::new();
+    let mut in_fence = false;
+    let mut fence_start = 0usize;
+    // Table accumulation across consecutive rows.
+    let mut prev_row_start: Option<usize> = None; // last row candidate — a header-in-waiting
+    let mut table_start: Option<usize> = None; // set once a delimiter row confirms a table
+    let mut table_end = 0usize; // end offset (past the newline) of the table's last row
+
+    let mut offset = 0usize;
+    for line in body.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        let trimmed = line
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .trim_start();
+        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+
+        if is_fence {
+            // A fence edge ends any table in progress, then toggles the fence.
+            if let Some(ts) = table_start.take() {
+                regions.push((ts, table_end));
+            }
+            prev_row_start = None;
+            if in_fence {
+                regions.push((fence_start, offset));
+            } else {
+                fence_start = line_start;
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        if is_table_row(trimmed) {
+            if table_start.is_some() {
+                table_end = offset; // extend the active table by this row
+            } else if is_table_delim(trimmed) {
+                if let Some(header_start) = prev_row_start {
+                    table_start = Some(header_start);
+                    table_end = offset;
+                }
+            }
+            if table_start.is_none() {
+                prev_row_start = Some(line_start);
+            }
+        } else {
+            if let Some(ts) = table_start.take() {
+                regions.push((ts, table_end));
+            }
+            prev_row_start = None;
+        }
+    }
+    // A table running to EOF (an unterminated fence is intentionally left unprotected).
+    if let Some(ts) = table_start.take() {
+        regions.push((ts, table_end));
+    }
+
+    regions.sort_by_key(|&(s, _)| s);
+    regions
+}
+
+/// Whether `trimmed` (already left-trimmed) could be a Markdown table row: non-empty
+/// and carrying a `|` column separator. Both header and body rows qualify.
+fn is_table_row(trimmed: &str) -> bool {
+    !trimmed.is_empty() && trimmed.contains('|')
+}
+
+/// Whether `trimmed` is a GFM table **delimiter** row — the `| --- | :-: |` line under
+/// the header. Requires a `|` (so a setext `---` underline or a `---` rule is *not* one)
+/// and at least one `-`, with every character drawn from `-:| ` and nothing else.
+fn is_table_delim(trimmed: &str) -> bool {
+    trimmed.contains('|')
+        && trimmed.contains('-')
+        && trimmed.chars().all(|c| matches!(c, '-' | ':' | '|' | ' '))
 }
 
 /// Emit `body[start..end]`, trimmed to its non-blank span (so `char_start..char_end`

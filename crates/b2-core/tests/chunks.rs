@@ -292,6 +292,123 @@ fn hash_inside_a_code_fence_is_not_a_heading() {
     assert_eq!(zebra.heading_path.as_deref(), Some("Real heading"));
 }
 
+/// Count fence-delimiter lines (```` ``` ````/`~~~`) in a chunk — an odd count means
+/// the chunk carries an unbalanced fence, i.e. a code block was bisected.
+fn fence_lines(text: &str) -> usize {
+    text.lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("```") || t.starts_with("~~~")
+        })
+        .count()
+}
+
+#[test]
+fn a_code_fence_is_never_split_across_chunks() {
+    // #41: a code block larger than the backscan window spans a target boundary, so a
+    // forced cut would land inside it. The guard must keep every chunk's fences
+    // balanced and pull the whole block into a single chunk.
+    let cfg = ChunkConfig {
+        target_tokens: 30,
+        overlap_frac: 0.15,
+        backscan_tokens: 8,
+        ..ChunkConfig::default()
+    };
+    let body = "Intro prose that comfortably fills the space ahead of the code block.\n\n\
+                ```rust\n\
+                fn alpha() { let a = 1; }\n\
+                fn bravo() { let b = 2; }\n\
+                fn charlie() { let c = 3; }\n\
+                fn delta() { let d = 4; }\n\
+                fn echo() { let e = 5; }\n\
+                fn foxtrot() { let f = 6; }\n\
+                ```\n\n\
+                Trailing prose after the block with a distinctive walrus token here.\n";
+    let chunks = chunk_body(body, &cfg);
+
+    assert!(chunks.len() > 1, "the body must actually split");
+    for c in &chunks {
+        assert_eq!(
+            fence_lines(&c.text) % 2,
+            0,
+            "chunk {} bisects a code fence:\n{}",
+            c.seq,
+            c.text
+        );
+    }
+    // The block is pushed past its closing fence into one chunk (first line to last).
+    let block = chunks
+        .iter()
+        .find(|c| c.text.contains("fn alpha()"))
+        .expect("a chunk holds the code block");
+    assert!(
+        block.text.contains("fn foxtrot()"),
+        "the code block stays whole in one chunk"
+    );
+    assert!(block.text.matches("```").count() >= 2, "with both fences");
+}
+
+#[test]
+fn a_table_keeps_its_header_and_rows_together() {
+    // #41: a table larger than the target spans a boundary; the guard must keep the
+    // header row and every data row in the same chunk (no orphaned rows).
+    let cfg = ChunkConfig {
+        target_tokens: 30,
+        overlap_frac: 0.0,
+        backscan_tokens: 8,
+        ..ChunkConfig::default()
+    };
+    let body = "Intro prose ahead of the data table that follows just below here.\n\n\
+                | Name | Role | Notes   |\n\
+                | ---- | ---- | ------- |\n\
+                | Ann  | Lead | alpha   |\n\
+                | Bob  | Dev  | bravo   |\n\
+                | Cy   | Ops  | charlie |\n\
+                | Dot  | QA   | delta   |\n\
+                | Eve  | PM   | echo    |\n\n\
+                Trailing prose after the table with a distinctive walrus token here.\n";
+    let chunks = chunk_body(body, &cfg);
+
+    assert!(chunks.len() > 1, "the body must actually split");
+    // Any chunk carrying a data row must also carry the header — the table is whole.
+    for c in &chunks {
+        let has_row = ["| Ann", "| Bob", "| Cy", "| Dot", "| Eve"]
+            .iter()
+            .any(|r| c.text.contains(r));
+        if has_row {
+            assert!(
+                c.text.contains("| Name |"),
+                "chunk {} separates a table row from its header:\n{}",
+                c.seq,
+                c.text
+            );
+        }
+    }
+    // And the header chunk holds the full table (first row through last).
+    let table = chunks
+        .iter()
+        .find(|c| c.text.contains("| Name |"))
+        .expect("a chunk holds the table");
+    assert!(table.text.contains("| Ann") && table.text.contains("| Eve"));
+}
+
+#[test]
+fn a_setext_underline_is_not_mistaken_for_a_table() {
+    // `---` under a line is a setext heading / rule, not a table delimiter (no `|`),
+    // so it forms no protected region and normal boundary scoring applies.
+    let cfg = ChunkConfig {
+        target_tokens: 12,
+        overlap_frac: 0.0,
+        ..ChunkConfig::default()
+    };
+    let body = "Alpha heading\n---\n\nSome prose that follows the setext underline here.\n";
+    // Just needs to chunk without panicking and address exact slices (no false region
+    // pushing the boundary somewhere the text no longer matches).
+    for c in chunk_body(body, &cfg) {
+        assert_eq!(&body[c.char_start..c.char_end], c.text);
+    }
+}
+
 #[test]
 fn prepend_heading_path_seeds_the_embedded_text() {
     // D3's eval knob: with prepend on, the breadcrumb leads the embedded text; the
