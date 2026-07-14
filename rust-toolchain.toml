@@ -1,0 +1,11 @@
+[toolchain]
+# Pin the toolchain to the workspace MSRV (`rust-version` in every crate's
+# Cargo.toml). The floor is a real one: libsqlite3-sys 0.38's build.rs uses the
+# `cfg_select!` macro (stable since 1.95). Pinning here means any `cargo`/`rustup`
+# invocation in the repo auto-installs and selects this toolchain, so a fresh
+# environment whose default `stable` predates the MSRV builds without a manual step.
+channel = "1.96"
+profile = "minimal"
+# `minimal` omits rustfmt + clippy; name them so the repo's `cargo fmt` / `cargo
+# clippy` gates (and `just check`) work on a freshly auto-installed toolchain.
+components = ["rustfmt", "clippy"]
