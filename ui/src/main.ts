@@ -448,6 +448,8 @@ async function switchVault(): Promise<void> {
     if (!info) return; // cancelled — leave the current vault untouched
     state.vaultRoot = info.root;
     state.semantic = info.semantic;
+    state.notesEmbedded = info.notes_embedded;
+    state.notesTotal = info.notes_total;
     state.current = null;
     state.similar = [];
     state.connections = [];
@@ -465,6 +467,22 @@ async function switchVault(): Promise<void> {
   } catch (e) {
     state.loading = false;
     flash(errText(e));
+  }
+}
+
+// Re-read the embedding-coverage fraction (#26) from the host so the search caveat
+// reflects reality after a project/embed phase. Best-effort and guarded on the vault we
+// started on: a mid-run switch owns the UI, so a stale count must never clobber its fresh
+// one, and a failed status read just leaves the prior fraction rather than blocking.
+async function refreshEmbedStatus(forRoot: string | null): Promise<void> {
+  try {
+    const info = await api.vaultInfo();
+    if (state.vaultRoot !== forRoot) return;
+    state.semantic = info.semantic;
+    state.notesEmbedded = info.notes_embedded;
+    state.notesTotal = info.notes_total;
+  } catch {
+    // ignore — coverage is a hint, never worth surfacing an error over
   }
 }
 
@@ -501,6 +519,9 @@ async function doReindex(): Promise<void> {
     // The tree paints HERE — a projection can add, remove, or rename notes, and the
     // vault is browsable + keyword-searchable while embedding runs.
     await loadNotes();
+    // The search caveat now reads "keyword-only for now (0/M embedded)" honestly while
+    // the embed phase below fills the vectors (#26).
+    await refreshEmbedStatus(startedRoot);
     render();
     if (state.reindexCancelling) {
       // Cancel landed during the short projection window: don't start embedding (the
@@ -525,6 +546,9 @@ async function doReindex(): Promise<void> {
     // (`reindexCancelling` true) *does* fall through: the projected index is complete
     // and a prefix embedded, worth reporting.
     if (r.cancelled && !state.reindexCancelling) return;
+    // Coverage is now total/total after a full embed, or the partial count after a cancel
+    // — the search caveat updates to match (#26).
+    await refreshEmbedStatus(startedRoot);
     flash(
       r.cancelled
         ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}`
@@ -1174,6 +1198,8 @@ async function boot(): Promise<void> {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;
     state.semantic = info.semantic;
+    state.notesEmbedded = info.notes_embedded;
+    state.notesTotal = info.notes_total;
     // Populate the file tree so the vault is navigable before anything is opened.
     await loadNotes();
   } catch (e) {

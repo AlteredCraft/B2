@@ -44,8 +44,12 @@ export interface LinkTarget {
 export interface AppState {
   /** Vault root, or null when none is configured (the app shows an actionable state). */
   vaultRoot: string | null;
-  /** Whether semantic ranking is live (real model) — drives the honest search caveat. */
+  /** Whether the real model is installed — drives the "run `b2 init`" search caveat. */
   semantic: boolean;
+  /** Notes with a full set of vectors (#26): the "N/M embedded" numerator. */
+  notesEmbedded: number;
+  /** Every projected note — the "N/M embedded" denominator (0 before the first index). */
+  notesTotal: number;
   /** Every indexed note, path-ordered — the file tree's source (from `list_notes`). */
   notes: NoteSummary[];
   /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
@@ -130,6 +134,8 @@ export interface AppState {
 export const state: AppState = {
   vaultRoot: null,
   semantic: true,
+  notesEmbedded: 0,
+  notesTotal: 0,
   notes: [],
   resources: [],
   expandedDirs: new Set<string>(),

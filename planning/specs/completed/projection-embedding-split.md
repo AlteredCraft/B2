@@ -320,8 +320,12 @@ UX the desktop wants.
 - **Auto-index-on-open** (async-indexing.md §7). Detect an unindexed/partly-indexed vault on open and
   offer/start `project` (then `embed`) immediately, so a first-run vault is keyword-usable in seconds
   without a manual click. A first-run UX call taken when this lands; not this slice. **Tracked: #25.**
-- **"Semantic N/M embedded" signal.** Extend `vault_info` (or a light `embed_status` read) so search
-  results can flag "keyword-only for now" precisely, not just via the binary `semantic` flag (§5). **Tracked: #26.**
+- **"Semantic N/M embedded" signal.** ~~Extend `vault_info` (or a light `embed_status` read) so search
+  results can flag "keyword-only for now" precisely, not just via the binary `semantic` flag (§5).~~
+  **Shipped 2026-07-14 (#26):** `Vault::embed_status` reads `db::embed_progress` — a model-free
+  `(embedded, total)` count over the projection; `vault_info` carries the fraction alongside `semantic`,
+  and the desktop search caveat reads "keyword-only for now (N/M embedded)" while a projected vault embeds
+  (and "keyword-first (N/M embedded)" once partial), instead of the binary flag alone. **Tracked: #26.**
 - **Relevance-ordered embedding** — embed the open note + its neighbors first, so discovery lights up
   for what the user is looking at soonest. Pure ordering; orthogonal to the split. **Tracked: #27.**
 - **CLI keyword-first / background embed** — the stateless CLI wants the different answer

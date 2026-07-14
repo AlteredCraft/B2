@@ -300,3 +300,46 @@ fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
         "similar waits for vectors, honestly empty"
     );
 }
+
+/// The honest "N/M embedded" coverage read (#26): 0/M while projected-but-unembedded,
+/// M/M once fully embedded, and a precise partial fraction when a projected note still
+/// lacks vectors — the signal an adapter flags "keyword-only for now" from. Model-free.
+#[test]
+fn embed_status_reports_the_coverage_fraction() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    let vault = Vault::open(&root).unwrap();
+
+    // Projected but unembedded: every note counts toward the total, none is embedded, and
+    // the embedding space doesn't exist yet — reads as 0/M, no error (the query short-
+    // circuits before touching the absent `embeddings` table).
+    vault.project(false).unwrap();
+    let s = vault.embed_status().unwrap();
+    assert_eq!(
+        (s.embedded, s.total),
+        (0, 2),
+        "projected-but-unembedded: 0/M"
+    );
+
+    // After a full embed: every note is embedded — M/M, semantic ranking complete.
+    vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
+    let s = vault.embed_status().unwrap();
+    assert_eq!((s.embedded, s.total), (2, 2), "fully embedded: M/M");
+
+    // A newly added note (projected, not yet embedded) makes coverage partial — the
+    // precise fraction #26 surfaces, distinct from the binary "is a model installed".
+    // The two unchanged notes keep their vectors (project never re-embeds them).
+    fs::write(
+        root.join("fresh.md"),
+        "---\nb2id: 01CCCCCCCCCCCCCCCCCCCCCCCC\n---\n\nA fresh unembedded note.\n",
+    )
+    .unwrap();
+    vault.project(false).unwrap();
+    let s = vault.embed_status().unwrap();
+    assert_eq!(
+        (s.embedded, s.total),
+        (2, 3),
+        "one note pending vectors: N/M partial"
+    );
+}
