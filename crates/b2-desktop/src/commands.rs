@@ -290,6 +290,15 @@ pub fn models_dir() -> Result<String, CmdError> {
     Ok(EmbedConfig::load()?.cache_dir.display().to_string())
 }
 
+/// The compute device the real embedder runs on for THIS build — `"Metal"` on a
+/// `--features metal` build with a working Apple-Silicon GPU, else `"CPU"` (GH #40). Global,
+/// infallible embedder-wiring like [`list_models`] (no vault, no engine logic): it forwards
+/// [`b2_embed::active_device_label`] straight through for the Settings badge.
+#[tauri::command(async)]
+pub fn embed_device() -> &'static str {
+    b2_embed::active_device_label()
+}
+
 /// One model's cumulative embedding cost, for the Settings pane (`stats.rs`). Flat view
 /// over [`crate::stats::ModelStat`] so it crosses IPC as a plain payload.
 #[derive(Debug, Clone, Serialize)]
@@ -585,6 +594,14 @@ mod tests {
         for m in b2_embed::AVAILABLE_MODELS {
             assert!(ids.contains(&m.id), "registry model {} is offered", m.id);
         }
+    }
+
+    #[test]
+    fn embed_device_reports_the_build_device() {
+        // Thin passthrough to b2_embed::active_device_label (own tests there). In the default
+        // (no `metal` feature) test build it is always "CPU"; a `--features metal` build would
+        // report "Metal". Either way it's one of the two labels the badge renders.
+        assert!(matches!(embed_device(), "CPU" | "Metal"));
     }
 
     #[test]

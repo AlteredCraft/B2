@@ -355,15 +355,18 @@ async function openSettings(): Promise<void> {
   state.settingsOpen = true;
   render(); // show the modal shell immediately; the list fills when it resolves
   try {
-    // Models, their embedding-time history, and where model files live — parallel reads.
-    const [models, stats, dir] = await Promise.all([
+    // Models, their embedding-time history, where model files live, and the active compute
+    // device (Metal/CPU) — parallel reads.
+    const [models, stats, dir, device] = await Promise.all([
       api.listModels(),
       api.embedStats(),
       api.modelsDir(),
+      api.embedDevice(),
     ]);
     state.models = models;
     state.embedStats = stats;
     state.modelsDir = dir;
+    state.embedDevice = device;
   } catch (e) {
     flash(errText(e));
   }

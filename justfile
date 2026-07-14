@@ -63,9 +63,20 @@ ui-dev:
 ui-build:
     npm --prefix ui run build
 
-# Run the desktop app in dev: Vite HMR + a live Tauri window (beforeDevCommand starts
-# Vite). Point it at a vault with B2_VAULT_PATH, e.g. `B2_VAULT_PATH=~/notes just app`.
+# Embed on the Metal GPU by default on Apple Silicon (GH #40); CPU everywhere else. The `metal`
+# feature is a compile-time switch, so this selects it for the dev build — the runtime still
+# falls back to CPU if the GPU can't initialize. `just app-cpu` forces CPU.
+metal_feature := if os() == "macos" { if arch() == "aarch64" { "--features metal" } else { "" } } else { "" }
+
+# Run the desktop app in dev (Vite HMR + a live Tauri window). Point it at a vault with
+# B2_VAULT_PATH, e.g. `B2_VAULT_PATH=~/notes just app`. Settings (⌘,) shows a CPU/Metal badge;
+# switching device re-embeds the vault (a `@metal` model swap).
+# Auto-selects Metal on Apple Silicon; `just app-cpu` forces CPU.
 app:
+    cd crates/b2-desktop && cargo tauri dev {{metal_feature}}
+
+# Force the CPU embedder regardless of platform — the A/B counterpart to the default `just app`.
+app-cpu:
     cd crates/b2-desktop && cargo tauri dev
 
 # Bundle the desktop app (per-platform); builds the frontend first (beforeBuildCommand).

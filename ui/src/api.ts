@@ -168,6 +168,9 @@ export const api = {
   /** The shared directory where downloaded model files are saved (shown in Settings). */
   modelsDir: (): Promise<string> => invoke("models_dir"),
 
+  /** Compute device the embedder runs on for this build — "Metal" or "CPU" (Settings badge). */
+  embedDevice: (): Promise<string> => invoke("embed_device"),
+
   /**
    * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once
    * per burst of external Markdown changes; the returned promise resolves to an unlisten

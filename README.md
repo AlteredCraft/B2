@@ -112,7 +112,8 @@ The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend) and the 
 
 ```bash
 just ui-install                       # one-time: install the frontend's npm deps
-B2_VAULT_PATH=~/notes just app        # run the app in dev (Vite HMR + a live window)
+B2_VAULT_PATH=~/notes just app        # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
+B2_VAULT_PATH=~/notes just app-cpu    # …same, but force the CPU embedder
 just app-build                        # bundle a per-platform app
 ```
 
@@ -120,6 +121,15 @@ The window opens on the vault named by `B2_VAULT_PATH` (or the first launch argu
 switcher). Search or use the file tree to open a note, read or edit it on the left (live-preview Markdown,
 autosave), and connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake`
 for an offline, non-semantic dev mode (no `b2 init` needed).
+
+**Embedder device — CPU or Metal GPU.** `just app` senses the platform and embeds on the **Metal GPU**
+on Apple Silicon (measured **~7× faster** than CPU on the test vault — [GH #40](https://github.com/AlteredCraft/B2/issues/40)),
+falling back to CPU automatically if the GPU can't initialize. `just app-cpu` forces the CPU embedder
+(the A/B counterpart, or if you hit a GPU issue). The active device is shown as a subtle badge in
+**Settings (⌘,)**. Metal is a **compile-time** choice, so the recipe you run picks it — and because CPU
+and Metal produce distinct vectors, switching device re-embeds the vault on the next reindex (a one-time
+model swap; `search` refuses to mix the two). See [`fixtures/README.md`](fixtures/README.md) and
+`just compare-device` to benchmark the two on your own hardware.
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
 every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,

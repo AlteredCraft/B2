@@ -327,6 +327,7 @@ fn main() {
             commands::set_model,
             commands::provision_model,
             commands::models_dir,
+            commands::embed_device,
             commands::embed_stats,
         ])
         .run(tauri::generate_context!())

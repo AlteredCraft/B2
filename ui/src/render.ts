@@ -483,6 +483,14 @@ function settingsModalHtml(state: AppState): string {
         current.installed ? "installed" : "not installed"
       }</p>`
     : `<p class="settings-detail muted">Loading models…</p>`;
+  // Subtle badge: which compute device the build embeds on (GH #40). Metal gets the accent
+  // pill + a ⚡ cue; CPU is a neutral pill. Hidden until the async read resolves.
+  const device = state.embedDevice;
+  const deviceRow = device
+    ? `<p class="settings-device">Embedding on <span class="settings-badge${
+        device === "Metal" ? " settings-badge-metal" : ""
+      }">${device === "Metal" ? "⚡ " : ""}${escapeHtml(device)}</span></p>`
+    : "";
   // In-app `b2 init`: a Download button appears when the selected model isn't installed,
   // and a spinner while it downloads (network-bound, can take minutes).
   const provisionRow =
@@ -502,6 +510,7 @@ function settingsModalHtml(state: AppState): string {
           }>${options}</select>
         </label>
         ${detail}
+        ${deviceRow}
         ${provisionRow}
         <p class="settings-note">Changing the model re-embeds the whole vault on the next
           Reindex. A newly-chosen model is downloaded with the button above.</p>

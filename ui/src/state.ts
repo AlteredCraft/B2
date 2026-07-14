@@ -101,6 +101,8 @@ export interface AppState {
   provisioning: boolean;
   /** The shared directory where model files are saved — loaded with Settings, else null. */
   modelsDir: string | null;
+  /** Compute device the embedder runs on ("Metal"/"CPU") — loaded with Settings, else null. */
+  embedDevice: string | null;
   /** A slow op is in flight. */
   loading: boolean;
   /**
@@ -142,6 +144,7 @@ export const state: AppState = {
   embedStats: [],
   provisioning: false,
   modelsDir: null,
+  embedDevice: null,
   loading: false,
   reindexing: false,
   reindexProgress: null,
