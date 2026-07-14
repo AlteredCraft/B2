@@ -32,5 +32,16 @@ candle-core = { version = "0.9", features = ["accelerate"] }
 candle-nn = { version = "0.9", features = ["accelerate"] }
 candle-transformers = { version = "0.9", features = ["accelerate"] }
 
+# Research lever (GH #40): run the BERT forward pass on the Apple-Silicon Metal GPU instead
+# of the CPU. `metal` is *additive* over `accelerate` (independent code paths — CPU mode still
+# gets Accelerate BLAS, Metal mode uses the GPU), and the device is chosen at load via candle's
+# `metal_is_available()` (== `cfg!(feature = "metal")`) with a graceful CPU fallback — see
+# `model.rs::select_device`. Switching device is a *model swap* (the recorded model id gains an
+# `@metal` tag), so a re-embed is forced and `search` fails fast rather than mixing vectors.
+# **macOS-only:** the candle metal-kernels crate builds only on macOS; don't pass `--features
+# metal` on Linux. Enable per-build: `cargo run -p b2-cli --features metal -- reindex`.
+[features]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -19,5 +19,10 @@ thiserror = "2.0.18"
 # per-query SQLite timings, façade-op spans — rendered as JSON Lines on stderr.
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 
+# Research build (GH #40, macOS-only): forward the Metal GPU embedder feature to b2-embed so
+# `cargo run -p b2-cli --features metal -- reindex` embeds on the GPU. Default build is CPU.
+[features]
+metal = ["b2-embed/metal"]
+
 [dev-dependencies]
 tempfile = "3.27.0"

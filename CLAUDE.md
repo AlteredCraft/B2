@@ -50,6 +50,17 @@ cargo test -p b2-core one_note_reindex  # filter by test-name substring
 cargo run -p b2-cli -- init             # download + verify bge-base-en-v1.5 into the XDG cache
 cargo run -p b2-embed --example eval    # semantic-retrieval quality eval (never in `cargo test`)
 
+# Metal GPU embedder — research lever (GH #40, macOS-only). The `metal` cargo feature moves the
+# BERT forward pass to the Apple-Silicon GPU (default build stays CPU + Accelerate). It's a
+# BUILD switch, not runtime: recompile to flip. Selecting Metal tags the recorded model id
+# `…@metal`, so switching device re-embeds the vault (a model swap) and `search` fails fast
+# rather than mixing CPU/GPU vectors — no silent staleness. The desktop Settings pane (⌘,) shows
+# a subtle CPU/Metal badge for the running build (`b2_embed::active_device_label`).
+cargo run -p b2-cli --features metal -- reindex   # embed on the GPU (else identical to reindex)
+just eval-metal        # retrieval-quality eval on Metal (compare to `just eval` on CPU)
+just app               # desktop app — auto-selects Metal on Apple Silicon (`just app-cpu` forces CPU)
+just compare-device    # CPU-vs-Metal embed A/B on fixtures/test-vault → chunks/s + speedup
+
 # Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
 just ui-install                         # one-time: install the frontend's npm deps
 B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
@@ -192,8 +203,12 @@ centroid)` — created at **embed time**, not in the base migration: their exist
 has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
 computed **in-process** (`embed::l2_sq`, one sequential scan statement — the former `sqlite-vec`
 `vec0` table charged a per-row shadow probe on every scan, #36/#38). `meta` records `(embed_model_id,
-embed_dim)` — the only place a model swap is detectable. A swap drops both tables and re-embeds on
-`reindex`; `search` **fails fast** on a mismatch rather than returning silently-wrong results. `open`
+embed_dim)` — the only place a model swap is detectable. The compute **device** folds into this
+identity: the real embedder tags its recorded `embed_model_id` with the resolved device (CPU stays the
+bare repo id; a `--features metal` GPU build appends `@metal`, `b2-embed/src/model.rs`), so a
+device/precision change that alters vectors *is* a model swap — GH #40. A swap drops both tables and
+re-embeds on `reindex`; `search` **fails fast** on a mismatch rather than returning silently-wrong
+results. `open`
 never mutates the vector space (so changing the configured model can't wipe vectors on the next
 command). Centroids are derived data with the vectors' own lifecycle: the embed pass refreshes a
 note's centroid after filling its vectors; a re-chunk drops it (`db::replace_chunks`) — no separate

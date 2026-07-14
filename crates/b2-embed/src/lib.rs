@@ -27,7 +27,7 @@ mod provision;
 pub use config::{
     find_model, EmbedConfig, ModelChoice, ModelInfo, Source, AVAILABLE_MODELS, DEFAULT_MODEL,
 };
-pub use model::LocalEmbedder;
+pub use model::{active_device_label, LocalEmbedder};
 pub use provision::{provision, ProvisionReport};
 
 /// Errors from provisioning/loading the local model. Embed-*time* failures map into

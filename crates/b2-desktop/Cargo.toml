@@ -49,6 +49,11 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 serde_json = "1.0.150"
 
+# Research build (GH #40, macOS-only): forward the Metal GPU embedder feature to b2-embed so
+# `cargo tauri dev --features metal` (or `just app-metal`) embeds on the GPU. Default is CPU.
+[features]
+metal = ["b2-embed/metal"]
+
 [dev-dependencies]
 tempfile = "3.27.0"
 # Test-only: exercise the `CmdError` → webview serialization boundary the way Tauri

@@ -77,10 +77,13 @@ impl LocalEmbedder {
             ..Default::default()
         }));
 
-        // CPU inference (with Accelerate BLAS, see Cargo.toml). Moving the forward pass to
-        // the Metal GPU on Apple Silicon is the biggest untried perf lever — deferred with
-        // a fallback plan in AlteredCraft/B2#40; measure the cheaper smaller-model swap first.
-        let device = Device::Cpu;
+        // Pick the compute device (GH #40). Default build → CPU (with Accelerate BLAS, see
+        // Cargo.toml); a `--features metal` build → the Apple-Silicon GPU, with a graceful CPU
+        // fallback. The *resolved* device tags the recorded model id (`@metal`), so a device
+        // switch is a model swap: `ensure_embedding_space` re-embeds and `search` fails fast
+        // rather than mixing CPU and GPU vectors in one space.
+        let (device, device_tag) = select_device();
+        let model_id = tagged_model_id(&config.model, device_tag);
         // SAFETY: memory-maps the safetensors weights. Sound as long as the file is
         // not mutated while mapped; it is a read-only file in our XDG cache, written
         // once by `b2 init` (provision) and never touched again for the process's life.
@@ -95,7 +98,7 @@ impl LocalEmbedder {
             model,
             tokenizer,
             device,
-            model_id: config.model.clone(),
+            model_id,
             dim,
             query_prefix: config.query_prefix.clone(),
         })
@@ -186,4 +189,88 @@ impl Embedder for LocalEmbedder {
 fn l2_normalize(v: &[f32]) -> Vec<f32> {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
     v.iter().map(|x| x / norm).collect()
+}
+
+/// Try to open the Metal GPU — only when compiled `--features metal` (candle's
+/// `metal_is_available()` is literally `cfg!(feature = "metal")`), and never a hard
+/// requirement: any failure returns `None` and the caller uses the CPU (GH #40). `announce`
+/// gates the one-line fallback notice so the load path can warn while the cheap capability
+/// probe ([`active_device_label`]) stays silent. No `unwrap`: a failed `new_metal` is a soft
+/// degrade (no-panic rule), not a load error.
+fn open_metal(announce: bool) -> Option<Device> {
+    if candle_core::utils::metal_is_available() {
+        match Device::new_metal(0) {
+            Ok(d) => return Some(d),
+            Err(e) if announce => eprintln!("note: Metal GPU unavailable ({e}); embedding on CPU"),
+            Err(_) => {}
+        }
+    }
+    None
+}
+
+/// Pick the inference device and a short tag (`"cpu"`/`"metal"`) describing what we *actually*
+/// got — so the recorded model id reflects the resolved device, and a fallback build honestly
+/// records CPU vectors.
+fn select_device() -> (Device, &'static str) {
+    match open_metal(true) {
+        Some(d) => (d, "metal"),
+        None => (Device::Cpu, "cpu"),
+    }
+}
+
+/// Human label for the compute device this build embeds on — `"Metal"` on a `--features metal`
+/// build with a working GPU, else `"CPU"` (GH #40). The desktop Settings badge renders it.
+/// Same resolution as [`select_device`] but silent; cheap — the compile-time gate
+/// short-circuits on a CPU build before any GPU probe.
+pub fn active_device_label() -> &'static str {
+    match open_metal(false) {
+        Some(_) => "Metal",
+        None => "CPU",
+    }
+}
+
+/// The id recorded as `meta.embed_model_id`, tagged by the resolved device. CPU keeps the
+/// bare repo id (so existing indexes need no migration); any non-CPU device appends `@<tag>`
+/// so its vectors live in a distinct embedding space — the swap that forces a re-embed and
+/// makes `search` fail fast rather than mix devices. The tag is only in this id, never in
+/// `config.model` (model-file lookup is unaffected).
+fn tagged_model_id(base: &str, device_tag: &str) -> String {
+    if device_tag == "cpu" {
+        base.to_string()
+    } else {
+        format!("{base}@{device_tag}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_id_is_untagged_others_are_suffixed() {
+        // CPU keeps the bare repo id — existing indexes must not be seen as a model swap.
+        assert_eq!(
+            tagged_model_id("BAAI/bge-base-en-v1.5", "cpu"),
+            "BAAI/bge-base-en-v1.5"
+        );
+        // A non-CPU device tags a distinct embedding space, so a switch re-embeds + fails fast.
+        assert_eq!(
+            tagged_model_id("BAAI/bge-base-en-v1.5", "metal"),
+            "BAAI/bge-base-en-v1.5@metal"
+        );
+    }
+
+    #[test]
+    fn select_device_falls_back_to_cpu_without_the_metal_feature() {
+        // The default (no-feature) test build has `metal_is_available() == false`, so selection
+        // resolves to CPU and the tag is "cpu" — this keeps the whole test suite on the CPU path.
+        // (A `--features metal` build exercises the GPU branch out-of-CI; see the eval recipe.)
+        if !candle_core::utils::metal_is_available() {
+            let (device, tag) = select_device();
+            assert_eq!(tag, "cpu");
+            assert!(matches!(device, Device::Cpu));
+            // The Settings-badge label agrees with the resolved device.
+            assert_eq!(active_device_label(), "CPU");
+        }
+    }
 }
