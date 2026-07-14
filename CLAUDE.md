@@ -229,7 +229,7 @@ invalidation exists or is needed.
   implementation detail (a retired dependency's constant, a since-changed fixture assumption) rather than
   a real invariant — re-anchor it on the invariant, or fix the system. When the resolution isn't obvious,
   **open a conversation with the user** to work through it; do not reach for `#[ignore]`, a slow/brittle
-  fixture, or a weakened assertion to move on. (See GH #46 for the worked example this rule comes from.)
+  fixture, or a weakened assertion to move on. 
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
   CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
   This matches the repo-wide logging policy in the parent `CLAUDE.md`.
