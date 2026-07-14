@@ -17,6 +17,10 @@ use yaml_rust2::{Yaml, YamlLoader};
 pub struct NoteFields {
     pub b2id: Option<String>,
     pub r#type: Option<String>,
+    /// The frontmatter `title:` value, parsed only so it round-trips and can be
+    /// inspected. It has **no special meaning**: a note's display title is its
+    /// filename ([`display_title`]), and B2 never privileges this field
+    /// (data-model.md §1). Kept recognized so the key is understood, not stripped.
     pub title: Option<String>,
     pub description: Option<String>,
     pub created: Option<String>,
@@ -283,6 +287,24 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
     Ok(insert_at.map(|at| (at, indent)))
 }
 
+/// A note's **display title — its filename** (data-model.md §1). The filename *is*
+/// the title: a frontmatter `title:` key is recognized but carries no special
+/// meaning, so the title is a pure function of the note's vault-relative,
+/// `/`-separated `path` — its base name with a trailing `.md` (any case) removed
+/// (`notes/spaced-repetition.md` → `spaced-repetition`). A name that is only an
+/// extension (`.md`) or carries a non-`.md` extension is returned whole.
+pub fn display_title(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    let stem = base.rsplit_once('.').map_or(base, |(stem, ext)| {
+        if ext.eq_ignore_ascii_case("md") && !stem.is_empty() {
+            stem
+        } else {
+            base
+        }
+    });
+    stem.to_string()
+}
+
 /// YAML double-quote a string (escaping `\` and `"`), so a value with `[[`, `|`,
 /// `:` (a typed-link spec, or a new note's `title`) is always a safe scalar.
 /// `pub(crate)` so [`crate::add`] renders a new note's frontmatter with the same
@@ -320,5 +342,22 @@ mod tests {
         // distinct from no frontmatter at all (None).
         let note = parse("---\n---\nbody\n");
         assert_eq!(note.frontmatter(), Some(""));
+    }
+
+    #[test]
+    fn display_title_is_the_filename_without_the_md_extension() {
+        assert_eq!(
+            display_title("notes/spaced-repetition.md"),
+            "spaced-repetition"
+        );
+        assert_eq!(display_title("memory.md"), "memory");
+        // Case-insensitive extension; nested folders drop away.
+        assert_eq!(display_title("a/b/Read Me.MD"), "Read Me");
+        // A dotted stem keeps every dot but the extension.
+        assert_eq!(display_title("notes/2026.07.14-log.md"), "2026.07.14-log");
+        // Non-`.md` or extension-only names are returned whole (never used for a
+        // real note, but the helper must not mangle them).
+        assert_eq!(display_title("data.csv"), "data.csv");
+        assert_eq!(display_title(".md"), ".md");
     }
 }

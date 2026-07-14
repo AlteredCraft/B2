@@ -512,7 +512,8 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert_eq!(view.backlinks.len(), 1);
     let b = &view.backlinks[0];
     assert_eq!(b.path, "notes/card.md");
-    assert_eq!(b.title.as_deref(), Some("Card"));
+    // The backlink shows the linking note's title — its filename (data-model.md §1).
+    assert_eq!(b.title.as_deref(), Some("card"));
     assert_eq!(b.r#type, "references");
     assert_eq!(b.caption.as_deref(), Some("a tiny diagram"));
     assert!(b.embed);

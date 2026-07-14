@@ -28,7 +28,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     // Header: the note resolved to its identity + display fields.
     assert_eq!(view.b2id, SRS_ID);
     assert_eq!(view.path, "notes/spaced-repetition.md");
-    assert_eq!(view.title.as_deref(), Some("Spaced repetition"));
+    assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
     // Two outbound edges to memory — a typed `elaborates` (with a "why") and a bare
     // `references` (none). Both are body-authored, so origin=inline.
@@ -62,7 +62,7 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
 
     // Memory is only pointed *at* (by SRS) — inbound edges, inverse-labelled.
     let view = vault.explain(MEMORY_ID).unwrap();
-    assert_eq!(view.title.as_deref(), Some("Human memory"));
+    assert_eq!(view.title.as_deref(), Some("memory"));
     assert!(!view.connections.is_empty());
     assert!(view.connections.iter().all(|c| c.direction == "inbound"));
     assert!(view.connections.iter().all(|c| c.b2id == SRS_ID));
@@ -129,7 +129,7 @@ fn explain_reports_an_isolated_note_with_no_connections() {
     vault.reindex().unwrap();
 
     let view = vault.explain("lonely").unwrap();
-    assert_eq!(view.title.as_deref(), Some("Lonely"));
+    assert_eq!(view.title.as_deref(), Some("lonely"));
     assert!(
         view.connections.is_empty(),
         "an isolated note has no connections: {:?}",

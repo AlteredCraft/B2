@@ -77,8 +77,12 @@ Two distinct operations, both covered:
 1. **Path rename / move** — the file moves on disk (`ideas/foo.md` → `archive/foo.md`, or
    `foo.md` → `bar.md`). The note's *content* and `b2id` are unchanged, but the **inline `path` in
    inbound links is now stale**.
-2. **Title rename** — the note's human title (frontmatter `title`, hence the natural alias) changes.
-   The `path` is unchanged, so inbound links still **resolve**; only their display alias is stale.
+2. **Alias drift** — an inbound link's display `|alias` no longer matches the target. Since **the title
+   is the filename** (data-model.md §1/§9, 2026-07-14 — the frontmatter `title` is inert), there is no
+   managed "title rename": renaming the *file* is case 1 (a move), and any `|alias` a human wrote is their
+   text. The `path` is unchanged here, so inbound links still **resolve**; only the human-authored alias
+   reads stale, and B2 leaves it as written (it never authors an alias, and `b2 mv` preserves aliases
+   verbatim). *(Historically this case tracked a frontmatter-title change; that precedence is retired.)*
 
 (See **Link format & identity** above for the `[[path|title]]` / `b2id` model these cases follow.)
 
@@ -88,15 +92,16 @@ Two distinct operations, both covered:
   target's `b2id` untouched, so every b2id-keyed edge stays valid the instant the kernel learns the new
   path/title. Resolution is robust *before* any file is rewritten.
 - **Preferred entry point: an explicit kernel operation.** A move/rename through the core API / CLI
-  (`b2 mv`) is transactional: the kernel updates its `title ↔ b2id ↔ path` resolution and repairs the
+  (`b2 mv`) is transactional: the kernel updates its `b2id ↔ path` resolution and repairs the
   authored layer in one step.
 - **Move → rewrite inbound `path` text.** Because the inline target is a `path`, a move makes every
   inbound `[[oldpath|title]]` stale, so the kernel **rewrites each to `[[newpath|title]]`** —
   Markdown written first (source of truth), index updated after. The b2id-keyed edges name *exactly*
   which inbound files and links to touch, so the rewrite is complete and bounded.
-- **Title rename → cosmetic alias repair only.** The `path` still resolves, so links are never
-  broken. The kernel may refresh the stale `title` alias in inbound links for readability, but this
-  is display-only and optional — no link depends on it.
+- **Stale `|alias` → left as written.** The `path` still resolves, so links are never broken. A
+  human-authored alias that no longer matches the target is cosmetic and B2 **leaves it verbatim** — it
+  never authors an alias, and `b2 mv` preserves existing aliases on the links it rewrites. No link
+  depends on the alias text.
 - **Out-of-band moves are tolerated.** If a file is moved outside B2 (Finder, `git mv`), a reindex
   re-reads its frontmatter `b2id` and re-establishes `b2id → newpath`; with index continuity the now-
   dangling inbound `[[oldpath|title]]` links are matched back to that `b2id` and repaired. *Caveat:* a
@@ -113,8 +118,8 @@ Two distinct operations, both covered:
   to A's new path, and `b2 neighbors A` / `b2 explain A` shows the same inbound set as before.
 - **Given** A is moved, **then** B and C round-trip losslessly (`parse → serialize → parse`) and
   only their link `path` changed — every other byte is identical.
-- **Given** A's *title* is renamed (path unchanged), **then** all backlinks still resolve with **no
-  rewrite required**; any alias refresh is cosmetic and the link target is untouched.
+- **Given** an inbound link's `|alias` is stale but A's path is unchanged, **then** all backlinks still
+  resolve with **no rewrite required**; the alias is cosmetic, left as authored, and the target is untouched.
 - **Given** A is moved out-of-band and the vault is reindexed, **then** backlinks resolve again
   (directly realizing the locked invariant **"rename keeps every backlink resolving"**,
   [vision-and-scope.md](vision-and-scope.md)).

@@ -494,7 +494,8 @@ mod tests {
         let state = AppState::new(Some(root));
 
         let note = read_note_impl(&state, "concepts/memory").unwrap();
-        assert_eq!(note.title.as_deref(), Some("Human memory"));
+        // Title is the filename (data-model.md §1); the frontmatter `title:` is inert.
+        assert_eq!(note.title.as_deref(), Some("memory"));
         assert!(note.body.contains("The brain encodes"));
     }
 
@@ -511,7 +512,7 @@ mod tests {
             paths,
             vec!["concepts/memory.md", "notes/spaced-repetition.md"]
         );
-        assert_eq!(notes[0].title.as_deref(), Some("Human memory"));
+        assert_eq!(notes[0].title.as_deref(), Some("memory"));
     }
 
     #[test]
