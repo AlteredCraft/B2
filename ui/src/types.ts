@@ -132,12 +132,32 @@ export interface NeighborView {
   origin: string; // "inline" | "frontmatter"
 }
 
-/** `Vault::explain` — a note's identity + all its typed edges. */
+/**
+ * One outbound link that resolves to nothing — no note and no resource exists at
+ * its target (a `[[Hermes]]` naming a *folder*, or a typo). A note is one `.md` file,
+ * so a folder is never a valid target; B2 surfaces the link as broken rather than
+ * dropping it (GH #12). Has no `b2id`/`path` — nothing resolved.
+ */
+export interface UnresolvedLink {
+  /** The target exactly as written in the Markdown (`[[target]]`) — e.g. `Hermes`. */
+  target: string;
+  /** The relation verb (`references` for a bare link). */
+  relation: string;
+  origin: string; // "inline" | "frontmatter"
+  explanation: string | null;
+}
+
+/**
+ * `Vault::explain` — a note's identity, its typed edges, and any unresolved
+ * (dangling) outbound links. `connections` are resolved neighbors; `unresolved` are
+ * links whose target names no note or file, shown with a broken-link emblem (GH #12).
+ */
 export interface ExplainView {
   b2id: string;
   path: string;
   title: string | null;
   connections: NeighborView[];
+  unresolved: UnresolvedLink[];
 }
 
 /**

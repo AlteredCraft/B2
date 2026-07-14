@@ -326,6 +326,15 @@ table holds; the Markdown is the source, this is the index.
   `[[papers/x.pdf]]`) resolves against the `resources` table, not `notes`; the edge records a
   `dst_resource_path` instead of a `dst_id`, and `src` is still a note (resources author no outbound edges
   in v1, §10). Full model in §10; schema in [index-engine.md](index-engine.md) §3.
+- **A `dst` that resolves to *nothing* is a surfaced dangling edge, not a dropped one.** A note is one
+  `.md` file (§1), so a `[[Hermes]]` naming a **folder** — or a plain typo — matches no note and no
+  resource: the edge is still projected with `dst_id` **and** `dst_resource_path` both NULL (`dst_path_raw`
+  keeps the authored text). These are the vault's *broken links*. `b2 neighbors`/`b2 explain` (and the
+  desktop Connections pane) present them **distinctly** — as *unresolved*, with the authored target — so a
+  mistyped or folder-pointing link reads as broken rather than silently vanishing (GH #12). Resolving the
+  target (create the note, fix the path) turns the same edge into an ordinary connection on the next
+  reindex — no separate authoring step. Folder-note resolution (Obsidian-style `Hermes/Hermes.md`) is a
+  possible later refinement, deliberately out of scope here.
 
 > **Why this projection is materialized, not computed on read.** A note's *outbound* edges are
 > re-derivable by parsing that one file — which is exactly why this table is **disposable**. It is kept

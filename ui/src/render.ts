@@ -393,7 +393,7 @@ function similarSectionHtml(state: AppState): string {
 
 function connectionsSectionHtml(state: AppState): string {
   const head = `<div class="side-head"><h2>Connections</h2></div>`;
-  if (state.connections.length === 0)
+  if (state.connections.length === 0 && state.unresolved.length === 0)
     return (
       head +
       `<p class="side-empty">${
@@ -415,7 +415,30 @@ function connectionsSectionHtml(state: AppState): string {
         </button>`;
     })
     .join("");
-  return head + `<div class="cards">${items}</div>`;
+  return head + `<div class="cards">${items}${unresolvedCardsHtml(state)}</div>`;
+}
+
+// Dangling outbound links — a `[[folder]]` or a typo that resolves to no note or
+// file (GH #12). Not clickable (nothing to open), so a plain `div`, flagged with a
+// broken-link emblem so it reads as broken rather than silently missing. The target
+// is shown as written (`[[Hermes]]`), which is what the user can fix in the note.
+function unresolvedCardsHtml(state: AppState): string {
+  return state.unresolved
+    .map((u) => {
+      const why = u.explanation
+        ? `<div class="card-snip">${escapeHtml(u.explanation)}</div>`
+        : "";
+      return `<div class="card edge broken" title="This link points to nothing — no note or file named “${escapeHtml(
+        u.target,
+      )}”. A note is a single .md file, so a folder can’t be linked.">
+          <div class="card-title"><span class="edge-broken" aria-label="Broken link">⚠</span> ${escapeHtml(
+            u.relation,
+          )} <span class="edge-origin">${escapeHtml(u.origin)}</span></div>
+          <div class="card-path">[[${escapeHtml(u.target)}]] · unresolved</div>
+          ${why}
+        </div>`;
+    })
+    .join("");
 }
 
 /** A cumulative-duration label from milliseconds: "3h 25m", "12m 04s", "45s", "0s". */

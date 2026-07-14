@@ -150,6 +150,7 @@ async function openNote(ref: string): Promise<void> {
     // Clear the prior note's discovery so its cards don't linger under the new note.
     state.similar = [];
     state.connections = [];
+    state.unresolved = [];
     state.loading = false;
     state.discoveringSimilar = true;
     state.discoveringConnections = true;
@@ -182,6 +183,7 @@ async function openResource(path: string): Promise<void> {
     state.searchResults = [];
     state.similar = [];
     state.connections = [];
+    state.unresolved = [];
     state.discoveringSimilar = false;
     state.discoveringConnections = false;
   } catch (e) {
@@ -230,11 +232,15 @@ async function refreshDiscovery(): Promise<void> {
   const connections = api
     .explain(n.path)
     .then((explain) => {
-      if (!stale()) state.connections = explain.connections;
+      if (!stale()) {
+        state.connections = explain.connections;
+        state.unresolved = explain.unresolved;
+      }
     })
     .catch((e) => {
       if (!stale()) {
         state.connections = [];
+        state.unresolved = [];
         flash(errText(e));
       }
     })
@@ -445,6 +451,7 @@ async function switchVault(): Promise<void> {
     state.current = null;
     state.similar = [];
     state.connections = [];
+    state.unresolved = [];
     state.searchQuery = "";
     state.searchResults = [];
     state.expandedDirs = new Set<string>();
@@ -726,6 +733,7 @@ async function refreshConnections(): Promise<void> {
     const explain = await api.explain(cur.path);
     if (state.current?.path !== cur.path) return; // navigated away meanwhile
     state.connections = explain.connections;
+    state.unresolved = explain.unresolved;
     render();
   } catch {
     // deliberately silent
