@@ -1,0 +1,43 @@
+---
+b2id: 01KXF21DXBCZ3T57JM5Y8N7AAM
+type: note
+title: "The Zettelkasten"
+---
+
+# The Zettelkasten
+
+Notes on the zettelkasten within the broader theme of personal knowledge management.
+
+## The Map of Content
+
+Progressive summarization highlights the passages you would want to find again later. An atomic note holds exactly one idea, which makes it reusable and easy to link. Backlinks turn a pile of notes into a graph you can actually navigate. A good note title is a claim you can link to, not just a topic label. Evergreen notes are written to be revisited and refined rather than filed and forgotten.
+
+Local-first tools keep your data as plain files you own, with the software layered on top. Backlinks turn a pile of notes into a graph you can actually navigate. A good note title is a claim you can link to, not just a topic label. An atomic note holds exactly one idea, which makes it reusable and easy to link. Surfacing semantically similar notes lets you discover connections you never explicitly made. The Zettelkasten grows value from the links between notes, not the notes themselves.
+
+## Evergreen Notes
+
+A map of content is a hand-curated index note that gathers a topic's threads in one place. Surfacing semantically similar notes lets you discover connections you never explicitly made. Local-first tools keep your data as plain files you own, with the software layered on top. A good note title is a claim you can link to, not just a topic label. See [[pkm/013-evergreen-notes]].
+
+A good note title is a claim you can link to, not just a topic label. Spaced repetition schedules review so the ideas worth keeping resurface before you forget them. A map of content is a hand-curated index note that gathers a topic's threads in one place. See [[pkm/173-local-first-vaults]]. See [[pkm/153-local-first-vaults]].
+
+## Atomic Notes
+
+Daily notes are a low-friction capture surface that you refactor into permanent notes later. Surfacing semantically similar notes lets you discover connections you never explicitly made. A good note title is a claim you can link to, not just a topic label.
+
+Daily notes are a low-friction capture surface that you refactor into permanent notes later. Evergreen notes are written to be revisited and refined rather than filed and forgotten. Surfacing semantically similar notes lets you discover connections you never explicitly made. Backlinks turn a pile of notes into a graph you can actually navigate. An atomic note holds exactly one idea, which makes it reusable and easy to link. See [[pkm/023-surfacing-connections]].
+
+Local-first tools keep your data as plain files you own, with the software layered on top. Spaced repetition schedules review so the ideas worth keeping resurface before you forget them. An atomic note holds exactly one idea, which makes it reusable and easy to link. Surfacing semantically similar notes lets you discover connections you never explicitly made. A good note title is a claim you can link to, not just a topic label. Backlinks turn a pile of notes into a graph you can actually navigate. See [[productivity/186-default-to-action]].
+
+## Linking Your Thinking
+
+A map of content is a hand-curated index note that gathers a topic's threads in one place. The friction of filing is the enemy; capture first and organize by linking, not foldering. Spaced repetition schedules review so the ideas worth keeping resurface before you forget them. Daily notes are a low-friction capture surface that you refactor into permanent notes later. Progressive summarization highlights the passages you would want to find again later. See [[pkm/003-local-first-vaults]].
+
+Progressive summarization highlights the passages you would want to find again later. An atomic note holds exactly one idea, which makes it reusable and easy to link. A map of content is a hand-curated index note that gathers a topic's threads in one place. Local-first tools keep your data as plain files you own, with the software layered on top. The Zettelkasten grows value from the links between notes, not the notes themselves. See [[pkm/123-linking-your-thinking]].
+
+## Daily Notes
+
+The Zettelkasten grows value from the links between notes, not the notes themselves. An atomic note holds exactly one idea, which makes it reusable and easy to link. Progressive summarization highlights the passages you would want to find again later. See [[hiking/049-water-treatment]].
+
+Progressive summarization highlights the passages you would want to find again later. A good note title is a claim you can link to, not just a topic label. Backlinks turn a pile of notes into a graph you can actually navigate.
+
+A map of content is a hand-curated index note that gathers a topic's threads in one place. The friction of filing is the enemy; capture first and organize by linking, not foldering. Progressive summarization highlights the passages you would want to find again later. Surfacing semantically similar notes lets you discover connections you never explicitly made. Evergreen notes are written to be revisited and refined rather than filed and forgotten. See [[pkm/093-the-zettelkasten]].

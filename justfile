@@ -47,6 +47,17 @@ init:
 eval:
     cargo run -p b2-embed --example eval
 
+# Same eval, but embedding on the Metal GPU (GH #40, macOS-only). Compare its retrieval
+# quality against `just eval` (CPU) — a device switch is a model swap (`@metal` id tag).
+eval-metal:
+    cargo run -p b2-embed --example eval --features metal
+
+# CPU-vs-Metal embed throughput A/B on a vault (default fixtures/test-vault; GH #40,
+# macOS-only). Reindexes an isolated copy on each device and reports chunks/s + speedup.
+# Never mutates the committed fixture; artifacts are gitignored + cleaned up.
+compare-device vault="fixtures/test-vault":
+    scripts/compare-embed-device.sh {{vault}}
+
 # --- Desktop app (crates/b2-desktop + ui/) — heavier; needs Node + the Tauri CLI ---
 # One-time frontend prerequisites: `npm i -D @tauri-apps/cli` is *not* needed if the
 # Tauri CLI is installed via cargo: `cargo install tauri-cli --locked`.

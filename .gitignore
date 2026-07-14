@@ -27,3 +27,10 @@ crates/b2-desktop/gen/
 /logs/
 # don't ignore logs/.keep
 !/logs/.keep
+
+# Embed device-compare (scripts/compare-embed-device.sh) artifacts. Its work copies live in
+# the system tempdir and its logs land under logs/ above — both already covered — but pin the
+# footgun explicitly: an ad-hoc `b2 reindex` pointed straight at the committed test vault would
+# drop a disposable index here (also matched by the global `.b2/` rule; listed for clarity).
+fixtures/test-vault/.b2/
+logs/embed-compare-*.jsonl

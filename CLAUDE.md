@@ -226,7 +226,9 @@ invalidation exists or is needed.
   CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
   This matches the repo-wide logging policy in the parent `CLAUDE.md`.
 - Integration tests copy the committed `fixtures/golden-vault/` into a tempdir first, so ingest (which
-  may stamp a `b2id`) never mutates the repo fixtures.
+  may stamp a `b2id`) never mutates the repo fixtures. `fixtures/test-vault/` is a *separate*,
+  larger synthetic fixture (~200 notes) for **out-of-CI throughput/quality experiments**, not the
+  deterministic suite — see `fixtures/README.md` and `just compare-device` (the CPU-vs-Metal embed A/B).
 
 ## Idiomatic Rust
 
