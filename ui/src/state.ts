@@ -13,6 +13,7 @@ import type {
   ResourceSummary,
   SearchResult,
   SimilarView,
+  UnresolvedLink,
 } from "./types";
 
 /**
@@ -76,6 +77,13 @@ export interface AppState {
   /** The open note's typed edges (from explain). */
   connections: NeighborView[];
   /**
+   * The open note's unresolved (dangling) outbound links — a `[[folder]]` or a typo
+   * that resolves to no note or file. Loaded alongside `connections` from the same
+   * `explain` read; rendered with a broken-link emblem so they read as broken, not
+   * missing (GH #12).
+   */
+  unresolved: UnresolvedLink[];
+  /**
    * Discovery reads in flight for the open note, tracked **per side-pane section** so
    * the fast graph read (`explain` → Connections) paints without waiting on the slower
    * whole-vault scan (`similar` → Similar & unlinked). Both are kept separate from
@@ -133,6 +141,7 @@ export const state: AppState = {
   editConflict: false,
   similar: [],
   connections: [],
+  unresolved: [],
   discoveringSimilar: false,
   discoveringConnections: false,
   searchQuery: "",

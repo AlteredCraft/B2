@@ -96,6 +96,45 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
     Ok(out)
 }
 
+/// One outbound link that resolved to **nothing** — neither a note nor a resource
+/// exists at its target, so it is a *dangling* edge (`dst_id IS NULL AND
+/// dst_resource_path IS NULL`). A note is one `.md` file (data-model.md §1), so a
+/// `[[Hermes]]` that names a *folder* — or a plain typo — never resolves. These are
+/// surfaced rather than silently dropped so a broken link is visible (GH #12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unresolved {
+    /// The target exactly as authored (`dst_path_raw`) — e.g. `Hermes`.
+    pub target: String,
+    /// The relation verb (`references` for a bare link).
+    pub edge_type: String,
+    /// Edge origin — `inline` (a body link) or `frontmatter` (a `relations:` entry).
+    pub origin: String,
+    pub explanation: Option<String>,
+}
+
+/// A note's **dangling** outbound links: the edges it authored whose target resolves
+/// to no note and no resource, in a deterministic order. The complement of
+/// [`neighbors`]'s outbound half (which keeps only `dst_id IS NOT NULL`) — together
+/// they cover every outbound edge, so a link is either a resolved neighbor or a
+/// surfaced unresolved link, never silently gone (GH #12). Backed by the
+/// `edges_dangling_idx` partial index, whose predicate this query mirrors.
+pub fn unresolved_outbound(conn: &Connection, b2id: &str) -> Result<Vec<Unresolved>> {
+    let mut stmt = conn.prepare(
+        "SELECT dst_path_raw, type, origin, explanation FROM edges
+         WHERE src_id = ?1 AND dst_id IS NULL AND dst_resource_path IS NULL
+         ORDER BY type, dst_path_raw, occurrence_index",
+    )?;
+    let rows = stmt.query_map([b2id], |r| {
+        Ok(Unresolved {
+            target: r.get(0)?,
+            edge_type: r.get(1)?,
+            origin: r.get(2)?,
+            explanation: r.get::<_, Option<String>>(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// The set of notes within `hops` typed hops of `anchor` (inclusive of `anchor`),
 /// traversing `active` edges **undirected** — a note related to the anchor either
 /// way is reachable. This is the hop set the graph-filtered discovery join uses

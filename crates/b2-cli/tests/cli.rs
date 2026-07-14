@@ -414,6 +414,66 @@ fn neighbors_unknown_note_fails_cleanly() {
     assert!(!err.contains("panicked"), "stderr: {err}");
 }
 
+/// A note whose only body link is a `[[folder]]` (GH #12): a note is one `.md` file,
+/// so the folder resolves to nothing. `neighbors` and `explain` must surface it as
+/// unresolved rather than silently drop it.
+fn guide_with_dangling_link(root: &Path) {
+    std::fs::write(
+        root.join("guide.md"),
+        "---\nb2id: 01JGUIDE00000000000000001\ntype: note\ntitle: Guide\n---\n\
+         - [[Hermes]] is the R&D machine\n",
+    )
+    .unwrap();
+    let re = run_in(root, &["reindex"]);
+    assert!(re.status.success(), "reindex failed: {}", stderr(&re));
+}
+
+#[test]
+fn neighbors_surfaces_unresolved_links_in_human_output() {
+    let (_g, root) = reindexed();
+    guide_with_dangling_link(&root);
+
+    // Human output flags the broken link (it would otherwise vanish entirely).
+    let human = run_in(&root, &["neighbors", "guide"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let text = stdout(&human).to_lowercase();
+    assert!(text.contains("unresolved"), "flags the broken link: {text}");
+    assert!(text.contains("hermes"), "names the target: {text}");
+
+    // `--json` keeps its resolved-neighbors array contract — the note has no resolved
+    // neighbors, so it's empty (the structured unresolved data lives in `explain`).
+    let json = run_in(&root, &["--json", "neighbors", "guide"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert!(
+        v.as_array()
+            .expect("neighbors --json is an array")
+            .is_empty(),
+        "no resolved neighbors: {v}"
+    );
+}
+
+#[test]
+fn explain_surfaces_unresolved_links_human_and_json() {
+    let (_g, root) = reindexed();
+    guide_with_dangling_link(&root);
+
+    let human = run_in(&root, &["explain", "guide"]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let text = stdout(&human).to_lowercase();
+    assert!(text.contains("unresolved"), "flags the broken link: {text}");
+    assert!(text.contains("hermes"), "names the target: {text}");
+
+    let json = run_in(&root, &["--json", "explain", "guide"]);
+    assert!(json.status.success(), "{}", stderr(&json));
+    let v: Value = serde_json::from_slice(&json.stdout).unwrap();
+    let un = v["unresolved"].as_array().expect("unresolved array");
+    assert_eq!(un.len(), 1, "one dangling link: {v}");
+    assert_eq!(un[0]["target"], "Hermes");
+    assert_eq!(un[0]["relation"], "references");
+    assert_eq!(un[0]["origin"], "inline");
+}
+
 #[test]
 fn search_finds_note_human_and_json() {
     let (_g, root) = reindexed();

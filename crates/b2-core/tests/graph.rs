@@ -4,12 +4,13 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::graph::{neighbors, Direction};
+use b2_core::graph::{neighbors, unresolved_outbound, Direction};
 use b2_core::id::UlidGen;
 use b2_core::ingest::{ingest_file, ingest_vault};
 use b2_core::open;
 use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
 use rusqlite::Connection;
+use std::fs;
 
 /// (src_id, dst_id, dst_path_raw, type, origin, occ, explanation), ordered — the
 /// comparable shape of the whole edge set (id excluded; it is a deterministic
@@ -118,6 +119,47 @@ fn neighbors_of_spaced_repetition_are_outbound() {
     assert!(ns
         .iter()
         .all(|n| n.other == MEMORY_ID && n.direction == Direction::Outbound));
+}
+
+#[test]
+fn unresolved_outbound_surfaces_folder_and_typo_links() {
+    // GH #12: a note is one `.md` file, so a `[[Hermes]]` naming a *folder* (or a
+    // typo) resolves to nothing. Those dangling links must be surfaced, not dropped —
+    // `neighbors` keeps only resolved edges, `unresolved_outbound` returns the rest,
+    // and together they cover every outbound link the note authored.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    golden_vault_copy(&vault);
+    let guide = "01JGUIDE00000000000000001";
+    fs::write(
+        vault.join("guide.md"),
+        format!(
+            "---\nb2id: {guide}\ntype: note\ntitle: Guide\n---\n\
+             - [[Hermes]] is the R&D machine\n\
+             See [[concepts/memory|Human memory]] for context.\n\
+             A [[concepts/memoryy]] typo.\n"
+        ),
+    )
+    .unwrap();
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+
+    // Only the one resolvable link is an outbound neighbor.
+    let ns = neighbors(&conn, guide).unwrap();
+    assert_eq!(ns.len(), 1, "only the memory link resolves: {ns:?}");
+    assert_eq!(ns[0].other, MEMORY_ID);
+    assert_eq!(ns[0].direction, Direction::Outbound);
+
+    // The folder + typo links are surfaced as unresolved (ordered by target), each an
+    // inline `references` edge that resolved to nothing.
+    let dangling = unresolved_outbound(&conn, guide).unwrap();
+    let targets: Vec<&str> = dangling.iter().map(|u| u.target.as_str()).collect();
+    assert_eq!(targets, vec!["Hermes", "concepts/memoryy"]);
+    assert!(dangling.iter().all(|u| u.edge_type == "references"));
+    assert!(dangling.iter().all(|u| u.origin == "inline"));
+
+    // A fully-resolved note has none — no false positives.
+    assert!(unresolved_outbound(&conn, SRS_ID).unwrap().is_empty());
 }
 
 #[test]

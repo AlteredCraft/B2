@@ -53,6 +53,40 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
         view.connections.iter().any(|c| c.label == "references"),
         "the bare body link is a references edge"
     );
+    // Every link resolves, so there are no unresolved (dangling) links.
+    assert!(
+        view.unresolved.is_empty(),
+        "resolved note has no unresolved links: {:?}",
+        view.unresolved
+    );
+}
+
+#[test]
+fn explain_surfaces_unresolved_folder_and_typo_links() {
+    // GH #12: a `[[Hermes]]` link naming a *folder* (a note is one `.md` file) — or a
+    // typo — resolves to nothing. `explain` must surface it as an unresolved link,
+    // distinct from a resolved connection, so a broken link reads as broken not gone.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed(tmp.path());
+    fs::write(
+        root.join("guide.md"),
+        "---\nb2id: 01JGUIDE00000000000000001\ntype: note\ntitle: Guide\n---\n\
+         - [[Hermes]] is the R&D machine\n\
+         See [[concepts/memory|Human memory]] for context.\n",
+    )
+    .unwrap();
+    vault.reindex().unwrap();
+
+    let view = vault.explain("guide").unwrap();
+    // The resolvable link is a normal outbound connection…
+    assert_eq!(view.connections.len(), 1, "{:?}", view.connections);
+    assert_eq!(view.connections[0].b2id, MEMORY_ID);
+    assert_eq!(view.connections[0].direction, "outbound");
+    // …and the folder link is surfaced as unresolved, carrying its authored target.
+    assert_eq!(view.unresolved.len(), 1, "{:?}", view.unresolved);
+    assert_eq!(view.unresolved[0].target, "Hermes");
+    assert_eq!(view.unresolved[0].relation, "references");
+    assert_eq!(view.unresolved[0].origin, "inline");
 }
 
 #[test]
@@ -134,6 +168,11 @@ fn explain_reports_an_isolated_note_with_no_connections() {
         view.connections.is_empty(),
         "an isolated note has no connections: {:?}",
         view.connections
+    );
+    assert!(
+        view.unresolved.is_empty(),
+        "no links at all ⇒ no unresolved links: {:?}",
+        view.unresolved
     );
 }
 

@@ -149,9 +149,28 @@ pub struct NeighborView {
     pub origin: String,
 }
 
+/// One outbound link a note authored that resolves to **nothing** — no note and no
+/// resource exists at its target (a `[[Hermes]]` naming a *folder*, or a plain
+/// typo). A note is one `.md` file (data-model.md §1), so a folder is never a valid
+/// target; rather than silently drop such a link, B2 surfaces it as *unresolved* so
+/// it reads as broken, not missing (GH #12). Has no `b2id`/`path` — the whole point
+/// is that nothing resolved — so it is a distinct shape from [`NeighborView`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnresolvedLink {
+    /// The target exactly as written in the Markdown (`[[target]]`) — e.g. `Hermes`.
+    pub target: String,
+    /// The relation verb (`references` for a bare link).
+    pub relation: String,
+    /// Edge origin — `"inline"` (a body link) or `"frontmatter"` (a `relations:`
+    /// entry).
+    pub origin: String,
+    pub explanation: Option<String>,
+}
+
 /// A note's full connection picture for `b2 explain`: the note itself (resolved to
-/// its identity + display fields) and every active connection with its "why". A
-/// thin header over [`NeighborView`] — `explain`'s job is to present a note's typed
+/// its identity + display fields), every active connection with its "why", and any
+/// **unresolved** outbound links (dangling — the target names no note or resource).
+/// A thin header over [`NeighborView`] — `explain`'s job is to present a note's typed
 /// edges and their explanations, so it reuses the same per-edge shape `neighbors`
 /// returns rather than a parallel one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -162,6 +181,10 @@ pub struct ExplainView {
     /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them),
     /// each with its label, target, and explanation. Empty for an isolated note.
     pub connections: Vec<NeighborView>,
+    /// Outbound links that resolved to nothing (a folder target or a typo) — shown
+    /// as broken rather than silently dropped (GH #12). Empty when every link
+    /// resolves.
+    pub unresolved: Vec<UnresolvedLink>,
 }
 
 /// A note's content + display metadata for a reader — the Desktop UI MVP's left
@@ -465,23 +488,56 @@ impl Vault {
         Ok(out)
     }
 
+    /// The unresolved (dangling) outbound links of an already-resolved `b2id` —
+    /// authored links whose target names no note and no resource (a folder or a
+    /// typo). Shared by [`explain`](Self::explain) and
+    /// [`unresolved_links`](Self::unresolved_links) so both present the same shape.
+    fn unresolved_of(&self, b2id: &str) -> Result<Vec<UnresolvedLink>> {
+        Ok(graph::unresolved_outbound(&self.conn, b2id)?
+            .into_iter()
+            .map(|u| UnresolvedLink {
+                target: u.target,
+                relation: u.edge_type,
+                origin: u.origin,
+                explanation: u.explanation,
+            })
+            .collect())
+    }
+
+    /// The unresolved (dangling) outbound links of the note referenced by `note_ref`
+    /// (path **or** `b2id`): links it authored that resolve to no note and no
+    /// resource — a `[[Hermes]]` naming a *folder*, or a typo (GH #12). Surfaced so a
+    /// broken link is visible, not silently dropped; `b2 neighbors`/`b2 explain` show
+    /// them. Errors with [`Error::NoteNotFound`] for an unknown ref; a note whose
+    /// every link resolves returns an empty list. A pure graph read — no embedding.
+    pub fn unresolved_links(&self, note_ref: &str) -> Result<Vec<UnresolvedLink>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "unresolved_links", note = note_ref)
+            .entered();
+        let b2id = self.resolve_ref(note_ref)?;
+        self.unresolved_of(&b2id)
+    }
+
     /// Explain a note's connections (`b2 explain`): the note referenced by
     /// `note_ref` (path **or** `b2id`) resolved to its identity + title, together
-    /// with every active typed edge and its "why". Errors with
-    /// [`Error::NoteNotFound`] when the ref matches no indexed note; a found note
-    /// with no edges returns an [`ExplainView`] with an empty `connections`. A pure
-    /// graph read — no embedding, like [`neighbors`](Self::neighbors).
+    /// with every active typed edge and its "why", plus any **unresolved** outbound
+    /// links (dangling — a folder target or a typo, surfaced not dropped, GH #12).
+    /// Errors with [`Error::NoteNotFound`] when the ref matches no indexed note; a
+    /// found note with no edges returns an [`ExplainView`] with empty `connections`
+    /// and `unresolved`. A pure graph read — no embedding, like
+    /// [`neighbors`](Self::neighbors).
     pub fn explain(&self, note_ref: &str) -> Result<ExplainView> {
         let _op = tracing::debug_span!(target: "b2::vault", "explain", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?.unwrap_or_default();
         let title = db::note_title(&self.conn, &b2id)?;
         let connections = self.neighbors_of(&b2id)?;
+        let unresolved = self.unresolved_of(&b2id)?;
         Ok(ExplainView {
             b2id,
             path,
             title,
             connections,
+            unresolved,
         })
     }
 

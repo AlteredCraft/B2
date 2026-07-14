@@ -846,6 +846,23 @@ body {
   margin-left: 4px;
 }
 
+/* a dangling/unresolved outbound link — a [[folder]] or typo (GH #12). Not
+   clickable (nothing resolves), flagged with a broken-link emblem so it reads as
+   broken rather than silently missing. */
+.card.edge.broken {
+  cursor: default;
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+}
+.edge .edge-broken {
+  color: var(--danger);
+  font-weight: 700;
+  margin-right: 2px;
+}
+.card.edge.broken .card-path {
+  color: color-mix(in srgb, var(--danger) 70%, var(--muted));
+}
+
 .linklike {
   background: none;
   border: none;

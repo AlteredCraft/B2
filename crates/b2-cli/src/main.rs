@@ -338,9 +338,14 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // the model (no needless `b2 init` just to explore the graph).
             let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
             let neighbors = vault.neighbors(note)?;
+            // Dangling outbound links (a `[[folder]]` or a typo) that resolve to no
+            // note or resource — surfaced, not dropped (GH #12). `--json` keeps its
+            // resolved-neighbors array contract; the full structured picture,
+            // including these, is `b2 explain --json`.
+            let unresolved = vault.unresolved_links(note)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&neighbors)?);
-            } else if neighbors.is_empty() {
+            } else if neighbors.is_empty() && unresolved.is_empty() {
                 println!("No neighbors.");
             } else {
                 for n in &neighbors {
@@ -356,6 +361,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         .map(|e| format!(" — {e}"))
                         .unwrap_or_default();
                     println!("{arrow} {}  {name} ({}){explanation}", n.label, n.path);
+                }
+                for u in &unresolved {
+                    println!(
+                        "⚠ {}  [[{}]] — unresolved (no matching note or file)",
+                        u.relation, u.target
+                    );
                 }
             }
         }
@@ -396,11 +407,11 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             } else {
                 let name = view.title.as_deref().unwrap_or(&view.path);
                 println!("{name} ({})  [b2id {}]", view.path, view.b2id);
-                if view.connections.is_empty() {
+                if view.connections.is_empty() && view.unresolved.is_empty() {
                     // Zero connections at all — nothing links to it and it links to
                     // nothing (an orphan; the kernel only surfaces, never archives).
                     println!("No connections yet.");
-                } else {
+                } else if !view.connections.is_empty() {
                     println!("Connections:");
                     for c in &view.connections {
                         let arrow = if c.direction == "outbound" {
@@ -421,6 +432,21 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     // acted on (user-stories.md Story 2; files are only touched when asked).
                     if !view.connections.iter().any(|c| c.direction == "inbound") {
                         println!("No inbound links — this note is an orphan.");
+                    }
+                }
+                // Dangling outbound links (a `[[folder]]` or a typo): a note is one
+                // `.md` file, so these resolve to nothing — shown as broken rather
+                // than silently dropped (GH #12).
+                if !view.unresolved.is_empty() {
+                    println!("Unresolved links:");
+                    for u in &view.unresolved {
+                        println!(
+                            "  ⚠ {}  [[{}]]  (no matching note or file)  [{}]",
+                            u.relation, u.target, u.origin
+                        );
+                        if let Some(why) = &u.explanation {
+                            println!("      why: {why}");
+                        }
                     }
                 }
             }
