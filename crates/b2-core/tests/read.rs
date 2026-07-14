@@ -27,10 +27,11 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 
     let note = vault.read("concepts/memory.md").unwrap();
 
-    // identity + display metadata come from the frontmatter fields.
+    // Identity + display metadata: the title is the filename (data-model.md §1 — the
+    // frontmatter `title:` is inert); type/created still come from the frontmatter.
     assert_eq!(note.b2id, MEMORY_ID);
     assert_eq!(note.path, "concepts/memory.md");
-    assert_eq!(note.title.as_deref(), Some("Human memory"));
+    assert_eq!(note.title.as_deref(), Some("memory"));
     assert_eq!(note.r#type.as_deref(), Some("concept"));
     assert_eq!(note.created.as_deref(), Some("2026-06-20"));
 
@@ -57,10 +58,10 @@ fn read_returns_the_raw_frontmatter_block_verbatim() {
     let fm = note.frontmatter.expect("golden note has frontmatter");
 
     // The verbatim YAML between the fences — the source keys, not a re-serialization.
-    // Byte-honest: the title keeps its source quotes here (`"Human memory"`), whereas
-    // the projected `title` field is the parsed, unquoted value.
+    // Byte-honest: the raw block still carries the (inert) `title:` key verbatim,
+    // while the note's display `title` is its filename (data-model.md §1).
     assert!(fm.contains(r#"title: "Human memory""#));
-    assert_eq!(note.title.as_deref(), Some("Human memory"));
+    assert_eq!(note.title.as_deref(), Some("memory"));
     assert!(fm.contains(&format!("b2id: {MEMORY_ID}")));
     assert!(fm.contains("type: concept"));
     assert!(!fm.contains("---"), "fences are excluded from the block");
@@ -113,7 +114,8 @@ fn read_surfaces_tags_from_frontmatter() {
 
     let note = vault.read("tagged").unwrap();
     assert_eq!(note.tags, vec!["alpha".to_string(), "beta".to_string()]);
-    assert_eq!(note.title.as_deref(), Some("Tagged"));
+    // Title is the filename (`tagged.md`), not the frontmatter `title: Tagged`.
+    assert_eq!(note.title.as_deref(), Some("tagged"));
     assert_eq!(note.body.trim(), "Hello body.");
 }
 

@@ -115,7 +115,7 @@ A note is one `.md` file: YAML frontmatter, then a Markdown body.
 ---
 b2id: 01J9Z3K7QX8V2B4N6M0PQR7TS         # durable identity (ULID); B2's one mandatory key, never changes
 type: concept                           # required; OKF-compatible discriminator
-title: "Spaced repetition"              # human title; the natural link alias
+title: "Spaced repetition"              # optional, inert: recognized but NOT special — the title is the filename
 description: "Why expanding intervals beat massed practice."
 tags: [learning, memory]
 created: 2026-06-20
@@ -154,9 +154,12 @@ body, and B2 reads them; B2 just never writes there.
 
 **Optional (B2-recognized)**
 
-- **`title`** — human title and the natural alias for inbound `[[path|title]]` links. If absent, B2
-  derives a display title from the first H1, then the filename (derivation is display-only; it does
-  not write).
+- **`title`** — **recognized but inert (no special meaning).** A note's title **is its filename**
+  (basename with the `.md` extension removed); B2 derives the display title from the path alone and never
+  privileges this frontmatter field. The key is still parsed and round-tripped losslessly like any other
+  (a human or importer may keep a `title:` for other tools), and it never drives B2's display, its link
+  aliases, or search. *(This reverses the earlier "frontmatter title → first H1 → filename" precedence —
+  the H1 step was never built, and the filename is now the sole source; decision 2026-07-14, §9.)*
 - **`description`** — one-line summary; feeds the embedding `title:`/`text:` prompt and OKF export.
 - **`tags`** — list of strings.
 - **`created` / `updated`** — ISO-8601 date or datetime. `created` is set at creation; `updated` is
@@ -347,7 +350,10 @@ connection becomes real in exactly two ways, both **authored in Markdown**:
    **source note's frontmatter `relations:`** (Markdown first; **never the body**), then re-projects the
    note so the edge materializes from that Markdown as `origin='frontmatter'` (§3). `--type` defaults to
    `references`; the palette is the core vocabulary (§2). This is the *only* structured edge B2 authors,
-   and it happens only on your explicit command.
+   and it happens only on your explicit command. B2 writes the target as a **bare `[[path]]`** — no
+   `|alias`: the filename is the note's title (§1), so the path already reads as the title, and there is no
+   privileged frontmatter title to source an alias from. *(A human writing a body link may still add any
+   `|alias` they like; B2 reads it and never rewrites it.)*
 
 Both paths yield ordinary **authored, active** edges — there is no `suggested`/`rejected` status and no
 in-place flip; an edge exists iff it is written in the Markdown (§3).
@@ -516,6 +522,14 @@ connected here.
   evidential, structural, versioning), the closed palette for `b2 link` + queries; a **tolerated tail**
   stored verbatim; a **promotion path**; plus the conventions and "most-specific-then-`relates`" typing
   guidance (§2).
+- **The title is the filename (2026-07-14).** A note's title **is its filename** (basename minus `.md`);
+  the frontmatter `title:` key is **recognized but inert** — parsed and round-tripped, never privileged for
+  display, link aliases, or search (§1). This **reverses** the earlier "frontmatter `title` → first H1 →
+  filename" precedence (the H1 step was never built) and makes notes uniform with **resources**, which were
+  already filename-titled. Consequences: the display title is a pure function of the path (so an
+  unindexed note still titles correctly), and **`b2 link` writes a bare `[[path]]`** with no `|alias`
+  (§4). No migration — the index is a projection; a `reindex` recomputes every label, and existing
+  `title:` frontmatter stays untouched on disk.
 
 **Still open:** none — the data model is locked. Next is the **index-engine build** against golden-vault
 fixtures ([index-engine.md](index-engine.md), now reconciled with this two-tier model).

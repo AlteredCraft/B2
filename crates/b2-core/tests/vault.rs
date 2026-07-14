@@ -84,13 +84,14 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     labels.sort_unstable();
     assert_eq!(labels, vec!["elaborated-by", "referenced-by"]);
 
-    // every neighbor is the SRS note, inbound, resolved to its path + title.
+    // every neighbor is the SRS note, inbound, resolved to its path + title (the
+    // filename, data-model.md §1).
     assert!(ns.iter().all(|n| n.b2id == SRS_ID));
     assert!(ns.iter().all(|n| n.direction == "inbound"));
     assert!(ns.iter().all(|n| n.path == "notes/spaced-repetition.md"));
     assert!(ns
         .iter()
-        .all(|n| n.title.as_deref() == Some("Spaced repetition")));
+        .all(|n| n.title.as_deref() == Some("spaced-repetition")));
     // the typed `elaborates` edge carries its explanation through.
     assert!(ns.iter().any(|n| n.relation == "elaborates"
         && n.explanation.as_deref() == Some("applies the forgetting curve")));
@@ -114,9 +115,7 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
         assert!(ns.iter().all(|n| n.b2id == MEMORY_ID));
         assert!(ns.iter().all(|n| n.direction == "outbound"));
         assert!(ns.iter().all(|n| n.path == "concepts/memory.md"));
-        assert!(ns
-            .iter()
-            .all(|n| n.title.as_deref() == Some("Human memory")));
+        assert!(ns.iter().all(|n| n.title.as_deref() == Some("memory")));
     }
     assert_eq!(by_path.len(), by_id.len());
     assert_eq!(by_stem.len(), by_id.len());
@@ -146,7 +145,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
         .find(|h| h.b2id == SRS_ID)
         .expect("SRS must be a hit for 'forgetting'");
     assert_eq!(srs.path, "notes/spaced-repetition.md");
-    assert_eq!(srs.title.as_deref(), Some("Spaced repetition"));
+    assert_eq!(srs.title.as_deref(), Some("spaced-repetition"));
     assert!(srs.snippet.contains("forgetting"));
     assert!(srs.score > 0.0);
 

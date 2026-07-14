@@ -32,9 +32,10 @@ fn list_notes_returns_every_note_ordered_by_path() {
         vec!["concepts/memory.md", "notes/spaced-repetition.md"]
     );
 
-    // Identity + display title come through; no body field to carry.
+    // Identity + display title come through; the title is the filename (data-model.md
+    // §1), so `concepts/memory.md` lists as "memory". No body field to carry.
     assert_eq!(notes[0].b2id, MEMORY_ID);
-    assert_eq!(notes[0].title.as_deref(), Some("Human memory"));
+    assert_eq!(notes[0].title.as_deref(), Some("memory"));
     assert_eq!(notes[1].b2id, SRS_ID);
 }
 

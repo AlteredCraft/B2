@@ -503,10 +503,14 @@ impl Vault {
         let revision = revision_of(&raw);
         let parsed = note::parse(&raw);
         let fields = parsed.fields();
+        // Display title is the filename (data-model.md §1); the frontmatter `title:`
+        // is inert. Derived from the path here so even a not-yet-reindexed note shows
+        // its filename in the pane header, matching the projected `notes.title`.
+        let title = Some(note::display_title(&path));
         Ok(NoteView {
             b2id,
             path,
-            title: fields.title.clone(),
+            title,
             r#type: fields.r#type.clone(),
             created: fields.created.clone(),
             updated: fields.updated.clone(),
@@ -797,11 +801,10 @@ impl Vault {
             });
         }
 
-        // Build the typed-link spec from the dst's current path + title.
-        let link = match db::note_title(&self.conn, &dst_id)? {
-            Some(title) => format!("[[{dst_path}|{title}]]"),
-            None => format!("[[{dst_path}]]"),
-        };
+        // The typed-link spec targets the dst's path. A note's title is its filename
+        // (data-model.md §1), so a bare `[[path]]` already reads as the title — B2
+        // writes no alias, and a frontmatter `title:` (inert) is never consulted.
+        let link = format!("[[{dst_path}]]");
         let spec = match explanation {
             Some(e) => format!("{edge_type} {link} — {e}"),
             None => format!("{edge_type} {link}"),

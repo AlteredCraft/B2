@@ -160,6 +160,11 @@ fn project_note_and_chunks(
     };
 
     let fields = parsed.fields();
+    // A note's display title is its **filename** (data-model.md §1) — a frontmatter
+    // `title:` is inert. Projected into `notes.title` so every read path (both
+    // adapters, search, neighbors, discovery) shows the filename with no per-call
+    // derivation; the column stays populated (never NULL) for an indexed note.
+    let title = note::display_title(rel_path);
     db::upsert_note(
         conn,
         &NoteRow {
@@ -168,7 +173,7 @@ fn project_note_and_chunks(
             // `type` is required by the model; default the projection to "note"
             // for the rare untyped file (the file itself is never modified).
             r#type: fields.r#type.as_deref().unwrap_or("note"),
-            title: fields.title.as_deref(),
+            title: Some(title.as_str()),
             description: fields.description.as_deref(),
             created: fields.created.as_deref(),
             updated: fields.updated.as_deref(),

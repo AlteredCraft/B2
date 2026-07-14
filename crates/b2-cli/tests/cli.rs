@@ -322,7 +322,7 @@ fn explain_shows_connections_human_and_json() {
     let human = run_in(&root, &["explain", "notes/spaced-repetition"]);
     assert!(human.status.success(), "{}", stderr(&human));
     let out = stdout(&human);
-    assert!(out.contains("Spaced repetition"), "header: {out}");
+    assert!(out.contains("spaced-repetition"), "header: {out}");
     assert!(out.contains("elaborates"), "{out}");
     assert!(out.contains("why:"), "the explanation is labelled: {out}");
     assert!(out.contains("forgetting curve"), "{out}");
@@ -331,7 +331,8 @@ fn explain_shows_connections_human_and_json() {
     assert!(json.status.success(), "{}", stderr(&json));
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(v["path"], "notes/spaced-repetition.md");
-    assert_eq!(v["title"], "Spaced repetition");
+    // Title is the filename (data-model.md §1), not the frontmatter `title:`.
+    assert_eq!(v["title"], "spaced-repetition");
     let conns = v["connections"].as_array().expect("connections array");
     assert_eq!(conns.len(), 2);
     assert!(conns.iter().all(|c| c["direction"] == "outbound"));
@@ -372,10 +373,11 @@ fn neighbors_by_path_and_by_b2id() {
     let by_path = run_in(&root, &["neighbors", "notes/spaced-repetition"]);
     assert!(by_path.status.success(), "{}", stderr(&by_path));
     let out = stdout(&by_path);
-    // outbound edges: the verbs themselves, resolved to the target's title.
+    // outbound edges: the verbs themselves, resolved to the target's title (its
+    // filename, data-model.md §1).
     assert!(out.contains("elaborates"), "{out}");
     assert!(out.contains("references"), "{out}");
-    assert!(out.contains("Human memory"), "{out}");
+    assert!(out.contains("memory"), "{out}");
 
     let by_id = run_in(&root, &["neighbors", MEMORY_ID]);
     assert!(by_id.status.success(), "{}", stderr(&by_id));
@@ -383,7 +385,7 @@ fn neighbors_by_path_and_by_b2id() {
     // memory sees the inbound inverse labels, from the SRS note.
     assert!(out.contains("elaborated-by"), "{out}");
     assert!(out.contains("referenced-by"), "{out}");
-    assert!(out.contains("Spaced repetition"), "{out}");
+    assert!(out.contains("spaced-repetition"), "{out}");
 }
 
 #[test]
@@ -419,7 +421,7 @@ fn search_finds_note_human_and_json() {
     let human = run_in(&root, &["search", "forgetting"]);
     assert!(human.status.success(), "{}", stderr(&human));
     assert!(
-        stdout(&human).contains("Spaced repetition"),
+        stdout(&human).contains("spaced-repetition"),
         "{:?}",
         stdout(&human)
     );
@@ -770,7 +772,7 @@ fn explain_dispatches_to_the_resource_card() {
     );
     assert!(out.contains("Backlinks:"), "{out}");
     assert!(
-        out.contains("Card (notes/card.md)  references (embed) — \"a tiny diagram\""),
+        out.contains("card (notes/card.md)  references (embed) — \"a tiny diagram\""),
         "{out}"
     );
 
