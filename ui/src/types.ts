@@ -206,6 +206,8 @@ export interface ProjectReport {
   indexed: number;
   stamped: number;
   skipped: SkippedNote[];
+  /** Ghost note rows pruned this pass — files deleted outside b2 (#31). */
+  notes_pruned: number;
   /** Resources inventoried this pass, and stale inventory rows pruned (slice 1). */
   resources_indexed: number;
   resources_pruned: number;

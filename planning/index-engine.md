@@ -399,11 +399,14 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   truth: `db::upsert_note` drops the **stale** row that still holds the path (its chunks/edges cascade)
   before writing the new owner, so an incremental reindex converges on the same state as a from-scratch
   rebuild (`full-reindex ≡ incremental-update`) instead of failing on a raw `UNIQUE(notes.path)` error.
-  **Known gap:** a note file *deleted with no replacement* still leaves a ghost row until the path is reused
-  or the index is rebuilt — non-crashing, tracked in [#31](https://github.com/AlteredCraft/B2/issues/31).
-  *(Resources will churn more than notes — images/PDFs get added and deleted freely — so the resource
-  inventory pass (slice 1) includes pruning, which also bounds this gap's blast radius;
-  [research/file-type-support.md](research/file-type-support.md) §8.)*
+  A note file *deleted with no replacement* is reconciled by the whole-vault projection pass
+  ([#31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault` prunes every `notes` row whose
+  `b2id` it did not project this run (`db::prune_notes_except` — chunks/FTS/vectors/outgoing edges
+  cascade; inbound links re-dangle when phase 2 re-derives edges against the pruned resolver), **except**
+  rows whose file was skipped as unreadable — the walk saw that file, its `b2id` is merely unknowable this
+  run, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note and never
+  prunes. *(Resources churn more than notes — images/PDFs get added and deleted freely — and their
+  inventory pass prunes the same way; [research/file-type-support.md](research/file-type-support.md) §8.)*
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
   file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting

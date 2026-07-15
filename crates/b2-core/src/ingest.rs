@@ -494,6 +494,8 @@ pub struct IngestOutcome {
     /// Files the projection pass skipped as unreadable (see [`SkippedNote`]); empty on
     /// a clean vault. A whole-vault reindex reports these rather than failing on them.
     pub skipped: Vec<SkippedNote>,
+    /// Ghost rows pruned by the projection pass (see [`ProjectOutcome`], #31).
+    pub notes_pruned: usize,
     /// The resource inventory's counts (see [`ProjectOutcome`]).
     pub resources_indexed: usize,
     pub resources_pruned: usize,
@@ -581,6 +583,9 @@ fn skip_reason(err: &std::io::Error) -> String {
 pub struct ProjectOutcome {
     pub notes: Vec<Projected>,
     pub skipped: Vec<SkippedNote>,
+    /// Ghost rows pruned this pass (#31) — notes whose files were deleted outside
+    /// b2 with no replacement. Zero on a vault with no out-of-band deletions.
+    pub notes_pruned: usize,
     /// Resources inventoried this pass (unchanged ones included), and stale
     /// inventory rows pruned — the slice-1 resource pass (spec §2).
     pub resources_indexed: usize,
@@ -650,6 +655,20 @@ pub fn project_vault(
         }
     }
 
+    // Deletion reconciliation (#31): prune the rows of notes whose files are gone —
+    // deleted outside b2 with no replacement — so an incremental reindex converges on
+    // what a from-scratch rebuild would hold instead of serving ghosts to
+    // `list_notes`/search/`similar`/the graph. "Gone" is decided by `b2id`: every
+    // note the walk read was staged above, so an unstaged b2id has no file — except a
+    // file skipped as unreadable, whose b2id is unknowable this run; its row is kept
+    // by path (the walk *saw* the file — evicting it would lie). Runs before phase 2
+    // so edges re-derive against the pruned resolver and links at a deleted note
+    // re-dangle, exactly as a full rebuild resolves them. Whole-vault only: the
+    // single-note paths (`ingest_file`/`project_file`) touch one note and never prune.
+    let projected_ids: HashSet<&str> = staged.iter().map(|(b2id, ..)| b2id.as_str()).collect();
+    let skipped_paths: HashSet<&str> = skipped.iter().map(|s| s.path.as_str()).collect();
+    let notes_pruned = db::prune_notes_except(conn, &projected_ids, &skipped_paths)?;
+
     // Resource inventory — between the phases so the rows exist before phase 2
     // resolves links (a `![[img.png]]` edge resolves against `resources`, spec §3).
     let (resources_indexed, resources_pruned, mut resource_skips) =
@@ -669,6 +688,7 @@ pub fn project_vault(
         notes = notes.len(),
         stamped = notes.iter().filter(|n| n.stamped).count(),
         skipped = skipped.len(),
+        notes_pruned,
         resources = resources_indexed,
         resources_pruned,
         force,
@@ -677,6 +697,7 @@ pub fn project_vault(
     Ok(ProjectOutcome {
         notes,
         skipped,
+        notes_pruned,
         resources_indexed,
         resources_pruned,
     })
@@ -790,6 +811,7 @@ pub fn ingest_vault_with_progress(
     let ProjectOutcome {
         notes: projected_notes,
         skipped,
+        notes_pruned,
         resources_indexed,
         resources_pruned,
     } = project_vault(conn, vault_root, idgen, force)?;
@@ -813,6 +835,7 @@ pub fn ingest_vault_with_progress(
         notes,
         cancelled: embed.cancelled,
         skipped,
+        notes_pruned,
         resources_indexed,
         resources_pruned,
     })

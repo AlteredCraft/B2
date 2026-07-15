@@ -66,7 +66,9 @@ façade** have shipped:
   `b2id` — so an incremental reindex equals a from-scratch rebuild rather than crashing on
   `UNIQUE(notes.path)` when files are renamed/replaced outside `b2 mv`. The desktop host also now **logs
   full error detail server-side** (the webview still gets only the generic message). Residual deleted-file
-  ghost rows tracked in [#31](https://github.com/AlteredCraft/B2/issues/31). See
+  ghost rows closed 2026-07-15 ([#31](https://github.com/AlteredCraft/B2/issues/31)): the whole-vault
+  projection pass now **prunes** rows whose file is gone (`db::prune_notes_except`, skipped-unreadable
+  files carved out; single-note ingest never prunes), surfaced as `notes_pruned` in the reports. See
   [index-engine.md](index-engine.md) §8.
 - **Native fs-watch auto-reload (2026-07-11)** — Step 5 of the desktop plan
   ([specs/completed/desktop-ui-mvp.md](specs/completed/desktop-ui-mvp.md) §5/§8), replacing "stale until you
