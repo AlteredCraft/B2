@@ -16,6 +16,9 @@ import type {
   UnresolvedLink,
 } from "./types";
 
+/** Side-pane discovery sections that can be collapsed (foldable headers). */
+export type SideSection = "similar" | "connections";
+
 /**
  * The closed 10-verb relation core (b2-core `relation.rs` CORE — data-model.md §2).
  * The link picker offers exactly these; the Rust host re-validates `is_core`, so a
@@ -40,6 +43,28 @@ export interface LinkTarget {
   path: string;
   title: string | null;
 }
+
+/**
+ * An open right-click menu on a discovery card. Anchored at the cursor (viewport
+ * coords, already clamped on-screen when opened) and carrying the card's note so its
+ * actions (Open / Link…) know their target. Null when no menu is up. Replaces the
+ * inline "Link…" button on Similar cards — the whole card is the target, right-click
+ * is the affordance.
+ */
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  path: string;
+  title: string | null;
+}
+
+/**
+ * Appearance preference. `"system"` (the default) defers to the OS via
+ * `prefers-color-scheme`; `"light"`/`"dark"` pin the theme regardless. A pure
+ * front-end preference persisted in `localStorage` — it's a viewing choice, not
+ * vault state, so it never round-trips to the Rust host.
+ */
+export type ThemePref = "system" | "light" | "dark";
 
 export interface AppState {
   /** Vault root, or null when none is configured (the app shows an actionable state). */
@@ -81,6 +106,20 @@ export interface AppState {
   /** The open note's typed edges (from explain). */
   connections: NeighborView[];
   /**
+   * Discovery sections the user has collapsed (foldable headers, Obsidian-style).
+   * Sticky across notes — a viewing preference — so a collapsed section stays folded
+   * as you browse. Empty ⇒ every section expanded (the default).
+   */
+  collapsedSections: Set<SideSection>;
+  /**
+   * Per-card fold state: the card keys (`"<section>:<path>"`) whose body (path +
+   * snippet) is collapsed to just the title row. Cards default expanded; this tracks
+   * the exceptions. Reset on note-open — the keys belong to the note just closed.
+   */
+  collapsedCards: Set<string>;
+  /** An open right-click menu on a discovery card, or null. */
+  contextMenu: ContextMenuState | null;
+  /**
    * The open note's unresolved (dangling) outbound links — a `[[folder]]` or a typo
    * that resolves to no note or file. Loaded alongside `connections` from the same
    * `explain` read; rendered with a broken-link emblem so they read as broken, not
@@ -105,6 +144,8 @@ export interface AppState {
   linkRelation: string;
   /** The settings modal (⌘,) is open. */
   settingsOpen: boolean;
+  /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
+  theme: ThemePref;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
   models: ModelChoice[];
   /** Per-model cumulative embedding time — loaded alongside `models`, shown in Settings. */
@@ -147,6 +188,9 @@ export const state: AppState = {
   editConflict: false,
   similar: [],
   connections: [],
+  collapsedSections: new Set<SideSection>(),
+  collapsedCards: new Set<string>(),
+  contextMenu: null,
   unresolved: [],
   discoveringSimilar: false,
   discoveringConnections: false,
@@ -155,6 +199,7 @@ export const state: AppState = {
   linkTarget: null,
   linkRelation: "references",
   settingsOpen: false,
+  theme: "system",
   models: [],
   embedStats: [],
   provisioning: false,

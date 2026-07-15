@@ -9,7 +9,7 @@
 // not needed for a local-first, own-content MVP.
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
-import { RELATION_VERBS, type AppState } from "./state";
+import { RELATION_VERBS, type AppState, type SideSection } from "./state";
 import type { NoteSummary, ResourceExplainView, ResourceSummary } from "./types";
 
 export function escapeHtml(s: string): string {
@@ -142,7 +142,7 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
       const header = `<button class="tree-row tree-dir" data-dir="${escapeHtml(
         sub.path,
       )}" style="${pad(depth)}" aria-expanded="${open}">
-          <span class="tree-caret">${open ? "▾" : "▸"}</span>
+          <span class="tree-caret">${open ? "▼" : "▶"}</span>
           <span class="tree-label">${escapeHtml(sub.name)}</span>
         </button>`;
       const body = open ? treeChildrenHtml(sub, state, depth + 1) : "";
@@ -219,7 +219,7 @@ function noteBarHtml(state: AppState, frontmatter: string | null): string {
   return `<div class="frontmatter-bar">
       <div class="note-bar-head">
         <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}">
-          <span class="tree-caret">${open ? "▾" : "▸"}</span>
+          <span class="tree-caret">${open ? "▼" : "▶"}</span>
           <span class="frontmatter-label">Frontmatter</span>
         </button>
         <div class="note-bar-actions">
@@ -377,8 +377,49 @@ function discoverySectionHtml(state: AppState): string {
   return similarSectionHtml(state) + connectionsSectionHtml(state);
 }
 
+// A collapsible discovery-section header (chevron + title + count) — the same fold
+// idiom the file tree and the Frontmatter drawer use, so the right column reads the
+// same way. Collapsing is a sticky viewing preference (`collapsedSections`); the count
+// is shown only when non-zero so an empty section stays quiet.
+function sideFoldHead(
+  section: SideSection,
+  label: string,
+  count: number,
+  collapsed: boolean,
+): string {
+  return `<button class="side-head side-fold" data-fold-section="${section}" aria-expanded="${!collapsed}">
+      <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
+      <span class="side-title">${label}</span>
+      ${count ? `<span class="side-count">${count}</span>` : ""}
+    </button>`;
+}
+
+/** A card's per-note fold key — unique across the two sections a path can appear in. */
+function cardKey(section: SideSection, path: string): string {
+  return `${section}:${path}`;
+}
+
+// The card's own fold chevron. Cards default expanded (the snippet is the signal you
+// link on); this collapses the body (path + snippet) to just the title row. Kept out of
+// the `.card-open` button so a click on the chevron folds without opening the note
+// (nested buttons aren't allowed — the chevron and the open-region are siblings).
+function cardFold(key: string, collapsed: boolean): string {
+  return `<button class="card-fold" data-fold-card="${escapeHtml(
+    key,
+  )}" aria-expanded="${!collapsed}" aria-label="Toggle details">
+      <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
+    </button>`;
+}
+
 function similarSectionHtml(state: AppState): string {
-  const head = `<div class="side-head"><h2>Similar &amp; unlinked</h2></div>`;
+  const collapsed = state.collapsedSections.has("similar");
+  const head = sideFoldHead(
+    "similar",
+    "Similar &amp; unlinked",
+    state.similar.length,
+    collapsed,
+  );
+  if (collapsed) return head;
   if (state.similar.length === 0) {
     if (state.discoveringSimilar)
       return (
@@ -391,25 +432,40 @@ function similarSectionHtml(state: AppState): string {
     return head + `<p class="side-empty">${hint}</p>`;
   }
   const items = state.similar
-    .map(
-      (c) => `<div class="card candidate">
-        <button class="card-open" data-open="${escapeHtml(c.path)}">
-          <div class="card-title">${escapeHtml(c.title ?? c.path)}</div>
-          <div class="card-path">${escapeHtml(c.path)} · ${c.score.toFixed(3)}</div>
-          ${c.evidence ? `<div class="card-snip">${escapeHtml(c.evidence)}</div>` : ""}
-        </button>
-        <button class="btn small" data-link-path="${escapeHtml(c.path)}" data-link-title="${escapeHtml(
-          c.title ?? "",
-        )}">Link…</button>
-      </div>`,
-    )
+    .map((c) => {
+      const key = cardKey("similar", c.path);
+      const folded = state.collapsedCards.has(key);
+      const body = folded
+        ? ""
+        : `<div class="card-body">
+            <div class="card-path">${escapeHtml(c.path)}</div>
+            ${c.evidence ? `<div class="card-snip">${escapeHtml(c.evidence)}</div>` : ""}
+          </div>`;
+      // `data-card-path`/`-title` on the root feed the right-click menu (Open / Link…);
+      // the whole card is the target now that the inline Link button is gone.
+      return `<div class="card foldable candidate${folded ? " is-collapsed" : ""}" data-card-path="${escapeHtml(
+        c.path,
+      )}" data-card-title="${escapeHtml(c.title ?? "")}">
+          <div class="card-head">
+            ${cardFold(key, folded)}
+            <button class="card-open" data-open="${escapeHtml(c.path)}">
+              <span class="card-title">${escapeHtml(c.title ?? c.path)}</span>
+              <span class="card-score">${c.score.toFixed(3)}</span>
+            </button>
+          </div>
+          ${body}
+        </div>`;
+    })
     .join("");
   return head + `<div class="cards">${items}</div>`;
 }
 
 function connectionsSectionHtml(state: AppState): string {
-  const head = `<div class="side-head"><h2>Connections</h2></div>`;
-  if (state.connections.length === 0 && state.unresolved.length === 0)
+  const count = state.connections.length + state.unresolved.length;
+  const collapsed = state.collapsedSections.has("connections");
+  const head = sideFoldHead("connections", "Connections", count, collapsed);
+  if (collapsed) return head;
+  if (count === 0)
     return (
       head +
       `<p class="side-empty">${
@@ -419,16 +475,28 @@ function connectionsSectionHtml(state: AppState): string {
   const items = state.connections
     .map((c) => {
       const arrow = c.direction === "outbound" ? "→" : "←";
+      const key = cardKey("connections", c.path);
+      const folded = state.collapsedCards.has(key);
       const why = c.explanation
         ? `<div class="card-snip">${escapeHtml(c.explanation)}</div>`
         : "";
-      return `<button class="card edge" data-open="${escapeHtml(c.path)}">
-          <div class="card-title"><span class="edge-arrow">${arrow}</span> ${escapeHtml(
-            c.label,
-          )} <span class="edge-origin">${escapeHtml(c.origin)}</span></div>
-          <div class="card-path">${escapeHtml(c.title ?? c.path)}</div>
-          ${why}
-        </button>`;
+      const body = folded
+        ? ""
+        : `<div class="card-body">
+            <div class="card-path">${escapeHtml(c.title ?? c.path)}</div>
+            ${why}
+          </div>`;
+      return `<div class="card edge foldable${folded ? " is-collapsed" : ""}">
+          <div class="card-head">
+            ${cardFold(key, folded)}
+            <button class="card-open" data-open="${escapeHtml(c.path)}">
+              <span class="card-title"><span class="edge-arrow">${arrow}</span> ${escapeHtml(
+                c.label,
+              )} <span class="edge-origin">${escapeHtml(c.origin)}</span></span>
+            </button>
+          </div>
+          ${body}
+        </div>`;
     })
     .join("");
   return head + `<div class="cards">${items}${unresolvedCardsHtml(state)}</div>`;
@@ -540,9 +608,28 @@ function settingsModalHtml(state: AppState): string {
           )}… this can take a few minutes.</span></div>`
         : `<div class="settings-provision"><button class="btn small primary" id="settings-provision">Download model</button><span class="muted">Required before this model can embed.</span></div>`
       : "";
+  // Appearance: System (follow the OS) / Light / Dark. A segmented control rather than a
+  // <select> so the three mutually-exclusive choices read at a glance.
+  const themes: { id: "system" | "light" | "dark"; label: string }[] = [
+    { id: "system", label: "System" },
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+  ];
+  const themeButtons = themes
+    .map((t) => {
+      const on = state.theme === t.id;
+      return `<button type="button" class="seg${on ? " seg-on" : ""}" data-theme-choice="${
+        t.id
+      }" aria-pressed="${on}">${t.label}</button>`;
+    })
+    .join("");
   return `<div class="modal-backdrop" data-settings-backdrop>
       <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
         <h3>Settings</h3>
+        <div class="field">
+          <span class="field-label">Appearance</span>
+          <div class="segmented" role="group" aria-label="Appearance">${themeButtons}</div>
+        </div>
         <label class="field">Embedding model
           <select id="settings-model"${
             models.length && !state.provisioning ? "" : " disabled"
@@ -566,6 +653,20 @@ function settingsModalHtml(state: AppState): string {
           <button class="btn primary" data-settings-close>Done</button>
         </div>
       </div>
+    </div>`;
+}
+
+// The discovery card right-click menu (replaces the inline "Link…" button on Similar
+// cards). Anchored at the cursor via inline left/top — the coords are set + clamped
+// on-screen in main.ts, and are plain numbers, so no escaping is needed. Rendered into
+// its own overlay root so it floats above the panes; an outside click / Escape / scroll
+// dismisses it (main.ts).
+export function contextMenuHtml(state: AppState): string {
+  const m = state.contextMenu;
+  if (!m) return "";
+  return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu">
+      <button class="context-item" data-ctx-open role="menuitem">Open note</button>
+      <button class="context-item" data-ctx-link role="menuitem">Link…</button>
     </div>`;
 }
 

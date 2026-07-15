@@ -11,9 +11,16 @@ import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
-import { state } from "./state";
+import { state, type SideSection, type ThemePref } from "./state";
 import { livePreview, wikilink } from "./livepreview";
-import { escapeHtml, modalHtml, notePaneHtml, sidePaneHtml, treePaneHtml } from "./render";
+import {
+  contextMenuHtml,
+  escapeHtml,
+  modalHtml,
+  notePaneHtml,
+  sidePaneHtml,
+  treePaneHtml,
+} from "./render";
 
 // --- render ---------------------------------------------------------------------
 
@@ -30,6 +37,7 @@ function render(): void {
   // the editor mid-keystroke. Everything else keeps rendering.
   if (!state.editing) el("note-pane").innerHTML = notePaneHtml(state);
   el("side-pane").innerHTML = sidePaneHtml(state);
+  el("menu-root").innerHTML = contextMenuHtml(state);
   el("modal-root").innerHTML = modalHtml(state);
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
@@ -151,6 +159,8 @@ async function openNote(ref: string): Promise<void> {
     state.similar = [];
     state.connections = [];
     state.unresolved = [];
+    state.collapsedCards.clear(); // per-note fold state belongs to the note we just left
+    state.contextMenu = null;
     state.loading = false;
     state.discoveringSimilar = true;
     state.discoveringConnections = true;
@@ -184,6 +194,8 @@ async function openResource(path: string): Promise<void> {
     state.similar = [];
     state.connections = [];
     state.unresolved = [];
+    state.collapsedCards.clear();
+    state.contextMenu = null;
     state.discoveringSimilar = false;
     state.discoveringConnections = false;
   } catch (e) {
@@ -202,6 +214,43 @@ function toggleDir(path: string): void {
 
 function toggleFrontmatter(): void {
   state.frontmatterOpen = !state.frontmatterOpen;
+  render();
+}
+
+// Fold a whole discovery section (Similar & unlinked / Connections). Sticky across
+// notes — a viewing preference, not per-note state.
+function toggleSection(section: SideSection): void {
+  if (state.collapsedSections.has(section)) state.collapsedSections.delete(section);
+  else state.collapsedSections.add(section);
+  render();
+}
+
+// Fold a single card's body (path + snippet) down to its title row. Per-note state,
+// keyed `"<section>:<path>"`; cleared on note-open (see openNote).
+function toggleCard(key: string): void {
+  if (state.collapsedCards.has(key)) state.collapsedCards.delete(key);
+  else state.collapsedCards.add(key);
+  render();
+}
+
+// --- discovery-card context menu --------------------------------------------------
+//
+// Right-click a Similar card → a small floating menu (Open note / Link…), replacing the
+// inline "Link…" button. Anchored at the cursor, but clamped so it never spills past the
+// viewport edge (a menu that opens off-screen is unusable).
+const CTX_MENU_W = 168;
+const CTX_MENU_H = 76;
+
+function openContextMenu(clientX: number, clientY: number, path: string, title: string): void {
+  const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
+  const y = Math.min(clientY, window.innerHeight - CTX_MENU_H - 8);
+  state.contextMenu = { x: Math.max(8, x), y: Math.max(8, y), path, title: title || null };
+  render();
+}
+
+function closeContextMenu(): void {
+  if (!state.contextMenu) return;
+  state.contextMenu = null;
   render();
 }
 
@@ -358,6 +407,7 @@ async function commitLink(): Promise<void> {
 // switch is completed by the user (b2 init + Reindex), which the flashed guidance names.
 
 async function openSettings(): Promise<void> {
+  state.contextMenu = null; // a card menu could be up via the ⌘, shortcut path
   state.settingsOpen = true;
   render(); // show the modal shell immediately; the list fills when it resolves
   try {
@@ -382,6 +432,51 @@ async function openSettings(): Promise<void> {
 
 function closeSettings(): void {
   state.settingsOpen = false;
+  render();
+}
+
+// --- appearance (light/dark) ------------------------------------------------------
+//
+// A pure front-end preference: "system" (the default) defers to the OS via the
+// stylesheet's `prefers-color-scheme` rules; "light"/"dark" pin a theme by stamping a
+// `data-theme` attribute on <html> that those rules' overrides key on. Persisted in
+// localStorage — a viewing choice, never vault state, so it doesn't touch the host.
+
+const THEME_KEY = "b2:theme";
+
+function isThemePref(v: string | null): v is ThemePref {
+  return v === "system" || v === "light" || v === "dark";
+}
+
+/** Reflect `state.theme` onto <html>: absent attribute ⇒ follow the OS. */
+function applyTheme(): void {
+  const root = document.documentElement;
+  if (state.theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", state.theme);
+}
+
+/** Read the saved preference into state and apply it (once, first thing on boot). */
+function loadTheme(): void {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(THEME_KEY);
+  } catch {
+    // localStorage can be unavailable (e.g. private mode) — fall back to System.
+  }
+  state.theme = isThemePref(saved) ? saved : "system";
+  applyTheme();
+}
+
+/** Persist + apply an appearance choice from the Settings control. */
+function setTheme(theme: ThemePref): void {
+  if (state.theme === theme) return;
+  state.theme = theme;
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // Non-fatal: the choice still applies for this session if it can't persist.
+  }
+  applyTheme();
   render();
 }
 
@@ -990,9 +1085,9 @@ function buildShell(): void {
         </button>
         <button id="reindex" class="btn ghost" title="Re-project the vault into the index">Reindex</button>
         <button id="open-settings" class="btn ghost icon-btn" title="Settings (⌘,)" aria-label="Settings">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="8" cy="8" r="2.1"/>
-            <path d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.3 3.3l1.1 1.1M11.6 11.6l1.1 1.1M12.7 3.3l-1.1 1.1M4.4 11.6l-1.1 1.1"/>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.076.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
+            <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
           </svg>
         </button>
       </div>
@@ -1002,6 +1097,7 @@ function buildShell(): void {
       <section id="note-pane" class="note-pane"></section>
       <aside id="side-pane" class="side-pane"></aside>
     </main>
+    <div id="menu-root"></div>
     <div id="modal-root"></div>
     <div id="toast" class="toast" role="status" hidden></div>`;
 }
@@ -1010,6 +1106,25 @@ function wireEvents(): void {
   // Delegated clicks for everything that renders dynamically.
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
+
+    // The discovery-card right-click menu owns the next click: its own items act, any
+    // other click merely dismisses it (a menu-dismissing click isn't also a card click).
+    if (state.contextMenu) {
+      if (target.closest("[data-ctx-open]")) {
+        const p = state.contextMenu.path;
+        closeContextMenu();
+        void openNote(p);
+        return;
+      }
+      if (target.closest("[data-ctx-link]")) {
+        const { path, title } = state.contextMenu;
+        closeContextMenu();
+        openLinkModal(path, title ?? "");
+        return;
+      }
+      closeContextMenu();
+      return;
+    }
 
     if (target.closest("#open-settings")) {
       void openSettings();
@@ -1021,6 +1136,12 @@ function wireEvents(): void {
     if (state.settingsOpen) {
       if (target.closest("#settings-provision")) {
         void provisionModel();
+        return;
+      }
+      const themeBtn = target.closest<HTMLElement>("[data-theme-choice]");
+      if (themeBtn) {
+        const choice = themeBtn.dataset.themeChoice ?? null;
+        if (isThemePref(choice)) setTheme(choice);
         return;
       }
       if (
@@ -1054,9 +1175,15 @@ function wireEvents(): void {
       return;
     }
 
-    const linkBtn = target.closest<HTMLElement>("[data-link-path]");
-    if (linkBtn) {
-      openLinkModal(linkBtn.dataset.linkPath ?? "", linkBtn.dataset.linkTitle ?? "");
+    const foldSection = target.closest<HTMLElement>("[data-fold-section]");
+    if (foldSection) {
+      const s = foldSection.dataset.foldSection;
+      if (s === "similar" || s === "connections") toggleSection(s);
+      return;
+    }
+    const foldCard = target.closest<HTMLElement>("[data-fold-card]");
+    if (foldCard) {
+      toggleCard(foldCard.dataset.foldCard ?? "");
       return;
     }
 
@@ -1132,6 +1259,26 @@ function wireEvents(): void {
     }
   });
 
+  // Right-click a Similar card → our own menu (Open / Link…). Only these candidate
+  // cards intercept the default menu; everywhere else the webview's stays untouched.
+  document.addEventListener("contextmenu", (e) => {
+    const card = (e.target as HTMLElement).closest<HTMLElement>(".card.candidate");
+    if (!card) return;
+    e.preventDefault();
+    openContextMenu(
+      e.clientX,
+      e.clientY,
+      card.dataset.cardPath ?? "",
+      card.dataset.cardTitle ?? "",
+    );
+  });
+
+  // The floating menu is positioned at fixed viewport coords, so any scroll or resize
+  // strands it — dismiss rather than let it hover over the wrong card. Capture-phase so
+  // a scroll inside the side pane (which doesn't bubble) is still caught.
+  document.addEventListener("scroll", closeContextMenu, true);
+  window.addEventListener("resize", closeContextMenu);
+
   // Search on submit (Enter).
   document.addEventListener("submit", (e) => {
     if ((e.target as HTMLElement).id === "search-form") {
@@ -1165,6 +1312,10 @@ function wireEvents(): void {
       return;
     }
     if (e.key === "Escape") {
+      if (state.contextMenu) {
+        closeContextMenu();
+        return;
+      }
       if (state.settingsOpen) {
         closeSettings();
         return;
@@ -1188,6 +1339,7 @@ function wireEvents(): void {
 // --- boot -----------------------------------------------------------------------
 
 async function boot(): Promise<void> {
+  loadTheme(); // stamp the saved appearance onto <html> before the first paint
   buildShell();
   wireEvents();
   // Auto-reload on external edits (#14): subscribe once for the window's lifetime. The

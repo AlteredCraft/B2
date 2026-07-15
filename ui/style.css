@@ -1,6 +1,8 @@
-/* B2 desktop — a calm reading surface. Light/dark aware via prefers-color-scheme.
-   The left pane is for *reading a note*, so its typography (measure, rhythm, heading
-   scale) gets the care; the chrome stays quiet. Accent matches the app icon. */
+/* B2 desktop — a calm reading surface. Light/dark aware. The Settings "Appearance"
+   control stamps `data-theme` on <html>: absent ⇒ "System" (follow the OS via
+   prefers-color-scheme), else it pins Light/Dark. The left pane is for *reading a
+   note*, so its typography (measure, rhythm, heading scale) gets the care; the chrome
+   stays quiet. Accent matches the app icon. */
 
 :root {
   --bg: #faf9f7;
@@ -18,8 +20,26 @@
   color-scheme: light;
 }
 
+/* The dark palette applies when the user pins Dark (`data-theme="dark"`), OR when no
+   theme is pinned (`data-theme` absent ⇒ "System") and the OS prefers dark. The two
+   rule bodies below MUST stay identical — CSS can't share them across the @media
+   boundary. A pinned `data-theme="light"` matches neither, so it holds the light :root
+   even on a dark OS. */
+:root[data-theme="dark"] {
+  --bg: #16161a;
+  --surface: #1e1e23;
+  --surface-2: #26262c;
+  --text: #e9e8ea;
+  --muted: #9b9aa2;
+  --border: #2d2d34;
+  --accent: #8098ff;
+  --accent-soft: #23263a;
+  --danger: #ff8080;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #16161a;
     --surface: #1e1e23;
     --surface-2: #26262c;
@@ -277,9 +297,12 @@ body {
 
 .tree-caret {
   flex: 0 0 auto;
-  width: 12px;
+  width: 13px;
   color: var(--muted);
-  font-size: 10px;
+  /* A letter-sized fold caret: the full ▼/▶ triangles at ~cap-height, not the earlier
+     10px small-triangle glyphs that read as dots. Shared by the tree, the Frontmatter
+     drawer, and the side-pane section/card folds so every fold affordance matches. */
+  font-size: 12px;
   text-align: center;
 }
 
@@ -727,13 +750,39 @@ body {
 .side-head:first-child {
   margin-top: 0;
 }
-.side-head h2 {
+.side-head h2,
+.side-head .side-title {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
   font-weight: 600;
   margin: 0;
+}
+
+/* Foldable discovery-section header (Similar & unlinked / Connections): a full-width
+   button carrying a chevron, the section title, and its count — the same fold idiom as
+   the file tree's dirs and the frontmatter drawer, so the right column reads the same. */
+.side-head.side-fold {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.side-head.side-fold:hover .side-title {
+  color: var(--text);
+}
+.side-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .side-sub,
@@ -792,6 +841,9 @@ body {
 .card-title {
   font-weight: 600;
   font-size: 14px;
+  /* Long unbroken tokens (underscored filenames, URLs, deep paths) wrap instead of
+     spilling past the card — the fixed-width right column has no room to overflow into. */
+  overflow-wrap: anywhere;
 }
 .card-path {
   color: var(--muted);
@@ -806,29 +858,76 @@ body {
   font-size: 12.5px;
   margin-top: 5px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
-/* a candidate card pairs an open-region with a Link button */
-.card.candidate {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
+/* --- foldable discovery cards (Similar & unlinked / Connections) ----------------
+   One bordered box = a title row (fold chevron + a clickable open-region) over a
+   collapsible body (path + snippet). The head and body are borderless regions inside
+   the card; the whole card highlights on hover. The `.card-open` `min-width: 0` is the
+   actual overflow fix: without it a flex child refuses to shrink below its longest
+   unbroken word and shoves the card past the column edge (the reported bug). */
+.card.foldable {
   padding: 0;
-  overflow: hidden;
 }
-.card.candidate .card-open {
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 12px 7px 6px;
+}
+.card-fold {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.card-fold:hover {
+  color: var(--text);
+}
+.card-fold:hover .tree-caret {
+  color: var(--text);
+}
+.card-open {
   flex: 1 1 auto;
+  min-width: 0; /* allow the ellipsis to engage rather than overflow the column */
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   text-align: left;
   background: none;
   border: none;
   color: inherit;
   font: inherit;
   cursor: pointer;
-  padding: 10px 0 10px 12px;
+  padding: 0;
 }
-.card.candidate .btn.small {
-  align-self: center;
-  margin-right: 10px;
+/* Discovery titles ride a single ellipsized line (the full path lives in the body);
+   this keeps a collapsed card to one tidy row. Search / backlink cards keep wrapping. */
+.card-open .card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-score {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.card-body {
+  /* indent under the title (6px pad + 20px chevron + 4px gap), not under the chevron */
+  padding: 0 12px 10px 30px;
 }
 
 .edge .edge-arrow {
@@ -927,6 +1026,38 @@ body.is-loading {
   cursor: progress;
 }
 
+/* --- discovery-card context menu ----------------------------------------------
+   The right-click menu on a Similar card (Open note / Link…), replacing the inline
+   "Link…" button. Positioned at the cursor via inline left/top (clamped on-screen in
+   main.ts); sits above the panes but below any modal it opens. */
+.context-menu {
+  position: fixed;
+  z-index: 15;
+  min-width: 152px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+.context-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.context-item:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* --- link modal --------------------------------------------------------------- */
 
 .modal-backdrop {
@@ -997,6 +1128,47 @@ body.is-loading {
 .field input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* A field caption that sits *above* its control (vs. the inline `<label>` text the
+   model/link fields use), for controls that aren't a single form element. */
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* Segmented control — a row of mutually-exclusive pills (the Appearance switch). The
+   selected segment gets the accent-soft fill; the rest stay quiet like ghost buttons. */
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.segmented .seg {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.segmented .seg:hover {
+  color: var(--text);
+}
+.segmented .seg-on {
+  background: var(--accent-soft);
+  border-color: var(--border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.segmented .seg:focus-visible {
+  outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .muted {
