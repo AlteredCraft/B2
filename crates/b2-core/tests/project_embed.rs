@@ -10,7 +10,7 @@ mod common;
 use b2_core::db;
 use b2_core::embed::FakeEmbedder;
 use b2_core::id::UlidGen;
-use b2_core::ingest::{embed_vault, project_vault};
+use b2_core::ingest::{embed_vault, ingest_file, ingest_vault, project_file, project_vault};
 use b2_core::open;
 use b2_core::vault::Vault;
 use common::golden_vault_copy;
@@ -251,6 +251,175 @@ fn reindex_reconciles_a_path_taken_over_by_another_note() {
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].path, "foo.md");
     assert_eq!(notes[0].b2id, "01BBBBBBBBBBBBBBBBBBBBBBBB");
+}
+
+/// Write a minimal note with a fixed `b2id` (so two roots can build comparable
+/// indexes) at `root/name`.
+fn write_note(root: &Path, name: &str, b2id: &str, body: &str) {
+    fs::write(
+        root.join(name),
+        format!("---\nb2id: {b2id}\n---\n\n{body}\n"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
+    // A note file deleted outside b2 with *no replacement* must not linger as a ghost
+    // row (#31): before this, only a path reuse or a from-scratch rebuild evicted it,
+    // so an incremental reindex diverged from `full-reindex ≡ incremental-update`.
+    // foo links to bar so the deletion also exercises inbound-edge re-dangling.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    write_note(
+        &root,
+        "foo.md",
+        "01AAAAAAAAAAAAAAAAAAAAAAAA",
+        "Alpha body. See [[bar]].",
+    );
+    write_note(
+        &root,
+        "bar.md",
+        "01BBBBBBBBBBBBBBBBBBBBBBBB",
+        "Beta body about tidal pools.",
+    );
+    write_note(
+        &root,
+        "baz.md",
+        "01CCCCCCCCCCCCCCCCCCCCCCCC",
+        "Gamma body, unlinked.",
+    );
+
+    let vault = Vault::open(&root).unwrap();
+    assert_eq!(vault.reindex().unwrap().indexed, 3);
+
+    // Out-of-b2 deletion, no replacement — the path is never reused.
+    fs::remove_file(root.join("bar.md")).unwrap();
+
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 2);
+    assert_eq!(report.notes_pruned, 1, "the ghost row is pruned");
+
+    // Gone from every read surface: the listing…
+    let notes = vault.list_notes().unwrap();
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().all(|n| n.path != "bar.md"));
+    // …search (its chunks and FTS entries cascaded with the row)…
+    assert!(vault
+        .search("tidal", 10)
+        .unwrap()
+        .iter()
+        .all(|h| h.path != "bar.md"));
+    // …and discovery (its vectors are gone; the unlinked survivor still surfaces).
+    let candidates = vault.similar("foo.md", 5).unwrap();
+    assert!(candidates.iter().any(|c| c.path == "baz.md"));
+    assert!(candidates.iter().all(|c| c.path != "bar.md"));
+    drop(vault);
+
+    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    // FTS stayed in lockstep through the cascade (no ghost text in the index)…
+    assert_eq!(count(&conn, "chunks_fts"), count(&conn, "chunks"));
+    // …and foo's `[[bar]]` re-dangled: phase 2 re-resolved it against the pruned
+    // resolver, keeping the authored link visible for repair (#12), not dropped.
+    let (dst_id, dst_path_raw): (Option<String>, String) = conn
+        .query_row(
+            "SELECT dst_id, dst_path_raw FROM edges WHERE src_id = ?1",
+            ["01AAAAAAAAAAAAAAAAAAAAAAAA"],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(dst_id, None, "the inbound edge re-dangles");
+    assert_eq!(dst_path_raw, "bar");
+    drop(conn);
+
+    // The invariant itself: the incrementally-reconciled index equals a from-scratch
+    // rebuild of the same final vault (same files, same b2ids).
+    let fresh_root = tmp.path().join("fresh");
+    fs::create_dir_all(&fresh_root).unwrap();
+    write_note(
+        &fresh_root,
+        "foo.md",
+        "01AAAAAAAAAAAAAAAAAAAAAAAA",
+        "Alpha body. See [[bar]].",
+    );
+    write_note(
+        &fresh_root,
+        "baz.md",
+        "01CCCCCCCCCCCCCCCCCCCCCCCC",
+        "Gamma body, unlinked.",
+    );
+    Vault::open(&fresh_root).unwrap().reindex().unwrap();
+    assert_eq!(
+        observable_state(&root),
+        observable_state(&fresh_root),
+        "incremental-after-delete == full rebuild"
+    );
+}
+
+#[test]
+fn prune_spares_a_file_skipped_as_unreadable() {
+    // The #31 carve-out: a file the walk *saw* but could not read has an unknowable
+    // b2id this run — "not projected" must not mean "deleted". Its existing row stays.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    write_note(&root, "foo.md", "01AAAAAAAAAAAAAAAAAAAAAAAA", "Alpha body.");
+    write_note(&root, "bar.md", "01BBBBBBBBBBBBBBBBBBBBBBBB", "Beta body.");
+
+    let vault = Vault::open(&root).unwrap();
+    assert_eq!(vault.reindex().unwrap().indexed, 2);
+
+    // bar.md turns unreadable in place (a stray non-UTF-8 write) — still on disk.
+    fs::write(root.join("bar.md"), [0xff, 0xfe, b'x']).unwrap();
+
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].path, "bar.md");
+    assert_eq!(report.notes_pruned, 0, "a skipped file is never pruned");
+    let notes = vault.list_notes().unwrap();
+    assert_eq!(notes.len(), 2, "the unreadable file keeps its index row");
+    assert!(notes.iter().any(|n| n.b2id == "01BBBBBBBBBBBBBBBBBBBBBBBB"));
+}
+
+#[test]
+fn single_note_ingest_never_prunes() {
+    // Pruning is a *whole-vault* reconciliation: only `project_vault` sees every file,
+    // so only it may decide a b2id is gone. The single-note paths (`project_file` /
+    // `ingest_file`, the add/mv/link/write substrate) touch their one note and must
+    // leave every other row alone — even a genuine ghost.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&vault_dir).unwrap();
+    write_note(
+        &vault_dir,
+        "foo.md",
+        "01AAAAAAAAAAAAAAAAAAAAAAAA",
+        "Alpha body.",
+    );
+    write_note(
+        &vault_dir,
+        "bar.md",
+        "01BBBBBBBBBBBBBBBBBBBBBBBB",
+        "Beta body.",
+    );
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    let embedder = FakeEmbedder::new(64);
+    ingest_vault(&conn, &vault_dir, &UlidGen, &embedder).unwrap();
+    assert_eq!(count(&conn, "notes"), 2);
+
+    fs::remove_file(vault_dir.join("bar.md")).unwrap();
+
+    // Neither single-note path evicts the now-ghost row…
+    project_file(&conn, &vault_dir, "foo.md", &UlidGen).unwrap();
+    assert_eq!(count(&conn, "notes"), 2, "project_file prunes nothing");
+    ingest_file(&conn, &vault_dir, "foo.md", &UlidGen, &embedder).unwrap();
+    assert_eq!(count(&conn, "notes"), 2, "ingest_file prunes nothing");
+
+    // …only the whole-vault pass reconciles the deletion.
+    let outcome = project_vault(&conn, &vault_dir, &UlidGen, false).unwrap();
+    assert_eq!(outcome.notes_pruned, 1);
+    assert_eq!(count(&conn, "notes"), 1);
 }
 
 #[test]

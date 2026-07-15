@@ -348,6 +348,39 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
     Ok(())
 }
 
+/// Delete every `notes` row whose `b2id` is not in `projected` (the whole-vault
+/// walk's survivors) and whose `path` is not in `keep_paths` (files the walk saw but
+/// could not read — their `b2id` is unknowable this run, so evicting them would lie).
+/// Returns how many were pruned — the note half of #31, the sibling of
+/// [`prune_resources_except`]: without it a note file deleted outside `b2` leaves a
+/// ghost row that `list_notes`, keyword search, `similar`, and the graph keep serving
+/// until a from-scratch rebuild, so an incremental reindex diverges from `full-reindex
+/// ≡ incremental-update` (index-engine.md §8).
+///
+/// The ghost's aliases, chunks (FTS kept in lockstep by the `chunks_ad` trigger, any
+/// vectors by the `embeddings` FK), centroid, and **outgoing** edges all cascade with
+/// the row. **Inbound** edges are the caller's concern: `edges.dst_id` carries no FK,
+/// so this must run *before* the edge-derivation phase, which then re-resolves every
+/// link against the pruned `notes` and re-dangles the ones that pointed here —
+/// exactly what a from-scratch rebuild produces.
+pub fn prune_notes_except(
+    conn: &Connection,
+    projected: &HashSet<&str>,
+    keep_paths: &HashSet<&str>,
+) -> Result<usize> {
+    let mut stmt = conn.prepare("SELECT b2id, path FROM notes")?;
+    let stored = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut pruned = 0;
+    for (b2id, path) in stored {
+        if !projected.contains(b2id.as_str()) && !keep_paths.contains(path.as_str()) {
+            pruned += conn.execute("DELETE FROM notes WHERE b2id = ?1", [&b2id])?;
+        }
+    }
+    Ok(pruned)
+}
+
 // ---------------------------------------------------------------------------
 // resources (file-type support slice 1 — planning/specs/resources-inventory-graph.md §2)
 // ---------------------------------------------------------------------------

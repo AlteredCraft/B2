@@ -79,6 +79,9 @@ pub struct ReindexReport {
     /// reindex never fails on one bad file (non-UTF-8, permission-denied). Empty on a
     /// clean vault; each entry names the file and a short, file-level reason.
     pub skipped: Vec<SkippedNote>,
+    /// Ghost rows pruned this run (#31): notes whose files were deleted outside b2
+    /// with no replacement, reconciled so incremental equals a from-scratch rebuild.
+    pub notes_pruned: usize,
     /// The resource inventory's counts (file-type support slice 1): resources seen
     /// this run, and stale inventory rows pruned.
     pub resources_indexed: usize,
@@ -96,6 +99,9 @@ pub struct ProjectReport {
     /// vault never fails on one bad file. Empty on a clean vault; surfaced so an
     /// adapter can tell the user which files were left out and why.
     pub skipped: Vec<SkippedNote>,
+    /// Ghost rows pruned this pass (#31): notes whose files were deleted outside b2
+    /// with no replacement, reconciled so incremental equals a from-scratch rebuild.
+    pub notes_pruned: usize,
     /// The resource inventory's counts (file-type support slice 1): resources seen
     /// this pass, and stale inventory rows pruned.
     pub resources_indexed: usize,
@@ -401,6 +407,7 @@ impl Vault {
             stamped: ingested.notes.iter().filter(|i| i.stamped).count(),
             cancelled: ingested.cancelled,
             skipped: ingested.skipped,
+            notes_pruned: ingested.notes_pruned,
             resources_indexed: ingested.resources_indexed,
             resources_pruned: ingested.resources_pruned,
         })
@@ -425,6 +432,7 @@ impl Vault {
             indexed: outcome.notes.len(),
             stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
             skipped: outcome.skipped,
+            notes_pruned: outcome.notes_pruned,
             resources_indexed: outcome.resources_indexed,
             resources_pruned: outcome.resources_pruned,
         })

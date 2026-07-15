@@ -296,10 +296,15 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "Indexed {} notes ({} embedded, {} stamped) and {} resources{}",
+                    "Indexed {} notes ({} embedded, {} stamped{}) and {} resources{}",
                     report.indexed,
                     report.embedded,
                     report.stamped,
+                    if report.notes_pruned > 0 {
+                        format!(", {} pruned", report.notes_pruned)
+                    } else {
+                        String::new()
+                    },
                     report.resources_indexed,
                     if report.resources_pruned > 0 {
                         format!(" ({} pruned)", report.resources_pruned)
