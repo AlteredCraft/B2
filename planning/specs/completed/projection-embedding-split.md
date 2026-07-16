@@ -310,16 +310,24 @@ Split the host `reindex` command into `project` + `embed` (guard/cancel on `embe
 the two commands + the unguarded-project safety note. Manual dogfood: cold-index the ~1000-note vault,
 confirm the tree + keyword search are live within seconds, embedding meters behind, Cancel still works.
 
-*Later (follow-on, §9): auto-index-on-open (#25); the "semantic N/M" signal (#26); embed ordering (#27).*
+*Later (follow-on, §9): ~~auto-index-on-open (#25)~~ **shipped 2026-07-16**; ~~the "semantic N/M" signal (#26)~~ **shipped 2026-07-14**; embed ordering (#27).*
 
 Step 1 alone is the whole architectural decoupling (and de-risks the rest); Steps 2–3 turn it into the
 UX the desktop wants.
 
 ## 9. Open questions / deferred
 
-- **Auto-index-on-open** (async-indexing.md §7). Detect an unindexed/partly-indexed vault on open and
+- **Auto-index-on-open** (async-indexing.md §7). ~~Detect an unindexed/partly-indexed vault on open and
   offer/start `project` (then `embed`) immediately, so a first-run vault is keyword-usable in seconds
-  without a manual click. A first-run UX call taken when this lands; not this slice. **Tracked: #25.**
+  without a manual click. A first-run UX call taken when this lands; not this slice.~~ **Shipped
+  2026-07-16 (#25):** `autoIndexOnOpen` (`ui/src/main.ts`) fires on app launch (`boot`) and vault switch
+  (`switchVault`) off the model-free `notes_embedded/notes_total` detector shipped with #26 — `total == 0`
+  runs `project` (tree + keyword search live in seconds) then `embed`; `embedded < total` resumes only the
+  trailing `embed` (the DB-derived pending set is self-healing, §7.2); a fully-embedded vault is left
+  untouched. **The UX call went to silent auto-start, no confirm dialog** — the embed phase runs only when
+  a model is installed, so a model-less vault is keyword-first with nothing to confirm, and the search
+  caveat (#26) already surfaces coverage; the progress meter + Cancel are the only chrome. Adapter
+  sequencing only, no engine change (reuses `project`/`embed` and doReindex's vault-switch guards). **Tracked: #25.**
 - **"Semantic N/M embedded" signal.** ~~Extend `vault_info` (or a light `embed_status` read) so search
   results can flag "keyword-only for now" precisely, not just via the binary `semantic` flag (§5).~~
   **Shipped 2026-07-14 (#26):** `Vault::embed_status` reads `db::embed_progress` — a model-free
