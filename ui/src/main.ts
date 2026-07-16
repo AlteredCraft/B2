@@ -42,6 +42,7 @@ function render(): void {
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
   paintReindex();
+  paintNav();
   // The vault switcher stays enabled with no vault open — it's the in-app way to pick
   // the first one — but not mid-op, to avoid re-entrant switches. It stays live during
   // a reindex: switching cancels the in-flight run first (handled host-side).
@@ -140,16 +141,24 @@ async function loadNotes(): Promise<void> {
   }
 }
 
-async function openNote(ref: string): Promise<void> {
-  // Mid-edit navigation (tree, side pane, search) flushes the buffer and leaves edit
-  // mode first; a conflict keeps the editor — and the user's buffer — alive instead.
-  if (!(await closeEditor())) return;
+/**
+ * Load a note into the center pane — the shared core of `openNote` and back/forward
+ * (#52): everything after the edit-mode guard. `commit` runs the history-stack
+ * mutation the moment the read succeeds — before the slower discovery tail, so rapid
+ * navigations can't interleave stack updates out of order — and receives the
+ * canonical vault-relative path (the ref may be a b2id or a wikilink target).
+ * Resolves false when the read failed (its error already toasted), so back/forward
+ * can prune a dead entry.
+ */
+async function loadNote(ref: string, commit: (path: string) => void): Promise<boolean> {
   state.loading = true;
   render();
   try {
-    state.current = await api.readNote(ref);
+    const note = await api.readNote(ref);
+    state.current = note;
     state.currentResource = null; // one document owns the pane
-    expandAncestors(state.current.path);
+    commit(note.path);
+    expandAncestors(note.path);
     state.searchQuery = "";
     state.searchResults = [];
     // Paint the note the instant its body is read — the body is already in hand.
@@ -166,8 +175,10 @@ async function openNote(ref: string): Promise<void> {
     state.discoveringConnections = true;
     render();
     await refreshDiscovery();
+    return true;
   } catch (e) {
     flash(errText(e));
+    return false;
   } finally {
     // The discovery flags are owned by refreshDiscovery (it clears each section's when
     // that read settles, guarded against a superseding open) — clearing them here would
@@ -177,18 +188,27 @@ async function openNote(ref: string): Promise<void> {
   }
 }
 
-// Select a resource in the tree → the fallback card (file-type slice 1, spec §6):
-// metadata + backlinks + *Open in system default*. The note-pane sibling of
-// openNote — same edit-mode flush, same one-document-owns-the-pane rule; discovery
-// doesn't apply (resources have no chunks until slice 3), so the side pane clears.
-async function openResource(path: string): Promise<void> {
+// User navigation to a note (tree, wikilink, backlink, similar card, search result).
+// Mid-edit navigation flushes the buffer and leaves edit mode first; a conflict keeps
+// the editor — and the user's buffer — alive instead. A successful load records the
+// document in the history stack (#52); back/forward call `loadNote` directly.
+async function openNote(ref: string): Promise<void> {
   if (!(await closeEditor())) return;
+  await loadNote(ref, (path) => navPush({ kind: "note", path }));
+}
+
+/** The resource sibling of `loadNote` — same core/commit split, for `openResource`
+ *  and back/forward. Discovery doesn't apply (resources have no chunks until file-type
+ *  slice 3), so the side pane clears. */
+async function loadResource(path: string, commit: (path: string) => void): Promise<boolean> {
   state.loading = true;
   render();
   try {
-    state.currentResource = await api.explainResource(path);
+    const resource = await api.explainResource(path);
+    state.currentResource = resource;
     state.current = null;
-    expandAncestors(path);
+    commit(resource.path);
+    expandAncestors(resource.path);
     state.searchQuery = "";
     state.searchResults = [];
     state.similar = [];
@@ -198,11 +218,126 @@ async function openResource(path: string): Promise<void> {
     state.contextMenu = null;
     state.discoveringSimilar = false;
     state.discoveringConnections = false;
+    return true;
   } catch (e) {
     flash(errText(e));
+    return false;
   } finally {
     state.loading = false;
     render();
+  }
+}
+
+// Select a resource in the tree → the fallback card (file-type slice 1, spec §6):
+// metadata + backlinks + *Open in system default*. The note-pane sibling of
+// openNote — same edit-mode flush, same one-document-owns-the-pane rule, same
+// history push.
+async function openResource(path: string): Promise<void> {
+  if (!(await closeEditor())) return;
+  await loadResource(path, (p) => navPush({ kind: "resource", path: p }));
+}
+
+// --- navigation history (#52) -----------------------------------------------------
+//
+// Browser-style back/forward over the center pane's document. The stack holds every
+// document the pane has shown — notes and resources alike, regardless of how each was
+// reached — with a cursor at the current one. Session-scoped by design: it starts
+// empty on launch, is never persisted, and clears on vault switch. Module-locals like
+// the editor's timers (nothing here is rendered from, so it stays out of AppState);
+// the two chrome buttons repaint through the targeted `paintNav` (the `paintReindex`
+// pattern). In-place content updates (a save's re-read, a write report, external-edit
+// reconciliation) mutate `state.current` directly without passing through
+// `openNote`/`openResource`, so they never create entries.
+
+/** One center-pane document: what `loadNote`/`loadResource` can bring back. */
+interface NavEntry {
+  kind: "note" | "resource";
+  path: string;
+}
+
+/** Cap the stack so an all-day browse can't grow it unbounded. */
+const NAV_MAX = 100;
+
+let navStack: NavEntry[] = [];
+/** Index of the pane's current document in `navStack`; -1 while it's empty. */
+let navCursor = -1;
+
+// Record a genuine navigation: truncate the forward branch (the browser model —
+// navigating after going back discards it), then append. Called from the load cores
+// *after* a successful read with the canonical vault-relative path in hand, so a
+// wikilink followed by title and a tree click on the same note dedupe, and a target
+// that fails to load never enters the stack. Re-opening the already-current document
+// is a history no-op (consecutive-duplicate suppression).
+function navPush(entry: NavEntry): void {
+  const cur = navStack[navCursor];
+  if (cur && cur.kind === entry.kind && cur.path === entry.path) return;
+  navStack.splice(navCursor + 1);
+  navStack.push(entry);
+  if (navStack.length > NAV_MAX) navStack.shift();
+  navCursor = navStack.length - 1;
+  paintNav();
+}
+
+/** Vault switch: the stack's paths are meaningless in the new vault. */
+function navClear(): void {
+  navStack = [];
+  navCursor = -1;
+  paintNav();
+}
+
+/** True while a text-entry surface owns the keyboard (the search field, a modal
+ *  input) — ⌘←/⌘→ mean caret-to-line-edge there, never history. */
+function inTextEntry(): boolean {
+  const a = document.activeElement;
+  return (
+    a instanceof HTMLInputElement ||
+    a instanceof HTMLTextAreaElement ||
+    (a instanceof HTMLElement && a.isContentEditable)
+  );
+}
+
+// Paint just the Back/Forward buttons' enabled state — never a pane rebuild. Disabled
+// at the stack's ends, and mid-op like the vault switcher (navGo also guards, for the
+// keyboard/mouse paths that don't go through a disabled button).
+function paintNav(): void {
+  const back = document.getElementById("nav-back") as HTMLButtonElement | null;
+  const forward = document.getElementById("nav-forward") as HTMLButtonElement | null;
+  if (back) back.disabled = state.loading || navCursor <= 0;
+  if (forward) forward.disabled = state.loading || navCursor >= navStack.length - 1;
+}
+
+// Back (-1) / Forward (+1): move the cursor and load the entry there, through the
+// same edit-mode guard as any navigation — flush + leave edit mode first, abort (and
+// keep the buffer) on a write conflict. The cursor commits at read-success inside the
+// load core, exactly where a normal navigation pushes, so a rapid follow-up can't
+// interleave a stale cursor over a fresher stack. A dead target (deleted or renamed
+// since it was visited) toasts the generic read error and is dropped from the stack
+// so navigation isn't wedged on it.
+async function navGo(delta: -1 | 1): Promise<void> {
+  if (state.loading) return;
+  // The guard first (it can await a save flush); the cursor math after, against
+  // whatever the stack is once navigation is actually allowed to proceed.
+  if (!(await closeEditor())) return;
+  const target = navCursor + delta;
+  if (target < 0 || target >= navStack.length) return;
+  const entry = navStack[target];
+  const commit = () => {
+    navCursor = target;
+    paintNav();
+  };
+  const ok =
+    entry.kind === "note"
+      ? await loadNote(entry.path, commit)
+      : await loadResource(entry.path, commit);
+  if (!ok) {
+    // By identity, not index: the failed read resolved through an await, so the
+    // stack may have shifted under us (e.g. a click-navigation truncated it).
+    const i = navStack.indexOf(entry);
+    if (i !== -1) {
+      navStack.splice(i, 1);
+      if (i < navCursor) navCursor -= 1;
+    }
+    paintNav();
   }
 }
 
@@ -546,12 +681,14 @@ async function switchVault(): Promise<void> {
     state.notesEmbedded = info.notes_embedded;
     state.notesTotal = info.notes_total;
     state.current = null;
+    state.currentResource = null;
     state.similar = [];
     state.connections = [];
     state.unresolved = [];
     state.searchQuery = "";
     state.searchResults = [];
     state.expandedDirs = new Set<string>();
+    navClear(); // history is per-vault: the old stack's paths mean nothing here
     const input = document.getElementById("search-input") as HTMLInputElement | null;
     if (input) input.value = "";
     state.loading = true;
@@ -1068,6 +1205,18 @@ function buildShell(): void {
   el("app").innerHTML = `
     <header class="topbar">
       <div class="brand">B2</div>
+      <div class="nav-history">
+        <button id="nav-back" class="btn ghost icon-btn" title="Back (⌘[)" aria-label="Back" disabled>
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 3.5 5.5 8l4.5 4.5"/>
+          </svg>
+        </button>
+        <button id="nav-forward" class="btn ghost icon-btn" title="Forward (⌘])" aria-label="Forward" disabled>
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 3.5 10.5 8 6 12.5"/>
+          </svg>
+        </button>
+      </div>
       <form id="search-form" class="search" autocomplete="off">
         <input id="search-input" type="search" placeholder="Search the vault…" aria-label="Search" />
       </form>
@@ -1245,6 +1394,14 @@ function wireEvents(): void {
       clearSearch();
       return;
     }
+    if (target.closest("#nav-back")) {
+      void navGo(-1);
+      return;
+    }
+    if (target.closest("#nav-forward")) {
+      void navGo(1);
+      return;
+    }
     if (target.closest("#switch-vault")) {
       void switchVault();
       return;
@@ -1326,7 +1483,32 @@ function wireEvents(): void {
     if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void saveNow();
+      return;
     }
+    // ⌘[ / ⌘] (and the ⌘←/⌘→ aliases) walk the pane's history (#52) — but never over
+    // text entry or a modal. While editing, both chords belong to CodeMirror (Mod-[/]
+    // are indent bindings, Mod-arrows caret movement); in an input, only the arrows
+    // mean caret-to-edge, so the brackets still navigate (e.g. straight from the
+    // search field). The buttons and mouse back/forward stay live everywhere — they
+    // flush through navGo's edit-mode guard.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !state.editing) {
+      if (state.settingsOpen || state.linkTarget) return;
+      const back = e.key === "[" || e.key === "ArrowLeft";
+      const forward = e.key === "]" || e.key === "ArrowRight";
+      if (!back && !forward) return;
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && inTextEntry()) return;
+      e.preventDefault();
+      void navGo(back ? -1 : 1);
+    }
+  });
+
+  // Mouse back/forward buttons (W3C numbering: 3 back, 4 forward) walk the history
+  // too. `auxclick` fires only for non-primary buttons, so this never doubles the
+  // click delegation above.
+  document.addEventListener("auxclick", (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    void navGo(e.button === 3 ? -1 : 1);
   });
 
   // Losing window focus is a flush point: the buffer lands on disk before the user

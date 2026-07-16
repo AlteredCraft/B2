@@ -98,6 +98,14 @@ body {
   font-size: 16px;
 }
 
+/* Back/forward history pair (#52) — grouped tight by the brand, browser-convention
+   top-left. The buttons themselves are the standard chrome icon-btn. */
+.nav-history {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .search {
   flex: 1 1 auto;
   max-width: 560px;
