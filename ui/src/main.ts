@@ -676,7 +676,12 @@ async function switchVault(): Promise<void> {
   try {
     const info = await api.chooseVault();
     if (!info) return; // cancelled — leave the current vault untouched
-    state.vaultRoot = info.root;
+    // `choose_vault` already cancelled any in-flight index for the vault we're leaving
+    // (host-side); capture its frontend run so the new vault's auto-index can be chained
+    // *after* it settles — otherwise the new run could see a not-yet-cleared `reindexing`
+    // flag and bail. Not awaited here: the UI reset below must not block on a wind-down.
+    const departing = indexingRun;
+    state.vaultRoot = info.root; // set now so the departing run's guards bail promptly
     state.semantic = info.semantic;
     state.notesEmbedded = info.notes_embedded;
     state.notesTotal = info.notes_total;
@@ -696,6 +701,15 @@ async function switchVault(): Promise<void> {
     await loadNotes(); // catches its own errors → toast; empty tree on an unindexed vault
     state.loading = false;
     flash(`Switched to ${info.root}.`);
+    // Auto-index the new vault (#25): if it's unindexed or only partly embedded, bring it
+    // up to date now — the tree we just painted fills in as projection completes. Chained
+    // after the departing run so it starts only once that has fully wound down.
+    trackIndexing(
+      (async () => {
+        if (departing) await departing;
+        await autoIndexOnOpen(info.root);
+      })(),
+    );
   } catch (e) {
     state.loading = false;
     flash(errText(e));
@@ -716,6 +730,24 @@ async function refreshEmbedStatus(forRoot: string | null): Promise<void> {
   } catch {
     // ignore — coverage is a hint, never worth surfacing an error over
   }
+}
+
+// The in-flight background index — a manual Reindex (`doReindex`), an auto-index on
+// open (`autoIndexOnOpen`), or a trailing embed after a save (`runTrailingEmbed`) — or
+// null when idle. A vault switch cancels the run host-side (choose_vault →
+// cancel_and_wait_for_reindex) and then chains the new vault's auto-index *after* this
+// handle, so the fresh run never starts on the departing run's not-yet-cleared
+// `state.reindexing` flag. Only one index runs at a time (each entry point guards on
+// `reindexing`), so a single slot suffices.
+let indexingRun: Promise<void> | null = null;
+
+/** Register a background-index run so a vault switch can chain after its wind-down. The
+ *  tracked promise settles *after* the run's `finally` has cleared `state.reindexing`. */
+function trackIndexing(run: Promise<void>): void {
+  const done = run.finally(() => {
+    if (indexingRun === done) indexingRun = null;
+  });
+  indexingRun = done;
 }
 
 // Reindex as project → embed, sequenced here (Shape A, projection-embedding-split.md
@@ -797,6 +829,67 @@ async function doReindex(): Promise<void> {
     }
   } catch (e) {
     if (state.vaultRoot === startedRoot) flash(errText(e));
+  } finally {
+    state.reindexing = false;
+    state.reindexProgress = null;
+    state.reindexCancelling = false;
+    render();
+  }
+}
+
+// Auto-index on open (#25): the moment a vault is opened — app launch or vault switch —
+// bring its index up to date with no manual Reindex click and no confirm dialog. The
+// detector is the model-free embedding-coverage read already in `VaultInfo` (#26):
+//   • notesTotal === 0        → never projected: run the fast `project` first (its tree +
+//                               keyword search go live in seconds), then embed.
+//   • notesEmbedded < total   → projected but embedding didn't finish (a prior cancel or
+//                               crash): only the trailing vectors need filling — the pass
+//                               is self-healing off the DB-derived pending set (split §7.2).
+//   • embedded === total (>0) → index complete: left untouched, so reopening is never busywork.
+// The embed phase runs only when the real model is installed (`state.semantic`); without
+// it a fresh vault still gets its keyword + graph index and nothing errors — the search
+// caveat already reads "keyword-only for now". Silent like the trailing embed after a
+// save: the progress meter (and Cancel) are the only chrome, no toast. Reuses doReindex's
+// exact vault-switch guards (spec §6) so a switch mid-run never touches the departed vault.
+async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
+  if (state.reindexing || state.vaultRoot === null) return; // a run is live, or no vault
+  const projected = state.notesTotal > 0;
+  if (projected && state.notesEmbedded >= state.notesTotal) return; // index already complete
+  const needsProject = !projected;
+  // An already-projected vault with no model has nothing left we can do; a never-projected
+  // one still gets its keyword + graph index below (project is model-free).
+  if (!needsProject && !state.semantic) return;
+
+  state.reindexing = true;
+  state.reindexProgress = null;
+  state.reindexCancelling = false;
+  render();
+  try {
+    if (needsProject) {
+      await api.project();
+      if (state.vaultRoot !== startedRoot) return; // a switch took over — it owns the UI
+      await loadNotes(); // the tree paints HERE; keyword search is live
+      await refreshEmbedStatus(startedRoot); // caveat reads "keyword-only for now (0/M)"
+      render();
+    }
+    // Embed only with a real model, not if a Cancel landed during the project window, and
+    // not if a vault switch has taken over meanwhile (don't embed the vault we're leaving).
+    if (state.vaultRoot !== startedRoot || !state.semantic || state.reindexCancelling) return;
+    const r = await embedWithProgress(startedRoot);
+    if (state.vaultRoot !== startedRoot) return;
+    // A cancel we didn't initiate came from a vault switch stopping us host-side; that
+    // switch reloads the new vault, so leave the one we're departing untouched (spec §6).
+    if (r.cancelled && !state.reindexCancelling) return;
+    await refreshEmbedStatus(startedRoot);
+    // If the user opened a note while embedding ran, its vectors exist now — re-read it
+    // (projection may have stamped it) and refresh discovery so `similar` can rank.
+    if (state.current && !state.editing) {
+      state.current = await api.readNote(state.current.path);
+      await refreshDiscovery();
+    }
+  } catch {
+    // Silent by design (§7.2): the user didn't ask for this run, so a missing model or a
+    // lost race just leaves the vault keyword-first; the pending set heals on the next run.
   } finally {
     state.reindexing = false;
     state.reindexProgress = null;
@@ -1003,7 +1096,7 @@ function scheduleTrailingEmbed(): void {
   if (embedTimer !== undefined) clearTimeout(embedTimer);
   embedTimer = window.setTimeout(() => {
     embedTimer = undefined;
-    void runTrailingEmbed();
+    trackIndexing(runTrailingEmbed());
   }, TRAILING_EMBED_MS);
 }
 
@@ -1407,7 +1500,7 @@ function wireEvents(): void {
       return;
     }
     if (target.closest("#reindex")) {
-      void doReindex();
+      trackIndexing(doReindex());
       return;
     }
     if (target.closest("#cancel-reindex")) {
@@ -1542,6 +1635,10 @@ async function boot(): Promise<void> {
     flash(errText(e));
   }
   render();
+  // Auto-index on launch (#25): if the startup vault is unindexed or only partly embedded,
+  // bring it up to date now instead of waiting behind a manual Reindex click. No-ops when
+  // no vault resolved (vaultRoot === null) or the index is already complete.
+  trackIndexing(autoIndexOnOpen(state.vaultRoot));
 }
 
 void boot();
