@@ -13,6 +13,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref } from "./state";
 import { livePreview, wikilink } from "./livepreview";
+import { BOUNDS, initPanes } from "./panes";
 import {
   contextMenuHtml,
   escapeHtml,
@@ -1334,9 +1335,15 @@ function buildShell(): void {
         </button>
       </div>
     </header>
-    <main class="layout">
+    <main id="layout" class="layout">
       <nav id="tree-pane" class="tree-pane"></nav>
+      <div id="gutter-tree" class="gutter" role="separator" aria-orientation="vertical"
+           aria-label="Resize the file tree" aria-controls="tree-pane" tabindex="0"
+           aria-valuemin="${BOUNDS.tree.min}" aria-valuemax="${BOUNDS.tree.max}"></div>
       <section id="note-pane" class="note-pane"></section>
+      <div id="gutter-side" class="gutter" role="separator" aria-orientation="vertical"
+           aria-label="Resize the discovery pane" aria-controls="side-pane" tabindex="0"
+           aria-valuemin="${BOUNDS.side.min}" aria-valuemax="${BOUNDS.side.max}"></div>
       <aside id="side-pane" class="side-pane"></aside>
     </main>
     <div id="menu-root"></div>
@@ -1616,6 +1623,7 @@ function wireEvents(): void {
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
   buildShell();
+  initPanes(el("layout")); // restore the saved column widths, likewise before the paint
   wireEvents();
   // Auto-reload on external edits (#14): subscribe once for the window's lifetime. The
   // host only pulses when the *watched* vault's Markdown changes, and re-points the watch

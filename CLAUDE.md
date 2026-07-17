@@ -66,6 +66,8 @@ just ui-install                         # one-time: install the frontend's npm d
 B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
 B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structured JSONL log ($PWD: cwd is crates/b2-desktop)
 just check-app                          # clippy for b2-desktop (builds ui/dist first)
+(cd ui && npm test)                     # the frontend's pure-logic suite (pane sizing); no deps —
+                                        # node strips the TS types and runs off the source
 
 cargo fmt
 cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)

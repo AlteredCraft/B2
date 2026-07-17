@@ -17,6 +17,9 @@
   --shadow: 0 1px 2px rgba(20, 20, 30, 0.06), 0 6px 20px rgba(20, 20, 30, 0.06);
   --radius: 10px;
   --reading: 68ch;
+  /* Width of the draggable strip between panes. Mirrored by GUTTER in panes.ts, which
+     has to subtract it when working out what room the center has left. */
+  --gutter-w: 6px;
   color-scheme: light;
 }
 
@@ -211,10 +214,20 @@ body {
 
 /* --- layout ------------------------------------------------------------------- */
 
+/* Three panes, two draggable gutters. The side columns are sized by custom properties
+   that `panes.ts` writes (defaults here are what a first run gets); the center is never
+   sized directly — it takes the remainder, because the note is the reading surface and
+   the columns beside it are chrome. The gutters are grid tracks rather than overlays so
+   they can't cover a pane's scrollbar, and they're transparent: each reads as its
+   neighbouring pane's background, which keeps the panes' own 1px borders as the divider
+   and leaves the resting layout looking exactly as it did before it could be dragged. */
 .layout {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 380px;
+  grid-template-columns:
+    var(--tree-w, 240px) var(--gutter-w)
+    minmax(0, 1fr)
+    var(--gutter-w) var(--side-w, 380px);
   min-height: 0;
 }
 
@@ -226,8 +239,12 @@ body {
 }
 
 .note-pane {
+  /* The side padding tapers as the pane narrows — `panes.ts` keeps it in step with the
+     pane's measured width. The full-bleed bars below cancel it by name, so it must stay
+     a px length (see the ResizeObserver comment in panes.ts for why not a CSS clamp()). */
+  --note-pad-x: 48px;
   overflow-y: auto;
-  padding: 40px 48px 96px;
+  padding: 40px var(--note-pad-x) 96px;
 }
 
 .side-pane {
@@ -237,11 +254,63 @@ body {
   padding: 20px 18px 96px;
 }
 
+/* --- gutters (draggable column edges) ----------------------------------------- */
+
+/* The grab strip. `cursor: col-resize` is set, but WKWebView doesn't reliably paint a
+   CSS cursor, so it is NOT the affordance — the hover/focus rule below is: the divider
+   thickens and takes the accent, which paints everywhere. */
+.gutter {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none; /* the drag is ours, not the scroller's */
+  z-index: 1; /* over the neighbouring pane's border, so the hover line covers it */
+}
+
+/* The hit strip is 6px, but the *line* it paints is 1px, centered — widened on hover so
+   the edge announces itself as draggable without shifting the layout. */
+.gutter::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: none;
+  transition:
+    background 120ms ease,
+    width 120ms ease;
+}
+
+.gutter:hover::after,
+.gutter:focus-visible::after,
+.gutter.is-dragging::after {
+  width: 3px;
+  background: var(--accent);
+}
+
+.gutter:focus-visible {
+  outline: none; /* the accent line above IS the focus ring — a box around a 6px strip reads as noise */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gutter::after {
+    transition: none;
+  }
+}
+
+/* While a drag is live the pointer is captured by the gutter, but the panes underneath
+   would still text-select under the sweep. */
+body.is-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
 @media (max-width: 1040px) {
   .layout {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: var(--tree-w, 220px) var(--gutter-w) minmax(0, 1fr);
   }
-  .side-pane {
+  .side-pane,
+  #gutter-side {
     display: none;
   }
 }
@@ -250,7 +319,8 @@ body {
   .layout {
     grid-template-columns: 1fr;
   }
-  .tree-pane {
+  .tree-pane,
+  .gutter {
     display: none;
   }
 }
@@ -343,8 +413,9 @@ body {
    centered reading column. Full-bleed via negative margins that cancel .note-pane's
    padding, so its divider spans edge to edge like the file tree's "Files" header. */
 .frontmatter-bar {
-  margin: -40px -48px 32px; /* cancel .note-pane's top (40px) + side (48px) padding */
-  padding: 12px 48px;
+  /* cancel .note-pane's top (40px) + side padding, which now tapers with the pane */
+  margin: -40px calc(-1 * var(--note-pad-x)) 32px;
+  padding: 12px var(--note-pad-x);
   border-bottom: 1px solid var(--border);
 }
 
@@ -574,8 +645,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: -40px -48px 24px; /* cancel .note-pane's top (40px) + side (48px) padding */
-  padding: 10px 48px;
+  margin: -40px calc(-1 * var(--note-pad-x)) 24px; /* cancel .note-pane's padding, as above */
+  padding: 10px var(--note-pad-x);
   border-bottom: 1px solid var(--border);
 }
 

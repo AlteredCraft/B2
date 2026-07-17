@@ -3,6 +3,9 @@
     "target": "ES2021",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // panes.test.ts imports "./panes.ts" by full filename — what node's type-stripping
+    // needs to run the suite off the source. Safe here: noEmit, so tsc rewrites nothing.
+    "allowImportingTsExtensions": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
