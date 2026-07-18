@@ -169,6 +169,33 @@ pub struct NeighborView {
     /// committed via `b2 link`, or a human/importer authored) — data-model.md §0.
     /// `b2 explain` renders it; `b2 neighbors` carries it too.
     pub origin: String,
+    /// The other note's `created` date, if it has one — the lineage lens's time
+    /// axis (GH #22): versioning edges (`supersedes`/`derived-from`) *are* time,
+    /// so an adapter can place and label a version neighbor by when it was born.
+    pub created: Option<String>,
+}
+
+/// One outbound link a note authors at a **resource** (an image, a PDF — any
+/// non-`.md` vault file), resolved for display. The third target kind an edge can
+/// have (note / resource / dangling); surfaced on [`ExplainView`] so a note's file
+/// links are visible from the note's side, not only as the resource's backlinks
+/// (GH #22). Distinct from [`NeighborView`] — a resource has no `b2id`, no title,
+/// and no direction (a resource never authors edges, so these are always outbound).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceLinkView {
+    /// The resource's vault-relative path.
+    pub path: String,
+    /// Its inventory class (`image`/`pdf`/`html`/`text`/`media`/`binary`).
+    pub class: String,
+    /// The relation verb (`references` for a bare link/embed).
+    pub relation: String,
+    /// Edge origin — `"inline"` (a body link) or `"frontmatter"`.
+    pub origin: String,
+    /// The authored caption (alt text / `|caption`), if any.
+    pub caption: Option<String>,
+    /// Whether the link is an embed (`![…]` / `![[…]]`).
+    pub embed: bool,
+    pub explanation: Option<String>,
 }
 
 /// One outbound link a note authored that resolves to **nothing** — no note and no
@@ -203,6 +230,10 @@ pub struct ExplainView {
     /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them),
     /// each with its label, target, and explanation. Empty for an isolated note.
     pub connections: Vec<NeighborView>,
+    /// Outbound links at **resources** (images, PDFs, …) — the third target kind,
+    /// so a note's file links are visible from the note's side (GH #22). Empty
+    /// when the note links no files.
+    pub resources: Vec<ResourceLinkView>,
     /// Outbound links that resolved to nothing (a folder target or a typo) — shown
     /// as broken rather than silently dropped (GH #12). Empty when every link
     /// resolves.
@@ -494,6 +525,7 @@ impl Vault {
         for n in graph::neighbors(&self.conn, b2id)? {
             let path = db::resolve_b2id_to_path(&self.conn, &n.other)?.unwrap_or_default();
             let title = db::note_title(&self.conn, &n.other)?;
+            let created = db::note_created(&self.conn, &n.other)?;
             out.push(NeighborView {
                 b2id: n.other,
                 path,
@@ -507,9 +539,29 @@ impl Vault {
                 label: n.label,
                 explanation: n.explanation,
                 origin: n.origin,
+                created,
             });
         }
         Ok(out)
+    }
+
+    /// The resource links of an already-resolved `b2id` — every outbound edge at a
+    /// non-`.md` file, resolved with its inventory class for display (GH #22).
+    fn resource_links_of(&self, b2id: &str) -> Result<Vec<ResourceLinkView>> {
+        Ok(db::outbound_resource_edges(&self.conn, b2id)?
+            .into_iter()
+            .map(
+                |(path, class, relation, origin, caption, embed, explanation)| ResourceLinkView {
+                    path,
+                    class,
+                    relation,
+                    origin,
+                    caption,
+                    embed,
+                    explanation,
+                },
+            )
+            .collect())
     }
 
     /// The unresolved (dangling) outbound links of an already-resolved `b2id` —
@@ -543,8 +595,10 @@ impl Vault {
 
     /// Explain a note's connections (`b2 explain`): the note referenced by
     /// `note_ref` (path **or** `b2id`) resolved to its identity + title, together
-    /// with every active typed edge and its "why", plus any **unresolved** outbound
-    /// links (dangling — a folder target or a typo, surfaced not dropped, GH #12).
+    /// with every active typed edge and its "why", its outbound **resource** links
+    /// (images/PDFs — the third target kind, GH #22), plus any **unresolved**
+    /// outbound links (dangling — a folder target or a typo, surfaced not
+    /// dropped, GH #12).
     /// Errors with [`Error::NoteNotFound`] when the ref matches no indexed note; a
     /// found note with no edges returns an [`ExplainView`] with empty `connections`
     /// and `unresolved`. A pure graph read — no embedding, like
@@ -555,12 +609,14 @@ impl Vault {
         let path = db::resolve_b2id_to_path(&self.conn, &b2id)?.unwrap_or_default();
         let title = db::note_title(&self.conn, &b2id)?;
         let connections = self.neighbors_of(&b2id)?;
+        let resources = self.resource_links_of(&b2id)?;
         let unresolved = self.unresolved_of(&b2id)?;
         Ok(ExplainView {
             b2id,
             path,
             title,
             connections,
+            resources,
             unresolved,
         })
     }

@@ -53,12 +53,52 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
         view.connections.iter().any(|c| c.label == "references"),
         "the bare body link is a references edge"
     );
+    // Every edge carries the other note's `created` — the lineage lens's time
+    // axis (GH #22) — resolved from the projection, not a file re-read.
+    assert!(
+        view.connections
+            .iter()
+            .all(|c| c.created.as_deref() == Some("2026-06-20")),
+        "neighbors carry their created date: {:?}",
+        view.connections
+    );
     // Every link resolves, so there are no unresolved (dangling) links.
     assert!(
         view.unresolved.is_empty(),
         "resolved note has no unresolved links: {:?}",
         view.unresolved
     );
+}
+
+#[test]
+fn explain_surfaces_outbound_resource_links() {
+    // GH #22: an edge can target a note, a resource, or nothing. The resource kind
+    // must be visible from the *note's* side (not only as the resource's backlinks),
+    // else a graph over `explain` silently hides a note's file links.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed(tmp.path());
+    fs::write(
+        root.join("notes/uses-diagram.md"),
+        "---\nb2id: 01JUSD0000000000000000000C\ntype: note\ntitle: Uses diagram\n---\n\
+         ![a tiny diagram](../resources/diagram.png)\n\
+         See [[concepts/memory|Human memory]].\n",
+    )
+    .unwrap();
+    vault.reindex().unwrap();
+
+    let view = vault.explain("notes/uses-diagram").unwrap();
+    // The note link is a normal connection; the file link is a resource link.
+    assert_eq!(view.connections.len(), 1, "{:?}", view.connections);
+    assert_eq!(view.resources.len(), 1, "{:?}", view.resources);
+    let r = &view.resources[0];
+    assert_eq!(r.path, "resources/diagram.png");
+    assert_eq!(r.class, "image");
+    assert_eq!(r.relation, "references");
+    assert_eq!(r.origin, "inline");
+    assert_eq!(r.caption.as_deref(), Some("a tiny diagram"));
+    assert!(r.embed, "an image embed reads as embed=true");
+    // A note with no file links reports an empty list, never an error.
+    assert!(vault.explain("concepts/memory").unwrap().resources.is_empty());
 }
 
 #[test]
