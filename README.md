@@ -32,8 +32,8 @@ explained connections between them yourself.
 > reconciles external edits live. Reindex is a **cancellable background action** — live progress, a Cancel
 > button, and the UI stays usable while a large vault indexes; projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
-> ([specs/completed/](planning/specs/completed/)). Run it with `just app` (point it at a vault via
-> `B2_VAULT_PATH`). **Next:** no single focus queued — the backlog lives in
+> ([specs/completed/](planning/specs/completed/)). Run it with `just app` — pick a vault from the
+> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** no single focus queued — the backlog lives in
 > [GitHub Issues](https://github.com/AlteredCraft/B2/issues) ([tasks.md](planning/tasks.md)).
 
 ## What B2 is (the north star)
@@ -86,6 +86,14 @@ and work with a vault in about ten minutes. Then go deeper:
 
 ## Build and run
 
+**Stop 0 — check your setup.** On a fresh clone, run `just doctor` first: it checks Rust,
+Node/npm, the Tauri CLI, and the platform build toolchain, and prints the fix for anything
+missing (this is the fastest path to a working `just app` — see the desktop app section below).
+
+```bash
+just doctor
+```
+
 ```bash
 cargo install --path crates/b2-cli --locked   # installs `b2` to ~/.cargo/bin (on PATH)
 b2 --help
@@ -97,6 +105,7 @@ For engine iteration where you don't want to reinstall each time, `cargo run -p 
 [`just`](https://github.com/casey/just) recipes wrap this and the other common commands:
 
 ```bash
+just doctor     # sanity-check your local setup — run this first on a fresh clone
 just install    # build + install `b2` onto your PATH (~/.cargo/bin)
 just test       # fast, deterministic, model-free engine suite (what CI runs)
 just check      # fmt-check + clippy + tests — the pre-commit gate
@@ -107,20 +116,29 @@ just            # list every recipe
 
 ### The desktop app (`crates/b2-desktop` + `ui/`)
 
-The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend) and the **Tauri CLI**
-(`cargo install tauri-cli --locked`).
+The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend — Node 18, 20, or 22+;
+that floor comes from vite, [nvm](https://github.com/nvm-sh/nvm) is the easiest way to install
+one: `nvm install --lts`) and the **Tauri CLI** (`cargo install tauri-cli --locked`). Run
+`just doctor` first — it checks both (including the Node version, and whether nvm is
+available if Node is missing), plus the platform build toolchain (Xcode Command Line Tools on
+macOS), and tells you exactly what's missing and how to fix it (this is what catches e.g.
+`just app` failing with `error: no such command: 'tauri'` before it happens).
 
 ```bash
-just ui-install                       # one-time: install the frontend's npm deps
-B2_VAULT_PATH=~/notes just app        # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
-B2_VAULT_PATH=~/notes just app-cpu    # …same, but force the CPU embedder
-just app-build                        # bundle a per-platform app
+just doctor           # confirm Node, npm, and the Tauri CLI are all in place
+just ui-install       # one-time: install the frontend's npm deps
+just app              # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
+just app-cpu          # …same, but force the CPU embedder
+just app-build        # bundle a per-platform app
 ```
 
-The window opens on the vault named by `B2_VAULT_PATH` (or the first launch argument, or the in-app vault
-switcher). Search or use the file tree to open a note, read or edit it on the left (live-preview Markdown,
-autosave), and connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake`
-for an offline, non-semantic dev mode (no `b2 init` needed).
+On first launch (nothing remembered yet) the window opens with no vault selected — click the
+vault switcher to pick one; from then on, `just app` reopens whatever vault you had open last.
+`B2_VAULT_PATH` (or a launch argument) is an alternative for that first run, letting you skip
+the picker and jump straight into a vault, e.g. `B2_VAULT_PATH=~/notes just app`. Search or use
+the file tree to open a note, read or edit it on the left (live-preview Markdown, autosave), and
+connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake` for an
+offline, non-semantic dev mode (no `b2 init` needed).
 
 **Embedder device — CPU or Metal GPU.** `just app` senses the platform and embeds on the **Metal GPU**
 on Apple Silicon (measured **~7× faster** than CPU on the test vault — [GH #40](https://github.com/AlteredCraft/B2/issues/40)),

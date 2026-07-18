@@ -6,6 +6,12 @@
 default:
     @just --list
 
+# Sanity-check your local setup — run this first on a fresh clone. Checks Rust, Node/npm,
+# the Tauri CLI, the platform build toolchain, and a couple of optional extras, printing
+# the fix for anything missing (this is "stop 0" before `just app` works — see README).
+doctor:
+    -@scripts/doctor.sh
+
 # Install the `b2` binary to ~/.cargo/bin (on PATH; no alias, works from any dir).
 # Re-run to update after code changes (--force reinstalls the same 0.1.0 version).
 install:
