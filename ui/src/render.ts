@@ -586,9 +586,11 @@ function edgeHtml(e: GraphEdge): string {
   }
   const verb = e.label.replace(/[^a-z0-9-]/gi, "");
   const marker = e.arrow ? ` marker-end="url(#garr-${e.category})"` : "";
-  const label = `<text class="gedge-label cat-${e.category}" x="${px(e.lx)}" y="${px(
-    e.ly - 6,
-  )}">${escapeHtml(e.label)}</text>`;
+  const label = e.hideLabel
+    ? ""
+    : `<text class="gedge-label cat-${e.category}" x="${px(e.lx)}" y="${px(
+        e.ly - 6,
+      )}">${escapeHtml(e.label)}</text>`;
   return `<path class="gedge cat-${e.category} verb-${verb}" d="${edgePathD(e)}"${marker}/>${label}`;
 }
 
@@ -681,8 +683,15 @@ function lensChromeHtml(lens: GraphLens, scene: GraphScene): string {
       </g>`;
   }
   if (lens === "argument") {
+    // The axis is a standalone guide now that its edges bow off it (graph.ts): draw
+    // the full-height fault line plus a single vertical `contradicts` caption running
+    // along it (the verb the bowed edges no longer carry). Placed on the lower half,
+    // which the edges vacate by bowing.
+    const cx = VIEW_W / 2;
+    const capY = VIEW_H - 190;
     const fault = scene.edges.some((e) => e.label === "contradicts")
-      ? `<line class="gfault" x1="${VIEW_W / 2}" y1="56" x2="${VIEW_W / 2}" y2="${VIEW_H - 56}"/>`
+      ? `<line class="gfault" x1="${cx}" y1="56" x2="${cx}" y2="${VIEW_H - 56}"/>
+         <text class="gfault-label" x="${cx}" y="${capY}" text-anchor="middle" transform="rotate(-90 ${cx} ${capY})">contradicts</text>`
       : "";
     return `<g class="gzone" aria-hidden="true">${fault}
         <text x="195" y="42" text-anchor="middle">supports →</text>

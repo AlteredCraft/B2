@@ -8,6 +8,7 @@
 // renderer builds on, not pixel positions.
 
 import {
+  AXIS_BOW,
   buildScene,
   categoryOf,
   GHOST_LIMIT,
@@ -270,6 +271,31 @@ check("argument: supporters left, refuters right, contradicts on the vertical fa
   equal(at("01C").x, a.x, "contradicts sits on the claim's vertical axis");
   assert(at("01C").y !== a.y, "…above or below it (the fault line)");
   assert(!s.nodes.some((n) => n.id === "01E"), "non-evidential edges are out of this lens");
+});
+
+check("argument: fault-line edges bow off the axis (first right, then left) so they read as edges, not the axis", () => {
+  const s = buildScene(
+    "argument",
+    input({
+      connections: [
+        neighbor({ b2id: "01C", path: "notes/c.md", title: "c", relation: "contradicts" }),
+        neighbor({ b2id: "01D", path: "notes/d.md", title: "d", relation: "contradicts" }),
+      ],
+    }),
+  );
+  const a = anchorOf(s);
+  const edgeTo = (id: string): GraphScene["edges"][number] => {
+    const e = s.edges.find((x) => x.to === id || x.from === id);
+    assert(e !== undefined, `edge for ${id}`);
+    return e!;
+  };
+  const c = edgeTo("01C");
+  const d = edgeTo("01D");
+  assert(c.cx !== null && d.cx !== null, "both fault-line edges curve, not run straight along the axis");
+  assert((c.cx as number) > a.x, "the first contradicts edge bows right of the axis");
+  assert((d.cx as number) < a.x, "the second bows left");
+  equal(Math.round((c.cx as number) - a.x), AXIS_BOW, "…by AXIS_BOW");
+  assert(c.hideLabel === true && d.hideLabel === true, "the verb moves to the axis caption, not a per-edge pill");
 });
 
 check("argument: evidential edges at resources and dangling targets stay visible", () => {

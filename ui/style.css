@@ -1714,6 +1714,13 @@ body.is-loading {
   stroke-dasharray: 2 7;
   opacity: 0.5;
 }
+/* The verb the bowed fault-line edges no longer carry, run once along the axis.
+   Beats `.gzone text` on specificity so it keeps the evidential hue, not muted. */
+.gzone .gfault-label {
+  fill: var(--cat-evidential);
+  opacity: 0.72;
+  letter-spacing: 0.22em;
+}
 
 /* --- overlays: the ghost caveat chip and per-lens empty guidance ---------------- */
 

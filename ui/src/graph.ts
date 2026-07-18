@@ -111,6 +111,9 @@ export interface GraphEdge {
   ghost: boolean;
   /** Directed verbs get an arrowhead at `to`; symmetric verbs none. */
   arrow: boolean;
+  /** Suppress the per-edge verb pill. The argument lens sets this on its bowed
+   *  fault-line edges, whose verb is carried once by the axis caption instead. */
+  hideLabel?: boolean;
 }
 
 export interface GraphScene {
@@ -459,8 +462,14 @@ function lineageLens(input: GraphInput): GraphScene {
   return { nodes, edges };
 }
 
+/** How far a fault-line edge bows off the vertical axis, so the connection reads as
+ *  distinct from the axis chrome it would otherwise run straight along. */
+export const AXIS_BOW = 90;
+
 /** Concept 2b — the argument lens: supporters and refuters point at the claim from
- *  opposite sides; symmetric `contradicts` sits on the vertical fault line. */
+ *  opposite sides; symmetric `contradicts` sits on the vertical fault line. The
+ *  fault-line edges bow off the axis (first right, then left) so the axis stays a
+ *  clean standalone guide and each contradicts link reads as a connection. */
 function argumentLens(input: GraphInput): GraphScene {
   const kept = sortAuthored(
     authoredOf(input).filter((it) => lensKeeps("argument", it.verb)),
@@ -493,7 +502,30 @@ function argumentLens(input: GraphInput): GraphScene {
   });
 
   const nodes: GraphNode[] = [anchorNode(input, CENTER, null), ...nodesFor(kept, nodeAt)];
-  const edges = edgesFor(kept, nodeAt, CENTER, radii(kept));
+
+  // Bow the edges that would otherwise run straight *along* the fault line (to the
+  // contradicts peers sitting on the axis) out to one side: the first peer right,
+  // the next left (they sit at the top and bottom of the axis). The verb moves to
+  // the axis caption, so the per-edge pill is suppressed. Axis edges are vertical,
+  // so the perpendicular offset is a plain horizontal shift.
+  const onAxis = axis.filter((id) => Math.abs((nodeAt.get(id)?.x ?? 0) - CENTER.x) < 1);
+  const bow = new Map<string, number>();
+  onAxis.forEach((id, i) => bow.set(id, i % 2 === 0 ? 1 : -1));
+  const edges = edgesFor(kept, nodeAt, CENTER, radii(kept)).map((e) => {
+    const owner = e.from === "anchor" ? e.to : e.from;
+    const dir = bow.get(owner);
+    if (dir === undefined || e.cx !== null) return e; // only the straight, on-axis edges
+    const cx = (e.x1 + e.x2) / 2 + AXIS_BOW * dir;
+    const cy = (e.y1 + e.y2) / 2;
+    return {
+      ...e,
+      cx,
+      cy,
+      lx: 0.25 * e.x1 + 0.5 * cx + 0.25 * e.x2,
+      ly: 0.25 * e.y1 + 0.5 * cy + 0.25 * e.y2,
+      hideLabel: true,
+    };
+  });
   return { nodes, edges };
 }
 
