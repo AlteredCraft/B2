@@ -13,7 +13,8 @@ doctor:
     -@scripts/doctor.sh
 
 # Install the `b2` binary to ~/.cargo/bin (on PATH; no alias, works from any dir).
-# Re-run to update after code changes (--force reinstalls the same 0.1.0 version).
+# The recipe always passes --force itself (cargo would otherwise refuse a same-version
+# reinstall, since this stays 0.1.0) — just re-run `just install` to update after code changes.
 install:
     cargo install --path crates/b2-cli --locked --force
 
