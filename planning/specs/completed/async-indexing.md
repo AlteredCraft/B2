@@ -228,6 +228,16 @@ consistent-partial-index guarantee (§5) is its prerequisite — both delivered 
 
 *(Was `tasks.md` Backlog → "Non-blocking embedding — background reindex + `b2 status`." Consolidated here.)*
 
+> **Update (2026-07-18, #16 partially shipped):** the useful ~80% landed on top of seams that already
+> exist — `b2 status` (a model-free read over `Vault::embed_status`, #26), a **foreground Ctrl-C** cancel
+> (a SIGINT handler flips a flag the embed loop reads through the §3 `ControlFlow` seam), and a
+> **single-in-flight** advisory lock at `<vault>/.b2/reindex.lock`. **Detach itself leans on shell job
+> control** — `b2 reindex &` / `nohup … & disown` — since WAL already lets `status`/`search` read the index
+> live across processes and the lock keeps a second run out, so no bespoke background-process lifecycle was
+> needed on Unix. The remaining **built-in `--detach` daemonization** (portability to Windows, `setsid` +
+> stream redirection, a targeted `--cancel` for detached runs) is split out to
+> [#55](https://github.com/AlteredCraft/B2/issues/55).
+
 For the **CLI** (stateless, one process per command), "reindex can't block" wants a *different* answer than
 the desktop's in-process task: `b2 reindex` detaches and returns immediately; a separate process embeds
 while `search` reads the index live (WAL permits one writer + concurrent readers across processes); `b2

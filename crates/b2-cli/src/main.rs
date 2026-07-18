@@ -15,10 +15,29 @@ use b2_core::resource::{doc_kind, DocKind};
 use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
+use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set by the Ctrl-C handler installed for a foreground `reindex`. The embed loop
+/// reads it at each batch boundary (through the [`ControlFlow`] the progress closure
+/// returns — the shipped cancel seam) and stops *after* the current batch: a
+/// consistent, re-runnable partial index, never a torn write (async-indexing.md §3/§8).
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Map the Ctrl-C flag onto the reindex embed loop's cooperative-cancel signal —
+/// [`ControlFlow::Break`] once a cancel has been requested (stop after the current
+/// batch), else [`ControlFlow::Continue`]. Shared by `reindex`'s two progress closures.
+fn cancel_flow() -> ControlFlow<()> {
+    if CANCEL.load(Ordering::SeqCst) {
+        ControlFlow::Break(())
+    } else {
+        ControlFlow::Continue(())
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -59,6 +78,11 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Report embedding coverage — how many notes are embedded (so semantic ranking
+    /// is live vs. keyword-only) and whether a reindex is currently running. A pure,
+    /// model-free read; handy after kicking off a slow reindex in the background with
+    /// `b2 reindex &`.
+    Status,
     /// Create a new note and project it into the index (it's immediately in the
     /// graph + searchable). PATH is vault-relative (the `.md` extension is optional).
     Add {
@@ -255,13 +279,31 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 }
                 return Ok(());
             }
+            // Single-in-flight: take an advisory lock *before* the (slow) model load so
+            // a second `b2 reindex` — e.g. a foreground run racing one you backgrounded
+            // with `b2 reindex &` — refuses cleanly instead of two processes writing the
+            // same index. Advisory, not a PID file: the OS frees it the instant the holder
+            // exits (crash, kill, or Ctrl-C included), so nothing stale is ever left behind.
+            // `lock` is held until this arm ends; dropping it releases the lock.
+            let lock = open_reindex_lock(root)?;
+            match lock.try_lock() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::ReindexRunning),
+                Err(std::fs::TryLockError::Error(e)) => return Err(CliError::Io(e)),
+            }
             // Reindex embeds every changed chunk → it needs the real model.
             let (vault, _semantic) = open_vault(root, true)?;
+            // Wire Ctrl-C to the cooperative-cancel flag now that the model is loaded and
+            // real embedding is next. (During the model load the default SIGINT still
+            // applies — nothing is written yet, so a hard stop there is safe.) Best-effort:
+            // if the handler can't be installed, Ctrl-C keeps its default (terminate), which
+            // still leaves a consistent index since edges + FTS land before any vectors.
+            let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
             // Embedding a large vault on CPU is slow; show a live progress line so it
             // never looks frozen. Only on an interactive stderr (never in --json, and
             // never when piped/captured) so machine output and tests stay clean.
             let report = if cli.json || !std::io::stderr().is_terminal() {
-                vault.reindex_with_progress(*force, &mut |_| ControlFlow::Continue(()))?
+                vault.reindex_with_progress(*force, &mut |_| cancel_flow())?
             } else {
                 // Name the vault being indexed up front, then a live line that counts
                 // the notes actually (re)embedded — not every note, most of which an
@@ -282,9 +324,10 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         if p.note_chunks == 1 { "" } else { "s" },
                     );
                     let _ = std::io::stderr().flush();
-                    // The CLI never cancels — a Ctrl-C cancel is a deferred follow-on
-                    // (async-indexing.md §8). Always continue.
-                    ControlFlow::Continue(())
+                    // Stop after this batch if Ctrl-C was pressed (async-indexing.md §3/§8),
+                    // else carry on. The batch is already written above, so a cancel here
+                    // never tears a write.
+                    cancel_flow()
                 };
                 let report = vault.reindex_with_progress(*force, &mut on_progress)?;
                 if progressed {
@@ -320,6 +363,57 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     for s in &report.skipped {
                         eprintln!("  - {} ({})", s.path, s.reason);
                     }
+                }
+                // The counts above already report the partial work truthfully; add the
+                // one line that tells the user it was interrupted and is safe to resume.
+                if report.cancelled {
+                    eprintln!(
+                        "Cancelled — the index is consistent but only partly embedded. Re-run `b2 reindex` to finish the rest."
+                    );
+                }
+            }
+        }
+        Command::Status => {
+            // Read-only coverage report: how much of the vault is embedded (semantic
+            // ranking live vs. keyword-only) and whether a background reindex is in
+            // flight — the companion to backgrounding a slow reindex with `b2 reindex &`
+            // (async-indexing.md §8). A pure model-free DB read (#26): open with the fake.
+            let root = cli.vault_or_cwd();
+            let (vault, _semantic) = open_vault(&root, false)?;
+            let status = vault.embed_status()?;
+            let running = reindex_in_flight(&root);
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "embedded": status.embedded,
+                        "total": status.total,
+                        "reindex_running": running,
+                    }))?
+                );
+            } else {
+                if status.total == 0 {
+                    println!("No notes indexed yet. Run `b2 reindex` to build the index.");
+                } else if status.embedded == 0 {
+                    println!(
+                        "Embedded 0/{} notes — keyword-only. Run `b2 reindex` for semantic ranking.",
+                        status.total
+                    );
+                } else if status.embedded < status.total {
+                    println!(
+                        "Embedded {}/{} notes — semantic ranking partial ({} still keyword-only).",
+                        status.embedded,
+                        status.total,
+                        status.total - status.embedded
+                    );
+                } else {
+                    println!(
+                        "Embedded {}/{} notes — semantic ranking fully live.",
+                        status.embedded, status.total
+                    );
+                }
+                if running {
+                    println!("A reindex is currently running.");
                 }
             }
         }
@@ -604,6 +698,43 @@ fn use_fake_embedder() -> bool {
     matches!(std::env::var("B2_EMBEDDER").ok().as_deref(), Some("fake"))
 }
 
+/// Path to the single-in-flight advisory lock for `reindex`, under the disposable
+/// index dir (`<vault>/.b2/reindex.lock`, gitignored along with the rest of `.b2/`).
+fn reindex_lock_path(root: &Path) -> PathBuf {
+    root.join(".b2").join("reindex.lock")
+}
+
+/// Open (creating if absent) the reindex lock file, ensuring `.b2/` exists first so
+/// the lock can be taken *before* the index does on a first-ever reindex. The caller
+/// takes the lock with [`File::try_lock`] and holds the returned handle for the run.
+fn open_reindex_lock(root: &Path) -> Result<File, CliError> {
+    std::fs::create_dir_all(root.join(".b2"))?;
+    Ok(OpenOptions::new()
+        .create(true)
+        // A lock file carries no contents we care about — never truncate it (that's a
+        // needless write, and could race a holder). Presence + the advisory lock is all.
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(reindex_lock_path(root))?)
+}
+
+/// Whether a reindex currently holds the lock — a best-effort peek for `b2 status`:
+/// open the *existing* lock file and try to take it; a contended lock means a run is
+/// in flight. Never creates the file (a read-only command), so a missing lock file
+/// simply means no reindex has run; any I/O hiccup degrades to "not running".
+fn reindex_in_flight(root: &Path) -> bool {
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(reindex_lock_path(root))
+    else {
+        return false;
+    };
+    // If we *can* take it, nobody holds it; `file` drops here and releases at once.
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// The CLI's error, composing the two crates it drives. Kept internal; `user_message`
 /// turns it into a generic, actionable, no-internals-leaked line (logging policy).
 /// `#[from]` supplies the `?` conversions; `transparent` defers `Display` to the
@@ -616,10 +747,16 @@ enum CliError {
     Embed(#[from] EmbedError),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
+    /// A filesystem error creating `.b2/` or opening the reindex lock file.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     /// `reindex` was run with no vault at all (no positional, no `-C`, no
     /// `$B2_VAULT_PATH`) — refuse rather than silently index the current directory.
     #[error("no vault specified")]
     VaultRequired,
+    /// Another `reindex` already holds the single-in-flight lock on this vault.
+    #[error("a reindex is already running")]
+    ReindexRunning,
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -665,6 +802,9 @@ fn user_message(err: &CliError) -> String {
         CliError::VaultRequired => {
             "No vault specified. Point B2 at your vault with `-C <path>`, or set B2_VAULT_PATH.".to_string()
         }
+        CliError::ReindexRunning => {
+            "A reindex is already running on this vault. Wait for it to finish (check `b2 status`), or stop the other run.".to_string()
+        }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
@@ -672,7 +812,9 @@ fn user_message(err: &CliError) -> String {
             CliError::Core(e) => e.to_string(),
             CliError::Embed(e) => e.to_string(),
             CliError::Serde(e) => e.to_string(),
+            CliError::Io(e) => e.to_string(),
             CliError::VaultRequired => err.to_string(),
+            CliError::ReindexRunning => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {
