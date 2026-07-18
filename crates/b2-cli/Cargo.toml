@@ -15,6 +15,10 @@ b2-embed = { path = "../b2-embed" }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
+# Foreground `reindex` Ctrl-C → cooperative cancel (GH #16): a SIGINT handler flips a
+# flag the embed loop reads at each batch boundary (the shipped `ControlFlow` seam), so
+# a cancel leaves a consistent, re-runnable partial index rather than a torn one.
+ctrlc = "3.4"
 # The opt-in structured-log sink (B2_LOG/B2_DEBUG): the kernel's tracing events —
 # per-query SQLite timings, façade-op spans — rendered as JSON Lines on stderr.
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
