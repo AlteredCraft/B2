@@ -10,11 +10,13 @@ import type {
   NoteView,
   ReindexProgress,
   ResourceExplainView,
+  ResourceLink,
   ResourceSummary,
   SearchResult,
   SimilarView,
   UnresolvedLink,
 } from "./types";
+import type { GraphLens } from "./graph";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
@@ -105,6 +107,18 @@ export interface AppState {
   similar: SimilarView[];
   /** The open note's typed edges (from explain). */
   connections: NeighborView[];
+  /** The open note's outbound resource links (from the same explain, GH #22). */
+  resourceLinks: ResourceLink[];
+  /**
+   * The center pane shows the anchored ghost graph instead of the reading view
+   * (GH #22). Sticky across notes like `sourceOpen`, so the vault can be *browsed*
+   * in graph mode — a node click re-anchors the graph on the opened note. Renders
+   * purely from the discovery state above (`connections`/`resourceLinks`/
+   * `unresolved`/`similar`), so toggling costs no IPC.
+   */
+  graphOpen: boolean;
+  /** The graph's typed lens: "all" (ghost graph), "lineage", or "argument". Sticky. */
+  graphLens: GraphLens;
   /**
    * Discovery sections the user has collapsed (foldable headers, Obsidian-style).
    * Sticky across notes — a viewing preference — so a collapsed section stays folded
@@ -188,6 +202,9 @@ export const state: AppState = {
   editConflict: false,
   similar: [],
   connections: [],
+  resourceLinks: [],
+  graphOpen: false,
+  graphLens: "all",
   collapsedSections: new Set<SideSection>(),
   collapsedCards: new Set<string>(),
   contextMenu: null,

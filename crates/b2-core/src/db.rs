@@ -477,6 +477,46 @@ pub fn inbound_resource_edges(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Every active edge a note points *at a resource* — the outbound complement of
+/// [`inbound_resource_edges`], so `explain` can present all three target kinds a
+/// note authors (note / resource / dangling — GH #22) instead of silently hiding
+/// its file links. Joins the inventory for the resource's `class` (the display
+/// glyph). Ordered for deterministic display.
+#[allow(clippy::type_complexity)]
+pub fn outbound_resource_edges(
+    conn: &Connection,
+    b2id: &str,
+) -> Result<
+    Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        bool,
+        Option<String>,
+    )>,
+> {
+    let mut stmt = conn.prepare(
+        "SELECT e.dst_resource_path, r.class, e.type, e.origin, e.caption, e.embed, e.explanation
+         FROM edges e JOIN resources r ON r.path = e.dst_resource_path
+         WHERE e.src_id = ?1 AND e.dst_resource_path IS NOT NULL
+         ORDER BY e.dst_resource_path, e.type, e.occurrence_index",
+    )?;
+    let rows = stmt.query_map([b2id], |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get::<_, i64>(5)? != 0,
+            r.get(6)?,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// The bounded inbound set a **resource move** must rewrite — for each active
 /// edge at the resource, its source file and the exact authored link text
 /// (`dst_path_raw`). The resource sibling of [`inbound_edge_targets`]; ordered
@@ -780,6 +820,18 @@ pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<(String, String, 
 pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT title FROM notes WHERE b2id = ?1", [b2id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten())
+}
+
+/// A note's `created` date (`None` if absent or unset) — the lineage-lens time
+/// axis (GH #22): a versioning neighbor is placed, and labelled, by when it was
+/// created, so a graph adapter never re-reads the file just for a date.
+pub fn note_created(conn: &Connection, b2id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT created FROM notes WHERE b2id = ?1", [b2id], |r| {
             r.get::<_, Option<String>>(0)
         })
         .optional()?

@@ -31,12 +31,33 @@ function el(id: string): HTMLElement {
   return node;
 }
 
+// The note pane's last-written HTML, for the render memo below. Cleared whenever the
+// pane is owned imperatively (edit mode writes its own DOM) so exiting always repaints.
+let lastNotePaneHtml: string | null = null;
+
 function render(): void {
   el("tree-pane").innerHTML = treePaneHtml(state);
   // The carve-out (desktop-editing.md §6): while editing, the note pane belongs to
   // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
   // the editor mid-keystroke. Everything else keeps rendering.
-  if (!state.editing) el("note-pane").innerHTML = notePaneHtml(state);
+  if (!state.editing) {
+    // Memoized: an unrelated render (a toast timer, streamed progress) with identical
+    // pane HTML skips the innerHTML swap, so reading scroll position survives and the
+    // graph view's entrance animation plays on real changes only — never on a toast.
+    const noteHtml = notePaneHtml(state);
+    if (noteHtml !== lastNotePaneHtml) {
+      el("note-pane").innerHTML = noteHtml;
+      lastNotePaneHtml = noteHtml;
+    }
+  } else {
+    lastNotePaneHtml = null;
+  }
+  // Graph mode owns the pane's box: padding off, scrolling off, column flex on
+  // (the stage flexes to fill; the SVG viewBox scales the scene into it).
+  el("note-pane").classList.toggle(
+    "is-graph",
+    state.graphOpen && !state.editing && state.current !== null && state.currentResource === null,
+  );
   el("side-pane").innerHTML = sidePaneHtml(state);
   el("menu-root").innerHTML = contextMenuHtml(state);
   el("modal-root").innerHTML = modalHtml(state);
@@ -168,6 +189,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     // Clear the prior note's discovery so its cards don't linger under the new note.
     state.similar = [];
     state.connections = [];
+    state.resourceLinks = [];
     state.unresolved = [];
     state.collapsedCards.clear(); // per-note fold state belongs to the note we just left
     state.contextMenu = null;
@@ -214,6 +236,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
     state.searchResults = [];
     state.similar = [];
     state.connections = [];
+    state.resourceLinks = [];
     state.unresolved = [];
     state.collapsedCards.clear();
     state.contextMenu = null;
@@ -390,6 +413,26 @@ function closeContextMenu(): void {
   render();
 }
 
+// --- the anchored ghost graph (GH #22) --------------------------------------------
+//
+// The center pane's third mode. Both toggles below are pure state flips — the scene
+// renders from discovery state the note-open already fetched, so no IPC happens here.
+
+/** Flip the pane between reading and the graph. Sticky across notes, like sourceOpen. */
+function toggleGraph(): void {
+  if (!state.current) return; // the graph anchors on an open note
+  state.graphOpen = !state.graphOpen;
+  render();
+}
+
+/** Switch the graph's typed lens (All / Lineage / Argument). */
+function setGraphLens(lens: string): void {
+  if (lens !== "all" && lens !== "lineage" && lens !== "argument") return;
+  if (state.graphLens === lens) return;
+  state.graphLens = lens;
+  render();
+}
+
 // The `</>` toggle serves two surfaces off the one sticky `sourceOpen` (spec §3
 // "Escape hatch"). In the reading view it flips rendered ↔ raw via a full re-render.
 // While editing, the carve-out forbids rebuilding the pane, so it reconfigures the
@@ -419,12 +462,14 @@ async function refreshDiscovery(): Promise<void> {
     .then((explain) => {
       if (!stale()) {
         state.connections = explain.connections;
+        state.resourceLinks = explain.resources;
         state.unresolved = explain.unresolved;
       }
     })
     .catch((e) => {
       if (!stale()) {
         state.connections = [];
+        state.resourceLinks = [];
         state.unresolved = [];
         flash(errText(e));
       }
@@ -690,6 +735,7 @@ async function switchVault(): Promise<void> {
     state.currentResource = null;
     state.similar = [];
     state.connections = [];
+    state.resourceLinks = [];
     state.unresolved = [];
     state.searchQuery = "";
     state.searchResults = [];
@@ -1083,6 +1129,7 @@ async function refreshConnections(): Promise<void> {
     const explain = await api.explain(cur.path);
     if (state.current?.path !== cur.path) return; // navigated away meanwhile
     state.connections = explain.connections;
+    state.resourceLinks = explain.resources;
     state.unresolved = explain.unresolved;
     render();
   } catch {
@@ -1446,6 +1493,23 @@ function wireEvents(): void {
       return;
     }
 
+    if (target.closest("[data-toggle-graph]")) {
+      toggleGraph();
+      return;
+    }
+    const lens = target.closest<HTMLElement>("[data-graph-lens]");
+    if (lens) {
+      setGraphLens(lens.dataset.graphLens ?? "");
+      return;
+    }
+    // A ghost is a question — clicking it opens the link palette (the typing moment;
+    // committing re-runs discovery, so the ghost solidifies into a typed edge in place).
+    const ghostNode = target.closest<HTMLElement>("[data-ghost-link]");
+    if (ghostNode) {
+      openLinkModal(ghostNode.dataset.ghostLink ?? "", ghostNode.dataset.cardTitle ?? "");
+      return;
+    }
+
     if (target.closest("[data-toggle-edit]")) {
       enterEdit();
       return;
@@ -1516,10 +1580,11 @@ function wireEvents(): void {
     }
   });
 
-  // Right-click a Similar card → our own menu (Open / Link…). Only these candidate
-  // cards intercept the default menu; everywhere else the webview's stays untouched.
+  // Right-click a Similar card — or a ghost node in the graph (same latent
+  // candidate, same menu: Open note / Link…). Only these intercept the default
+  // menu; everywhere else the webview's stays untouched.
   document.addEventListener("contextmenu", (e) => {
-    const card = (e.target as HTMLElement).closest<HTMLElement>(".card.candidate");
+    const card = (e.target as HTMLElement).closest<HTMLElement>(".card.candidate, .gnode.is-ghost");
     if (!card) return;
     e.preventDefault();
     openContextMenu(
@@ -1577,7 +1642,12 @@ function wireEvents(): void {
         closeSettings();
         return;
       }
-      if (state.linkTarget) closeModal();
+      if (state.linkTarget) {
+        closeModal();
+        return;
+      }
+      // With nothing else to dismiss, Escape backs out of the graph into reading.
+      if (state.graphOpen && state.current && !state.editing) toggleGraph();
       return;
     }
     if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {

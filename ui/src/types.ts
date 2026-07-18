@@ -138,6 +138,27 @@ export interface NeighborView {
   label: string;
   explanation: string | null;
   origin: string; // "inline" | "frontmatter"
+  /**
+   * The other note's `created` date, if it has one — the graph's lineage lens
+   * places and labels version neighbors by it (GH #22).
+   */
+  created: string | null;
+}
+
+/**
+ * One outbound link a note authors at a **resource** (an image, a PDF — any
+ * non-`.md` vault file), from `Vault::explain` — the third target kind an edge
+ * can have (note / resource / dangling, GH #22). No `b2id`/direction: a resource
+ * never authors edges, so these are always outbound.
+ */
+export interface ResourceLink {
+  path: string;
+  class: string; // "text" | "html" | "pdf" | "image" | "media" | "binary"
+  relation: string;
+  origin: string; // "inline" | "frontmatter"
+  caption: string | null;
+  embed: boolean;
+  explanation: string | null;
 }
 
 /**
@@ -165,6 +186,8 @@ export interface ExplainView {
   path: string;
   title: string | null;
   connections: NeighborView[];
+  /** Outbound links at resources — a note's file links, from the note's side. */
+  resources: ResourceLink[];
   unresolved: UnresolvedLink[];
 }
 

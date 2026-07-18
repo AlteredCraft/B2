@@ -412,7 +412,10 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             } else {
                 let name = view.title.as_deref().unwrap_or(&view.path);
                 println!("{name} ({})  [b2id {}]", view.path, view.b2id);
-                if view.connections.is_empty() && view.unresolved.is_empty() {
+                if view.connections.is_empty()
+                    && view.resources.is_empty()
+                    && view.unresolved.is_empty()
+                {
                     // Zero connections at all — nothing links to it and it links to
                     // nothing (an orphan; the kernel only surfaces, never archives).
                     println!("No connections yet.");
@@ -437,6 +440,27 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     // acted on (user-stories.md Story 2; files are only touched when asked).
                     if !view.connections.iter().any(|c| c.direction == "inbound") {
                         println!("No inbound links — this note is an orphan.");
+                    }
+                }
+                // Outbound links at resources (images, PDFs, …) — the third target
+                // kind an edge can have, shown from the note's side (GH #22).
+                if !view.resources.is_empty() {
+                    println!("Resource links:");
+                    for r in &view.resources {
+                        let mut line = format!(
+                            "  → {}  {} ({})  [{}]",
+                            r.relation, r.path, r.class, r.origin
+                        );
+                        if r.embed {
+                            line.push_str(" (embed)");
+                        }
+                        if let Some(c) = &r.caption {
+                            line.push_str(&format!(" — \"{c}\""));
+                        }
+                        println!("{line}");
+                        if let Some(why) = &r.explanation {
+                            println!("      why: {why}");
+                        }
                     }
                 }
                 // Dangling outbound links (a `[[folder]]` or a typo): a note is one

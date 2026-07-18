@@ -10,7 +10,18 @@
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state";
-import type { NoteSummary, ResourceExplainView, ResourceSummary } from "./types";
+import type { NoteSummary, NoteView, ResourceExplainView, ResourceSummary } from "./types";
+import {
+  buildScene,
+  NODE_R,
+  VIEW_H,
+  VIEW_W,
+  type Category,
+  type GraphEdge,
+  type GraphLens,
+  type GraphNode,
+  type GraphScene,
+} from "./graph";
 
 export function escapeHtml(s: string): string {
   return s
@@ -223,6 +234,7 @@ function noteBarHtml(state: AppState, frontmatter: string | null): string {
           <span class="frontmatter-label">Frontmatter</span>
         </button>
         <div class="note-bar-actions">
+          ${graphToggleHtml(false)}
           <button class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
             source ? "Show rendered Markdown" : "Show Markdown source"
           }">&lt;/&gt;</button>
@@ -292,6 +304,7 @@ function resourceCardHtml(r: ResourceExplainView): string {
 export function notePaneHtml(state: AppState): string {
   if (state.currentResource) return resourceCardHtml(state.currentResource);
   const n = state.current;
+  if (n && state.graphOpen) return graphPaneHtml(state, n);
   if (n) {
     const metaBits = [n.type, n.created].filter(Boolean).map((s) => escapeHtml(s as string));
     const meta = [escapeHtml(n.path), ...metaBits].join(" · ");
@@ -523,6 +536,285 @@ function unresolvedCardsHtml(state: AppState): string {
         </div>`;
     })
     .join("");
+}
+
+// --- the anchored ghost graph (GH #22) ----------------------------------------------
+//
+// The center pane's third mode: the open note's typed neighborhood as hand-rolled,
+// deterministic SVG — scene geometry from `graph.ts` (pure, unit-tested), markup
+// here, clicks delegated in main.ts. The reading key: color = edge category, solid =
+// authored / dashed teal = latent (`similar`), disc = note / square = resource /
+// dashed hollow = dangling. Everything renders from state the note-open already
+// fetched, so entering the graph (and switching lenses) costs no IPC.
+
+/** The lens selector's entries, in display order. */
+const LENSES: { id: GraphLens; label: string; blurb: string }[] = [
+  { id: "all", label: "All", blurb: "Every authored edge, plus latent (ghost) candidates" },
+  { id: "lineage", label: "Lineage", blurb: "supersedes / derived-from on a time axis" },
+  { id: "argument", label: "Argument", blurb: "supports / refutes / contradicts around the claim" },
+];
+
+/** The small node-and-edges glyph on the graph toggle (both bars). */
+const GRAPH_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="M8 5.4 4 10.6M8 5.4l4 5.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+    <circle cx="8" cy="3.4" r="2.1" fill="currentColor"/>
+    <circle cx="3.4" cy="12.4" r="2.1" fill="currentColor"/>
+    <circle cx="12.6" cy="12.4" r="2.1" fill="currentColor"/>
+  </svg>`;
+
+/** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). */
+function graphToggleHtml(active: boolean): string {
+  return `<button class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
+      aria-pressed="${active}" title="${active ? "Back to reading" : "Show the connection graph"}">${GRAPH_ICON}</button>`;
+}
+
+/** Fixed-point SVG coordinate — keeps the markup compact and diff-stable. */
+function px(v: number): string {
+  return (Math.round(v * 10) / 10).toString();
+}
+
+/** One edge's path (a straight segment, or the parallel-separating quadratic). */
+function edgePathD(e: GraphEdge): string {
+  return e.cx === null || e.cy === null
+    ? `M ${px(e.x1)} ${px(e.y1)} L ${px(e.x2)} ${px(e.y2)}`
+    : `M ${px(e.x1)} ${px(e.y1)} Q ${px(e.cx)} ${px(e.cy)} ${px(e.x2)} ${px(e.y2)}`;
+}
+
+function edgeHtml(e: GraphEdge): string {
+  if (e.ghost) {
+    return `<path class="gedge is-ghost" d="${edgePathD(e)}"/>`;
+  }
+  const verb = e.label.replace(/[^a-z0-9-]/gi, "");
+  const marker = e.arrow ? ` marker-end="url(#garr-${e.category})"` : "";
+  const label = `<text class="gedge-label cat-${e.category}" x="${px(e.lx)}" y="${px(
+    e.ly - 6,
+  )}">${escapeHtml(e.label)}</text>`;
+  return `<path class="gedge cat-${e.category} verb-${verb}" d="${edgePathD(e)}"${marker}/>${label}`;
+}
+
+/** A node's shape + glyph, by kind (labels are added by the group builder). */
+function nodeShapeHtml(n: GraphNode): string {
+  const x = px(n.x);
+  const y = px(n.y);
+  switch (n.kind) {
+    case "anchor":
+      return `<circle class="gring" cx="${x}" cy="${y}" r="${NODE_R.anchor}"/>
+        <circle class="gshape" cx="${x}" cy="${y}" r="${NODE_R.anchor - 7}"/>
+        <circle class="gcore" cx="${x}" cy="${y}" r="7"/>`;
+    case "resource": {
+      const s = NODE_R.resource - 2;
+      return `<rect class="gshape" x="${px(n.x - s)}" y="${px(n.y - s)}" width="${2 * s}" height="${2 * s}" rx="9"/>
+        <text class="gglyph" x="${x}" y="${px(n.y + 5)}">${CLASS_GLYPHS[n.sub ?? ""] ?? CLASS_GLYPHS.binary}</text>`;
+    }
+    case "dangling":
+      return `<circle class="gshape" cx="${x}" cy="${y}" r="${NODE_R.dangling}"/>
+        <text class="gglyph" x="${x}" y="${px(n.y + 5)}">⚠</text>`;
+    default:
+      return `<circle class="gshape" cx="${x}" cy="${y}" r="${NODE_R[n.kind]}"/>`;
+  }
+}
+
+/** The tooltip line(s) for a node — also the click affordance's explanation. */
+function nodeTitle(n: GraphNode): string {
+  switch (n.kind) {
+    case "anchor":
+      return `${n.full} — the open note. Click to return to reading.`;
+    case "ghost":
+      return `${n.full} — similar but not linked (similarity ${n.sub ?? "?"}). Click to link it; right-click for more.`;
+    case "dangling":
+      return `${n.full} resolves to no note or file — fix the link in the note.`;
+    case "resource":
+      return `${n.full} (${n.sub ?? "file"}) — click to open.`;
+    default:
+      return `${n.full} — click to open.`;
+  }
+}
+
+/**
+ * One scene node as an interactive `<g>`, its incident edges inside it so a pure-CSS
+ * hover lights the node *and* its edges while the rest of the scene dims. The click
+ * affordance rides existing delegation: notes reuse `data-open`, resources
+ * `data-open-resource`; ghosts get `data-ghost-link` (→ the link palette) plus the
+ * `data-card-*` pair the right-click menu reads; the anchor toggles back to reading.
+ */
+function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string {
+  const attrs: string[] = [`class="gnode is-${n.kind}"`, `style="--i:${order}"`];
+  if (n.kind === "note" && n.path) attrs.push(`data-open="${escapeHtml(n.path)}"`);
+  if (n.kind === "anchor") attrs.push(`data-toggle-graph="1"`);
+  if (n.kind === "resource" && n.path) attrs.push(`data-open-resource="${escapeHtml(n.path)}"`);
+  if (n.kind === "ghost" && n.path) {
+    attrs.push(
+      `data-ghost-link="${escapeHtml(n.path)}"`,
+      `data-card-path="${escapeHtml(n.path)}"`,
+      `data-card-title="${escapeHtml(n.title ?? "")}"`,
+    );
+  }
+  const r = NODE_R[n.kind];
+  // Text goes on the side of the node facing *away* from the anchor (above for the
+  // upper half of the scene), so a label never sits in its own edge's path.
+  const above = n.kind !== "anchor" && n.y < VIEW_H / 2 - 20;
+  const label = `<text class="gnode-label" x="${px(n.x)}" y="${px(
+    above ? n.y - r - 14 : n.y + r + 18,
+  )}">${escapeHtml(n.label)}</text>`;
+  const sub = n.sub
+    ? `<text class="gnode-sub" x="${px(n.x)}" y="${px(
+        above ? n.y - r - 29 : n.y + r + 33,
+      )}">${escapeHtml(n.sub)}</text>`
+    : "";
+  return `<g ${attrs.join(" ")}>
+      <title>${escapeHtml(nodeTitle(n))}</title>
+      ${edges.map(edgeHtml).join("")}
+      ${nodeShapeHtml(n)}
+      ${label}${sub}
+    </g>`;
+}
+
+/** Per-lens chrome drawn under the scene: the lineage time axis, the argument
+ *  zones + fault line. Pure annotation — no hit targets. */
+function lensChromeHtml(lens: GraphLens, scene: GraphScene): string {
+  if (lens === "lineage") {
+    const y = VIEW_H - 34;
+    return `<g class="gaxis" aria-hidden="true">
+        <line x1="150" y1="${y}" x2="850" y2="${y}" marker-end="url(#garr-axis)"/>
+        <text x="150" y="${y - 10}" text-anchor="start">older</text>
+        <text x="850" y="${y - 10}" text-anchor="end">newer</text>
+      </g>`;
+  }
+  if (lens === "argument") {
+    const fault = scene.edges.some((e) => e.label === "contradicts")
+      ? `<line class="gfault" x1="${VIEW_W / 2}" y1="56" x2="${VIEW_W / 2}" y2="${VIEW_H - 56}"/>`
+      : "";
+    return `<g class="gzone" aria-hidden="true">${fault}
+        <text x="195" y="42" text-anchor="middle">supports →</text>
+        <text x="805" y="42" text-anchor="middle">← refutes</text>
+      </g>`;
+  }
+  return "";
+}
+
+/** The honest ghost-halo caveat (mirrors `searchCaveat`'s tiers, #26): why there are
+ *  no ghosts right now, or null when there are (or when silence is the honest state). */
+function ghostHintHtml(state: AppState): string {
+  if (state.graphLens !== "all" || state.similar.length > 0) return "";
+  if (state.discoveringSimilar)
+    return `<div class="graph-hint is-scanning"><span class="spinner"></span>scanning for latent connections…</div>`;
+  if (!state.semantic)
+    return `<div class="graph-hint">ghost connections need the semantic model — run <code>b2 init</code>, then Reindex</div>`;
+  if (state.notesTotal > 0 && state.notesEmbedded < state.notesTotal)
+    return `<div class="graph-hint">ghosts appear once the vault is embedded — Reindex</div>`;
+  return "";
+}
+
+/** The centered guidance when a lens has nothing to draw (the anchor always shows). */
+function graphEmptyHtml(state: AppState, scene: GraphScene): string {
+  if (scene.edges.length > 0) return "";
+  if (state.graphLens === "lineage")
+    return `<div class="graph-empty"><p>No lineage yet.</p>
+      <p class="muted">Link with <code>supersedes</code> or <code>derived-from</code> to see this idea's history on a time axis.</p></div>`;
+  if (state.graphLens === "argument")
+    return `<div class="graph-empty"><p>No argument yet.</p>
+      <p class="muted"><code>supports</code>, <code>refutes</code>, and <code>contradicts</code> edges map a claim's evidence here.</p></div>`;
+  if (state.discoveringSimilar) return "";
+  return `<div class="graph-empty"><p>No connections yet.</p>
+    <p class="muted">B2 floats similar-but-unlinked notes here as ghosts — click one to make the connection real.</p></div>`;
+}
+
+/** The reading key, one quiet strip: category colors, edge states, node shapes. */
+function graphLegendHtml(): string {
+  const cats: [Category, string][] = [
+    ["referential", "referential"],
+    ["expository", "expository"],
+    ["evidential", "evidential"],
+    ["structural", "structural"],
+    ["versioning", "versioning"],
+  ];
+  const dots = cats
+    .map(([c, label]) => `<span class="leg"><span class="leg-dot cat-${c}"></span>${label}</span>`)
+    .join("");
+  return `<div class="graph-legend" aria-hidden="true">${dots}
+      <span class="leg"><span class="leg-dash"></span>ghost (unlinked)</span>
+      <span class="leg"><span class="leg-square"></span>file</span>
+      <span class="leg"><span class="leg-broken">⚠</span>broken</span>
+    </div>`;
+}
+
+/** Arrowhead markers, one per category (an SVG marker can't inherit its edge's
+ *  stroke everywhere yet), plus the muted lineage-axis arrow. */
+function graphDefsHtml(): string {
+  const cats: Category[] = ["referential", "expository", "evidential", "structural", "versioning", "other"];
+  const arrow = (id: string, cls: string) =>
+    `<marker id="${id}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+       <path d="M0 0.8 L9.5 5 L0 9.2 z" class="${cls}"/>
+     </marker>`;
+  return `<defs>${cats.map((c) => arrow(`garr-${c}`, `garr cat-${c}`)).join("")}
+    ${arrow("garr-axis", "garr is-axis")}</defs>`;
+}
+
+/**
+ * The graph pane — the note pane's third mode (Reading / Editing / Graph). Bar:
+ * the typed-lens selector + the same action chips as reading; stage: the SVG scene
+ * (fills the pane, `viewBox`-scaled) with overlay hints; footer: the reading key.
+ */
+function graphPaneHtml(state: AppState, n: NoteView): string {
+  const scene = buildScene(state.graphLens, {
+    anchor: { path: n.path, title: n.title, created: n.created },
+    connections: state.connections,
+    resources: state.resourceLinks,
+    unresolved: state.unresolved,
+    ghosts: state.similar,
+  });
+
+  const lenses = LENSES.map((l) => {
+    const on = state.graphLens === l.id;
+    return `<button type="button" class="seg${on ? " seg-on" : ""}" data-graph-lens="${l.id}"
+        aria-pressed="${on}" title="${escapeHtml(l.blurb)}">${l.label}</button>`;
+  }).join("");
+
+  // Edges live inside their node's group (hover affordance); the anchor renders
+  // last so it always paints on top of edge crossings.
+  const byNode = new Map<string, GraphEdge[]>();
+  for (const e of scene.edges) {
+    const owner = e.from === "anchor" ? e.to : e.from;
+    const list = byNode.get(owner) ?? [];
+    list.push(e);
+    byNode.set(owner, list);
+  }
+  // Paint order: ghosts lowest (their long dashed spokes must pass *under* the
+  // authored orbit), authored above them, the anchor on top of everything. The
+  // stagger index is narrative, not paint, order: authored pops first, ghosts after.
+  const authoredNodes = scene.nodes.filter((node) => node.kind !== "anchor" && node.kind !== "ghost");
+  const ghostNodes = scene.nodes.filter((node) => node.kind === "ghost");
+  const anchor = scene.nodes.find((node) => node.kind === "anchor");
+  const groups = [
+    ...ghostNodes.map((node, i) =>
+      nodeGroupHtml(node, byNode.get(node.id) ?? [], authoredNodes.length + 1 + i),
+    ),
+    ...authoredNodes.map((node, i) => nodeGroupHtml(node, byNode.get(node.id) ?? [], i + 1)),
+    ...(anchor ? [nodeGroupHtml(anchor, [], 0)] : []),
+  ].join("");
+
+  return `<div class="graph-view">
+      <div class="graph-bar">
+        <div class="segmented graph-lenses" role="group" aria-label="Graph lens">${lenses}</div>
+        <div class="note-bar-actions">
+          ${graphToggleHtml(true)}
+          <button class="edit-toggle" data-toggle-edit${
+            state.loading ? " disabled" : ""
+          } title="Edit this note (autosaves as you type)">Edit</button>
+        </div>
+      </div>
+      <div class="graph-stage">
+        <svg class="graph-svg" viewBox="0 0 ${VIEW_W} ${VIEW_H}" preserveAspectRatio="xMidYMid meet"
+             role="img" aria-label="Connection graph for ${escapeHtml(n.title ?? n.path)}">
+          ${graphDefsHtml()}
+          ${lensChromeHtml(state.graphLens, scene)}
+          ${groups}
+        </svg>
+        ${graphEmptyHtml(state, scene)}
+        ${ghostHintHtml(state)}
+      </div>
+      ${graphLegendHtml()}
+    </div>`;
 }
 
 /** A cumulative-duration label from milliseconds: "3h 25m", "12m 04s", "45s", "0s". */
