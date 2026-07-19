@@ -61,10 +61,13 @@ pub struct Vault {
     idgen: UlidGen,
     // The vault's one chunking policy (chunk.rs, spec §3 D5). Held here — not
     // re-defaulted per call — so every path that chunks (reindex/project/write/
-    // add/link/mv) cuts identically and `incremental ≡ full rebuild` holds by
-    // construction. Defaults to `ChunkConfig::default()`; the retrieval eval is
-    // the one client that overrides it (`set_chunk_config`) to A/B chunker levers
-    // in-process (specs/eval-strategy.md).
+    // add/link/mv) cuts identically under a *fixed* config and `incremental ≡
+    // full rebuild` holds by construction. Across a `set_chunk_config` change the
+    // guarantee is doc-enforced instead: an incremental pass would reuse chunks
+    // cut under the old policy, so a config change must pair with
+    // `project(force)` (as `set_chunk_config`'s doc requires and the eval does).
+    // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
+    // that overrides it, to A/B chunker levers in-process (specs/eval-strategy.md).
     chunk_config: ChunkConfig,
 }
 
@@ -896,7 +899,12 @@ impl Vault {
             tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
         let mut out = Vec::new();
         for hit in self.retrieve(query, limit)? {
-            let path = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)?.unwrap_or_default();
+            // Both lookups can miss only on an inconsistent index (a hit whose row
+            // vanished mid-call); drop such a hit rather than emit a half-resolved
+            // one — a rank slot with an empty path would read as a real result.
+            let Some(path) = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)? else {
+                continue;
+            };
             let Some((heading_path, text)) = db::chunk_detail(&self.conn, hit.chunk_id)? else {
                 continue;
             };

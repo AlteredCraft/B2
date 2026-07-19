@@ -171,7 +171,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&vault_root)?;
     for entry in std::fs::read_dir(&corpus_dir)? {
         let entry = entry?;
-        std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
+        // Regular files only: `fs::copy` errors on a directory, so a future
+        // corpus/ subfolder (or any stray non-file) must not abort the run.
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
+        }
     }
     let mut vault = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
 
