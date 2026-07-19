@@ -17,6 +17,7 @@ import type {
   UnresolvedLink,
 } from "./types";
 import type { GraphLens } from "./graph";
+import type { NodeKind } from "./move";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
@@ -47,15 +48,26 @@ export interface LinkTarget {
 }
 
 /**
+ * The tree node a move/rename gesture targets — a note, resource, or folder row,
+ * identified by its vault-relative path (the tree's DOM identity).
+ */
+export interface TreeNodeRef {
+  path: string;
+  nodeKind: NodeKind;
+  label: string;
+}
+
+/**
  * An open right-click menu, anchored at the cursor (viewport coords, already
  * clamped on-screen when opened). Null when no menu is up. Two surfaces share the
  * one overlay: a discovery **card** (Open / Link… — the whole card is the target,
  * replacing the old inline "Link…" button) and the file **tree** (New note / New
- * folder, targeting the folder under the cursor).
+ * folder, targeting the folder under the cursor; over a concrete row, `node` is
+ * that row and the menu grows Rename / Move…).
  */
 export type ContextMenuState =
   | { kind: "card"; x: number; y: number; path: string; title: string | null }
-  | { kind: "tree"; x: number; y: number; dir: string };
+  | { kind: "tree"; x: number; y: number; dir: string; node: TreeNodeRef | null };
 
 /**
  * Appearance preference. `"system"` (the default) defers to the OS via
@@ -96,6 +108,10 @@ export interface AppState {
   pendingDirs: Set<string>;
   /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
   treeCreate: { kind: "note" | "folder"; dir: string } | null;
+  /** An inline rename input open on a tree row, or null. */
+  treeRename: TreeNodeRef | null;
+  /** When set, the Move… modal is open for this tree node. */
+  moveTarget: TreeNodeRef | null;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
   /**
@@ -217,6 +233,8 @@ export const state: AppState = {
   selectedDir: "",
   pendingDirs: new Set<string>(),
   treeCreate: null,
+  treeRename: null,
+  moveTarget: null,
   current: null,
   currentResource: null,
   frontmatterOpen: false,

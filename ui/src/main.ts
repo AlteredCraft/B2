@@ -11,8 +11,9 @@ import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
-import { state, type SideSection, type ThemePref } from "./state";
+import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
+import { baseName, canMoveInto, moveDestination, remapPath, renameDestination } from "./move";
 import { livePreview, wikilink } from "./livepreview";
 import { BOUNDS, initPanes } from "./panes";
 import {
@@ -43,25 +44,34 @@ let lastNotePaneHtml: string | null = null;
 // change swaps and then restores the input's value, caret, and focus below.
 let lastTreePaneHtml: string | null = null;
 
-/** Repaint the tree pane (memoized), carrying an open create input across the swap. */
+/** Repaint the tree pane (memoized), carrying an open create/rename input across
+ *  the swap. A fresh rename input (first paint) gets its prefilled name selected,
+ *  so typing replaces it wholesale — the platform rename affordance. */
 function paintTree(): void {
   const html = treePaneHtml(state);
   if (html === lastTreePaneHtml) return;
-  const prev = document.getElementById("tree-create-input") as HTMLInputElement | null;
-  const saved =
-    prev && state.treeCreate
-      ? { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd }
-      : null;
+  const carry = (id: string, open: boolean, selectAllOnFresh: boolean) => {
+    const prev = document.getElementById(id) as HTMLInputElement | null;
+    const saved =
+      prev && open ? { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd } : null;
+    return () => {
+      const input = document.getElementById(id) as HTMLInputElement | null;
+      if (!input) return;
+      if (saved) {
+        input.value = saved.value;
+        input.setSelectionRange(saved.start ?? saved.value.length, saved.end ?? saved.value.length);
+      } else if (selectAllOnFresh) {
+        input.select();
+      }
+      input.focus();
+    };
+  };
+  const restoreCreate = carry("tree-create-input", state.treeCreate !== null, false);
+  const restoreRename = carry("tree-rename-input", state.treeRename !== null, true);
   el("tree-pane").innerHTML = html;
   lastTreePaneHtml = html;
-  const input = document.getElementById("tree-create-input") as HTMLInputElement | null;
-  if (input) {
-    if (saved) {
-      input.value = saved.value;
-      input.setSelectionRange(saved.start ?? saved.value.length, saved.end ?? saved.value.length);
-    }
-    input.focus();
-  }
+  restoreCreate();
+  restoreRename();
 }
 
 function render(): void {
@@ -436,6 +446,7 @@ function toggleCard(key: string): void {
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 76;
 const TREE_MENU_H = 100; // the context line + two items
+const TREE_NODE_MENU_H = 172; // + Rename / Move… and their separator
 
 function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
@@ -449,9 +460,14 @@ function openCardMenu(clientX: number, clientY: number, path: string, title: str
   render();
 }
 
-function openTreeMenu(clientX: number, clientY: number, dir: string): void {
-  const { x, y } = clampMenu(clientX, clientY, TREE_MENU_H);
-  state.contextMenu = { kind: "tree", x, y, dir };
+function openTreeMenu(
+  clientX: number,
+  clientY: number,
+  dir: string,
+  node: TreeNodeRef | null = null,
+): void {
+  const { x, y } = clampMenu(clientX, clientY, node ? TREE_NODE_MENU_H : TREE_MENU_H);
+  state.contextMenu = { kind: "tree", x, y, dir, node };
   render();
 }
 
@@ -533,6 +549,135 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
     // adjusts rather than retypes; the toast explains.
     state.treeCreate = create;
     flash(errText(e));
+  }
+}
+
+// --- tree move / rename (context menu, Move… modal, drag-and-drop) -----------------
+//
+// All three gestures funnel into one executor: resolve the destination (pure logic
+// in move.ts), dispatch the node's kind to its IPC command (`move_note` /
+// `move_resource` / `move_dir` — the host's `Vault` ops rewrite inbound links and
+// re-project the index), then re-point the open document and reload the tree.
+// Renaming acts on the *file path* — a frontmatter `title:` is inert (the note's
+// display title is its filename, data-model.md §1) — exactly like `b2 mv`.
+//
+// The re-point runs BEFORE the watcher's debounced `vault-changed` pulse arrives:
+// reconcileExternalChange re-reads the open note by path, so if it still pointed at
+// the old path it would flash "moved or removed" for a move we made ourselves.
+
+/** A move/rename is in flight — further gestures are ignored (no queueing in v1). */
+let moveInFlight = false;
+
+function startTreeRename(node: TreeNodeRef): void {
+  state.contextMenu = null;
+  state.treeRename = node;
+  for (const d of dirChain(parentDir(node.path))) state.expandedDirs.add(d);
+  render(); // paintTree focuses the input and selects the prefilled name
+}
+
+function cancelTreeRename(): void {
+  if (!state.treeRename) return;
+  state.treeRename = null;
+  render();
+}
+
+async function commitTreeRename(raw: string): Promise<void> {
+  const node = state.treeRename;
+  if (!node) return;
+  const dest = renameDestination(node.path, node.nodeKind, raw);
+  if (dest === null) {
+    cancelTreeRename(); // empty / traversal / unchanged — a back-out, not an error
+    return;
+  }
+  // The input stays open while the move runs: on a refusal the typed name survives
+  // (the memoized tree HTML is unchanged, so the DOM input is never rebuilt — the
+  // commitTreeCreate posture) and the toast explains; success clears it.
+  const ok = await executeMove(node, dest);
+  if (ok) {
+    state.treeRename = null;
+    render();
+  }
+}
+
+function openMoveModal(node: TreeNodeRef): void {
+  state.contextMenu = null;
+  state.moveTarget = node;
+  render();
+}
+
+/**
+ * The one shared move executor (rename commit, Move… modal, drop). Resolves true
+ * on success. Refuses while a reindex runs — the move opens the real model, and
+ * two model instances at once is a needless memory spike — and while another move
+ * is still in flight.
+ */
+async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
+  if (moveInFlight) return false;
+  if (state.reindexing) {
+    flash("Indexing is running — try the move again when it finishes.");
+    return false;
+  }
+  // If the open document is affected, flush and close the editor first so the save
+  // chain never targets the old path (a conflict keeps the editor and aborts the move).
+  const curPath = state.current?.path ?? state.currentResource?.path ?? null;
+  const affected =
+    curPath !== null &&
+    (node.nodeKind === "folder" ? remapPath(curPath, node.path, to) !== null : curPath === node.path);
+  if (affected && state.editing && !(await closeEditor())) return false;
+
+  moveInFlight = true;
+  if (node.nodeKind === "folder") flash(`Moving ${node.path}/…`);
+  try {
+    let from: string;
+    let rewritten: number;
+    if (node.nodeKind === "note") {
+      const r = await api.moveNote(node.path, to);
+      from = r.from;
+      to = r.to; // the host normalizes (e.g. appends .md)
+      rewritten = r.links_rewritten;
+    } else if (node.nodeKind === "resource") {
+      const r = await api.moveResource(node.path, to);
+      from = r.from;
+      to = r.to;
+      rewritten = r.links_rewritten;
+    } else {
+      const r = await api.moveDir(node.path, to);
+      from = r.from;
+      to = r.to;
+      rewritten = r.links_rewritten;
+    }
+
+    // Re-point open/tree state through the move before the watcher pulse re-reads it.
+    state.expandedDirs = new Set(
+      [...state.expandedDirs].map((d) => remapPath(d, from, to) ?? d),
+    );
+    state.pendingDirs = new Set([...state.pendingDirs].map((d) => remapPath(d, from, to) ?? d));
+    state.selectedDir = remapPath(state.selectedDir, from, to) ?? state.selectedDir;
+    for (const d of dirChain(parentDir(to))) state.expandedDirs.add(d);
+    const openNotePath = state.current ? remapPath(state.current.path, from, to) : null;
+    const openResourcePath = state.currentResource
+      ? remapPath(state.currentResource.path, from, to)
+      : null;
+    if (openNotePath !== null) {
+      state.current = await api.readNote(openNotePath);
+    }
+    if (openResourcePath !== null) {
+      state.currentResource = await api.explainResource(openResourcePath);
+    }
+    await loadNotes();
+    if (openNotePath !== null) await refreshDiscovery(); // backlinks may show new paths
+    flash(
+      rewritten > 0
+        ? `Moved ${from} → ${to} (${rewritten} link${rewritten === 1 ? "" : "s"} rewritten).`
+        : `Moved ${from} → ${to}.`,
+    );
+    return true;
+  } catch (e) {
+    flash(errText(e));
+    return false;
+  } finally {
+    moveInFlight = false;
+    render();
   }
 }
 
@@ -659,6 +804,7 @@ function openLinkModal(path: string, title: string): void {
 
 function closeModal(): void {
   state.linkTarget = null;
+  state.moveTarget = null;
   render();
 }
 
@@ -1575,6 +1721,14 @@ function wireEvents(): void {
     if (state.contextMenu) {
       const menu = state.contextMenu;
       if (menu.kind === "tree") {
+        if (menu.node && target.closest("[data-ctx-rename]")) {
+          startTreeRename(menu.node); // clears the menu itself
+          return;
+        }
+        if (menu.node && target.closest("[data-ctx-move]")) {
+          openMoveModal(menu.node);
+          return;
+        }
         if (target.closest("[data-ctx-new-note]")) {
           startTreeCreate("note", menu.dir); // clears the menu itself
           return;
@@ -1661,6 +1815,15 @@ function wireEvents(): void {
     }
     if (target.closest("#link-commit")) {
       void commitLink();
+      return;
+    }
+    // The Move… modal: clicking a destination row commits the move and closes it.
+    const moveDest = target.closest<HTMLElement>("[data-move-dest]");
+    if (moveDest && state.moveTarget) {
+      const node = state.moveTarget;
+      const dest = moveDest.dataset.moveDest ?? "";
+      state.moveTarget = null;
+      void executeMove(node, moveDestination(node.path, dest));
       return;
     }
 
@@ -1798,8 +1961,20 @@ function wireEvents(): void {
         : fileRow
           ? parentDir(fileRow.dataset.open ?? fileRow.dataset.openResource ?? "")
           : "";
+      // Over a concrete row, the menu also targets that node (Rename / Move…).
+      const node: TreeNodeRef | null = dirRow
+        ? { path: dirRow.dataset.dir ?? "", nodeKind: "folder", label: baseName(dirRow.dataset.dir ?? "") }
+        : fileRow?.dataset.open
+          ? { path: fileRow.dataset.open, nodeKind: "note", label: baseName(fileRow.dataset.open) }
+          : fileRow?.dataset.openResource
+            ? {
+                path: fileRow.dataset.openResource,
+                nodeKind: "resource",
+                label: baseName(fileRow.dataset.openResource),
+              }
+            : null;
       state.selectedDir = dir;
-      openTreeMenu(e.clientX, e.clientY, dir);
+      openTreeMenu(e.clientX, e.clientY, dir, node && node.path ? node : null);
       return;
     }
     const card = target.closest<HTMLElement>(".card.candidate, .gnode.is-ghost");
@@ -1850,6 +2025,11 @@ function wireEvents(): void {
     if (t.id === "tree-create-input" && t.isConnected && state.treeCreate) {
       void commitTreeCreate((t as HTMLInputElement).value, false);
     }
+    // The rename input commits on blur too, same VS Code posture (a changed name is
+    // a "yes, rename it"; an unchanged or empty one backs out via renameDestination).
+    if (t.id === "tree-rename-input" && t.isConnected && state.treeRename) {
+      void commitTreeRename((t as HTMLInputElement).value);
+    }
   });
 
   // ⌘, toggles Settings (the macOS Preferences reflex); Escape closes whichever modal is
@@ -1869,8 +2049,19 @@ function wireEvents(): void {
       }
       return;
     }
+    // The rename input owns its keys the same way.
+    if (state.treeRename && (e.target as HTMLElement).id === "tree-rename-input") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void commitTreeRename((e.target as HTMLInputElement).value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelTreeRename();
+      }
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
-      if (state.settingsOpen || state.linkTarget) return; // a modal owns the keyboard
+      if (state.settingsOpen || state.linkTarget || state.moveTarget) return; // a modal owns the keyboard
       e.preventDefault();
       startTreeCreate(e.shiftKey ? "folder" : "note", state.selectedDir);
       return;
@@ -1890,7 +2081,7 @@ function wireEvents(): void {
         closeSettings();
         return;
       }
-      if (state.linkTarget) {
+      if (state.linkTarget || state.moveTarget) {
         closeModal();
         return;
       }
@@ -1910,7 +2101,7 @@ function wireEvents(): void {
     // search field). The buttons and mouse back/forward stay live everywhere — they
     // flush through navGo's edit-mode guard.
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !state.editing) {
-      if (state.settingsOpen || state.linkTarget) return;
+      if (state.settingsOpen || state.linkTarget || state.moveTarget) return;
       const back = e.key === "[" || e.key === "ArrowLeft";
       const forward = e.key === "]" || e.key === "ArrowRight";
       if (!back && !forward) return;
@@ -1933,6 +2124,93 @@ function wireEvents(): void {
   // looks at (or edits in) anything else.
   window.addEventListener("blur", () => {
     if (state.editing) void saveNow();
+  });
+
+  // --- tree drag-and-drop ---------------------------------------------------------
+  //
+  // Depends on `dragDropEnabled: false` in tauri.conf.json's window config: with
+  // Tauri's native drag-drop interception on (the default), wry consumes drag
+  // events for its own file-drop channel and the DOM never sees dragover/drop on
+  // macOS — dragstart fires, but no drop zone ever activates.
+  //
+  // Any tree row drags; folder rows and the pane background (= vault root) accept
+  // drops — a drop on a *file* row lands in that file's folder, mirroring the
+  // right-click context rule. The payload is a module-local (same-window DnD needs
+  // no dataTransfer round-trip); validity is `canMoveInto` (pure, move.ts), and only
+  // a valid target preventDefaults dragover, so the OS cursor says no everywhere
+  // else. The highlight is applied imperatively — dragover fires continuously, and
+  // a render() per event would fight the drag.
+  let treeDrag: TreeNodeRef | null = null;
+  let dropHighlight: Element | null = null;
+
+  const clearDropHighlight = () => {
+    dropHighlight?.classList.remove("is-drop-target");
+    dropHighlight = null;
+  };
+  /** The drop context under the cursor: a row element + its destination folder. */
+  const dropTargetOf = (target: HTMLElement): { el: Element; dir: string } | null => {
+    const pane = target.closest("#tree-pane");
+    if (!pane) return null;
+    const dirRow = target.closest<HTMLElement>("[data-dir]");
+    if (dirRow) return { el: dirRow, dir: dirRow.dataset.dir ?? "" };
+    const fileRow = target.closest<HTMLElement>("[data-open], [data-open-resource]");
+    if (fileRow)
+      return { el: fileRow, dir: parentDir(fileRow.dataset.open ?? fileRow.dataset.openResource ?? "") };
+    return { el: pane, dir: "" };
+  };
+
+  document.addEventListener("dragstart", (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest("#tree-pane")) return;
+    const dirRow = target.closest<HTMLElement>("[data-dir]");
+    const noteRow = target.closest<HTMLElement>("[data-open]");
+    const resRow = target.closest<HTMLElement>("[data-open-resource]");
+    treeDrag = dirRow?.dataset.dir
+      ? { path: dirRow.dataset.dir, nodeKind: "folder", label: baseName(dirRow.dataset.dir) }
+      : noteRow?.dataset.open
+        ? { path: noteRow.dataset.open, nodeKind: "note", label: baseName(noteRow.dataset.open) }
+        : resRow?.dataset.openResource
+          ? {
+              path: resRow.dataset.openResource,
+              nodeKind: "resource",
+              label: baseName(resRow.dataset.openResource),
+            }
+          : null;
+    if (!treeDrag) return;
+    if (e.dataTransfer) {
+      e.dataTransfer.setData("text/plain", treeDrag.path);
+      e.dataTransfer.effectAllowed = "move";
+    }
+  });
+
+  document.addEventListener("dragover", (e) => {
+    if (!treeDrag) return;
+    const drop = dropTargetOf(e.target as HTMLElement);
+    const valid = drop !== null && canMoveInto(treeDrag.path, treeDrag.nodeKind, drop.dir);
+    if (drop?.el !== dropHighlight) clearDropHighlight();
+    if (!valid) return;
+    e.preventDefault(); // this is what makes the target droppable
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (drop.el !== dropHighlight) {
+      dropHighlight = drop.el;
+      drop.el.classList.add("is-drop-target");
+    }
+  });
+
+  document.addEventListener("drop", (e) => {
+    const drag = treeDrag;
+    treeDrag = null;
+    clearDropHighlight();
+    if (!drag) return;
+    const drop = dropTargetOf(e.target as HTMLElement);
+    if (drop === null || !canMoveInto(drag.path, drag.nodeKind, drop.dir)) return;
+    e.preventDefault();
+    void executeMove(drag, moveDestination(drag.path, drop.dir));
+  });
+
+  document.addEventListener("dragend", () => {
+    treeDrag = null;
+    clearDropHighlight();
   });
 }
 

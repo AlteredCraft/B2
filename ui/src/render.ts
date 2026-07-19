@@ -10,6 +10,7 @@
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state";
+import { allDirs, canMoveInto, renamePrefill } from "./move";
 import { shouldPromptEmbedInstall } from "./embedreminder";
 import type { NoteSummary, NoteView, ResourceExplainView, ResourceSummary } from "./types";
 import {
@@ -168,6 +169,19 @@ function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
     </div>`;
 }
 
+/** The inline rename input, rendered in place of the row being renamed — the
+ *  rename sibling of `treeCreateRowHtml` (same commit/cancel wiring in main.ts,
+ *  same value-carrying across repaints in paintTree). `glyph` keeps the row's
+ *  own marker so the input reads as "this row, editable". */
+function treeRenameRowHtml(prefill: string, glyph: string, pad: string): string {
+  return `<div class="tree-row tree-create" style="${pad}">
+      <span class="tree-caret">${glyph}</span>
+      <input id="tree-rename-input" class="tree-create-input" type="text"
+        value="${escapeHtml(prefill)}"
+        aria-label="Rename" autocomplete="off" spellcheck="false" />
+    </div>`;
+}
+
 /** Render one folder's children (its sub-folders, then its files), recursively. */
 function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string {
   const subdirs = [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -187,9 +201,12 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
     .map((sub) => {
       const open = state.expandedDirs.has(sub.path);
       const selected = state.selectedDir === sub.path ? " is-selected" : "";
-      const header = `<button class="tree-row tree-dir${selected}" data-dir="${escapeHtml(
-        sub.path,
-      )}" style="${pad(depth)}" aria-expanded="${open}">
+      const header =
+        state.treeRename?.path === sub.path
+          ? treeRenameRowHtml(renamePrefill(sub.path, "folder"), open ? "▼" : "▶", pad(depth))
+          : `<button class="tree-row tree-dir${selected}" data-dir="${escapeHtml(
+              sub.path,
+            )}" style="${pad(depth)}" aria-expanded="${open}" draggable="true">
           <span class="tree-caret">${open ? "▼" : "▶"}</span>
           <span class="tree-label">${escapeHtml(sub.name)}</span>
         </button>`;
@@ -200,11 +217,18 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
 
   const fileHtml = files
     .map((file) => {
+      if (state.treeRename?.path === file.path) {
+        return treeRenameRowHtml(
+          renamePrefill(file.path, file.kind),
+          file.kind === "resource" ? file.glyph : "",
+          pad(depth),
+        );
+      }
       if (file.kind === "resource") {
         const active = state.currentResource?.path === file.path ? " is-active" : "";
         return `<button class="tree-row tree-file tree-resource${active}" data-open-resource="${escapeHtml(
           file.path,
-        )}" style="${pad(depth)}" title="${escapeHtml(file.path)}">
+        )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
             <span class="tree-caret tree-glyph">${file.glyph}</span>
             <span class="tree-label">${escapeHtml(file.label)}</span>
           </button>`;
@@ -212,7 +236,7 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
       const active = state.current?.path === file.path ? " is-active" : "";
       return `<button class="tree-row tree-file${active}" data-open="${escapeHtml(
         file.path,
-      )}" style="${pad(depth)}" title="${escapeHtml(file.path)}">
+      )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
           <span class="tree-caret"></span>
           <span class="tree-label">${escapeHtml(file.label)}</span>
         </button>`;
@@ -1070,18 +1094,66 @@ function settingsModalHtml(state: AppState): string {
 export function contextMenuHtml(state: AppState): string {
   const m = state.contextMenu;
   if (!m) return "";
-  const items =
-    m.kind === "tree"
-      ? `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>
+  let items: string;
+  if (m.kind === "tree") {
+    // Over a concrete row the menu targets that node (Rename / Move… — renaming
+    // acts on the file path, never a frontmatter title); the create pair keeps
+    // targeting the folder context either way.
+    const node = m.node
+      ? `<div class="context-label">${escapeHtml(m.node.path)}</div>
+        <button class="context-item" data-ctx-rename role="menuitem">Rename</button>
+        <button class="context-item" data-ctx-move role="menuitem">Move…</button>
+        <div class="context-sep" role="separator"></div>`
+      : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
+    items = `${node}
         <button class="context-item" data-ctx-new-note role="menuitem">New note</button>
-        <button class="context-item" data-ctx-new-folder role="menuitem">New folder</button>`
-      : `<button class="context-item" data-ctx-open role="menuitem">Open note</button>
+        <button class="context-item" data-ctx-new-folder role="menuitem">New folder</button>`;
+  } else {
+    items = `<button class="context-item" data-ctx-open role="menuitem">Open note</button>
         <button class="context-item" data-ctx-link role="menuitem">Link…</button>`;
+  }
   return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu">${items}</div>`;
+}
+
+/** The Move… modal: pick a destination folder for the targeted tree node. Every
+ *  folder the tree knows renders as a row; an invalid destination (the node's
+ *  current folder, or a folder inside the folder being moved) renders disabled
+ *  with the reason, so the modal teaches the same rule the host enforces. */
+function moveModalHtml(state: AppState): string {
+  const t = state.moveTarget;
+  if (!t) return "";
+  const dirs = allDirs(
+    state.notes.map((n) => n.path),
+    state.resources.map((r) => r.path),
+    state.pendingDirs,
+  );
+  const rows = dirs
+    .map((dir) => {
+      const label = dir === "" ? "vault root" : `${dir}/`;
+      if (!canMoveInto(t.path, t.nodeKind, dir)) {
+        const why =
+          t.nodeKind === "folder" && (dir === t.path || dir.startsWith(`${t.path}/`))
+            ? "inside the folder being moved"
+            : "current folder";
+        return `<div class="move-dest is-disabled">${escapeHtml(label)}<span class="muted"> — ${why}</span></div>`;
+      }
+      return `<button class="move-dest" data-move-dest="${escapeHtml(dir)}">${escapeHtml(label)}</button>`;
+    })
+    .join("");
+  return `<div class="modal-backdrop">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Move to a folder">
+        <h3>Move ${escapeHtml(t.label)} to…</h3>
+        <div class="move-dest-list">${rows}</div>
+        <div class="modal-actions">
+          <button class="btn ghost" data-cancel>Cancel</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 export function modalHtml(state: AppState): string {
   if (state.settingsOpen) return settingsModalHtml(state);
+  if (state.moveTarget) return moveModalHtml(state);
   const t = state.linkTarget;
   if (!t) return "";
   const src = state.current;

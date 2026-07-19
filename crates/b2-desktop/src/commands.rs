@@ -21,8 +21,9 @@ use crate::{open_vault, AppState};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
-    EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
-    ResourceExplainView, ResourceSummary, SearchResult, SimilarView, WriteReport,
+    DirMoveReport, EmbedReport, ExplainView, LinkReport, MoveReport, NeighborView, NoteSummary,
+    NoteView, ProjectReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
+    SearchResult, SimilarView, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
 use serde::Serialize;
@@ -175,6 +176,39 @@ pub fn write_note(
 #[tauri::command(async)]
 pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
     create_note_impl(state.inner(), &path)
+}
+
+/// Move/rename a note — the tree's Rename / Move… / drag-drop action. Opens the
+/// **real** model (like `search`/`link`): rewriting an inbound file's link text
+/// changes its body, and the re-projection re-embeds it inline.
+#[tauri::command(async)]
+pub fn move_note(
+    state: State<'_, AppState>,
+    note: String,
+    to: String,
+) -> Result<MoveReport, CmdError> {
+    move_note_impl(state.inner(), &note, &to)
+}
+
+/// [`move_note`]'s resource sibling — same posture, minus the `b2id`.
+#[tauri::command(async)]
+pub fn move_resource(
+    state: State<'_, AppState>,
+    path: String,
+    to: String,
+) -> Result<ResourceMoveReport, CmdError> {
+    move_resource_impl(state.inner(), &path, &to)
+}
+
+/// Move/rename a whole folder — one rename on disk (unindexed files travel too),
+/// inbound links across and within the moved set rewritten, index re-projected.
+#[tauri::command(async)]
+pub fn move_dir(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<DirMoveReport, CmdError> {
+    move_dir_impl(state.inner(), &from, &to)
 }
 
 #[tauri::command(async)]
@@ -466,6 +500,25 @@ fn write_note_impl(
 fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError> {
     let (vault, _) = open_vault(state, false)?;
     Ok(vault.create_note(path)?)
+}
+
+fn move_note_impl(state: &AppState, note: &str, to: &str) -> Result<MoveReport, CmdError> {
+    let (vault, _) = open_vault(state, true)?;
+    Ok(vault.move_note(note, to)?)
+}
+
+fn move_resource_impl(
+    state: &AppState,
+    path: &str,
+    to: &str,
+) -> Result<ResourceMoveReport, CmdError> {
+    let (vault, _) = open_vault(state, true)?;
+    Ok(vault.move_resource(path, to)?)
+}
+
+fn move_dir_impl(state: &AppState, from: &str, to: &str) -> Result<DirMoveReport, CmdError> {
+    let (vault, _) = open_vault(state, true)?;
+    Ok(vault.move_dir(from, to)?)
 }
 
 /// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against

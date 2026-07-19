@@ -210,6 +210,39 @@ export interface AddReport {
   path: string;
 }
 
+/**
+ * `Vault::move_note` — the completed move/rename: old and new vault-relative
+ * paths, plus which inbound files had their link text rewritten.
+ */
+export interface MoveReport {
+  b2id: string;
+  from: string;
+  to: string;
+  rewrote: string[];
+  links_rewritten: number;
+}
+
+/** `Vault::move_resource` — the resource sibling of `MoveReport` (no b2id). */
+export interface ResourceMoveReport {
+  from: string;
+  to: string;
+  rewrote: string[];
+  links_rewritten: number;
+}
+
+/**
+ * `Vault::move_dir` — a whole-folder move: how many indexed notes/resources
+ * travelled, and the rewritten files at their post-move paths.
+ */
+export interface DirMoveReport {
+  from: string;
+  to: string;
+  moved_notes: number;
+  moved_resources: number;
+  rewrote: string[];
+  links_rewritten: number;
+}
+
 /** `Vault::link` — the committed edge (idempotent: `created=false` if it existed). */
 export interface LinkReport {
   src_path: string;

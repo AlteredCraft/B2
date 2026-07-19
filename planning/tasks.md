@@ -97,6 +97,21 @@ inversion), whole-workspace suite + CLI smoke green; a live desktop dogfood pass
 gate before the spec moves to `completed/`. Then slice 2 (render mechanisms) gets its spec. The
 tracked [backlog](#backlog--github-issues) below is otherwise pick-per-priority.
 
+**Desktop move/rename shipped 2026-07-19**: the file tree gained Rename (inline input, the create-row
+pattern) and Move… (folder-picker modal) on the right-click menu, plus drag-and-drop onto folder rows /
+the pane root — notes, resources, **and folders**. Folders got a new core op, `Vault::move_dir`
+(`mv.rs`): one `fs::rename` of the directory (unindexed files travel), inbound links rewritten across
+*and within* the moved set (wikilinks are vault-root-anchored, so co-moved siblings rewrite too;
+note-relative Markdown links between co-moved files are natural no-ops), resolver repointed
+(`db::repoint_note_path`) before any re-projection so link resolution never depends on order, and
+`incremental ≡ full rebuild` pinned by test. `b2 mv` kind-dispatches to it when the source is an
+existing directory. All three ops gained a case-only-rename carve-out for case-insensitive APFS
+(`is_same_dirent`). The desktop host added three thin commands (`move_note`/`move_resource`/`move_dir`,
+real-model like `link` — the rewritten inbound files re-embed) + `user_message` arms; the UI re-points
+the open document/tree state through the move *before* the watcher pulse so no "moved or removed" toast
+fires, then reloads the tree (auto index update is the ops' own re-projection). Pure destination/validity
+logic lives in `ui/src/move.ts` with its node-run test.
+
 ## Backlog → GitHub Issues
 
 Everything planned-but-unstarted is tracked as an issue:

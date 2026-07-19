@@ -65,6 +65,16 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),
+        CmdError::Core(b2_core::Error::MoveTargetExists(p)) => format!(
+            "Can't move: something already exists at '{p}'. Choose a different name or destination."
+        ),
+        CmdError::Core(b2_core::Error::MoveDestination(_)) => {
+            "That destination isn't valid. Give a vault-relative name like `notes/new-name`."
+                .to_string()
+        }
+        CmdError::Core(b2_core::Error::DirNotFound(p)) => {
+            format!("Folder not found: '{p}'. It may have been moved — reindex and try again.")
+        }
         CmdError::Core(b2_core::Error::AddTargetExists(p)) => format!(
             "A note already exists at '{p}'. Choose a different name, or open that note."
         ),
@@ -161,5 +171,24 @@ mod tests {
             "\"Something went wrong. Please check the vault and try again.\""
         );
         assert!(!json.to_lowercase().contains("utf-8"), "no internal leaks");
+    }
+
+    /// The move family maps to specific, actionable messages (not the catch-all),
+    /// mirroring the CLI's `user_message` arms.
+    #[test]
+    fn move_errors_map_to_actionable_messages() {
+        let exists = CmdError::Core(b2_core::Error::MoveTargetExists("a/b.md".into()));
+        assert!(user_message(&exists).contains("already exists at 'a/b.md'"));
+
+        let dest = CmdError::Core(b2_core::Error::MoveDestination("../up".into()));
+        let msg = user_message(&dest);
+        assert!(msg.contains("isn't valid"));
+        assert!(
+            !msg.contains("../up"),
+            "the raw destination detail stays server-side"
+        );
+
+        let dir = CmdError::Core(b2_core::Error::DirNotFound("old-folder".into()));
+        assert!(user_message(&dir).contains("Folder not found: 'old-folder'"));
     }
 }

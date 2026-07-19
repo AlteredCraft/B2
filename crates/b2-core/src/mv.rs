@@ -78,7 +78,7 @@ pub fn move_note(
     }
     let old_abs = vault_root.join(old_rel);
     let new_abs = vault_root.join(&new_rel);
-    if new_abs.exists() {
+    if new_abs.exists() && !is_same_dirent(&old_abs, &new_abs) {
         return Err(Error::MoveTargetExists(new_rel));
     }
 
@@ -191,7 +191,7 @@ pub fn move_resource(
     }
     let old_abs = vault_root.join(old_rel);
     let new_abs = vault_root.join(&new_rel);
-    if new_abs.exists() {
+    if new_abs.exists() && !is_same_dirent(&old_abs, &new_abs) {
         return Err(Error::MoveTargetExists(new_rel));
     }
 
@@ -249,27 +249,7 @@ pub fn move_resource(
     //    class re-derives from the new extension), then drop the old row — its
     //    inbound edges re-dangle (ON DELETE SET NULL) until the re-projection
     //    below re-resolves them at the new path.
-    let (_, size, _, content_hash) = db::resource_detail(conn, old_rel)?
-        .ok_or_else(|| Error::ResourceNotFound(old_rel.to_string()))?;
-    let mtime = fs::metadata(&new_abs)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
-    let class = crate::resource::ResourceClass::of_path(&new_rel)
-        .map(|c| c.as_str().to_string())
-        .unwrap_or_else(|| "binary".to_string());
-    db::upsert_resource(
-        conn,
-        &db::ResourceRow {
-            path: &new_rel,
-            class: &class,
-            size,
-            mtime,
-            content_hash: &content_hash,
-        },
-    )?;
-    conn.execute("DELETE FROM resources WHERE path = ?1", [old_rel])?;
+    repoint_resource_row(conn, old_rel, &new_rel, &new_abs)?;
 
     // 4. Re-project the rewritten notes from the now-current Markdown (their
     //    changed chunks re-embed inline, exactly like a note move's inbound set).
@@ -280,6 +260,281 @@ pub fn move_resource(
     Ok(ResourceMoveReport {
         from: old_rel.to_string(),
         to: new_rel,
+        rewrote,
+        links_rewritten,
+    })
+}
+
+/// Whether `a` and `b` name the **same directory entry** on disk — true only on
+/// a case-insensitive filesystem (APFS default) for a case-only rename, where
+/// `Path::exists` on the destination false-positives against the source itself.
+/// `fs::canonicalize` returns the on-disk-case path, so the two canonicalize
+/// equal iff they are one entry; any error (e.g. the path doesn't exist) means
+/// "not the same entry" and the ordinary target-exists refusal stands.
+fn is_same_dirent(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+/// Repoint one inventory row from `old_rel` to `new_rel` (whose file now sits at
+/// `new_abs`): upsert the new path with the same bytes' hash (class re-derives
+/// from the new extension), then drop the old row — its inbound edges re-dangle
+/// (ON DELETE SET NULL) until the caller's re-projection re-resolves them.
+/// Shared by [`move_resource`] and [`move_dir`].
+fn repoint_resource_row(
+    conn: &Connection,
+    old_rel: &str,
+    new_rel: &str,
+    new_abs: &Path,
+) -> Result<()> {
+    let (_, size, _, content_hash) = db::resource_detail(conn, old_rel)?
+        .ok_or_else(|| Error::ResourceNotFound(old_rel.to_string()))?;
+    let mtime = fs::metadata(new_abs)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    let class = crate::resource::ResourceClass::of_path(new_rel)
+        .map(|c| c.as_str().to_string())
+        .unwrap_or_else(|| "binary".to_string());
+    db::upsert_resource(
+        conn,
+        &db::ResourceRow {
+            path: new_rel,
+            class: &class,
+            size,
+            mtime,
+            content_hash: &content_hash,
+        },
+    )?;
+    conn.execute("DELETE FROM resources WHERE path = ?1", [old_rel])?;
+    Ok(())
+}
+
+/// What [`move_dir`] did: the folder's old and new vault-relative paths, how many
+/// **indexed** notes/resources travelled (unindexed files travel too — the whole
+/// directory is renamed — but only indexed rows are counted), the files whose
+/// link text was rewritten (reported at their **post-move** paths, sorted), and
+/// the total link targets repaired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DirMoveReport {
+    pub from: String,
+    pub to: String,
+    pub moved_notes: usize,
+    pub moved_resources: usize,
+    /// Post-move vault-relative paths of the files whose link text was rewritten
+    /// (sorted, deduped). Empty when no links referenced the moved set.
+    pub rewrote: Vec<String>,
+    /// Total individual link targets rewritten across `rewrote`.
+    pub links_rewritten: usize,
+}
+
+/// Map `path` through the `from/ → to/` prefix, or return it unchanged when it
+/// is outside the moved subtree.
+fn remap_prefix(path: &str, from: &str, to: &str) -> String {
+    match path.strip_prefix(from).and_then(|r| r.strip_prefix('/')) {
+        Some(rest) => format!("{to}/{rest}"),
+        None => path.to_string(),
+    }
+}
+
+/// Move/rename the whole directory `from_input` to `to_input` (both
+/// vault-relative; a trailing `/` is tolerated). One `fs::rename` moves the
+/// directory — so **unindexed** files inside travel too — after every inbound
+/// link at the moved set is rewritten, exactly as [`move_note`]/[`move_resource`]
+/// do per file:
+///
+/// - wikilinks are vault-root-anchored, so links *between* co-moved notes are
+///   rewritten just like links from outside the set;
+/// - note-relative Markdown targets between co-moved files survive unchanged (a
+///   computed replacement equal to the authored text is skipped, so those files
+///   are not rewritten at all);
+/// - after the rename, every moved note's `notes.path` is repointed **first**
+///   ([`db::repoint_note_path`]), then each moved/rewritten file re-projects —
+///   so path-based link resolution never depends on re-projection order (the
+///   same reason full ingest is two-phase).
+///
+/// Re-projection **re-embeds** only genuinely rewritten bodies (unchanged bodies
+/// reuse their vectors), but that still requires the caller to open the vault
+/// with the real embedder — same posture as [`move_note`].
+///
+/// Errors: [`Error::DirNotFound`] for a missing source directory,
+/// [`Error::MoveDestination`] for an invalid destination (including one inside
+/// the moved folder), [`Error::MoveTargetExists`] rather than merge into an
+/// existing entry (with the case-only-rename carve-out on case-insensitive
+/// filesystems).
+#[allow(clippy::too_many_arguments)]
+pub fn move_dir(
+    conn: &Connection,
+    idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
+    embedder: &dyn Embedder,
+    vault_root: &Path,
+    from_input: &str,
+    to_input: &str,
+) -> Result<DirMoveReport> {
+    let from = crate::pathspec::normalize_rel_dir(from_input).map_err(Error::MoveDestination)?;
+    let to = crate::pathspec::normalize_rel_dir(to_input).map_err(Error::MoveDestination)?;
+    if to == from {
+        return Err(Error::MoveDestination(format!(
+            "{to} is the folder's current path"
+        )));
+    }
+    if to.strip_prefix(&from).is_some_and(|r| r.starts_with('/')) {
+        return Err(Error::MoveDestination(format!(
+            "{to} is inside the folder being moved"
+        )));
+    }
+    let old_abs = vault_root.join(&from);
+    let new_abs = vault_root.join(&to);
+    if !old_abs.is_dir() {
+        return Err(Error::DirNotFound(from));
+    }
+    if new_abs.exists() && !is_same_dirent(&old_abs, &new_abs) {
+        return Err(Error::MoveTargetExists(to));
+    }
+
+    let moved_notes = db::notes_under_dir(conn, &from)?;
+    let moved_resources = db::resources_under_dir(conn, &from)?;
+
+    // Build each inbound file's target→replacement maps. Wikilink note targets
+    // are vault-root-anchored (one replacement regardless of source); Markdown
+    // resource targets are convention-preserving, relativized against the
+    // source's **post-move** directory so inside↔inside relative links become
+    // no-ops (and are skipped rather than rewritten). Two maps per file because
+    // the two syntaxes rewrite through different passes, mirroring
+    // `move_note` (wikilinks only) and `move_resource` (both).
+    let mut wiki_by_file: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut md_by_file: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+
+    for (b2id, old_path) in &moved_notes {
+        let new_path = remap_prefix(old_path, &from, &to);
+        let new_path_no_md = new_path
+            .strip_suffix(".md")
+            .unwrap_or(&new_path)
+            .to_string();
+        for (_src_id, src_path, dst_raw) in db::inbound_edge_targets(conn, b2id)? {
+            let replacement = if dst_raw.ends_with(".md") {
+                new_path.clone()
+            } else {
+                new_path_no_md.clone()
+            };
+            if replacement != dst_raw {
+                wiki_by_file
+                    .entry(src_path)
+                    .or_default()
+                    .insert(dst_raw, replacement);
+            }
+        }
+    }
+    for old_path in &moved_resources {
+        let new_path = remap_prefix(old_path, &from, &to);
+        for (_src_id, src_path, dst_raw) in db::inbound_resource_edge_targets(conn, old_path)? {
+            // The source's directory *after* the move — sources inside the moved
+            // set remap; outside sources keep their dir.
+            let src_dir_after = {
+                let src_after = remap_prefix(&src_path, &from, &to);
+                src_after
+                    .rsplit_once('/')
+                    .map(|(dir, _)| dir.to_string())
+                    .unwrap_or_default()
+            };
+            let (base, fragment) = match dst_raw.split_once('#') {
+                Some((b, f)) => (b, Some(f)),
+                None => (dst_raw.as_str(), None),
+            };
+            let new_base = if base.trim() == old_path.as_str() {
+                new_path.clone() // authored vault-root — keep it vault-root
+            } else {
+                relativize(&src_dir_after, &new_path) // authored note-relative
+            };
+            let replacement = match fragment {
+                Some(f) => format!("{new_base}#{f}"),
+                None => new_base,
+            };
+            if replacement != dst_raw {
+                wiki_by_file
+                    .entry(src_path.clone())
+                    .or_default()
+                    .insert(dst_raw.clone(), replacement.clone());
+                md_by_file
+                    .entry(src_path)
+                    .or_default()
+                    .insert(dst_raw, replacement);
+            }
+        }
+    }
+
+    // 1. Markdown first: rewrite each inbound file in place at its pre-move path.
+    let empty = BTreeMap::new();
+    let mut rewrote_old_paths = Vec::new();
+    let mut links_rewritten = 0usize;
+    let touched: std::collections::BTreeSet<String> = wiki_by_file
+        .keys()
+        .chain(md_by_file.keys())
+        .cloned()
+        .collect();
+    for src_path in &touched {
+        let abs = vault_root.join(src_path);
+        let raw = fs::read_to_string(&abs)?;
+        let (pass1, n1) = rewrite_links(&raw, wiki_by_file.get(src_path).unwrap_or(&empty));
+        let (pass2, n2) = rewrite_md_targets(&pass1, md_by_file.get(src_path).unwrap_or(&empty));
+        if n1 + n2 > 0 {
+            fs::write(&abs, pass2)?;
+            rewrote_old_paths.push(src_path.clone());
+            links_rewritten += n1 + n2;
+        }
+    }
+
+    // 2. One rename moves the whole directory (unindexed files travel for free),
+    //    creating any missing destination parents.
+    if let Some(parent) = new_abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&old_abs, &new_abs)?;
+
+    // 3. Repoint the resolver before any re-projection: every moved note's path
+    //    (old and new sets are disjoint — the destination didn't exist — so the
+    //    UNIQUE(path) constraint can't trip), then every moved resource's
+    //    inventory row (so resource links resolve at their new paths too).
+    for (b2id, old_path) in &moved_notes {
+        db::repoint_note_path(conn, b2id, &remap_prefix(old_path, &from, &to))?;
+    }
+    for old_path in &moved_resources {
+        let new_path = remap_prefix(old_path, &from, &to);
+        repoint_resource_row(conn, old_path, &new_path, &vault_root.join(&new_path))?;
+    }
+
+    // 4. Re-project from the now-current Markdown: every moved note (refreshes
+    //    the filename-derived title, mtime, and its outbound edges — an unchanged
+    //    body reuses its vectors), then every rewritten file outside the moved
+    //    set (moved ones were just re-projected at their new paths).
+    let moved_note_old_paths: std::collections::BTreeSet<&str> =
+        moved_notes.iter().map(|(_, p)| p.as_str()).collect();
+    for (_b2id, old_path) in &moved_notes {
+        let new_path = remap_prefix(old_path, &from, &to);
+        ingest::ingest_file(conn, vault_root, &new_path, idgen, cfg, embedder)?;
+    }
+    for src_path in &rewrote_old_paths {
+        if moved_note_old_paths.contains(src_path.as_str()) {
+            continue;
+        }
+        ingest::ingest_file(conn, vault_root, src_path, idgen, cfg, embedder)?;
+    }
+
+    let mut rewrote: Vec<String> = rewrote_old_paths
+        .iter()
+        .map(|p| remap_prefix(p, &from, &to))
+        .collect();
+    rewrote.sort();
+
+    Ok(DirMoveReport {
+        from,
+        to,
+        moved_notes: moved_notes.len(),
+        moved_resources: moved_resources.len(),
         rewrote,
         links_rewritten,
     })

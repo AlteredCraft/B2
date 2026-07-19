@@ -1097,6 +1097,48 @@ pub fn inbound_edge_targets(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Every indexed note under the directory `dir` (vault-relative, no trailing
+/// slash) as `(b2id, path)` pairs, path-ordered — the moved set a **directory
+/// move** operates on. Prefix-matched with `substr` (not `LIKE`) so a dir name
+/// containing `%`/`_` never wildcards.
+pub fn notes_under_dir(conn: &Connection, dir: &str) -> Result<Vec<(String, String)>> {
+    let prefix = format!("{dir}/");
+    let mut stmt = conn.prepare(
+        "SELECT b2id, path FROM notes
+         WHERE substr(path, 1, length(?1)) = ?1
+         ORDER BY path",
+    )?;
+    let rows = stmt.query_map([&prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Every inventoried resource path under the directory `dir` — the resource half
+/// of [`notes_under_dir`], same prefix semantics, path-ordered.
+pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> {
+    let prefix = format!("{dir}/");
+    let mut stmt = conn.prepare(
+        "SELECT path FROM resources
+         WHERE substr(path, 1, length(?1)) = ?1
+         ORDER BY path",
+    )?;
+    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Repoint a note's `path` in the resolver (`notes(b2id PK, path UNIQUE)`)
+/// without touching anything else. A **directory move** runs this for every
+/// moved note *before* re-projecting any file, so link resolution — which is
+/// path-based — is independent of re-projection order (the same reason full
+/// ingest is two-phase). The follow-up [`crate::ingest::ingest_file`] refreshes
+/// the row's filename-derived title and mtime.
+pub fn repoint_note_path(conn: &Connection, b2id: &str, new_path: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE notes SET path = ?1 WHERE b2id = ?2",
+        params![new_path, b2id],
+    )?;
+    Ok(())
+}
+
 /// Resolve a wikilink target (`dst_path_raw`, written without the `.md`
 /// extension in Obsidian) to a `b2id`. Tries the literal path, then with `.md`
 /// appended. `None` means the link is dangling.

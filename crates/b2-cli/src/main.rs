@@ -100,11 +100,13 @@ enum Command {
     /// Explain a note's connections — every typed edge and its "why". NOTE is a
     /// vault-relative path or a b2id.
     Explain { note: String },
-    /// Move/rename a note and rewrite every inbound link to point at its new path.
+    /// Move/rename a note, file, or folder and rewrite every inbound link to
+    /// point at the new path. An existing directory moves as a whole folder
+    /// (everything under it, one rename).
     Mv {
-        /// The note to move: a vault-relative path or a b2id.
+        /// What to move: a vault-relative path (note, file, or folder) or a b2id.
         from: String,
-        /// The new vault-relative path (the `.md` extension is optional).
+        /// The new vault-relative path (for a note, the `.md` extension is optional).
         to: String,
     },
     /// Hybrid keyword+semantic+graph search across the vault.
@@ -578,16 +580,31 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             // A move rewrites files (and re-embeds them on re-projection) → require an
             // explicit vault (no silent cwd), and it needs the real model the index was
             // built with, like `reindex`/`add`/`link`.
-            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
-            // Kind dispatch (§9b #8): the two arms differ only in the report type
-            // (a resource has no b2id to carry); the human line is the same shape.
-            let (from_path, to_path, links_rewritten, rewrote_files, json) =
-                if doc_kind(from) == DocKind::Resource {
+            let root = cli.require_vault(None)?;
+            let (vault, _semantic) = open_vault(root, true)?;
+            // Kind dispatch (§9b #8): an existing directory moves as a folder
+            // (every file under it, one rename); otherwise the two file arms
+            // differ only in the report type (a resource has no b2id to carry).
+            // The human "Moved" line is preformatted per arm, the rewrite tally
+            // is shared.
+            let (moved_line, links_rewritten, rewrote_files, json) =
+                if root.join(from.trim_end_matches('/')).is_dir() {
+                    let report = vault.move_dir(from, to)?;
+                    let json = serde_json::to_string_pretty(&report)?;
+                    (
+                        format!(
+                            "Moved {}/ → {}/ ({} note(s), {} file(s))",
+                            report.from, report.to, report.moved_notes, report.moved_resources
+                        ),
+                        report.links_rewritten,
+                        report.rewrote.len(),
+                        json,
+                    )
+                } else if doc_kind(from) == DocKind::Resource {
                     let report = vault.move_resource(from, to)?;
                     let json = serde_json::to_string_pretty(&report)?;
                     (
-                        report.from,
-                        report.to,
+                        format!("Moved {} → {}", report.from, report.to),
                         report.links_rewritten,
                         report.rewrote.len(),
                         json,
@@ -596,8 +613,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     let report = vault.move_note(from, to)?;
                     let json = serde_json::to_string_pretty(&report)?;
                     (
-                        report.from,
-                        report.to,
+                        format!("Moved {} → {}", report.from, report.to),
                         report.links_rewritten,
                         report.rewrote.len(),
                         json,
@@ -606,7 +622,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             if cli.json {
                 println!("{json}");
             } else {
-                println!("Moved {from_path} → {to_path}");
+                println!("{moved_line}");
                 if links_rewritten > 0 {
                     println!(
                         "Rewrote {links_rewritten} inbound link(s) across {rewrote_files} file(s)."
@@ -805,6 +821,9 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::MoveDestination(_)) => {
             "That move destination isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
         }
+        CliError::Core(b2_core::Error::DirNotFound(p)) => format!(
+            "Folder not found: '{p}'. Check the path (folders are vault-relative, like `notes/archive`)."
+        ),
         CliError::Core(b2_core::Error::AddTargetExists(p)) => format!(
             "A note already exists at '{p}'. Choose a different path, or edit that note."
         ),

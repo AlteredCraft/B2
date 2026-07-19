@@ -8,17 +8,20 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AddReport,
+  DirMoveReport,
   EmbedReport,
   EmbedStat,
   ExplainView,
   LinkReport,
   ModelChoice,
+  MoveReport,
   NeighborView,
   NoteSummary,
   NoteView,
   ProjectReport,
   ReindexProgress,
   ResourceExplainView,
+  ResourceMoveReport,
   ResourceSummary,
   SearchResult,
   SimilarView,
@@ -114,6 +117,22 @@ export const api = {
    * its vectors fill on the next embed pass.
    */
   createNote: (path: string): Promise<AddReport> => invoke("create_note", { path }),
+
+  /**
+   * Move/rename a note (path or b2id) to a new vault-relative path — inbound
+   * links are rewritten and the index re-projects. Needs the real model (the
+   * rewritten files re-embed), so it can reject with the "run `b2 init`" state.
+   */
+  moveNote: (note: string, to: string): Promise<MoveReport> =>
+    invoke("move_note", { note, to }),
+
+  /** `moveNote`'s resource sibling — same posture, no b2id in the report. */
+  moveResource: (path: string, to: string): Promise<ResourceMoveReport> =>
+    invoke("move_resource", { path, to }),
+
+  /** Move/rename a whole folder — one rename on disk (unindexed files travel too). */
+  moveDir: (from: string, to: string): Promise<DirMoveReport> =>
+    invoke("move_dir", { from, to }),
 
   /** A note's typed neighbors (both directions). */
   neighbors: (note: string): Promise<NeighborView[]> => invoke("neighbors", { note }),

@@ -26,7 +26,7 @@ use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
-use crate::mv::{self, MoveReport};
+use crate::mv;
 use crate::{ingest, note, relation, search};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -37,9 +37,13 @@ use std::path::{Path, PathBuf};
 /// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
 /// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
-/// Re-exported for the same reason: [`move_resource`](Vault::move_resource)'s
-/// report is part of the façade contract.
-pub use crate::mv::ResourceMoveReport;
+/// Re-exported for the same reason: [`move_dir`](Vault::move_dir)'s report is
+/// part of the façade contract.
+pub use crate::mv::DirMoveReport;
+/// Re-exported for the same reason: [`move_note`](Vault::move_note)'s and
+/// [`move_resource`](Vault::move_resource)'s reports are part of the façade
+/// contract.
+pub use crate::mv::{MoveReport, ResourceMoveReport};
 
 /// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
 /// without an injected model (tests/dev). The real model brings its own `dim` (768)
@@ -1079,6 +1083,32 @@ impl Vault {
             relation: edge_type.to_string(),
             created: true,
         })
+    }
+
+    /// Move/rename the whole folder `from` to `to` (both vault-relative
+    /// directory paths; a trailing `/` is tolerated). One `fs::rename` moves the
+    /// directory — unindexed files inside travel too — after every inbound link
+    /// at the moved set (including vault-root wikilinks *between* co-moved
+    /// notes) is rewritten, then the index re-projects; the graph never breaks
+    /// (edges key on `b2id`). Errors with [`Error::DirNotFound`] for a missing
+    /// source folder, [`Error::MoveDestination`] for an invalid destination
+    /// (including one inside the moved folder), or [`Error::MoveTargetExists`]
+    /// rather than merge into an existing entry.
+    ///
+    /// Rewriting an inbound file changes its body, so this **re-embeds** those
+    /// files: the adapters open the vault with the real model for a dir move,
+    /// as for `mv`/`reindex`/`link`.
+    pub fn move_dir(&self, from: &str, to: &str) -> Result<DirMoveReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "mv_dir", from, to).entered();
+        mv::move_dir(
+            &self.conn,
+            &self.idgen,
+            &self.chunk_config,
+            self.embedder.as_ref(),
+            &self.root,
+            from,
+            to,
+        )
     }
 
     /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a

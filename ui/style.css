@@ -560,6 +560,16 @@ body.is-resizing {
   color: var(--muted);
 }
 
+/* Drag-and-drop: the folder row (or the pane itself = vault root) a dragged tree
+   entry would drop into. Accent-washed like is-active, plus an inset ring so the
+   target reads while the cursor is over child rows' hover states. */
+.tree-row.is-drop-target,
+#tree-pane.is-drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  border-radius: 6px;
+}
+
 /* --- the note (reading surface) ----------------------------------------------- */
 
 .note {
@@ -1294,6 +1304,12 @@ body.is-loading {
   background: var(--accent);
   color: #fff;
 }
+/* Separates a node's own actions (Rename / Move…) from the folder-context pair. */
+.context-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
 /* The tree menu's context line: which folder the create lands in ("projects/"). */
 .context-label {
   padding: 4px 10px 2px;
@@ -1427,6 +1443,42 @@ body.is-loading {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 4px;
+}
+
+/* --- Move… modal ---------------------------------------------------------------
+   The destination-folder list: one row per folder, click to move. Scrolls past
+   ~10 rows so a deep vault never grows the dialog off-screen. */
+.move-dest-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 14px;
+}
+.move-dest {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.move-dest:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.move-dest.is-disabled {
+  color: var(--muted);
+  cursor: default;
 }
 
 /* --- settings modal ----------------------------------------------------------- */

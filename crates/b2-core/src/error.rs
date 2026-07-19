@@ -44,6 +44,12 @@ pub enum Error {
     #[error("move target already exists: {0}")]
     MoveTargetExists(String),
 
+    /// `b2 mv` was given a source folder that doesn't exist in the vault — the
+    /// directory sibling of [`Error::NoteNotFound`] (a folder is a path prefix,
+    /// never an indexed row, so it resolves against the filesystem).
+    #[error("directory not found: {0}")]
+    DirNotFound(String),
+
     /// `b2 add` was given a destination that isn't a valid vault-relative Markdown
     /// path — empty, absolute, or escaping the vault via `..`. The `mv` parallel of
     /// [`Error::MoveDestination`], distinct so the CLI can phrase it for note

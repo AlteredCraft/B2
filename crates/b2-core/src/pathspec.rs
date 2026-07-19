@@ -23,6 +23,21 @@ pub(crate) fn normalize_rel(input: &str) -> Result<String, String> {
     Ok(s)
 }
 
+/// Normalize + validate `input` into a vault-relative *directory* path — the
+/// folder variant of [`normalize_rel`]: same checks, plus a trailing `/` trimmed
+/// (so `notes/` and `notes` name the same folder) and dot-prefixed segments
+/// refused (`.b2/`, `.git/`, … are never managed by b2 — the walk skips them, so
+/// a bulk dir move over one would silently desync fs and index).
+pub(crate) fn normalize_rel_dir(input: &str) -> Result<String, String> {
+    let s = normalize_rel(input.trim().trim_end_matches('/'))?;
+    if s.split('/').any(|seg| seg.starts_with('.')) {
+        return Err(format!(
+            "{s} is a hidden path; b2 does not manage dotfolders"
+        ));
+    }
+    Ok(s)
+}
+
 /// Normalize + validate `input` into a vault-relative `.md` path — the note
 /// variant of [`normalize_rel`]: same checks, plus `.md` appended if omitted.
 pub(crate) fn normalize_rel_md(input: &str) -> Result<String, String> {
@@ -47,6 +62,16 @@ mod tests {
     #[test]
     fn trims_and_normalizes_separators() {
         assert_eq!(normalize_rel_md("  a\\b  ").unwrap(), "a/b.md");
+    }
+
+    #[test]
+    fn dir_form_trims_trailing_slash_and_refuses_dotfolders() {
+        assert_eq!(normalize_rel_dir("notes/").unwrap(), "notes");
+        assert_eq!(normalize_rel_dir("a/b").unwrap(), "a/b");
+        assert!(normalize_rel_dir(".b2").is_err());
+        assert!(normalize_rel_dir("a/.git/b").is_err());
+        assert!(normalize_rel_dir("/").is_err());
+        assert!(normalize_rel_dir("../up").is_err());
     }
 
     #[test]
