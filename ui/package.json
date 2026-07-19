@@ -8,9 +8,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types src/panes.test.ts && node --experimental-strip-types src/graph.test.ts && node --experimental-strip-types src/newentry.test.ts && node --experimental-strip-types src/embedreminder.test.ts && node --experimental-strip-types src/move.test.ts"
+    "test": "node --experimental-strip-types src/panes.test.ts && node --experimental-strip-types src/graph.test.ts && node --experimental-strip-types src/newentry.test.ts && node --experimental-strip-types src/embedreminder.test.ts && node --experimental-strip-types src/move.test.ts && node --experimental-strip-types src/wikicomplete.test.ts && node --experimental-strip-types src/format.test.ts"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.0.0",
     "@codemirror/lang-markdown": "^6.0.0",
     "@codemirror/language": "^6.0.0",

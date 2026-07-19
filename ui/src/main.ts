@@ -5,16 +5,23 @@
 // flow, never engine logic.
 
 import "../style.css";
+import {
+  autocompletion,
+  type CompletionContext,
+  type CompletionResult,
+} from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, type Extension } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { Compartment, EditorSelection, type Extension } from "@codemirror/state";
+import { EditorView, keymap, tooltips } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { baseName, canMoveInto, moveDestination, remapPath, renameDestination } from "./move";
 import { livePreview, wikilink } from "./livepreview";
+import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
+import { FORMATS, toggleInline, type InlineFormat } from "./format";
 import { BOUNDS, initPanes } from "./panes";
 import {
   contextMenuHtml,
@@ -1312,6 +1319,49 @@ function enterEdit(): void {
   mountEditor(n.body);
 }
 
+// Wikilink completion (the Obsidian gesture): typing `[[` opens a picker over the
+// vault's notes + files. The logic — trigger detection, ranking, bracket-closing —
+// is the pure wikicomplete.ts; this is only the CodeMirror adapter. `filter: false`
+// because the ranking is ours (title-prefix > title > path), and no `validFor` so
+// each keystroke re-queries it — the lists live in `state` and are already loaded,
+// so a query is just an in-memory scan.
+function wikiSource(ctx: CompletionContext): CompletionResult | null {
+  const line = ctx.state.doc.lineAt(ctx.pos);
+  const found = wikiQueryAt(line.text.slice(0, ctx.pos - line.from));
+  if (!found) return null;
+  const options = wikiCandidates(state.notes, state.resources, found.query).map((c) => ({
+    label: c.label,
+    detail: c.detail,
+    apply: (view: EditorView, _completion: unknown, from: number, to: number) => {
+      const { insert, cursor } = wikiInsertion(c.target, view.state.sliceDoc(to, to + 2));
+      view.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + cursor },
+      });
+    },
+  }));
+  return { from: line.from + found.from, options, filter: false };
+}
+
+// Formatting chords (⌘B/⌘I, …) — the CodeMirror adapter over the pure format.ts
+// engine. The keymap derives from the `FORMATS` table, so adding a chord is one new
+// table row, no wiring here. `changeByRange` runs the toggle per selection range and
+// maps the coordinates, so multi-cursor edits come free.
+function runFormat(view: EditorView, fmt: InlineFormat): boolean {
+  const doc = view.state.doc.toString();
+  view.dispatch(
+    view.state.changeByRange((range) => {
+      const r = toggleInline(doc, range.from, range.to, fmt);
+      return { changes: r.changes, range: EditorSelection.range(r.selFrom, r.selTo) };
+    }),
+  );
+  return true;
+}
+const formatKeymap = FORMATS.map((f) => ({
+  key: f.key,
+  run: (view: EditorView) => runFormat(view, f),
+}));
+
 function mountEditor(body: string): void {
   const n = state.current;
   if (!n) return;
@@ -1343,8 +1393,16 @@ function mountEditor(body: string): void {
       // CommonMark-only). Always on — the parser feeds both live preview and source mode.
       markdown({ base: markdownLanguage, extensions: [wikilink] }),
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      // Formatting chords first so a future format key can shadow a default binding.
+      keymap.of([...formatKeymap, ...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      // `[[` completion — always on, in both live-preview and source mode. Its
+      // keymap (arrows/Enter/Escape while the menu is open) binds at higher
+      // precedence than defaultKeymap, so Enter accepts rather than newlines.
+      autocompletion({ override: [wikiSource], icons: false }),
+      // The note pane is an overflow scroll container; render tooltips fixed on
+      // <body> so a menu near the pane's bottom edge isn't clipped by it.
+      tooltips({ position: "fixed", parent: document.body }),
       lpCompartment.of(livePreviewConf()),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) scheduleAutosave();

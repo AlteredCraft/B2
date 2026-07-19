@@ -881,6 +881,48 @@ body.is-resizing {
   caret-color: var(--accent);
 }
 
+/* The `[[` wikilink completion menu (autocompletion in main.ts) — restyle CodeMirror's
+   tooltip to the app's panel voice: two-line rows, title over a muted `dir/` line. */
+.cm-tooltip.cm-tooltip-autocomplete {
+  z-index: 15; /* body-mounted (tooltips parent) — sit with the context menu, over the panes */
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.cm-tooltip-autocomplete > ul {
+  max-height: 320px;
+  min-width: 260px;
+  max-width: 420px;
+}
+.cm-tooltip-autocomplete > ul > li {
+  padding: 5px 10px;
+  border-radius: 6px;
+  line-height: 1.35;
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.cm-tooltip-autocomplete .cm-completionLabel {
+  display: block;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.cm-tooltip-autocomplete .cm-completionDetail {
+  display: block;
+  margin-left: 0;
+  font-size: 11.5px;
+  font-style: normal;
+  color: var(--muted);
+}
+/* An empty detail (a root-level entry) must not leave a blank second line. */
+.cm-tooltip-autocomplete .cm-completionDetail:empty {
+  display: none;
+}
+
 /* --- live-preview decorations (desktop-live-preview.md §5) ----------------------- */
 /* The `.lp-*` block mirrors `.note-body`'s scale so mode-switching read ↔ edit doesn't
    jar (spec §7). Light/dark ride the existing CSS vars — no highlight-theme dependency.

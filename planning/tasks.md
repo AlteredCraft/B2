@@ -112,6 +112,25 @@ the open document/tree state through the move *before* the watcher pulse so no "
 fires, then reloads the tree (auto index update is the ops' own re-projection). Pure destination/validity
 logic lives in `ui/src/move.ts` with its node-run test.
 
+**Wikilink autocomplete shipped 2026-07-19**: typing `[[` in the editor opens an Obsidian-style
+picker over the vault's notes + resources (title over a muted `dir/` line; embeds `![[` trigger
+too). Frontend-only — `@codemirror/autocomplete` with one override source; the pure logic (trigger
+detection, ranking — title-prefix > title-substring > path-substring, case-insensitive — and
+bracket-closing insertion) lives in `ui/src/wikicomplete.ts` with its node-run test. Inserts what
+the engine actually resolves (`db::resolve_link_target`): the vault-root-relative path, `.md`
+dropped for notes, extension kept for resources — titles are display-only, never inserted. Tooltips
+render fixed on `<body>` so the note pane's overflow can't clip the menu; accepting a pick lands the
+caret past `]]` and rides the normal autosave → re-projection, so the edge appears without any extra
+wiring.
+
+**Formatting chords shipped 2026-07-19**: ⌘B/⌘I toggle bold/italic in the editor. The engine is the
+pure `ui/src/format.ts` (node-run test): one generic `toggleInline` over a `FORMATS` table of
+`{id, marker, key}` rows — a future chord (strikethrough, inline code, highlight) is one new row,
+no wiring. It encodes the star-nesting parity rule (`*a*`/`**a**`/`***a***`), unwraps whether the
+selection is the content or includes the markers, toggles the word under a bare cursor, and drops a
+caret-centered empty pair when there's no word. main.ts derives the CodeMirror keymap from the table
+(bound ahead of `defaultKeymap`; `changeByRange` gives multi-cursor support free).
+
 ## Backlog → GitHub Issues
 
 Everything planned-but-unstarted is tracked as an issue:
