@@ -220,6 +220,77 @@ body {
   }
 }
 
+/* --- install banner (semantic search off — no model) -------------------------- */
+/* A calm, informational strip under the top bar when the embedding model isn't
+   installed: the vault is keyword-indexed but discovery + semantic ranking are off,
+   which is otherwise near-invisible. Accent tones, not --danger — it's a nudge, not an
+   error. Its host (#embed-banner) is always in the DOM; an empty innerHTML collapses it,
+   so there is no [hidden] toggle to fight. */
+.install-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  font-size: 13px;
+  color: var(--text);
+}
+
+.install-banner-icon {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.install-banner-text {
+  flex: 1 1 auto;
+  margin: 0;
+  line-height: 1.45;
+}
+.install-banner-text strong {
+  font-weight: 650;
+}
+
+.install-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+/* The "Don't remind me again" opt-out — a real checkbox (a11y + the user's mental model),
+   kept quiet (muted, 12px) so it reads as the secondary choice next to Download. */
+.install-banner-optout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.install-banner-optout input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.install-banner-close {
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.install-banner-close:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .reindex-label {
   color: var(--muted);
   font-size: 12px;

@@ -179,6 +179,13 @@ export interface AppState {
   embedStats: EmbedStat[];
   /** A model download (in-app `b2 init`) is in flight — disables the button, shows a spinner. */
   provisioning: boolean;
+  /**
+   * The "semantic search is off — install the model" banner has been dismissed. Set by
+   * the banner's ✕ (this session only) or its "Don't remind me again" checkbox (also
+   * persisted to `localStorage`, so a keyword-only user stays opted out across launches).
+   * Initialized from that persisted flag on boot; see `embedreminder.ts` for the gate.
+   */
+  embedReminderDismissed: boolean;
   /** The shared directory where model files are saved — loaded with Settings, else null. */
   modelsDir: string | null;
   /** Compute device the embedder runs on ("Metal"/"CPU") — loaded with Settings, else null. */
@@ -236,6 +243,7 @@ export const state: AppState = {
   models: [],
   embedStats: [],
   provisioning: false,
+  embedReminderDismissed: false,
   modelsDir: null,
   embedDevice: null,
   loading: false,

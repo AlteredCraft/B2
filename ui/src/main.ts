@@ -17,6 +17,7 @@ import { livePreview, wikilink } from "./livepreview";
 import { BOUNDS, initPanes } from "./panes";
 import {
   contextMenuHtml,
+  embedBannerHtml,
   escapeHtml,
   modalHtml,
   notePaneHtml,
@@ -87,6 +88,9 @@ function render(): void {
     state.graphOpen && !state.editing && state.current !== null && state.currentResource === null,
   );
   el("side-pane").innerHTML = sidePaneHtml(state);
+  // The "semantic search is off — install the model" banner, under the top bar. Empty
+  // string when the gate (embedreminder.ts) says not to prompt, so the strip collapses.
+  el("embed-banner").innerHTML = embedBannerHtml(state);
   el("menu-root").innerHTML = contextMenuHtml(state);
   el("modal-root").innerHTML = modalHtml(state);
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
@@ -780,6 +784,39 @@ function setTheme(theme: ThemePref): void {
   render();
 }
 
+// --- install reminder (the "semantic search is off" banner) -----------------------
+//
+// Gating is the pure `shouldPromptEmbedInstall` (embedreminder.ts); these own the
+// dismissal side. The banner nags once per launch on a fresh, model-less vault — a plain
+// ✕ hides it for the session (it returns next launch), while "Don't remind me again"
+// persists the opt-out so a keyword-only user isn't pestered. Same localStorage idiom as
+// the appearance preference above (a viewing choice, never vault state).
+
+const EMBED_REMINDER_KEY = "b2:embed-reminder-off";
+
+/** Read the persisted "don't remind me" opt-out into state (once, on boot). */
+function loadEmbedReminderPref(): void {
+  try {
+    state.embedReminderDismissed = localStorage.getItem(EMBED_REMINDER_KEY) === "1";
+  } catch {
+    // localStorage unavailable (e.g. private mode): default to showing the reminder.
+  }
+}
+
+/** Turn the banner off. `persist` writes the opt-out so it survives relaunch (the
+ *  checkbox); the bare ✕ passes false and only hides it for this session. */
+function dismissEmbedReminder(persist: boolean): void {
+  state.embedReminderDismissed = true;
+  if (persist) {
+    try {
+      localStorage.setItem(EMBED_REMINDER_KEY, "1");
+    } catch {
+      // Non-fatal: the opt-out still holds for this session if it can't persist.
+    }
+  }
+  render();
+}
+
 // Download + verify the selected model in-app (the `b2 init` button). Single-flight via
 // `state.provisioning` (the webview is single-threaded, so the sync guard + button-disable
 // fully prevent a concurrent download — no host guard needed). On success the model's
@@ -791,7 +828,14 @@ async function provisionModel(): Promise<void> {
   try {
     state.models = await api.provisionModel();
     const now = state.models.find((m) => m.current);
-    flash(`Downloaded ${now?.label ?? "model"}. Reindex to embed your vault with it.`);
+    // The model is installed now, so `vault_info` reports `semantic: true` — re-read it so
+    // the install banner and the search caveat both clear immediately.
+    await refreshEmbedStatus(state.vaultRoot);
+    flash(`Downloaded ${now?.label ?? "model"}. Embedding your vault now…`);
+    // Close the loop (#25 auto-index): actually embed the vault so semantic search turns
+    // on, instead of leaving it behind a manual Reindex the user is unlikely to find.
+    // Background run with the usual progress + Cancel; no-ops if already complete.
+    trackIndexing(autoIndexOnOpen(state.vaultRoot));
   } catch (e) {
     flash(errText(e));
   } finally {
@@ -1504,6 +1548,7 @@ function buildShell(): void {
         </button>
       </div>
     </header>
+    <div id="embed-banner"></div>
     <main id="layout" class="layout">
       <nav id="tree-pane" class="tree-pane"></nav>
       <div id="gutter-tree" class="gutter" role="separator" aria-orientation="vertical"
@@ -1569,6 +1614,17 @@ function wireEvents(): void {
 
     if (target.closest("#open-settings")) {
       void openSettings();
+      return;
+    }
+    // The install banner (the "semantic search is off" strip): its primary action opens
+    // Settings → Download; the ✕ dismisses for this session. ("Don't remind me again" is a
+    // checkbox — handled in the `change` delegation below.)
+    if (target.closest("[data-install-open-settings]")) {
+      void openSettings();
+      return;
+    }
+    if (target.closest("[data-install-dismiss]")) {
+      dismissEmbedReminder(false);
       return;
     }
     // Settings modal: the Download button (in-app `b2 init`), else the Done button or a
@@ -1778,6 +1834,11 @@ function wireEvents(): void {
     if (t.id === "settings-model") {
       void changeModel((t as HTMLSelectElement).value);
     }
+    // The install banner's "Don't remind me again" — checking it persists the opt-out and
+    // dismisses the banner (the strip is gone the moment it's checked, which is the intent).
+    if (t instanceof HTMLInputElement && t.matches("[data-install-remind-off]")) {
+      dismissEmbedReminder(true);
+    }
   });
 
   // The inline create input commits on blur (a non-empty name — clicking away is a
@@ -1879,6 +1940,7 @@ function wireEvents(): void {
 
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
+  loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
   buildShell();
   initPanes(el("layout")); // restore the saved column widths, likewise before the paint
   wireEvents();

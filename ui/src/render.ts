@@ -10,6 +10,7 @@
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state";
+import { shouldPromptEmbedInstall } from "./embedreminder";
 import type { NoteSummary, NoteView, ResourceExplainView, ResourceSummary } from "./types";
 import {
   buildScene,
@@ -423,6 +424,44 @@ function searchCaveat(state: AppState): string {
   return n === 0
     ? ` · keyword-only for now (0/${m} embedded — Reindex)`
     : ` · keyword-first (${n}/${m} embedded)`;
+}
+
+// The install banner — the prominent, persistent counterpart to the small search caveat
+// above (#26). On a fresh install with no model, the vault still gets its keyword index,
+// but embedding is silently skipped (`autoIndexOnOpen` bails on `!semantic`), so semantic
+// ranking and discovery are off with almost no visible sign — the reported gap. This
+// surfaces that state as a dismissible strip under the top bar, pointing at Settings →
+// Download. Gating is the pure, tested `shouldPromptEmbedInstall`; the controls are wired
+// in main.ts:
+//   • Open Settings         → opens the model picker + Download (the in-app `b2 init`)
+//   • ✕                     → hide for this session (returns next launch — a gentle nag)
+//   • Don't remind me again → persist the opt-out (a keyword-only user, for good)
+export function embedBannerHtml(state: AppState): string {
+  const show = shouldPromptEmbedInstall({
+    hasVault: state.vaultRoot !== null,
+    semantic: state.semantic,
+    notesTotal: state.notesTotal,
+    provisioning: state.provisioning,
+    dismissed: state.embedReminderDismissed,
+  });
+  if (!show) return "";
+  return `<div class="install-banner" role="status">
+      <span class="install-banner-icon" aria-hidden="true">✨</span>
+      <p class="install-banner-text">
+        <strong>Semantic search is off.</strong>
+        Your notes are indexed for keyword search, but the embedding model isn't installed —
+        so similar-note discovery and semantic ranking are unavailable. Download it in
+        Settings to turn them on.
+      </p>
+      <div class="install-banner-actions">
+        <button class="btn small primary" data-install-open-settings>Open Settings</button>
+        <label class="install-banner-optout">
+          <input type="checkbox" data-install-remind-off />
+          Don’t remind me again
+        </label>
+        <button class="install-banner-close" data-install-dismiss aria-label="Dismiss for now" title="Dismiss for now">✕</button>
+      </div>
+    </div>`;
 }
 
 function searchSectionHtml(state: AppState): string {
