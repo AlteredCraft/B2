@@ -315,6 +315,7 @@ fn main() {
             commands::explain_resource,
             commands::open_resource,
             commands::write_note,
+            commands::create_note,
             commands::similar,
             commands::search,
             commands::neighbors,

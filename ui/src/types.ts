@@ -201,6 +201,15 @@ export interface WriteReport {
   revision: string;
 }
 
+/**
+ * `Vault::create_note` — the created note's identity: the `b2id` projection
+ * stamped, and the vault-relative path (`.md`-normalized) to open it by.
+ */
+export interface AddReport {
+  b2id: string;
+  path: string;
+}
+
 /** `Vault::link` — the committed edge (idempotent: `created=false` if it existed). */
 export interface LinkReport {
   src_path: string;

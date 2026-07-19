@@ -47,18 +47,15 @@ export interface LinkTarget {
 }
 
 /**
- * An open right-click menu on a discovery card. Anchored at the cursor (viewport
- * coords, already clamped on-screen when opened) and carrying the card's note so its
- * actions (Open / Link…) know their target. Null when no menu is up. Replaces the
- * inline "Link…" button on Similar cards — the whole card is the target, right-click
- * is the affordance.
+ * An open right-click menu, anchored at the cursor (viewport coords, already
+ * clamped on-screen when opened). Null when no menu is up. Two surfaces share the
+ * one overlay: a discovery **card** (Open / Link… — the whole card is the target,
+ * replacing the old inline "Link…" button) and the file **tree** (New note / New
+ * folder, targeting the folder under the cursor).
  */
-export interface ContextMenuState {
-  x: number;
-  y: number;
-  path: string;
-  title: string | null;
-}
+export type ContextMenuState =
+  | { kind: "card"; x: number; y: number; path: string; title: string | null }
+  | { kind: "tree"; x: number; y: number; dir: string };
 
 /**
  * Appearance preference. `"system"` (the default) defers to the OS via
@@ -83,6 +80,22 @@ export interface AppState {
   resources: ResourceSummary[];
   /** Folder paths (vault-relative, no trailing slash) the tree shows expanded. */
   expandedDirs: Set<string>;
+  /**
+   * The tree's creation context — the folder a new note/folder lands in (⌘N, the
+   * tree-head icons). Follows the selection: the open document's folder, or the
+   * last folder row clicked/right-clicked. "" is the vault root (the default).
+   */
+  selectedDir: string;
+  /**
+   * Staged folders (session-scoped, cleared on vault switch): created in the UI
+   * but still empty, so the index-derived tree can't list them and B2 writes no
+   * empty dir to disk (nothing durable outside the Markdown). Each materializes
+   * for real when its first note is created inside it — `create_note` creates
+   * missing parent dirs, exactly like `b2 add`.
+   */
+  pendingDirs: Set<string>;
+  /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
+  treeCreate: { kind: "note" | "folder"; dir: string } | null;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
   /**
@@ -194,6 +207,9 @@ export const state: AppState = {
   notes: [],
   resources: [],
   expandedDirs: new Set<string>(),
+  selectedDir: "",
+  pendingDirs: new Set<string>(),
+  treeCreate: null,
   current: null,
   currentResource: null,
   frontmatterOpen: false,

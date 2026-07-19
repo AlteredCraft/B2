@@ -101,13 +101,20 @@ const CLASS_GLYPHS: Record<string, string> = {
   binary: "◆",
 };
 
-/** Fold the flat, path-ordered note + resource lists into one nested folder tree. */
-function buildTree(notes: NoteSummary[], resources: ResourceSummary[]): TreeDir {
+/** Fold the flat, path-ordered note + resource lists into one nested folder tree.
+ *  `staged` adds folders that hold no file yet — the UI's pending "new folder"s
+ *  (and the folder an inline create input is open in), which the index-derived
+ *  lists can't know about; an already-real folder merges harmlessly. */
+function buildTree(
+  notes: NoteSummary[],
+  resources: ResourceSummary[],
+  staged: Iterable<string>,
+): TreeDir {
   const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [] };
-  const insert = (file: TreeFile) => {
-    const parts = file.path.split("/");
+  const descend = (dirPath: string): TreeDir => {
     let dir = root;
-    for (const seg of parts.slice(0, -1)) {
+    if (!dirPath) return dir;
+    for (const seg of dirPath.split("/")) {
       const full = dir.path ? `${dir.path}/${seg}` : seg;
       let child = dir.dirs.get(seg);
       if (!child) {
@@ -116,7 +123,11 @@ function buildTree(notes: NoteSummary[], resources: ResourceSummary[]): TreeDir 
       }
       dir = child;
     }
-    dir.files.push(file);
+    return dir;
+  };
+  const insert = (file: TreeFile) => {
+    const parts = file.path.split("/");
+    descend(parts.slice(0, -1).join("/")).files.push(file);
   };
   for (const note of notes) {
     insert({ kind: "note", path: note.path, label: fileLabel(note), glyph: "" });
@@ -129,6 +140,9 @@ function buildTree(notes: NoteSummary[], resources: ResourceSummary[]): TreeDir 
       glyph: CLASS_GLYPHS[r.class] ?? CLASS_GLYPHS.binary,
     });
   }
+  for (const dir of staged) {
+    descend(dir);
+  }
   return root;
 }
 
@@ -139,6 +153,20 @@ function fileLabel(note: NoteSummary): string {
   return base.replace(/\.md$/i, "");
 }
 
+/** The inline name input for a pending create (new note / new folder), rendered at
+ *  the top of its target folder's children. The typed value lives only in the DOM —
+ *  main.ts commits on Enter/blur, cancels on Escape, and carries it across an
+ *  unrelated tree repaint. */
+function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
+  return `<div class="tree-row tree-create" style="${pad}">
+      <span class="tree-caret">${kind === "folder" ? "▶" : ""}</span>
+      <input id="tree-create-input" class="tree-create-input" type="text"
+        placeholder="${kind === "note" ? "New note…" : "New folder…"}"
+        aria-label="${kind === "note" ? "New note name" : "New folder name"}"
+        autocomplete="off" spellcheck="false" />
+    </div>`;
+}
+
 /** Render one folder's children (its sub-folders, then its files), recursively. */
 function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string {
   const subdirs = [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -147,10 +175,18 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
   // so files sit one notch deeper than the folder header above them.
   const pad = (d: number) => `padding-left:${8 + d * 14}px`;
 
+  // An open create input renders first in its target folder (startTreeCreate
+  // expanded the chain down to here, so a match is always visible).
+  const create =
+    state.treeCreate && state.treeCreate.dir === dir.path
+      ? treeCreateRowHtml(state.treeCreate.kind, pad(depth))
+      : "";
+
   const dirHtml = subdirs
     .map((sub) => {
       const open = state.expandedDirs.has(sub.path);
-      const header = `<button class="tree-row tree-dir" data-dir="${escapeHtml(
+      const selected = state.selectedDir === sub.path ? " is-selected" : "";
+      const header = `<button class="tree-row tree-dir${selected}" data-dir="${escapeHtml(
         sub.path,
       )}" style="${pad(depth)}" aria-expanded="${open}">
           <span class="tree-caret">${open ? "▼" : "▶"}</span>
@@ -182,23 +218,51 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
     })
     .join("");
 
-  return dirHtml + fileHtml;
+  return create + dirHtml + fileHtml;
+}
+
+/** The tree-head create icons (new note / new folder). Contextual: both target the
+ *  selection's folder, named in the tooltip so ⌘N is never a surprise. */
+function treeActionsHtml(state: AppState): string {
+  const ctx = state.selectedDir ? `in ${state.selectedDir}/` : "in the vault root";
+  return `<span class="tree-actions">
+      <button class="tree-action" data-new-note title="New note ${escapeHtml(ctx)} (⌘N)" aria-label="New note">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9.25 1.75h-5c-.55 0-1 .45-1 1v10.5c0 .55.45 1 1 1h7.5c.55 0 1-.45 1-1V5.25L9.25 1.75Z"/>
+          <path d="M9.25 1.75v3.5h3.5"/>
+          <path d="M8 7.5v3.6M6.2 9.3h3.6"/>
+        </svg>
+      </button>
+      <button class="tree-action" data-new-folder title="New folder ${escapeHtml(ctx)} (⇧⌘N)" aria-label="New folder">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M1.75 4c0-.55.45-1 1-1h2.9c.32 0 .62.15.8.4L7.7 4.6h5.55c.55 0 1 .45 1 1v6.65c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1V4Z"/>
+          <path d="M8 6.8v3.4M6.3 8.5h3.4"/>
+        </svg>
+      </button>
+    </span>`;
 }
 
 export function treePaneHtml(state: AppState): string {
   const total = state.notes.length + state.resources.length;
   const head = `<div class="tree-head">
       <h2>Files</h2>
-      <span class="tree-count">${total || ""}</span>
+      <span class="tree-head-right">
+        <span class="tree-count">${total || ""}</span>
+        ${state.vaultRoot === null ? "" : treeActionsHtml(state)}
+      </span>
     </div>`;
   if (state.vaultRoot === null)
     return head + `<p class="tree-empty">No vault open.</p>`;
-  if (total === 0)
+  // Staged folders (pending "new folder"s) and the folder an inline create input
+  // is open in join the index-derived lists, so both render even before any file
+  // exists under them — including on a completely empty vault.
+  const staged = state.treeCreate
+    ? [...state.pendingDirs, state.treeCreate.dir]
+    : [...state.pendingDirs];
+  const body = treeChildrenHtml(buildTree(state.notes, state.resources, staged), state, 0);
+  if (!body)
     return head + `<p class="tree-empty">No files indexed yet — Reindex to populate.</p>`;
-  return (
-    head +
-    `<div class="tree">${treeChildrenHtml(buildTree(state.notes, state.resources), state, 0)}</div>`
-  );
+  return head + `<div class="tree">${body}</div>`;
 }
 
 // --- pane builders --------------------------------------------------------------
@@ -957,18 +1021,24 @@ function settingsModalHtml(state: AppState): string {
     </div>`;
 }
 
-// The discovery card right-click menu (replaces the inline "Link…" button on Similar
-// cards). Anchored at the cursor via inline left/top — the coords are set + clamped
-// on-screen in main.ts, and are plain numbers, so no escaping is needed. Rendered into
-// its own overlay root so it floats above the panes; an outside click / Escape / scroll
-// dismisses it (main.ts).
+// The right-click menu — one overlay, two surfaces (state.ts `ContextMenuState`):
+// a discovery card (Open note / Link…, replacing the old inline "Link…" button) or
+// the file tree (New note / New folder in the folder under the cursor, named in a
+// muted context line). Anchored at the cursor via inline left/top — the coords are
+// set + clamped on-screen in main.ts, and are plain numbers, so no escaping is
+// needed. Rendered into its own overlay root so it floats above the panes; an
+// outside click / Escape / scroll dismisses it (main.ts).
 export function contextMenuHtml(state: AppState): string {
   const m = state.contextMenu;
   if (!m) return "";
-  return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu">
-      <button class="context-item" data-ctx-open role="menuitem">Open note</button>
-      <button class="context-item" data-ctx-link role="menuitem">Link…</button>
-    </div>`;
+  const items =
+    m.kind === "tree"
+      ? `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>
+        <button class="context-item" data-ctx-new-note role="menuitem">New note</button>
+        <button class="context-item" data-ctx-new-folder role="menuitem">New folder</button>`
+      : `<button class="context-item" data-ctx-open role="menuitem">Open note</button>
+        <button class="context-item" data-ctx-link role="menuitem">Link…</button>`;
+  return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu">${items}</div>`;
 }
 
 export function modalHtml(state: AppState): string {

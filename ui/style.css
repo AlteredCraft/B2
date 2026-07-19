@@ -370,6 +370,38 @@ body.is-resizing {
   font-size: 11px;
 }
 
+/* The head's right cluster: the count plus the two create icons (new note / new
+   folder). The icons are quiet like the topbar's icon-btns, sized down to the
+   tree-head's scale. */
+.tree-head-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tree-head-right .tree-count {
+  margin-right: 4px;
+}
+.tree-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tree-action:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.tree-action svg {
+  display: block;
+}
+
 .tree-empty {
   color: var(--muted);
   font-size: 13px;
@@ -423,6 +455,38 @@ body.is-resizing {
 }
 .tree-file.is-active .tree-label {
   font-weight: 600;
+}
+
+/* The selection context (state.selectedDir): the folder ⌘N / the head icons create
+   into. Quieter than a file's is-active — context, not the open document. */
+.tree-dir.is-selected {
+  background: var(--surface-2);
+}
+.tree-dir.is-selected .tree-label {
+  color: var(--accent);
+}
+
+/* The inline create row (new note / new folder): a name input in place, at the
+   target folder's indent. The row itself isn't a button, so no hover wash. */
+.tree-row.tree-create,
+.tree-row.tree-create:hover {
+  background: none;
+  cursor: default;
+}
+.tree-create-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 2px 6px;
+  outline: none;
+}
+.tree-create-input::placeholder {
+  color: var(--muted);
 }
 
 /* --- the note (reading surface) ----------------------------------------------- */
@@ -1158,6 +1222,16 @@ body.is-loading {
 .context-item:hover {
   background: var(--accent);
   color: #fff;
+}
+/* The tree menu's context line: which folder the create lands in ("projects/"). */
+.context-label {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- link modal --------------------------------------------------------------- */

@@ -12,6 +12,7 @@ import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref } from "./state";
+import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { livePreview, wikilink } from "./livepreview";
 import { BOUNDS, initPanes } from "./panes";
 import {
@@ -34,9 +35,36 @@ function el(id: string): HTMLElement {
 // The note pane's last-written HTML, for the render memo below. Cleared whenever the
 // pane is owned imperatively (edit mode writes its own DOM) so exiting always repaints.
 let lastNotePaneHtml: string | null = null;
+// The tree pane's memo — same idea, different reason: while an inline create input
+// is open (`state.treeCreate`), its typed name lives only in the DOM, so an
+// unrelated repaint (a toast timer, streamed progress) must not rebuild the pane
+// under the user's cursor. Identical HTML skips the swap entirely; a real tree
+// change swaps and then restores the input's value, caret, and focus below.
+let lastTreePaneHtml: string | null = null;
+
+/** Repaint the tree pane (memoized), carrying an open create input across the swap. */
+function paintTree(): void {
+  const html = treePaneHtml(state);
+  if (html === lastTreePaneHtml) return;
+  const prev = document.getElementById("tree-create-input") as HTMLInputElement | null;
+  const saved =
+    prev && state.treeCreate
+      ? { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd }
+      : null;
+  el("tree-pane").innerHTML = html;
+  lastTreePaneHtml = html;
+  const input = document.getElementById("tree-create-input") as HTMLInputElement | null;
+  if (input) {
+    if (saved) {
+      input.value = saved.value;
+      input.setSelectionRange(saved.start ?? saved.value.length, saved.end ?? saved.value.length);
+    }
+    input.focus();
+  }
+}
 
 function render(): void {
-  el("tree-pane").innerHTML = treePaneHtml(state);
+  paintTree();
   // The carve-out (desktop-editing.md §6): while editing, the note pane belongs to
   // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
   // the editor mid-keystroke. Everything else keeps rendering.
@@ -181,6 +209,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     state.currentResource = null; // one document owns the pane
     commit(note.path);
     expandAncestors(note.path);
+    state.selectedDir = parentDir(note.path); // the create context follows the selection
     state.searchQuery = "";
     state.searchResults = [];
     // Paint the note the instant its body is read — the body is already in hand.
@@ -232,6 +261,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
     state.current = null;
     commit(resource.path);
     expandAncestors(resource.path);
+    state.selectedDir = parentDir(resource.path); // the create context follows the selection
     state.searchQuery = "";
     state.searchResults = [];
     state.similar = [];
@@ -368,6 +398,7 @@ async function navGo(delta: -1 | 1): Promise<void> {
 function toggleDir(path: string): void {
   if (state.expandedDirs.has(path)) state.expandedDirs.delete(path);
   else state.expandedDirs.add(path);
+  state.selectedDir = path; // clicking a folder also makes it the create context
   render();
 }
 
@@ -392,18 +423,31 @@ function toggleCard(key: string): void {
   render();
 }
 
-// --- discovery-card context menu --------------------------------------------------
+// --- context menus (discovery cards + the file tree) ------------------------------
 //
-// Right-click a Similar card → a small floating menu (Open note / Link…), replacing the
-// inline "Link…" button. Anchored at the cursor, but clamped so it never spills past the
+// Right-click a Similar card → Open note / Link… (replacing the inline "Link…"
+// button); right-click the file tree → New note / New folder in the folder under
+// the cursor. Anchored at the cursor, but clamped so a menu never spills past the
 // viewport edge (a menu that opens off-screen is unusable).
 const CTX_MENU_W = 168;
-const CTX_MENU_H = 76;
+const CARD_MENU_H = 76;
+const TREE_MENU_H = 100; // the context line + two items
 
-function openContextMenu(clientX: number, clientY: number, path: string, title: string): void {
+function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
-  const y = Math.min(clientY, window.innerHeight - CTX_MENU_H - 8);
-  state.contextMenu = { x: Math.max(8, x), y: Math.max(8, y), path, title: title || null };
+  const y = Math.min(clientY, window.innerHeight - height - 8);
+  return { x: Math.max(8, x), y: Math.max(8, y) };
+}
+
+function openCardMenu(clientX: number, clientY: number, path: string, title: string): void {
+  const { x, y } = clampMenu(clientX, clientY, CARD_MENU_H);
+  state.contextMenu = { kind: "card", x, y, path, title: title || null };
+  render();
+}
+
+function openTreeMenu(clientX: number, clientY: number, dir: string): void {
+  const { x, y } = clampMenu(clientX, clientY, TREE_MENU_H);
+  state.contextMenu = { kind: "tree", x, y, dir };
   render();
 }
 
@@ -411,6 +455,81 @@ function closeContextMenu(): void {
   if (!state.contextMenu) return;
   state.contextMenu = null;
   render();
+}
+
+// --- tree creation: new note / new folder (left nav) ------------------------------
+//
+// The create affordances: the tree-head icons, ⌘N / ⇧⌘N, and the tree's right-click
+// menu — all contextual, landing the entry in `state.selectedDir` (which follows
+// the selection: the open document's folder, or the last folder clicked). The name
+// is typed into an inline input row in the tree (Enter commits, Escape cancels,
+// blur commits a non-empty name).
+//
+// A new *note* is real — and auto-indexed — immediately: the model-free
+// `create_note` writes the file and projects it (tree, keyword search, graph), and
+// its vectors fill through the normal editing pipeline (the note opens in edit
+// mode; autosave's trailing embed covers whatever gets typed — an empty body has
+// nothing to embed). A new *folder* is staged UI state (`pendingDirs`): the
+// index-derived tree can't list an empty dir and nothing durable lives outside the
+// Markdown, so B2 writes no empty folder — it materializes on disk when its first
+// note is created inside it (`create_note` creates missing parent dirs).
+
+function startTreeCreate(kind: "note" | "folder", dir: string): void {
+  if (state.vaultRoot === null) return;
+  state.contextMenu = null;
+  state.treeCreate = { kind, dir };
+  for (const d of dirChain(dir)) state.expandedDirs.add(d); // reveal the target folder
+  render(); // paintTree focuses the fresh input
+}
+
+function cancelTreeCreate(): void {
+  if (!state.treeCreate) return;
+  state.treeCreate = null;
+  render();
+}
+
+/**
+ * Commit the inline input's name. `open` distinguishes the two commit gestures:
+ * Enter means "create and start writing" (the note opens in edit mode); a blur
+ * commit (the user clicked into something else) creates quietly and leaves their
+ * click's navigation alone.
+ */
+async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
+  const create = state.treeCreate;
+  if (!create) return;
+  const name = normalizeName(raw);
+  if (name === null) {
+    cancelTreeCreate(); // an empty (or traversal) name is a back-out, not an error
+    return;
+  }
+  const path = joinPath(create.dir, name);
+  state.treeCreate = null;
+  if (create.kind === "folder") {
+    for (const d of dirChain(path)) {
+      state.pendingDirs.add(d);
+      state.expandedDirs.add(d);
+    }
+    state.selectedDir = path; // the natural next step is a note inside it
+    render();
+    return;
+  }
+  try {
+    const report = await api.createNote(path);
+    await loadNotes(); // the tree lists it now — create_note already projected it
+    void refreshEmbedStatus(state.vaultRoot); // the N/M denominator grew (#26)
+    if (open) {
+      await openNote(report.path); // sets selectedDir to the new note's folder
+      enterEdit(); // a fresh, empty note wants a cursor, not a reading view
+    } else {
+      flash(`Created ${report.path}.`);
+    }
+  } catch (e) {
+    // Refused (e.g. the name already exists): keep the input open — with the typed
+    // name intact, since the unchanged tree HTML skips the repaint — so the user
+    // adjusts rather than retypes; the toast explains.
+    state.treeCreate = create;
+    flash(errText(e));
+  }
 }
 
 // --- the anchored ghost graph (GH #22) --------------------------------------------
@@ -740,6 +859,9 @@ async function switchVault(): Promise<void> {
     state.searchQuery = "";
     state.searchResults = [];
     state.expandedDirs = new Set<string>();
+    state.selectedDir = ""; // the create context belongs to the vault we left…
+    state.pendingDirs = new Set<string>(); // …as do any staged, still-empty folders
+    state.treeCreate = null;
     navClear(); // history is per-vault: the old stack's paths mean nothing here
     const input = document.getElementById("search-input") as HTMLInputElement | null;
     if (input) input.value = "";
@@ -1403,22 +1525,45 @@ function wireEvents(): void {
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
 
-    // The discovery-card right-click menu owns the next click: its own items act, any
-    // other click merely dismisses it (a menu-dismissing click isn't also a card click).
+    // An open right-click menu owns the next click: its own items act, any other
+    // click merely dismisses it (a menu-dismissing click isn't also a card click).
     if (state.contextMenu) {
+      const menu = state.contextMenu;
+      if (menu.kind === "tree") {
+        if (target.closest("[data-ctx-new-note]")) {
+          startTreeCreate("note", menu.dir); // clears the menu itself
+          return;
+        }
+        if (target.closest("[data-ctx-new-folder]")) {
+          startTreeCreate("folder", menu.dir);
+          return;
+        }
+        closeContextMenu();
+        return;
+      }
       if (target.closest("[data-ctx-open]")) {
-        const p = state.contextMenu.path;
+        const p = menu.path;
         closeContextMenu();
         void openNote(p);
         return;
       }
       if (target.closest("[data-ctx-link]")) {
-        const { path, title } = state.contextMenu;
+        const { path, title } = menu;
         closeContextMenu();
         openLinkModal(path, title ?? "");
         return;
       }
       closeContextMenu();
+      return;
+    }
+
+    // The tree-head create icons — contextual on the selection's folder.
+    if (target.closest("[data-new-note]")) {
+      startTreeCreate("note", state.selectedDir);
+      return;
+    }
+    if (target.closest("[data-new-folder]")) {
+      startTreeCreate("folder", state.selectedDir);
       return;
     }
 
@@ -1580,19 +1725,31 @@ function wireEvents(): void {
     }
   });
 
-  // Right-click a Similar card — or a ghost node in the graph (same latent
-  // candidate, same menu: Open note / Link…). Only these intercept the default
-  // menu; everywhere else the webview's stays untouched.
+  // Right-click surfaces. The file tree's default menu is taken over wholesale:
+  // New note / New folder, contextual on the row under the cursor — a folder row
+  // targets itself, a file row its parent folder, the pane's empty space the vault
+  // root — and, like a click, the right-click also moves the selection context.
+  // Similar cards — and ghost nodes in the graph (same latent candidate) — keep
+  // their menu (Open note / Link…). Everywhere else the webview's stays untouched.
   document.addEventListener("contextmenu", (e) => {
-    const card = (e.target as HTMLElement).closest<HTMLElement>(".card.candidate, .gnode.is-ghost");
+    const target = e.target as HTMLElement;
+    if (target.closest("#tree-pane") && state.vaultRoot !== null) {
+      e.preventDefault();
+      const dirRow = target.closest<HTMLElement>("[data-dir]");
+      const fileRow = target.closest<HTMLElement>("[data-open], [data-open-resource]");
+      const dir = dirRow
+        ? (dirRow.dataset.dir ?? "")
+        : fileRow
+          ? parentDir(fileRow.dataset.open ?? fileRow.dataset.openResource ?? "")
+          : "";
+      state.selectedDir = dir;
+      openTreeMenu(e.clientX, e.clientY, dir);
+      return;
+    }
+    const card = target.closest<HTMLElement>(".card.candidate, .gnode.is-ghost");
     if (!card) return;
     e.preventDefault();
-    openContextMenu(
-      e.clientX,
-      e.clientY,
-      card.dataset.cardPath ?? "",
-      card.dataset.cardTitle ?? "",
-    );
+    openCardMenu(e.clientX, e.clientY, card.dataset.cardPath ?? "", card.dataset.cardTitle ?? "");
   });
 
   // The floating menu is positioned at fixed viewport coords, so any scroll or resize
@@ -1623,10 +1780,40 @@ function wireEvents(): void {
     }
   });
 
+  // The inline create input commits on blur (a non-empty name — clicking away is a
+  // "yes, make it", VS Code-style; empty backs out). `isConnected` distinguishes a
+  // real blur from the input being torn down by a tree repaint or its own commit —
+  // a removed node must never re-commit.
+  document.addEventListener("focusout", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.id === "tree-create-input" && t.isConnected && state.treeCreate) {
+      void commitTreeCreate((t as HTMLInputElement).value, false);
+    }
+  });
+
   // ⌘, toggles Settings (the macOS Preferences reflex); Escape closes whichever modal is
   // up; Cmd/Ctrl+S forces an immediate flush while editing (autosave means it's never
-  // *required* — this is for the reflex).
+  // *required* — this is for the reflex); ⌘N / ⇧⌘N create a note / folder in the
+  // selection's folder (the tree-head icons' shortcuts).
   document.addEventListener("keydown", (e) => {
+    // The tree's inline create input owns its keys first: Enter commits, Escape
+    // cancels, and nothing else typed there leaks into the global chords below.
+    if (state.treeCreate && (e.target as HTMLElement).id === "tree-create-input") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void commitTreeCreate((e.target as HTMLInputElement).value, true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelTreeCreate();
+      }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
+      if (state.settingsOpen || state.linkTarget) return; // a modal owns the keyboard
+      e.preventDefault();
+      startTreeCreate(e.shiftKey ? "folder" : "note", state.selectedDir);
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === ",") {
       e.preventDefault();
       if (state.settingsOpen) closeSettings();

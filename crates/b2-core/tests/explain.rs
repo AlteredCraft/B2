@@ -98,7 +98,11 @@ fn explain_surfaces_outbound_resource_links() {
     assert_eq!(r.caption.as_deref(), Some("a tiny diagram"));
     assert!(r.embed, "an image embed reads as embed=true");
     // A note with no file links reports an empty list, never an error.
-    assert!(vault.explain("concepts/memory").unwrap().resources.is_empty());
+    assert!(vault
+        .explain("concepts/memory")
+        .unwrap()
+        .resources
+        .is_empty());
 }
 
 #[test]

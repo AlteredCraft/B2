@@ -7,6 +7,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AddReport,
   EmbedReport,
   EmbedStat,
   ExplainView,
@@ -105,6 +106,14 @@ export const api = {
    */
   writeNote: (note: string, body: string, baseRevision: string): Promise<WriteReport> =>
     invoke("write_note", { note, body, baseRevision }),
+
+  /**
+   * Create a new, empty note at a vault-relative path (`.md` optional; missing
+   * parent folders are created — how a staged folder becomes real). Model-free
+   * like `writeNote`: the note is projected immediately (tree/search/graph) and
+   * its vectors fill on the next embed pass.
+   */
+  createNote: (path: string): Promise<AddReport> => invoke("create_note", { path }),
 
   /** A note's typed neighbors (both directions). */
   neighbors: (note: string): Promise<NeighborView[]> => invoke("neighbors", { note }),

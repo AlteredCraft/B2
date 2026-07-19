@@ -4,8 +4,8 @@
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
 //! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
-//! `explain` / `search` / `similar` / `link` / `add` / `mv`. Add operations when a
-//! command needs them; do not pre-build a sprawling surface.
+//! `explain` / `search` / `similar` / `link` / `add` / `create` / `mv`. Add
+//! operations when a command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
 //! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
@@ -1038,6 +1038,31 @@ impl Vault {
             path,
             title,
             content,
+            &created,
+        )
+    }
+
+    /// Create a new, empty note **model-free** — the desktop's New-note action
+    /// (its tree affordance / ⌘N), the create sibling of [`write`](Self::write):
+    /// write `path` with the same minimal frontmatter as [`add_note`](Self::add_note)
+    /// (no title — a note's display title is its filename, data-model.md §1) and
+    /// project it via [`ingest::project_file`] with **no embedder touched**, so
+    /// creation works with no model provisioned and a fake-opened vault can never
+    /// write foreign vectors into a real-model embedding space. The note's chunks
+    /// join the DB-derived missing-vector set, healed by any later
+    /// [`embed`](Self::embed)/reindex (projection-embedding-split.md §7.2) — and an
+    /// empty body has nothing to embed anyway. Same refusals as `add_note`:
+    /// [`Error::AddDestination`] / [`Error::AddTargetExists`].
+    pub fn create_note(&self, path: &str) -> Result<AddReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "create", path).entered();
+        let created = self.today()?;
+        add::create_note(
+            &self.conn,
+            &self.idgen,
+            &self.root,
+            path,
+            None,
+            None,
             &created,
         )
     }
