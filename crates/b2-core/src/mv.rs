@@ -19,6 +19,7 @@
 //! to name *exactly* the inbound files and link strings to touch (index-engine.md
 //! §8), so the cost is O(inbound links), never O(vault).
 
+use crate::chunk::ChunkConfig;
 use crate::db;
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
@@ -58,9 +59,11 @@ pub struct MoveReport {
 /// Errors with [`Error::MoveDestination`] for an invalid destination (empty,
 /// absolute, escaping the vault, or equal to the source) and
 /// [`Error::MoveTargetExists`] rather than clobber an existing file.
+#[allow(clippy::too_many_arguments)]
 pub fn move_note(
     conn: &Connection,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     embedder: &dyn Embedder,
     vault_root: &Path,
     b2id: &str,
@@ -122,12 +125,12 @@ pub fn move_note(
     // 3. Re-project from the now-current Markdown. The moved note goes first so its
     //    `notes.path` is current before inbound files re-resolve their links to it.
     //    (An unchanged body means the moved note reuses its vectors — no re-embed.)
-    ingest::ingest_file(conn, vault_root, &new_rel, idgen, embedder)?;
+    ingest::ingest_file(conn, vault_root, &new_rel, idgen, cfg, embedder)?;
     for src_path in &rewrote {
         if src_path == old_rel {
             continue; // the moved note itself (a self-link) — already re-projected
         }
-        ingest::ingest_file(conn, vault_root, src_path, idgen, embedder)?;
+        ingest::ingest_file(conn, vault_root, src_path, idgen, cfg, embedder)?;
     }
 
     Ok(MoveReport {
@@ -174,6 +177,7 @@ pub struct ResourceMoveReport {
 pub fn move_resource(
     conn: &Connection,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     embedder: &dyn Embedder,
     vault_root: &Path,
     old_rel: &str,
@@ -270,7 +274,7 @@ pub fn move_resource(
     // 4. Re-project the rewritten notes from the now-current Markdown (their
     //    changed chunks re-embed inline, exactly like a note move's inbound set).
     for src_path in &rewrote {
-        ingest::ingest_file(conn, vault_root, src_path, idgen, embedder)?;
+        ingest::ingest_file(conn, vault_root, src_path, idgen, cfg, embedder)?;
     }
 
     Ok(ResourceMoveReport {

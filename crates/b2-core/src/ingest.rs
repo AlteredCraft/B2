@@ -116,11 +116,18 @@ pub struct ReindexProgress {
 /// vector tables (projection-embedding-split.md §4). [`ingest_file`] passes `true`
 /// (it embeds inline and has ensured the space exists), so a note left mid-embed is
 /// also healed by [`would_reembed`]'s vector-state check, exactly as before.
+///
+/// `cfg` is the chunking policy (spec §3 D5) — threaded from the caller (ultimately
+/// the `Vault`, which defaults it) so *every* path that chunks a given vault cuts
+/// identically and `incremental ≡ full rebuild` holds by construction. The retrieval
+/// eval injects non-default configs here to A/B chunker levers in one process
+/// (specs/eval-strategy.md).
 fn project_note_and_chunks(
     conn: &Connection,
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     force: bool,
     consult_vectors: bool,
 ) -> Result<ProjectedNote> {
@@ -192,7 +199,7 @@ fn project_note_and_chunks(
     let pending = if rechunk {
         // Chunk → project rows; hand the (id, text) pairs back for a batched embed
         // (Flow ①). replace_chunks also clears any stale vectors for this note.
-        let chunks = chunk_body(&body, &ChunkConfig::default());
+        let chunks = chunk_body(&body, cfg);
         let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
         chunk_ids
             .into_iter()
@@ -449,12 +456,15 @@ fn derive_edge_id(src_id: &str, target_key: &str, edge_type: &str, occurrence: i
 }
 
 /// Ingest a single note at `vault_root/rel_path` against an already-built index
-/// (the incremental path). Projects note + chunks + edges.
+/// (the incremental path). Projects note + chunks + edges. `cfg` is the vault's
+/// chunking policy — the same one every other path uses, so a single-note
+/// re-projection cuts identically to a full rebuild.
 pub fn ingest_file(
     conn: &Connection,
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     embedder: &dyn Embedder,
 ) -> Result<Ingested> {
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
@@ -463,7 +473,7 @@ pub fn ingest_file(
     // needlessly re-embedding it. Vector state IS consulted (`consult_vectors`):
     // this path embeds inline, so a note left mid-embed re-chunks + re-embeds here.
     let (b2id, stamped, body, relations, pending) =
-        project_note_and_chunks(conn, vault_root, rel_path, idgen, false, true)?;
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, cfg, false, true)?;
     let embedded = !pending.is_empty();
     // A single-note re-projection is never cancelled — always run to completion.
     embed_pending(conn, embedder, &b2id, &pending, |_| {
@@ -504,19 +514,25 @@ pub struct IngestOutcome {
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
 /// incrementally (unchanged notes reuse their vectors) and with no progress
 /// reporting. Dotfolders (e.g. `.b2/`) are skipped. Never cancelled, so it returns
-/// the note list directly.
+/// the note list directly. A convenience wrapper (what the test suite drives), so
+/// it chunks with the **default** [`ChunkConfig`]; callers with a non-default
+/// policy use [`ingest_vault_with_progress`].
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
-    Ok(
-        ingest_vault_with_progress(conn, vault_root, idgen, embedder, false, &mut |_| {
-            ControlFlow::Continue(())
-        })?
-        .notes,
-    )
+    Ok(ingest_vault_with_progress(
+        conn,
+        vault_root,
+        idgen,
+        &ChunkConfig::default(),
+        embedder,
+        false,
+        &mut |_| ControlFlow::Continue(()),
+    )?
+    .notes)
 }
 
 /// One note's projection outcome: its `b2id` and whether a missing `b2id` was
@@ -540,9 +556,10 @@ pub fn project_file(
     vault_root: &Path,
     rel_path: &str,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
 ) -> Result<Projected> {
     let (b2id, stamped, body, relations, _pending) =
-        project_note_and_chunks(conn, vault_root, rel_path, idgen, false, false)?;
+        project_note_and_chunks(conn, vault_root, rel_path, idgen, cfg, false, false)?;
     project_edges(conn, &b2id, &body, &relations)?;
     Ok(Projected { b2id, stamped })
 }
@@ -622,6 +639,7 @@ pub fn project_vault(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     force: bool,
 ) -> Result<ProjectOutcome> {
     let mut rel_paths = Vec::new();
@@ -637,7 +655,7 @@ pub fn project_vault(
     let mut staged = Vec::with_capacity(rel_paths.len());
     let mut skipped = Vec::new();
     for rel in &rel_paths {
-        match project_note_and_chunks(conn, vault_root, rel, idgen, force, false) {
+        match project_note_and_chunks(conn, vault_root, rel, idgen, cfg, force, false) {
             Ok((b2id, stamped, body, relations, _pending)) => {
                 staged.push((b2id, stamped, body, relations));
             }
@@ -804,6 +822,7 @@ pub fn ingest_vault_with_progress(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     embedder: &dyn Embedder,
     force: bool,
     on_progress: &mut dyn FnMut(ReindexProgress) -> ControlFlow<()>,
@@ -814,7 +833,7 @@ pub fn ingest_vault_with_progress(
         notes_pruned,
         resources_indexed,
         resources_pruned,
-    } = project_vault(conn, vault_root, idgen, force)?;
+    } = project_vault(conn, vault_root, idgen, cfg, force)?;
     let embed = embed_vault(conn, embedder, on_progress)?;
 
     // Merge the two outcomes into the per-note report shape `reindex` has always

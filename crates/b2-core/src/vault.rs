@@ -4,7 +4,8 @@
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
 //! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
-//! `explain` / `search` / `similar` / `link` / `add` / `create` / `mv`. Add
+//! `explain` / `search` / `search_chunks` / `similar` / `link` / `add` / `create` /
+//! `mv`. Add
 //! operations when a command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
@@ -18,6 +19,7 @@
 //! embedder — callers must not overstate the fake.
 
 use crate::add::{self, AddReport};
+use crate::chunk::ChunkConfig;
 use crate::db;
 use crate::discover;
 use crate::embed::{Embedder, FakeEmbedder};
@@ -57,6 +59,16 @@ pub struct Vault {
     // (the "build for tomorrow's model" seam, vision-and-scope).
     embedder: Box<dyn Embedder>,
     idgen: UlidGen,
+    // The vault's one chunking policy (chunk.rs, spec §3 D5). Held here — not
+    // re-defaulted per call — so every path that chunks (reindex/project/write/
+    // add/link/mv) cuts identically under a *fixed* config and `incremental ≡
+    // full rebuild` holds by construction. Across a `set_chunk_config` change the
+    // guarantee is doc-enforced instead: an incremental pass would reuse chunks
+    // cut under the old policy, so a config change must pair with
+    // `project(force)` (as `set_chunk_config`'s doc requires and the eval does).
+    // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
+    // that overrides it, to A/B chunker levers in-process (specs/eval-strategy.md).
+    chunk_config: ChunkConfig,
 }
 
 /// What `reindex` did: how many notes were projected, how many were actually
@@ -328,6 +340,28 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
+/// One **chunk-level** search hit — the sub-note view of [`search`](Vault::search).
+/// Same retrieval (BM25 ⊕ vector → RRF, keyword-only fallback), but ranked chunks
+/// are returned as-is instead of deduped up to notes, so a caller can see *which
+/// passage* matched and at what rank. The client is the out-of-CI retrieval eval
+/// (specs/eval-strategy.md): note-rank scoring is blind to sub-note retrieval
+/// quality — exactly what chunking levers move — so the eval scores passage ranks
+/// through this view. Carries the chunk's **full text** (not a display snippet):
+/// the eval anchors passage-containment scoring on it; an adapter wanting a
+/// one-liner trims it itself.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChunkSearchResult {
+    pub b2id: String,
+    pub path: String,
+    /// The chunk's heading breadcrumb (`"Fermentation > Vegetables"`), when the
+    /// chunker recorded one.
+    pub heading_path: Option<String>,
+    /// Fused relevance score; higher is better.
+    pub score: f64,
+    /// The chunk's stored text, verbatim.
+    pub text: String,
+}
+
 /// One semantically-similar candidate for `b2 similar`: a note near the anchor in
 /// embedding space that is **not** already connected to it, resolved for display
 /// with the passage that made it similar. This is connection-discovery candidate
@@ -396,7 +430,19 @@ impl Vault {
             conn,
             embedder,
             idgen: UlidGen,
+            chunk_config: ChunkConfig::default(),
         })
+    }
+
+    /// Override the vault's chunking policy (default: [`ChunkConfig::default()`]).
+    /// Every subsequent op that chunks — `project`/`reindex`/`write`/`add`/`link`/
+    /// `mv` — cuts with this config, so the index stays self-consistent. The
+    /// client is the out-of-CI retrieval eval, which sweeps chunker levers in one
+    /// process (`set_chunk_config` → `project(force)` → `embed` → score;
+    /// specs/eval-strategy.md); the shipped adapters never call it. Changing the
+    /// config does **not** re-chunk by itself — pair it with `project(force)`.
+    pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
+        self.chunk_config = cfg;
     }
 
     /// Re-project every `.md` note under the vault root into the index (Flow ①):
@@ -428,6 +474,7 @@ impl Vault {
             &self.conn,
             &self.root,
             &self.idgen,
+            &self.chunk_config,
             self.embedder.as_ref(),
             force,
             on_progress,
@@ -458,7 +505,13 @@ impl Vault {
     /// pass it runs.)*
     pub fn project(&self, force: bool) -> Result<ProjectReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "project", force).entered();
-        let outcome = ingest::project_vault(&self.conn, &self.root, &self.idgen, force)?;
+        let outcome = ingest::project_vault(
+            &self.conn,
+            &self.root,
+            &self.idgen,
+            &self.chunk_config,
+            force,
+        )?;
         Ok(ProjectReport {
             indexed: outcome.notes.len(),
             stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
@@ -691,7 +744,13 @@ impl Vault {
         fs::write(&abs, parsed.as_str())?;
 
         // Re-project model-free; stamps a missing b2id through the ordinary path.
-        ingest::project_file(&self.conn, &self.root, &path, &self.idgen)?;
+        ingest::project_file(
+            &self.conn,
+            &self.root,
+            &path,
+            &self.idgen,
+            &self.chunk_config,
+        )?;
 
         // Hash the FINAL on-disk bytes (a stamp re-wrote the file after our splice).
         let final_raw = fs::read_to_string(&abs)?;
@@ -781,6 +840,7 @@ impl Vault {
         mv::move_resource(
             &self.conn,
             &self.idgen,
+            &self.chunk_config,
             self.embedder.as_ref(),
             &self.root,
             path,
@@ -804,26 +864,7 @@ impl Vault {
         // Pull a wider chunk pool than `limit` so dedup can still fill `limit`
         // distinct notes when several top chunks share a note.
         let pool = limit.saturating_mul(3).max(limit);
-        let hits = if db::embedding_space_exists(&self.conn)? {
-            // Fail fast if the index was built with a different model than the active
-            // one: its vectors are incomparable with the query vector we'd produce, so
-            // returning results would be silently wrong. The fix is a `reindex`.
-            if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
-                if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
-                    return Err(Error::ModelMismatch {
-                        indexed: format!("{indexed_model} (dim {indexed_dim})"),
-                        active: format!(
-                            "{} (dim {})",
-                            self.embedder.model_id(),
-                            self.embedder.dim()
-                        ),
-                    });
-                }
-            }
-            search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)?
-        } else {
-            search::keyword_only_search(&self.conn, query, pool)?
-        };
+        let hits = self.retrieve(query, pool)?;
         let mut out: Vec<SearchResult> = Vec::new();
         for hit in hits {
             if out.iter().any(|r| r.b2id == hit.note_b2id) {
@@ -846,6 +887,61 @@ impl Vault {
             }
         }
         Ok(out)
+    }
+
+    /// [`search`](Self::search) at **chunk** granularity: the top `limit` ranked
+    /// chunks, resolved to their note + heading breadcrumb + full text, with **no
+    /// note dedup** — one note may appear several times when several of its
+    /// passages rank. Same retrieval, same fallback, same model-mismatch fail-fast
+    /// (see [`ChunkSearchResult`] for who consumes this and why).
+    pub fn search_chunks(&self, query: &str, limit: usize) -> Result<Vec<ChunkSearchResult>> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
+        let mut out = Vec::new();
+        for hit in self.retrieve(query, limit)? {
+            // Both lookups can miss only on an inconsistent index (a hit whose row
+            // vanished mid-call); drop such a hit rather than emit a half-resolved
+            // one — a rank slot with an empty path would read as a real result.
+            let Some(path) = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)? else {
+                continue;
+            };
+            let Some((heading_path, text)) = db::chunk_detail(&self.conn, hit.chunk_id)? else {
+                continue;
+            };
+            out.push(ChunkSearchResult {
+                b2id: hit.note_b2id,
+                path,
+                heading_path,
+                score: hit.score,
+                text,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The shared retrieval core of [`search`](Self::search) and
+    /// [`search_chunks`](Self::search_chunks): hybrid when the embedding space
+    /// exists (failing fast on a model mismatch — the stored vectors would be
+    /// incomparable with the query vector, so results would be silently wrong; the
+    /// fix is a `reindex`), BM25-only on a projected-but-unembedded vault.
+    fn retrieve(&self, query: &str, pool: usize) -> Result<Vec<search::Hit>> {
+        if db::embedding_space_exists(&self.conn)? {
+            if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
+                if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
+                    return Err(Error::ModelMismatch {
+                        indexed: format!("{indexed_model} (dim {indexed_dim})"),
+                        active: format!(
+                            "{} (dim {})",
+                            self.embedder.model_id(),
+                            self.embedder.dim()
+                        ),
+                    });
+                }
+            }
+            search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)
+        } else {
+            search::keyword_only_search(&self.conn, query, pool)
+        }
     }
 
     /// The vault's semantic-embedding coverage as an [`EmbedStatus`] — the honest
@@ -973,6 +1069,7 @@ impl Vault {
             &self.root,
             &src_path,
             &self.idgen,
+            &self.chunk_config,
             self.embedder.as_ref(),
         )?;
 
@@ -1004,6 +1101,7 @@ impl Vault {
         mv::move_note(
             &self.conn,
             &self.idgen,
+            &self.chunk_config,
             self.embedder.as_ref(),
             &self.root,
             &b2id,
@@ -1033,6 +1131,7 @@ impl Vault {
         add::add_note(
             &self.conn,
             &self.idgen,
+            &self.chunk_config,
             self.embedder.as_ref(),
             &self.root,
             path,
@@ -1059,6 +1158,7 @@ impl Vault {
         add::create_note(
             &self.conn,
             &self.idgen,
+            &self.chunk_config,
             &self.root,
             path,
             None,

@@ -79,6 +79,7 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
         &conn,
         &vault,
         &UlidGen,
+        &b2_core::chunk::ChunkConfig::default(),
         &FakeEmbedder::new(64),
         false,
         &mut |p| {

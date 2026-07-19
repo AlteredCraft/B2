@@ -50,9 +50,15 @@ check:
 init:
     cargo run -p b2-cli -- init
 
-# Semantic-retrieval quality eval (real model; never part of `cargo test`)
+# Semantic-retrieval + discovery quality eval (real model; never part of `cargo test`).
+# Scores BM25-only vs hybrid (the semantic lift), passage-level ranks, and `similar`;
+# appends every run to crates/b2-embed/evals/results.jsonl (gitignored).
 eval:
     cargo run -p b2-embed --example eval
+
+# `just eval` plus the in-process chunker A/B (ChunkConfig sweep) — the GH #44 gate.
+eval-sweep:
+    cargo run -p b2-embed --example eval -- --sweep
 
 # Same eval, but embedding on the Metal GPU (GH #40, macOS-only). Compare its retrieval
 # quality against `just eval` (CPU) — a device switch is a model swap (`@metal` id tag).
