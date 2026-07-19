@@ -735,6 +735,18 @@ pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
         .optional()?)
 }
 
+/// A chunk's heading breadcrumb + text in one read (None if the chunk id is
+/// unknown) — the chunk-level hit resolution (`Vault::search_chunks`).
+pub fn chunk_detail(conn: &Connection, chunk_id: i64) -> Result<Option<(Option<String>, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT heading_path, text FROM chunks WHERE id = ?1",
+            [chunk_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
 /// A note's stored body hash (None if the note isn't indexed yet). Read **before**
 /// re-upserting so an incremental reindex can tell whether the body actually
 /// changed and skip re-embedding an unchanged note.

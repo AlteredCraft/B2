@@ -178,6 +178,7 @@ fn one_note_reindex_equals_full() {
         &vault,
         "notes/spaced-repetition.md",
         &UlidGen,
+        &b2_core::chunk::ChunkConfig::default(),
         &FakeEmbedder::default(),
     )
     .unwrap();

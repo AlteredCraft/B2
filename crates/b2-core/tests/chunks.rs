@@ -71,6 +71,38 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
 }
 
 #[test]
+fn vault_chunk_config_reaches_projection() {
+    // The eval's sweep seam (specs/eval-strategy.md): a non-default ChunkConfig
+    // set on the Vault must actually shape the cut — `set_chunk_config` +
+    // `project(force)` on the same vault re-chunks under the new policy, so a
+    // much finer target yields more chunks than the default did. Model-free.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let mut vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.project(false).unwrap();
+
+    let chunk_count = || -> i64 {
+        let conn = open(&vault_dir.join(".b2").join("b2.sqlite")).unwrap();
+        conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+            .unwrap()
+    };
+    let default_chunks = chunk_count();
+
+    vault.set_chunk_config(ChunkConfig {
+        target_tokens: 20,
+        backscan_tokens: 10,
+        overlap_frac: 0.0,
+        ..ChunkConfig::default()
+    });
+    vault.project(true).unwrap();
+    assert!(
+        chunk_count() > default_chunks,
+        "a finer target must cut more chunks than the default ({default_chunks})"
+    );
+}
+
+#[test]
 fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");

@@ -16,6 +16,7 @@
 //! The `created` date is passed in (the façade's determinism boundary, like the
 //! move/link timestamps), keeping `b2-core` wall-clock-free.
 
+use crate::chunk::ChunkConfig;
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::id::IdGen;
@@ -51,6 +52,7 @@ pub struct AddReport {
 pub fn add_note(
     conn: &Connection,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     embedder: &dyn Embedder,
     vault_root: &Path,
     path_input: &str,
@@ -62,7 +64,7 @@ pub fn add_note(
 
     // 2. Project from that Markdown: stamp the `b2id`, chunk + embed the body, and
     //    derive any edges its content authors.
-    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, embedder)?;
+    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, cfg, embedder)?;
     Ok(AddReport {
         b2id: ingested.b2id,
         path: rel,
@@ -76,9 +78,11 @@ pub fn add_note(
 /// missing-vector set for any later embed/reindex to fill
 /// (projection-embedding-split.md §7.2) — and a body-less note has nothing to
 /// embed anyway. Same validation and refusals as [`add_note`].
+#[allow(clippy::too_many_arguments)]
 pub fn create_note(
     conn: &Connection,
     idgen: &dyn IdGen,
+    cfg: &ChunkConfig,
     vault_root: &Path,
     path_input: &str,
     title: Option<&str>,
@@ -86,7 +90,7 @@ pub fn create_note(
     created: &str,
 ) -> Result<AddReport> {
     let rel = write_new_note(vault_root, path_input, title, content, created)?;
-    let projected = ingest::project_file(conn, vault_root, &rel, idgen)?;
+    let projected = ingest::project_file(conn, vault_root, &rel, idgen, cfg)?;
     Ok(AddReport {
         b2id: projected.b2id,
         path: rel,

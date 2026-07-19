@@ -1,5 +1,5 @@
 {
-  "description": "Hand-labelled semantic-retrieval set. Each query deliberately avoids the target note's keywords (synonyms/paraphrase) so it measures semantic lift, not lexical overlap. `relevant` lists the vault-relative path(s) that should rank first.",
+  "description": "Hand-labelled semantic-retrieval set (specs/eval-strategy.md §3). Each query avoids the target note's keywords (synonyms/paraphrase) so it measures semantic lift, not lexical overlap. `relevant` lists the vault-relative path(s) that should rank first. The corpus clusters notes into confusable topic groups (coffee, sleep, plants, security, geology, cycling), so ranking WITHIN a cluster is tested, not just across unrelated topics. An optional `passage` is a short verbatim phrase from the target passage: those queries are additionally scored at CHUNK level (does the ranked chunk's text contain the phrase?), which is what makes chunking changes visible to the eval (qmd-chunker.md §7, GH #44). Keep passages verbatim, short, and unique within the corpus.",
   "queries": [
     { "query": "how do leaves turn light into food", "relevant": ["photosynthesis.md"] },
     { "query": "pedalling a bike up a steep hill", "relevant": ["bicycle.md"] },
@@ -8,6 +8,25 @@
     { "query": "keeping messages secret from eavesdroppers", "relevant": ["encryption.md"] },
     { "query": "a strong little italian coffee shot", "relevant": ["espresso.md"] },
     { "query": "scrambling data with a secret key", "relevant": ["encryption.md"] },
-    { "query": "trouble sleeping because of caffeine", "relevant": ["insomnia.md"] }
+    { "query": "trouble sleeping because of caffeine", "relevant": ["insomnia.md"] },
+
+    { "query": "steeping coarse grounds then pushing the screen down", "relevant": ["french-press.md"] },
+    { "query": "turning green beans brown in a heated rotating drum", "relevant": ["coffee-roasting.md"] },
+    { "query": "a consistent bedtime routine in a dark cool room", "relevant": ["sleep-hygiene.md"] },
+    { "query": "why sleeping minds play vivid stories", "relevant": ["dreaming.md"] },
+    { "query": "my potted fern's leaves are going brown indoors", "relevant": ["houseplant-care.md"] },
+    { "query": "the underground parts that anchor a plant and drink for it", "relevant": ["plant-roots.md"] },
+    { "query": "is a long random phrase safer than a short complex one", "relevant": ["passwords.md"] },
+    { "query": "an urgent email pretending to be my bank", "relevant": ["phishing.md"] },
+    { "query": "why the ground shakes when a fault lets go", "relevant": ["earthquakes.md"] },
+    { "query": "slow rivers of ice grinding out valleys", "relevant": ["glaciers.md"] },
+    { "query": "squeaky chain and sloppy gear changes", "relevant": ["bike-maintenance.md"] },
+
+    { "query": "how warm should the crock stay for sour cabbage", "relevant": ["fermentation.md"], "passage": "18–22 °C" },
+    { "query": "why the flour and water culture needs regular feeding", "relevant": ["fermentation.md"], "passage": "domesticated colony" },
+    { "query": "protecting sore rubbed heels on a long trail walk", "relevant": ["backpacking-gear.md"], "passage": "moleskin" },
+    { "query": "how heavy is a minimalist pack before food and water", "relevant": ["backpacking-gear.md"], "passage": "under 4.5 kg" },
+    { "query": "setting aside savings for a surprise car repair", "relevant": ["personal-finance.md"], "passage": "emergency fund" },
+    { "query": "a retirement account whose withdrawals are never taxed", "relevant": ["personal-finance.md"], "passage": "Roth" }
   ]
 }

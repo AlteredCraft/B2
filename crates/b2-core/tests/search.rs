@@ -165,6 +165,33 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
 }
 
 #[test]
+fn search_chunks_exposes_passage_level_hits() {
+    // The sub-note view (`Vault::search_chunks`) the retrieval eval scores passage
+    // ranks through (specs/eval-strategy.md): same retrieval as `search`, no note
+    // dedup, each hit resolved to its note path + heading breadcrumb + the chunk's
+    // FULL text — containment-scorable, unlike `SearchResult`'s display snippet.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    let hits = vault.search_chunks("forgetting curve", 10).unwrap();
+    assert!(!hits.is_empty());
+    assert!(hits
+        .iter()
+        .all(|h| !h.path.is_empty() && !h.text.is_empty()));
+    // 'forgetting' lives only in spaced-repetition; its hit must carry the full
+    // chunk text (the term itself), not a trimmed snippet.
+    let srs = hits
+        .iter()
+        .find(|h| h.b2id == SRS_ID)
+        .expect("the one keyword-matching note must surface at chunk level");
+    assert!(srs.path.ends_with("spaced-repetition.md"));
+    assert!(srs.text.contains("forgetting"));
+}
+
+#[test]
 fn graph_filter_with_zero_hops_is_just_the_anchor() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());

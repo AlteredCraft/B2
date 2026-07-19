@@ -27,7 +27,8 @@ schema must satisfy the data model, never the reverse.
   (index engine, desktop MVP, async indexing, projection/embedding split, desktop editing, live preview).
 - `planning/user-stories.md` — kernel behavior as testable scenarios.
 - `planning/specs/eval-strategy.md` — how model quality (the `Embedder` seam) is measured out-of-CI:
-  the hand-labelled retrieval eval, its metrics, and how to run/grow it.
+  the hand-labelled retrieval + discovery evals (BM25-vs-hybrid ablation, note & passage ranks,
+  `b2 similar`), the chunker-sweep gate, the results log, and how to run/grow it all.
 
 ## Commands
 
@@ -48,7 +49,10 @@ cargo test -p b2-core one_note_reindex  # filter by test-name substring
 
 # Real embedder (out of CI; needs the model provisioned first)
 cargo run -p b2-cli -- init             # download + verify bge-base-en-v1.5 into the XDG cache
-cargo run -p b2-embed --example eval    # semantic-retrieval quality eval (never in `cargo test`)
+cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (never in `cargo test`):
+                                        # BM25-vs-hybrid lift, passage ranks, `similar`; appends each
+                                        # run to crates/b2-embed/evals/results.jsonl (gitignored)
+cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
 # Metal GPU embedder — research lever (GH #40, macOS-only). The `metal` cargo feature moves the
 # BERT forward pass to the Apple-Silicon GPU (default build stays CPU + Accelerate). It's a

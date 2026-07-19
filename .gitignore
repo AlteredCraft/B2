@@ -28,6 +28,10 @@ crates/b2-desktop/gen/
 # don't ignore logs/.keep
 !/logs/.keep
 
+# The retrieval eval's append-only results log (specs/eval-strategy.md): one JSON
+# line per scored run, machine-local (scores depend on the machine's model/device).
+crates/b2-embed/evals/results.jsonl
+
 # Embed device-compare (scripts/compare-embed-device.sh) artifacts. Its work copies live in
 # the system tempdir and its logs land under logs/ above — both already covered — but pin the
 # footgun explicitly: an ad-hoc `b2 reindex` pointed straight at the committed test vault would
