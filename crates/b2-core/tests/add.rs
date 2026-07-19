@@ -151,6 +151,61 @@ fn add_refuses_to_clobber_an_existing_file() {
 }
 
 #[test]
+fn create_note_writes_a_stamped_minimal_note_model_free() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed(tmp.path());
+    let before = vault.embed_status().unwrap();
+
+    let report = vault.create_note("inbox/idea").unwrap();
+    assert_eq!(report.path, "inbox/idea.md");
+    assert!(!report.b2id.is_empty());
+
+    // On disk: the minimal frontmatter (no title — the display title is the
+    // filename, data-model.md §1), stamped, body-less, in a freshly-created dir.
+    let text = fs::read_to_string(root.join("inbox/idea.md")).unwrap();
+    assert!(text.contains(&format!("b2id: {}", report.b2id)), "{text}");
+    assert!(text.contains("type: note"), "{text}");
+    assert!(text.contains("created:"), "{text}");
+    assert!(!text.contains("title:"), "{text}");
+
+    // Projected: it resolves by path and b2id, and the tree lists it.
+    assert!(vault.explain("inbox/idea").is_ok());
+    assert!(vault.explain(&report.b2id).is_ok());
+    assert!(vault
+        .list_notes()
+        .unwrap()
+        .iter()
+        .any(|n| n.path == "inbox/idea.md"));
+
+    // Model-free: the embedding space is untouched — coverage gains no embedded
+    // note (an empty body has no chunks; a later embed/reindex owns any vectors).
+    let after = vault.embed_status().unwrap();
+    assert_eq!(
+        after.embedded, before.embedded,
+        "create_note must never embed"
+    );
+    assert_eq!(after.total, before.total + 1);
+}
+
+#[test]
+fn create_note_refuses_clobber_and_invalid_paths() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = reindexed(tmp.path());
+
+    let err = vault.create_note("concepts/memory").unwrap_err();
+    assert!(matches!(err, Error::AddTargetExists(p) if p == "concepts/memory.md"));
+    for bad in ["../escape", "/abs/path", "  "] {
+        assert!(
+            matches!(
+                vault.create_note(bad).unwrap_err(),
+                Error::AddDestination(_)
+            ),
+            "path {bad:?} must be rejected"
+        );
+    }
+}
+
+#[test]
 fn add_rejects_an_invalid_path() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed(tmp.path());

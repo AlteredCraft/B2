@@ -18,6 +18,7 @@
 use crate::error::CmdError;
 use crate::watch::VaultWatcher;
 use crate::{open_vault, AppState};
+use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
     EmbedReport, ExplainView, LinkReport, NeighborView, NoteSummary, NoteView, ProjectReport,
@@ -160,6 +161,20 @@ pub fn write_note(
     base_revision: String,
 ) -> Result<WriteReport, CmdError> {
     write_note_impl(state.inner(), &note, &body, &base_revision)
+}
+
+/// Create a new, empty note — the file tree's New-note action (and ⌘N). **Model-free**
+/// like `write_note`/`project`: `Vault::create_note` writes the file and projects it
+/// without touching vectors, so creating works with no model provisioned, and it runs
+/// outside the single-in-flight embed slot (short, and a fake-opened vault must never
+/// write into a real-model embedding space). The note's chunks join the DB-derived
+/// pending set for the next embed pass — and an empty body has nothing to embed anyway.
+/// Folders need no command: they exist only as file paths (the tree is index-derived),
+/// so a staged folder materializes when its first note is created inside it
+/// (`create_note` creates missing parent dirs, mirroring `b2 add`).
+#[tauri::command(async)]
+pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
+    create_note_impl(state.inner(), &path)
 }
 
 #[tauri::command(async)]
@@ -448,6 +463,11 @@ fn write_note_impl(
     Ok(vault.write(note, body, base_revision)?)
 }
 
+fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.create_note(path)?)
+}
+
 /// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against
 /// the registry *before* any filesystem write, so the unknown-model path is hermetic (no
 /// file touched); the real-config write itself is exercised by `b2-embed`'s `write_model`
@@ -729,6 +749,57 @@ mod tests {
         assert_eq!(reread.body, "An edited body.\n");
         assert_eq!(reread.revision, report.revision);
         write_note_impl(&state, "concepts/memory", "Again.\n", &report.revision).unwrap();
+    }
+
+    #[test]
+    fn create_note_projects_and_lists_model_free() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        // Creating into a not-yet-existing folder materializes it (the staged-folder
+        // flow: the tree's "new folder" is UI state until its first note lands).
+        let report = create_note_impl(&state, "inbox/idea").unwrap();
+        assert_eq!(report.path, "inbox/idea.md");
+        assert!(root.join("inbox/idea.md").is_file());
+
+        // Immediately in the tree and readable (projected, no model touched).
+        let notes = list_notes_impl(&state).unwrap();
+        assert!(notes.iter().any(|n| n.path == "inbox/idea.md"));
+        let note = read_note_impl(&state, "inbox/idea").unwrap();
+        assert_eq!(note.body, "");
+        assert_eq!(note.b2id, report.b2id);
+    }
+
+    #[test]
+    fn create_note_refusals_stay_generic_and_actionable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        // Clobber refusal names the path and the way out.
+        let err = create_note_impl(&state, "concepts/memory").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::AddTargetExists(_))
+        ));
+        assert_eq!(
+            user_message(&err),
+            "A note already exists at 'concepts/memory.md'. Choose a different name, or open that note."
+        );
+
+        // An invalid destination is refused with actionable phrasing, no internals.
+        let err = create_note_impl(&state, "../escape").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::AddDestination(_))
+        ));
+        assert_eq!(
+            user_message(&err),
+            "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
+        );
     }
 
     #[test]

@@ -65,6 +65,13 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
             "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
         ),
+        CmdError::Core(b2_core::Error::AddTargetExists(p)) => format!(
+            "A note already exists at '{p}'. Choose a different name, or open that note."
+        ),
+        CmdError::Core(b2_core::Error::AddDestination(_)) => {
+            "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
+                .to_string()
+        }
         CmdError::Core(b2_core::Error::WriteConflict(_)) => {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit."
                 .to_string()

@@ -58,19 +58,7 @@ pub fn add_note(
     content: Option<&str>,
     created: &str,
 ) -> Result<AddReport> {
-    let rel = crate::pathspec::normalize_rel_md(path_input).map_err(Error::AddDestination)?;
-    let abs = vault_root.join(&rel);
-    if abs.exists() {
-        return Err(Error::AddTargetExists(rel));
-    }
-
-    // 1. Markdown first: write the new file (creating any missing parent dirs). The
-    //    `b2id` is deliberately left off — ingest stamps it on first sight (§1).
-    let doc = render_note(title, content, created);
-    if let Some(parent) = abs.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&abs, doc)?;
+    let rel = write_new_note(vault_root, path_input, title, content, created)?;
 
     // 2. Project from that Markdown: stamp the `b2id`, chunk + embed the body, and
     //    derive any edges its content authors.
@@ -79,6 +67,55 @@ pub fn add_note(
         b2id: ingested.b2id,
         path: rel,
     })
+}
+
+/// The **model-free** sibling of [`add_note`] — the desktop's New-note action
+/// (`Vault::create_note`): same file write, but the projection is
+/// [`ingest::project_file`] (chunks + FTS + edges, **no embedder**), the same pass
+/// `Vault::write` runs after a save. The new note's chunks join the DB-derived
+/// missing-vector set for any later embed/reindex to fill
+/// (projection-embedding-split.md §7.2) — and a body-less note has nothing to
+/// embed anyway. Same validation and refusals as [`add_note`].
+pub fn create_note(
+    conn: &Connection,
+    idgen: &dyn IdGen,
+    vault_root: &Path,
+    path_input: &str,
+    title: Option<&str>,
+    content: Option<&str>,
+    created: &str,
+) -> Result<AddReport> {
+    let rel = write_new_note(vault_root, path_input, title, content, created)?;
+    let projected = ingest::project_file(conn, vault_root, &rel, idgen)?;
+    Ok(AddReport {
+        b2id: projected.b2id,
+        path: rel,
+    })
+}
+
+/// The shared create step: validate `path_input`, refuse to clobber, render the
+/// minimal frontmatter + body, and write the new file (creating missing parent
+/// dirs). Markdown first (step 1 of both entry points) — the `b2id` is deliberately
+/// left off; ingest/projection stamps it on first sight (§1). Returns the
+/// vault-relative `.md` path.
+fn write_new_note(
+    vault_root: &Path,
+    path_input: &str,
+    title: Option<&str>,
+    content: Option<&str>,
+    created: &str,
+) -> Result<String> {
+    let rel = crate::pathspec::normalize_rel_md(path_input).map_err(Error::AddDestination)?;
+    let abs = vault_root.join(&rel);
+    if abs.exists() {
+        return Err(Error::AddTargetExists(rel));
+    }
+    let doc = render_note(title, content, created);
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&abs, doc)?;
+    Ok(rel)
 }
 
 /// Render a new note's text: a minimal valid frontmatter block followed by the body.

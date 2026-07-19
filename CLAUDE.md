@@ -161,8 +161,8 @@ The **one typed API**. The CLI and the desktop host are its only clients; every 
 module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `neighbors` / `explain` / `search` / `similar`), writes (`add_note` /
-`move_note` / `link` / `write`). **Add operations when a command needs them; do not pre-build a broad
-surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
+`create_note` / `move_note` / `link` / `write`). **Add operations when a command needs them; do not
+pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
 adapters wire the real model.
 
 ### Data flows
