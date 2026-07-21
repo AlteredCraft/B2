@@ -13,8 +13,8 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, EditorSelection, type Extension } from "@codemirror/state";
-import { EditorView, keymap, tooltips } from "@codemirror/view";
+import { Compartment, EditorSelection, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, keymap, tooltips } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
@@ -22,6 +22,7 @@ import { baseName, canMoveInto, moveDestination, remapPath, renameDestination } 
 import { livePreview, wikilink } from "./livepreview";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, toggleInline, type InlineFormat } from "./format";
+import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import {
   contextMenuHtml,
@@ -86,6 +87,7 @@ function render(): void {
   // The carve-out (desktop-editing.md §6): while editing, the note pane belongs to
   // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
   // the editor mid-keystroke. Everything else keeps rendering.
+  let noteSwapped = false;
   if (!state.editing) {
     // Memoized: an unrelated render (a toast timer, streamed progress) with identical
     // pane HTML skips the innerHTML swap, so reading scroll position survives and the
@@ -94,6 +96,7 @@ function render(): void {
     if (noteHtml !== lastNotePaneHtml) {
       el("note-pane").innerHTML = noteHtml;
       lastNotePaneHtml = noteHtml;
+      noteSwapped = true;
     }
   } else {
     lastNotePaneHtml = null;
@@ -128,6 +131,7 @@ function render(): void {
   }
   // Focus the explanation field the moment the modal appears.
   document.getElementById("link-explanation")?.focus();
+  syncFind(noteSwapped);
 }
 
 // Paint just the reindex affordance — the Reindex button's disabled state and the
@@ -1404,14 +1408,24 @@ function mountEditor(body: string): void {
       // <body> so a menu near the pane's bottom edge isn't clipped by it.
       tooltips({ position: "fixed", parent: document.body }),
       lpCompartment.of(livePreviewConf()),
+      // Find-in-note (⌘F) match decorations — inert (null) until the bar sets a query.
+      findField,
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) scheduleAutosave();
+        if (u.docChanged) {
+          scheduleAutosave();
+          // An edit reshapes the match set (the field already recomputed) — keep the
+          // bar's count pill in step.
+          if (findOpen) syncEditorFind(u.view);
+        }
       }),
     ],
     parent: el("editor-host"),
   });
   editorView.focus();
   paintEditor();
+  // An open find bar carries across the mount (Edit clicked, or a conflict reload):
+  // same query, editor engine.
+  if (findOpen) setFindQuery(findInput().value);
 }
 
 // Repaint just the editor's conflict bar and the `</>` source-toggle button — never a
@@ -1625,6 +1639,268 @@ async function exitEdit(): Promise<void> {
   if (await closeEditor()) render(); // shows the saved text — no re-read needed
 }
 
+// --- find in note (⌘F) ------------------------------------------------------------
+//
+// One bar, two engines, one pure core (findbar.ts). The bar is static shell chrome —
+// a floating overlay in the note pane's grid area, built once in buildShell and never
+// innerHTML-swapped — and its state is module-local like the editor's: transient view
+// state, not AppState, so typing in it never triggers a render. Over the reading view
+// it paints matches with the CSS Custom Highlight API (Ranges over the rendered text
+// nodes — no DOM mutation, so the render memo, scroll position, and click delegation
+// are untouched, and a match spanning inline markup still highlights whole). Over the
+// editor it drives the CodeMirror StateField below. ⇧⌘F is different in kind: it just
+// focuses the global vault-search box in the top bar.
+
+let findOpen = false;
+let findQuery = "";
+/** The current match set + active index, whichever engine produced it. */
+let findMatchesList: Match[] = [];
+let findActive = -1;
+/** Reading-mode DOM anchors, parallel to findMatchesList; stale after any pane swap. */
+let findRanges: globalThis.Range[] = [];
+/** The doc the bar is bound to — navigating anywhere else closes it (syncFind). */
+let findDocKey: string | null = null;
+
+// The editor engine: match state lives in a StateField so the decorations re-derive on
+// every doc change — typing with the bar open keeps the highlights honest, with no
+// listener→dispatch round-trip.
+type EditorFind = { query: string; matches: Match[]; active: number };
+const setFindEffect = StateEffect.define<{ query: string; active: number } | null>();
+const findMark = Decoration.mark({ class: "find-match" });
+const findMarkActive = Decoration.mark({ class: "find-match is-active" });
+const findField = StateField.define<EditorFind | null>({
+  create: () => null,
+  update(value, tr) {
+    let next = value;
+    for (const ef of tr.effects) {
+      if (ef.is(setFindEffect))
+        next = ef.value && { query: ef.value.query, matches: [], active: ef.value.active };
+    }
+    if (!next) return null;
+    if (next === value && !tr.docChanged) return value;
+    const matches = findMatches(tr.newDoc.toString(), next.query);
+    const active =
+      next !== value || value === null
+        ? matches.length === 0
+          ? -1
+          : Math.max(0, Math.min(next.active, matches.length - 1))
+        : // A doc edit: re-anchor on where the old active match ended up.
+          activeAfter(
+            matches,
+            value.active >= 0 && value.matches[value.active]
+              ? tr.changes.mapPos(value.matches[value.active].from)
+              : 0,
+          );
+    return { query: next.query, matches, active };
+  },
+  provide: (f) =>
+    EditorView.decorations.from(f, (v): DecorationSet => {
+      if (!v) return Decoration.none;
+      return Decoration.set(
+        v.matches.map((m, i) => (i === v.active ? findMarkActive : findMark).range(m.from, m.to)),
+      );
+    }),
+});
+
+/** What the note pane is showing, as an identity — null means "nothing findable"
+ *  (empty pane, or the graph, which has no text to find in). */
+function findableDocKey(): string | null {
+  if (state.currentResource) return `res:${state.currentResource.path}`;
+  if (!state.current) return null;
+  if (state.graphOpen && !state.editing) return null;
+  return `note:${state.current.path}`;
+}
+
+const findInput = () => el("find-input") as HTMLInputElement;
+
+function openFind(): void {
+  const key = findableDocKey();
+  if (!key) return;
+  // Seed from the live selection — the "search for this" gesture; otherwise the bar
+  // keeps its last query, preselected so typing replaces it.
+  const sel =
+    state.editing && editorView
+      ? editorView.state.sliceDoc(
+          editorView.state.selection.main.from,
+          editorView.state.selection.main.to,
+        )
+      : (window.getSelection()?.toString() ?? "");
+  findOpen = true;
+  findDocKey = key;
+  el("find-bar").hidden = false;
+  if (sel && !sel.includes("\n")) findInput().value = sel;
+  setFindQuery(findInput().value);
+  findInput().focus();
+  findInput().select();
+}
+
+function closeFind(): void {
+  if (!findOpen) return;
+  findOpen = false;
+  findDocKey = null;
+  findMatchesList = [];
+  findActive = -1;
+  el("find-bar").hidden = true;
+  clearReadingFind();
+  if (state.editing && editorView) {
+    editorView.dispatch({ effects: setFindEffect.of(null) });
+    editorView.focus();
+  }
+}
+
+function clearReadingFind(): void {
+  findRanges = [];
+  if ("highlights" in CSS) {
+    CSS.highlights.delete("b2-find");
+    CSS.highlights.delete("b2-find-active");
+  }
+}
+
+/** Recompute matches + Ranges over the rendered note and repaint the highlights.
+ *  Runs on open, on each query keystroke, and after any note-pane swap (which
+ *  invalidates the previous pass's Ranges). */
+function applyReadingFind(): void {
+  const anchor = findMatchesList[findActive]?.from ?? 0;
+  clearReadingFind();
+  // The article is the reading surface (title, meta, tags, body — or the raw source
+  // in `</>` mode); the bars above it are chrome and stay out of the match set.
+  const article = document.querySelector("#note-pane article.note");
+  if (!article) {
+    findMatchesList = [];
+    findActive = -1;
+    paintFindBar();
+    return;
+  }
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  const segs = nodes.map((n) => n.data.length);
+  findMatchesList = findMatches(nodes.map((n) => n.data).join(""), findQuery);
+  findRanges = findMatchesList.map((m) => {
+    const s = locate(segs, m.from, "start");
+    const e = locate(segs, m.to, "end");
+    const r = document.createRange();
+    r.setStart(nodes[s.seg], s.off);
+    r.setEnd(nodes[e.seg], e.off);
+    return r;
+  });
+  findActive = activeAfter(findMatchesList, anchor);
+  paintReadingFind();
+  paintFindBar();
+}
+
+/** Paint the two highlight layers (all matches + the active one) from findRanges. */
+function paintReadingFind(): void {
+  if (!("highlights" in CSS)) return; // unsupported: navigation/scroll still work, unpainted
+  if (findRanges.length === 0) {
+    CSS.highlights.delete("b2-find");
+    CSS.highlights.delete("b2-find-active");
+    return;
+  }
+  CSS.highlights.set("b2-find", new Highlight(...findRanges));
+  const active = findRanges[findActive];
+  if (active) CSS.highlights.set("b2-find-active", new Highlight(active));
+  else CSS.highlights.delete("b2-find-active");
+}
+
+function scrollFindActiveIntoView(): void {
+  const range = findRanges[findActive];
+  if (!range) return;
+  const pane = el("note-pane");
+  const rect = range.getBoundingClientRect();
+  const box = pane.getBoundingClientRect();
+  // Leave it alone when it's already in the comfortable band (below the floating bar,
+  // above the bottom edge); otherwise bring it to the pane's upper third.
+  if (rect.top >= box.top + 96 && rect.bottom <= box.bottom - 40) return;
+  pane.scrollTop += rect.top - box.top - pane.clientHeight * 0.35;
+}
+
+/** Mirror the editor field's match state into the bar (count pill, button states). */
+function syncEditorFind(view: EditorView): void {
+  const f = view.state.field(findField, false) ?? null;
+  findMatchesList = f?.matches ?? [];
+  findActive = f?.active ?? -1;
+  paintFindBar();
+}
+
+function setFindQuery(q: string): void {
+  findQuery = q;
+  if (state.editing && editorView) {
+    const view = editorView;
+    const matches = findMatches(view.state.doc.toString(), q);
+    // Anchor on the previous active match, else the caret — typing a longer query
+    // stays near where the user was instead of snapping to the top.
+    const anchor = findMatchesList[findActive]?.from ?? view.state.selection.main.from;
+    const active = activeAfter(matches, anchor);
+    const effects: StateEffect<unknown>[] = [setFindEffect.of({ query: q, active })];
+    const m = matches[active];
+    if (m) effects.push(EditorView.scrollIntoView(m.from, { y: "center" }));
+    view.dispatch({ effects });
+    syncEditorFind(view);
+  } else {
+    applyReadingFind();
+    scrollFindActiveIntoView();
+  }
+}
+
+function findStep(delta: 1 | -1): void {
+  if (!findOpen || findMatchesList.length === 0) return;
+  if (state.editing && editorView) {
+    const view = editorView;
+    const f = view.state.field(findField, false);
+    if (!f || f.matches.length === 0) return;
+    const active = stepActive(f.matches.length, f.active, delta);
+    const m = f.matches[active];
+    // Selecting the match is the editor-find convention (a follow-up ⌘F re-seeds from
+    // it); the dispatch doesn't move focus, so Enter in the bar keeps stepping.
+    view.dispatch({
+      selection: { anchor: m.from, head: m.to },
+      effects: [
+        setFindEffect.of({ query: f.query, active }),
+        EditorView.scrollIntoView(m.from, { y: "center" }),
+      ],
+    });
+    syncEditorFind(view);
+  } else {
+    findActive = stepActive(findMatchesList.length, findActive, delta);
+    paintReadingFind();
+    scrollFindActiveIntoView();
+    paintFindBar();
+  }
+}
+
+function paintFindBar(): void {
+  const pill = el("find-count");
+  pill.hidden = findQuery === "";
+  pill.textContent = countLabel(
+    findMatchesList.length,
+    findActive,
+    findMatchesList.length === FIND_CAP,
+  );
+  const none = findMatchesList.length === 0;
+  (el("find-prev") as HTMLButtonElement).disabled = none;
+  (el("find-next") as HTMLButtonElement).disabled = none;
+}
+
+/** render()'s hook: close when the pane now shows a different doc (or the graph/empty
+ *  state); re-derive the highlights when the pane's DOM was rebuilt under an open bar
+ *  (the old pass's Ranges point into detached nodes). */
+function syncFind(noteSwapped: boolean): void {
+  if (!findOpen) return;
+  if (findableDocKey() !== findDocKey) {
+    closeFind();
+    return;
+  }
+  if (!state.editing && noteSwapped) applyReadingFind();
+}
+
+/** ⇧⌘F: hand the keyboard to the global vault-search box in the top bar. */
+function focusGlobalSearch(): void {
+  const input = document.getElementById("search-input") as HTMLInputElement | null;
+  input?.focus();
+  input?.select();
+}
+
 // --- external-edit reconciliation (desktop-ui-mvp.md §5 / #14) --------------------
 //
 // The host watches the vault and emits a debounced `vault-changed` pulse whenever the
@@ -1763,6 +2039,24 @@ function buildShell(): void {
            aria-label="Resize the discovery pane" aria-controls="side-pane" tabindex="0"
            aria-valuemin="${BOUNDS.side.min}" aria-valuemax="${BOUNDS.side.max}"></div>
       <aside id="side-pane" class="side-pane"></aside>
+      <div id="find-bar" class="find-bar" role="search" aria-label="Find in note" hidden>
+        <div class="find-field">
+          <svg class="find-glass" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3"/>
+          </svg>
+          <input id="find-input" type="text" placeholder="Find…" autocomplete="off" spellcheck="false" aria-label="Find in note" />
+          <span id="find-count" class="find-count" aria-live="polite" hidden></span>
+        </div>
+        <button id="find-prev" class="btn ghost icon-btn" title="Previous match (⇧Enter)" aria-label="Previous match">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10 8 5.5l4.5 4.5"/></svg>
+        </button>
+        <button id="find-next" class="btn ghost icon-btn" title="Next match (Enter)" aria-label="Next match">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
+        </button>
+        <button id="find-close" class="btn ghost icon-btn" title="Close (Esc)" aria-label="Close find">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
     </main>
     <div id="menu-root"></div>
     <div id="modal-root"></div>
@@ -2047,6 +2341,21 @@ function wireEvents(): void {
   document.addEventListener("scroll", closeContextMenu, true);
   window.addEventListener("resize", closeContextMenu);
 
+  // The find bar is static shell chrome — direct listeners, not delegation. mousedown
+  // preventDefault keeps focus in the find input across button clicks, so Enter keeps
+  // stepping without a re-click.
+  findInput().addEventListener("input", (e) => setFindQuery((e.target as HTMLInputElement).value));
+  const findButtons: [string, () => void][] = [
+    ["find-prev", () => findStep(-1)],
+    ["find-next", () => findStep(1)],
+    ["find-close", closeFind],
+  ];
+  for (const [id, act] of findButtons) {
+    const btn = el(id);
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", act);
+  }
+
   // Search on submit (Enter).
   document.addEventListener("submit", (e) => {
     if ((e.target as HTMLElement).id === "search-form") {
@@ -2118,6 +2427,34 @@ function wireEvents(): void {
       }
       return;
     }
+    // The find bar's input: Enter steps (⇧Enter back), Escape closes. Everything else
+    // falls through so the global chords (⌘F itself, ⇧⌘F) still work from the bar.
+    if (findOpen && (e.target as HTMLElement).id === "find-input") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        findStep(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeFind();
+        return;
+      }
+    }
+    // ⌘F — find in the open note; ⇧⌘F — jump to the global vault-search box.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
+      if (state.settingsOpen || state.linkTarget || state.moveTarget) return;
+      e.preventDefault();
+      if (e.shiftKey) focusGlobalSearch();
+      else openFind();
+      return;
+    }
+    // ⌘G / ⇧⌘G — the classic find-next/previous chords, live while the bar is open.
+    if (findOpen && (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      findStep(e.shiftKey ? -1 : 1);
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
       if (state.settingsOpen || state.linkTarget || state.moveTarget) return; // a modal owns the keyboard
       e.preventDefault();
@@ -2141,6 +2478,11 @@ function wireEvents(): void {
       }
       if (state.linkTarget || state.moveTarget) {
         closeModal();
+        return;
+      }
+      // An open find bar dismisses next (Escape from anywhere, not just its input).
+      if (findOpen) {
+        closeFind();
         return;
       }
       // With nothing else to dismiss, Escape backs out of the graph into reading.

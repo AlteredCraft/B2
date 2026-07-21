@@ -323,6 +323,10 @@ body {
     minmax(0, 1fr)
     var(--gutter-w) var(--side-w, 380px);
   min-height: 0;
+  /* Containing block for the find bar: an absolutely-positioned grid child is sized
+     against the grid area its placement names, so the bar tracks the note pane's
+     column through drags and breakpoints with no JS measuring. */
+  position: relative;
 }
 
 .tree-pane {
@@ -416,6 +420,131 @@ body.is-resizing {
   .tree-pane,
   .gutter {
     display: none;
+  }
+}
+
+/* --- find in note (⌘F) --------------------------------------------------------- */
+
+/* A floating overlay in the note pane's grid area (see .layout's position comment):
+   centered near the top, below the frontmatter/editor strip, over the text — no
+   layout shift, so opening it never moves what the user is reading. */
+.find-bar {
+  position: absolute;
+  grid-column: 3;
+  grid-row: 1;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 100% - 48px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+/* `display: flex` beats the UA's [hidden] rule — re-assert (the reindex-progress lesson). */
+.find-bar[hidden] {
+  display: none;
+}
+
+.find-field {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.find-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.find-glass {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+#find-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 13.5px;
+  padding: 0;
+}
+
+#find-input:focus {
+  outline: none;
+}
+
+.find-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Match paint. The reading view uses the CSS Custom Highlight API (no DOM mutation);
+   the editor marks the same matches with .find-match decorations. Concrete colors,
+   not vars: custom-property resolution inside ::highlight pseudos is still patchy
+   across engines, and a silently-unresolved var() would paint nothing. The dark
+   overrides mirror the theme rule pair up top (both bodies identical, by the same
+   rule). */
+::highlight(b2-find) {
+  background-color: rgba(255, 199, 66, 0.4);
+}
+::highlight(b2-find-active) {
+  background-color: rgba(255, 145, 40, 0.75);
+}
+.find-match {
+  background: rgba(255, 199, 66, 0.4);
+  border-radius: 2px;
+}
+.find-match.is-active {
+  background: rgba(255, 145, 40, 0.75);
+}
+
+:root[data-theme="dark"] ::highlight(b2-find) {
+  background-color: rgba(255, 199, 66, 0.3);
+}
+:root[data-theme="dark"] ::highlight(b2-find-active) {
+  background-color: rgba(255, 145, 40, 0.6);
+}
+:root[data-theme="dark"] .find-match {
+  background: rgba(255, 199, 66, 0.3);
+}
+:root[data-theme="dark"] .find-match.is-active {
+  background: rgba(255, 145, 40, 0.6);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(b2-find) {
+    background-color: rgba(255, 199, 66, 0.3);
+  }
+  :root:not([data-theme]) ::highlight(b2-find-active) {
+    background-color: rgba(255, 145, 40, 0.6);
+  }
+  :root:not([data-theme]) .find-match {
+    background: rgba(255, 199, 66, 0.3);
+  }
+  :root:not([data-theme]) .find-match.is-active {
+    background: rgba(255, 145, 40, 0.6);
+  }
+}
+
+/* The single-column breakpoint collapses the grid to one track — follow the pane. */
+@media (max-width: 720px) {
+  .find-bar {
+    grid-column: 1;
   }
 }
 
