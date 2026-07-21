@@ -39,13 +39,13 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed(tmp.path());
 
-    // The backlink set of memory, before the move (SRS elaborates + references it).
+    // The backlink set of memory, before the move (SRS supports + references it).
     let before = inbound(&vault, MEMORY_ID);
     assert_eq!(
         before,
         vec![
-            ("elaborated-by".to_string(), SRS_ID.to_string()),
             ("referenced-by".to_string(), SRS_ID.to_string()),
+            ("supported-by".to_string(), SRS_ID.to_string()),
         ]
     );
 

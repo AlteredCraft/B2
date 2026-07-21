@@ -30,31 +30,31 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     assert_eq!(view.path, "notes/spaced-repetition.md");
     assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
-    // Two outbound edges to memory — a typed `elaborates` (with a "why") and a bare
+    // Two outbound edges to memory — a typed `supports` (with a "why") and a bare
     // `references` (none). Both are body-authored, so origin=inline.
     assert_eq!(view.connections.len(), 2, "{:?}", view.connections);
     assert!(view.connections.iter().all(|c| c.direction == "outbound"));
     assert!(view.connections.iter().all(|c| c.b2id == MEMORY_ID));
     assert!(view.connections.iter().all(|c| c.origin == "inline"));
 
-    let elaborates = view
+    let supports = view
         .connections
         .iter()
-        .find(|c| c.label == "elaborates")
-        .expect("an elaborates edge");
+        .find(|c| c.label == "supports")
+        .expect("a supports edge");
     assert!(
-        elaborates
+        supports
             .explanation
             .as_deref()
             .is_some_and(|w| w.contains("forgetting curve")),
-        "the typed edge carries its why: {elaborates:?}"
+        "the typed edge carries its why: {supports:?}"
     );
     assert!(
         view.connections.iter().any(|c| c.label == "references"),
         "the bare body link is a references edge"
     );
-    // Every edge carries the other note's `created` — the lineage lens's time
-    // axis (GH #22) — resolved from the projection, not a file re-read.
+    // Every edge carries the other note's `created` (GH #22) — resolved from
+    // the projection, not a file re-read.
     assert!(
         view.connections
             .iter()
@@ -145,17 +145,17 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
     assert!(view.connections.iter().all(|c| c.direction == "inbound"));
     assert!(view.connections.iter().all(|c| c.b2id == SRS_ID));
 
-    let elaborated_by = view
+    let supported_by = view
         .connections
         .iter()
-        .find(|c| c.label == "elaborated-by")
-        .expect("the inverse label of elaborates");
+        .find(|c| c.label == "supported-by")
+        .expect("the inverse label of supports");
     assert!(
-        elaborated_by
+        supported_by
             .explanation
             .as_deref()
             .is_some_and(|w| w.contains("forgetting curve")),
-        "inbound edges keep the edge's why: {elaborated_by:?}"
+        "inbound edges keep the edge's why: {supported_by:?}"
     );
 }
 
@@ -179,7 +179,7 @@ fn explain_surfaces_frontmatter_provenance() {
     fs::write(
         root.join("author.md"),
         "---\nb2id: 01JAUTH000000000000000001\ntype: note\ntitle: Author\n\
-         relations:\n  - \"elaborates [[concepts/memory|Human memory]] — via frontmatter\"\n---\n\
+         relations:\n  - \"supports [[concepts/memory|Human memory]] — via frontmatter\"\n---\n\
          A body with no links.\n",
     )
     .unwrap();
@@ -192,7 +192,7 @@ fn explain_surfaces_frontmatter_provenance() {
         .find(|c| c.b2id == MEMORY_ID)
         .expect("the frontmatter relation edge");
     assert_eq!(edge.origin, "frontmatter");
-    assert_eq!(edge.label, "elaborates");
+    assert_eq!(edge.label, "supports");
 }
 
 #[test]

@@ -212,8 +212,8 @@ nothing inert — a connection exists only once I author it.
 - **Given** a vault with an embedding index, **when** I run `b2 similar A`, **then** it returns notes
   ranked by similarity to A, never includes A itself or a note already linked to A, and writes no file
   and no edge.
-- **Given** `b2 similar A` lists B, **when** I run `b2 link A B --type elaborates`, **then** A's
-  frontmatter `relations:` gains `- "elaborates [[pathB|B]]"`, A's **body is byte-identical**, and after
+- **Given** `b2 similar A` lists B, **when** I run `b2 link A B --type supports`, **then** A's
+  frontmatter `relations:` gains `- "supports [[pathB|B]]"`, A's **body is byte-identical**, and after
   reindex `b2 neighbors A` shows B (outbound) while `b2 neighbors B` shows A (backlink).
 - **Given** I omit `--type`, **then** the committed relation defaults to `references`.
 - **Given** A and B are now linked, **when** I re-run `b2 similar A`, **then** B no longer appears — it is

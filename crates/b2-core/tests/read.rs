@@ -81,7 +81,7 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
     assert!(note.body.contains("## Relations"));
     assert!(note
         .body
-        .contains("elaborates [[concepts/memory|Human memory]]"));
+        .contains("supports [[concepts/memory|Human memory]]"));
 }
 
 #[test]

@@ -118,7 +118,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
-    // The golden SRS note links memory twice (references + elaborates). Save a body
+    // The golden SRS note links memory twice (references + supports). Save a body
     // that keeps ONE link and adds fresh text.
     let note = vault.read(SRS_PATH).unwrap();
     let new_body = "Rewritten body about zettelkasten workflows.\n\nSee [[concepts/memory]].\n";

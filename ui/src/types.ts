@@ -139,8 +139,8 @@ export interface NeighborView {
   explanation: string | null;
   origin: string; // "inline" | "frontmatter"
   /**
-   * The other note's `created` date, if it has one — the graph's lineage lens
-   * places and labels version neighbors by it (GH #22).
+   * The other note's `created` date, if it has one — resolved by the host so a
+   * client never re-reads the file just for a date (GH #22).
    */
   created: string | null;
 }

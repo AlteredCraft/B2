@@ -205,7 +205,7 @@ fn heading_path_tracks_nested_headings() {
 fn body_before_any_heading_has_no_path() {
     // The golden spaced-repetition shape: prose, then a heading. The single chunk
     // starts in the headingless prose, so its path is None.
-    let body = "Spaced repetition exploits the forgetting curve.\n\n## Relations\n- elaborates X\n";
+    let body = "Spaced repetition exploits the forgetting curve.\n\n## Relations\n- supports X\n";
     let chunks = chunk_body(body, &ChunkConfig::default());
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0].heading_path, None);

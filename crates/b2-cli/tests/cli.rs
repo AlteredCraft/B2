@@ -323,7 +323,7 @@ fn explain_shows_connections_human_and_json() {
     assert!(human.status.success(), "{}", stderr(&human));
     let out = stdout(&human);
     assert!(out.contains("spaced-repetition"), "header: {out}");
-    assert!(out.contains("elaborates"), "{out}");
+    assert!(out.contains("supports"), "{out}");
     assert!(out.contains("why:"), "the explanation is labelled: {out}");
     assert!(out.contains("forgetting curve"), "{out}");
 
@@ -337,7 +337,7 @@ fn explain_shows_connections_human_and_json() {
     assert_eq!(conns.len(), 2);
     assert!(conns.iter().all(|c| c["direction"] == "outbound"));
     assert!(conns.iter().all(|c| c["origin"] == "inline"));
-    assert!(conns.iter().any(|c| c["label"] == "elaborates"));
+    assert!(conns.iter().any(|c| c["label"] == "supports"));
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn neighbors_by_path_and_by_b2id() {
     let out = stdout(&by_path);
     // outbound edges: the verbs themselves, resolved to the target's title (its
     // filename, data-model.md §1).
-    assert!(out.contains("elaborates"), "{out}");
+    assert!(out.contains("supports"), "{out}");
     assert!(out.contains("references"), "{out}");
     assert!(out.contains("memory"), "{out}");
 
@@ -383,7 +383,7 @@ fn neighbors_by_path_and_by_b2id() {
     assert!(by_id.status.success(), "{}", stderr(&by_id));
     let out = stdout(&by_id);
     // memory sees the inbound inverse labels, from the SRS note.
-    assert!(out.contains("elaborated-by"), "{out}");
+    assert!(out.contains("supported-by"), "{out}");
     assert!(out.contains("referenced-by"), "{out}");
     assert!(out.contains("spaced-repetition"), "{out}");
 }
@@ -400,7 +400,7 @@ fn neighbors_json_shape() {
     assert!(arr
         .iter()
         .all(|n| n["path"] == "notes/spaced-repetition.md"));
-    assert!(arr.iter().any(|n| n["label"] == "elaborated-by"));
+    assert!(arr.iter().any(|n| n["label"] == "supported-by"));
 }
 
 #[test]
@@ -591,7 +591,10 @@ fn similar_excludes_already_linked() {
         .any(|c| c["path"] == "beta.md"));
 
     // link alpha → beta; beta is now a 1-hop neighbor and drops out of the list.
-    let out = run_in(&root, &["link", "alpha.md", "beta.md", "--type", "relates"]);
+    let out = run_in(
+        &root,
+        &["link", "alpha.md", "beta.md", "--type", "supports"],
+    );
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         similar(&root, "alpha.md")
@@ -621,7 +624,7 @@ fn link_writes_frontmatter_and_shows_in_both_directions() {
 
     let out = run_in(
         &root,
-        &["link", "alpha.md", "beta.md", "--type", "elaborates"],
+        &["link", "alpha.md", "beta.md", "--type", "supports"],
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).to_lowercase().contains("linked"));
@@ -632,7 +635,7 @@ fn link_writes_frontmatter_and_shows_in_both_directions() {
         body.contains("relations:"),
         "link must append to frontmatter: {body}"
     );
-    assert!(body.contains("elaborates"), "the verb is written: {body}");
+    assert!(body.contains("supports"), "the verb is written: {body}");
 
     // …and the graph shows it outbound from alpha and inbound (backlink) at beta.
     let a = run_in(&root, &["--json", "neighbors", "alpha.md"]);

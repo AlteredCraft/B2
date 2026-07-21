@@ -63,7 +63,7 @@ pub fn user_message(err: &CmdError) -> String {
                 .to_string()
         }
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
-            "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
+            "'{v}' isn't a known relation type. Use one of: references, supports, contradicts."
         ),
         CmdError::Core(b2_core::Error::MoveTargetExists(p)) => format!(
             "Can't move: something already exists at '{p}'. Choose a different name or destination."

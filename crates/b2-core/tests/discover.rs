@@ -137,7 +137,7 @@ fn generation_is_deterministic() {
 
 #[test]
 fn a_directly_connected_pair_yields_no_candidates() {
-    // The golden vault is two notes, directly connected (spaced-repetition elaborates
+    // The golden vault is two notes, directly connected (spaced-repetition supports
     // /references human-memory), so each is within 1 hop of the other → no candidates.
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());

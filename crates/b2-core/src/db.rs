@@ -838,9 +838,9 @@ pub fn note_title(conn: &Connection, b2id: &str) -> Result<Option<String>> {
         .flatten())
 }
 
-/// A note's `created` date (`None` if absent or unset) — the lineage-lens time
-/// axis (GH #22): a versioning neighbor is placed, and labelled, by when it was
-/// created, so a graph adapter never re-reads the file just for a date.
+/// A note's `created` date (`None` if absent or unset), resolved from the
+/// projection (GH #22): a neighbor is dated for display without an adapter ever
+/// re-reading the file just for a date.
 pub fn note_created(conn: &Connection, b2id: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT created FROM notes WHERE b2id = ?1", [b2id], |r| {

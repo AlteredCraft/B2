@@ -82,7 +82,7 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     let ns = vault.neighbors(MEMORY_ID).unwrap();
     let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
-    assert_eq!(labels, vec!["elaborated-by", "referenced-by"]);
+    assert_eq!(labels, vec!["referenced-by", "supported-by"]);
 
     // every neighbor is the SRS note, inbound, resolved to its path + title (the
     // filename, data-model.md §1).
@@ -92,8 +92,8 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     assert!(ns
         .iter()
         .all(|n| n.title.as_deref() == Some("spaced-repetition")));
-    // the typed `elaborates` edge carries its explanation through.
-    assert!(ns.iter().any(|n| n.relation == "elaborates"
+    // the typed `supports` edge carries its explanation through.
+    assert!(ns.iter().any(|n| n.relation == "supports"
         && n.explanation.as_deref() == Some("applies the forgetting curve")));
 }
 
@@ -111,7 +111,7 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
         let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
         labels.sort_unstable();
         // outbound labels are the verbs themselves.
-        assert_eq!(labels, vec!["elaborates", "references"]);
+        assert_eq!(labels, vec!["references", "supports"]);
         assert!(ns.iter().all(|n| n.b2id == MEMORY_ID));
         assert!(ns.iter().all(|n| n.direction == "outbound"));
         assert!(ns.iter().all(|n| n.path == "concepts/memory.md"));

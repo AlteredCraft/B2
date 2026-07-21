@@ -693,22 +693,13 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
 }
 
 // --- the anchored ghost graph (GH #22) --------------------------------------------
-//
-// The center pane's third mode. Both toggles below are pure state flips — the scene
-// renders from discovery state the note-open already fetched, so no IPC happens here.
 
-/** Flip the pane between reading and the graph. Sticky across notes, like sourceOpen. */
+/** Flip the pane between reading and the graph — a pure state flip (the scene
+ *  renders from discovery state the note-open already fetched, so no IPC happens
+ *  here). Sticky across notes, like sourceOpen. */
 function toggleGraph(): void {
   if (!state.current) return; // the graph anchors on an open note
   state.graphOpen = !state.graphOpen;
-  render();
-}
-
-/** Switch the graph's typed lens (All / Lineage / Argument). */
-function setGraphLens(lens: string): void {
-  if (lens !== "all" && lens !== "lineage" && lens !== "argument") return;
-  if (state.graphLens === lens) return;
-  state.graphLens = lens;
   render();
 }
 
@@ -2213,11 +2204,6 @@ function wireEvents(): void {
 
     if (target.closest("[data-toggle-graph]")) {
       toggleGraph();
-      return;
-    }
-    const lens = target.closest<HTMLElement>("[data-graph-lens]");
-    if (lens) {
-      setGraphLens(lens.dataset.graphLens ?? "");
       return;
     }
     // A ghost is a question — clicking it opens the link palette (the typing moment;

@@ -133,7 +133,7 @@ enum Command {
         src: String,
         /// The target note (the edge points *to* it): path or b2id.
         dst: String,
-        /// The relation verb (a core verb, e.g. elaborates/supports/supersedes).
+        /// The relation verb (a core verb: references/supports/contradicts).
         #[arg(long = "type", default_value = "references")]
         edge_type: String,
         /// Optional explanation — trailing text shown after the link.
@@ -831,7 +831,7 @@ fn user_message(err: &CliError) -> String {
             "That note path isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
         }
         CliError::Core(b2_core::Error::InvalidRelation(v)) => format!(
-            "'{v}' isn't a known relation type. Use one of: references, relates, elaborates, supports, refutes, contradicts, example-of, part-of, supersedes, derived-from."
+            "'{v}' isn't a known relation type. Use one of: references, supports, contradicts."
         ),
         CliError::Core(b2_core::Error::WriteConflict(_)) => {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit.".to_string()

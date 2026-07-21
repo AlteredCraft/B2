@@ -1,12 +1,10 @@
 // The anchored ghost graph's scene builder (GH #22): pure functions from the
 // discovery state the app already holds (`explain` + `similar`) to a positioned
 // scene of nodes and edges. **Deterministic, no physics** — an ego graph is a
-// statement, not soup: the "all" lens bands authored edges by category around the
-// anchor with the latent (ghost) candidates on an outer orbit; the lineage lens
-// lays versioning edges on a left→right time axis; the argument lens diverges
-// supporters and refuters around the claim with `contradicts` on a fault line.
-// That layout-follows-meaning stance is the whole point of drawing B2's typed
-// graph instead of cloning an untyped force-directed hairball (issue #22).
+// statement, not soup: authored edges band by category around the anchor with
+// the latent (ghost) candidates on an outer orbit. That layout-follows-meaning
+// stance is the whole point of drawing B2's typed graph instead of cloning an
+// untyped force-directed hairball (issue #22).
 //
 // No DOM, no IPC, no randomness — same input, same scene — so this file is unit
 // tested the way `panes.ts` is (`graph.test.ts`, plain node). `render.ts` turns
@@ -14,52 +12,24 @@
 
 import type { NeighborView, ResourceLink, SimilarView, UnresolvedLink } from "./types";
 
-/** The typed-lens selector: the same neighborhood, reshaped so layout matches
- *  meaning. "all" is the ghost graph; the other two are the ⭐ categories the
- *  vision names as B2's reason to exist (data-model.md §2). */
-export type GraphLens = "all" | "lineage" | "argument";
+/** The stance-trio core verbs (data-model.md §2) plus the tolerated tail —
+ *  color = verb is the graph's first encoding. */
+export type Category = "references" | "supports" | "contradicts" | "other";
 
-/** The five relation categories (data-model.md §2) plus the tolerated tail —
- *  color = category is the graph's first encoding. */
-export type Category =
-  | "referential"
-  | "expository"
-  | "evidential"
-  | "structural"
-  | "versioning"
-  | "other";
+const CORE_VERBS = new Set(["references", "supports", "contradicts"]);
 
-const CATEGORY_OF: Record<string, Category> = {
-  references: "referential",
-  relates: "referential",
-  elaborates: "expository",
-  supports: "evidential",
-  refutes: "evidential",
-  contradicts: "evidential",
-  "example-of": "structural",
-  "part-of": "structural",
-  supersedes: "versioning",
-  "derived-from": "versioning",
-};
-
-/** A verb's category; tail verbs (stored verbatim, never dropped) read as "other". */
+/** A verb's color key: core verbs are themselves; tail verbs (stored verbatim,
+ *  never dropped) read as "other". */
 export function categoryOf(verb: string): Category {
-  return CATEGORY_OF[verb] ?? "other";
+  return CORE_VERBS.has(verb) ? (verb as Category) : "other";
 }
 
 /** Symmetric verbs are their own inverse (relation.rs) — drawn with no arrowhead. */
-const SYMMETRIC = new Set(["relates", "contradicts"]);
+const SYMMETRIC = new Set(["contradicts"]);
 
-/** Category display order: authored nodes sort by it so edge colors band into
+/** Verb display order: authored nodes sort by it so edge colors band into
  *  sectors instead of alternating around the orbit. */
-const CATEGORY_ORDER: Category[] = [
-  "referential",
-  "expository",
-  "evidential",
-  "structural",
-  "versioning",
-  "other",
-];
+const CATEGORY_ORDER: Category[] = ["references", "supports", "contradicts", "other"];
 
 /** The logical drawing space; the SVG viewBox scales it to the pane. */
 export const VIEW_W = 1000;
@@ -82,7 +52,7 @@ export interface GraphNode {
   /** Display label (truncated); `full` keeps the whole string for the tooltip. */
   label: string;
   full: string;
-  /** The quiet second line: a ghost's score, a lineage date, a resource class. */
+  /** The quiet second line: a ghost's score, a resource class. */
   sub: string | null;
   /** Vault path a click opens (null for dangling — nothing resolved to open). */
   path: string | null;
@@ -111,9 +81,6 @@ export interface GraphEdge {
   ghost: boolean;
   /** Directed verbs get an arrowhead at `to`; symmetric verbs none. */
   arrow: boolean;
-  /** Suppress the per-edge verb pill. The argument lens sets this on its bowed
-   *  fault-line edges, whose verb is carried once by the axis caption instead. */
-  hideLabel?: boolean;
 }
 
 export interface GraphScene {
@@ -123,7 +90,7 @@ export interface GraphScene {
 
 /** Everything the scene is a pure function of — state the app already fetched. */
 export interface GraphInput {
-  anchor: { path: string; title: string | null; created: string | null };
+  anchor: { path: string; title: string | null };
   connections: NeighborView[];
   resources: ResourceLink[];
   unresolved: UnresolvedLink[];
@@ -142,7 +109,6 @@ interface Authored {
   verb: string;
   /** Drawn src → dst: outbound = anchor → node, inbound = node → anchor. */
   outbound: boolean;
-  created: string | null;
 }
 
 const LABEL_MAX = 22;
@@ -170,7 +136,6 @@ function authoredOf(input: GraphInput): Authored[] {
       path: c.path,
       verb: c.relation,
       outbound: c.direction === "outbound",
-      created: c.created,
     });
   }
   for (const r of input.resources) {
@@ -182,7 +147,6 @@ function authoredOf(input: GraphInput): Authored[] {
       path: r.path,
       verb: r.relation,
       outbound: true,
-      created: null,
     });
   }
   input.unresolved.forEach((u, i) => {
@@ -195,17 +159,9 @@ function authoredOf(input: GraphInput): Authored[] {
       path: null,
       verb: u.relation,
       outbound: true,
-      created: null,
     });
   });
   return out;
-}
-
-/** The verbs a lens keeps ("all" keeps everything, ghosts included). */
-export function lensKeeps(lens: GraphLens, verb: string): boolean {
-  if (lens === "all") return true;
-  if (lens === "lineage") return verb === "supersedes" || verb === "derived-from";
-  return categoryOf(verb) === "evidential";
 }
 
 interface Placed {
@@ -288,7 +244,7 @@ function edgesFor(
 }
 
 /** One node record per distinct authored target (a pair can share several edges). */
-function nodesFor(items: Authored[], nodeAt: Map<string, Placed>, subOf?: (it: Authored) => string | null): GraphNode[] {
+function nodesFor(items: Authored[], nodeAt: Map<string, Placed>): GraphNode[] {
   const out: GraphNode[] = [];
   const done = new Set<string>();
   for (const it of items) {
@@ -303,7 +259,7 @@ function nodesFor(items: Authored[], nodeAt: Map<string, Placed>, subOf?: (it: A
       y: at.y,
       label: truncate(it.name),
       full: it.name,
-      sub: subOf ? subOf(it) : it.sub,
+      sub: it.sub,
       path: it.path,
       title: null,
     });
@@ -311,7 +267,7 @@ function nodesFor(items: Authored[], nodeAt: Map<string, Placed>, subOf?: (it: A
   return out;
 }
 
-function anchorNode(input: GraphInput, at: Placed, sub: string | null): GraphNode {
+function anchorNode(input: GraphInput, at: Placed): GraphNode {
   const name = noteName(input.anchor.title, input.anchor.path);
   return {
     id: "anchor",
@@ -320,7 +276,7 @@ function anchorNode(input: GraphInput, at: Placed, sub: string | null): GraphNod
     y: at.y,
     label: truncate(name),
     full: name,
-    sub,
+    sub: null,
     path: input.anchor.path,
     title: input.anchor.title,
   };
@@ -363,13 +319,14 @@ function ring(center: Placed, rx: number, n: number, phase = -Math.PI / 2): Plac
   });
 }
 
-// --- the three lenses ---------------------------------------------------------------
+// --- the scene ----------------------------------------------------------------------
 
 const CENTER: Placed = { x: VIEW_W / 2, y: VIEW_H / 2 };
 
-/** Concept 1 — the ghost graph: authored edges on an inner orbit (category-banded),
- *  the top `similar` candidates as a dashed outer halo of not-yet-links. */
-function allLens(input: GraphInput): GraphScene {
+/** The ghost graph — the module's one entry point: authored edges on an inner orbit
+ *  (category-banded), the top `similar` candidates as a dashed outer halo of
+ *  not-yet-links. */
+export function buildScene(input: GraphInput): GraphScene {
   const authored = sortAuthored(authoredOf(input));
   const ghosts = input.ghosts.slice(0, GHOST_LIMIT);
 
@@ -388,7 +345,7 @@ function allLens(input: GraphInput): GraphScene {
   const phase = -Math.PI / 2 + (ghosts.length ? Math.PI / ghosts.length : 0) + 0.35;
   const halo = ring(CENTER, r2, Math.max(ghosts.length, 1), phase);
 
-  const nodes: GraphNode[] = [anchorNode(input, CENTER, null), ...nodesFor(authored, nodeAt)];
+  const nodes: GraphNode[] = [anchorNode(input, CENTER), ...nodesFor(authored, nodeAt)];
   const edges = edgesFor(authored, nodeAt, CENTER, radii(authored));
 
   ghosts.forEach((g, i) => {
@@ -422,116 +379,4 @@ function allLens(input: GraphInput): GraphScene {
   });
 
   return { nodes, edges };
-}
-
-/** Stack `n` rows around a vertical center; the gap tightens when a tall column
- *  would otherwise run off the drawing space. */
-function column(x: number, n: number, cy = CENTER.y): Placed[] {
-  const gap = Math.min(112, n > 1 ? (VIEW_H - 150) / (n - 1) : 112);
-  return Array.from({ length: n }, (_, i) => ({ x, y: cy + (i - (n - 1) / 2) * gap }));
-}
-
-/** Concept 2a — the lineage lens: versioning edges on a time axis. What the anchor
- *  supersedes / derives from is its past (left); what supersedes / derives from
- *  the anchor is its future (right). Node dates label the axis. */
-function lineageLens(input: GraphInput): GraphScene {
-  const kept = sortAuthored(
-    authoredOf(input).filter((it) => lensKeeps("lineage", it.verb)),
-  );
-  // Outbound versioning edges point at the anchor's sources — its past.
-  const past = kept.filter((it) => it.outbound);
-  const future = kept.filter((it) => !it.outbound);
-
-  const nodeAt = new Map<string, Placed>();
-  const distinct = (items: Authored[]): string[] => {
-    const ids: string[] = [];
-    for (const it of items) if (!ids.includes(it.nodeId)) ids.push(it.nodeId);
-    return ids;
-  };
-  const pastIds = distinct(past);
-  const futureIds = distinct(future);
-  column(190, pastIds.length).forEach((p, i) => nodeAt.set(pastIds[i], p));
-  column(810, futureIds.length).forEach((p, i) => nodeAt.set(futureIds[i], p));
-
-  const sub = (it: Authored) => it.created ?? it.sub;
-  const nodes: GraphNode[] = [
-    anchorNode(input, CENTER, input.anchor.created),
-    ...nodesFor(kept, nodeAt, sub),
-  ];
-  const edges = edgesFor(kept, nodeAt, CENTER, radii(kept));
-  return { nodes, edges };
-}
-
-/** How far a fault-line edge bows off the vertical axis, so the connection reads as
- *  distinct from the axis chrome it would otherwise run straight along. */
-export const AXIS_BOW = 90;
-
-/** Concept 2b — the argument lens: supporters and refuters point at the claim from
- *  opposite sides; symmetric `contradicts` sits on the vertical fault line. The
- *  fault-line edges bow off the axis (first right, then left) so the axis stays a
- *  clean standalone guide and each contradicts link reads as a connection. */
-function argumentLens(input: GraphInput): GraphScene {
-  const kept = sortAuthored(
-    authoredOf(input).filter((it) => lensKeeps("argument", it.verb)),
-  );
-  const side = (verb: string) => (verb === "supports" ? "left" : verb === "refutes" ? "right" : "axis");
-
-  const nodeAt = new Map<string, Placed>();
-  const bucket = (want: string): string[] => {
-    const ids: string[] = [];
-    for (const it of kept) {
-      if (side(it.verb) === want && !ids.includes(it.nodeId) && !nodeAt.has(it.nodeId)) {
-        ids.push(it.nodeId);
-      }
-    }
-    return ids;
-  };
-  // A node arguing twice (e.g. supports + contradicts) is placed by its first
-  // bucket, left → right → axis, so placement stays deterministic.
-  const left = bucket("left");
-  column(195, left.length).forEach((p, i) => nodeAt.set(left[i], p));
-  const right = bucket("right");
-  column(805, right.length).forEach((p, i) => nodeAt.set(right[i], p));
-  const axis = bucket("axis");
-  axis.forEach((id, i) => {
-    // The fault line: contradicting peers alternate above/below the claim.
-    nodeAt.set(id, {
-      x: CENTER.x + Math.floor(i / 2) * 170,
-      y: i % 2 === 0 ? 96 : VIEW_H - 96,
-    });
-  });
-
-  const nodes: GraphNode[] = [anchorNode(input, CENTER, null), ...nodesFor(kept, nodeAt)];
-
-  // Bow the edges that would otherwise run straight *along* the fault line (to the
-  // contradicts peers sitting on the axis) out to one side: the first peer right,
-  // the next left (they sit at the top and bottom of the axis). The verb moves to
-  // the axis caption, so the per-edge pill is suppressed. Axis edges are vertical,
-  // so the perpendicular offset is a plain horizontal shift.
-  const onAxis = axis.filter((id) => Math.abs((nodeAt.get(id)?.x ?? 0) - CENTER.x) < 1);
-  const bow = new Map<string, number>();
-  onAxis.forEach((id, i) => bow.set(id, i % 2 === 0 ? 1 : -1));
-  const edges = edgesFor(kept, nodeAt, CENTER, radii(kept)).map((e) => {
-    const owner = e.from === "anchor" ? e.to : e.from;
-    const dir = bow.get(owner);
-    if (dir === undefined || e.cx !== null) return e; // only the straight, on-axis edges
-    const cx = (e.x1 + e.x2) / 2 + AXIS_BOW * dir;
-    const cy = (e.y1 + e.y2) / 2;
-    return {
-      ...e,
-      cx,
-      cy,
-      lx: 0.25 * e.x1 + 0.5 * cx + 0.25 * e.x2,
-      ly: 0.25 * e.y1 + 0.5 * cy + 0.25 * e.y2,
-      hideLabel: true,
-    };
-  });
-  return { nodes, edges };
-}
-
-/** Build the positioned scene for a lens — the module's one entry point. */
-export function buildScene(lens: GraphLens, input: GraphInput): GraphScene {
-  if (lens === "lineage") return lineageLens(input);
-  if (lens === "argument") return argumentLens(input);
-  return allLens(input);
 }

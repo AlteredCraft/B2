@@ -20,13 +20,12 @@
   /* Width of the draggable strip between panes. Mirrored by GUTTER in panes.ts, which
      has to subtract it when working out what room the center has left. */
   --gutter-w: 6px;
-  /* The graph's reading key (GH #22): color = edge category (data-model.md §2),
-     plus the dashed-teal *latent* state for ghost edges from `similar`. */
-  --cat-referential: #64748b;
-  --cat-expository: #d97706;
-  --cat-evidential: #d94f4f;
-  --cat-structural: #2f9e63;
-  --cat-versioning: #6366f1;
+  /* The graph's reading key (GH #22): color = relation verb (the stance trio,
+     data-model.md §2) + "other" for tail verbs, plus the dashed-teal *latent*
+     state for ghost edges from `similar`. */
+  --cat-references: #64748b;
+  --cat-supports: #2f9e63;
+  --cat-contradicts: #d94f4f;
   --cat-other: #8a8880;
   --cat-latent: #0d9488;
   color-scheme: light;
@@ -48,11 +47,9 @@
   --accent-soft: #23263a;
   --danger: #ff8080;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
-  --cat-referential: #94a3b8;
-  --cat-expository: #f0a942;
-  --cat-evidential: #f37f7f;
-  --cat-structural: #52c589;
-  --cat-versioning: #a5b4fc;
+  --cat-references: #94a3b8;
+  --cat-supports: #52c589;
+  --cat-contradicts: #f37f7f;
   --cat-other: #8f8e96;
   --cat-latent: #35c4b5;
   color-scheme: dark;
@@ -69,11 +66,9 @@
     --accent-soft: #23263a;
     --danger: #ff8080;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
-    --cat-referential: #94a3b8;
-    --cat-expository: #f0a942;
-    --cat-evidential: #f37f7f;
-    --cat-structural: #52c589;
-    --cat-versioning: #a5b4fc;
+    --cat-references: #94a3b8;
+    --cat-supports: #52c589;
+    --cat-contradicts: #f37f7f;
     --cat-other: #8f8e96;
     --cat-latent: #35c4b5;
     color-scheme: dark;
@@ -1870,12 +1865,12 @@ button.move-dest:hover {
   flex-direction: column;
 }
 
-/* The graph's bar: the typed-lens selector left, the same action chips as reading
-   (graph toggle, Edit) pinned right — the reading bar's sibling. */
+/* The graph's bar: the same action chips as reading (graph toggle, Edit) pinned
+   right — the reading bar's sibling. */
 .graph-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 10px 20px;
   border-bottom: 1px solid var(--border);
@@ -1900,22 +1895,17 @@ button.move-dest:hover {
   height: 100%;
 }
 
-/* One class per relation category sets --cat; edge strokes, arrowhead fills, verb
-   labels, and legend dots all read it — the color half of the reading key. */
-.cat-referential {
-  --cat: var(--cat-referential);
+/* One class per core verb (plus the tail's "other") sets --cat; edge strokes,
+   arrowhead fills, verb labels, and legend dots all read it — the color half of
+   the reading key. */
+.cat-references {
+  --cat: var(--cat-references);
 }
-.cat-expository {
-  --cat: var(--cat-expository);
+.cat-supports {
+  --cat: var(--cat-supports);
 }
-.cat-evidential {
-  --cat: var(--cat-evidential);
-}
-.cat-structural {
-  --cat: var(--cat-structural);
-}
-.cat-versioning {
-  --cat: var(--cat-versioning);
+.cat-contradicts {
+  --cat: var(--cat-contradicts);
 }
 .cat-other {
   --cat: var(--cat-other);
@@ -1937,8 +1927,8 @@ button.move-dest:hover {
   opacity: 0.7;
 }
 
-/* The symmetric fault-line verb reads as charged, not just colored: a dotted live
-   wire between peers that state the opposite (the argument lens's signature). */
+/* The symmetric `contradicts` verb reads as charged, not just colored: a dotted
+   live wire between peers that state the opposite. */
 .gedge.verb-contradicts {
   stroke-dasharray: 1.5 6;
   stroke-width: 2.1;
@@ -1946,9 +1936,6 @@ button.move-dest:hover {
 
 .garr {
   fill: var(--cat, var(--muted));
-}
-.garr.is-axis {
-  fill: var(--border);
 }
 
 .gedge-label {
@@ -2091,34 +2078,7 @@ button.move-dest:hover {
   }
 }
 
-/* --- lens chrome: the lineage time axis, the argument zones + fault line -------- */
-
-.gaxis line {
-  stroke: var(--border);
-  stroke-width: 1.5;
-}
-.gaxis text,
-.gzone text {
-  font-size: 11px;
-  fill: var(--muted);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.gfault {
-  stroke: var(--cat-evidential);
-  stroke-width: 1;
-  stroke-dasharray: 2 7;
-  opacity: 0.5;
-}
-/* The verb the bowed fault-line edges no longer carry, run once along the axis.
-   Beats `.gzone text` on specificity so it keeps the evidential hue, not muted. */
-.gzone .gfault-label {
-  fill: var(--cat-evidential);
-  opacity: 0.72;
-  letter-spacing: 0.22em;
-}
-
-/* --- overlays: the ghost caveat chip and per-lens empty guidance ---------------- */
+/* --- overlays: the ghost caveat chip and the empty-graph guidance --------------- */
 
 .graph-hint {
   position: absolute;

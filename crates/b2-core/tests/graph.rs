@@ -58,7 +58,7 @@ fn ingest_golden(dir: &std::path::Path) -> Connection {
 }
 
 #[test]
-fn golden_graph_has_references_and_elaborates_inline_active() {
+fn golden_graph_has_references_and_supports_inline_active() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());
 
@@ -66,16 +66,6 @@ fn golden_graph_has_references_and_elaborates_inline_active() {
     assert_eq!(
         edges,
         vec![
-            // elaborates: spaced-repetition → memory (typed line, with explanation)
-            (
-                SRS_ID.to_string(),
-                Some(MEMORY_ID.to_string()),
-                "concepts/memory".to_string(),
-                "elaborates".to_string(),
-                "inline".to_string(),
-                0,
-                Some("applies the forgetting curve".to_string()),
-            ),
             // references: spaced-repetition → memory (prose bare wikilink)
             (
                 SRS_ID.to_string(),
@@ -86,19 +76,29 @@ fn golden_graph_has_references_and_elaborates_inline_active() {
                 0,
                 None,
             ),
+            // supports: spaced-repetition → memory (typed line, with explanation)
+            (
+                SRS_ID.to_string(),
+                Some(MEMORY_ID.to_string()),
+                "concepts/memory".to_string(),
+                "supports".to_string(),
+                "inline".to_string(),
+                0,
+                Some("applies the forgetting curve".to_string()),
+            ),
         ]
     );
 }
 
 #[test]
-fn neighbors_of_memory_are_referenced_by_and_elaborated_by() {
+fn neighbors_of_memory_are_referenced_by_and_supported_by() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());
 
     let ns = neighbors(&conn, MEMORY_ID).unwrap();
     let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
-    assert_eq!(labels, vec!["elaborated-by", "referenced-by"]);
+    assert_eq!(labels, vec!["referenced-by", "supported-by"]);
 
     // both are inbound edges from spaced-repetition (B2 stores no reciprocal link)
     assert!(ns
@@ -115,7 +115,7 @@ fn neighbors_of_spaced_repetition_are_outbound() {
     let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
     // outbound labels are the verbs themselves
-    assert_eq!(labels, vec!["elaborates", "references"]);
+    assert_eq!(labels, vec!["references", "supports"]);
     assert!(ns
         .iter()
         .all(|n| n.other == MEMORY_ID && n.direction == Direction::Outbound));

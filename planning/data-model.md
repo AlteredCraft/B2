@@ -129,7 +129,7 @@ provenance:                             # optional; defaults to {by: human}
 
 Spaced repetition schedules reviews at expanding intervals…
 
-It elaborates [[concepts/memory|Human memory]] — applies the forgetting curve.
+It supports [[concepts/memory|Human memory]] — applies the forgetting curve.
 ```
 
 The body link above is **human-authored** (`origin=inline`); the `relations:` entry is one B2 wrote on
@@ -194,8 +194,8 @@ This is the untyped graph Obsidian already gives you; B2 simply keys it by `b2id
 (A→B — the literal fact that A's text points at B), which preserves the backlink ↔ forward-link split:
 `b2 neighbors` / `b2 explain` show it as *referenced-by* from B's side. Directed is the
 information-preserving default — the symmetric "these are connected" view is always derivable from it
-(in ∪ out), never the reverse — and it keeps the explicit symmetric verbs (`relates`, `contradicts`)
-meaningful as deliberate choices.
+(in ∪ out), never the reverse — and it keeps the explicit symmetric verb (`contradicts`) meaningful
+as a deliberate choice.
 
 > See [[concepts/memory|Human memory]] for the underlying mechanism.
 
@@ -206,8 +206,8 @@ text after an em-dash (or `:`) is the edge's **`explanation`**.
 
 ```markdown
 ## Relations
-- supersedes [[notes/old-plan|Old plan]] — replaced after the 2026-Q2 review
-- example-of [[concepts/forgetting-curve|Forgetting curve]]
+- supports [[concepts/forgetting-curve|Forgetting curve]] — the schedule exploits it
+- contradicts [[notes/cramming-works|Cramming works]]
 ```
 
 - A human may keep these under a `## Relations` heading or embed them anywhere in prose
@@ -224,8 +224,8 @@ structured place B2 authors edges — it is metadata, so it never appears in the
 
 ```yaml
 relations:
-  - "supersedes [[notes/old-plan|Old plan]] — replaced after the 2026-Q2 review"
-  - "example-of [[concepts/forgetting-curve|Forgetting curve]]"
+  - "supports [[concepts/forgetting-curve|Forgetting curve]] — the schedule exploits it"
+  - "contradicts [[notes/cramming-works|Cramming works]]"
 ```
 
 - **Quoted** so `[[`, `|`, and `:` are always YAML-safe; the reader accepts quoted or unquoted.
@@ -233,56 +233,49 @@ relations:
 - Humans and importers may write this block too (it supersedes the old "tolerated, not primary"
   framing); B2 appends to it on `b2 link` and never authors the body.
 
-### Relation vocabulary — a tight, orthogonal core + a tolerated tail
+### Relation vocabulary — a stance core + a tolerated tail
 
 The verb set has two consumers — **you**, when you type a connection with `b2 link` (or in the body), and
-**queries / explainability** (`b2 neighbors --type supersedes`). Both want the core **small, orthogonal,
-and stable**, so the same relationship always gets the same verb. Expressiveness lives in the tail;
-reliability lives in the core.
+**queries / explainability** (`b2 neighbors --type supports`). Both want the core **small, orthogonal,
+and stable**, so the same relationship always gets the same verb — and the core encodes the one thing
+embedding similarity cannot infer: **stance**. The model already surfaces "these are related"
+(`b2 similar`); whether the notes *agree* is what only the human at the typing moment knows.
+Expressiveness lives in the tail; reliability lives in the core.
 
 **The core (closed set — your typing palette on `b2 link`, and what queries can rely on):**
 
-| Category | Verb | Direction | Inverse (display only) |
+| Verb | Stance | Direction | Inverse (display only) |
 |---|---|---|---|
-| Referential | `references` | directed | referenced-by |
-| Referential | `relates` | symmetric | relates |
-| Expository | `elaborates` | directed | elaborated-by |
-| Evidential ⭐ | `supports` | directed | supported-by |
-| Evidential ⭐ | `refutes` | directed | refuted-by |
-| Evidential ⭐ | `contradicts` | symmetric | contradicts |
-| Structural | `example-of` | directed | has-example |
-| Structural | `part-of` | directed | has-part |
-| Versioning ⭐ | `supersedes` | directed | superseded-by |
-| Versioning ⭐ | `derived-from` | directed | source-of |
+| `references` | neutral | directed | referenced-by |
+| `supports` | for | directed | supported-by |
+| `contradicts` | against | symmetric | contradicts |
 
-The ⭐ categories — **evidential** ("argue the same / opposite") and **versioning** ("this supersedes
-that") — are the ones the vision names as B2's reason to exist; they are non-negotiably first-class.
-
-*Referential boundary (the one place classification can waver):* `references` is **automatic** (a bare
-link, never hand-chosen); `relates` is a **deliberate symmetric** "these belong together"; `elaborates`
-is a **deliberate directed** "A develops B."
+*Boundary notes:* `references` is both the **automatic** type of a bare link and the deliberate
+"see also" — one neutral verb, hand-chosen or not; `supports` is a **directed** "A backs B";
+`contradicts` is a **deliberate symmetric** "these state opposites" — tension has no aggressor, so no
+direction is recorded.
 
 **Extensibility model:**
 
 - **Core** is the closed set above — the verbs `b2 link` offers as its palette and the verbs queries can
   rely on. Stable across versions.
-- **Tail** — any other verb a human writes (`inspired-by`, `analogous-to`, …) is **tolerated and stored
-  verbatim, never dropped**. Tooling treats tail verbs as opaque strings (no inverse label, no special
-  traversal).
+- **Tail** — any other verb a human writes (`elaborates`, `part-of`, `supersedes`, `inspired-by`, …) is
+  **tolerated and stored verbatim, never dropped**. Tooling treats tail verbs as opaque strings (no
+  inverse label, no special traversal).
 - **Promotion** — a tail verb that proves common can graduate into the core in a later version (gaining
   an inverse label). Demotion is just removal from the palette; stored data is untouched.
 
-**Typing guidance:** prefer the **most specific** applicable core verb, falling back to `relates` (or a
-bare `references` link) only when nothing more specific fits — so the vague symmetric default never
-crowds out a real type.
+**Typing guidance:** use a stance verb (`supports` / `contradicts`) whenever the notes take a position
+on each other; `references` is the honest default when they don't. A more specific relationship than
+the core expresses can always be hand-authored as a tail verb.
 
 **Conventions:**
 
-- **lowercase kebab-case**, named from the source's perspective (`example-of`, not `HasExample`).
+- **lowercase kebab-case**, named from the source's perspective (`derived-from`, not `DerivedFrom`).
 - **Edges are directed and stored once.** Every directed verb ships an inverse label (display-only):
   `b2 neighbors` / `b2 explain` compute inbound edges by scanning `dst_id` and label them with the
-  inverse. **Symmetric** verbs (`relates`, `contradicts`) are their own inverse and traverse both ways
-  with no special handling.
+  inverse. The **symmetric** verb (`contradicts`) is its own inverse and traverses both ways with no
+  special handling.
 - B2 **never** writes a reciprocal link into the target file — that would be write-amplification and
   pollute a note the user didn't edit.
 
@@ -488,7 +481,7 @@ created: 2026-06-20
 Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.
 
 ## Relations
-- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve
+- supports [[concepts/memory|Human memory]] — applies the forgetting curve
 ```
 
 Here the `## Relations` block is **human-authored** in the body (so `origin=inline`); B2 reads it but
@@ -498,9 +491,9 @@ spaced-repetition's frontmatter `relations:` (`origin=frontmatter`) — never to
 Derived graph (no live model needed to assert):
 
 - `references`: spaced-repetition → memory (origin=inline) — from the prose wikilink.
-- `elaborates`: spaced-repetition → memory (origin=inline, explanation="applies…").
+- `supports`: spaced-repetition → memory (origin=inline, explanation="applies…").
 
-`b2 neighbors concepts/memory` returns spaced-repetition twice (referenced-by, elaborated-by); both
+`b2 neighbors concepts/memory` returns spaced-repetition twice (referenced-by, supported-by); both
 files round-trip byte-identical; dropping and rebuilding the index reproduces the identical graph.
 `b2 similar concepts/memory` would rank other notes by embedding proximity, minus the ones already
 connected here.
@@ -524,13 +517,12 @@ connected here.
   **B2's single always-allowed edit** to the vault, done as needed on first sight (no `b2 init` gate, no
   refusing to index), written straight to the note's frontmatter with no separate log (§1).
 - **Bare-wikilink default type** — a plain `[[path|title]]` is a **directed `references`** edge (§2): the
-  minimal literally-true reading of "A's text points at B," strictly more expressive than symmetric
-  `relates` (the symmetric view derives from directed, not the reverse), it preserves the backlink
-  signal, and it keeps `relates`/`contradicts` meaningful as explicit symmetric verbs.
-- **Relation vocabulary** — a **10-verb core** across 5 orthogonal categories (referential, expository,
-  evidential, structural, versioning), the closed palette for `b2 link` + queries; a **tolerated tail**
-  stored verbatim; a **promotion path**; plus the conventions and "most-specific-then-`relates`" typing
-  guidance (§2).
+  minimal literally-true reading of "A's text points at B," strictly more expressive than a symmetric
+  reading (the symmetric view derives from directed, not the reverse), it preserves the backlink
+  signal, and it keeps `contradicts` meaningful as the explicit symmetric verb.
+- **Relation vocabulary** — a **three-verb stance core** (`references` / `supports` / `contradicts`:
+  neutral / for / against), the closed palette for `b2 link` + queries; a **tolerated tail** stored
+  verbatim; a **promotion path**; plus the conventions and stance-first typing guidance (§2).
 - **The title is the filename (2026-07-14).** A note's title **is its filename** (basename minus `.md`);
   the frontmatter `title:` key is **recognized but inert** — parsed and round-tripped, never privileged for
   display, link aliases, or search (§1). This **reverses** the earlier "frontmatter `title` → first H1 →

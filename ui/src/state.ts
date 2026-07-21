@@ -16,30 +16,19 @@ import type {
   SimilarView,
   UnresolvedLink,
 } from "./types";
-import type { GraphLens } from "./graph";
 import type { NodeKind } from "./move";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
 
 /**
- * The closed 10-verb relation core (b2-core `relation.rs` CORE — data-model.md §2).
- * The link picker offers exactly these; the Rust host re-validates `is_core`, so a
- * drifted entry here is *refused*, never silently stored (a bad verb → a generic,
- * actionable error). `references` is the default, matching `b2 link`.
+ * The closed three-verb stance core (b2-core `relation.rs` CORE — data-model.md §2):
+ * neutral / for / against. The link picker offers exactly these; the Rust host
+ * re-validates `is_core`, so a drifted entry here is *refused*, never silently
+ * stored (a bad verb → a generic, actionable error). `references` is the default,
+ * matching `b2 link`.
  */
-export const RELATION_VERBS = [
-  "references",
-  "relates",
-  "elaborates",
-  "supports",
-  "refutes",
-  "contradicts",
-  "example-of",
-  "part-of",
-  "supersedes",
-  "derived-from",
-] as const;
+export const RELATION_VERBS = ["references", "supports", "contradicts"] as const;
 
 /** The note the link modal targets (the source is always the open note). */
 export interface LinkTarget {
@@ -146,8 +135,6 @@ export interface AppState {
    * `unresolved`/`similar`), so toggling costs no IPC.
    */
   graphOpen: boolean;
-  /** The graph's typed lens: "all" (ghost graph), "lineage", or "argument". Sticky. */
-  graphLens: GraphLens;
   /**
    * Discovery sections the user has collapsed (foldable headers, Obsidian-style).
    * Sticky across notes — a viewing preference — so a collapsed section stays folded
@@ -245,7 +232,6 @@ export const state: AppState = {
   connections: [],
   resourceLinks: [],
   graphOpen: false,
-  graphLens: "all",
   collapsedSections: new Set<SideSection>(),
   collapsedCards: new Set<string>(),
   contextMenu: null,

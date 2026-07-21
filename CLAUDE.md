@@ -198,7 +198,8 @@ adapters wire the real model.
 `(src, dst, type, occurrence)`. There is **no `status` column** — every edge is authored and active. The
 edge set = union of body links (`inline`) and frontmatter `relations:` (`frontmatter`), with **inline-wins
 dedup**. Backlinks are why the graph is materialized rather than parsed at read time. The relation
-vocabulary (`relation.rs`) is a **closed 10-verb core** plus a tolerated tail; the core is your typing
+vocabulary (`relation.rs`) is a **closed three-verb stance core** — `references` (neutral), `supports`
+(for), `contradicts` (against) — plus a tolerated tail stored verbatim; the core is your typing
 palette on `b2 link` (and what queries rely on). Edges are stored once, directed; inverse labels are
 display-only.
 

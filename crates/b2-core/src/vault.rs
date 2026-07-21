@@ -185,9 +185,9 @@ pub struct NeighborView {
     /// committed via `b2 link`, or a human/importer authored) — data-model.md §0.
     /// `b2 explain` renders it; `b2 neighbors` carries it too.
     pub origin: String,
-    /// The other note's `created` date, if it has one — the lineage lens's time
-    /// axis (GH #22): versioning edges (`supersedes`/`derived-from`) *are* time,
-    /// so an adapter can place and label a version neighbor by when it was born.
+    /// The other note's `created` date, if it has one — resolved from the
+    /// projection (GH #22), so an adapter can date a neighbor without re-reading
+    /// the file.
     pub created: Option<String>,
 }
 

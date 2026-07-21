@@ -17,11 +17,10 @@ fn bare_wikilink_in_prose_is_a_references_edge() {
 
 #[test]
 fn typed_relation_line_is_a_typed_edge_with_explanation() {
-    let links = parse_links(
-        "- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve\n",
-    );
+    let links =
+        parse_links("- supports [[concepts/memory|Human memory]] — applies the forgetting curve\n");
     assert_eq!(links.len(), 1);
-    assert_eq!(links[0].edge_type, "elaborates");
+    assert_eq!(links[0].edge_type, "supports");
     assert_eq!(links[0].target_path, "concepts/memory");
     assert_eq!(links[0].alias.as_deref(), Some("Human memory"));
     assert_eq!(
@@ -32,20 +31,20 @@ fn typed_relation_line_is_a_typed_edge_with_explanation() {
 }
 
 #[test]
-fn golden_body_yields_exactly_references_plus_elaborates_not_a_double_count() {
+fn golden_body_yields_exactly_references_plus_supports_not_a_double_count() {
     // The typed line also *contains* a wikilink; it must not also count as a
     // bare reference (data-model §2). The golden body has one prose link + one
     // typed line → exactly two edges.
-    let body = "Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.\n\n## Relations\n- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve\n";
+    let body = "Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.\n\n## Relations\n- supports [[concepts/memory|Human memory]] — applies the forgetting curve\n";
     let links = parse_links(body);
     assert_eq!(
         links.len(),
         2,
-        "one references (prose) + one elaborates (typed)"
+        "one references (prose) + one supports (typed)"
     );
     let mut types: Vec<&str> = links.iter().map(|l| l.edge_type.as_str()).collect();
     types.sort_unstable();
-    assert_eq!(types, vec!["elaborates", "references"]);
+    assert_eq!(types, vec!["references", "supports"]);
 }
 
 #[test]

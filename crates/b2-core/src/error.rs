@@ -73,7 +73,7 @@ pub enum Error {
     /// `b2 link` was given a `--type` that is not a core relation verb
     /// (data-model.md §2). The core is the palette `b2 link` offers; a tail verb can
     /// still be hand-authored in the Markdown, but the command validates to the core
-    /// so a typo (`elaborate` for `elaborates`) is caught rather than silently stored.
+    /// so a typo (`support` for `supports`) is caught rather than silently stored.
     #[error("not a core relation verb: {0}")]
     InvalidRelation(String),
 

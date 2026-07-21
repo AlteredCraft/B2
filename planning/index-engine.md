@@ -198,7 +198,7 @@ Why this shape fits B2 specifically:
 A note's *outbound* links (and their type + explanation) are parseable from that one file on demand, so
 it's fair to ask why the index carries an `edges` table at all rather than resolving links at read time.
 The answer separates two things the question tends to bundle. **Edge metadata is *not* the reason:** a
-typed line `- supersedes [[path|title]] — because X` yields its verb and explanation to a runtime parse
+typed line `- supports [[path|title]] — because X` yields its verb and explanation to a runtime parse
 just as well, *for that note's outbound edges*. **Inversion and composition are the reason.** Materializing
 edges is what turns the following from full-vault scans (or impossibilities) into indexed lookups:
 
@@ -206,7 +206,7 @@ edges is what turns the following from full-vault scans (or impossibilities) int
   The runtime answer is O(vault) per query; the table makes it one lookup. This is also what services
   *"rename keeps every backlink resolving"* ([user-stories.md](user-stories.md), Story 1): the edges name
   the exact N inbound files to rewrite on a move instead of scanning the vault to find them (§8).
-- **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`refutes`" is a scan *per hop*
+- **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`contradicts`" is a scan *per hop*
   at runtime; over `edges` it is one SQL traversal.
 - **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a single
   join `chunks_vec ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**

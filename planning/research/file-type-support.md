@@ -235,7 +235,7 @@ Consequences, stated honestly against the locked invariants:
   dangling-index machinery is already half of this.
 - **Parser work:** `link.rs` learns the two Markdown-native forms — `![alt](path)` / `[text](path)`
   (relative paths only; `http(s)://` targets are not vault members and stay unparsed) and the
-  `![[file.ext]]` embed. All produce `references` edges (the closed 10-verb core is untouched);
+  `![[file.ext]]` embed. All produce `references` edges (the closed relation core is untouched);
   the **alt/caption text is captured on the edge** — it becomes the image's index text (§5). An
   embed is recorded as `references` with an `embed` marker (display nicety, not a new verb).
 

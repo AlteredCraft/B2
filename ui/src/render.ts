@@ -20,7 +20,6 @@ import {
   VIEW_W,
   type Category,
   type GraphEdge,
-  type GraphLens,
   type GraphNode,
   type GraphScene,
 } from "./graph";
@@ -672,14 +671,7 @@ function unresolvedCardsHtml(state: AppState): string {
 // here, clicks delegated in main.ts. The reading key: color = edge category, solid =
 // authored / dashed teal = latent (`similar`), disc = note / square = resource /
 // dashed hollow = dangling. Everything renders from state the note-open already
-// fetched, so entering the graph (and switching lenses) costs no IPC.
-
-/** The lens selector's entries, in display order. */
-const LENSES: { id: GraphLens; label: string; blurb: string }[] = [
-  { id: "all", label: "All", blurb: "Every authored edge, plus latent (ghost) candidates" },
-  { id: "lineage", label: "Lineage", blurb: "supersedes / derived-from on a time axis" },
-  { id: "argument", label: "Argument", blurb: "supports / refutes / contradicts around the claim" },
-];
+// fetched, so entering the graph costs no IPC.
 
 /** The small node-and-edges glyph on the graph toggle (both bars). */
 const GRAPH_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -713,11 +705,9 @@ function edgeHtml(e: GraphEdge): string {
   }
   const verb = e.label.replace(/[^a-z0-9-]/gi, "");
   const marker = e.arrow ? ` marker-end="url(#garr-${e.category})"` : "";
-  const label = e.hideLabel
-    ? ""
-    : `<text class="gedge-label cat-${e.category}" x="${px(e.lx)}" y="${px(
-        e.ly - 6,
-      )}">${escapeHtml(e.label)}</text>`;
+  const label = `<text class="gedge-label cat-${e.category}" x="${px(e.lx)}" y="${px(
+    e.ly - 6,
+  )}">${escapeHtml(e.label)}</text>`;
   return `<path class="gedge cat-${e.category} verb-${verb}" d="${edgePathD(e)}"${marker}/>${label}`;
 }
 
@@ -798,40 +788,10 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
     </g>`;
 }
 
-/** Per-lens chrome drawn under the scene: the lineage time axis, the argument
- *  zones + fault line. Pure annotation — no hit targets. */
-function lensChromeHtml(lens: GraphLens, scene: GraphScene): string {
-  if (lens === "lineage") {
-    const y = VIEW_H - 34;
-    return `<g class="gaxis" aria-hidden="true">
-        <line x1="150" y1="${y}" x2="850" y2="${y}" marker-end="url(#garr-axis)"/>
-        <text x="150" y="${y - 10}" text-anchor="start">older</text>
-        <text x="850" y="${y - 10}" text-anchor="end">newer</text>
-      </g>`;
-  }
-  if (lens === "argument") {
-    // The axis is a standalone guide now that its edges bow off it (graph.ts): draw
-    // the full-height fault line plus a single vertical `contradicts` caption running
-    // along it (the verb the bowed edges no longer carry). Placed on the lower half,
-    // which the edges vacate by bowing.
-    const cx = VIEW_W / 2;
-    const capY = VIEW_H - 190;
-    const fault = scene.edges.some((e) => e.label === "contradicts")
-      ? `<line class="gfault" x1="${cx}" y1="56" x2="${cx}" y2="${VIEW_H - 56}"/>
-         <text class="gfault-label" x="${cx}" y="${capY}" text-anchor="middle" transform="rotate(-90 ${cx} ${capY})">contradicts</text>`
-      : "";
-    return `<g class="gzone" aria-hidden="true">${fault}
-        <text x="195" y="42" text-anchor="middle">supports →</text>
-        <text x="805" y="42" text-anchor="middle">← refutes</text>
-      </g>`;
-  }
-  return "";
-}
-
 /** The honest ghost-halo caveat (mirrors `searchCaveat`'s tiers, #26): why there are
  *  no ghosts right now, or null when there are (or when silence is the honest state). */
 function ghostHintHtml(state: AppState): string {
-  if (state.graphLens !== "all" || state.similar.length > 0) return "";
+  if (state.similar.length > 0) return "";
   if (state.discoveringSimilar)
     return `<div class="graph-hint is-scanning"><span class="spinner"></span>scanning for latent connections…</div>`;
   if (!state.semantic)
@@ -841,28 +801,20 @@ function ghostHintHtml(state: AppState): string {
   return "";
 }
 
-/** The centered guidance when a lens has nothing to draw (the anchor always shows). */
+/** The centered guidance when there's nothing to draw (the anchor always shows). */
 function graphEmptyHtml(state: AppState, scene: GraphScene): string {
   if (scene.edges.length > 0) return "";
-  if (state.graphLens === "lineage")
-    return `<div class="graph-empty"><p>No lineage yet.</p>
-      <p class="muted">Link with <code>supersedes</code> or <code>derived-from</code> to see this idea's history on a time axis.</p></div>`;
-  if (state.graphLens === "argument")
-    return `<div class="graph-empty"><p>No argument yet.</p>
-      <p class="muted"><code>supports</code>, <code>refutes</code>, and <code>contradicts</code> edges map a claim's evidence here.</p></div>`;
   if (state.discoveringSimilar) return "";
   return `<div class="graph-empty"><p>No connections yet.</p>
     <p class="muted">B2 floats similar-but-unlinked notes here as ghosts — click one to make the connection real.</p></div>`;
 }
 
-/** The reading key, one quiet strip: category colors, edge states, node shapes. */
+/** The reading key, one quiet strip: verb colors, edge states, node shapes. */
 function graphLegendHtml(): string {
   const cats: [Category, string][] = [
-    ["referential", "referential"],
-    ["expository", "expository"],
-    ["evidential", "evidential"],
-    ["structural", "structural"],
-    ["versioning", "versioning"],
+    ["references", "references"],
+    ["supports", "supports"],
+    ["contradicts", "contradicts"],
   ];
   const dots = cats
     .map(([c, label]) => `<span class="leg"><span class="leg-dot cat-${c}"></span>${label}</span>`)
@@ -875,36 +827,29 @@ function graphLegendHtml(): string {
 }
 
 /** Arrowhead markers, one per category (an SVG marker can't inherit its edge's
- *  stroke everywhere yet), plus the muted lineage-axis arrow. */
+ *  stroke everywhere yet). */
 function graphDefsHtml(): string {
-  const cats: Category[] = ["referential", "expository", "evidential", "structural", "versioning", "other"];
+  const cats: Category[] = ["references", "supports", "contradicts", "other"];
   const arrow = (id: string, cls: string) =>
     `<marker id="${id}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
        <path d="M0 0.8 L9.5 5 L0 9.2 z" class="${cls}"/>
      </marker>`;
-  return `<defs>${cats.map((c) => arrow(`garr-${c}`, `garr cat-${c}`)).join("")}
-    ${arrow("garr-axis", "garr is-axis")}</defs>`;
+  return `<defs>${cats.map((c) => arrow(`garr-${c}`, `garr cat-${c}`)).join("")}</defs>`;
 }
 
 /**
  * The graph pane — the note pane's third mode (Reading / Editing / Graph). Bar:
- * the typed-lens selector + the same action chips as reading; stage: the SVG scene
- * (fills the pane, `viewBox`-scaled) with overlay hints; footer: the reading key.
+ * the same action chips as reading; stage: the SVG scene (fills the pane,
+ * `viewBox`-scaled) with overlay hints; footer: the reading key.
  */
 function graphPaneHtml(state: AppState, n: NoteView): string {
-  const scene = buildScene(state.graphLens, {
-    anchor: { path: n.path, title: n.title, created: n.created },
+  const scene = buildScene({
+    anchor: { path: n.path, title: n.title },
     connections: state.connections,
     resources: state.resourceLinks,
     unresolved: state.unresolved,
     ghosts: state.similar,
   });
-
-  const lenses = LENSES.map((l) => {
-    const on = state.graphLens === l.id;
-    return `<button type="button" class="seg${on ? " seg-on" : ""}" data-graph-lens="${l.id}"
-        aria-pressed="${on}" title="${escapeHtml(l.blurb)}">${l.label}</button>`;
-  }).join("");
 
   // Edges live inside their node's group (hover affordance); the anchor renders
   // last so it always paints on top of edge crossings.
@@ -931,7 +876,6 @@ function graphPaneHtml(state: AppState, n: NoteView): string {
 
   return `<div class="graph-view">
       <div class="graph-bar">
-        <div class="segmented graph-lenses" role="group" aria-label="Graph lens">${lenses}</div>
         <div class="note-bar-actions">
           ${graphToggleHtml(true)}
           <button class="edit-toggle" data-toggle-edit${
@@ -943,7 +887,6 @@ function graphPaneHtml(state: AppState, n: NoteView): string {
         <svg class="graph-svg" viewBox="0 0 ${VIEW_W} ${VIEW_H}" preserveAspectRatio="xMidYMid meet"
              role="img" aria-label="Connection graph for ${escapeHtml(n.title ?? n.path)}">
           ${graphDefsHtml()}
-          ${lensChromeHtml(state.graphLens, scene)}
           ${groups}
         </svg>
         ${graphEmptyHtml(state, scene)}

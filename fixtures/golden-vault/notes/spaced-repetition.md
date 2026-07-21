@@ -7,4 +7,4 @@ created: 2026-06-20
 Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.
 
 ## Relations
-- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve
+- supports [[concepts/memory|Human memory]] — applies the forgetting curve

@@ -1,8 +1,10 @@
-//! The relation vocabulary (planning/data-model.md §2): a closed 10-verb core
-//! with display-only inverse labels and symmetry, plus a tolerated tail kept
-//! verbatim. This is the closed set discovery emits and queries rely on; it is a
-//! relaxable policy, not a structural assumption (vision-and-scope, design
-//! philosophy) — adding a verb here is the whole change.
+//! The relation vocabulary (planning/data-model.md §2): a closed three-verb
+//! stance core — `references` (neutral), `supports` (for), `contradicts`
+//! (against) — with display-only inverse labels and symmetry, plus a tolerated
+//! tail kept verbatim. The core encodes the one thing embedding similarity
+//! cannot infer: stance. It is a relaxable policy, not a structural assumption
+//! (vision-and-scope, design philosophy) — adding a verb here is the whole
+//! change.
 
 /// A core relation verb and its display metadata.
 pub struct CoreVerb {
@@ -22,49 +24,14 @@ pub const CORE: &[CoreVerb] = &[
         symmetric: false,
     },
     CoreVerb {
-        verb: "relates",
-        inverse: "relates",
-        symmetric: true,
-    },
-    CoreVerb {
-        verb: "elaborates",
-        inverse: "elaborated-by",
-        symmetric: false,
-    },
-    CoreVerb {
         verb: "supports",
         inverse: "supported-by",
-        symmetric: false,
-    },
-    CoreVerb {
-        verb: "refutes",
-        inverse: "refuted-by",
         symmetric: false,
     },
     CoreVerb {
         verb: "contradicts",
         inverse: "contradicts",
         symmetric: true,
-    },
-    CoreVerb {
-        verb: "example-of",
-        inverse: "has-example",
-        symmetric: false,
-    },
-    CoreVerb {
-        verb: "part-of",
-        inverse: "has-part",
-        symmetric: false,
-    },
-    CoreVerb {
-        verb: "supersedes",
-        inverse: "superseded-by",
-        symmetric: false,
-    },
-    CoreVerb {
-        verb: "derived-from",
-        inverse: "source-of",
-        symmetric: false,
     },
 ];
 
