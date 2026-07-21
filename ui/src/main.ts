@@ -1370,23 +1370,25 @@ function mountEditor(body: string): void {
   const n = state.current;
   if (!n) return;
   el("note-pane").innerHTML = `
-    <div class="editor-bar">
-      <span class="editor-title">Editing · ${escapeHtml(n.path)}</span>
-      <div class="note-bar-actions">
-        <button id="edit-source" class="source-toggle${
-          state.sourceOpen ? " is-active" : ""
-        }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
-          state.sourceOpen ? "Show live preview" : "Show Markdown source"
-        }">&lt;/&gt;</button>
-        <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+    <div class="editor-chrome">
+      <div class="editor-bar">
+        <span class="editor-title">Editing · ${escapeHtml(n.path)}</span>
+        <div class="note-bar-actions">
+          <button id="edit-source" class="source-toggle${
+            state.sourceOpen ? " is-active" : ""
+          }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
+            state.sourceOpen ? "Show live preview" : "Show Markdown source"
+          }">&lt;/&gt;</button>
+          <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+        </div>
       </div>
-    </div>
-    <div id="edit-conflict" class="conflict-bar" hidden>
-      <span>This note changed on disk.</span>
-      <span class="conflict-actions">
-        <button id="conflict-reload" class="btn small" title="Discard my edits and load the note from disk">Reload</button>
-        <button id="conflict-keep" class="btn small" title="Overwrite the note on disk with my edits">Keep mine</button>
-      </span>
+      <div id="edit-conflict" class="conflict-bar" hidden>
+        <span>This note changed on disk.</span>
+        <span class="conflict-actions">
+          <button id="conflict-reload" class="btn small" title="Discard my edits and load the note from disk">Reload</button>
+          <button id="conflict-keep" class="btn small" title="Overwrite the note on disk with my edits">Keep mine</button>
+        </span>
+      </div>
     </div>
     <div id="editor-host" class="editor-host"></div>`;
   editorView = new EditorView({

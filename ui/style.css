@@ -339,10 +339,14 @@ body {
 .note-pane {
   /* The side padding tapers as the pane narrows — `panes.ts` keeps it in step with the
      pane's measured width. The full-bleed bars below cancel it by name, so it must stay
-     a px length (see the ResizeObserver comment in panes.ts for why not a CSS clamp()). */
+     a px length (see the ResizeObserver comment in panes.ts for why not a CSS clamp()).
+     No top padding: the sticky top bars pin at `top: 0`, and WKWebView measures sticky
+     insets from the scroller's *content* box, so scroller top-padding would open a gap
+     above a stuck bar that scrolled content shows through. Headroom is the bars' own
+     padding (or .resource-card's, in the bar-less state). */
   --note-pad-x: 48px;
   overflow-y: auto;
-  padding: 40px var(--note-pad-x) 96px;
+  padding: 0 var(--note-pad-x) 96px;
 }
 
 .side-pane {
@@ -708,12 +712,19 @@ body.is-resizing {
 
 /* frontmatter drawer — a full-bleed strip across the top of the note pane, above the
    centered reading column. Full-bleed via negative margins that cancel .note-pane's
-   padding, so its divider spans edge to edge like the file tree's "Files" header. */
+   padding, so its divider spans edge to edge like the file tree's "Files" header.
+   Sticky within the scrolling .note-pane so the shelf (drawer toggle, graph/source/Edit)
+   stays reachable while reading a long note; needs an opaque background for the note
+   text that scrolls beneath it. Below the find bar (z-index 5). */
 .frontmatter-bar {
-  /* cancel .note-pane's top (40px) + side padding, which now tapers with the pane */
-  margin: -40px calc(-1 * var(--note-pad-x)) 32px;
+  /* cancel .note-pane's side padding, which tapers with the pane */
+  margin: 0 calc(-1 * var(--note-pad-x)) 32px;
   padding: 12px var(--note-pad-x);
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
 }
 
 /* The bar's head row: frontmatter toggle on the left, `</>` view-source toggle pinned
@@ -796,6 +807,10 @@ body.is-resizing {
   word-break: break-word;
   overflow-x: auto;
   color: var(--text);
+  /* the bar is sticky — cap the open drawer so a long relations: list can't pin
+     itself over most of the viewport; the YAML scrolls inside instead */
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .frontmatter-empty {
@@ -935,14 +950,23 @@ body.is-resizing {
 
 /* --- edit mode (desktop-editing.md §6) ------------------------------------------ */
 
-/* The editor's top bar mirrors the frontmatter bar's full-bleed strip (same
-   negative-margin recipe) so the pane chrome doesn't jump when edit mode swaps in. */
+/* The editor's chrome mirrors the frontmatter bar's full-bleed strip (same
+   negative-margin recipe) so the pane chrome doesn't jump when edit mode swaps in.
+   The wrapper is sticky — like the reading shelf — so Done/`</>` stay reachable in a
+   long note, and the conflict strip docks beneath the bar instead of fighting it. */
+.editor-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 calc(-1 * var(--note-pad-x)) 24px; /* cancel .note-pane's side padding, as above */
+  background: var(--bg);
+}
+
 .editor-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: -40px calc(-1 * var(--note-pad-x)) 24px; /* cancel .note-pane's padding, as above */
   padding: 10px var(--note-pad-x);
   border-bottom: 1px solid var(--border);
 }
@@ -958,18 +982,16 @@ body.is-resizing {
   white-space: nowrap;
 }
 
-/* The conflict strip: sticky above the editor so it's visible wherever the user is
-   in the document when autosave pauses. */
+/* The conflict strip: lives inside the sticky .editor-chrome, docked beneath the
+   editor bar, so it's visible wherever the user is in the document when autosave
+   pauses. */
 .conflict-bar {
-  position: sticky;
-  top: 0;
-  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   max-width: var(--reading);
-  margin: 0 auto 16px;
+  margin: 12px auto;
   padding: 10px 14px;
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
@@ -1776,6 +1798,12 @@ button.move-dest:hover {
   font-size: 9px;
   opacity: 0.55;
   text-align: center;
+}
+
+/* The bar-less pane state: no top bar supplies headroom, so the card brings its own
+   (the note pane itself has no top padding — see .note-pane). */
+.resource-card {
+  padding-top: 40px;
 }
 
 .resource-card-body {
