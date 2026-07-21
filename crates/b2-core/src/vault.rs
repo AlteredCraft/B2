@@ -1266,9 +1266,9 @@ impl Vault {
         )
     }
 
-    /// Create the folder `dir` (vault-relative; missing parents included, like
-    /// `mkdir -p`) — the desktop's New-folder action, the structure sibling of
-    /// [`create_note`](Self::create_note). A folder is user-authored vault
+    /// Create the folder `dir` (vault-relative; missing parents included, an
+    /// occupied target refused) — the desktop's New-folder action, the structure
+    /// sibling of [`create_note`](Self::create_note). A folder is user-authored vault
     /// structure, so this writes the filesystem and touches **nothing else**: no
     /// index rows exist for a folder (see [`list_dirs`](Self::list_dirs)), and the
     /// new folder is real to every tool — Finder, the CLI, a sync — the moment

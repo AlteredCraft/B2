@@ -131,9 +131,10 @@ pub fn list_dirs(state: State<'_, AppState>) -> Result<Vec<String>, CmdError> {
     list_dirs_impl(state.inner())
 }
 
-/// Create a folder — the file tree's New-folder action (⇧⌘N). A real `mkdir -p`
-/// on disk (a folder is user-authored vault structure, immediately visible to
-/// Finder/CLI/sync), touching no index rows. Model-free and index-free.
+/// Create a folder — the file tree's New-folder action (⇧⌘N). A real on-disk
+/// create, missing parents included, occupied targets refused (a folder is
+/// user-authored vault structure, immediately visible to Finder/CLI/sync),
+/// touching no index rows. Model-free and index-free.
 #[tauri::command(async)]
 pub fn create_dir(state: State<'_, AppState>, dir: String) -> Result<DirCreateReport, CmdError> {
     create_dir_impl(state.inner(), &dir)

@@ -203,18 +203,26 @@ function expandAncestors(path: string): void {
   }
 }
 
-// Load the vault listing for the file tree. Non-fatal on failure (e.g. an unindexed
-// vault): the tree shows its empty state and the reason surfaces as a toast.
-async function loadNotes(): Promise<void> {
+// Load the vault listing for the file tree — all three lists fetched before any
+// state commit, so a mid-refresh failure can't leave the tree half-updated.
+// Non-fatal on failure (e.g. no vault open): the tree shows its empty state and
+// the reason surfaces as a toast; resolves false so callers don't overwrite that
+// toast with a success flash.
+async function loadNotes(): Promise<boolean> {
   try {
-    state.notes = await api.listNotes();
-    state.resources = await api.listResources();
-    state.dirs = await api.listDirs();
+    const notes = await api.listNotes();
+    const resources = await api.listResources();
+    const dirs = await api.listDirs();
+    state.notes = notes;
+    state.resources = resources;
+    state.dirs = dirs;
+    return true;
   } catch (e) {
     state.notes = [];
     state.resources = [];
     state.dirs = [];
     flash(errText(e));
+    return false;
   }
 }
 
@@ -540,10 +548,11 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
   if (create.kind === "folder") {
     try {
       const report = await api.createDir(path);
-      await loadNotes(); // the tree re-lists structure from disk — the folder is real
+      const refreshed = await loadNotes(); // re-lists structure from disk — the folder is real
       for (const d of dirChain(report.dir)) state.expandedDirs.add(d);
       state.selectedDir = report.dir; // the natural next step is a note inside it
-      flash(`Created ${report.dir}/.`);
+      if (refreshed) flash(`Created ${report.dir}/.`);
+      else render(); // the refresh failure already toasted; still repaint the expansion
     } catch (e) {
       // Refused (e.g. the name is taken): keep the input open with the typed name
       // intact — the commitTreeCreate posture below; the toast explains.
@@ -554,13 +563,13 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
   }
   try {
     const report = await api.createNote(path);
-    await loadNotes(); // the tree lists it now — create_note already projected it
+    const refreshed = await loadNotes(); // the tree lists it now — create_note already projected it
     void refreshEmbedStatus(state.vaultRoot); // the N/M denominator grew (#26)
     if (open) {
       await openNote(report.path); // sets selectedDir to the new note's folder
       enterEdit(); // a fresh, empty note wants a cursor, not a reading view
-    } else {
-      flash(`Created ${report.path}.`);
+    } else if (refreshed) {
+      flash(`Created ${report.path}.`); // a failed refresh already toasted — don't overwrite it
     }
   } catch (e) {
     // Refused (e.g. the name already exists): keep the input open — with the typed

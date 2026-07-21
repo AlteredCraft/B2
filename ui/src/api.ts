@@ -128,9 +128,10 @@ export const api = {
   createNote: (path: string): Promise<AddReport> => invoke("create_note", { path }),
 
   /**
-   * Create a folder — a real `mkdir -p` on disk (missing parents included). A
-   * folder is user-authored vault structure, immediately visible to Finder, the
-   * CLI, and any sync; no index rows are touched.
+   * Create a folder — a real on-disk create (missing parents included, an
+   * occupied target refused). A folder is user-authored vault structure,
+   * immediately visible to Finder, the CLI, and any sync; no index rows are
+   * touched.
    */
   createDir: (dir: string): Promise<DirCreateReport> => invoke("create_dir", { dir }),
 

@@ -22,7 +22,11 @@ pub struct DirCreateReport {
 /// separators and no trailing slash, sorted. Dot-prefixed directories (`.b2/`,
 /// `.git/`, `.obsidian/`) are skipped — the same routing rule as the ingest walk
 /// (`collect_vault_files`), so the tree and the index agree on what a vault
-/// member is.
+/// member is. That mirroring is deliberate and includes symlink behavior:
+/// `is_dir()` follows directory symlinks exactly as the ingest walk does, so a
+/// symlinked folder whose notes get indexed also shows in the tree — diverging
+/// here would desync structure from content. A vault-wide symlink policy, if one
+/// ever lands, must change both walks together.
 pub fn list_dirs(vault_root: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     collect_dirs(vault_root, vault_root, &mut out)?;
@@ -56,8 +60,9 @@ fn collect_dirs(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
 }
 
 /// Create the folder `dir_input` (vault-relative; a trailing `/` is tolerated),
-/// missing parents included — `mkdir -p`, matching `create_note`'s parent
-/// creation and the UI's nested-name input. Errors with
+/// missing parents included — matching `create_note`'s parent creation and the
+/// UI's nested-name input — but, unlike `mkdir -p`, **refusing an occupied
+/// target**: the user asked to *create*, and it's already there. Errors with
 /// [`Error::DirDestination`] for an invalid path and [`Error::DirTargetExists`]
 /// when anything (file or folder) already sits there.
 pub fn create_dir(vault_root: &Path, dir_input: &str) -> Result<DirCreateReport> {

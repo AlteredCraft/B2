@@ -114,8 +114,9 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
    connection lives here: a body `[[link]]` (always untyped), or a frontmatter `b2_relations:` entry
    (the sole home of a typed relation; written by `b2 link` or by hand).
 2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings` + `note_centroids`, scored in-process) + the typed `edges` graph.
-   Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable state
-   lives outside the Markdown.**
+   Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable
+   B2-derived state lives outside the Markdown** (the human's own directory tree is vault material,
+   not B2 state — see the folders paragraph below).
 
 Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
 edge is re-derived from Markdown on every reindex; the only writes B2 makes to a note *of its own accord*
@@ -126,9 +127,10 @@ edit, guarded by a content-hash revision; B2 still never authors body content it
 **Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
 "Folders", decision 2026-07-21): a folder — empty or not — is vault material like a note, never projected
 into the index (nothing to chunk, embed, or link). The tree's structure listing (`Vault::list_dirs`) is a
-**live fs walk**, so the desktop file tree is one-to-one with disk by construction; `create_dir` /
-`move_dir` / `delete_dir` proxy the OS (`mkdir -p` / `rename` / `remove_dir_all`) and resolve targets
-against the disk, so empty folders work everywhere (`b2 mv`, `b2 rm -r`, the tree).
+**live fs walk**, so the desktop file tree is one-to-one with the vault's managed (non-dot) subtree by
+construction; `create_dir` / `move_dir` / `delete_dir` proxy the OS (create-with-parents — an occupied
+target refused — / `rename` / `remove_dir_all`) and resolve targets against the disk, so empty folders
+work everywhere (`b2 mv`, `b2 rm -r`, the tree).
 
 *(Through 2026-06-30 there was a third tier — a durable `.b2/log/` event log holding the suggestion queue
 + rejection memory — and the invariant was `(Markdown ∪ log)`. The 2026-07-04 relator cut removed it;
@@ -172,9 +174,10 @@ no model) + `b2 link` (the human commits). A reranker would be the next seam if/
 The **one typed API**. The CLI and the desktop host are its only clients; every other `b2-core`
 module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
-reads (`read` / `list_notes` / `list_dirs` / `neighbors` / `explain` / `search` / `similar`), writes
-(`add_note` / `create_note` / `create_dir` / `move_note` / `link` / `write` / `delete_note` /
-`delete_resource` / `delete_dir`).
+reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
+`explain_resource` / `search` / `similar`), writes (`add_note` / `create_note` / `create_dir` /
+`move_note` / `move_resource` / `move_dir` / `link` / `write` / `delete_note` / `delete_resource` /
+`delete_dir`).
 **Add operations when a command needs them; do not
 pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
 adapters wire the real model.
