@@ -259,7 +259,7 @@ b2 similar espresso-extraction.md    <span class="c"># instant local KNN — no 
         <div class="kickerlbl" style="color:var(--green)">or run <code>b2 link</code></div>
         <p style="font-size:13px;margin:6px 0 0"><code>b2 link &lt;src&gt; &lt;dst&gt; [--type &lt;verb&gt;]
         [--explanation …]</code> appends one typed-link string to the <b>source note's frontmatter
-        <code>relations:</code></b> — Markdown-first, <b>never the body</b> — then re-projects that note so the
+        <code>b2_relations:</code></b> — Markdown-first, <b>never the body</b> — then re-projects that note so the
         edge materializes as <code>origin=frontmatter</code>, active.</p>
       </div>
     </div>
@@ -288,14 +288,14 @@ Linked espresso-extraction.md —<span class="g">supports</span>→ notes/dialin
 
     <p class="cap">What changed on disk is one line, in the <b>source</b> note's frontmatter — the body is
     untouched:</p>
-    <pre> <span class="n">relations:</span>
+    <pre> <span class="n">b2_relations:</span>
 <span class="g">+  - "supports [[dialing-in-grind.md|Grind size]] — grind size sets the extraction pressure"</span></pre>
 
     <div class="invariant"><b>An edge exists iff it's in the Markdown.</b> There is no <code>suggested</code>
     or <code>rejected</code> status and no review queue to survive a rebuild — drop the index, reindex, and the
     edge comes back <em>because it's in your note</em>. A committed edge is pristine: just the
     <code>&lt;verb&gt; [[path|title]]</code> line, no <code>by</code>, <code>confidence</code>, or provenance
-    stapled on. To undo one, delete its <code>relations:</code> entry; it's gone on the next reindex.</div>
+    stapled on. To undo one, delete its <code>b2_relations:</code> entry; it's gone on the next reindex.</div>
 
     <div class="ground"><b>Ground truth:</b> the core vocabulary is the closed 10-verb set in
     <span class="mono">relation::CORE</span> — <span class="mono">references · relates · elaborates · supports ·

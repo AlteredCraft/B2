@@ -2,7 +2,7 @@
 b2id: 01KXF21DVQZV69JDZ003H055D7
 type: note
 title: "Consensus Under Partition"
-relations:
+b2_relations:
   - "elaborates [[distributed-systems/081-retries-and-jitter]] — see also"
 ---
 

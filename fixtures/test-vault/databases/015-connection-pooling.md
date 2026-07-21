@@ -2,7 +2,7 @@
 b2id: 01KXF21DTSRC65KB3T2N0STXW7
 type: note
 title: "Connection Pooling"
-relations:
+b2_relations:
   - "refutes [[databases/175-query-planning]] — see also"
 ---
 

@@ -2,7 +2,7 @@
 b2id: 01KXF21DZKG54VMBMJNQJ5P6N5
 type: note
 title: "Dense vs Sparse"
-relations:
+b2_relations:
   - "supports [[vector-search/080-hnsw-graphs]] — see also"
 ---
 

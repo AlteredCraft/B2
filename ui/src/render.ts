@@ -300,7 +300,7 @@ export function treePaneHtml(state: AppState): string {
 // edge, like the file tree's "Files" header.
 //
 // The frontmatter drawer is a collapsible peek at the note's raw YAML (verbatim, as on
-// disk — `relations:` and any unmodeled keys included). The `</>` toggle flips the note
+// disk — `b2_relations:` and any unmodeled keys included). The `</>` toggle flips the note
 // body between rendered Markdown and its raw source. Both are state-controlled (not
 // native `<details>`) so their open state survives the full-pane re-render a toast timer
 // or tree toggle triggers, and both stay sticky across notes. The bar is always

@@ -2,7 +2,7 @@
 b2id: 01KXF21DT0DS5P7DEDQ56BHANB
 type: note
 title: "Brew Ratio"
-relations:
+b2_relations:
   - "references [[coffee/048-the-espresso-shot]] — see also"
 ---
 

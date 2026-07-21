@@ -2,7 +2,7 @@
 b2id: 01KXF21DSNMVW08EKQ92AAS6Y7
 type: note
 title: "The Pour-Over"
-relations:
+b2_relations:
   - "derived-from [[coffee/078-water-temperature]] — see also"
 ---
 

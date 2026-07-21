@@ -58,7 +58,7 @@ fn ingest_golden(dir: &std::path::Path) -> Connection {
 }
 
 #[test]
-fn golden_graph_has_references_and_supports_inline_active() {
+fn golden_graph_has_inline_references_and_frontmatter_supports() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path());
 
@@ -76,13 +76,14 @@ fn golden_graph_has_references_and_supports_inline_active() {
                 0,
                 None,
             ),
-            // supports: spaced-repetition → memory (typed line, with explanation)
+            // supports: spaced-repetition → memory (`b2_relations:` entry, with
+            // explanation — the augment shape, data-model §2/§8)
             (
                 SRS_ID.to_string(),
                 Some(MEMORY_ID.to_string()),
                 "concepts/memory".to_string(),
                 "supports".to_string(),
-                "inline".to_string(),
+                "frontmatter".to_string(),
                 0,
                 Some("applies the forgetting curve".to_string()),
             ),

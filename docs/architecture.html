@@ -269,10 +269,11 @@ retrieval curve.
     chunk per maximal run of non-blank lines); chunk text lands in <code>chunks_fts</code> immediately, so
     keyword search works before anything is embedded. This fills
     <code>notes(b2id, path)</code> — the <code>path ⇄ b2id</code> resolver — for the <em>whole</em> vault.</li>
-    <li><b>Phase 2</b> derives edges by parsing each body + frontmatter <code>relations:</code> and resolving every
-    <code>[[path]]</code> against the now-complete resolver. From <code>spaced-repetition.md</code> that's two
-    directed edges to <code>memory.md</code>: a bare <code>references</code> and a typed <code>elaborates</code>.
-    A typed line <em>consumes</em> its wikilink, so it isn't double-counted as a bare reference.</li>
+    <li><b>Phase 2</b> derives edges by parsing each body's links + frontmatter <code>b2_relations:</code> and
+    resolving every <code>[[path]]</code> against the now-complete resolver. From
+    <code>spaced-repetition.md</code> that's two directed edges to <code>memory.md</code>: a bare body
+    <code>references</code> and a typed frontmatter <code>supports</code>. Body links are always untyped —
+    the verb and explanation come only from <code>b2_relations:</code>.</li>
     <li>If a note lacks a <code>b2id</code>, phase 1 <b>stamps one</b> — mint a ULID, write a single surgical line
     into the note's frontmatter. That's the whole record: the id travels <em>in the file</em>, so there is no
     separate log to keep. B2's one always-allowed write during ingest. (Both fixture notes are pre-stamped, so
@@ -317,7 +318,7 @@ retrieval curve.
   <p class="sub" style="margin-top:12px;font-size:13px">Two schema details do load-bearing work. <b>There is no
   <code>status</code> column and no lifecycle</b> — an edge exists iff it is written in the Markdown, so
   <code>origin</code> only records <em>which home</em> it came from (<code>inline</code> body link, or a
-  <code>frontmatter</code> <code>relations:</code> entry). And <code>chunks_vec</code> is created <em>outside</em>
+  <code>frontmatter</code> <code>b2_relations:</code> entry). And <code>chunks_vec</code> is created <em>outside</em>
   the base migration because its <code>FLOAT[N]</code> dimension is a DDL literal pinned to
   <code>meta.embed_dim</code>: the vector space can only be shaped once the embedder's <code>dim</code> is known.
   <span style="color:var(--muted)">(Removed 2026-07-04: the <code>edge_provenance</code> table, the
@@ -447,7 +448,7 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       <ul class="tidy" style="font-size:13.5px;margin:0">
         <li><b><code>b2 link &lt;src&gt; &lt;dst&gt; [--type &lt;verb&gt;] [--explanation …]</code>.</b> B2 resolves
         both refs (path or b2id), builds the typed-link string from the target's <em>current</em> path + title,
-        and appends it to the source note's <b>frontmatter <code>relations:</code></b> (Markdown-first — never the
+        and appends it to the source note's <b>frontmatter <code>b2_relations:</code></b> (Markdown-first — never the
         body). <code>--type</code> defaults to <code>references</code>; the palette is the closed 10-verb core.</li>
         <li><b>Then it re-projects the note</b> (Flow ①), so the edge materializes as <code>origin=frontmatter</code>
         straight from the line just written. Committing is a <em>projection of an authored line</em>, not a bespoke
@@ -464,8 +465,8 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
 b2id: <span class="u">01JSRS…B</span>
 type: concept
 title: <span class="s">"Spaced repetition"</span>
-relations:
-  - <span class="s">"elaborates [[concepts/memory|Human memory]]"</span>  <span class="c"># ← appended</span>
+b2_relations:
+  - <span class="s">"supports [[concepts/memory|Human memory]]"</span>  <span class="c"># ← appended</span>
 <span class="c">---</span></pre>
       <p style="font-size:12px;color:var(--muted);margin:6px 0 0">Frontmatter only. The body is byte-unchanged. On
       the next reindex this line re-derives as an active <code>origin=frontmatter</code> edge — no separate record
@@ -473,9 +474,9 @@ relations:
     </div>
   </div>
   <div class="ground"><b>Ground truth:</b> the write path is <span class="mono">note.rs · add_relation</span> — one
-  YAML-quoted typed-link appended to <code>relations:</code>, the body byte-unchanged (<span class="mono">frontmatter.rs</span>,
+  YAML-quoted typed-link appended to <code>b2_relations:</code>, the body byte-unchanged (<span class="mono">frontmatter.rs</span>,
   <span class="mono">roundtrip.rs</span>). The committed edge then re-derives as <code>origin=frontmatter</code> on
-  reindex, identical to a hand-authored <code>relations:</code> line (<span class="mono">graph.rs</span>).</div>
+  reindex, identical to a hand-authored <code>b2_relations:</code> line (<span class="mono">graph.rs</span>).</div>
 </section>
 
 <!-- ============ WRITE DISCIPLINE ============ -->
@@ -491,7 +492,7 @@ relations:
       <div class="kicker" style="color:var(--green)">Frontmatter, surgical</div>
       <ul class="tidy" style="font-size:13px;margin:2px 0 0">
         <li><code>stamp_b2id</code> — one <code>b2id:</code> line; strict no-op if present, <b>never re-stamped</b>.</li>
-        <li><code>add_relation</code> — one YAML-quoted typed-link appended to <code>relations:</code> (the <code>b2 link</code> path).</li>
+        <li><code>add_relation</code> — one YAML-quoted typed-link appended to <code>b2_relations:</code> (the <code>b2 link</code> path).</li>
       </ul>
     </div>
     <div class="card tight" style="margin:0">
@@ -583,7 +584,7 @@ relations:
     <tr><td class="mono">neighbors</td><td>a note's typed neighbors</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every typed edge + its "why", with an orphan flag</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes (path/title/score/evidence)</td><td>— (stored vectors)</td></tr>
-    <tr><td class="mono">link</td><td>commit a chosen connection to frontmatter <code>relations:</code>, re-project it</td><td>embedder</td></tr>
+    <tr><td class="mono">link</td><td>commit a chosen connection to frontmatter <code>b2_relations:</code>, re-project it</td><td>embedder</td></tr>
   </table>
   <div class="note"><b>Honest by construction.</b> A note ref resolves by <b>path or b2id</b>. Commands that embed
   fail fast with "run <code>b2 init</code>" if the model is absent; pure-graph commands (and <code>similar</code>,
@@ -606,7 +607,7 @@ relations:
   <table>
     <tr><th style="width:28%">Invariant</th><th>What it means · where it's defended</th></tr>
     <tr><td><b>Lossless round-trip</b></td><td><code>parse → serialize → parse</code> is byte-identical; B2 only ever makes surgical edits. <span class="mono" style="color:var(--muted)">→ roundtrip.rs</span></td></tr>
-    <tr><td><b>B2 never authors the body</b></td><td>Writes are surgical and in <em>frontmatter</em>: the b2id stamp, and a committed edge in <code>relations:</code> via <code>b2 link</code>. <span class="mono" style="color:var(--muted)">→ stamp · frontmatter</span></td></tr>
+    <tr><td><b>B2 never authors the body</b></td><td>Writes are surgical and in <em>frontmatter</em>: the b2id stamp, and a committed edge in <code>b2_relations:</code> via <code>b2 link</code>. <span class="mono" style="color:var(--muted)">→ stamp · frontmatter</span></td></tr>
     <tr><td><b>Idempotent re-projection</b></td><td>Re-ingest changes nothing; an incremental one-note re-index equals a full rebuild; no stale FTS/vector rows accumulate. <span class="mono" style="color:var(--muted)">→ chunks · graph · embed</span></td></tr>
     <tr><td><b>Disposable index</b></td><td>Drop the DB, rebuild from Markdown → an identical index. Every committed edge returns because it lives in the Markdown; there is no log to replay. <span class="mono" style="color:var(--muted)">→ graph · ingest</span></td></tr>
     <tr><td><b>The graph never breaks on a move</b></td><td>Edges key on b2id, so a rename repairs only link text — backlinks resolve unchanged. <span class="mono" style="color:var(--muted)">→ mv</span></td></tr>

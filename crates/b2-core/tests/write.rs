@@ -118,8 +118,8 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
-    // The golden SRS note links memory twice (references + supports). Save a body
-    // that keeps ONE link and adds fresh text.
+    // The golden SRS note links memory twice: a body reference + a frontmatter
+    // `supports`. Save a body that keeps ONE link and adds fresh text.
     let note = vault.read(SRS_PATH).unwrap();
     let new_body = "Rewritten body about zettelkasten workflows.\n\nSee [[concepts/memory]].\n";
     vault.write(SRS_PATH, new_body, &note.revision).unwrap();
@@ -128,15 +128,29 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let hits = vault.search("zettelkasten", 10).unwrap();
     assert!(hits.iter().any(|h| h.path == SRS_PATH), "FTS is current");
 
-    // …edges were re-derived from the new body (two typed links → one bare link)…
-    let outbound: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM edges e JOIN notes n ON n.b2id = e.src_id WHERE n.path = ?1",
-            [SRS_PATH],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(outbound, 1, "edges re-projected from the saved body");
+    // …edges were re-derived: the body contributes its one reference, and the
+    // frontmatter `supports` survives untouched — a body save never edits the
+    // frontmatter home (desktop-editing.md §4, data-model §2).
+    let outbound: Vec<(String, String)> = {
+        let mut s = conn
+            .prepare(
+                "SELECT e.type, e.origin FROM edges e JOIN notes n ON n.b2id = e.src_id
+                 WHERE n.path = ?1 ORDER BY e.type",
+            )
+            .unwrap();
+        s.query_map([SRS_PATH], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(
+        outbound,
+        vec![
+            ("references".to_string(), "inline".to_string()),
+            ("supports".to_string(), "frontmatter".to_string()),
+        ],
+        "edges re-projected from the saved body + the untouched frontmatter"
+    );
 
     // …and the re-chunked note's vectors were cleared into the pending set, which
     // an embed pass then fills exactly (§7 invariant 5 — convergence).

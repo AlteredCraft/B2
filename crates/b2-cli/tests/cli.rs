@@ -336,8 +336,13 @@ fn explain_shows_connections_human_and_json() {
     let conns = v["connections"].as_array().expect("connections array");
     assert_eq!(conns.len(), 2);
     assert!(conns.iter().all(|c| c["direction"] == "outbound"));
-    assert!(conns.iter().all(|c| c["origin"] == "inline"));
-    assert!(conns.iter().any(|c| c["label"] == "supports"));
+    // The two homes: the bare body link vs the typed `b2_relations:` entry.
+    assert!(conns
+        .iter()
+        .any(|c| c["label"] == "references" && c["origin"] == "inline"));
+    assert!(conns
+        .iter()
+        .any(|c| c["label"] == "supports" && c["origin"] == "frontmatter"));
 }
 
 #[test]
@@ -620,7 +625,7 @@ fn link_writes_frontmatter_and_shows_in_both_directions() {
     let src = root.join("alpha.md");
     assert!(!std::fs::read_to_string(&src)
         .unwrap()
-        .contains("relations:"));
+        .contains("b2_relations:"));
 
     let out = run_in(
         &root,
@@ -629,10 +634,11 @@ fn link_writes_frontmatter_and_shows_in_both_directions() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).to_lowercase().contains("linked"));
 
-    // Markdown-first: the typed relation lands in the source note's frontmatter…
+    // Markdown-first: the typed relation lands in the source note's frontmatter,
+    // under the namespaced `b2_relations:` key…
     let body = std::fs::read_to_string(&src).unwrap();
     assert!(
-        body.contains("relations:"),
+        body.contains("b2_relations:"),
         "link must append to frontmatter: {body}"
     );
     assert!(body.contains("supports"), "the verb is written: {body}");

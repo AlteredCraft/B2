@@ -2,7 +2,7 @@
 b2id: 01KXF21DZGDV2A8TWPNNH4FXGK
 type: note
 title: "Recall vs Latency"
-relations:
+b2_relations:
   - "elaborates [[vector-search/030-approximate-nearest-neighbors]] — see also"
 ---
 

@@ -126,7 +126,7 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
-    /// Commit a typed connection SRC → DST into SRC's frontmatter `relations:`.
+    /// Commit a typed connection SRC → DST into SRC's frontmatter `b2_relations:`.
     /// SRC and DST are each a vault-relative path or a b2id.
     Link {
         /// The source note (the edge points *from* it): path or b2id.

@@ -2,7 +2,7 @@
 b2id: 01KXF21DZ47PP3GVTE9V817MW0
 type: note
 title: "Approximate Nearest Neighbors"
-relations:
+b2_relations:
   - "supports [[vector-search/010-hybrid-retrieval]] — see also"
 ---
 

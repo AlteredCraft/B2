@@ -74,14 +74,19 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = reindexed(tmp.path());
 
-    // The body is byte-honest Markdown: wikilinks and headings survive verbatim so
-    // the adapter renders them (clickable wikilinks are the MVP's navigation).
+    // The body is byte-honest Markdown: wikilinks survive verbatim so the adapter
+    // renders them (clickable wikilinks are the MVP's navigation). The typed
+    // relation is metadata — it shows in the frontmatter block, never the body.
     let note = vault.read("notes/spaced-repetition").unwrap();
     assert!(note.body.contains("[[concepts/memory|Human memory]]"));
-    assert!(note.body.contains("## Relations"));
+    assert!(
+        !note.body.contains("supports [["),
+        "no typed syntax in the body"
+    );
     assert!(note
-        .body
-        .contains("supports [[concepts/memory|Human memory]]"));
+        .frontmatter
+        .as_deref()
+        .is_some_and(|fm| fm.contains("supports [[concepts/memory|Human memory]]")));
 }
 
 #[test]

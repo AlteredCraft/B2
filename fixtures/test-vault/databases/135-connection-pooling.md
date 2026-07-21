@@ -2,7 +2,7 @@
 b2id: 01KXF21DV6XKJNBPYQ9KRPBTPX
 type: note
 title: "Connection Pooling"
-relations:
+b2_relations:
   - "refutes [[databases/005-sqlite-as-a-library]] — see also"
 ---
 

@@ -59,7 +59,10 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
         report.rewrote,
         vec!["notes/spaced-repetition.md".to_string()]
     );
-    assert_eq!(report.links_rewritten, 2, "the bare + the typed link");
+    assert_eq!(
+        report.links_rewritten, 2,
+        "the body link + the frontmatter relation's link"
+    );
 
     // The file moved on disk.
     assert!(!root.join("concepts/memory.md").exists());

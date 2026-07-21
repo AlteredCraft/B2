@@ -2,7 +2,7 @@
 b2id: 01KXF21DYFB93DH9V5P68G8VHR
 type: note
 title: "Zero-Cost Abstractions"
-relations:
+b2_relations:
   - "supports [[rust/172-zero-cost-abstractions]] — see also"
 ---
 

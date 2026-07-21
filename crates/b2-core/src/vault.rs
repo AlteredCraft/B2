@@ -226,7 +226,7 @@ pub struct UnresolvedLink {
     pub target: String,
     /// The relation verb (`references` for a bare link).
     pub relation: String,
-    /// Edge origin — `"inline"` (a body link) or `"frontmatter"` (a `relations:`
+    /// Edge origin — `"inline"` (a body link) or `"frontmatter"` (a `b2_relations:`
     /// entry).
     pub origin: String,
     pub explanation: Option<String>,
@@ -275,7 +275,7 @@ pub struct NoteView {
     pub body: String,
     /// The raw frontmatter YAML **verbatim** (the text between the `---` fences,
     /// fences excluded), or `None` when the note has none. This is the byte-honest
-    /// block, not a re-serialization of the projected fields above — so `relations:`
+    /// block, not a re-serialization of the projected fields above — so `b2_relations:`
     /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
     /// collapsible drawer (specs/completed/desktop-ui-mvp.md §4).
     pub frontmatter: Option<String>,
@@ -1002,7 +1002,7 @@ impl Vault {
     }
 
     /// Commit a typed connection `src --type--> dst` (`b2 link`, Flow ③): append a
-    /// typed-link string to the **source note's frontmatter `relations:`** (Markdown
+    /// typed-link string to the **source note's frontmatter `b2_relations:`** (Markdown
     /// first, **never the body** — data-model.md §0) and re-project it as an
     /// `origin='frontmatter'` active edge. Both ends resolve by path **or** `b2id`.
     /// `edge_type` must be a **core** verb (data-model.md §2) — the CLI defaults it to
@@ -1059,7 +1059,7 @@ impl Vault {
             None => format!("{edge_type} {link}"),
         };
 
-        // 1. Markdown first: append to frontmatter relations: (never the body, §0).
+        // 1. Markdown first: append to frontmatter b2_relations: (never the body, §0).
         let abs = self.root.join(&src_path);
         let mut parsed = note::parse(&fs::read_to_string(&abs)?);
         parsed.add_relation(&spec)?;

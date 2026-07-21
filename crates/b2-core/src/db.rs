@@ -1027,7 +1027,7 @@ pub struct EdgeRow {
 }
 
 /// Replace a note's edges. Every edge is authored (body links ∪ frontmatter
-/// `relations:`), so this deletes the note's edges and re-inserts them from the
+/// `b2_relations:`), so this deletes the note's edges and re-inserts them from the
 /// current Markdown (Flow ①) — the whole graph is a projection of Markdown, with no
 /// suggestion rows to preserve.
 pub fn replace_authored_edges(conn: &Connection, src_id: &str, edges: &[EdgeRow]) -> Result<()> {

@@ -60,7 +60,7 @@ export interface NoteView {
   /**
    * Raw frontmatter YAML verbatim (between the `---` fences, fences excluded), or
    * null when the note has none. The byte-honest block — not a re-serialization of
-   * the fields above — so `relations:` and any unmodeled keys show as written. The
+   * the fields above — so `b2_relations:` and any unmodeled keys show as written. The
    * note pane renders it in a collapsible drawer.
    */
   frontmatter: string | null;

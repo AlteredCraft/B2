@@ -2,7 +2,7 @@
 b2id: 01KXF21DY16E8W4QQNQVF6BKCJ
 type: note
 title: "Lifetimes Explained"
-relations:
+b2_relations:
   - "elaborates [[rust/082-iterators-and-laziness]] — see also"
 ---
 
