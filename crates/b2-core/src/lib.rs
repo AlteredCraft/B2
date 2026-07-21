@@ -9,6 +9,7 @@
 pub mod add;
 pub mod chunk;
 pub mod db;
+pub mod dirs;
 pub mod discover;
 pub mod embed;
 mod error;

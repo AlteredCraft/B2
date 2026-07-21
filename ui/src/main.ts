@@ -209,9 +209,11 @@ async function loadNotes(): Promise<void> {
   try {
     state.notes = await api.listNotes();
     state.resources = await api.listResources();
+    state.dirs = await api.listDirs();
   } catch (e) {
     state.notes = [];
     state.resources = [];
+    state.dirs = [];
     flash(errText(e));
   }
 }
@@ -500,10 +502,10 @@ function closeContextMenu(): void {
 // `create_note` writes the file and projects it (tree, keyword search, graph), and
 // its vectors fill through the normal editing pipeline (the note opens in edit
 // mode; autosave's trailing embed covers whatever gets typed — an empty body has
-// nothing to embed). A new *folder* is staged UI state (`pendingDirs`): the
-// index-derived tree can't list an empty dir and nothing durable lives outside the
-// Markdown, so B2 writes no empty folder — it materializes on disk when its first
-// note is created inside it (`create_note` creates missing parent dirs).
+// nothing to embed). A new *folder* is equally real — `create_dir` is a true
+// `mkdir` on disk: a folder is user-authored vault structure (the fs is
+// authoritative for it, empty or not), so it exists to Finder, the CLI, and any
+// sync the moment the input commits, and the tree re-lists it from disk.
 
 function startTreeCreate(kind: "note" | "folder", dir: string): void {
   if (state.vaultRoot === null) return;
@@ -536,12 +538,18 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
   const path = joinPath(create.dir, name);
   state.treeCreate = null;
   if (create.kind === "folder") {
-    for (const d of dirChain(path)) {
-      state.pendingDirs.add(d);
-      state.expandedDirs.add(d);
+    try {
+      const report = await api.createDir(path);
+      await loadNotes(); // the tree re-lists structure from disk — the folder is real
+      for (const d of dirChain(report.dir)) state.expandedDirs.add(d);
+      state.selectedDir = report.dir; // the natural next step is a note inside it
+      flash(`Created ${report.dir}/.`);
+    } catch (e) {
+      // Refused (e.g. the name is taken): keep the input open with the typed name
+      // intact — the commitTreeCreate posture below; the toast explains.
+      state.treeCreate = create;
+      flash(errText(e));
     }
-    state.selectedDir = path; // the natural next step is a note inside it
-    render();
     return;
   }
   try {
@@ -662,7 +670,6 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
     state.expandedDirs = new Set(
       [...state.expandedDirs].map((d) => remapPath(d, from, to) ?? d),
     );
-    state.pendingDirs = new Set([...state.pendingDirs].map((d) => remapPath(d, from, to) ?? d));
     state.selectedDir = remapPath(state.selectedDir, from, to) ?? state.selectedDir;
     for (const d of dirChain(parentDir(to))) state.expandedDirs.add(d);
     const openNotePath = state.current ? remapPath(state.current.path, from, to) : null;
@@ -704,9 +711,9 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
 let deleteInFlight = false;
 
 /**
- * Route a delete gesture to its flow: files execute immediately; folders open the
- * confirm modal. A staged-only folder (nothing on disk yet) just unstages locally
- * — there is nothing durable to confirm or to ask the host about.
+ * Route a delete gesture to its flow: files execute immediately; folders always
+ * open the confirm modal — even one the index lists nothing under may hold
+ * unindexed files on disk, and `delete_dir` removes everything.
  */
 function requestDelete(node: TreeNodeRef): void {
   state.contextMenu = null;
@@ -715,22 +722,14 @@ function requestDelete(node: TreeNodeRef): void {
     void executeDelete(node);
     return;
   }
-  const inside = (p: string) => p.startsWith(`${node.path}/`);
-  const hasFiles = state.notes.some((n) => inside(n.path)) || state.resources.some((r) => inside(r.path));
-  if (!hasFiles) {
-    dropDirState(node.path);
-    render();
-    return;
-  }
   state.deleteTarget = node;
   render();
 }
 
-/** Forget tree state pointing into a (deleted or unstaged) folder subtree. */
+/** Forget tree state pointing into a deleted folder subtree. */
 function dropDirState(dir: string): void {
   const gone = (d: string) => d === dir || d.startsWith(`${dir}/`);
   state.expandedDirs = new Set([...state.expandedDirs].filter((d) => !gone(d)));
-  state.pendingDirs = new Set([...state.pendingDirs].filter((d) => !gone(d)));
   if (gone(state.selectedDir)) state.selectedDir = parentDir(dir);
 }
 
@@ -1162,8 +1161,8 @@ async function switchVault(): Promise<void> {
     state.searchQuery = "";
     state.searchResults = [];
     state.expandedDirs = new Set<string>();
-    state.selectedDir = ""; // the create context belongs to the vault we left…
-    state.pendingDirs = new Set<string>(); // …as do any staged, still-empty folders
+    state.selectedDir = ""; // the create context belongs to the vault we left
+    state.dirs = []; // loadNotes below re-lists the new vault's structure
     state.treeCreate = null;
     navClear(); // history is per-vault: the old stack's paths mean nothing here
     const input = document.getElementById("search-input") as HTMLInputElement | null;

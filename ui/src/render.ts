@@ -103,13 +103,14 @@ const CLASS_GLYPHS: Record<string, string> = {
 };
 
 /** Fold the flat, path-ordered note + resource lists into one nested folder tree.
- *  `staged` adds folders that hold no file yet — the UI's pending "new folder"s
- *  (and the folder an inline create input is open in), which the index-derived
- *  lists can't know about; an already-real folder merges harmlessly. */
+ *  `dirs` is the vault's full folder list (`list_dirs`, a live fs walk) — the
+ *  structure half of the tree, so a folder renders even when it holds no file
+ *  (the fs supports empty folders, so the tree does); a folder that also appears
+ *  as a file's path prefix merges harmlessly. */
 function buildTree(
   notes: NoteSummary[],
   resources: ResourceSummary[],
-  staged: Iterable<string>,
+  dirs: Iterable<string>,
 ): TreeDir {
   const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [] };
   const descend = (dirPath: string): TreeDir => {
@@ -141,7 +142,7 @@ function buildTree(
       glyph: CLASS_GLYPHS[r.class] ?? CLASS_GLYPHS.binary,
     });
   }
-  for (const dir of staged) {
+  for (const dir of dirs) {
     descend(dir);
   }
   return root;
@@ -277,13 +278,7 @@ export function treePaneHtml(state: AppState): string {
     </div>`;
   if (state.vaultRoot === null)
     return head + `<p class="tree-empty">No vault open.</p>`;
-  // Staged folders (pending "new folder"s) and the folder an inline create input
-  // is open in join the index-derived lists, so both render even before any file
-  // exists under them — including on a completely empty vault.
-  const staged = state.treeCreate
-    ? [...state.pendingDirs, state.treeCreate.dir]
-    : [...state.pendingDirs];
-  const body = treeChildrenHtml(buildTree(state.notes, state.resources, staged), state, 0);
+  const body = treeChildrenHtml(buildTree(state.notes, state.resources, state.dirs), state, 0);
   if (!body)
     return head + `<p class="tree-empty">No files indexed yet — Reindex to populate.</p>`;
   return head + `<div class="tree">${body}</div>`;
@@ -1066,11 +1061,7 @@ export function contextMenuHtml(state: AppState): string {
 function moveModalHtml(state: AppState): string {
   const t = state.moveTarget;
   if (!t) return "";
-  const dirs = allDirs(
-    state.notes.map((n) => n.path),
-    state.resources.map((r) => r.path),
-    state.pendingDirs,
-  );
+  const dirs = allDirs(state.dirs);
   const rows = dirs
     .map((dir) => {
       const label = dir === "" ? "vault root" : `${dir}/`;

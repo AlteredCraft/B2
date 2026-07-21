@@ -79,6 +79,13 @@ export interface AppState {
   notes: NoteSummary[];
   /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
   resources: ResourceSummary[];
+  /**
+   * Every folder in the vault, empty ones included — the tree's structure half
+   * (from `list_dirs`, a live filesystem walk). Folders are user-authored
+   * structure with the fs authoritative, so this list is one-to-one with disk:
+   * a Finder `mkdir` or a folder emptied by a move shows exactly as it is.
+   */
+  dirs: string[];
   /** Folder paths (vault-relative, no trailing slash) the tree shows expanded. */
   expandedDirs: Set<string>;
   /**
@@ -87,14 +94,6 @@ export interface AppState {
    * last folder row clicked/right-clicked. "" is the vault root (the default).
    */
   selectedDir: string;
-  /**
-   * Staged folders (session-scoped, cleared on vault switch): created in the UI
-   * but still empty, so the index-derived tree can't list them and B2 writes no
-   * empty dir to disk (nothing durable outside the Markdown). Each materializes
-   * for real when its first note is created inside it — `create_note` creates
-   * missing parent dirs, exactly like `b2 add`.
-   */
-  pendingDirs: Set<string>;
   /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
   treeCreate: { kind: "note" | "folder"; dir: string } | null;
   /** An inline rename input open on a tree row, or null. */
@@ -222,9 +221,9 @@ export const state: AppState = {
   notesTotal: 0,
   notes: [],
   resources: [],
+  dirs: [],
   expandedDirs: new Set<string>(),
   selectedDir: "",
-  pendingDirs: new Set<string>(),
   treeCreate: null,
   treeRename: null,
   moveTarget: null,

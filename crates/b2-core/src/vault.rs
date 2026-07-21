@@ -21,6 +21,7 @@
 use crate::add::{self, AddReport};
 use crate::chunk::ChunkConfig;
 use crate::db;
+use crate::dirs;
 use crate::discover;
 use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
@@ -35,6 +36,9 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+/// Re-exported for the same reason: [`create_dir`](Vault::create_dir)'s report is
+/// part of the façade contract.
+pub use crate::dirs::DirCreateReport;
 /// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
 /// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
@@ -802,6 +806,19 @@ impl Vault {
             .collect())
     }
 
+    /// Every folder in the vault (vault-relative, sorted, empty ones included) —
+    /// the file tree's structure half. Read **live off the filesystem, never the
+    /// index**: folders are user-authored *structure* with no derived data
+    /// (nothing to chunk, embed, or link), so the walk itself is the projection
+    /// and the tree stays one-to-one with disk — a `mkdir` in Finder or a folder
+    /// emptied by a move shows exactly as the filesystem has it. Dot-folders are
+    /// skipped, the ingest walk's routing rule. Model-free and index-free (works
+    /// on a never-reindexed vault).
+    pub fn list_dirs(&self) -> Result<Vec<String>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "list_dirs").entered();
+        dirs::list_dirs(&self.root)
+    }
+
     /// The fallback card's data for one resource (`b2 explain <file>`, the desktop
     /// card — slice-1 spec §4/§6): inventory metadata plus the backlinks panel,
     /// straight off the materialized graph. `path` is a vault-relative path (the
@@ -1247,6 +1264,19 @@ impl Vault {
             None,
             &created,
         )
+    }
+
+    /// Create the folder `dir` (vault-relative; missing parents included, like
+    /// `mkdir -p`) — the desktop's New-folder action, the structure sibling of
+    /// [`create_note`](Self::create_note). A folder is user-authored vault
+    /// structure, so this writes the filesystem and touches **nothing else**: no
+    /// index rows exist for a folder (see [`list_dirs`](Self::list_dirs)), and the
+    /// new folder is real to every tool — Finder, the CLI, a sync — the moment
+    /// this returns. Errors with [`Error::DirDestination`] for an invalid path or
+    /// [`Error::DirTargetExists`] when anything already sits there.
+    pub fn create_dir(&self, dir: &str) -> Result<DirCreateReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "mkdir", dir).entered();
+        dirs::create_dir(&self.root, dir)
     }
 
     /// Today's date (`YYYY-MM-DD`) from **SQLite** — the same clock that stamps

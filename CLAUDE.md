@@ -123,6 +123,13 @@ are stamping a missing `b2id` (a ULID) and, on `b2 link`, appending a frontmatte
 (The desktop editor's saves go through `Vault::write` — a byte-honest splice of the **human's own** body
 edit, guarded by a content-hash revision; B2 still never authors body content itself.)
 
+**Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
+"Folders", decision 2026-07-21): a folder — empty or not — is vault material like a note, never projected
+into the index (nothing to chunk, embed, or link). The tree's structure listing (`Vault::list_dirs`) is a
+**live fs walk**, so the desktop file tree is one-to-one with disk by construction; `create_dir` /
+`move_dir` / `delete_dir` proxy the OS (`mkdir -p` / `rename` / `remove_dir_all`) and resolve targets
+against the disk, so empty folders work everywhere (`b2 mv`, `b2 rm -r`, the tree).
+
 *(Through 2026-06-30 there was a third tier — a durable `.b2/log/` event log holding the suggestion queue
 + rejection memory — and the invariant was `(Markdown ∪ log)`. The 2026-07-04 relator cut removed it;
 see `vision-and-scope.md` "Decisions locked (2026-07-04)".)*
@@ -165,8 +172,9 @@ no model) + `b2 link` (the human commits). A reranker would be the next seam if/
 The **one typed API**. The CLI and the desktop host are its only clients; every other `b2-core`
 module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
-reads (`read` / `list_notes` / `neighbors` / `explain` / `search` / `similar`), writes (`add_note` /
-`create_note` / `move_note` / `link` / `write` / `delete_note` / `delete_resource` / `delete_dir`).
+reads (`read` / `list_notes` / `list_dirs` / `neighbors` / `explain` / `search` / `similar`), writes
+(`add_note` / `create_note` / `create_dir` / `move_note` / `link` / `write` / `delete_note` /
+`delete_resource` / `delete_dir`).
 **Add operations when a command needs them; do not
 pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
 adapters wire the real model.

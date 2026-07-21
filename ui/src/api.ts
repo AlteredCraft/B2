@@ -9,6 +9,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AddReport,
   DeleteReport,
+  DirCreateReport,
   DirDeleteReport,
   DirMoveReport,
   EmbedReport,
@@ -85,6 +86,11 @@ export const api = {
   /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
   listResources: (): Promise<ResourceSummary[]> => invoke("list_resources"),
 
+  /** Every folder in the vault, empty ones included — the tree's structure half,
+   *  read live off the filesystem (never the index) so the tree is one-to-one
+   *  with disk in both directions. */
+  listDirs: (): Promise<string[]> => invoke("list_dirs"),
+
   /** The fallback card's data: a resource's metadata + backlinks. */
   explainResource: (path: string): Promise<ResourceExplainView> =>
     invoke("explain_resource", { path }),
@@ -115,11 +121,18 @@ export const api = {
 
   /**
    * Create a new, empty note at a vault-relative path (`.md` optional; missing
-   * parent folders are created — how a staged folder becomes real). Model-free
-   * like `writeNote`: the note is projected immediately (tree/search/graph) and
-   * its vectors fill on the next embed pass.
+   * parent folders are created, like `b2 add`). Model-free like `writeNote`: the
+   * note is projected immediately (tree/search/graph) and its vectors fill on
+   * the next embed pass.
    */
   createNote: (path: string): Promise<AddReport> => invoke("create_note", { path }),
+
+  /**
+   * Create a folder — a real `mkdir -p` on disk (missing parents included). A
+   * folder is user-authored vault structure, immediately visible to Finder, the
+   * CLI, and any sync; no index rows are touched.
+   */
+  createDir: (dir: string): Promise<DirCreateReport> => invoke("create_dir", { dir }),
 
   /**
    * Move/rename a note (path or b2id) to a new vault-relative path — inbound

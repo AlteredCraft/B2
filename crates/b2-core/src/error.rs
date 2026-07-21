@@ -62,6 +62,18 @@ pub enum Error {
     #[error("note already exists: {0}")]
     AddTargetExists(String),
 
+    /// `create_dir` was given a path that isn't a valid vault-relative folder —
+    /// empty, absolute, escaping via `..`, or dot-prefixed (b2 never manages
+    /// dotfolders). The folder sibling of [`Error::AddDestination`].
+    #[error("invalid folder path: {0}")]
+    DirDestination(String),
+
+    /// `create_dir` would land on an existing file or folder — refused rather than
+    /// silently merged (the user asked to *create*; it's already there). The folder
+    /// sibling of [`Error::AddTargetExists`].
+    #[error("folder already exists: {0}")]
+    DirTargetExists(String),
+
     /// `Vault::write` was handed a `base_revision` that no longer matches the file
     /// on disk — an external editor changed the note since it was read. Refused
     /// rather than clobbered (desktop-editing.md §3): the caller re-reads (getting

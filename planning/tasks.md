@@ -86,6 +86,16 @@ façade** have shipped:
   entry *augments* a body link (different verb coexists; same-verb overlap dedupes **frontmatter-wins**,
   keeping the explanation). A generic un-namespaced `relations:` key is no longer read. Canonical:
   [data-model.md](data-model.md) §0–§3 + §9 (decision entry).
+- **Folders are fs-authoritative, empty folders first-class (2026-07-21)** — the file tree is now
+  **one-to-one with the filesystem in both directions**: folders are user-authored *structure* (the
+  content sibling of notes), never projected into the index, and read live off disk. Two new façade ops —
+  `Vault::list_dirs` (a live fs walk, dot-folders skipped; the tree's structure half, so a Finder `mkdir`
+  or a folder emptied by a move stays visible) and `Vault::create_dir` (a real `mkdir -p`; the desktop's
+  New-folder now creates on disk immediately) — replace the UI's session-scoped `pendingDirs` staging,
+  which lost folders on restart/vault-switch and showed folders the fs didn't have. `move_dir`/`delete_dir`
+  already resolved against the disk, so empty folders move/rename/delete everywhere (`b2 mv`,
+  `b2 rm -r`, the tree) — now pinned by test. Canonical: [data-model.md](data-model.md) "Folders"
+  (decision entry).
 
 ## Active — next up
 

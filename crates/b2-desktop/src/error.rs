@@ -82,6 +82,13 @@ pub fn user_message(err: &CmdError) -> String {
             "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
                 .to_string()
         }
+        CmdError::Core(b2_core::Error::DirTargetExists(p)) => format!(
+            "Something already exists at '{p}'. Choose a different folder name."
+        ),
+        CmdError::Core(b2_core::Error::DirDestination(_)) => {
+            "That folder name isn't valid. Give a vault-relative name like `projects/2026`."
+                .to_string()
+        }
         CmdError::Core(b2_core::Error::WriteConflict(_)) => {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit."
                 .to_string()

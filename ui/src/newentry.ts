@@ -36,9 +36,8 @@ export function joinPath(dir: string, name: string): string {
 
 /**
  * Every folder prefix of `path`, shallowest first: `a/b/c` → `["a","a/b","a/b/c"]`.
- * Empty for "" — the root needs no expansion or staging. Feeds both the staged
- * `pendingDirs` set (each level renders as a folder) and `expandedDirs` (reveal
- * the whole chain down to a new entry).
+ * Empty for "" — the root needs no expansion. Feeds `expandedDirs` (reveal the
+ * whole chain down to a new or renamed entry).
  */
 export function dirChain(path: string): string[] {
   if (!path) return [];
