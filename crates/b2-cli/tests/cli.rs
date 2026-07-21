@@ -177,6 +177,7 @@ fn write_commands_refuse_without_an_explicit_vault() {
         &["reindex"],
         &["add", "notes/new"],
         &["mv", "notes/a", "notes/b"],
+        &["rm", "notes/a"],
         &["link", "notes/a", "notes/b"],
     ];
     for args in write_cmds {
@@ -904,5 +905,104 @@ fn similar_on_a_resource_is_honest() {
         stderr(&sim).contains("isn't available yet"),
         "{}",
         stderr(&sim)
+    );
+}
+
+/// `b2 rm <note>` deletes the file from the vault and the disk, reporting the
+/// notes whose links now dangle — human and JSON shapes.
+#[test]
+fn rm_deletes_a_note_and_reports_dangled() {
+    let (_g, root) = reindexed();
+
+    let rm = run_in(&root, &["rm", "concepts/memory"]);
+    assert!(rm.status.success(), "{}", stderr(&rm));
+    let out = stdout(&rm);
+    assert!(out.contains("Deleted concepts/memory.md"), "{out}");
+    assert!(out.contains("Links in 1 file(s) now unresolved"), "{out}");
+    assert!(!root.join("concepts/memory.md").exists());
+
+    // The linker's body was never rewritten — its links now surface as unresolved.
+    let explain = run_in(&root, &["--json", "explain", "notes/spaced-repetition"]);
+    let v: Value = serde_json::from_slice(&explain.stdout).unwrap();
+    assert_eq!(v["connections"].as_array().unwrap().len(), 0);
+    assert_eq!(v["unresolved"].as_array().unwrap().len(), 2);
+}
+
+/// `b2 rm --json` returns the delete report (agents read `dangled` directly).
+#[test]
+fn rm_json_shape() {
+    let (_g, root) = reindexed();
+
+    let rm = run_in(&root, &["--json", "rm", MEMORY_ID]);
+    assert!(rm.status.success(), "{}", stderr(&rm));
+    let v: Value = serde_json::from_slice(&rm.stdout).unwrap();
+    assert_eq!(v["b2id"], MEMORY_ID);
+    assert_eq!(v["path"], "concepts/memory.md");
+    assert_eq!(
+        v["dangled"],
+        serde_json::json!(["notes/spaced-repetition.md"])
+    );
+}
+
+/// A folder delete refuses without -r/--recursive, and removes the whole
+/// subtree with it — the CLI's stand-in for the desktop's confirm dialog.
+#[test]
+fn rm_folder_requires_recursive() {
+    let (_g, root) = reindexed();
+
+    let refused = run_in(&root, &["rm", "resources"]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("--recursive"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        root.join("resources").exists(),
+        "nothing deleted on refusal"
+    );
+
+    let rm = run_in(&root, &["rm", "-r", "resources/"]);
+    assert!(rm.status.success(), "{}", stderr(&rm));
+    let out = stdout(&rm);
+    assert!(
+        out.contains("Deleted resources/ (0 note(s), 4 file(s))"),
+        "{out}"
+    );
+    assert!(!root.join("resources").exists());
+}
+
+/// `b2 rm <file>` dispatches to the resource delete (extension-only rule).
+#[test]
+fn rm_dispatches_to_the_resource_delete() {
+    let (_g, root) = reindexed();
+
+    let rm = run_in(&root, &["--json", "rm", "resources/data.txt"]);
+    assert!(rm.status.success(), "{}", stderr(&rm));
+    let v: Value = serde_json::from_slice(&rm.stdout).unwrap();
+    assert_eq!(v["path"], "resources/data.txt");
+    assert!(v.get("b2id").is_none(), "a resource report carries no b2id");
+    assert!(!root.join("resources/data.txt").exists());
+}
+
+/// Unknown targets fail cleanly with the generic, actionable message.
+#[test]
+fn rm_unknown_target_fails_cleanly() {
+    let (_g, root) = reindexed();
+
+    let note = run_in(&root, &["rm", "no/such-note"]);
+    assert!(!note.status.success());
+    assert!(
+        stderr(&note).contains("Note not found"),
+        "{}",
+        stderr(&note)
+    );
+
+    let file = run_in(&root, &["rm", "resources/nope.png"]);
+    assert!(!file.status.success());
+    assert!(
+        stderr(&file).contains("File not found in the vault"),
+        "{}",
+        stderr(&file)
     );
 }

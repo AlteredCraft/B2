@@ -78,7 +78,7 @@ cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs 
 ```
 
 Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
-Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`link`) require
+Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`rm`/`link`) require
 an explicit vault (flag, positional, or env) and refuse otherwise, so a stale binary or typo'd var can't
 silently touch the wrong dir (`Cli::require_vault`).
 `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
@@ -166,7 +166,8 @@ The **one typed API**. The CLI and the desktop host are its only clients; every 
 module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `neighbors` / `explain` / `search` / `similar`), writes (`add_note` /
-`create_note` / `move_note` / `link` / `write`). **Add operations when a command needs them; do not
+`create_note` / `move_note` / `link` / `write` / `delete_note` / `delete_resource` / `delete_dir`).
+**Add operations when a command needs them; do not
 pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
 adapters wire the real model.
 

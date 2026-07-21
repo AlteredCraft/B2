@@ -243,6 +243,31 @@ export interface DirMoveReport {
   links_rewritten: number;
 }
 
+/**
+ * `Vault::delete_note` — the completed delete: the note's identity, plus the
+ * surviving files whose links at it now dangle (they are never rewritten).
+ */
+export interface DeleteReport {
+  b2id: string;
+  path: string;
+  dangled: string[];
+}
+
+/** `Vault::delete_resource` — the resource sibling of `DeleteReport` (no b2id). */
+export interface ResourceDeleteReport {
+  path: string;
+  dangled: string[];
+}
+
+/** `Vault::delete_dir` — a whole-folder delete: how many indexed notes/resources
+ *  died with it, and the surviving linkers whose links now dangle. */
+export interface DirDeleteReport {
+  dir: string;
+  deleted_notes: number;
+  deleted_resources: number;
+  dangled: string[];
+}
+
 /** `Vault::link` — the committed edge (idempotent: `created=false` if it existed). */
 export interface LinkReport {
   src_path: string;

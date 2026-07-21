@@ -1046,6 +1046,7 @@ export function contextMenuHtml(state: AppState): string {
       ? `<div class="context-label">${escapeHtml(m.node.path)}</div>
         <button class="context-item" data-ctx-rename role="menuitem">Rename</button>
         <button class="context-item" data-ctx-move role="menuitem">Move…</button>
+        <button class="context-item is-danger" data-ctx-delete role="menuitem">Delete</button>
         <div class="context-sep" role="separator"></div>`
       : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
     items = `${node}
@@ -1094,9 +1095,28 @@ function moveModalHtml(state: AppState): string {
     </div>`;
 }
 
+/** The folder-delete confirm — the one destructive gesture that asks first: a
+ *  whole subtree (unindexed files included) leaves the disk. Files delete
+ *  without a dialog; the tree gesture itself is the intent. */
+function deleteModalHtml(state: AppState): string {
+  const t = state.deleteTarget;
+  if (!t) return "";
+  return `<div class="modal-backdrop">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Delete folder">
+        <h3>Delete ${escapeHtml(t.label)}?</h3>
+        <p class="muted">${escapeHtml(t.path)}/ and everything inside it will be deleted from the vault and the disk.</p>
+        <div class="modal-actions">
+          <button class="btn ghost" data-cancel>Cancel</button>
+          <button class="btn danger" id="delete-confirm">Delete folder</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 export function modalHtml(state: AppState): string {
   if (state.settingsOpen) return settingsModalHtml(state);
   if (state.moveTarget) return moveModalHtml(state);
+  if (state.deleteTarget) return deleteModalHtml(state);
   const t = state.linkTarget;
   if (!t) return "";
   const src = state.current;

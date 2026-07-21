@@ -101,6 +101,12 @@ export interface AppState {
   treeRename: TreeNodeRef | null;
   /** When set, the Move… modal is open for this tree node. */
   moveTarget: TreeNodeRef | null;
+  /**
+   * When set, the delete-confirm modal is open for this tree node. Only folders
+   * land here (a subtree is a bigger loss); files delete without a dialog — the
+   * gesture itself is the intent.
+   */
+  deleteTarget: TreeNodeRef | null;
   /** The open note (left pane), or null before one is opened. */
   current: NoteView | null;
   /**
@@ -222,6 +228,7 @@ export const state: AppState = {
   treeCreate: null,
   treeRename: null,
   moveTarget: null,
+  deleteTarget: null,
   current: null,
   currentResource: null,
   frontmatterOpen: false,

@@ -21,6 +21,7 @@ pub mod note;
 mod pathspec;
 pub mod relation;
 pub mod resource;
+pub mod rm;
 pub mod search;
 pub mod vault;
 

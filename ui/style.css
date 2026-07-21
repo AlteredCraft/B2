@@ -1441,6 +1441,15 @@ body.is-resizing {
 .btn.ghost {
   background: transparent;
 }
+/* The destructive confirm (folder delete) — the primary shape in the danger tone. */
+.btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn.danger:hover {
+  filter: brightness(1.05);
+}
 /* Icon-only chrome button (the vault switcher) — a square that centers its glyph and
    matches the height of the neighbouring text buttons. Quiet by default; accents on hover. */
 .btn.icon-btn {
@@ -1490,6 +1499,14 @@ body.is-loading {
 }
 .context-item:hover {
   background: var(--accent);
+  color: #fff;
+}
+/* A destructive menu item (Delete) reads as such before it's hovered. */
+.context-item.is-danger {
+  color: var(--danger);
+}
+.context-item.is-danger:hover {
+  background: var(--danger);
   color: #fff;
 }
 /* Separates a node's own actions (Rename / Move…) from the folder-context pair. */

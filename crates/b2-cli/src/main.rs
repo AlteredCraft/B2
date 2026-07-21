@@ -48,8 +48,8 @@ fn cancel_flow() -> ControlFlow<()> {
 struct Cli {
     /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
     /// Set it with `-C <path>` or `$B2_VAULT_PATH` (the flag wins). Read-only commands
-    /// fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`link`)
-    /// require it explicitly, so they can never silently touch the wrong directory.
+    /// fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`rm`/
+    /// `link`) require it explicitly, so they can never silently touch the wrong directory.
     #[arg(short = 'C', long = "vault", global = true, env = "B2_VAULT_PATH")]
     vault: Option<PathBuf>,
 
@@ -109,6 +109,16 @@ enum Command {
         /// The new vault-relative path (for a note, the `.md` extension is optional).
         to: String,
     },
+    /// Delete a note, file, or folder from the vault *and* the disk. Inbound links
+    /// are never rewritten — they dangle and surface as unresolved (`b2 explain`).
+    /// An existing directory deletes as a whole folder and requires --recursive.
+    Rm {
+        /// What to delete: a vault-relative path (note, file, or folder) or a b2id.
+        target: String,
+        /// Required to delete a folder (and everything inside it, unindexed files too).
+        #[arg(short = 'r', long)]
+        recursive: bool,
+    },
     /// Hybrid keyword+semantic+graph search across the vault.
     Search {
         query: String,
@@ -151,7 +161,7 @@ impl Cli {
     }
 
     /// The vault root for commands that **write** to the vault (`reindex`, `add`, `mv`,
-    /// `link`): `positional` (only `reindex` has one) wins, then `-C`/`$B2_VAULT_PATH`;
+    /// `rm`, `link`): `positional` (only `reindex` has one) wins, then `-C`/`$B2_VAULT_PATH`;
     /// with none, error rather than silently building or mutating in the current
     /// directory — a stale binary or a mistyped var would otherwise pollute the wrong
     /// place (and leave a stray `.b2/`). This is the write-side counterpart to
@@ -632,6 +642,54 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 }
             }
         }
+        Command::Rm { target, recursive } => {
+            // A delete removes files and index rows but never rewrites a body
+            // (inbound links dangle, they aren't repaired) → **model-free**, like
+            // the desktop's delete; still an explicit vault, like every write.
+            let root = cli.require_vault(None)?;
+            let (vault, _semantic) = open_vault(root, false)?;
+            // Kind dispatch (§9b #8), mirroring `mv`: an existing directory deletes
+            // as a folder — gated on --recursive, the CLI's stand-in for the
+            // desktop's confirm dialog — else the extension picks the file arm.
+            let (deleted_line, dangled, json) = if root.join(target.trim_end_matches('/')).is_dir()
+            {
+                if !*recursive {
+                    return Err(CliError::RecursiveRequired(target.clone()));
+                }
+                let report = vault.delete_dir(target)?;
+                let json = serde_json::to_string_pretty(&report)?;
+                (
+                    format!(
+                        "Deleted {}/ ({} note(s), {} file(s))",
+                        report.dir, report.deleted_notes, report.deleted_resources
+                    ),
+                    report.dangled,
+                    json,
+                )
+            } else if doc_kind(target) == DocKind::Resource {
+                let report = vault.delete_resource(target)?;
+                let json = serde_json::to_string_pretty(&report)?;
+                (format!("Deleted {}", report.path), report.dangled, json)
+            } else {
+                let report = vault.delete_note(target)?;
+                let json = serde_json::to_string_pretty(&report)?;
+                (format!("Deleted {}", report.path), report.dangled, json)
+            };
+            if cli.json {
+                println!("{json}");
+            } else {
+                println!("{deleted_line}");
+                if dangled.is_empty() {
+                    println!("No inbound links affected.");
+                } else {
+                    println!(
+                        "Links in {} file(s) now unresolved: {}",
+                        dangled.len(),
+                        dangled.join(", ")
+                    );
+                }
+            }
+        }
         Command::Search { query, limit } => {
             // Search embeds the query for the vector half → it needs the real model.
             let (vault, semantic) = open_vault(&cli.vault_or_cwd(), true)?;
@@ -797,6 +855,11 @@ enum CliError {
     /// Another `reindex` already holds the single-in-flight lock on this vault.
     #[error("a reindex is already running")]
     ReindexRunning,
+    /// `rm` was pointed at a folder without `--recursive` — refuse rather than
+    /// silently remove a whole subtree (the CLI's stand-in for the desktop's
+    /// confirm dialog; there is no interactive prompt to give an agent).
+    #[error("folder delete requires --recursive: {0}")]
+    RecursiveRequired(String),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -848,6 +911,9 @@ fn user_message(err: &CliError) -> String {
         CliError::ReindexRunning => {
             "A reindex is already running on this vault. Wait for it to finish (check `b2 status`), or stop the other run.".to_string()
         }
+        CliError::RecursiveRequired(p) => format!(
+            "'{p}' is a folder. Re-run with -r/--recursive to delete it and everything inside it."
+        ),
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
@@ -858,6 +924,7 @@ fn user_message(err: &CliError) -> String {
             CliError::Io(e) => e.to_string(),
             CliError::VaultRequired => err.to_string(),
             CliError::ReindexRunning => err.to_string(),
+            CliError::RecursiveRequired(_) => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {

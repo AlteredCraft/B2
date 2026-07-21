@@ -457,7 +457,7 @@ function toggleCard(key: string): void {
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 76;
 const TREE_MENU_H = 100; // the context line + two items
-const TREE_NODE_MENU_H = 172; // + Rename / Move… and their separator
+const TREE_NODE_MENU_H = 204; // + Rename / Move… / Delete and their separator
 
 function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
@@ -692,6 +692,116 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   }
 }
 
+// --- tree delete (context menu, ⌘⌫, the folder confirm modal) ---------------------
+//
+// Deletes remove the file(s) from B2 *and* the disk in one gesture. Files (notes,
+// resources) delete immediately — the gesture is the intent, no dialog; folders
+// confirm first (a whole subtree, unindexed files included, is a bigger loss).
+// Inbound links at the deleted target dangle (they surface as unresolved links) —
+// they are never rewritten, exactly what an external delete would leave.
+
+/** A delete is in flight — further gestures are ignored (the move posture). */
+let deleteInFlight = false;
+
+/**
+ * Route a delete gesture to its flow: files execute immediately; folders open the
+ * confirm modal. A staged-only folder (nothing on disk yet) just unstages locally
+ * — there is nothing durable to confirm or to ask the host about.
+ */
+function requestDelete(node: TreeNodeRef): void {
+  state.contextMenu = null;
+  if (node.nodeKind !== "folder") {
+    render();
+    void executeDelete(node);
+    return;
+  }
+  const inside = (p: string) => p.startsWith(`${node.path}/`);
+  const hasFiles = state.notes.some((n) => inside(n.path)) || state.resources.some((r) => inside(r.path));
+  if (!hasFiles) {
+    dropDirState(node.path);
+    render();
+    return;
+  }
+  state.deleteTarget = node;
+  render();
+}
+
+/** Forget tree state pointing into a (deleted or unstaged) folder subtree. */
+function dropDirState(dir: string): void {
+  const gone = (d: string) => d === dir || d.startsWith(`${dir}/`);
+  state.expandedDirs = new Set([...state.expandedDirs].filter((d) => !gone(d)));
+  state.pendingDirs = new Set([...state.pendingDirs].filter((d) => !gone(d)));
+  if (gone(state.selectedDir)) state.selectedDir = parentDir(dir);
+}
+
+/**
+ * The one shared delete executor (context menu, ⌘⌫, the folder confirm). Refuses
+ * mid-reindex like a move — not for the model (deletes are model-free) but so two
+ * writers never race the same index.
+ */
+async function executeDelete(node: TreeNodeRef): Promise<void> {
+  if (deleteInFlight) return;
+  if (state.reindexing) {
+    flash("Indexing is running — try the delete again when it finishes.");
+    return;
+  }
+  // If the open document dies with the delete, close the editor first so no save
+  // chain targets a file that's about to be removed (a conflict aborts the delete,
+  // keeping the buffer alive — the executeMove posture).
+  const curPath = state.current?.path ?? state.currentResource?.path ?? null;
+  const affected =
+    curPath !== null &&
+    (node.nodeKind === "folder"
+      ? curPath === node.path || curPath.startsWith(`${node.path}/`)
+      : curPath === node.path);
+  if (affected && state.editing && !(await closeEditor())) return;
+
+  deleteInFlight = true;
+  try {
+    let what: string;
+    let dangled: number;
+    if (node.nodeKind === "note") {
+      const r = await api.deleteNote(node.path);
+      what = r.path;
+      dangled = r.dangled.length;
+    } else if (node.nodeKind === "resource") {
+      const r = await api.deleteResource(node.path);
+      what = r.path;
+      dangled = r.dangled.length;
+    } else {
+      const r = await api.deleteDir(node.path);
+      what = `${r.dir}/`;
+      dangled = r.dangled.length;
+    }
+
+    // Clear state that pointed into the deleted subtree — before the watcher's
+    // debounced pulse re-reads it and flashes "moved or removed" for our own delete.
+    if (node.nodeKind === "folder") dropDirState(node.path);
+    if (affected) {
+      state.current = null;
+      state.currentResource = null;
+      state.similar = [];
+      state.connections = [];
+      state.resourceLinks = [];
+      state.unresolved = [];
+      state.discoveringSimilar = false;
+      state.discoveringConnections = false;
+    }
+    await loadNotes();
+    void refreshEmbedStatus(state.vaultRoot); // the N/M denominator shrank (#26)
+    flash(
+      dangled > 0
+        ? `Deleted ${what} — links in ${dangled} note${dangled === 1 ? "" : "s"} now unresolved.`
+        : `Deleted ${what}.`,
+    );
+  } catch (e) {
+    flash(errText(e));
+  } finally {
+    deleteInFlight = false;
+    render();
+  }
+}
+
 // --- the anchored ghost graph (GH #22) --------------------------------------------
 
 /** Flip the pane between reading and the graph — a pure state flip (the scene
@@ -807,6 +917,7 @@ function openLinkModal(path: string, title: string): void {
 function closeModal(): void {
   state.linkTarget = null;
   state.moveTarget = null;
+  state.deleteTarget = null;
   render();
 }
 
@@ -2074,6 +2185,10 @@ function wireEvents(): void {
           openMoveModal(menu.node);
           return;
         }
+        if (menu.node && target.closest("[data-ctx-delete]")) {
+          requestDelete(menu.node); // clears the menu itself
+          return;
+        }
         if (target.closest("[data-ctx-new-note]")) {
           startTreeCreate("note", menu.dir); // clears the menu itself
           return;
@@ -2160,6 +2275,13 @@ function wireEvents(): void {
     }
     if (target.closest("#link-commit")) {
       void commitLink();
+      return;
+    }
+    // The folder-delete confirm: the Delete button commits and closes it.
+    if (target.closest("#delete-confirm") && state.deleteTarget) {
+      const node = state.deleteTarget;
+      state.deleteTarget = null;
+      void executeDelete(node);
       return;
     }
     // The Move… modal: clicking a destination row commits the move and closes it.
@@ -2431,7 +2553,7 @@ function wireEvents(): void {
     }
     // ⌘F — find in the open note; ⇧⌘F — jump to the global vault-search box.
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget) return;
+      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
       e.preventDefault();
       if (e.shiftKey) focusGlobalSearch();
       else openFind();
@@ -2444,9 +2566,38 @@ function wireEvents(): void {
       return;
     }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget) return; // a modal owns the keyboard
+      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return; // a modal owns the keyboard
       e.preventDefault();
       startTreeCreate(e.shiftKey ? "folder" : "note", state.selectedDir);
+      return;
+    }
+    // Enter commits the folder-delete confirm (its keyboard sibling of the button).
+    if (state.deleteTarget && e.key === "Enter") {
+      e.preventDefault();
+      const node = state.deleteTarget;
+      state.deleteTarget = null;
+      void executeDelete(node);
+      return;
+    }
+    // ⌘⌫ — delete the selected file (the tree's active row IS the open document).
+    // Reading view only: while editing — or in any text field — ⌘⌫ is the platform
+    // delete-to-line-start and must not be hijacked. Folders have no ⌘⌫ path (no
+    // folder-focus state exists); they delete via the context menu, which confirms.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Backspace") {
+      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
+      if (state.editing || inTextEntry()) return;
+      const node: TreeNodeRef | null = state.current
+        ? { path: state.current.path, nodeKind: "note", label: baseName(state.current.path) }
+        : state.currentResource
+          ? {
+              path: state.currentResource.path,
+              nodeKind: "resource",
+              label: baseName(state.currentResource.path),
+            }
+          : null;
+      if (!node) return;
+      e.preventDefault();
+      void executeDelete(node);
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key === ",") {
@@ -2464,7 +2615,7 @@ function wireEvents(): void {
         closeSettings();
         return;
       }
-      if (state.linkTarget || state.moveTarget) {
+      if (state.linkTarget || state.moveTarget || state.deleteTarget) {
         closeModal();
         return;
       }
@@ -2489,7 +2640,7 @@ function wireEvents(): void {
     // search field). The buttons and mouse back/forward stay live everywhere — they
     // flush through navGo's edit-mode guard.
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !state.editing) {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget) return;
+      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
       const back = e.key === "[" || e.key === "ArrowLeft";
       const forward = e.key === "]" || e.key === "ArrowRight";
       if (!back && !forward) return;

@@ -5,7 +5,7 @@
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
 //! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
 //! `explain` / `search` / `search_chunks` / `similar` / `link` / `add` / `create` /
-//! `mv`. Add
+//! `mv` / `rm`. Add
 //! operations when a command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
@@ -27,6 +27,7 @@ use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
 use crate::mv;
+use crate::rm;
 use crate::{ingest, note, relation, search};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -44,6 +45,10 @@ pub use crate::mv::DirMoveReport;
 /// [`move_resource`](Vault::move_resource)'s reports are part of the façade
 /// contract.
 pub use crate::mv::{MoveReport, ResourceMoveReport};
+/// Re-exported for the same reason: the delete family's reports
+/// ([`delete_note`](Vault::delete_note) / [`delete_resource`](Vault::delete_resource)
+/// / [`delete_dir`](Vault::delete_dir)) are part of the façade contract.
+pub use crate::rm::{DeleteReport, DirDeleteReport, ResourceDeleteReport};
 
 /// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
 /// without an injected model (tests/dev). The real model brings its own `dim` (768)
@@ -1138,6 +1143,53 @@ impl Vault {
             &old_rel,
             to,
         )
+    }
+
+    /// Delete the note `note_ref` (path **or** `b2id`): the file leaves the disk,
+    /// its projection rows leave the index, and every inbound link at it
+    /// **dangles** — never rewritten, surfacing as an unresolved link (GH #12) —
+    /// exactly the state an external `rm` plus a full reindex produces. Errors
+    /// with [`Error::NoteNotFound`] for an unknown ref.
+    ///
+    /// **Model-free** (the `create_note`/`write` posture): no body changes, so the
+    /// inbound re-projection touches no vectors and needs no model.
+    pub fn delete_note(&self, note_ref: &str) -> Result<DeleteReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "rm", note = note_ref).entered();
+        let b2id = self.resolve_ref(note_ref)?;
+        let rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        rm::delete_note(
+            &self.conn,
+            &self.idgen,
+            &self.chunk_config,
+            &self.root,
+            &b2id,
+            &rel,
+        )
+    }
+
+    /// [`delete_note`](Self::delete_note)'s resource sibling — same posture (file
+    /// off disk, inventory row off the index, inbound links dangle, model-free).
+    /// Errors with [`Error::ResourceNotFound`] for a path not in the inventory.
+    pub fn delete_resource(&self, path: &str) -> Result<ResourceDeleteReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "rm_resource", path).entered();
+        rm::delete_resource(
+            &self.conn,
+            &self.idgen,
+            &self.chunk_config,
+            &self.root,
+            path,
+        )
+    }
+
+    /// Delete the whole folder `dir` (vault-relative) and everything inside it —
+    /// one `fs::remove_dir_all`, so unindexed files inside go too — then every
+    /// contained note's/resource's rows; surviving linkers outside the folder
+    /// dangle, as for [`delete_note`](Self::delete_note). Model-free. Errors with
+    /// [`Error::DirNotFound`] for a missing (or invalid) folder.
+    pub fn delete_dir(&self, dir: &str) -> Result<DirDeleteReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "rm_dir", dir).entered();
+        rm::delete_dir(&self.conn, &self.idgen, &self.chunk_config, &self.root, dir)
     }
 
     /// Create a new note (`b2 add`): write `path` (a vault-relative path; `.md`

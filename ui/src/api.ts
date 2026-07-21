@@ -8,6 +8,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AddReport,
+  DeleteReport,
+  DirDeleteReport,
   DirMoveReport,
   EmbedReport,
   EmbedStat,
@@ -20,6 +22,7 @@ import type {
   NoteView,
   ProjectReport,
   ReindexProgress,
+  ResourceDeleteReport,
   ResourceExplainView,
   ResourceMoveReport,
   ResourceSummary,
@@ -133,6 +136,19 @@ export const api = {
   /** Move/rename a whole folder — one rename on disk (unindexed files travel too). */
   moveDir: (from: string, to: string): Promise<DirMoveReport> =>
     invoke("move_dir", { from, to }),
+
+  /**
+   * Delete a note (path or b2id) from the vault *and* the disk. Model-free —
+   * inbound links dangle (surfacing as unresolved), they are never rewritten.
+   */
+  deleteNote: (note: string): Promise<DeleteReport> => invoke("delete_note", { note }),
+
+  /** `deleteNote`'s resource sibling — same posture, no b2id in the report. */
+  deleteResource: (path: string): Promise<ResourceDeleteReport> =>
+    invoke("delete_resource", { path }),
+
+  /** Delete a whole folder and everything inside it (unindexed files go too). */
+  deleteDir: (dir: string): Promise<DirDeleteReport> => invoke("delete_dir", { dir }),
 
   /** A note's typed neighbors (both directions). */
   neighbors: (note: string): Promise<NeighborView[]> => invoke("neighbors", { note }),

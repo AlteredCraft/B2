@@ -21,9 +21,9 @@ use crate::{open_vault, AppState};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
-    DirMoveReport, EmbedReport, ExplainView, LinkReport, MoveReport, NeighborView, NoteSummary,
-    NoteView, ProjectReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
-    SearchResult, SimilarView, WriteReport,
+    DeleteReport, DirDeleteReport, DirMoveReport, EmbedReport, ExplainView, LinkReport, MoveReport,
+    NeighborView, NoteSummary, NoteView, ProjectReport, ResourceDeleteReport, ResourceExplainView,
+    ResourceMoveReport, ResourceSummary, SearchResult, SimilarView, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
 use serde::Serialize;
@@ -209,6 +209,31 @@ pub fn move_dir(
     to: String,
 ) -> Result<DirMoveReport, CmdError> {
     move_dir_impl(state.inner(), &from, &to)
+}
+
+/// Delete a note — the tree's Delete action (context menu, ⌘⌫). **Model-free**
+/// (the `create_note`/`write_note` posture): no body changes, so nothing
+/// re-embeds — inbound links simply dangle, exactly as an external delete plus a
+/// reindex would leave them.
+#[tauri::command(async)]
+pub fn delete_note(state: State<'_, AppState>, note: String) -> Result<DeleteReport, CmdError> {
+    delete_note_impl(state.inner(), &note)
+}
+
+/// [`delete_note`]'s resource sibling — same posture, minus the `b2id`.
+#[tauri::command(async)]
+pub fn delete_resource(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ResourceDeleteReport, CmdError> {
+    delete_resource_impl(state.inner(), &path)
+}
+
+/// Delete a whole folder and everything inside it (one `remove_dir_all` — unindexed
+/// files go too). The frontend confirms first; the host just executes. Model-free.
+#[tauri::command(async)]
+pub fn delete_dir(state: State<'_, AppState>, dir: String) -> Result<DirDeleteReport, CmdError> {
+    delete_dir_impl(state.inner(), &dir)
 }
 
 #[tauri::command(async)]
@@ -519,6 +544,21 @@ fn move_resource_impl(
 fn move_dir_impl(state: &AppState, from: &str, to: &str) -> Result<DirMoveReport, CmdError> {
     let (vault, _) = open_vault(state, true)?;
     Ok(vault.move_dir(from, to)?)
+}
+
+fn delete_note_impl(state: &AppState, note: &str) -> Result<DeleteReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.delete_note(note)?)
+}
+
+fn delete_resource_impl(state: &AppState, path: &str) -> Result<ResourceDeleteReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.delete_resource(path)?)
+}
+
+fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.delete_dir(dir)?)
 }
 
 /// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against
@@ -894,6 +934,66 @@ mod tests {
             api_ts.contains(&format!("\"{msg}\"")),
             "ui/src/api.ts WRITE_CONFLICT_MESSAGE must equal the host's conflict message"
         );
+    }
+
+    #[test]
+    fn delete_note_removes_it_model_free_and_lists_shrink() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let report = delete_note_impl(&state, "concepts/memory").unwrap();
+        assert_eq!(report.path, "concepts/memory.md");
+        assert_eq!(
+            report.dangled,
+            vec!["notes/spaced-repetition.md".to_string()]
+        );
+
+        assert!(!root.join("concepts/memory.md").exists());
+        let notes = list_notes_impl(&state).unwrap();
+        assert!(notes.iter().all(|n| n.path != "concepts/memory.md"));
+    }
+
+    #[test]
+    fn delete_dir_removes_the_subtree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let report = delete_dir_impl(&state, "resources").unwrap();
+        assert_eq!(report.deleted_resources, 4);
+        assert!(!root.join("resources").exists());
+    }
+
+    #[test]
+    fn delete_refusals_stay_generic_and_actionable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        let err = delete_note_impl(&state, "no/such.md").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::NoteNotFound(_))
+        ));
+        assert!(user_message(&err).starts_with("Note not found:"));
+
+        let err = delete_dir_impl(&state, "no-such-folder").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::DirNotFound(_))
+        ));
+        assert!(user_message(&err).starts_with("Folder not found:"));
+
+        let err = delete_resource_impl(&state, "resources/nope.png").unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::ResourceNotFound(_))
+        ));
+        assert!(user_message(&err).starts_with("File not found in the vault:"));
     }
 
     #[test]
