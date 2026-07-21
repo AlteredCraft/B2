@@ -271,6 +271,22 @@ fn delete_dir_removes_resources_and_their_inventory() {
 }
 
 #[test]
+fn delete_dir_deletes_an_empty_folder() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed(tmp.path());
+    fs::create_dir_all(root.join("scratch")).unwrap();
+
+    // An empty folder is a real vault member (fs-authoritative structure): the
+    // delete resolves against the filesystem, not the index, so it works exactly
+    // like a full folder — just with nothing indexed to count.
+    let report = vault.delete_dir("scratch").unwrap();
+    assert_eq!(report.deleted_notes, 0);
+    assert_eq!(report.deleted_resources, 0);
+    assert!(report.dangled.is_empty());
+    assert!(!root.join("scratch").exists());
+}
+
+#[test]
 fn delete_dir_missing_or_invalid_refuses() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed(tmp.path());

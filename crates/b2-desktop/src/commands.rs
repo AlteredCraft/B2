@@ -21,9 +21,10 @@ use crate::{open_vault, AppState};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
-    DeleteReport, DirDeleteReport, DirMoveReport, EmbedReport, ExplainView, LinkReport, MoveReport,
-    NeighborView, NoteSummary, NoteView, ProjectReport, ResourceDeleteReport, ResourceExplainView,
-    ResourceMoveReport, ResourceSummary, SearchResult, SimilarView, WriteReport,
+    DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport, ExplainView,
+    LinkReport, MoveReport, NeighborView, NoteSummary, NoteView, ProjectReport,
+    ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary, SearchResult,
+    SimilarView, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
 use serde::Serialize;
@@ -121,6 +122,24 @@ pub fn list_resources(state: State<'_, AppState>) -> Result<Vec<ResourceSummary>
     Ok(vault.list_resources()?)
 }
 
+/// The file tree's structure half: every folder in the vault, **empty ones
+/// included**, read live off the filesystem (never the index) so the tree stays
+/// one-to-one with disk. The frontend composes this with `list_notes` +
+/// `list_resources` into one tree.
+#[tauri::command(async)]
+pub fn list_dirs(state: State<'_, AppState>) -> Result<Vec<String>, CmdError> {
+    list_dirs_impl(state.inner())
+}
+
+/// Create a folder — the file tree's New-folder action (⇧⌘N). A real on-disk
+/// create, missing parents included, occupied targets refused (a folder is
+/// user-authored vault structure, immediately visible to Finder/CLI/sync),
+/// touching no index rows. Model-free and index-free.
+#[tauri::command(async)]
+pub fn create_dir(state: State<'_, AppState>, dir: String) -> Result<DirCreateReport, CmdError> {
+    create_dir_impl(state.inner(), &dir)
+}
+
 /// The fallback card's data: a resource's inventory metadata + backlinks. A pure
 /// graph/inventory read, model-free like `explain`.
 #[tauri::command(async)]
@@ -170,9 +189,8 @@ pub fn write_note(
 /// outside the single-in-flight embed slot (short, and a fake-opened vault must never
 /// write into a real-model embedding space). The note's chunks join the DB-derived
 /// pending set for the next embed pass — and an empty body has nothing to embed anyway.
-/// Folders need no command: they exist only as file paths (the tree is index-derived),
-/// so a staged folder materializes when its first note is created inside it
-/// (`create_note` creates missing parent dirs, mirroring `b2 add`).
+/// Missing parent folders are created, mirroring `b2 add`; an *empty* folder is
+/// [`create_dir`]'s job.
 #[tauri::command(async)]
 pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
     create_note_impl(state.inner(), &path)
@@ -512,6 +530,16 @@ fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
     Ok(vault.list_notes()?)
 }
 
+fn list_dirs_impl(state: &AppState) -> Result<Vec<String>, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.list_dirs()?)
+}
+
+fn create_dir_impl(state: &AppState, dir: &str) -> Result<DirCreateReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.create_dir(dir)?)
+}
+
 fn write_note_impl(
     state: &AppState,
     note: &str,
@@ -641,6 +669,47 @@ mod tests {
             vec!["concepts/memory.md", "notes/spaced-repetition.md"]
         );
         assert_eq!(notes[0].title.as_deref(), Some("memory"));
+    }
+
+    #[test]
+    fn list_dirs_reads_structure_live_including_empty_folders() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        // An external `mkdir` (Finder, CLI) — no reindex follows, and none is
+        // needed: structure is read off the filesystem, so the tree can't go stale.
+        fs::create_dir_all(root.join("projects/2026")).unwrap();
+        let state = AppState::new(Some(root));
+
+        assert_eq!(
+            list_dirs_impl(&state).unwrap(),
+            vec![
+                "concepts",
+                "notes",
+                "projects",
+                "projects/2026",
+                "resources"
+            ]
+        );
+    }
+
+    #[test]
+    fn create_dir_makes_a_real_folder_and_refuses_occupied_paths() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let report = create_dir_impl(&state, "projects/2026").unwrap();
+        assert_eq!(report.dir, "projects/2026");
+        assert!(root.join("projects/2026").is_dir());
+
+        // Occupied → the actionable, no-internals refusal.
+        let err = create_dir_impl(&state, "projects/2026").unwrap_err();
+        assert_eq!(
+            user_message(&err),
+            "Something already exists at 'projects/2026'. Choose a different folder name."
+        );
     }
 
     #[test]
@@ -851,8 +920,7 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root.clone()));
 
-        // Creating into a not-yet-existing folder materializes it (the staged-folder
-        // flow: the tree's "new folder" is UI state until its first note lands).
+        // Missing parent folders are created on the way, like `b2 add`.
         let report = create_note_impl(&state, "inbox/idea").unwrap();
         assert_eq!(report.path, "inbox/idea.md");
         assert!(root.join("inbox/idea.md").is_file());

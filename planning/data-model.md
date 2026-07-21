@@ -60,6 +60,25 @@ a resource contributes only *derived* rows (metadata, extracted text, inbound ed
 holds no durable authored state, so the guarantee is unchanged: drop `b2.sqlite`, reindex, get it back
 identical.)*
 
+### Folders — user-authored structure, filesystem-authoritative (decision 2026-07-21)
+
+The vault directory carries two kinds of authored material: the Markdown files (**content**) and the
+directory tree itself (**structure**). A folder — *empty or not* — is user-authored exactly like a note,
+and the **filesystem is authoritative** for it; B2 proxies the OS rather than modeling folders: create
+makes missing parents but refuses an occupied target (`Vault::create_dir` — no `mkdir -p` idempotence;
+the human asked to *create*), move is one `rename` (`move_dir`), delete is `remove_dir_all`
+(`delete_dir`), and each resolves its target against the *disk*, never the index, so empty folders are
+first-class throughout (`b2 mv`, `b2 rm -r`, the desktop tree). Folders are **never projected into the
+index** — they carry nothing to chunk, embed, or link — so the file tree's structure listing
+(`Vault::list_dirs`) is a **live fs walk** (dot-folders skipped, the ingest walk's routing rule): the tree
+is one-to-one with the vault's managed (non-dot) directory tree *by construction*, in both directions —
+a Finder `mkdir` appears on the next pulse, and a folder emptied by a move stays visible until the human
+removes it. The "no durable
+state outside Markdown" guarantee above scopes to **B2-derived data**; the human's own structure is vault
+material, not B2 state. *(Before this decision the desktop staged "new folders" as session UI state and
+wrote no empty dir — folders existed only as file-path prefixes, so an empty folder was invisible and a
+staged one was lost on restart; both violated the tree ↔ fs one-to-one.)*
+
 ---
 
 ## 0. The central decision — where a connection lives

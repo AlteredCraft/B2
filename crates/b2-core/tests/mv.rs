@@ -254,6 +254,24 @@ fn move_dir_moves_every_file_including_unindexed() {
 }
 
 #[test]
+fn move_dir_moves_an_empty_folder() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    let vault = dir_move_vault(&root);
+    fs::create_dir_all(root.join("scratch")).unwrap();
+
+    // An empty folder is a real vault member (fs-authoritative structure): the
+    // move resolves against the filesystem, not the index, so the rename works
+    // exactly like a full folder's — just with nothing indexed to repoint.
+    let report = vault.move_dir("scratch", "archive/scratch").unwrap();
+    assert_eq!(report.moved_notes, 0);
+    assert_eq!(report.moved_resources, 0);
+    assert_eq!(report.links_rewritten, 0);
+    assert!(!root.join("scratch").exists());
+    assert!(root.join("archive/scratch").is_dir());
+}
+
+#[test]
 fn move_dir_rewrites_inbound_and_intra_folder_links_and_graph_is_unchanged() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");

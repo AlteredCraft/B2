@@ -64,26 +64,11 @@ export function canMoveInto(srcPath: string, kind: NodeKind, destDir: string): b
 
 /**
  * Every folder the Move… modal offers: the vault root (`""`) first, then every
- * folder that holds an indexed file — including intermediate levels — plus the
- * session's staged folders, deduped and sorted.
+ * folder on disk (`list_dirs` — empty folders included, since the fs is
+ * authoritative for structure), deduped and sorted.
  */
-export function allDirs(
-  notePaths: string[],
-  resourcePaths: string[],
-  pendingDirs: Iterable<string>,
-): string[] {
-  const dirs = new Set<string>();
-  const addChain = (dir: string) => {
-    let acc = "";
-    for (const seg of dir ? dir.split("/") : []) {
-      acc = acc ? `${acc}/${seg}` : seg;
-      dirs.add(acc);
-    }
-  };
-  for (const p of notePaths) addChain(parentDir(p));
-  for (const p of resourcePaths) addChain(parentDir(p));
-  for (const d of pendingDirs) addChain(d);
-  return ["", ...[...dirs].sort()];
+export function allDirs(dirs: string[]): string[] {
+  return ["", ...[...new Set(dirs)].sort()];
 }
 
 /**

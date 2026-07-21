@@ -211,6 +211,15 @@ export interface AddReport {
 }
 
 /**
+ * `Vault::create_dir` — the created folder's normalized vault-relative path. A
+ * folder is user-authored structure (a real `mkdir` on disk), so there is no
+ * b2id and no index row to report.
+ */
+export interface DirCreateReport {
+  dir: string;
+}
+
+/**
  * `Vault::move_note` — the completed move/rename: old and new vault-relative
  * paths, plus which inbound files had their link text rewritten.
  */

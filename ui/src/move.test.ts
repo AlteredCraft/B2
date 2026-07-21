@@ -93,9 +93,10 @@ check("ordinary cross-folder moves are valid", () => {
 
 // --- allDirs: the Move… modal's folder list -----------------------------------------
 
-check("allDirs is root-first, deduped, sorted, with intermediate levels", () => {
-  const dirs = allDirs(["a/b/x.md", "a/y.md", "z.md"], ["a/b/p.png"], ["staged/deep"]);
-  equal(dirs.join("|"), "|a|a/b|staged|staged/deep", "chains + staged, root first");
+check("allDirs is root-first, deduped, sorted", () => {
+  // Input is `list_dirs`' walk — already every folder on disk, empty ones included.
+  const dirs = allDirs(["staged/deep", "a", "a/b", "staged", "a"]);
+  equal(dirs.join("|"), "|a|a/b|staged|staged/deep", "root first, deduped, sorted");
 });
 
 // --- remapPath: re-pointing open state after a move ---------------------------------
