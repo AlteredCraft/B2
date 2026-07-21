@@ -80,6 +80,12 @@ façade** have shipped:
   fallback for the note you're actively typing in. Host-owned infrastructure: the webview gets **no**
   filesystem permission and there is **no new façade op** (the watcher is a dumb signal, like the reindex
   task lifecycle and the OS dialog). Closes [#14](https://github.com/AlteredCraft/B2/issues/14).
+- **Relations definition revision (2026-07-21)** — typed relations are **frontmatter-only**, under a
+  **namespaced `b2_relations:`** key. The body typed-line construct (`- <verb> [[x]] — why`) is removed —
+  the body carries no B2 syntax and every body link is an untyped `references` edge; a `b2_relations:`
+  entry *augments* a body link (different verb coexists; same-verb overlap dedupes **frontmatter-wins**,
+  keeping the explanation). A generic un-namespaced `relations:` key is no longer read. Canonical:
+  [data-model.md](data-model.md) §0–§3 + §9 (decision entry).
 
 ## Active — next up
 
@@ -158,5 +164,7 @@ linked doc.
   Canonical: [CLAUDE.md](../CLAUDE.md) + [specs/eval-strategy.md](specs/eval-strategy.md).
 - **"Next up" / build plan** — the execution order other docs point to is this file's **Active** section
   above (build steps themselves: [specs/completed/index-engine-build.md](specs/completed/index-engine-build.md) §4).
-- **Typed relations in Markdown** — the authored-reference layer (`relations:` frontmatter + body links).
-  Canonical: [data-model.md](data-model.md) §0/§3.
+- **Typed relations in Markdown** — the authored-reference layer: frontmatter `b2_relations:` (the sole
+  typed home — verb + explanation; namespaced, frontmatter-wins dedup) + plain body links (always
+  untyped `references`; the body carries no B2 syntax — the typed-line construct was removed
+  2026-07-21). Canonical: [data-model.md](data-model.md) §0–§3, §9.

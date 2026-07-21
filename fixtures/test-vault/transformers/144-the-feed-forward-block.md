@@ -2,7 +2,7 @@
 b2id: 01KXF21DYYTJYKQVC681F5JCE5
 type: note
 title: "The Feed-Forward Block"
-relations:
+b2_relations:
   - "example-of [[transformers/124-positional-encoding]] — see also"
 ---
 

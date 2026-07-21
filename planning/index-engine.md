@@ -125,7 +125,7 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any ti
 │   └── chunks_vec                                -- sqlite-vec vec0(embedding float[768])
 │
 ├── DERIVED FROM MARKDOWN: TYPED GRAPH
-│   └── edges(id, src_id, dst_id, type, origin,   -- every row ← Markdown (body links + FM relations:)
+│   └── edges(id, src_id, dst_id, type, origin,   -- every row ← Markdown (body links + FM b2_relations:)
 │             explanation, …)                     -- origin ∈ {inline, frontmatter}; every edge active
 │
 └── CACHES (disposable)
@@ -179,10 +179,11 @@ Why this shape fits B2 specifically:
   `b2id` values. A move rewrites `notes.path` and inbound `[[path|title]]` text; every row in `edges`
   is untouched because it never referenced the path. "Rename keeps every backlink resolving" becomes a
   foreign-key truth, not a fix-up pass.
-- **Every `edges` row derives from Markdown** — body links (`origin=inline`) ∪ frontmatter `relations:`
-  (`origin=frontmatter`), deduped inline-wins. There is **no `status` column and no suggestion queue**:
-  an edge exists iff it is authored in the Markdown. Committing with **`b2 link`** appends a typed-link
-  string to the source note's frontmatter `relations:` (Markdown first; never the body —
+- **Every `edges` row derives from Markdown** — body links (`origin=inline`, all untyped `references`) ∪
+  frontmatter `b2_relations:` (`origin=frontmatter`, the sole typed home), deduped frontmatter-wins on
+  same-`(target, type)` overlap. There is **no `status` column and no suggestion queue**: an edge exists
+  iff it is authored in the Markdown. Committing with **`b2 link`** appends a typed-link
+  string to the source note's frontmatter `b2_relations:` (Markdown first; never the body —
   [data-model.md](data-model.md) §0), then re-projects that note — a projection of an authored line, not
   an in-place index write.
 - **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose
@@ -198,8 +199,8 @@ Why this shape fits B2 specifically:
 A note's *outbound* links (and their type + explanation) are parseable from that one file on demand, so
 it's fair to ask why the index carries an `edges` table at all rather than resolving links at read time.
 The answer separates two things the question tends to bundle. **Edge metadata is *not* the reason:** a
-typed line `- supports [[path|title]] — because X` yields its verb and explanation to a runtime parse
-just as well, *for that note's outbound edges*. **Inversion and composition are the reason.** Materializing
+`b2_relations:` entry `"supports [[path|title]] — because X"` yields its verb and explanation to a
+runtime parse just as well, *for that note's outbound edges*. **Inversion and composition are the reason.** Materializing
 edges is what turns the following from full-vault scans (or impossibilities) into indexed lookups:
 
 - **Backlinks / inversion.** "Who points at X" cannot be read from X — only from every *other* note.

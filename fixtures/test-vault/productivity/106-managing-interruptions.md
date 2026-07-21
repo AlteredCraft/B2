@@ -2,7 +2,7 @@
 b2id: 01KXF21DXS83V6WBJ5R0X4W50G
 type: note
 title: "Managing Interruptions"
-relations:
+b2_relations:
   - "derived-from [[productivity/046-saying-no]] — see also"
 ---
 

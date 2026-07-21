@@ -111,14 +111,15 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
 **`index = a pure projection of (Markdown)`.** Two storage tiers:
 
 1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable. Every committed
-   connection lives here: a body `[[link]]`, or a frontmatter `relations:` entry (written by `b2 link`).
+   connection lives here: a body `[[link]]` (always untyped), or a frontmatter `b2_relations:` entry
+   (the sole home of a typed relation; written by `b2 link` or by hand).
 2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings` + `note_centroids`, scored in-process) + the typed `edges` graph.
    Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable state
    lives outside the Markdown.**
 
 Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
 edge is re-derived from Markdown on every reindex; the only writes B2 makes to a note *of its own accord*
-are stamping a missing `b2id` (a ULID) and, on `b2 link`, appending a frontmatter `relations:` entry.
+are stamping a missing `b2id` (a ULID) and, on `b2 link`, appending a frontmatter `b2_relations:` entry.
 (The desktop editor's saves go through `Vault::write` — a byte-honest splice of the **human's own** body
 edit, guarded by a content-hash revision; B2 still never authors body content itself.)
 
@@ -185,7 +186,7 @@ adapters wire the real model.
   nearest *unlinked* notes in **two stages** (#38): a coarse O(notes) scan over per-note centroids
   (`note_centroids`, maintained by the embed pass) shortlists candidates, then exact max-sim over only
   the shortlist's chunk vectors — minus the anchor's 1-hop graph neighbors, no model call;
-  **`b2 link`** appends a typed `relations:` entry to the source note's frontmatter
+  **`b2 link`** appends a typed `b2_relations:` entry to the source note's frontmatter
   (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
   active edge. No suggestion queue — a connection exists only once you author it.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
@@ -196,12 +197,15 @@ adapters wire the real model.
 
 `edges` carries `origin` (`inline`/`frontmatter`) and a deterministic id derived from the identity tuple
 `(src, dst, type, occurrence)`. There is **no `status` column** — every edge is authored and active. The
-edge set = union of body links (`inline`) and frontmatter `relations:` (`frontmatter`), with **inline-wins
-dedup**. Backlinks are why the graph is materialized rather than parsed at read time. The relation
-vocabulary (`relation.rs`) is a **closed three-verb stance core** — `references` (neutral), `supports`
-(for), `contradicts` (against) — plus a tolerated tail stored verbatim; the core is your typing
-palette on `b2 link` (and what queries rely on). Edges are stored once, directed; inverse labels are
-display-only.
+edge set = union of body links (`inline`, all untyped `references` — **the body carries no B2 syntax**,
+so no verb/explanation is ever parsed from prose) and frontmatter `b2_relations:` (`frontmatter`, the
+sole typed home), with **frontmatter-wins dedup** on same-`(target, type)` overlap (the frontmatter row
+alone can carry an explanation; a *different* verb over a body-linked target simply coexists — the
+"augment" case, data-model §2). Backlinks are why the graph is materialized rather than parsed at read
+time. The relation vocabulary (`relation.rs`) is a **closed three-verb stance core** — `references`
+(neutral), `supports` (for), `contradicts` (against) — plus a tolerated tail stored verbatim; the core
+is your typing palette on `b2 link` (and what queries rely on). Edges are stored once, directed;
+inverse labels are display-only.
 
 ### Embedding-space discipline
 

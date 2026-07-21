@@ -204,16 +204,14 @@ Spaced repetition exploits the retrieval curve.
 <span class="c">title: "Spaced repetition"</span>
 <span class="c">created: 2026-07-03</span>
 <span class="c">---</span>
-<span class="c">Spaced repetition exploits the retrieval curve.</span>
-
-<span class="c">## Relations</span>
-<span class="c">- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve</span></pre>
+<span class="c">Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.</span></pre>
       <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly two
       places, and <b>never touches your prose</b>: it stamps the <code>b2id</code> the first time it
       indexes a note, and — only when you run <code>b2 link</code> (step&nbsp;8) — it appends a typed link
-      to a frontmatter <code>relations:</code> block. Connections you write yourself live in the body and
-      are labelled <code>inline</code>; ones you commit with <code>b2 link</code> live in frontmatter and
-      are labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
+      to a frontmatter <code>b2_relations:</code> block. Links you write yourself in the body are ordinary
+      Markdown (no special B2 syntax), always untyped <code>references</code> edges labelled
+      <code>inline</code>; typed relations (a verb, an optional "why") live in frontmatter and are
+      labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
     </div>
   </div>
 
@@ -302,7 +300,7 @@ Spaced repetition exploits the retrieval curve.
 <pre><span class="p">$</span> <span class="k">b2</span> link <span class="s">notes/spaced-repetition</span> <span class="s">notes/cramming</span> --type <span class="s">contradicts</span> --explanation <span class="s">"massed vs. spaced practice"</span>
 <span class="o">Linked notes/spaced-repetition.md —contradicts→ notes/cramming.md. Wrote the relation into the source note's frontmatter.</span></pre>
       <p><code>b2 link &lt;src&gt; &lt;dst&gt;</code> appends the typed relation to the <em>source</em>
-      note's frontmatter <code>relations:</code> — Markdown-first, <b>never the body</b>. <code>--type</code>
+      note's frontmatter <code>b2_relations:</code> — Markdown-first, <b>never the body</b>. <code>--type</code>
       picks the verb from the closed vocabulary (defaults to <code>references</code>);
       <code>--explanation</code> records the "why". Re-run <code>b2 similar</code> afterward and a note you
       just linked drops off the list — it's connected now, so the exclusion filters it out.</p>

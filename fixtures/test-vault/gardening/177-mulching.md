@@ -2,7 +2,7 @@
 b2id: 01KXF21DWES68JH5YDHTR1XQEZ
 type: note
 title: "Mulching"
-relations:
+b2_relations:
   - "refutes [[gardening/147-companion-planting]] — see also"
 ---
 

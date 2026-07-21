@@ -19,8 +19,9 @@ status: draft
 The model has exactly **two source-of-truth objects**, both plain Markdown:
 
 1. **A note** — one `.md` file: YAML frontmatter + a Markdown body.
-2. **A connection (edge)** — a typed, directed link from one note to another, written by a human in the
-   body, or committed by B2 to frontmatter `relations:` on `b2 link` (§0).
+2. **A connection (edge)** — a directed link from one note to another: a plain link a human writes in
+   the body, or a typed relation in frontmatter `b2_relations:` (committed by B2 on `b2 link`, or
+   written by a human/importer) (§0).
 
 Both are **authored** — a human (or B2, in its one managed zone) writes their structure in Markdown. A
 real vault also holds **resources** — every non-`.md` file (a PDF, a PNG, a `.csv`, an `.html` clipping).
@@ -38,7 +39,7 @@ contracts — getting this split right is what keeps the vault pristine and the 
 1. **Markdown — source of truth for *knowledge*.** Notes + every committed edge, on your disk, fully
    usable with no B2. Stays **pristine**, and the **body is 100% the human's** — B2 never authors prose or
    structure into it. B2's only writes to a note are three, all minimal: stamping a missing `b2id` (§1),
-   appending a committed edge to frontmatter `relations:` on `b2 link` (§2), and the mechanical rewrite of
+   appending a committed edge to frontmatter `b2_relations:` on `b2 link` (§2), and the mechanical rewrite of
    an inbound wikilink's *path text* when its target moves (§6). The body is never authored by B2 — the one
    body write is that move-repair, which fixes a link the human already wrote rather than adding one.
 2. **Index (`b2.sqlite`) — disposable cache.** The search indexes and the keyed graph — everything the
@@ -66,38 +67,45 @@ identical.)*
 This closes the "remaining central question" in [tasks.md](tasks.md). It is settled by one principle
 plus the locked rule that B2 changes the vault only on your command:
 
-- **The body is the human's document — B2 never authors it.** The body is what renders, exports, and
-  prints; structure B2 injected there (a `## Relations` section appearing in a `resume.md`) would
-  corrupt the document. So B2 writes **no** connections into the body. *(The lone body write is the
-  mechanical repair of an inbound wikilink's path on move — fixing a link the human already wrote, never
-  adding one.)*
+- **The body is the human's document — B2 never authors it, and never asks it to carry B2 syntax.**
+  The body is what renders, exports, and prints; structure B2 injected there (a `## Relations` section
+  appearing in a `resume.md`) would corrupt the document. So B2 writes **no** connections into the body.
+  The same principle bounds *reading*: B2 reads the body strictly as ordinary Markdown — links are
+  links, prose is prose — and no prose shape (a list marker, a leading verb) is ever B2 structure
+  (decision 2026-07-21, §2/§9). *(The lone body write is the mechanical repair of an inbound wikilink's
+  path on move — fixing a link the human already wrote, never adding one.)*
 - **B2 writes a connection only when you commit one** ([vision-and-scope.md](vision-and-scope.md),
   "Review & trust") — with `b2 link`, or a body link you write yourself. Nothing lands in a note that you
   didn't ask for; there is no agent proposing edges behind your back.
 
-So a connection lives in exactly one of two homes, **by origin**:
+So a connection lives in exactly one of two homes, **by origin** — and the two homes split by *what
+they can say*, not just who writes them:
 
 | Origin of the edge | Where it lives | SSOT |
 |---|---|---|
-| Human-authored | **Body** — a bare `[[path\|title]]`, or `- <verb> [[path\|title]] — …`, where the human wrote it | the body; B2 **reads**, never writes it |
-| Committed via `b2 link` (also any human/importer-written relation) | **Frontmatter `relations:`** — a typed-link string `- "<verb> [[path\|title]] — …"` (§2) | frontmatter; B2's managed metadata zone |
+| A plain body link | **Body** — a bare `[[path\|title]]`, a Markdown `[text](path)`, an embed — ordinary Markdown, always an untyped `references` edge | the body; B2 **reads**, never writes it |
+| A typed relation (committed via `b2 link`, or human/importer-written) | **Frontmatter `b2_relations:`** — a typed-link string `- "<verb> [[path\|title]] — …"` (§2); the **only** home of a verb + explanation | frontmatter; B2's managed metadata zone |
 
 **`b2 link` writes frontmatter, not body.** Committing a connection appends one typed-link string to the
-source note's `relations:` (Markdown first, index reconciled after). The user's body is byte-untouched;
+source note's `b2_relations:` (Markdown first, index reconciled after). The user's body is byte-untouched;
 the only change is one line in the frontmatter metadata. The edge then materializes as an
 `origin='frontmatter'` edge derived from that Markdown — committing is the projection of an authored line,
 not a bespoke index write (§3).
 
-> One line: **the body holds connections the human writes; frontmatter `relations:` holds connections you
-> commit with `b2 link`; both are authored Markdown, and the graph is their union.**
+> One line: **the body holds the plain links the human writes (all `references`); frontmatter
+> `b2_relations:` holds every *typed* relation — verb and explanation live only there; both are authored
+> Markdown, and the graph is their union.**
 
 **The graph is the union of the two homes** ([index-engine.md](index-engine.md) §3): the `edges` table is
 a projection of body links (`origin=inline`) ∪ frontmatter relations (`origin=frontmatter`). Each edge has
 exactly **one** home and B2 never copies between them — so there is nothing to keep "in sync," only a
-one-way projection to rebuild. The single overlap case — a human manually re-authoring in the body a
-connection already committed in frontmatter — is resolved at projection time by **inline-wins** dedup: the
-body row is kept, the redundant frontmatter row is ignored (and surfaced by `b2 explain`), never
-auto-removed.
+one-way projection to rebuild. A `b2_relations:` entry may deliberately target a note the body already
+links — that is the **augment** flow (§2): the typed edge coexists with the body's plain reference. The
+overlap case — the *same* `(target, type)` authored in both homes (necessarily `references`, the only
+type a body link can carry) — is resolved at projection time by **frontmatter-wins** dedup: the
+frontmatter row (the richer record — it alone can carry an explanation) is kept, the redundant body
+reference is ignored as a duplicate, never auto-removed from the file. *(Reverses the earlier
+inline-wins rule, which predates frontmatter being the sole typed home; 2026-07-21, §9.)*
 
 **The trade we accept:** a B2-committed edge is metadata, so it is *not* guaranteed clickable in vanilla
 Obsidian's reading view (frontmatter, not prose). Human body links are untouched and stay clickable, and
@@ -121,7 +129,7 @@ tags: [learning, memory]
 created: 2026-06-20
 updated: 2026-06-29
 aliases: [SRS]                          # optional Obsidian-native extra titles
-relations:                              # B2's managed zone: committed typed edges (§2). origin=frontmatter
+b2_relations:                           # B2's managed zone: typed edges (§2). origin=frontmatter
   - "contradicts [[notes/cramming-works|Cramming works]] — short-term recall only"
 provenance:                             # optional; defaults to {by: human}
   by: human
@@ -129,13 +137,14 @@ provenance:                             # optional; defaults to {by: human}
 
 Spaced repetition schedules reviews at expanding intervals…
 
-It supports [[concepts/memory|Human memory]] — applies the forgetting curve.
+It builds on [[concepts/memory|Human memory]] — the forgetting curve is the mechanism.
 ```
 
-The body link above is **human-authored** (`origin=inline`); the `relations:` entry is one B2 wrote on
-**`b2 link`** (`origin=frontmatter`). Both are typed edges in the same syntax (§2) — they differ only in
-*home*, which is exactly the body-vs-metadata line §0 draws. A human may also write typed lines in the
-body, and B2 reads them; B2 just never writes there.
+The body link above is **human-authored** (`origin=inline`) and untyped — an ordinary `references`
+edge; the surrounding prose is just prose, never B2 structure. The `b2_relations:` entry is a *typed*
+edge (`origin=frontmatter`) — one B2 wrote on **`b2 link`**, or a human/importer authored directly.
+Verb and explanation live only in the frontmatter home; the body home carries plain, clickable links —
+exactly the body-vs-metadata line §0 draws.
 
 ### Frontmatter schema
 
@@ -169,11 +178,13 @@ body, and B2 reads them; B2 just never writes there.
   source?, confidence?}`. Absent ⇒ treated as `{by: human}`. A hand-written frontmatter field for when
   you want a note's authorship recorded in the note itself; B2 neither requires nor manages it. (Edges
   carry no provenance — a committed edge is pristine; see §4.)
-- **`relations`** — **B2's managed zone for committed typed edges** (§2). A YAML list of typed-link
-  strings — `- "<verb> [[path|title]] — explanation"`, the *same* syntax as a body typed line (§2), just
-  located in frontmatter so it is metadata, not document content. B2 appends here on **`b2 link`** (never
-  the body); humans and importers may write it too. Round-tripped losslessly; edges from it are
-  `origin=frontmatter` (§3).
+- **`b2_relations`** — **B2's managed zone for typed edges** (§2). A YAML list of typed-link
+  strings — `- "<verb> [[path|title]] — explanation"` — the **only** place a relation verb and
+  explanation live; located in frontmatter so it is metadata, not document content. **Namespaced** like
+  `b2id` so it can never collide with a user's own or another tool's `relations:` key — and for the
+  same reason, a generic un-namespaced `relations:` is *not* read by B2 (it is just another unknown
+  key, preserved verbatim). B2 appends here on **`b2 link`** (never the body); humans and importers may
+  write it too. Round-tripped losslessly; edges from it are `origin=frontmatter` (§3).
 
 **Unknown keys** — preserved verbatim and byte-for-byte on round-trip (§6). B2 never strips frontmatter
 it doesn't understand; the vault stays the user's, plus whatever other tools wrote.
@@ -182,10 +193,12 @@ it doesn't understand; the vault stays the user's, plus whatever other tools wro
 
 ## 2. Authored links & typed relations
 
-A connection is written in one of two places, with **one shared syntax**: the **body** (by a human) or
-frontmatter **`relations:`** (by B2 on `b2 link`, or by a human/importer). The verb-and-wikilink form is
-identical in both; only the *home* differs (§0). Body constructs are ordinary Obsidian Markdown —
-clickable and meaningful with **no B2 running**; B2 *reads* them and never writes them.
+A connection is written in one of two places with **two different jobs**: the **body** holds plain
+links (by a human — ordinary Obsidian Markdown, clickable and meaningful with **no B2 running**; B2
+*reads* them and never writes them), and frontmatter **`b2_relations:`** holds *typed* relations (by
+B2 on `b2 link`, or by a human/importer). **The body carries no B2 syntax**: every body link — bare
+wikilink, Markdown link, embed — is an untyped `references` edge, and no prose around it changes that.
+The verb and the explanation are frontmatter-only.
 
 ### Bare wikilink ⇒ an untyped `references` edge
 
@@ -199,46 +212,53 @@ as a deliberate choice.
 
 > See [[concepts/memory|Human memory]] for the underlying mechanism.
 
-### `- <verb> [[path|title]] — explanation` ⇒ a *typed* edge
+### Frontmatter `b2_relations:` ⇒ a *typed* edge (`origin=frontmatter`)
 
-A list item beginning with a **relation verb** followed by a wikilink is a typed edge. Optional trailing
-text after an em-dash (or `:`) is the edge's **`explanation`**.
-
-```markdown
-## Relations
-- supports [[concepts/forgetting-curve|Forgetting curve]] — the schedule exploits it
-- contradicts [[notes/cramming-works|Cramming works]]
-```
-
-- A human may keep these under a `## Relations` heading or embed them anywhere in prose
-  (Basic-Memory-style); a typed line is recognized **anywhere** in the body, so both round-trip. B2
-  **reads** body typed lines but never writes them — its own edges go to frontmatter (below).
-- The verb is plain text before a normal clickable wikilink, so Obsidian renders a clean list of links;
-  the type is invisible structure to Obsidian and first-class structure to B2.
-
-### Frontmatter `relations:` ⇒ a *typed* edge (`origin=frontmatter`)
-
-The same `<verb> [[path|title]] — explanation` syntax, as a **quoted string** in a frontmatter
-`relations:` list. This is where B2 writes a **committed** connection (§4, `b2 link`) and the only
-structured place B2 authors edges — it is metadata, so it never appears in the rendered/exported document (§0).
+The typed-link syntax `<verb> [[path|title]] — explanation`, as a **quoted string** in a frontmatter
+`b2_relations:` list — **the one and only home of a typed relation**. Optional trailing text after an
+em-dash (or `:`) is the edge's **`explanation`**. This is where B2 writes a **committed** connection
+(§4, `b2 link`) and the only structured place B2 authors edges — it is metadata, so it never appears
+in the rendered/exported document (§0).
 
 ```yaml
-relations:
+b2_relations:
   - "supports [[concepts/forgetting-curve|Forgetting curve]] — the schedule exploits it"
   - "contradicts [[notes/cramming-works|Cramming works]]"
 ```
 
 - **Quoted** so `[[`, `|`, and `:` are always YAML-safe; the reader accepts quoted or unquoted.
-- Parsed by the *same* verb/wikilink/explanation parser as a body typed line — one syntax, two homes.
-- Humans and importers may write this block too (it supersedes the old "tolerated, not primary"
-  framing); B2 appends to it on `b2 link` and never authors the body.
+- An entry that is just a bare `[[path|title]]` (no verb) is accepted and reads as `references`.
+- Humans and importers may write this block too; B2 appends to it on `b2 link` and never authors the
+  body.
+
+### Typing a body link — frontmatter *augments* the body
+
+A `b2_relations:` entry may target a note the body already links. It **augments** that connection:
+the body keeps its plain, clickable link exactly as the human wrote it, and the frontmatter carries
+the stance. A different verb (`supports [[x]]` over a body `[[x]]`) simply adds the typed edge
+alongside the untyped reference — both are real, separately-authored facts. The same verb
+(`references [[x]] — why`) collapses into one edge, **frontmatter-wins** (§0/§3), so the explanation
+survives. This is the intended UI affordance: select (e.g. alt-click) a body link, choose a verb and
+optionally an explanation, and B2 appends one `b2_relations:` entry — the body is never touched.
+
+### Why there is no body typed-line syntax (decision 2026-07-21)
+
+Earlier revisions of this section defined a body construct — a list item
+`- <verb> [[path|title]] — explanation` parsed as a typed edge. It is **removed**. It made B2 an
+interpreter of prose *shape*: any list item that happened to open with a lowercase word before a link
+(`- see [[x]] for background`) silently became a typed edge of verb `see` — a misread no human
+intended, and a "special syntax" tax on the document that violates §0's first principle. The body is
+now read strictly as ordinary Markdown: its links are `references`, full stop. Old notes carrying
+typed lines lose nothing structural — the line's wikilink still projects as a `references` edge; its
+verb and trailing text read as the prose they visually are. Re-typing such a connection is one
+`b2 link` (or a hand-written `b2_relations:` entry).
 
 ### Relation vocabulary — a stance core + a tolerated tail
 
-The verb set has two consumers — **you**, when you type a connection with `b2 link` (or in the body), and
-**queries / explainability** (`b2 neighbors --type supports`). Both want the core **small, orthogonal,
-and stable**, so the same relationship always gets the same verb — and the core encodes the one thing
-embedding similarity cannot infer: **stance**. The model already surfaces "these are related"
+The verb set has two consumers — **you**, when you type a connection with `b2 link` (or by hand in
+`b2_relations:`), and **queries / explainability** (`b2 neighbors --type supports`). Both want the core
+**small, orthogonal, and stable**, so the same relationship always gets the same verb — and the core
+encodes the one thing embedding similarity cannot infer: **stance**. The model already surfaces "these are related"
 (`b2 similar`); whether the notes *agree* is what only the human at the typing moment knows.
 Expressiveness lives in the tail; reliability lives in the core.
 
@@ -283,8 +303,9 @@ the core expresses can always be hand-authored as a tail verb.
 
 An authored edge — body **or** frontmatter — is identified by the tuple
 **(src `b2id`, dst `b2id`, `type`, occurrence-index)**, all recoverable from the Markdown alone. No
-edge-id is ever written into the file; `<verb> [[path|title]]` is the whole syntax in both homes. A
-committed edge carries **no provenance at all** — it is a pristine authored line, nothing more (§4).
+edge-id is ever written into the file; a body link is the whole syntax of a `references` edge, and
+`<verb> [[path|title]]` the whole syntax of a typed one. A committed edge carries **no provenance at
+all** — it is a pristine authored line, nothing more (§4).
 
 ---
 
@@ -297,9 +318,9 @@ table holds; the Markdown is the source, this is the index.
 |---|---|---|
 | `id` | derived tuple | edge identity, derived from `(src, dst, type, occurrence)` |
 | `src_id`, `dst_id` | note `b2id`s — **never path** | resolved from the `[[path]]` at parse time |
-| `type` | relation verb (§2) | the verb; `references` for a bare link |
-| `origin` | `inline` (body) \| `frontmatter` (`relations:`) | which of the two homes (§0) the edge came from |
-| `explanation` | free text, optional | trailing text after `—`/`:` |
+| `type` | relation verb (§2) | the `b2_relations:` verb; `references` for every body link |
+| `origin` | `inline` (body) \| `frontmatter` (`b2_relations:`) | which of the two homes (§0) the edge came from |
+| `explanation` | free text, optional | trailing text after `—`/`:` (frontmatter entries only) |
 
 - **Every edge is authored and active.** `origin` records *which home it came from* (§0) — `inline` or
   `frontmatter`. There is no lifecycle and no `status` column: with suggestions gone, an edge exists iff
@@ -310,11 +331,13 @@ table holds; the Markdown is the source, this is the index.
 - **`src`/`dst` resolve path → `b2id` at parse time** and the edge stores only `b2id`s. This is why
   "rename keeps every backlink resolving" is a foreign-key truth, not a fix-up pass: a move rewrites `notes.path`
   and inbound `[[path|title]]` *text*, but no `edges` row changes ([index-engine.md](index-engine.md) §3).
-- **The edge set is the union of the two homes, deduped.** `edges` projects body links (`origin=inline`)
-  ∪ frontmatter `relations:` (`origin=frontmatter`). Each edge has exactly one home; if the *same*
-  `(src, dst, type)` is authored in **both** the body and frontmatter (a human re-typing a committed
-  edge), projection keeps the body row and drops the redundant frontmatter row — **inline-wins** —
-  surfacing it via `b2 explain`, never auto-editing the file.
+- **The edge set is the union of the two homes, deduped.** `edges` projects body links (`origin=inline`,
+  all `references`) ∪ frontmatter `b2_relations:` (`origin=frontmatter`, the typed home). Each edge has
+  exactly one home. A frontmatter entry with a *different* verb than a body link to the same target is
+  no duplicate — it is the augment case (§2), and both edges project. If the *same* `(src, dst, type)`
+  is authored in **both** homes (necessarily `references`), projection keeps the frontmatter row and
+  drops the redundant body reference — **frontmatter-wins**, because only the frontmatter entry can
+  carry an explanation — never auto-editing the file.
 - **A `dst` may be a resource, not a note.** A body embed/link to a non-`.md` file (`![[photo.png]]`,
   `[[papers/x.pdf]]`) resolves against the `resources` table, not `notes`; the edge records a
   `dst_resource_path` instead of a `dst_id`, and `src` is still a note (resources author no outbound edges
@@ -345,11 +368,11 @@ With the LLM relator cut ([vision-and-scope.md](vision-and-scope.md), "Decisions
 the data model has **no suggestion lifecycle, no review queue, no rejection memory, and no event log.** A
 connection becomes real in exactly two ways, both **authored in Markdown**:
 
-1. **A body link you write** — a bare `[[path|title]]` (an untyped `references` edge) or a typed
-   `- <verb> [[path|title]] — explanation` line (§2). B2 **reads** it on the next reindex; it never
-   writes the body.
+1. **A body link you write** — a plain `[[path|title]]`, Markdown link, or embed: an untyped
+   `references` edge (§2; the body carries no typed syntax). B2 **reads** it on the next reindex; it
+   never writes the body.
 2. **`b2 link <src> <dst> [--type <verb>] [--explanation …]`** — B2 appends one typed-link string to the
-   **source note's frontmatter `relations:`** (Markdown first; **never the body**), then re-projects the
+   **source note's frontmatter `b2_relations:`** (Markdown first; **never the body**), then re-projects the
    note so the edge materializes from that Markdown as `origin='frontmatter'` (§3). `--type` defaults to
    `references`; the palette is the core vocabulary (§2). This is the *only* structured edge B2 authors,
    and it happens only on your explicit command. B2 writes the target as a **bare `[[path]]`** — no
@@ -412,7 +435,7 @@ mechanical:
   frontmatter keys *and their order*, body text, whitespace, and comment tokens. The **only** bytes B2
   ever changes are the specific mechanical edits it is asked to make: (a) stamping a missing `b2id`,
   (b) rewriting an inbound `[[oldpath|title]]` → `[[newpath|title]]` on a move (**the lone body write**),
-  (c) appending one typed-link string to frontmatter `relations:` on `b2 link`, (d) optional
+  (c) appending one typed-link string to frontmatter `b2_relations:` on `b2 link`, (d) optional
   cosmetic alias refresh. **The body is never authored by B2** — (a), (c), (d) are frontmatter, and (b)
   only repairs a link the human already wrote. Every other byte is untouched — directly satisfying the
   Story-1/Story-2 acceptance criteria ([user-stories.md](user-stories.md)).
@@ -432,10 +455,15 @@ defined, that doc is where they're enforced in the store.
 
 - **B2 authoring the body — rejected (Decision 1, 2026-06-30).** The body is the rendered/exported
   document and must stay 100% the human's; B2 injecting a `## Relations` section (or any prose) would
-  corrupt it (imagine a `resume.md`). So B2's committed edges go to **frontmatter `relations:`** instead
+  corrupt it (imagine a `resume.md`). So B2's committed edges go to **frontmatter `b2_relations:`** instead
   (§0, §2). The *only* body write B2 makes is the mechanical move-repair of an inbound wikilink's path —
   fixing a link the human already wrote, never adding one. **This reverses the earlier "accepted edges go
   inline in the body" decision.**
+- **Body typed-line syntax (`- <verb> [[path|title]] — …` parsed from prose) — removed (2026-07-21).**
+  The read-side sibling of the decision above: parsing a verb + explanation out of body prose made B2
+  force "special" syntax onto the document and misread ordinary prose (`- see [[x]]` became a typed
+  edge of verb `see`). Typed relations are frontmatter-only; body links are always plain `references`
+  (§2). A frontmatter entry augments a body link rather than the body carrying the type.
 - **Inline-in-body as the home for accepted edges — superseded.** The trade: a frontmatter edge is *not*
   guaranteed clickable in vanilla Obsidian's reading view. Accepted because the body-pristine guarantee
   outweighs it — human body links stay clickable, and Obsidian can't render edge *types* regardless (§0).
@@ -477,21 +505,23 @@ b2id: 01JSRS0000000000000000000B
 type: concept
 title: "Spaced repetition"
 created: 2026-06-20
+b2_relations:
+  - "supports [[concepts/memory|Human memory]] — applies the forgetting curve"
 ---
 Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.
 
-## Relations
-- supports [[concepts/memory|Human memory]] — applies the forgetting curve
+Expanding review intervals exploit the forgetting curve.
 ```
 
-Here the `## Relations` block is **human-authored** in the body (so `origin=inline`); B2 reads it but
-never writes there. Had you run `b2 link` to commit a `contradicts` edge, B2 would append it to
-spaced-repetition's frontmatter `relations:` (`origin=frontmatter`) — never to this body section (§0).
+Here the body holds one plain link (`origin=inline`, `references`) — its prose is just prose — and the
+`b2_relations:` entry types the same connection with a stance (`origin=frontmatter`, `supports`): the
+augment shape from §2, exercising both homes at once. Running `b2 link` to commit a further edge would
+append another `b2_relations:` entry — never a body line (§0).
 
 Derived graph (no live model needed to assert):
 
 - `references`: spaced-repetition → memory (origin=inline) — from the prose wikilink.
-- `supports`: spaced-repetition → memory (origin=inline, explanation="applies…").
+- `supports`: spaced-repetition → memory (origin=frontmatter, explanation="applies…").
 
 `b2 neighbors concepts/memory` returns spaced-repetition twice (referenced-by, supported-by); both
 files round-trip byte-identical; dropping and rebuilding the index reproduces the identical graph.
@@ -531,6 +561,19 @@ connected here.
   unindexed note still titles correctly), and **`b2 link` writes a bare `[[path]]`** with no `|alias`
   (§4). No migration — the index is a projection; a `reindex` recomputes every label, and existing
   `title:` frontmatter stays untouched on disk.
+- **Typed relations are frontmatter-only, under a namespaced `b2_relations:` key (2026-07-21).** Three
+  changes, one principle — B2 forces no "special" syntax on the body and reads it only as ordinary
+  Markdown. (a) The body typed-line construct (`- <verb> [[path|title]] — …`) is **removed**: it made
+  prose shape B2 structure and misread lines like `- see [[x]]` as typed edges. Every body link is a
+  plain `references` edge; verb + explanation live **only** in frontmatter (§2, §7). (b) The
+  frontmatter key is **renamed `relations:` → `b2_relations:`**, namespaced like `b2id` so it never
+  collides with a user's or another tool's key; a generic `relations:` is no longer read (§1).
+  (c) Dedup flips to **frontmatter-wins** (was inline-wins): a frontmatter entry *augments* a body
+  link — same-verb overlap keeps the frontmatter row (it alone carries the explanation), a different
+  verb coexists with the body's reference (§0, §2, §3). The intended UI affordance follows: select a
+  body link, pick a verb/explanation, B2 appends one `b2_relations:` entry — the body is untouched.
+  No index migration (a `reindex` re-projects); vaults with legacy `relations:` keys or body typed
+  lines keep every byte, and re-typing those edges is a `b2 link` per connection.
 
 **Still open:** none — the data model is locked. Next is the **index-engine build** against golden-vault
 fixtures ([index-engine.md](index-engine.md), now reconciled with this two-tier model).
@@ -580,7 +623,7 @@ mechanically). It is keyed by its vault-relative path, recorded only in the disp
 rule: every edge must trace to an authored line in Markdown (§3), and a resource has no writable home for
 one — no frontmatter, no body B2 may touch. So in v1 resources are edge **targets** only. Two relief valves
 keep this from hardening into an expressiveness wall: **(a) today**, the tolerated tail already authors the
-inverse direction from the note side (`- "supported-by [[papers/x.pdf]]"` in `relations:` — stored,
+inverse direction from the note side (`- "supported-by [[papers/x.pdf]]"` in `b2_relations:` — stored,
 displayed, queryable as a tail verb); **(b) if needed**, resource-sourced edges get a designed future home
 — a **vault-level B2-managed relations file** (the frontmatter managed-zone concept lifted to one
 clearly-B2-owned Markdown file), so the edge is still authored Markdown and the invariant holds. Deferred

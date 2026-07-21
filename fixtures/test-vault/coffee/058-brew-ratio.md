@@ -2,7 +2,7 @@
 b2id: 01KXF21DSWTV79E6F8ZGR7C6M6
 type: note
 title: "Brew Ratio"
-relations:
+b2_relations:
   - "supersedes [[coffee/068-the-bloom]] — see also"
 ---
 

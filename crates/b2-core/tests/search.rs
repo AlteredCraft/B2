@@ -60,7 +60,7 @@ fn keyword_search_finds_chunks_by_term() {
 
     let ids = search::keyword_search(&conn, "forgetting", 10).unwrap();
     assert!(!ids.is_empty());
-    // 'forgetting' lives only in spaced-repetition's Relations chunk.
+    // 'forgetting' lives only in spaced-repetition's body.
     let note: String = conn
         .query_row(
             "SELECT note_b2id FROM chunks WHERE id = ?1",

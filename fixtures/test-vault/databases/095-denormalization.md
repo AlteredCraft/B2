@@ -2,7 +2,7 @@
 b2id: 01KXF21DV2A06P3MWXVBK145K3
 type: note
 title: "Denormalization"
-relations:
+b2_relations:
   - "derived-from [[databases/065-vacuuming]] — see also"
 ---
 

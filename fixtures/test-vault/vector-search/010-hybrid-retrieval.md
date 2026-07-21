@@ -2,7 +2,7 @@
 b2id: 01KXF21DZ3P1XQH98REF8GY2HQ
 type: note
 title: "Hybrid Retrieval"
-relations:
+b2_relations:
   - "part-of [[vector-search/070-cosine-similarity]] — see also"
 ---
 

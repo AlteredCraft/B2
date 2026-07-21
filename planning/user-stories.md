@@ -51,12 +51,14 @@ The decision the stories below rest on. It resolves the central "how is a link w
   deferred-UI period. We spend a bounded rewrite-on-move cost — already a committed, tested kernel
   capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
   the graph regardless.
-- **B2 never authors the body** *(refined 2026-06-30)*. The kernel **reads** the links a human writes in
-  the body but never writes there. Connections you commit with **`b2 link`** are written to frontmatter
-  **`relations:`** as typed-link strings (`- "<verb> [[path|title]] — …"`) — metadata, not document
-  content, so a note like `resume.md` never gains a `## Relations` section. The **only** body write the
-  kernel makes is the move-rewrite above, repairing an inbound `[[path]]` the human already wrote. See
-  [data-model.md](data-model.md) §0.
+- **B2 never authors the body — and never asks it to carry B2 syntax** *(refined 2026-06-30;
+  typed-body syntax removed 2026-07-21)*. The kernel **reads** the links a human writes in the body —
+  strictly as ordinary Markdown, every one an untyped `references` edge — but never writes there.
+  Typed connections (a verb, an optional explanation) live only in frontmatter **`b2_relations:`** as
+  typed-link strings (`- "<verb> [[path|title]] — …"`) — metadata, not document content, so a note
+  like `resume.md` never gains a `## Relations` section; `b2 link` appends there. The **only** body
+  write the kernel makes is the move-rewrite above, repairing an inbound `[[path]]` the human already
+  wrote. See [data-model.md](data-model.md) §0.
 
 > **How `b2id` is incorporated, in one line:** humans and Obsidian see `[[path|title]]`; the kernel
 > sees a `b2id → b2id` edge. Path is for people, `b2id` is for the graph, and the kernel keeps the two in
@@ -159,10 +161,9 @@ File **A** contains a link to file **B** (`[[path/to/B|B]]`). Files **C** and **
 
 ### Interaction with typed links
 
-- If the deleted link was a **human-authored typed** edge (`A —contradicts→ B`), that typed edge is
-  gone; B's other typed edges are unaffected.
-- If the deleted connection was a **committed frontmatter relation** (from `b2 link`), remove the
-  `relations:` entry the same way — its edge is gone on the next reindex. B2 authors no connection of its
+- If the deleted connection was a **typed frontmatter relation** (`A —contradicts→ B`, a
+  `b2_relations:` entry — committed via `b2 link` or hand-written), remove the
+  `b2_relations:` entry the same way — its edge is gone on the next reindex. B2 authors no connection of its
   own, so there is never a proposal to re-evaluate ([vision-and-scope.md](vision-and-scope.md), "Review &
   trust").
 
@@ -200,9 +201,9 @@ Connection discovery is two explicit steps, both fast and local — no model cal
    score, and the passage that made it similar. A pure read over the stored vectors + the graph (the
    "∖ already-connected" exclusion); it writes nothing and calls no model.
 2. **Lock in** — from that list I commit the connections worth keeping. Either I write a `[[link]]` in my
-   note's body myself, or I run `b2 link <src> <dst> --type <verb>` and B2 appends the typed relation to
-   the source note's frontmatter `relations:` (Markdown first; never the body). I choose the type; B2
-   supplies nothing but the mechanics.
+   note's body myself (an untyped reference), or I run `b2 link <src> <dst> --type <verb>` and B2 appends
+   the typed relation to the source note's frontmatter `b2_relations:` (Markdown first; never the body).
+   I choose the type; B2 supplies nothing but the mechanics.
 
 The machine finds the candidates; I supply the judgment and the type. There is no suggestion queue and
 nothing inert — a connection exists only once I author it.
@@ -213,7 +214,7 @@ nothing inert — a connection exists only once I author it.
   ranked by similarity to A, never includes A itself or a note already linked to A, and writes no file
   and no edge.
 - **Given** `b2 similar A` lists B, **when** I run `b2 link A B --type supports`, **then** A's
-  frontmatter `relations:` gains `- "supports [[pathB|B]]"`, A's **body is byte-identical**, and after
+  frontmatter `b2_relations:` gains `- "supports [[pathB|B]]"`, A's **body is byte-identical**, and after
   reindex `b2 neighbors A` shows B (outbound) while `b2 neighbors B` shows A (backlink).
 - **Given** I omit `--type`, **then** the committed relation defaults to `references`.
 - **Given** A and B are now linked, **when** I re-run `b2 similar A`, **then** B no longer appears — it is

@@ -94,7 +94,7 @@ are these tenets made mechanical; this is their canonical statement.
   (`index = projection of (Markdown)`), and dropping it and rebuilding yields an identical one (the
   locked `full-reindex ≡ incremental-update` invariant). There is **no** durable state outside your
   notes — every connection you commit lives in the Markdown itself (a body link, or a frontmatter
-  `relations:` entry), so losing the index loses nothing at all. An index that is never a source of
+  `b2_relations:` entry), so losing the index loses nothing at all. An index that is never a source of
   truth can't drift into a liability; so we spend complexity to keep it *derivable*, not to keep it
   *correct under edit*. Idempotency is the mechanism; a vault you can rewrite fearlessly is the point.
   *(Until 2026-07-04 one durable thing lived outside Markdown — a thin event log remembering rejected
@@ -233,7 +233,7 @@ I point B2 at a copy of my real vault and, entirely from the CLI:
 - `b2 similar <note>` surfaces the notes nearest it in meaning that I hadn't linked — and some are
   genuinely worth connecting;
 - I lock a few in with `b2 link` (or a body link of my own); they're written back as Markdown
-  (frontmatter `relations:`), and any editor shows them as normal links;
+  (frontmatter `b2_relations:`), and any editor shows them as normal links;
 - every bit of this is covered by tests that pass with no live model and no screen.
 
 That milestone proves the thesis — *self-owned Markdown + AI-native connection discovery* — with
@@ -376,7 +376,7 @@ rationale and the step-by-step build plan: [specs/completed/desktop-ui-mvp.md](s
   is still met to the letter by the CLI and in spirit by the app.
 - **Editor substrate = CodeMirror 6**, not the ProseMirror / Tiptap / Wordgard node-tree lineage. A WYSIWYG
   tree makes Markdown a lossy serialization at the edges — frontmatter, `[[path|title]]` wikilinks, and
-  `relations:` get normalized and churn noisy diffs — a direct hit to **principle #1** ("the files *are* the
+  `b2_relations:` get normalized and churn noisy diffs — a direct hit to **principle #1** ("the files *are* the
   format; export is a no-op"). CodeMirror keeps the Markdown buffer canonical (live-preview decorations give
   the document feel), and is what Obsidian's own editor is built on. (Wordgard — Haverbeke's ProseMirror
   rethink — was evaluated and rejected: it borrows CodeMirror's *change model* but keeps a *node tree*, so it

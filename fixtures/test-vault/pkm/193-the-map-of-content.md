@@ -2,7 +2,7 @@
 b2id: 01KXF21DXH6BVGXRV9W2MAZ4B5
 type: note
 title: "The Map of Content"
-relations:
+b2_relations:
   - "contradicts [[pkm/183-linking-your-thinking]] — see also"
 ---
 

@@ -2,7 +2,7 @@
 b2id: 01KXF21DWH5E1SJTRM2PDXMXHN
 type: note
 title: "Reading the Weather"
-relations:
+b2_relations:
   - "elaborates [[hiking/139-blister-prevention]] — see also"
 ---
 

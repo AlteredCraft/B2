@@ -107,7 +107,7 @@ pub struct Unresolved {
     pub target: String,
     /// The relation verb (`references` for a bare link).
     pub edge_type: String,
-    /// Edge origin — `inline` (a body link) or `frontmatter` (a `relations:` entry).
+    /// Edge origin — `inline` (a body link) or `frontmatter` (a `b2_relations:` entry).
     pub origin: String,
     pub explanation: Option<String>,
 }

@@ -30,18 +30,19 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     assert_eq!(view.path, "notes/spaced-repetition.md");
     assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
-    // Two outbound edges to memory — a typed `supports` (with a "why") and a bare
-    // `references` (none). Both are body-authored, so origin=inline.
+    // Two outbound edges to memory — a typed `supports` (with a "why", from the
+    // `b2_relations:` entry) and a bare body `references` (none). The two homes,
+    // side by side (data-model §8).
     assert_eq!(view.connections.len(), 2, "{:?}", view.connections);
     assert!(view.connections.iter().all(|c| c.direction == "outbound"));
     assert!(view.connections.iter().all(|c| c.b2id == MEMORY_ID));
-    assert!(view.connections.iter().all(|c| c.origin == "inline"));
 
     let supports = view
         .connections
         .iter()
         .find(|c| c.label == "supports")
         .expect("a supports edge");
+    assert_eq!(supports.origin, "frontmatter", "the typed home");
     assert!(
         supports
             .explanation
@@ -49,10 +50,12 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
             .is_some_and(|w| w.contains("forgetting curve")),
         "the typed edge carries its why: {supports:?}"
     );
-    assert!(
-        view.connections.iter().any(|c| c.label == "references"),
-        "the bare body link is a references edge"
-    );
+    let references = view
+        .connections
+        .iter()
+        .find(|c| c.label == "references")
+        .expect("the bare body link is a references edge");
+    assert_eq!(references.origin, "inline", "the body home");
     // Every edge carries the other note's `created` (GH #22) — resolved from
     // the projection, not a file re-read.
     assert!(
@@ -179,7 +182,7 @@ fn explain_surfaces_frontmatter_provenance() {
     fs::write(
         root.join("author.md"),
         "---\nb2id: 01JAUTH000000000000000001\ntype: note\ntitle: Author\n\
-         relations:\n  - \"supports [[concepts/memory|Human memory]] — via frontmatter\"\n---\n\
+         b2_relations:\n  - \"supports [[concepts/memory|Human memory]] — via frontmatter\"\n---\n\
          A body with no links.\n",
     )
     .unwrap();

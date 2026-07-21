@@ -27,8 +27,11 @@ pub struct NoteFields {
     pub updated: Option<String>,
     pub aliases: Vec<String>,
     pub tags: Vec<String>,
-    /// Raw `relations:` entries (typed-link strings, §2) — B2's frontmatter home
-    /// for accepted edges. Parsed into `origin=frontmatter` edges at ingest.
+    /// Raw `b2_relations:` entries (typed-link strings, §2) — B2's namespaced
+    /// frontmatter home for typed edges, the only place a verb/explanation lives.
+    /// Parsed into `origin=frontmatter` edges at ingest. (A generic `relations:`
+    /// key is NOT read — it is another tool's, preserved verbatim like any
+    /// unknown key; data-model §1.)
     pub relations: Vec<String>,
 }
 
@@ -90,7 +93,7 @@ impl ParsedNote {
     /// (fences excluded), exactly as on disk — or `None` when the note has no
     /// frontmatter block. Byte-honest like [`body`](Self::body): the actual bytes,
     /// not a re-serialization of the parsed [`fields`](Self::fields), so keys B2
-    /// doesn't model (`relations:`, `aliases:`, custom keys) show as written. Powers
+    /// doesn't model (`b2_relations:`, `aliases:`, custom keys) show as written. Powers
     /// the Desktop UI's frontmatter drawer (specs/completed/desktop-ui-mvp.md §4).
     pub fn frontmatter(&self) -> Option<&str> {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
@@ -142,23 +145,23 @@ impl ParsedNote {
     }
 
     /// Append a typed-link `spec` (e.g. `contradicts [[path|title]] — why`) to the
-    /// frontmatter `relations:` list, creating the block (or the whole frontmatter)
+    /// frontmatter `b2_relations:` list, creating the block (or the whole frontmatter)
     /// if absent. **Frontmatter only — never the body** (data-model §0). The single
     /// surgical insertion preserves every other byte; the new item is YAML-quoted so
-    /// `[[`, `|`, `:` are safe. Errors on a pre-existing flow-style `relations:`
+    /// `[[`, `|`, `:` are safe. Errors on a pre-existing flow-style `b2_relations:`
     /// rather than risk corrupting it.
     pub fn add_relation(&mut self, spec: &str) -> Result<()> {
         let quoted = yaml_quote(spec);
         match self.fm {
             None => {
                 self.raw
-                    .insert_str(0, &format!("---\nrelations:\n  - {quoted}\n---\n"));
+                    .insert_str(0, &format!("---\nb2_relations:\n  - {quoted}\n---\n"));
             }
             Some(fm) => match relations_insertion(&self.raw, &fm)? {
                 Some((at, indent)) => self.raw.insert_str(at, &format!("{indent}- {quoted}\n")),
                 None => self
                     .raw
-                    .insert_str(fm.content_end, &format!("relations:\n  - {quoted}\n")),
+                    .insert_str(fm.content_end, &format!("b2_relations:\n  - {quoted}\n")),
             },
         }
         let reparsed = parse(&self.raw);
@@ -223,7 +226,7 @@ fn extract_fields(yaml: &str) -> NoteFields {
     f.updated = scalar_to_string(&doc["updated"]);
     f.aliases = string_list(&doc["aliases"]);
     f.tags = string_list(&doc["tags"]);
-    f.relations = string_list(&doc["relations"]);
+    f.relations = string_list(&doc["b2_relations"]);
     f
 }
 
@@ -250,11 +253,11 @@ fn string_list(y: &Yaml) -> Vec<String> {
     }
 }
 
-/// Locate where to insert a new `relations:` block item, scanning the frontmatter
+/// Locate where to insert a new `b2_relations:` block item, scanning the frontmatter
 /// region. Returns `Some((byte_offset, indent))` to insert `"{indent}- …\n"` (the
 /// indent matches existing items, or 2 spaces for a fresh/empty block), or `None`
-/// if there is no `relations:` key (the caller then creates one). Errors on a
-/// flow-style `relations:` (e.g. `relations: [a, b]`) — not safely appendable.
+/// if there is no `b2_relations:` key (the caller then creates one). Errors on a
+/// flow-style `b2_relations:` (e.g. `b2_relations: [a, b]`) — not safely appendable.
 fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, String)>> {
     let region = &raw[fm.content_start..fm.content_end];
     let mut pos = fm.content_start;
@@ -268,12 +271,12 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
         let stripped = body.trim_start();
 
         if !in_block {
-            if body == "relations:" {
+            if body == "b2_relations:" {
                 in_block = true;
                 insert_at = Some(pos + len); // after the key line (updated as items appear)
-            } else if !line.starts_with([' ', '\t']) && stripped.starts_with("relations:") {
+            } else if !line.starts_with([' ', '\t']) && stripped.starts_with("b2_relations:") {
                 return Err(Error::Frontmatter(
-                    "a flow-style `relations:` value cannot be appended in place".into(),
+                    "a flow-style `b2_relations:` value cannot be appended in place".into(),
                 ));
             }
         } else if stripped.starts_with('-') {
@@ -319,13 +322,13 @@ mod tests {
 
     #[test]
     fn frontmatter_returns_raw_yaml_verbatim_between_the_fences() {
-        let raw = "---\nb2id: 01ABC\ntitle: Foo\nrelations:\n  - references [[x]]\n---\nbody\n";
+        let raw = "---\nb2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n---\nbody\n";
         let note = parse(raw);
-        // The exact bytes on disk, not a re-serialization — `relations:` (a key the
-        // projected fields flatten) survives verbatim.
+        // The exact bytes on disk, not a re-serialization — `b2_relations:` (a key
+        // the projected fields flatten) survives verbatim.
         assert_eq!(
             note.frontmatter(),
-            Some("b2id: 01ABC\ntitle: Foo\nrelations:\n  - references [[x]]\n")
+            Some("b2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n")
         );
         assert_eq!(note.body(), "body\n");
     }

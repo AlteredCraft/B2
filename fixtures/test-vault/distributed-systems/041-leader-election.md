@@ -2,7 +2,7 @@
 b2id: 01KXF21DVG2FK4T0VRJDK52QE7
 type: note
 title: "Leader Election"
-relations:
+b2_relations:
   - "derived-from [[distributed-systems/071-consensus-under-partition]] — see also"
 ---
 

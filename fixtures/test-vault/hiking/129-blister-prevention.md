@@ -2,7 +2,7 @@
 b2id: 01KXF21DWSZJCH7VRCFT3V1AKS
 type: note
 title: "Blister Prevention"
-relations:
+b2_relations:
   - "relates [[hiking/029-trail-etiquette]] — see also"
 ---
 

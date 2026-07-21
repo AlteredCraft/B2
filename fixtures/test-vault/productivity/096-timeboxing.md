@@ -2,7 +2,7 @@
 b2id: 01KXF21DXSPFJ23C7QKFS99PB0
 type: note
 title: "Timeboxing"
-relations:
+b2_relations:
   - "part-of [[productivity/166-energy-management]] — see also"
 ---
 

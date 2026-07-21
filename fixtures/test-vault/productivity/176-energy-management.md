@@ -2,7 +2,7 @@
 b2id: 01KXF21DY0AMDB00B1GZ74TH0W
 type: note
 title: "Energy Management"
-relations:
+b2_relations:
   - "supersedes [[productivity/156-timeboxing]] — see also"
 ---
 

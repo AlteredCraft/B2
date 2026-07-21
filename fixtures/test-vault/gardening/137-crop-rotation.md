@@ -2,7 +2,7 @@
 b2id: 01KXF21DWA3KJ86A43KD82DXC2
 type: note
 title: "Crop Rotation"
-relations:
+b2_relations:
   - "references [[gardening/007-soil-ph]] — see also"
 ---
 

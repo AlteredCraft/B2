@@ -2,7 +2,7 @@
 b2id: 01KXF21DTQNNG8Y9P12FHDJFJ5
 type: note
 title: "SQLite as a Library"
-relations:
+b2_relations:
   - "relates [[databases/185-schema-migrations]] — see also"
 ---
 

@@ -300,11 +300,14 @@ fn embed_pending(
 }
 
 /// Derive a note's authored edges and project them — the union of **body** links
-/// (`origin=inline`) and frontmatter **`relations:`** (`origin=frontmatter`),
-/// resolving each target against the current resolver. On overlap (the same
-/// `(target, type)` authored in both homes) the **body wins** and the redundant
-/// frontmatter entry is dropped (data-model §0/§3). Occurrence is assigned per
-/// `(target, type)` over the kept set.
+/// (`origin=inline`, all untyped `references`) and frontmatter **`b2_relations:`**
+/// (`origin=frontmatter`, the sole typed home), resolving each target against the
+/// current resolver. A frontmatter entry whose verb differs from `references`
+/// simply coexists with a body link to the same target (the augment case). On
+/// overlap (the same `(target, type)` authored in both homes — necessarily
+/// `references`) the **frontmatter entry wins** and the redundant body reference
+/// is dropped: only the frontmatter row can carry an explanation (data-model
+/// §0/§3). Occurrence is assigned per `(target, type)` over the kept set.
 ///
 /// Resolution dispatches by the target's **extension** (slice-1 spec §3,
 /// research §9b #8): a `.md` or extensionless target resolves against `notes`
@@ -330,8 +333,8 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
         .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.to_string()))
         .unwrap_or_default();
 
-    // Resolve targets; record which (target, type) the body already authors.
-    let mut body_keys: HashSet<(String, String)> = HashSet::new();
+    // Resolve targets; record which (target, type) the frontmatter authors.
+    let mut fm_keys: HashSet<(String, String)> = HashSet::new();
     let mut resolved = Vec::with_capacity(staged.len());
     for (link, origin) in staged {
         let (dst_id, dst_resource_path) = resolve_target(conn, &src_dir, &link)?;
@@ -339,8 +342,8 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
             .clone()
             .or_else(|| dst_resource_path.clone())
             .unwrap_or_else(|| link.target_path.clone());
-        if origin == "inline" {
-            body_keys.insert((target_key.clone(), link.edge_type.clone()));
+        if origin == "frontmatter" {
+            fm_keys.insert((target_key.clone(), link.edge_type.clone()));
         }
         resolved.push((link, origin, dst_id, dst_resource_path, target_key));
     }
@@ -349,8 +352,8 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
     let mut rows = Vec::with_capacity(resolved.len());
     for (link, origin, dst_id, dst_resource_path, target_key) in resolved {
         let key = (target_key.clone(), link.edge_type.clone());
-        if origin == "frontmatter" && body_keys.contains(&key) {
-            continue; // inline wins — drop the redundant frontmatter dup
+        if origin == "inline" && fm_keys.contains(&key) {
+            continue; // frontmatter wins — it alone can carry the explanation
         }
         let occurrence_index = *occ.get(&key).unwrap_or(&0);
         occ.insert(key, occurrence_index + 1);

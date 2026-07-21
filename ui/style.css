@@ -802,7 +802,7 @@ body.is-resizing {
   word-break: break-word;
   overflow-x: auto;
   color: var(--text);
-  /* the bar is sticky — cap the open drawer so a long relations: list can't pin
+  /* the bar is sticky — cap the open drawer so a long b2_relations: list can't pin
      itself over most of the viewport; the YAML scrolls inside instead */
   max-height: 40vh;
   overflow-y: auto;

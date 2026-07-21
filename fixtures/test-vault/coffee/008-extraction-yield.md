@@ -2,7 +2,7 @@
 b2id: 01KXF21DSJG6ACTDB4163PE7ZV
 type: note
 title: "Extraction Yield"
-relations:
+b2_relations:
   - "part-of [[coffee/118-extraction-yield]] — see also"
 ---
 

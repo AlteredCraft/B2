@@ -23,7 +23,7 @@ retrieval-quality experiments** that need volume, *not* the deterministic suite:
 - **Retrieval-quality sanity** — the notes are drawn from per-topic sentence pools, so they form
   real semantic clusters (vector-search, distributed-systems, rust, pkm, transformers, databases,
   productivity, gardening, coffee, hiking) cross-linked by body `[[wikilinks]]` (~2,300 edges) and
-  a few typed frontmatter `relations:`. Good for eyeballing `b2 search` / `b2 similar`. It is
+  a few typed frontmatter `b2_relations:`. Good for eyeballing `b2 search` / `b2 similar`. It is
   **not** the hand-labelled retrieval eval set (`planning/specs/eval-strategy.md`) — a scale
   fixture, not a graded benchmark.
 

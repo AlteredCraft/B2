@@ -2,7 +2,7 @@
 b2id: 01KXF21DT9RDPFSKTAA317TS0W
 type: note
 title: "Extraction Yield"
-relations:
+b2_relations:
   - "relates [[coffee/178-the-espresso-shot]] — see also"
 ---
 

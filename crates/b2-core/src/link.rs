@@ -1,27 +1,29 @@
 //! Parse a note body into the links that become edges (planning/data-model.md §2;
 //! resource forms: planning/specs/resources-inventory-graph.md §3).
 //!
-//! Four body constructs, all ordinary Obsidian Markdown:
-//!   - a bare `[[path|alias]]` anywhere in prose ⇒ an untyped `references` edge;
-//!   - a list item `- <verb> [[path|alias]] — explanation` ⇒ a *typed* edge;
+//! **The body carries no B2 syntax** (data-model §2, decision 2026-07-21): every
+//! body construct is ordinary Obsidian Markdown and yields an untyped
+//! `references` edge — prose around a link (a list marker, a leading verb) is
+//! just prose. Three body constructs:
+//!   - a bare `[[path|alias]]` anywhere ⇒ `references`;
 //!   - Markdown's own `[text](path)` / `![alt](path)` (relative vault targets
 //!     only — scheme/absolute/fragment-only targets are not vault members and
-//!     yield nothing) ⇒ a `references` edge, the `!` marking an **embed** and the
+//!     yield nothing) ⇒ `references`, the `!` marking an **embed** and the
 //!     text/alt captured as the edge's **caption** (an image's index text,
 //!     slice 3);
 //!   - the `![[file.ext|alias]]` embed ⇒ `references` + embed, alias as caption.
 //!
-//! A typed line *consumes* its wikilink as the edge target, so that link is not
-//! also counted as a bare reference. The verb must be lowercase-kebab (the
-//! data-model convention), which keeps prose list items like `- See [[x]] …` from
-//! being misread as a typed edge of type "see".
+//! A *typed* edge — `<verb> [[path|alias]] — explanation` — exists only as a
+//! frontmatter `b2_relations:` entry, parsed by [`parse_relation`]; the verb and
+//! explanation never come from the body.
 //!
 //! Hand-rolled (no regex dependency) and deliberately minimal. Known
-//! simplifications, to revisit when discovery/queries need them: a typed line
-//! yields exactly one edge (extra wikilinks in its trailing text are treated as
-//! explanation, not links); links inside code spans/fences are not excluded;
-//! only `—`/`:` introduce an explanation; a Markdown link's text stops at the
-//! first `]` (no nested brackets) and its target at the first `)` (no titles).
+//! simplifications, to revisit when discovery/queries need them: a typed
+//! frontmatter entry yields exactly one edge (extra wikilinks in its trailing
+//! text are treated as explanation, not links); links inside code spans/fences
+//! are not excluded; only `—`/`:` introduce an explanation; a Markdown link's
+//! text stops at the first `]` (no nested brackets) and its target at the first
+//! `)` (no titles).
 
 /// A link found in a body, ready to be resolved + projected into `edges`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,9 +36,9 @@ pub struct ParsedLink {
     pub target_path: String,
     /// The `|alias` display text, if present (wikilink forms only).
     pub alias: Option<String>,
-    /// Trailing text after `—`/`:` on a typed line.
+    /// Trailing text after `—`/`:` on a typed frontmatter entry.
     pub explanation: Option<String>,
-    /// True when this came from a `- <verb> [[..]]` typed line.
+    /// True when this came from a `<verb> [[..]]` frontmatter entry.
     pub typed: bool,
     /// True for an embed form (`![alt](path)` / `![[file]]`) — recorded on the
     /// edge as a display nicety, never a distinct verb (spec §3).
@@ -51,30 +53,20 @@ pub struct ParsedLink {
     pub caption: Option<String>,
 }
 
-/// Parse every link in `body`, in document order.
+/// Parse every link in `body`, in document order — all untyped `references`
+/// edges: the body carries no typed syntax (data-model §2).
 pub fn parse_links(body: &str) -> Vec<ParsedLink> {
     let mut links = Vec::new();
     for line in body.lines() {
-        match parse_typed_line(line) {
-            Some(link) => links.push(link),
-            None => scan_inline_links(line, &mut links),
-        }
+        scan_inline_links(line, &mut links);
     }
     links
 }
 
-/// Try to read `line` as `- <verb> [[path|alias]] [— explanation]`. Returns
-/// `None` for anything that isn't a typed-edge line (callers then scan it for
-/// bare links).
-fn parse_typed_line(line: &str) -> Option<ParsedLink> {
-    let after_marker = strip_list_marker(line.trim_start())?;
-    parse_typed_spec(after_marker.trim_start())
-}
-
-/// Parse a marker-less typed spec `<verb> [[path|alias]] [— explanation]`. This is
-/// the shared core of a body typed-line and a frontmatter `relations:` entry — one
-/// syntax, two homes (data-model §2). `None` if it isn't `<verb> <wikilink>`.
-pub fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
+/// Parse a typed spec `<verb> [[path|alias]] [— explanation]` — the shape of a
+/// frontmatter `b2_relations:` entry (data-model §2). `None` if it isn't
+/// `<verb> <wikilink>`.
+fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
     // The verb: a lowercase-kebab token immediately before the wikilink.
     let verb_end = rest.find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
     let verb_end = match verb_end {
@@ -109,10 +101,11 @@ pub fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
     })
 }
 
-/// Parse one frontmatter `relations:` entry (the string value, no `-` marker): a
-/// typed spec `<verb> [[path|alias]] — …`, or a bare `[[path|alias]]` ⇒
-/// `references`. `None` if it holds no wikilink. The caller assigns
-/// `origin=frontmatter`.
+/// Parse one frontmatter `b2_relations:` entry (the string value of one YAML
+/// list item): a typed spec `<verb> [[path|alias]] — …`, or a bare
+/// `[[path|alias]]` ⇒ `references`. `None` if it holds no wikilink. The caller
+/// assigns `origin=frontmatter`. This is the **only** parser that yields a verb
+/// or explanation — the body never does (data-model §2).
 pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
     let spec = spec.trim();
     if let Some(link) = parse_typed_spec(spec) {
@@ -122,20 +115,6 @@ pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
     let mut tmp = Vec::new();
     scan_inline_links(spec, &mut tmp);
     tmp.into_iter().next()
-}
-
-/// Strip a single leading list marker (`-`, `*`, `+`) that is followed by
-/// whitespace; returns the remainder, or `None` if there is no list marker.
-fn strip_list_marker(s: &str) -> Option<&str> {
-    let rest = s
-        .strip_prefix('-')
-        .or_else(|| s.strip_prefix('*'))
-        .or_else(|| s.strip_prefix('+'))?;
-    if rest.starts_with(char::is_whitespace) {
-        Some(rest)
-    } else {
-        None
-    }
 }
 
 /// Collect every inline link in `line` as a `references` edge, in written order:
@@ -380,16 +359,36 @@ mod tests {
     }
 
     #[test]
-    fn typed_lines_still_consume_their_wikilink() {
+    fn a_verb_shaped_body_list_item_is_just_a_reference() {
+        // The body carries no typed syntax (data-model §2): a list item opening
+        // with a verb-looking word is prose, and only its wikilink projects.
         let links = parse_links("- supports [[papers/x.pdf|the paper]] — key evidence");
         assert_eq!(links.len(), 1);
         let l = &links[0];
+        assert!(!l.typed);
+        assert_eq!(l.edge_type, "references");
+        assert_eq!(l.target_path, "papers/x.pdf");
+        assert_eq!(l.caption.as_deref(), Some("the paper"));
+        assert_eq!(l.explanation, None);
+        assert!(!l.embed);
+    }
+
+    #[test]
+    fn parse_relation_reads_verb_link_and_explanation() {
+        let l = parse_relation("supports [[papers/x.pdf|the paper]] — key evidence").unwrap();
         assert!(l.typed);
         assert_eq!(l.edge_type, "supports");
         assert_eq!(l.target_path, "papers/x.pdf");
-        assert_eq!(l.caption.as_deref(), Some("the paper"));
+        assert_eq!(l.alias.as_deref(), Some("the paper"));
         assert_eq!(l.explanation.as_deref(), Some("key evidence"));
-        assert!(!l.embed);
+
+        // A bare entry (no verb) falls back to an untyped reference.
+        let bare = parse_relation("[[notes/a|A]]").unwrap();
+        assert!(!bare.typed);
+        assert_eq!(bare.edge_type, "references");
+
+        // No wikilink at all ⇒ no edge.
+        assert!(parse_relation("just some words").is_none());
     }
 
     #[test]
