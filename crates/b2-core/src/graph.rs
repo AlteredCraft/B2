@@ -1,6 +1,6 @@
 //! Graph queries over the typed `edges` table. Inversion (backlinks) is the
 //! reason the graph is materialized rather than parsed at read time
-//! (planning/index-engine.md §3): a note's inbound edges live in every *other*
+//! (index-engine.md §3): a note's inbound edges live in every *other*
 //! note, so `neighbors` is one indexed lookup, not a full-vault scan.
 
 use crate::error::Result;

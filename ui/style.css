@@ -168,7 +168,7 @@ body {
 
 /* --- reindex progress (async, cancellable indexing) --------------------------- */
 /* A compact inline affordance in the top bar, shown only while a reindex runs. The
-   app stays fully usable behind it (async-indexing.md §2) — this is a signal of life,
+   app stays fully usable behind it (docs/design/index-engine.md) — this is a signal of life,
    not a blocker. */
 .reindex-progress {
   display: flex;
@@ -753,7 +753,7 @@ body.is-resizing {
 /* The bar's right-side action group: the `</>` view-source toggle and the Edit
    toggle, sharing one quiet-chip recipe. `</>` flips the note body between rendered
    Markdown and its raw source (active reads as the accent); Edit hands the pane to
-   the CodeMirror editor (desktop-editing.md §6). */
+   the CodeMirror editor (crates/b2-desktop/CLAUDE.md). */
 .note-bar-actions {
   display: flex;
   align-items: center;
@@ -943,7 +943,7 @@ body.is-resizing {
   padding: 6px 10px;
 }
 
-/* --- edit mode (desktop-editing.md §6) ------------------------------------------ */
+/* --- edit mode (crates/b2-desktop/CLAUDE.md) ------------------------------------------ */
 
 /* The editor's chrome mirrors the frontmatter bar's full-bleed strip (same
    negative-margin recipe) so the pane chrome doesn't jump when edit mode swaps in.
@@ -1069,7 +1069,7 @@ body.is-resizing {
   display: none;
 }
 
-/* --- live-preview decorations (desktop-live-preview.md §5) ----------------------- */
+/* --- live-preview decorations (crates/b2-desktop/CLAUDE.md) ----------------------- */
 /* The `.lp-*` block mirrors `.note-body`'s scale so mode-switching read ↔ edit doesn't
    jar (spec §7). Light/dark ride the existing CSS vars — no highlight-theme dependency.
    The `lp-body` class (from the live-preview compartment) swaps the editor to the

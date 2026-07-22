@@ -12,9 +12,9 @@ status: draft
 > Defines **what a note is** and **what a connection is**, as the plain-Markdown source of truth —
 > engine-independent. This is the yardstick the index-engine work measures against: the SQLite schema
 > in [index-engine.md](index-engine.md) (§3) is a *derived projection* of this model, and must satisfy
-> it, not the other way round. Context: [vision-and-scope.md](vision-and-scope.md) (principles, scope,
-> locked decisions), [user-stories.md](user-stories.md) (link format & identity, kernel scenarios),
-> [tasks.md](tasks.md) (the open pieces this doc closes).
+> it, not the other way round. The companion design docs are [invariants.md](invariants.md) (the
+> normative register — the *why*) and [index-engine.md](index-engine.md) (the *how*); planned work is
+> tracked in [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
 
 The model has exactly **two source-of-truth objects**, both plain Markdown:
 
@@ -84,7 +84,7 @@ Settled by one principle plus the locked rule that B2 changes the vault only on 
   links, prose is prose — and no prose shape (a list marker, a leading verb) is ever B2 structure
   (§2, §7). *(The lone body write is the mechanical repair of an inbound wikilink's
   path on move — fixing a link the human already wrote, never adding one.)*
-- **B2 writes a connection only when you commit one** ([vision-and-scope.md](vision-and-scope.md),
+- **B2 writes a connection only when you commit one** ([invariants.md](invariants.md),
   "Review & trust") — with `b2 link`, or a body link you write yourself. Nothing lands in a note that you
   didn't ask for; there is no agent proposing edges behind your back.
 
@@ -161,11 +161,11 @@ exactly the body-vs-metadata line §0 draws.
 
 - **`b2id`** — durable identity, ULID-style; **namespaced** so it never collides with a user's own
   `id`, an OKF `id`, or another tool's. The graph keys **every** edge by `b2id`, never by path or title
-  ([user-stories.md](user-stories.md)). Set once and never changes; survives move, rename, split, and
+  ([invariants.md](invariants.md)). Set once and never changes; survives move, rename, split, and
   merge. *This is B2's one always-allowed edit to the vault:* B2 stamps a missing `b2id` **as needed**
   (on first sight of a note) — no `b2 init` gate, no refusing to index — because durable identity is the
   anchor everything else keys off and must travel in the file itself (it's what lets an out-of-band move
-  be repaired, [user-stories.md](user-stories.md)). The stamp *is* the write — it lands in the note's
+  be repaired, [invariants.md](invariants.md)). The stamp *is* the write — it lands in the note's
   frontmatter, so identity travels with the file and needs no separate record.
 - **`type`** — what *kind* of note this is (`note`, `concept`, `source`, `person`, `daily`, …).
   Controlled-but-extensible; unknown values tolerated. This is the OKF entity discriminator (§5).
@@ -390,7 +390,7 @@ requires nor manages it, and it is separate from edges.)
 
 ## 5. OKF compatibility (export is a no-op, not a migration)
 
-Build *like* OKF for cheap interop; don't depend on it ([vision-and-scope.md](vision-and-scope.md),
+Build *like* OKF for cheap interop; don't depend on it ([invariants.md](invariants.md),
 "Inspiration"). The model already lines up:
 
 - **`type`** is the OKF entity discriminator — already required frontmatter (§1).
@@ -408,8 +408,8 @@ Net: "export to OKF" is selecting and re-shaping fields that already exist — a
 ## 6. Invariants & serialization discipline
 
 The model exists to make the three locked invariants
-([vision-and-scope.md](vision-and-scope.md)) hold by construction — they are the **"volatile vault over
-a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)) made
+([invariants.md](invariants.md)) hold by construction — they are the **"volatile vault over
+a disposable index"** tenet ([invariants.md](invariants.md)) made
 mechanical (the full register, cited by id: [invariants.md](invariants.md)):
 
 - **Round-trip losslessness** (`parse → serialize → parse` is byte-identical). B2 preserves unknown
@@ -419,7 +419,7 @@ mechanical (the full register, cited by id: [invariants.md](invariants.md)):
   aliases preserved verbatim), (c) appending one typed-link string to frontmatter `b2_relations:` on
   `b2 link`. **The body is never authored by B2** — (a) and (c) are frontmatter, and (b)
   only repairs a link the human already wrote. Every other byte is untouched — directly satisfying the
-  Story-1/Story-2 acceptance criteria ([user-stories.md](user-stories.md)).
+  Story-1/Story-2 acceptance criteria ([invariants.md](invariants.md)).
 - **`full-reindex ≡ incremental-update`.** The **index = projection of (the vault directory)**: the
   edge set is a pure function of a note's Markdown plus the `path → b2id` resolution table. Re-deriving
   one note ≡ re-deriving the vault for that note's edges; dropping `b2.sqlite` and rebuilding from the
@@ -472,7 +472,7 @@ defined, that doc is where they're enforced in the store.
 ## 8. A golden-vault sketch (for the test harness)
 
 The smallest fixture that exercises the whole model — an authored typed edge and a bare reference. (Ties
-to the testability stack, [vision-and-scope.md](vision-and-scope.md).)
+to the testability stack, [invariants.md](invariants.md).)
 
 `concepts/memory.md`
 ```markdown
@@ -565,7 +565,7 @@ connected here.
 §0–§9 define the **authored** objects — note and edge — whose structure a human (or B2, in frontmatter)
 writes in Markdown. A real vault also holds **resources**: every non-`.md` file — a PDF, a PNG, a `.csv`,
 an `.html` clipping. This section defines what a resource *is* in the model; the full findings, taxonomy,
-rendering, and build plan live in [research/file-type-support.md](research/file-type-support.md), and
+rendering, and build plan are tracked in [GitHub issue #66](https://github.com/AlteredCraft/B2/issues/66), and
 the schema in [index-engine.md](index-engine.md) §3.
 
 A resource is a **peer vault member** — not a lesser one, and not a generalized note. The single
@@ -620,4 +620,4 @@ defer-by-default posture (§4). Schema, the per-class extraction step, and the t
 resource" clauses. Generalizing `notes` to hold resources would staple a caveat onto every invariant, write
 guarantee, and frontmatter behavior in §0–§9; a distinct `resources` table isolates the different *write*
 contract instead of threading it through the note rules
-([research/file-type-support.md](research/file-type-support.md) §7).
+(see [#66](https://github.com/AlteredCraft/B2/issues/66)).

@@ -1,5 +1,5 @@
 //! Resources slice 1 — inventory & graph
-//! (planning/specs/resources-inventory-graph.md).
+//! (data-model.md §10).
 //!
 //! Step 0: the v4 schema — the `resources` table exists, `edges` carries the
 //! resource-target columns (`dst_resource_path`, `embed`, `caption`), dangling

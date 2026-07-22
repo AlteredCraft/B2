@@ -1,6 +1,6 @@
 // TypeScript mirrors of the `b2-core` façade's `Serialize` view types — the IPC
 // contract. These are the SAME shapes the CLI's `--json` mode emits (the desktop
-// host reuses them verbatim as command payloads, specs/completed/desktop-ui-mvp.md §3), so a
+// host reuses them verbatim as command payloads, crates/b2-desktop/CLAUDE.md), so a
 // field here corresponds 1:1 to a Rust struct field. Hand-written for now; if they
 // ever churn, `ts-rs`/`tauri-specta` codegen is the later lever (spec §9).
 
@@ -66,7 +66,7 @@ export interface NoteView {
   frontmatter: string | null;
   /**
    * blake3 of the raw file bytes at read time — the save-guard token
-   * (desktop-editing.md §3): a save presents it, and the host refuses if the file
+   * (crates/b2-desktop/CLAUDE.md): a save presents it, and the host refuses if the file
    * changed on disk since, so an external edit is never silently clobbered.
    */
   revision: string;
@@ -192,7 +192,7 @@ export interface ExplainView {
 }
 
 /**
- * `Vault::write` — the completed body save (desktop-editing.md §4): the note's path
+ * `Vault::write` — the completed body save (crates/b2-desktop/CLAUDE.md): the note's path
  * plus the new `revision` (blake3 of the final on-disk bytes), the token the editor
  * chains the next save on so its own saves never self-conflict.
  */
@@ -297,7 +297,7 @@ export interface SkippedNote {
 
 /**
  * `Vault::project` — what the fast, model-free projection pass did
- * (projection-embedding-split.md §4). Once this resolves, the tree and keyword
+ * (docs/design/index-engine.md). Once this resolves, the tree and keyword
  * search are live; only vectors are missing. `skipped` names any unreadable files the
  * pass left out — one bad file never aborts the whole reindex (empty on a clean vault).
  */
@@ -318,14 +318,14 @@ export interface EmbedReport {
   /**
    * The embed was cancelled mid-run (the user hit Cancel). The index is still
    * consistent — keyword search + graph are complete, a prefix of notes is embedded —
-   * and re-running finishes the rest (async-indexing.md §3).
+   * and re-running finishes the rest (docs/design/index-engine.md).
    */
   cancelled: boolean;
 }
 
 /**
  * `ingest::ReindexProgress` — one per-batch progress event streamed over a Tauri
- * `Channel` during an embed (async-indexing.md §4). The counts describe the notes
+ * `Channel` during an embed (docs/design/index-engine.md). The counts describe the notes
  * that actually (re)embed this run, not every note (an incremental run reuses most
  * vectors untouched), and are determinate from the first batch.
  */

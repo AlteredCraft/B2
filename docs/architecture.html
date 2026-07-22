@@ -636,7 +636,7 @@ b2_relations:
       <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter.rs</td><td class="mono" style="text-align:right">6</td></tr>
       <tr><td>Explain (orphan flag) · dry-run previews</td><td class="mono">explain · dry_run</td><td class="mono" style="text-align:right">10</td></tr>
       <tr><td>Note-authoring CRUD — add · mv (unit + integration)</td><td class="mono">add · mv · pathspec · note</td><td class="mono" style="text-align:right">31</td></tr>
-      <tr><td>The desktop-editing façade ops — read · write (revision guard) · list</td><td class="mono">read · write · list</td><td class="mono" style="text-align:right">16</td></tr>
+      <tr><td>The desktop editing façade ops — read · write (revision guard) · list</td><td class="mono">read · write · list</td><td class="mono" style="text-align:right">16</td></tr>
       <tr><td>Structured logging is parseable JSONL</td><td class="mono">logging.rs</td><td class="mono" style="text-align:right">2</td></tr>
       <tr><td>The <code>Vault</code> façade · the <code>b2</code> CLI (<code>similar</code>/<code>link</code> included)</td><td class="mono">vault.rs · cli.rs</td><td class="mono" style="text-align:right">36</td></tr>
       <tr><td>Embedder config &amp; provisioning</td><td class="mono">b2-embed</td><td class="mono" style="text-align:right">4</td></tr>
@@ -654,7 +654,7 @@ b2_relations:
   <h3>Not yet built</h3>
   <p class="sub">An honest architecture names its boundaries. Connection discovery is <em>built</em> — it is now
   <code>b2 similar</code> (surface) + <code>b2 link</code> (commit), local and free; the LLM relator was cut, not
-  deferred. What remains is tuning, scale, and packaging — tracked in <code>planning/tasks.md</code>, not gaps that
+  deferred. What remains is tuning, scale, and packaging — tracked in <a href="https://github.com/AlteredCraft/B2/issues">GitHub Issues</a>, not gaps that
   slipped through.</p>
   <div class="card" style="border-left:3px solid var(--amber)">
     <ul class="tidy">
@@ -679,8 +679,8 @@ b2_relations:
   <code>ui/</code>, the second dumb adapter over the façade: read → discover → link → edit → reconcile, with
   async cancellable indexing and fs-watch reconciliation). Source of truth for every claim:
   <code>crates/{b2-core,b2-embed,b2-cli,b2-desktop}/src/</code>
-  and the test suite under each crate's <code>tests/</code>. Design rationale lives in <code>planning/</code>
-  (<code>data-model.md</code> · <code>index-engine.md</code> · <code>specs/completed/</code>); the backlog is
+  and the test suite under each crate's <code>tests/</code>. Design rationale lives in <code>docs/design/</code>
+  (<code>data-model.md</code> · <code>index-engine.md</code> · <code>invariants.md</code>); the backlog is
   GitHub Issues. ·
   <a href="index.html">Home</a> · <a href="quickstart.html">Quick start</a> ·
   <a href="indexing.html">Indexing pipeline</a> · <a href="discovery.html">Connection discovery</a></p>

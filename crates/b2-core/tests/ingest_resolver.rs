@@ -1,7 +1,7 @@
 //! Step 1 — ingest into `notes`/`note_aliases` and the `b2id ⇄ path` resolver.
 //!
 //! Green-scenario assertions for build-plan step 1
-//! (planning/specs/completed/index-engine-build.md §4): ingest the golden vault, resolve
+//! (index-engine.md): ingest the golden vault, resolve
 //! `memory ⇄ path` both ways, and prove a note missing a `b2id` is stamped on disk
 //! (B2's one always-allowed write; the id travels in the frontmatter — data-model.md §1).
 

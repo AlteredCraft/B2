@@ -119,7 +119,7 @@ export interface AppState {
   sourceOpen: boolean;
   /**
    * Edit mode: the note pane belongs to the live CodeMirror editor, and `render()`
-   * must NOT rebuild it (the carve-out, desktop-editing.md §6) — everything else
+   * must NOT rebuild it (the carve-out, crates/b2-desktop/CLAUDE.md) — everything else
    * (tree, side pane, toasts) keeps rendering. Only the *renderable* editing state
    * lives here; timers, save flags, and the EditorView are module-locals in main.ts.
    */
@@ -202,7 +202,7 @@ export interface AppState {
   loading: boolean;
   /**
    * A reindex is in flight. Kept **separate** from `loading` so a reindex does NOT
-   * freeze the app (async-indexing.md §2) — only the Reindex action is disabled and a
+   * freeze the app (docs/design/index-engine.md) — only the Reindex action is disabled and a
    * progress + Cancel affordance appears, while reading/searching/navigating stay live.
    */
   reindexing: boolean;

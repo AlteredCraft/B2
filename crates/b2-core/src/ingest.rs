@@ -1,9 +1,9 @@
-//! Ingest (Flow ① of planning/specs/completed/index-engine-build.md): parse → stamp a
+//! Ingest (Flow ① of index-engine.md): parse → stamp a
 //! missing `b2id` (write file) → project into `notes`/`note_aliases`,
 //! `chunks` (+FTS), and the typed `edges` graph.
 //!
 //! A full ingest is **two separately-invokable passes**
-//! (planning/specs/completed/projection-embedding-split.md §4): [`project_vault`] — the
+//! (index-engine.md): [`project_vault`] — the
 //! model-free pass, which runs in two phases so link resolution never depends on
 //! file order (phase 1 projects every note + its chunks, filling the resolver;
 //! phase 2 derives edges against the now-complete resolver) — and [`embed_vault`] —
@@ -35,8 +35,8 @@ use std::path::Path;
 /// chunk in a batch to the batch's *longest*, so an over-large batch runs the whole
 /// forward pass at the longest length. Measured on a real (variable-length) vault, 16
 /// beat 32 (~40% faster: less padding waste) and 8 (better amortization). It also sets
-/// the reindex **cancel granularity**: the cancel flag is checked once per batch
-/// (async-indexing.md §3), so a smaller batch means the desktop **Cancel** responds
+/// the reindex **cancel granularity**: the cancel flag is checked once per batch,
+/// so a smaller batch means the desktop **Cancel** responds
 /// sooner — another reason not to over-size it.
 const EMBED_BATCH: usize = 16;
 
@@ -78,7 +78,7 @@ pub struct PlannedNote {
 /// a handful of notes are doing any work.
 ///
 /// `Serialize` so the desktop host can stream it to the webview over a
-/// `tauri::ipc::Channel` (async-indexing.md §4); the field names are the JSON keys the
+/// `tauri::ipc::Channel`; the field names are the JSON keys the
 /// frontend reads.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReindexProgress {
@@ -113,7 +113,7 @@ pub struct ReindexProgress {
 /// passes `false`: it reads only `notes` (`force || body changed || note is new`),
 /// because "unchanged body but missing vectors" is [`embed_vault`]'s job, not a
 /// reason to re-chunk — and this is what keeps [`project_vault`] free of the
-/// vector tables (projection-embedding-split.md §4). [`ingest_file`] passes `true`
+/// vector tables (index-engine.md). [`ingest_file`] passes `true`
 /// (it embeds inline and has ensured the space exists), so a note left mid-embed is
 /// also healed by [`would_reembed`]'s vector-state check, exactly as before.
 ///
@@ -121,7 +121,7 @@ pub struct ReindexProgress {
 /// the `Vault`, which defaults it) so *every* path that chunks a given vault cuts
 /// identically and `incremental ≡ full rebuild` holds by construction. The retrieval
 /// eval injects non-default configs here to A/B chunker levers in one process
-/// (specs/eval-strategy.md).
+/// (the eval harness, crates/b2-embed/evals/).
 fn project_note_and_chunks(
     conn: &Connection,
     vault_root: &Path,
@@ -242,7 +242,7 @@ fn would_reembed(
 /// at a batch boundary, and whether **every** pending chunk got a vector.
 struct NoteEmbedOutcome {
     /// `on_batch` returned [`ControlFlow::Break`] at a batch boundary — the caller
-    /// should stop starting new notes (a cooperative cancel, async-indexing.md §3).
+    /// should stop starting new notes (a cooperative cancel).
     cancelled: bool,
     /// Every pending chunk was embedded, so the note is now fully embedded. True even
     /// when the cancel landed on the *final* batch: each batch is written before its
@@ -256,7 +256,7 @@ struct NoteEmbedOutcome {
 /// cancel). Chunk vectors are independent, so batch boundaries never change the result.
 ///
 /// The cancel check runs **after** a batch is fully written, so a cancel never tears a
-/// batch (async-indexing.md §5.6) — it only stops *further* batches. Returns whether a
+/// batch — it only stops *further* batches. Returns whether a
 /// cancel was seen and whether the note finished embedding (see [`NoteEmbedOutcome`]).
 ///
 /// A note that finishes has its **centroid** refreshed from its now-complete stored
@@ -491,8 +491,8 @@ pub fn ingest_file(
 }
 
 /// The result of a (possibly cancelled) full ingest: every projected note, plus
-/// whether the embed phase was cut short by a cooperative cancel (async-indexing.md
-/// §3). A cancelled run is still **consistent** — every note has chunks + FTS + edges
+/// whether the embed phase was cut short by a cooperative cancel. A cancelled run is
+/// still **consistent** — every note has chunks + FTS + edges
 /// (Phase 1/2), only a *prefix* has vectors — so `notes` describes the partial work
 /// truthfully (its `embedded` flags count only notes that fully embedded this run) and
 /// an incremental re-run embeds the notes the cancel left unfinished. Vectors are
@@ -548,7 +548,7 @@ pub struct Projected {
 
 /// Re-project a single note at `vault_root/rel_path` **model-free** — the
 /// single-note sibling of [`project_vault`], and the pass `Vault::write` runs after
-/// its body splice (desktop-editing.md §4): note + chunks (+FTS) + edges, stamping
+/// its body splice: note + chunks (+FTS) + edges, stamping
 /// a missing `b2id`, never touching the embedding space. A changed body re-chunks
 /// (clearing its stale vectors), and the chunks join the DB-derived pending set for
 /// **any** later embed pass to fill — so the save path needs no embedder and no
@@ -624,7 +624,7 @@ pub struct EmbedOutcome {
     pub cancelled: bool,
 }
 
-/// The **projection pass** (projection-embedding-split.md §4): project every `.md`
+/// The **projection pass** (index-engine.md): project every `.md`
 /// file under `vault_root` — Phase 1 (note + chunks + FTS, stamping missing
 /// `b2id`s) then Phase 2 (the typed edges) — with **no embedder and no embedding
 /// space**: it never creates the vector tables, so it needs neither the model nor
@@ -724,14 +724,14 @@ pub fn project_vault(
     })
 }
 
-/// The **embed pass** (projection-embedding-split.md §4): fill a vector for every
+/// The **embed pass** (index-engine.md): fill a vector for every
 /// chunk that lacks one. Ensures the embedding space first (creates the
 /// `embeddings` + `note_centroids` tables; a model swap drops + resets them, so
 /// *all* chunks then count as missing), then works the DB-derived pending set
 /// ([`db::chunks_missing_vectors`])
 /// note by note through the batched [`embed_pending`] loop — firing `on_progress`
 /// per batch and honoring its [`ControlFlow::Break`] as the cooperative cancel
-/// checkpoint (async-indexing.md §3). Takes **no `force`**: re-chunking (which
+/// checkpoint. Takes **no `force`**: re-chunking (which
 /// clears vectors) is a projection concern, so this pass is purely "fill what's
 /// missing" — which is also why any interruption heals on the next call (§7.2).
 ///
@@ -813,10 +813,10 @@ pub fn embed_vault(
 /// when `on_progress` returns [`ControlFlow::Break`], the embed pass stops at that
 /// batch boundary. Projection (notes + chunks + FTS **and** edges) has completed
 /// before embedding starts, so a cancelled index is consistent — keyword search +
-/// graph are complete, only a prefix of notes has vectors (async-indexing.md §3/§5).
+/// graph are complete, only a prefix of notes has vectors.
 ///
 /// A thin composition of [`project_vault`] then [`embed_vault`]
-/// (projection-embedding-split.md §4): from a clean index the composed run is
+/// (index-engine.md): from a clean index the composed run is
 /// byte-identical to the old fused one; the sole intentional divergence is a
 /// resume-after-partial run, where projection leaves an unchanged-body note's
 /// chunks in place rather than regenerating their rowids — observably identical
@@ -913,7 +913,7 @@ pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result
 /// Walk the vault once, routing every file: `.md` (case-insensitive) → `notes`,
 /// everything else → `resources` with its class, per
 /// [`ResourceClass::of_path`] — the `index = projection of (the vault directory)`
-/// walk (planning/specs/resources-inventory-graph.md §2). Dot-prefixed
+/// walk (data-model.md §10). Dot-prefixed
 /// **directories** are skipped as always (`.b2/`, `.git/`); dot-prefixed **files**
 /// are skipped from the resource inventory (`.DS_Store`, `.gitignore` are not
 /// vault material) while the note route keeps its historical behavior.

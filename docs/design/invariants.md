@@ -9,16 +9,16 @@ status: active
 # B2 — Invariants
 
 > The normative register of what must always be true of B2. Each entry is one testable/reviewable
-> claim; the linked doc holds the elaboration and rationale. Product non-negotiables (local-first,
-> zero lock-in, …) stay in [vision-and-scope.md](vision-and-scope.md) — this page is the *engine and
-> data* contract.
+> claim; the linked doc holds the elaboration and rationale. This page is the top of the design set —
+> the *why* — with the *what* in [data-model.md](data-model.md) and the *how* in
+> [index-engine.md](index-engine.md); product non-negotiables (local-first, zero lock-in,
+> single-binary) are captured as invariants here.
 >
 > **On conflict, this page wins and the other doc gets fixed.** Changing this page is a deliberate
 > decision, never a drive-by edit. Cite entries by id (S2, G2, …).
 
 The register is the two design tenets — *a volatile vault over a disposable index* and *build for
-tomorrow's model* ([vision-and-scope.md → Design philosophy](vision-and-scope.md#design-philosophy)) —
-made mechanical.
+tomorrow's model* — made mechanical.
 
 ## S — Storage: two tiers, one projection
 
@@ -56,8 +56,7 @@ made mechanical.
   create/move/delete of notes, resources, and folders on explicit command.
 - **W4 — B2 never deletes, moves, or archives vault files of its own accord.** Consequences of human
   edits (orphans, dangling links, hash-matched move candidates) are *surfaced*, flagged, or proposed —
-  never silently applied. ([user-stories.md](user-stories.md) Story 2,
-  [index-engine.md](index-engine.md) §8)
+  never silently applied. ([index-engine.md](index-engine.md) §8)
 - **W5 — Round-trip losslessness.** `parse → serialize → parse` is byte-identical outside the specific
   edit performed; unknown frontmatter keys survive verbatim, in order. B2's own keys are namespaced
   (`b2id`, `b2_relations`) so they can never collide; a generic `relations:` key is *not* read.
@@ -67,8 +66,7 @@ made mechanical.
 
 - **L1 — The graph keys every edge by `b2id`, never by path or title.** The inline `[[path|alias]]`
   is a repairable convenience copy. Consequence, also locked: **rename keeps every backlink
-  resolving** — a move rewrites path *text* and zero edge rows. ([user-stories.md](user-stories.md)
-  "Link format & identity")
+  resolving** — a move rewrites path *text* and zero edge rows. ([data-model.md](data-model.md) §1)
 - **L2 — A note's title is its filename.** The frontmatter `title:` key is recognized but inert —
   round-tripped, never driving display, aliases, or search. `b2 link` therefore writes a bare
   `[[path]]`, no alias. ([data-model.md](data-model.md) §1, §9)
@@ -113,12 +111,11 @@ made mechanical.
   deterministic, content-addressed fake; a real model drops in through the seam with **no schema or
   flow change**. Model-compensating machinery (per-pair adjudication, query expansion, heavy
   orchestration) is deferred or off by default — the Bitter-Lesson tenet. A reranker, if it lands, is
-  the next seam, not an exception. ([vision-and-scope.md](vision-and-scope.md) "Design philosophy",
-  [index-engine.md](index-engine.md) §5–§6)
+  the next seam, not an exception. ([index-engine.md](index-engine.md) §5–§6)
 - **M2 — The embedding space has one recorded identity: `meta.(embed_model_id, embed_dim)` — and the
   compute device folds into it** (a Metal build tags the id `@metal`). Any identity change is a model
   swap: `search` **fails fast** rather than mixing spaces, `reindex` drops and re-embeds, and `open`
-  **never** mutates the vector space. ([CLAUDE.md](../CLAUDE.md) "Embedding-space discipline", GH #40)
+  **never** mutates the vector space. ([CLAUDE.md](../../CLAUDE.md) "Embedding-space discipline", GH #40)
 - **M3 — One embedding space in v1.** Every vault member funnels to *text* through the same model;
   multimodal spaces and describers are documented future seams, default-off.
   ([data-model.md](data-model.md) §10)
@@ -126,20 +123,20 @@ made mechanical.
   vector tables are created at embed time, so "tables exist" = "this vault has an embedding space" —
   the fallbacks (BM25-only search on a projected-but-unembedded vault) key on it. Centroids are
   derived data sharing the vectors' lifecycle — refreshed by the embed pass, dropped on re-chunk, no
-  separate invalidation. ([CLAUDE.md](../CLAUDE.md), #38)
+  separate invalidation. ([CLAUDE.md](../../CLAUDE.md), #38)
 
 ## E — Engineering discipline (what keeps the above true)
 
 - **E1 — The core is deterministic.** No wall-clock and no randomness inside `b2-core`; ids and
   timestamps are injected (`IdGen`, `created` params). Clocks and log subscribers live in the
-  adapters. ([CLAUDE.md](../CLAUDE.md) Conventions)
+  adapters. ([CLAUDE.md](../../CLAUDE.md) Conventions)
 - **E2 — `cargo test` is fast, deterministic, and model-free; model quality never enters CI.**
   Real-model work lives behind `b2 init` / the out-of-CI eval. `#[ignore]` is forbidden — a
   hard-to-write test is a signal to re-anchor on the invariant or fix the system.
-  ([CLAUDE.md](../CLAUDE.md), [specs/eval-strategy.md](specs/eval-strategy.md))
+  ([CLAUDE.md](../../CLAUDE.md), the eval harness under `crates/b2-embed/evals/`)
 - **E3 — The `Vault` façade is the one typed API, and every adapter is dumb.** CLI and desktop
   commands are deserialize → one façade call → serialize; logic that wants to live in an adapter
   belongs behind the façade. Dependencies point one way (adapters → core, never back); façade ops are
-  added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md))
+  added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md))
 - **E4 — User-facing errors are generic and actionable, never leaking internals.** Full detail goes
-  to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../CLAUDE.md) Conventions)
+  to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../../CLAUDE.md) Conventions)

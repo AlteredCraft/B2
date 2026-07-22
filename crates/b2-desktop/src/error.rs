@@ -1,6 +1,6 @@
 //! The host's error type + the generic, actionable, no-internals-leaked mapping to a
 //! user-facing string — the desktop mirror of the CLI's `user_message`
-//! (specs/completed/desktop-ui-mvp.md §3; the repo-wide logging policy in the parent CLAUDE.md).
+//! (crates/b2-desktop/CLAUDE.md; the repo-wide logging policy in the parent CLAUDE.md).
 //!
 //! [`CmdError`] **serializes to that string**, so a `#[tauri::command]` returning
 //! `Result<T, CmdError>` hands the webview a safe, actionable message and never a
@@ -24,8 +24,8 @@ pub enum CmdError {
     /// point B2 at one.
     #[error("no vault specified")]
     VaultRequired,
-    /// A `reindex` was requested while one was already running (single-in-flight,
-    /// async-indexing.md §4). The UI disables the button, so this is a belt-and-
+    /// A `reindex` was requested while one was already running (single-in-flight).
+    /// The UI disables the button, so this is a belt-and-
     /// suspenders refusal that reaches the webview only in a race.
     #[error("a reindex is already running")]
     ReindexInFlight,

@@ -1,6 +1,6 @@
 //! Connection-discovery candidate generation — the engine behind **`b2 similar`**
-//! (planning/tasks.md ①, resolved 2026-07-01; vision-and-scope "Connection discovery
-//! v1"). It surfaces the notes to *consider* linking; the human is the precision gate
+//! (index-engine.md §3, resolved 2026-07-01; invariants.md). It surfaces the notes to
+//! *consider* linking; the human is the precision gate
 //! and `b2 link` commits one. It is the only discovery stage, and the only one that
 //! reads the graph.
 //!
@@ -10,7 +10,7 @@
 //! a scoped-traversal primitive, the wrong tool here.) Generation is deliberately
 //! **permissive**: it over-produces, and the human decides which are worth a link.
 //!
-//! Mechanics are **two-stage** (#38; planning/research/discovery-scan-strategy.md):
+//! Mechanics are **two-stage** (#38; index-engine.md):
 //!
 //! 1. **Coarse, O(notes):** rank every note by the distance of its stored *centroid*
 //!    (`note_centroids`, maintained by the embed pass) to the anchor's centroid,
@@ -30,7 +30,7 @@
 //! (bge's asymmetric query prefix is the wrong side). Graph distance beyond the
 //! 1-hop exclusion is **not** a ranking signal — graph-distant "bridge" candidates
 //! ride along unboosted; weighting distance (closure vs. serendipity) is a deferred,
-//! eval-gated experiment (tasks.md backlog).
+//! eval-gated experiment (GitHub Issues).
 
 use crate::db;
 use crate::embed::{centroid_of, l2_sq, unpack_f32_into};
@@ -39,7 +39,7 @@ use crate::graph;
 use rusqlite::Connection;
 
 /// The exclusion radius: a candidate must not already be *directly* linked to the
-/// anchor. Fixed at 1 by decision (tasks.md ①) so triadic-closure candidates — a note
+/// anchor. Fixed at 1 by decision (index-engine.md §3) so triadic-closure candidates — a note
 /// two hops away, transitively related but with no direct edge — stay in the pool.
 const EXCLUDE_HOPS: usize = 1;
 
@@ -82,7 +82,7 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
     if limit == 0 || !db::embedding_space_exists(conn)? {
         return Ok(Vec::new());
     }
-    // The anchor's own stored vectors, loaded once (re-embeds nothing — tasks.md ①);
+    // The anchor's own stored vectors, loaded once (re-embeds nothing — index-engine.md §3);
     // none ⇒ nothing to search from. Its centroid is computed in-process from them
     // rather than read back, so an anchor mid-embed still discovers from what it has.
     let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(conn, anchor)?

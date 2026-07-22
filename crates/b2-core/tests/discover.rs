@@ -1,4 +1,4 @@
-//! Connection-discovery candidate generation (planning/tasks.md ①, resolved
+//! Connection-discovery candidate generation (index-engine.md §3, resolved
 //! 2026-07-01): candidates are the *complement* of the graph — notes near an anchor
 //! in vector space but **not** already connected (self + direct neighbors excluded),
 //! with 2-hop (triadic-closure) notes deliberately kept.

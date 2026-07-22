@@ -1,6 +1,6 @@
-//! `Vault::write` — the editing surface's one write op (desktop-editing.md §8
-//! Step 1): a byte-honest body splice guarded by a content-hash revision, followed
-//! by a **model-free** re-projection. The invariants under test (§7): frontmatter
+//! `Vault::write` — the editing surface's one write op: a byte-honest body splice
+//! guarded by a content-hash revision, followed
+//! by a **model-free** re-projection. The invariants under test: frontmatter
 //! bytes are invariant under save; the revision chain never self-conflicts while
 //! external writes always conflict; the save path needs no model; and a saved note
 //! converges to exactly what a full rebuild would produce once an embed pass runs.
@@ -130,7 +130,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
 
     // …edges were re-derived: the body contributes its one reference, and the
     // frontmatter `supports` survives untouched — a body save never edits the
-    // frontmatter home (desktop-editing.md §4, data-model §2).
+    // frontmatter home (data-model §2).
     let outbound: Vec<(String, String)> = {
         let mut s = conn
             .prepare(

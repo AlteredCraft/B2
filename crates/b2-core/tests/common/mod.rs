@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
-/// b2ids of the two golden-vault notes (planning/data-model.md §8).
+/// b2ids of the two golden-vault notes (data-model.md §8).
 pub const MEMORY_ID: &str = "01JMEM0000000000000000000A";
 pub const SRS_ID: &str = "01JSRS0000000000000000000B";
 

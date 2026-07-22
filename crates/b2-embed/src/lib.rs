@@ -7,7 +7,7 @@
 //! run against the deterministic `FakeEmbedder`. The `b2` CLI is the only client
 //! that wires the real model in.
 //!
-//! Decisions (locked 2026-06-30, tasks.md "Next up"):
+//! Decisions (locked 2026-06-30, GitHub Issues):
 //! - **Runtime = `candle` + `hf-hub`** — pure-Rust inference compiled into the
 //!   binary; no external ONNX runtime to ship. `hf-hub` is the download seam.
 //! - **Model = a BERT-family sentence embedder**, default **BAAI/bge-base-en-v1.5**

@@ -3,7 +3,7 @@
 //
 // Safety: output comes from the user's *own* local notes, and the webview CSP
 // (script-src 'self', no 'unsafe-inline') neutralizes inline `<script>`/`onclick`
-// from a note and blocks remote script/style loads (specs/completed/desktop-ui-mvp.md §6). We
+// from a note and blocks remote script/style loads (crates/b2-desktop/CLAUDE.md). We
 // still HTML-escape every value B2 itself interpolates (titles, paths, snippets) so
 // UI chrome can't be broken by note content. A DOMPurify pass is a later hardening,
 // not needed for a local-first, own-content MVP.
@@ -289,7 +289,7 @@ export function treePaneHtml(state: AppState): string {
 // The note-pane top bar: a full-bleed strip across the top of the note pane (above the
 // centered reading column, not inside it). Its head row carries the frontmatter drawer
 // toggle on the left and, grouped on the right, the `</>` view-source toggle and the
-// **Edit** toggle (desktop-editing.md §6 — entering edit mode hands the whole pane to
+// **Edit** toggle (crates/b2-desktop/CLAUDE.md — entering edit mode hands the whole pane to
 // the CodeMirror editor, so this bar isn't rendered again until edit mode exits). Sits
 // as a sibling *before* `<article class="note">` so its divider spans the pane edge to
 // edge, like the file tree's "Files" header.

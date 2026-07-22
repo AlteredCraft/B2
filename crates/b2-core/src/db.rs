@@ -4,7 +4,7 @@
 //! the `b2id ⇄ path` resolver.
 //!
 //! Every connection is opened `WAL` + `foreign_keys=ON` per
-//! planning/specs/completed/index-engine-build.md §0. Every table here is a derived
+//! index-engine.md. Every table here is a derived
 //! projection of `Markdown` — nothing is a source of truth.
 //!
 //! Vectors live in **plain tables** and every distance is computed in-process
@@ -36,7 +36,7 @@ use std::time::Duration;
 /// byte-clean slate; either way the next `reindex` rebuilds everything queried.
 /// **4** added the `resources` inventory and widened `edges` with resource targets
 /// (`dst_resource_path`/`embed`/`caption`) — file-type support slice 1
-/// (planning/specs/resources-inventory-graph.md §1).
+/// (data-model.md §10).
 pub const SCHEMA_VERSION: i64 = 4;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
@@ -121,8 +121,8 @@ pub fn open(path: &Path) -> Result<Connection> {
     );
     // execute_batch tolerates the rows PRAGMA journal_mode / mmap_size return.
     // busy_timeout: WAL allows one writer at a time, and two short-statement
-    // writers can now legitimately race (a save during the background embed —
-    // desktop-editing.md §4). A modest wait turns that contention into a few-ms
+    // writers can now legitimately race (a save during the background embed).
+    // A modest wait turns that contention into a few-ms
     // stall instead of an immediate SQLITE_BUSY error.
     // mmap_size + cache_size: the whole-space vector scans stream ~100+ MB of blob
     // rows per call on a real vault; under the 2 MB default cache with no mmap that
@@ -143,7 +143,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 /// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
 /// no-op on reopen; a `schema_version` mismatch drops the derived tables first so the
 /// next `reindex` rebuilds them (the index is disposable). The DDL mirrors
-/// planning/specs/completed/index-engine-build.md §1 (the vector tables are created at
+/// index-engine.md (the vector tables are created at
 /// embed time — see [`ensure_embedding_space`]).
 fn migrate(conn: &Connection) -> Result<()> {
     // `meta` must exist before we can read the schema version the index was built at.
@@ -151,7 +151,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
     // Schema-version gate: a mismatch means the derived tables have the wrong shape.
-    // The index is disposable (vision-and-scope, "volatile vault over a disposable
+    // The index is disposable (invariants.md, "volatile vault over a disposable
     // index"), so drop the stale derived tables and clear `meta` — the next `reindex`
     // rebuilds everything under the new schema. Children first (FKs); dropping `chunks`
     // takes its FTS triggers with it.
@@ -382,7 +382,7 @@ pub fn prune_notes_except(
 }
 
 // ---------------------------------------------------------------------------
-// resources (file-type support slice 1 — planning/specs/resources-inventory-graph.md §2)
+// resources (file-type support slice 1 — data-model.md §10)
 // ---------------------------------------------------------------------------
 
 /// One resource's projection into `resources`. Borrowed view like [`NoteRow`] —
@@ -566,7 +566,7 @@ pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Resu
 /// returned ids (Flow ①).
 pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> Result<Vec<i64>> {
     // Guarded on existence so the model-free projection pass still never *creates*
-    // the embedding space (projection-embedding-split.md §4).
+    // the embedding space (index-engine.md).
     if embedding_space_exists(conn)? {
         conn.execute(
             "DELETE FROM note_centroids WHERE note_b2id = ?1",
@@ -598,7 +598,7 @@ pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> R
 // ---------------------------------------------------------------------------
 // embeddings — the vector tables are created at embed time (not in migrate()):
 // their *existence* is the "this vault has an embedding space" signal the
-// projected-but-unembedded fallbacks key on (projection-embedding-split.md §5).
+// projected-but-unembedded fallbacks key on (index-engine.md).
 // ---------------------------------------------------------------------------
 
 /// Whether the embedding space (the `embeddings` table) currently exists.
@@ -808,7 +808,7 @@ pub fn embed_progress(conn: &Connection) -> Result<(usize, usize)> {
 
 /// Every chunk still lacking a stored vector, as `(note_b2id, path, chunk_id, text)`
 /// in `(path, seq)` order — the **DB-derived pending set** the embed pass fills
-/// (projection-embedding-split.md §2). Deriving it here is what decouples projection
+/// (index-engine.md). Deriving it here is what decouples projection
 /// from embedding: nothing is handed between the two passes in memory, so any stop
 /// point (a cancelled embed, a crash between the passes) heals on the next embed.
 /// The ordering reproduces the fused reindex's per-note batching + progress.
@@ -868,7 +868,7 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<(String, String, Option<String
 /// A note's stored chunk vectors as `(chunk_id, vector)` in `seq` order — one
 /// indexed join, not a per-chunk round-trip. Reading a note's own vectors back is
 /// what lets discovery search from them without re-embedding — passage↔passage, no
-/// `embed_query` (tasks.md ①); it is also discovery's second-stage rescore unit and
+/// `embed_query` (index-engine.md §3); it is also discovery's second-stage rescore unit and
 /// the input to a centroid refresh. Call only when the embedding space exists
 /// (`embedding_space_exists`), else the read hits a missing table. `prepare_cached`
 /// because discovery calls this once per shortlisted note.

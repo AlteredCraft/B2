@@ -1,5 +1,5 @@
 // Live-preview decorations — a document feel over the byte-honest buffer
-// (specs/desktop-live-preview.md). Decorations conceal Markdown markup away from the
+// (crates/b2-desktop/CLAUDE.md). Decorations conceal Markdown markup away from the
 // cursor and style content in place; they change what the DOM shows, NEVER what
 // `state.doc` holds (spec §0, insight §2.2). The save chain literally cannot observe
 // this feature — every construct decorates *within* lines (marks, inline replaces,

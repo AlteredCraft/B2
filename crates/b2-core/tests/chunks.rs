@@ -1,4 +1,4 @@
-//! The qmd-heuristic chunker (planning/specs/completed/qmd-chunker.md, issue #19): size-targeted,
+//! The qmd-heuristic chunker (index-engine.md, issue #19): size-targeted,
 //! overlapping, Markdown-aware chunks carrying a `heading_path`. Two DB-level tests keep
 //! the projection wiring honest; the rest exercise `chunk_body` as the pure function it is.
 
@@ -72,7 +72,7 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
 
 #[test]
 fn vault_chunk_config_reaches_projection() {
-    // The eval's sweep seam (specs/eval-strategy.md): a non-default ChunkConfig
+    // The eval's sweep seam (the eval harness, crates/b2-embed/evals/): a non-default ChunkConfig
     // set on the Vault must actually shape the cut — `set_chunk_config` +
     // `project(force)` on the same vault re-chunks under the new policy, so a
     // much finer target yields more chunks than the default did. Model-free.

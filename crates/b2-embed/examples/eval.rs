@@ -1,7 +1,7 @@
 //! Semantic-retrieval + discovery eval — the "separate, occasional pass" scoring
-//! model quality out of CI (specs/eval-strategy.md). It lives as an **example**,
+//! model quality out of CI (the eval harness, crates/b2-embed/evals/). It lives as an **example**,
 //! not a test, so it never runs in the deterministic `cargo test` suite and model
-//! quality can never flake CI (vision-and-scope testability point 5). Run it on
+//! quality can never flake CI (invariants.md). Run it on
 //! demand:
 //!
 //! ```console
@@ -21,7 +21,7 @@
 //! 3. **Passage rank** — queries labelled with a verbatim `passage` are also
 //!    scored at **chunk** level (`Vault::search_chunks`): note-rank is blind to
 //!    sub-note retrieval, which is exactly what chunking levers move
-//!    (qmd-chunker.md §7, GH #44).
+//!    (index-engine.md, GH #44).
 //! 4. **Discovery** — `evals/similar.json` anchors score `Vault::similar` (the
 //!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
 //!    does not exercise.
@@ -181,7 +181,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
 
     // ---- Phase 1: projection only → the BM25-only baseline. ------------------
     // The vector space does not exist yet, so `search`/`search_chunks` run
-    // keyword-only (projection-embedding-split.md §5) — the ablation costs nothing
+    // keyword-only (index-engine.md) — the ablation costs nothing
     // extra: it is the same vault, paused between the two passes.
     let report = vault.project(false)?;
     let bm25 = score_pass(&vault, &set.queries)?;

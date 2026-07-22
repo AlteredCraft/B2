@@ -1,5 +1,5 @@
 {
-  "description": "Hand-labelled connection-discovery set (specs/eval-strategy.md §3): for each anchor note, the corpus notes a human would say belong next to it — its topic-cluster mates. Scores `Vault::similar` (discover::candidates — the two-stage centroid shortlist + exact max-sim, GH #38), which the retrieval eval alone does NOT cover: note-to-note discovery is a different task from query-to-note search even over the same stored vectors. A hit = any `expected` path in the top candidates. The corpus is unlinked, so no candidate is excluded by the 1-hop graph rule.",
+  "description": "Hand-labelled connection-discovery set (the eval harness, crates/b2-embed/evals/): for each anchor note, the corpus notes a human would say belong next to it — its topic-cluster mates. Scores `Vault::similar` (discover::candidates — the two-stage centroid shortlist + exact max-sim, GH #38), which the retrieval eval alone does NOT cover: note-to-note discovery is a different task from query-to-note search even over the same stored vectors. A hit = any `expected` path in the top candidates. The corpus is unlinked, so no candidate is excluded by the 1-hop graph rule.",
   "anchors": [
     { "anchor": "espresso.md", "expected": ["french-press.md", "coffee-roasting.md"] },
     { "anchor": "insomnia.md", "expected": ["sleep-hygiene.md", "dreaming.md"] },

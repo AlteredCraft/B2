@@ -1,4 +1,4 @@
-//! `b2` — the first adapter over the `b2-core` typed API (vision-and-scope,
+//! `b2` — the first adapter over the `b2-core` typed API (invariants.md,
 //! headless-first: "the CLI is the UI before the UI"). It holds **no engine logic**:
 //! it parses args, picks + injects the embedder, calls the [`Vault`] façade, and
 //! prints — human-readable by default, or `--json` for agents.
@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Set by the Ctrl-C handler installed for a foreground `reindex`. The embed loop
 /// reads it at each batch boundary (through the [`ControlFlow`] the progress closure
 /// returns — the shipped cancel seam) and stops *after* the current batch: a
-/// consistent, re-runnable partial index, never a torn write (async-indexing.md §3/§8).
+/// consistent, re-runnable partial index, never a torn write (index-engine.md).
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Map the Ctrl-C flag onto the reindex embed loop's cooperative-cancel signal —
@@ -336,7 +336,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         if p.note_chunks == 1 { "" } else { "s" },
                     );
                     let _ = std::io::stderr().flush();
-                    // Stop after this batch if Ctrl-C was pressed (async-indexing.md §3/§8),
+                    // Stop after this batch if Ctrl-C was pressed,
                     // else carry on. The batch is already written above, so a cancel here
                     // never tears a write.
                     cancel_flow()
@@ -388,8 +388,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Status => {
             // Read-only coverage report: how much of the vault is embedded (semantic
             // ranking live vs. keyword-only) and whether a background reindex is in
-            // flight — the companion to backgrounding a slow reindex with `b2 reindex &`
-            // (async-indexing.md §8). A pure model-free DB read (#26): open with the fake.
+            // flight — the companion to backgrounding a slow reindex with `b2 reindex &`.
+            // A pure model-free DB read (#26): open with the fake.
             let root = cli.vault_or_cwd();
             let (vault, _semantic) = open_vault(&root, false)?;
             let status = vault.embed_status()?;
@@ -543,7 +543,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         }
                     }
                     // If nothing points *at* the note, it's an orphan — surfaced, not
-                    // acted on (user-stories.md Story 2; files are only touched when asked).
+                    // acted on (invariants.md; files are only touched when asked).
                     if !view.connections.iter().any(|c| c.direction == "inbound") {
                         println!("No inbound links — this note is an orphan.");
                     }

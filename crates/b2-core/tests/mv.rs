@@ -1,4 +1,4 @@
-//! `b2 mv` — move/rename a note and repair inbound links (user-stories.md Story 1,
+//! `b2 mv` — move/rename a note and repair inbound links (invariants.md,
 //! the locked invariant "rename keeps every backlink resolving"). Driven through
 //! the [`Vault`] façade against the golden vault (and a small purpose-built vault
 //! for prefix-safety), fully deterministic under the FakeEmbedder.

@@ -1,7 +1,7 @@
 //! `b2-desktop` — the Tauri host, B2's **second dumb adapter** over the
 //! [`Vault`](b2_core::vault::Vault) façade (the GUI sibling of `b2-cli`). It holds
 //! **no engine logic**: each `#[tauri::command]` deserializes its args, calls one
-//! façade method, and serializes the result (specs/completed/desktop-ui-mvp.md §3). The rules
+//! façade method, and serializes the result (crates/b2-desktop/CLAUDE.md). The rules
 //! that keep it a *dumb* adapter live in this crate's charter, `CLAUDE.md`.
 //!
 //! Two things this file owns, both mirroring the CLI:
@@ -17,8 +17,8 @@
 //!   * **Embedder wiring** — pure reads open with the deterministic fake; anything
 //!     that embeds a query or writes vectors (`search` / `link` / `embed`) opens the
 //!     real [`LocalEmbedder`] and **fails fast** with "run `b2 init`" if it's absent.
-//!     `project` — the model-free half of a reindex (projection-embedding-split.md
-//!     §6) — opens the fake, so the first tree paint never waits on a model load.
+//!     `project` — the model-free half of a reindex (index-engine.md) — opens the fake,
+//!     so the first tree paint never waits on a model load.
 //!     `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev mode).
 
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
@@ -47,7 +47,7 @@ use watch::VaultWatcher;
 const CANCEL_POLL: Duration = Duration::from_millis(25);
 
 /// The host's shared state: the active vault root plus the background-reindex control
-/// bits (async-indexing.md §4). Resolved once at startup, then **swappable at runtime**
+/// bits. Resolved once at startup, then **swappable at runtime**
 /// by the in-app vault picker (`choose_vault`) — so the root sits behind a [`Mutex`].
 /// Every command still opens its own short-lived [`Vault`] over the *current* root
 /// (SQLite WAL permits concurrent readers + one writer), the faithful mirror of the CLI
@@ -58,7 +58,7 @@ const CANCEL_POLL: Duration = Duration::from_millis(25);
 /// drives and interrupts* the one façade op stays here; *what* to embed stays in the
 /// core (the charter's line). `reindex_running` is a single-in-flight guard for the
 /// long, vector-writing **embed** pass (the fast, model-free `project` command runs
-/// outside it by design — projection-embedding-split.md §6); a running embed checks
+/// outside it by design — index-engine.md); a running embed checks
 /// `reindex_cancel` at each batch boundary (via the closure it passes to
 /// `Vault::embed`) and stops cooperatively when it is set.
 pub struct AppState {
@@ -125,15 +125,15 @@ impl AppState {
     }
 
     /// Signal the running reindex to stop at its next batch boundary (the
-    /// `cancel_reindex` command). Cooperative — never a thread kill, so no torn writes
-    /// (async-indexing.md §5.6). A no-op if nothing is running.
+    /// `cancel_reindex` command). Cooperative — never a thread kill, so no torn writes.
+    /// A no-op if nothing is running.
     pub fn request_reindex_cancel(&self) {
         self.reindex_cancel.store(true, Ordering::SeqCst);
     }
 
     /// Cancel any in-flight reindex and **block until it winds down** — used before a
-    /// vault switch so a reindex can never keep writing the vault the app has left
-    /// (async-indexing.md §4/§5.4). Re-asserts the cancel flag on every poll so it wins
+    /// vault switch so a reindex can never keep writing the vault the app has left.
+    /// Re-asserts the cancel flag on every poll so it wins
     /// even against a reindex that armed (cleared) it a moment after starting; returns
     /// immediately when nothing is running.
     pub fn cancel_and_wait_for_reindex(&self) {
@@ -291,7 +291,7 @@ fn main() {
         // webview holds no opener permission.
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        // Filesystem auto-reload (#14 / desktop-ui-mvp §5): its own managed state so the
+        // Filesystem auto-reload (#14 / crates/b2-desktop/CLAUDE.md): its own managed state so the
         // pure `AppState` machine stays free of an OS watch handle. Started below once the
         // app handle exists, and re-pointed on a vault switch (`choose_vault`).
         .manage(VaultWatcher::default())
