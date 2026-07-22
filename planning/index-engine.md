@@ -414,7 +414,8 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   the reindex on one file it cannot read.
 - **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
   projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
-  ([vision-and-scope.md](vision-and-scope.md)): round-trip losslessness (`parse → serialize → parse`),
+  ([vision-and-scope.md](vision-and-scope.md); the full register: [invariants.md](invariants.md)):
+  round-trip losslessness (`parse → serialize → parse`),
   `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
   (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
   diverges from the source of truth.

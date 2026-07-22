@@ -75,6 +75,7 @@ and work with a vault in about ten minutes. Then go deeper:
 
 | Doc | What it owns |
 |---|---|
+| [invariants.md](planning/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, cited by id. On conflict with any other doc, it wins. |
 | [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
 | [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + `sqlite-vec`) as a disposable projection. The canonical *how*. |

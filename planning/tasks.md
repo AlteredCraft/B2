@@ -165,6 +165,9 @@ Everything planned-but-unstarted is tracked as an issue:
 Compaction kept these because code comments cite them by name; the **canonical** home for each is the
 linked doc.
 
+- **The invariant register** — [invariants.md](invariants.md): the one-page normative list of what
+  must always be true, cited by id (S2, G2, …). On conflict with any other doc, it wins.
+
 - **① Connection discovery** (resolved 2026-07-01) — a candidate is the graph's *complement*, **near ∖
   connected**: per anchor chunk, KNN its **stored** `chunks_vec` vector (no re-embed, passage↔passage),
   score each other note by its **best** chunk-pair (max-sim), subtract the anchor's 1-hop neighbors

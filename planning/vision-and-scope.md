@@ -86,7 +86,8 @@ proposes — and I stay in control of what it commits.
 The principles above are *what B2 must always be* for its user. These two tenets are *how we build* to
 keep them true over time — the architectural stance the rest of the design serves. The invariants in
 [data-model.md](data-model.md) (§6) and the disposable index in [index-engine.md](index-engine.md) (§3)
-are these tenets made mechanical; this is their canonical statement.
+are these tenets made mechanical; this is their canonical statement, and
+**[invariants.md](invariants.md)** is the one-page register of the resulting invariants.
 
 - **A volatile vault over a disposable index.** Your notes are meant to churn — move, split, merge,
   compress, trim orphans, big refactors — and B2 must *welcome* that, never penalize it. We guarantee

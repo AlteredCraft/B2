@@ -19,6 +19,8 @@ The code is a *projection of the spec*, and comments cite it constantly (e.g. `d
 `build spec §1.2`, `index-engine.md §6`). Before changing behavior, read the relevant doc — the
 schema must satisfy the data model, never the reverse.
 
+- `planning/invariants.md` — the **invariant register**: the one-page normative list of what must
+  always be true (cited by id — S2, G2, …). On conflict with any other doc, it wins.
 - `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
 - `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
 - `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + in-process vector scan; `sqlite-vec` until 2026-07-12, see `research/discovery-scan-strategy.md`) projection, table DDL, the build order, data flows.
@@ -108,7 +110,7 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
 
 ### The core invariant
 
-**`index = a pure projection of (Markdown)`.** Two storage tiers:
+**`index = a pure projection of (Markdown)`.** (The full register: `planning/invariants.md`.) Two storage tiers:
 
 1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable. Every committed
    connection lives here: a body `[[link]]` (always untyped), or a frontmatter `b2_relations:` entry

@@ -448,7 +448,7 @@ Net: "export to OKF" is selecting and re-shaping fields that already exist — a
 The model exists to make the three locked invariants
 ([vision-and-scope.md](vision-and-scope.md)) hold by construction — they are the **"volatile vault over
 a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)) made
-mechanical:
+mechanical (the full register, cited by id: [invariants.md](invariants.md)):
 
 - **Round-trip losslessness** (`parse → serialize → parse` is byte-identical). B2 preserves unknown
   frontmatter keys *and their order*, body text, whitespace, and comment tokens. The **only** bytes B2
