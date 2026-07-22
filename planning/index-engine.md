@@ -2,7 +2,7 @@
 b2id: 01KWSRKASCAYXRPQ1AP5HE6R2N
 title: "B2 — Index Engine: rebuild qmd on SQLite"
 type: note
-tags: [b2, index-engine, sqlite, fts5, sqlite-vec, search, reranker, architecture]
+tags: [b2, index-engine, sqlite, fts5, vectors, search, reranker, architecture]
 created: 2026-06-29
 status: draft
 ---
@@ -10,8 +10,8 @@ status: draft
 # B2 — Index Engine: rebuild qmd on SQLite
 
 > **Findings for the "Index-engine evaluation" task** ([tasks.md](tasks.md)). Evaluates the idea of
-> rebuilding [tobi/qmd](https://github.com/tobi/qmd) on our own SQLite store (FTS5 + `sqlite-vec`,
-> reranker as a fast follow) instead of adopting qmd as a dependency. Context:
+> rebuilding [tobi/qmd](https://github.com/tobi/qmd) on our own SQLite store (FTS5 + an in-process
+> vector scan, reranker as a fast follow) instead of adopting qmd as a dependency. Context:
 > [vision-and-scope.md](vision-and-scope.md) (semantic search is **engine-gated**; single-binary;
 > local-first) and the data model leans in [tasks.md](tasks.md).
 
@@ -24,13 +24,12 @@ status: draft
   with hybrid retrieval over it**. qmd has no notion of typed edges, backlinks, or `b2id`-stable identity,
   which are the reasons B2 exists ([vision-and-scope.md](vision-and-scope.md), capability areas 3, 5).
 - SQLite gives us **one embedded store for every *queryable* concern at once** — full-text (FTS5),
-  vectors (`sqlite-vec`), and the typed graph — with transactional consistency across them, so
+  vectors (plain tables scored in-process), and the typed graph — with transactional consistency across them, so
   `b2 similar` candidate generation joins all three in a single query. That single-store property is
   worth more to B2 than anything we'd inherit by depending on qmd. The index is a pure **disposable
-  cache**: `index = projection of (Markdown)` — drop it, reindex, get it back identical, with **no
-  durable state outside your notes** (two tiers, [data-model.md](data-model.md); the review-layer /
-  event-log tier was removed with the LLM relator, 2026-07-04).
-- Because `sqlite-vec` **does** provide vector search, the locked **engine-gated** decision resolves in
+  cache**: `index = projection of (the vault directory)` — drop it, reindex, get it back identical,
+  with **no durable B2-derived state outside your notes** (two tiers, [data-model.md](data-model.md)).
+- Because the engine **does** provide vector search, the locked **engine-gated** decision resolves in
   favour of **semantic search in v1**, not as a fast follow ([vision-and-scope.md](vision-and-scope.md),
   "Decisions locked 2026-06-28").
 - The **reranker is a clean fast-follow**: a swappable seam after RRF fusion, exactly as the testability
@@ -75,7 +74,7 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 | Concern | qmd | B2's need |
 |---|---|---|
 | Full-text search | ✅ FTS5/BM25 | ✅ same |
-| Semantic search | ✅ `sqlite-vec` | ✅ same |
+| Semantic search | ✅ `sqlite-vec` | ✅ in-process scan |
 | Rerank | ✅ cross-encoder | ✅ fast-follow |
 | **Typed graph** (`b2id→b2id` edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
 | **Backlinks** (who points at X, typed, over the whole vault) | ❌ none | ⭐ core (area 5) |
@@ -85,7 +84,7 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 
 The decisive point: B2's index is a **derived projection of the vault** that holds the **typed graph**
 *next to* the search indexes, so retrieval and connection discovery share one transactional store —
-`index = projection of (Markdown)`, drop-and-rebuild at any time ([data-model.md](data-model.md)). qmd
+`index = projection of (the vault directory)`, drop-and-rebuild at any time ([data-model.md](data-model.md)). qmd
 models none of the graph layer — wrapping it would mean maintaining a second store for everything that
 makes B2 *B2*, and reconciling two sources of truth. Rebuilding the ~300 lines of retrieval glue that we
 actually want is cheaper than that integration tax — and qmd's MIT license + public design make the
@@ -102,12 +101,10 @@ agent-output discipline, and the MCP surface idea. **What we discard:** the npm/
 One artifact, per the two-tier model ([data-model.md](data-model.md)) and realizing the **"volatile vault
 over a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)): a
 **disposable** SQLite index holding every queryable concern transactionally. The whole index is
-**rebuildable from Markdown** — drop `b2.sqlite`, re-scan the vault, get back an identical index (the
-locked `full-reindex ≡ incremental-update` invariant). Markdown is the single source of truth (notes +
-every committed edge); the index is a cache of it, with **no durable state outside your notes**. *(Through
-2026-06-30 there was a second artifact — a durable `.b2/` event log holding the suggestion queue +
-rejection memory; the LLM-relator cut removed the only thing it was for, so the index now stands alone;
-[data-model.md](data-model.md) §4.)*
+**rebuildable from the vault** — drop `b2.sqlite`, re-scan the vault, get back an identical index (the
+locked `full-reindex ≡ incremental-update` invariant). The vault is the single source of truth (with
+Markdown its sole authored subset — notes + every committed edge); the index is a cache of it, with
+**no durable B2-derived state outside your notes**.
 
 > The precise DDL, the relations between these tables, the read/write data flows, and the build order
 > are specified in **[specs/completed/index-engine-build.md](specs/completed/index-engine-build.md)**. The sketch below is
@@ -122,7 +119,8 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any ti
 ├── DERIVED FROM MARKDOWN: SEARCH
 │   ├── chunks(id, note_b2id, seq, char_start, char_end, token_count, text)
 │   ├── chunks_fts                                -- FTS5 over chunk text (BM25)
-│   └── chunks_vec                                -- sqlite-vec vec0(embedding float[768])
+│   ├── embeddings(chunk_id, vector)              -- plain BLOB vectors (768-dim), scored in-process
+│   └── note_centroids(note_b2id, centroid)       -- per-note centroid (discovery's coarse stage)
 │
 ├── DERIVED FROM MARKDOWN: TYPED GRAPH
 │   └── edges(id, src_id, dst_id, type, origin,   -- every row ← Markdown (body links + FM b2_relations:)
@@ -132,17 +130,17 @@ b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any ti
     └── llm_cache(key, value, created)            -- reserved for a future reranker (fast-follow, §5)
 ```
 
-Every table is derived from the Markdown; there is no third home. `index = projection of (Markdown)`.
-*(Since 2026-07-07 the projection is built in two separately-invokable passes —
+Every table is derived from the vault; there is no third home.
+*(The projection is built in two separately-invokable passes —
 model-free `project` (notes/chunks/FTS/edges) then `embed` (vectors), with `reindex` their
 composition — so keyword search + graph are usable before embedding completes;
 [specs/completed/projection-embedding-split.md](specs/completed/projection-embedding-split.md). The invariant is untouched:
 a projected-but-unembedded index is a smaller projection, never a wrong one.)*
 
-**Resources widen the projection (designed 2026-07-08, build slice 1).** A real vault also holds
-non-`.md` files; the walk currently ignores them (`ingest.rs` filters `extension == "md"`). The locked
+**Resources widen the projection.** A real vault also holds non-`.md` files, and the walk inventories
+them. The locked
 design ([data-model.md](data-model.md) §10, [research/file-type-support.md](research/file-type-support.md))
-adds them as **path-keyed peers** without disturbing any statement above — the source *tier* becomes the
+adds them as **path-keyed peers** without disturbing any statement above — the source *tier* is the
 whole vault directory, so **`index = projection of (the vault directory)`**:
 
 - **A `resources` table** — `(path PK, class, size, mtime, content_hash, indexed_at)` — a **separate**
@@ -187,12 +185,12 @@ Why this shape fits B2 specifically:
   [data-model.md](data-model.md) §0), then re-projects that note — a projection of an authored line, not
   an in-place index write.
 - **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose
-  note is within 2 typed hops of note X" is a join across `chunks_vec`, `chunks`, and `edges`. This is
+  note is within 2 typed hops of note X" is a join across `embeddings`, `chunks`, and `edges`. This is
   the substrate **`b2 similar`** (connection-discovery candidate generation) runs on, and it's the thing a
   qmd-as-dependency design could never give us cleanly.
-- **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `chunks_vec`, so
+- **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `embeddings`, so
   the whole pipeline is assertable with no live model (testability stack, points 4–5). The embedder is the
-  one AI seam left.
+  one AI seam.
 
 ### Why materialize the graph at all — vs. resolving links at runtime
 
@@ -210,7 +208,7 @@ edges is what turns the following from full-vault scans (or impossibilities) int
 - **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`contradicts`" is a scan *per hop*
   at runtime; over `edges` it is one SQL traversal.
 - **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a single
-  join `chunks_vec ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
+  join `embeddings ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
   primitive (search *within* an already-related neighborhood). **`b2 similar`'s candidate generation is its
   *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links you
   *haven't* made (resolved 2026-07-01, see [tasks.md](tasks.md) ①) — where the materialized graph supplies
@@ -219,47 +217,40 @@ edges is what turns the following from full-vault scans (or impossibilities) int
 
 The reframe that keeps this cheap: **runtime outbound-parsing is the correctness *definition*
 (`index = projection of Markdown`); the `edges` table is its *cache*, kept so the inverse and compositional
-queries are fast.** It is therefore not a third subsystem beside FTS5 and `sqlite-vec` — it is one more
+queries are fast.** It is therefore not a third subsystem beside FTS5 and the vector tables — it is one more
 **disposable** table in the same store, populated by the **same parse pass** that already walks each body
 for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. qmd (§2); the typed,
 traversable graph is the value-add, not the search. The standing cost of carrying it is the
 `b2id`-under-`[[path]]` write-amplification budgeted in §8.
 
-FTS5 is built into SQLite (BM25 ranking included). `sqlite-vec` is a small loadable C extension we
-statically link. Both are battle-tested at personal-vault scale.
+FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
+in-process ([research/discovery-scan-strategy.md](research/discovery-scan-strategy.md)). Both are
+battle-tested at personal-vault scale.
 
 ## 4. Semantic search & the engine-gated decision → verdict
 
 The locked decision: *"if the index engine provides vector/semantic search, it's in v1."*
 
-`sqlite-vec` provides it. Therefore **semantic search is in v1.**
+The engine provides it. Therefore **semantic search is in v1.**
 
-Reality check on `sqlite-vec` so we don't over-promise:
+How it runs — an **exact, in-process scan**, no vector extension, no ANN:
 
-- **Maturity:** pre-v1, "expect breaking changes." Dual MIT/Apache-2.0. ~8k stars, the de-facto
-  successor to `sqlite-vss`, broad bindings (Python/Node/Go/Rust/WASM). Acceptable for a personal tool;
-  we pin a version and own the upgrade.
-- **Search method:** in practice today it is **brute-force KNN** (full linear scan) over `vec0` virtual
-  tables, with metadata/partition-key filtering. ANN (IVF, DiskANN) files exist in the repo but are
-  **not a stable, shipped path** — do **not** design v1 assuming ANN.
+- **Storage & scoring:** vectors live in plain tables — `embeddings(chunk_id, vector)` plus per-note
+  `note_centroids` — read with one sequential statement and scored in-process (`embed::l2_sq`). A
+  `vec0`-style virtual table charges a per-row shadow-table probe on every scan, which dominates at
+  real-vault scale; the plain-table scan does not. Full analysis + options:
+  [research/discovery-scan-strategy.md](research/discovery-scan-strategy.md)
+  ([#38](https://github.com/AlteredCraft/B2/issues/38)).
+- **Discovery is two-stage:** an O(notes) coarse scan over centroids shortlists candidates, then an
+  exact max-sim rescore over only the shortlist's chunk vectors.
 - **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
   chunks. Brute-force cosine over ~100k × 768-dim float32 vectors is on the order of **single-digit to
-  low-tens of milliseconds** — well within an interactive CLI budget. We're nowhere near the regime
-  where ANN matters. If we ever are (multi-hundred-k chunks), options are int8/binary quantization in
-  `sqlite-vec` (built in) or partitioning by collection — both before reaching for ANN.
+  low-tens of milliseconds** — well within an interactive budget. We're nowhere near the regime
+  where ANN matters; if a vault ever is (multi-hundred-k chunks), int8/binary quantization and ANN
+  hold a standby order behind the centroid stage.
 
-So: **semantic search ships in v1**, brute-force KNN, 768-dim float vectors, with quantization in our
+So: **semantic search ships in v1**, exact KNN, 768-dim float vectors, with quantization in our
 back pocket. This is the headline consequence of choosing SQLite.
-
-**Update (2026-07-12, [#38](https://github.com/AlteredCraft/B2/issues/38)).** The brute-force *math*
-scaled as predicted; `sqlite-vec`'s **read path** did not — every `vec0` scan probes a shadow table
-per row (~38.6k internal statements per `b2 similar` on the primary vault, ~4.4 s per note-open).
-Since its only shipped search was brute force we already compute, the dependency was **removed**:
-vectors now live in plain tables (`embeddings`, plus per-note `note_centroids`) scored in-process,
-and discovery is two-stage (O(notes) centroid shortlist → exact max-sim rescore). Same SQLite store,
-same single-store property, same exact results at test scale. Full analysis + options:
-[research/discovery-scan-strategy.md](research/discovery-scan-strategy.md). Quantization and ANN keep
-their standby order, now behind the centroid stage.
 
 ## 5. The reranker as a fast follow
 
@@ -320,7 +311,7 @@ model seam *is* the **"build for tomorrow's model"** tenet in practice,
 [vision-and-scope.md](vision-and-scope.md#design-philosophy)), ship a **local model as the default**
 (option 1 or 2), and decide model-download-on-first-run vs. bundled-in-binary as a packaging detail
 later. Crucially, **none of this blocks the engine work**: build the SQLite store +
-FTS5 + `sqlite-vec` + the typed graph now against the deterministic fake embedder; drop the real
+FTS5 + the vector tables + the typed graph now against the deterministic fake embedder; drop the real
 embedder into the seam when the packaging path is chosen.
 
 **Decided (2026-06-30).** Runtime = **`candle` + `hf-hub`** (pure-Rust inference compiled into the
@@ -343,34 +334,25 @@ config can't lie about it. `open()` no longer shapes/drops the vector space (the
 `search`, re-embeds on `reindex`); the fake embedder stays the CI default so model quality never enters
 the fast suite. Eval is a `cargo run -p b2-embed --example eval` pass (precision/MRR), out of CI.
 
-## 7. Tech-stack implications (noted, not decided)
+## 7. Tech-stack implications — resolved: Rust
 
-The stack is still open ([vision-and-scope.md](vision-and-scope.md)). The index-engine choice nudges it:
-
-- **SQLite + FTS5 + `sqlite-vec` are language-agnostic.** Strong embedded bindings exist for **Rust**
-  (`rusqlite`), **Go** (`mattn/go-sqlite3` / `modernc.org/sqlite`), Python, and Node/Bun. The engine
-  does not pick the language for us.
-- **The single-binary goal favours Rust or Go** (static link SQLite + `sqlite-vec` + an ONNX/GGUF
-  embedder into one artifact). qmd's TypeScript/Node path is the *least* aligned with principle #5,
-  which is another reason not to inherit qmd's runtime by depending on it.
-- This is a **separate decision** ([tasks.md](tasks.md) backlog) — flagged here only because "rebuild on
-  SQLite" quietly closes off "just use qmd's Node stack" and tilts toward a compiled language.
+- **SQLite + FTS5 are language-agnostic** (strong embedded bindings for Rust, Go, Python, Node), so
+  the engine didn't pick the language; the **single-binary goal** did — it favours a compiled
+  language, and B2 is a **Rust Cargo workspace** (`rusqlite` with bundled SQLite; `candle` for the
+  embedder).
+- qmd's TypeScript/Node path is the *least* aligned with principle #5, which is another reason not to
+  inherit qmd's runtime by depending on it.
 
 ## 8. Risks, open questions & operational burden
 
 ### Engine risks & open questions
 
-- **`sqlite-vec` is pre-v1.** Mitigate: pin a version, wrap vector ops behind our own small interface so
-  a future swap (or ANN upgrade) is contained.
-- **Embedding model size vs. single binary** (§6) — **resolved (2026-06-30):** not bundled; an explicit
+- **Embedding model size vs. single binary** (§6) — **resolved:** not bundled; an explicit
   `b2 init` downloads a configurable model (candle + hf-hub) into a shared XDG cache. The binary stays small.
-- **Embedding dimension & model lock-in.** Changing the embed model means re-embedding the whole vault
-  (qmd's `embed -f`). Store the model id + dim in the DB; treat a model change as a full re-embed.
-  **Locked:** the `vec0` column type is **dim 768** — the default **`BAAI/bge-base-en-v1.5`** and the
-  config-selectable EmbeddingGemma-300M are both 768-dim (§6, built 2026-07-01); a model/dim change is a
+- **Embedding dimension & model lock-in.** Changing the embed model means re-embedding the whole vault.
+  **Locked:** the embedding space is **dim 768** — the default **`BAAI/bge-base-en-v1.5`** and the
+  config-selectable EmbeddingGemma-300M are both 768-dim (§6); a model/dim change is a
   full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
-- **Loadable-extension friction.** `sqlite-vec` must be loaded at runtime (qmd notes macOS needs a
-  SQLite that allows extensions). Static-linking it into our binary removes this for end users.
 - **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
   Keep `chunks.note_b2id` as the join and resolve search hits up to notes for graph operations — already
   reflected in §3.
@@ -414,7 +396,8 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   the reindex on one file it cannot read.
 - **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
   projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
-  ([vision-and-scope.md](vision-and-scope.md)): round-trip losslessness (`parse → serialize → parse`),
+  ([vision-and-scope.md](vision-and-scope.md); the full register: [invariants.md](invariants.md)):
+  round-trip losslessness (`parse → serialize → parse`),
   `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
   (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
   diverges from the source of truth.
@@ -424,20 +407,17 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   ([user-stories.md](user-stories.md), Story 2) — but B2 only ever *surfaces* the consequence (an orphan
   flag in `b2 explain`), never silently rewrites an inbound file or an edge. Files are touched only when asked.
 
-## 9. Recommendation & next steps
+## 9. Recommendation
 
-1. **Adopt SQLite as the B2 index engine** (FTS5 + `sqlite-vec`) per the §3 schema — one disposable
-   index, `index = projection of (Markdown)`. Use qmd as a design reference under its MIT license; do
-   **not** depend on it.
-2. **Record the engine-gated outcome:** semantic search is **in v1** (brute-force KNN; quantization
-   reserved for scale). Update [vision-and-scope.md](vision-and-scope.md) / [tasks.md](tasks.md) to flip
-   semantic from "engine-gated" to "in v1".
+1. **SQLite is the B2 index engine** (FTS5 + plain vector tables) per the §3 schema — one disposable
+   index, `index = projection of (the vault directory)`. qmd is a design reference under its MIT
+   license, **not** a dependency.
+2. **The engine-gated outcome:** semantic search is **in v1** (exact in-process KNN; quantization
+   reserved for scale).
 3. **Reranker = explicit fast-follow** behind a post-fusion seam; query expansion = later/optional.
-4. **Make the embedder a seam now**; build the store + indexes + typed graph against the **deterministic
-   fake embedder**, so engine work proceeds before the single-binary embedding decision is made.
-5. **Sequence:** the data model is **locked** ([data-model.md](data-model.md)) and this doc is now
-   reconciled with its two-tier model, so the engine is unblocked — build the store + indexes + typed
-   graph against the golden-vault fixtures ([data-model.md](data-model.md) §8).
+4. **The embedder is a seam**; the store + indexes + typed graph are built and tested against the
+   **deterministic fake embedder**, with the golden-vault fixtures as the yardstick
+   ([data-model.md](data-model.md) §8).
 
 > Net: qmd answers "can a great hybrid search engine run locally on Markdown?" — yes, and here's how.
 > B2's question is one layer up: "can that retrieval live inside a typed, `b2id`-stable, agent-operated

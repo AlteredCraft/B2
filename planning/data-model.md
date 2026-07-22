@@ -47,20 +47,14 @@ contracts — getting this split right is what keeps the vault pristine and the 
 
 The crucial relationship between them:
 
-> **Index = projection of (Markdown).** Drop `b2.sqlite` → re-derive the graph and search indexes from
-> the Markdown → an identical index (the locked `full-reindex ≡ incremental-update` invariant). There is
-> **no** durable state outside your notes: every connection you commit lives in the Markdown itself, so
-> nothing outside Markdown can cause knowledge loss. *(Before the 2026-07-04 relator cut there was a
-> third tier — a durable `.b2/log/` event log holding pending suggestions + rejection memory. With the
-> LLM relator and its suggestion queue gone, that tier had nothing left to hold and was removed;
-> [vision-and-scope.md](vision-and-scope.md) "Decisions locked (2026-07-04)".)*
+> **Index = projection of (the vault directory).** Drop `b2.sqlite` → re-derive the graph and search
+> indexes from the vault → an identical index (the locked `full-reindex ≡ incremental-update`
+> invariant). There is **no** durable B2-derived state outside your notes: every connection you commit
+> lives in the Markdown itself, so nothing outside the vault can cause knowledge loss. A **resource**
+> (§10) contributes only *derived* rows (metadata, extracted text, inbound edges) and holds no durable
+> authored state, so the guarantee is unchanged.
 
-*(With **resources** in scope (§10) this generalizes to **`index = projection of (the vault directory)`** —
-a resource contributes only *derived* rows (metadata, extracted text, inbound edges) and, like the index,
-holds no durable authored state, so the guarantee is unchanged: drop `b2.sqlite`, reindex, get it back
-identical.)*
-
-### Folders — user-authored structure, filesystem-authoritative (decision 2026-07-21)
+### Folders — user-authored structure, filesystem-authoritative
 
 The vault directory carries two kinds of authored material: the Markdown files (**content**) and the
 directory tree itself (**structure**). A folder — *empty or not* — is user-authored exactly like a note,
@@ -75,23 +69,20 @@ is one-to-one with the vault's managed (non-dot) directory tree *by construction
 a Finder `mkdir` appears on the next pulse, and a folder emptied by a move stays visible until the human
 removes it. The "no durable
 state outside Markdown" guarantee above scopes to **B2-derived data**; the human's own structure is vault
-material, not B2 state. *(Before this decision the desktop staged "new folders" as session UI state and
-wrote no empty dir — folders existed only as file-path prefixes, so an empty folder was invisible and a
-staged one was lost on restart; both violated the tree ↔ fs one-to-one.)*
+material, not B2 state.
 
 ---
 
 ## 0. The central decision — where a connection lives
 
-This closes the "remaining central question" in [tasks.md](tasks.md). It is settled by one principle
-plus the locked rule that B2 changes the vault only on your command:
+Settled by one principle plus the locked rule that B2 changes the vault only on your command:
 
 - **The body is the human's document — B2 never authors it, and never asks it to carry B2 syntax.**
   The body is what renders, exports, and prints; structure B2 injected there (a `## Relations` section
   appearing in a `resume.md`) would corrupt the document. So B2 writes **no** connections into the body.
   The same principle bounds *reading*: B2 reads the body strictly as ordinary Markdown — links are
   links, prose is prose — and no prose shape (a list marker, a leading verb) is ever B2 structure
-  (decision 2026-07-21, §2/§9). *(The lone body write is the mechanical repair of an inbound wikilink's
+  (§2, §7). *(The lone body write is the mechanical repair of an inbound wikilink's
   path on move — fixing a link the human already wrote, never adding one.)*
 - **B2 writes a connection only when you commit one** ([vision-and-scope.md](vision-and-scope.md),
   "Review & trust") — with `b2 link`, or a body link you write yourself. Nothing lands in a note that you
@@ -123,8 +114,7 @@ links — that is the **augment** flow (§2): the typed edge coexists with the b
 overlap case — the *same* `(target, type)` authored in both homes (necessarily `references`, the only
 type a body link can carry) — is resolved at projection time by **frontmatter-wins** dedup: the
 frontmatter row (the richer record — it alone can carry an explanation) is kept, the redundant body
-reference is ignored as a duplicate, never auto-removed from the file. *(Reverses the earlier
-inline-wins rule, which predates frontmatter being the sole typed home; 2026-07-21, §9.)*
+reference is ignored as a duplicate, never auto-removed from the file.
 
 **The trade we accept:** a B2-committed edge is metadata, so it is *not* guaranteed clickable in vanilla
 Obsidian's reading view (frontmatter, not prose). Human body links are untouched and stay clickable, and
@@ -186,12 +176,11 @@ exactly the body-vs-metadata line §0 draws.
   (basename with the `.md` extension removed); B2 derives the display title from the path alone and never
   privileges this frontmatter field. The key is still parsed and round-tripped losslessly like any other
   (a human or importer may keep a `title:` for other tools), and it never drives B2's display, its link
-  aliases, or search. *(This reverses the earlier "frontmatter title → first H1 → filename" precedence —
-  the H1 step was never built, and the filename is now the sole source; decision 2026-07-14, §9.)*
+  aliases, or search.
 - **`description`** — one-line summary; feeds the embedding `title:`/`text:` prompt and OKF export.
 - **`tags`** — list of strings.
-- **`created` / `updated`** — ISO-8601 date or datetime. `created` is set at creation; `updated` is
-  maintained by B2 on B2-authored edits (manual edits may set it too).
+- **`created` / `updated`** — ISO-8601 date or datetime. `created` is set by B2 at creation
+  (`b2 add`); `updated` is the human's (or another tool's) to maintain — B2 does not stamp it.
 - **`aliases`** — Obsidian-native additional titles; B2 treats them as alternate link aliases.
 - **`provenance`** — *optional, opt-in* note-level authorship: `{by: human | agent:<model-id>,
   source?, confidence?}`. Absent ⇒ treated as `{by: human}`. A hand-written frontmatter field for when
@@ -259,18 +248,6 @@ alongside the untyped reference — both are real, separately-authored facts. Th
 (`references [[x]] — why`) collapses into one edge, **frontmatter-wins** (§0/§3), so the explanation
 survives. This is the intended UI affordance: select (e.g. alt-click) a body link, choose a verb and
 optionally an explanation, and B2 appends one `b2_relations:` entry — the body is never touched.
-
-### Why there is no body typed-line syntax (decision 2026-07-21)
-
-Earlier revisions of this section defined a body construct — a list item
-`- <verb> [[path|title]] — explanation` parsed as a typed edge. It is **removed**. It made B2 an
-interpreter of prose *shape*: any list item that happened to open with a lowercase word before a link
-(`- see [[x]] for background`) silently became a typed edge of verb `see` — a misread no human
-intended, and a "special syntax" tax on the document that violates §0's first principle. The body is
-now read strictly as ordinary Markdown: its links are `references`, full stop. Old notes carrying
-typed lines lose nothing structural — the line's wikilink still projects as a `references` edge; its
-verb and trailing text read as the prose they visually are. Re-typing such a connection is one
-`b2 link` (or a hand-written `b2_relations:` entry).
 
 ### Relation vocabulary — a stance core + a tolerated tail
 
@@ -381,11 +358,10 @@ table holds; the Markdown is the source, this is the index.
 
 ---
 
-## 4. Committing a connection — and why there is no third tier
+## 4. Committing a connection
 
-With the LLM relator cut ([vision-and-scope.md](vision-and-scope.md), "Decisions locked (2026-07-04)"),
-the data model has **no suggestion lifecycle, no review queue, no rejection memory, and no event log.** A
-connection becomes real in exactly two ways, both **authored in Markdown**:
+The data model has **no suggestion lifecycle, no review queue, no rejection memory, and no event
+log.** A connection becomes real in exactly two ways, both **authored in Markdown**:
 
 1. **A body link you write** — a plain `[[path|title]]`, Markdown link, or embed: an untyped
    `references` edge (§2; the body carries no typed syntax). B2 **reads** it on the next reindex; it
@@ -406,23 +382,9 @@ in-place flip; an edge exists iff it is written in the Markdown (§3).
 
 A committed edge is **pristine**: no `by`, no `confidence`, no `source`, no breadcrumb — nothing stapled
 to the note beyond the `<verb> [[path|title]]` line itself. There is nowhere else for edge provenance to
-live, and that is deliberate — provenance was *decision fuel* for a review step that no longer exists.
+live, and that is deliberate — provenance is *decision fuel* for a review step B2 doesn't have.
 (Optional **note-level** `provenance:` frontmatter remains the human's to write — §1 — but B2 neither
 requires nor manages it, and it is separate from edges.)
-
-### Why there is no event log
-
-The durable `.b2/log/` tier existed for exactly two jobs — holding the **pending suggestion queue** and
-remembering **rejections** so they weren't re-proposed. Both die with the relator. Its only other content
-was `b2id.stamped`, and that is pure history: the `b2id` lives in the note's frontmatter, so the stamp is
-reconstructible from the Markdown and needs no separate record. With nothing load-bearing left, the tier
-(and its `replay(log) ⇒ review state` step) is **removed**. The consequence is the strongest form of the
-disposable-index tenet: **`index = projection of (Markdown)`** — drop `b2.sqlite`, reindex, get an
-identical index, with **no durable state anywhere outside your notes** (§6).
-
-*(For the record: this reverses the three-tier / event-log design that §0, §3, and this section carried
-through 2026-06-30. The reversal is scoped to the review layer — the body-vs-frontmatter home decision
-(§0) and every invariant in §6 are unchanged.)*
 
 ---
 
@@ -448,20 +410,20 @@ Net: "export to OKF" is selecting and re-shaping fields that already exist — a
 The model exists to make the three locked invariants
 ([vision-and-scope.md](vision-and-scope.md)) hold by construction — they are the **"volatile vault over
 a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)) made
-mechanical:
+mechanical (the full register, cited by id: [invariants.md](invariants.md)):
 
 - **Round-trip losslessness** (`parse → serialize → parse` is byte-identical). B2 preserves unknown
   frontmatter keys *and their order*, body text, whitespace, and comment tokens. The **only** bytes B2
   ever changes are the specific mechanical edits it is asked to make: (a) stamping a missing `b2id`,
-  (b) rewriting an inbound `[[oldpath|title]]` → `[[newpath|title]]` on a move (**the lone body write**),
-  (c) appending one typed-link string to frontmatter `b2_relations:` on `b2 link`, (d) optional
-  cosmetic alias refresh. **The body is never authored by B2** — (a), (c), (d) are frontmatter, and (b)
+  (b) rewriting an inbound `[[oldpath|title]]` → `[[newpath|title]]` on a move (**the lone body write**;
+  aliases preserved verbatim), (c) appending one typed-link string to frontmatter `b2_relations:` on
+  `b2 link`. **The body is never authored by B2** — (a) and (c) are frontmatter, and (b)
   only repairs a link the human already wrote. Every other byte is untouched — directly satisfying the
   Story-1/Story-2 acceptance criteria ([user-stories.md](user-stories.md)).
-- **`full-reindex ≡ incremental-update`.** The **index = projection of (Markdown)**: the edge set is a
-  pure function of a note's Markdown plus the `path → b2id` resolution table. Re-deriving one note ≡
-  re-deriving the vault for that note's edges; dropping `b2.sqlite` and rebuilding from the Markdown
-  yields an identical index — there is no log term left to replay.
+- **`full-reindex ≡ incremental-update`.** The **index = projection of (the vault directory)**: the
+  edge set is a pure function of a note's Markdown plus the `path → b2id` resolution table. Re-deriving
+  one note ≡ re-deriving the vault for that note's edges; dropping `b2.sqlite` and rebuilding from the
+  vault yields an identical index.
 - **`rename keeps every backlink resolving`.** Edges key on `b2id`; path is a repairable convenience copy.
   A move rewrites path *text* in inbound files and zero edge rows.
 
@@ -472,24 +434,30 @@ defined, that doc is where they're enforced in the store.
 
 ## 7. Rejected / deferred alternatives
 
-- **B2 authoring the body — rejected (Decision 1, 2026-06-30).** The body is the rendered/exported
+- **B2 authoring the body — rejected.** The body is the rendered/exported
   document and must stay 100% the human's; B2 injecting a `## Relations` section (or any prose) would
   corrupt it (imagine a `resume.md`). So B2's committed edges go to **frontmatter `b2_relations:`** instead
   (§0, §2). The *only* body write B2 makes is the mechanical move-repair of an inbound wikilink's path —
-  fixing a link the human already wrote, never adding one. **This reverses the earlier "accepted edges go
-  inline in the body" decision.**
-- **Body typed-line syntax (`- <verb> [[path|title]] — …` parsed from prose) — removed (2026-07-21).**
-  The read-side sibling of the decision above: parsing a verb + explanation out of body prose made B2
-  force "special" syntax onto the document and misread ordinary prose (`- see [[x]]` became a typed
-  edge of verb `see`). Typed relations are frontmatter-only; body links are always plain `references`
+  fixing a link the human already wrote, never adding one.
+- **Body typed-line syntax (`- <verb> [[path|title]] — …` parsed from prose) — rejected.**
+  The read-side sibling of the decision above: parsing a verb + explanation out of body prose would make
+  B2 an interpreter of prose *shape* — a list item that happens to open with a lowercase word before a
+  link (`- see [[x]] for background`) would silently become a typed edge of verb `see`, a misread no
+  human intended and a "special syntax" tax that violates §0's first principle. Typed relations are
+  frontmatter-only; body links are always plain `references`
   (§2). A frontmatter entry augments a body link rather than the body carrying the type.
-- **Inline-in-body as the home for accepted edges — superseded.** The trade: a frontmatter edge is *not*
+- **Inline-in-body as the home for committed edges — rejected.** The trade: a frontmatter edge is *not*
   guaranteed clickable in vanilla Obsidian's reading view. Accepted because the body-pristine guarantee
   outweighs it — human body links stay clickable, and Obsidian can't render edge *types* regardless (§0).
-- **A suggestion review layer — removed (2026-07-04).** B2 briefly generated LLM-typed suggestions into
-  an inert review queue; the relator's per-pair cost didn't scale to a real vault and the machinery is
-  gone (§4). Discovery is now `b2 similar` (B2 surfaces candidates) + `b2 link` (you commit) — no
+- **A suggestion review layer / LLM relator — rejected.** A per-pair LLM adjudicator that types and
+  explains every candidate pair doesn't scale (~notes × candidates model calls) and is exactly the
+  model-compensating machinery the Bitter-Lesson tenet defers. Discovery is `b2 similar` (B2 surfaces
+  candidates) + `b2 link` (you commit) — no
   inert-until-accepted layer, because B2 proposes nothing on its own.
+- **A durable event-log tier — rejected.** An in-vault `.b2/log/` would exist to hold a suggestion
+  queue and rejection memory — neither of which B2 has — and stamp history the Markdown already carries
+  (the `b2id` lives in the note itself). Anything durable outside the notes weakens
+  `index = projection of (the vault directory)` (§6), so no log tier exists.
 - **Stored reciprocal links — rejected.** Inverse edges are derived at query time; writing them back
   amplifies writes and edits notes the user didn't touch.
 - **Per-edge ULIDs in the file — rejected.** Authored edge identity is derived from
@@ -549,19 +517,18 @@ connected here.
 
 ---
 
-## 9. Judgment calls — resolved (2026-06-29; §0 revised 2026-06-30)
+## 9. Judgment calls — resolved
 
-- **Where a connection lives (Decision 1–3, 2026-06-30; review layer removed 2026-07-04)** — **B2 never
+- **Where a connection lives** — **B2 never
   authors the body.** Human connections live in the body (B2 reads, never writes); **B2-committed edges
-  live in frontmatter `relations:`** (via `b2 link`) as typed-link strings (Format A — the same
-  `<verb> [[path|title]] — …` syntax as a body line). The graph is the **union** of the two homes,
-  deduped **inline-wins** on overlap, never auto-editing the file. The body write B2 makes is the
-  move-repair only. This **reverses** the earlier "accepted edges go inline in the body" call (§0, §2,
-  §7).
-- **Edge-provenance durability** — committed edges stay **pristine** (in frontmatter `relations:`), and
-  as of 2026-07-04 carry **no** provenance at all: with the review step gone there is nothing to record
-  (§4). The model is now **two tiers** (Markdown / disposable index) with `index = projection of
-  (Markdown)`. *(Supersedes the earlier three-tier / `∪ log` resolution.)*
+  live in frontmatter `b2_relations:`** (via `b2 link`) as typed-link strings (the same
+  `<verb> [[path|title]] — …` syntax a human could write). The graph is the **union** of the two homes,
+  deduped **frontmatter-wins** on same-`(target, type)` overlap, never auto-editing the file. The body
+  write B2 makes is the move-repair only (§0, §2, §7).
+- **Edge-provenance durability** — committed edges stay **pristine** (in frontmatter `b2_relations:`)
+  and carry **no** provenance at all: with no review step there is nothing to record
+  (§4). The model is **two tiers** (Markdown / disposable index) with `index = projection of
+  (the vault directory)` (§6).
 - **`b2id` backfill on ingest** — identity is **namespaced to `b2id`**, and stamping a missing one is
   **B2's single always-allowed edit** to the vault, done as needed on first sight (no `b2 init` gate, no
   refusing to index), written straight to the note's frontmatter with no separate log (§1).
@@ -572,44 +539,34 @@ connected here.
 - **Relation vocabulary** — a **three-verb stance core** (`references` / `supports` / `contradicts`:
   neutral / for / against), the closed palette for `b2 link` + queries; a **tolerated tail** stored
   verbatim; a **promotion path**; plus the conventions and stance-first typing guidance (§2).
-- **The title is the filename (2026-07-14).** A note's title **is its filename** (basename minus `.md`);
+- **The title is the filename.** A note's title **is its filename** (basename minus `.md`);
   the frontmatter `title:` key is **recognized but inert** — parsed and round-tripped, never privileged for
-  display, link aliases, or search (§1). This **reverses** the earlier "frontmatter `title` → first H1 →
-  filename" precedence (the H1 step was never built) and makes notes uniform with **resources**, which were
-  already filename-titled. Consequences: the display title is a pure function of the path (so an
+  display, link aliases, or search (§1). Notes are uniform with **resources**, which are
+  filename-titled too. Consequences: the display title is a pure function of the path (so an
   unindexed note still titles correctly), and **`b2 link` writes a bare `[[path]]`** with no `|alias`
-  (§4). No migration — the index is a projection; a `reindex` recomputes every label, and existing
-  `title:` frontmatter stays untouched on disk.
-- **Typed relations are frontmatter-only, under a namespaced `b2_relations:` key (2026-07-21).** Three
-  changes, one principle — B2 forces no "special" syntax on the body and reads it only as ordinary
-  Markdown. (a) The body typed-line construct (`- <verb> [[path|title]] — …`) is **removed**: it made
-  prose shape B2 structure and misread lines like `- see [[x]]` as typed edges. Every body link is a
-  plain `references` edge; verb + explanation live **only** in frontmatter (§2, §7). (b) The
-  frontmatter key is **renamed `relations:` → `b2_relations:`**, namespaced like `b2id` so it never
-  collides with a user's or another tool's key; a generic `relations:` is no longer read (§1).
-  (c) Dedup flips to **frontmatter-wins** (was inline-wins): a frontmatter entry *augments* a body
+  (§4). Existing `title:` frontmatter stays untouched on disk.
+- **Typed relations are frontmatter-only, under a namespaced `b2_relations:` key.** One
+  principle — B2 forces no "special" syntax on the body and reads it only as ordinary
+  Markdown. Every body link is a
+  plain `references` edge; verb + explanation live **only** in frontmatter (§2, §7). The
+  key is **namespaced** like `b2id` so it never
+  collides with a user's or another tool's key; a generic `relations:` is not read (§1).
+  Dedup is **frontmatter-wins**: a frontmatter entry *augments* a body
   link — same-verb overlap keeps the frontmatter row (it alone carries the explanation), a different
   verb coexists with the body's reference (§0, §2, §3). The intended UI affordance follows: select a
   body link, pick a verb/explanation, B2 appends one `b2_relations:` entry — the body is untouched.
-  No index migration (a `reindex` re-projects); vaults with legacy `relations:` keys or body typed
-  lines keep every byte, and re-typing those edges is a `b2 link` per connection.
 
-**Still open:** none — the data model is locked. Next is the **index-engine build** against golden-vault
-fixtures ([index-engine.md](index-engine.md), now reconciled with this two-tier model).
-
-> Next ([tasks.md](tasks.md)): this model is the yardstick for the **index-engine evaluation** — whose
-> recommendation ([index-engine.md](index-engine.md)) already targets this exact note/edge/provenance
-> shape. With the data model fixed, the engine can be built against golden-vault fixtures.
+**Still open:** none — the data model is locked.
 
 ---
 
-## 10. Resources — the second kind of vault member (2026-07-08)
+## 10. Resources — the second kind of vault member
 
 §0–§9 define the **authored** objects — note and edge — whose structure a human (or B2, in frontmatter)
 writes in Markdown. A real vault also holds **resources**: every non-`.md` file — a PDF, a PNG, a `.csv`,
 an `.html` clipping. This section defines what a resource *is* in the model; the full findings, taxonomy,
-rendering, and build plan live in [research/file-type-support.md](research/file-type-support.md) (locked
-2026-07-08), and the schema in [index-engine.md](index-engine.md) §3.
+rendering, and build plan live in [research/file-type-support.md](research/file-type-support.md), and
+the schema in [index-engine.md](index-engine.md) §3.
 
 A resource is a **peer vault member** — not a lesser one, and not a generalized note. The single
 asymmetry is **authoring surface, not status**:
@@ -655,8 +612,8 @@ bge space with zero new discipline — chunks *and* a per-document **centroid** 
 scans only centroids, [#38](https://github.com/AlteredCraft/B2/issues/38)) — so `b2 search` and
 `b2 similar` cover the whole vault. Multimodal image embedding (a second vector space — its own plain
 vector/centroid tables and `meta` entry, the #38 shape) and an LLM/OCR **Describer** (intrinsic text for
-`image`/`media`/`binary`) are **documented future seams**, default-off — the same Bitter-Lesson posture
-that cut the relator (§4). Schema, the per-class extraction step, and the taxonomy:
+`image`/`media`/`binary`) are **documented future seams**, default-off — the Bitter-Lesson
+defer-by-default posture (§4). Schema, the per-class extraction step, and the taxonomy:
 [index-engine.md](index-engine.md) §3.
 
 **Why a separate object, not a `kind` column on the note.** Two tables, two contracts, zero "unless it's a
