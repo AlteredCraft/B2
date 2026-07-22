@@ -1,7 +1,7 @@
 //! Step 0 — DB skeleton & the substrate bet.
 //!
 //! Green-scenario assertions for build-plan step 0
-//! (planning/specs/completed/index-engine-build.md §4):
+//! (index-engine.md):
 //!   - FTS5 is compiled in (the `bundled` SQLite). *(Vectors need no substrate proof
 //!     since schema v3, #38: they are plain BLOB tables scored in-process — the
 //!     `sqlite-vec` half of the original bet was retired with the dependency.)*

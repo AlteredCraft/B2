@@ -1,5 +1,5 @@
-//! Parse a note body into the links that become edges (planning/data-model.md §2;
-//! resource forms: planning/specs/resources-inventory-graph.md §3).
+//! Parse a note body into the links that become edges (data-model.md §2;
+//! resource forms: data-model.md §10).
 //!
 //! **The body carries no B2 syntax** (data-model §2, decision 2026-07-21): every
 //! body construct is ordinary Obsidian Markdown and yields an untyped

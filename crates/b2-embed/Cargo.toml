@@ -6,8 +6,8 @@ rust-version = "1.96"
 description = "B2's real local embedder — candle-backed inference behind the b2-core Embedder seam"
 
 # Heavy ML deps (candle + tokenizers) live *only* here, never in b2-core, so the
-# core test suite stays fast, deterministic, and model-free (tasks.md testability
-# points 4–5). The `b2` binary depends on this crate to inject the real model.
+# core test suite stays fast, deterministic, and model-free (CLAUDE.md). The `b2`
+# binary depends on this crate to inject the real model.
 
 [dependencies]
 b2-core = { path = "../b2-core" }

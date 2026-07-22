@@ -9,11 +9,11 @@ status: draft
 
 # B2 — Index Engine: rebuild qmd on SQLite
 
-> **Findings for the "Index-engine evaluation" task** ([tasks.md](tasks.md)). Evaluates the idea of
-> rebuilding [tobi/qmd](https://github.com/tobi/qmd) on our own SQLite store (FTS5 + an in-process
-> vector scan, reranker as a fast follow) instead of adopting qmd as a dependency. Context:
-> [vision-and-scope.md](vision-and-scope.md) (semantic search is **engine-gated**; single-binary;
-> local-first) and the data model leans in [tasks.md](tasks.md).
+> **The engine design — the *how*.** Evaluates rebuilding [tobi/qmd](https://github.com/tobi/qmd) on
+> our own SQLite store (FTS5 + an in-process vector scan, reranker as a fast follow) instead of
+> adopting qmd as a dependency, and specifies the result. Companion design docs:
+> [invariants.md](invariants.md) (the *why*) and [data-model.md](data-model.md) (the *what*); semantic
+> search is **engine-gated**, single-binary, local-first.
 
 ## TL;DR / recommendation
 
@@ -22,7 +22,7 @@ status: draft
 - qmd is an excellent *blueprint* for hybrid retrieval (BM25 + vector + RRF + LLM rerank) and proves
   the whole pipeline runs locally. But it is a **search engine**, and B2 is not — B2 is a **typed graph
   with hybrid retrieval over it**. qmd has no notion of typed edges, backlinks, or `b2id`-stable identity,
-  which are the reasons B2 exists ([vision-and-scope.md](vision-and-scope.md), capability areas 3, 5).
+  which are the reasons B2 exists ([invariants.md](invariants.md)).
 - SQLite gives us **one embedded store for every *queryable* concern at once** — full-text (FTS5),
   vectors (plain tables scored in-process), and the typed graph — with transactional consistency across them, so
   `b2 similar` candidate generation joins all three in a single query. That single-store property is
@@ -30,12 +30,11 @@ status: draft
   cache**: `index = projection of (the vault directory)` — drop it, reindex, get it back identical,
   with **no durable B2-derived state outside your notes** (two tiers, [data-model.md](data-model.md)).
 - Because the engine **does** provide vector search, the locked **engine-gated** decision resolves in
-  favour of **semantic search in v1**, not as a fast follow ([vision-and-scope.md](vision-and-scope.md),
-  "Decisions locked 2026-06-28").
+  favour of **semantic search in v1**, not as a fast follow ([invariants.md](invariants.md)).
 - The **reranker is a clean fast-follow**: a swappable seam after RRF fusion, exactly as the testability
   stack wants the AI parts isolated. Retrieval quality is good without it; it's pure upside later.
 - The one genuinely hard part is **not the engine** — it's **producing embeddings inside a single
-  binary** ([vision-and-scope.md](vision-and-scope.md), principle #5). qmd solves this with
+  binary** ([invariants.md](invariants.md)). qmd solves this with
   `node-llama-cpp` + GGUF + Node 22, a heavy stack that fights the single-binary goal. This is the real
   decision to make, and it is **orthogonal to choosing SQLite** (see §7).
 
@@ -51,7 +50,7 @@ A local CLI search engine for Markdown, all on-device. The shape worth stealing:
 - **Chunking:** ~900-token chunks, ~15% overlap, Markdown-aware break-point scoring (H1=100, H2=90,
   code-fence=80, … blank-line=20, list-item=5), with a 200-token backward scan and quadratic distance
   decay to pick the cleanest boundary. Optional tree-sitter AST chunking for code files.
-  **Implemented in B2** (`chunk.rs`, #19 / [specs/completed/qmd-chunker.md](specs/completed/qmd-chunker.md), 2026-07-13),
+  **Implemented in B2** (`chunk.rs`, #19, 2026-07-13),
   with four model-free adaptations: a **~450**-token target (headroom under bge's 512 truncation), a
   `chars/4` proxy for token sizing (the core stays tokenizer-free), an unconditional `heading_path`
   breadcrumb, and every lever on a `ChunkConfig`. Tree-sitter code chunking stays deferred (#41 / spec §8).
@@ -78,7 +77,7 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 | Rerank | ✅ cross-encoder | ✅ fast-follow |
 | **Typed graph** (`b2id→b2id` edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
 | **Backlinks** (who points at X, typed, over the whole vault) | ❌ none | ⭐ core (area 5) |
-| **`b2id`-keyed identity** surviving move/rename | ❌ path-keyed, cache is disposable | ⭐ core (user-stories 1–2) |
+| **`b2id`-keyed identity** surviving move/rename | ❌ path-keyed, cache is disposable | ⭐ core (invariants L1) |
 | **Markdown as source of truth** (index is rebuildable/derived) | ~ index *is* the artifact | ⭐ non-negotiable (principle #1) |
 | Distribution | npm package, Node runtime | ⭐ single binary (principle #5) |
 
@@ -99,7 +98,7 @@ agent-output discipline, and the MCP surface idea. **What we discard:** the npm/
 ## 3. The storage architecture (one disposable SQLite index)
 
 One artifact, per the two-tier model ([data-model.md](data-model.md)) and realizing the **"volatile vault
-over a disposable index"** tenet ([vision-and-scope.md](vision-and-scope.md#design-philosophy)): a
+over a disposable index"** tenet ([invariants.md](invariants.md)): a
 **disposable** SQLite index holding every queryable concern transactionally. The whole index is
 **rebuildable from the vault** — drop `b2.sqlite`, re-scan the vault, get back an identical index (the
 locked `full-reindex ≡ incremental-update` invariant). The vault is the single source of truth (with
@@ -107,8 +106,8 @@ Markdown its sole authored subset — notes + every committed edge); the index i
 **no durable B2-derived state outside your notes**.
 
 > The precise DDL, the relations between these tables, the read/write data flows, and the build order
-> are specified in **[specs/completed/index-engine-build.md](specs/completed/index-engine-build.md)**. The sketch below is
-> the orientation; that doc is the buildable contract.
+> are realized in the code (`crates/b2-core/src/db.rs` schema + `ingest.rs` flows). The sketch below is
+> the orientation; the code is the buildable contract.
 
 ```
 b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any time)
@@ -134,12 +133,12 @@ Every table is derived from the vault; there is no third home.
 *(The projection is built in two separately-invokable passes —
 model-free `project` (notes/chunks/FTS/edges) then `embed` (vectors), with `reindex` their
 composition — so keyword search + graph are usable before embedding completes;
-[specs/completed/projection-embedding-split.md](specs/completed/projection-embedding-split.md). The invariant is untouched:
+the `project`/`embed` split ([#15](https://github.com/AlteredCraft/B2/issues/15)). The invariant is untouched:
 a projected-but-unembedded index is a smaller projection, never a wrong one.)*
 
 **Resources widen the projection.** A real vault also holds non-`.md` files, and the walk inventories
 them. The locked
-design ([data-model.md](data-model.md) §10, [research/file-type-support.md](research/file-type-support.md))
+design ([data-model.md](data-model.md) §10, [#66](https://github.com/AlteredCraft/B2/issues/66))
 adds them as **path-keyed peers** without disturbing any statement above — the source *tier* is the
 whole vault directory, so **`index = projection of (the vault directory)`**:
 
@@ -150,7 +149,7 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   same three questions — what index text, can it be a graph endpoint, how does it render.
 - **`chunks` generalizes** from `note_b2id` to a **document reference** (a note `b2id` *or* a resource
   path — as one-of nullable FKs on the single table, CASCADE intact for both parents; locked,
-  [research/file-type-support.md](research/file-type-support.md) §9b #7); search resolves hits up to the
+  [#66](https://github.com/AlteredCraft/B2/issues/66)); search resolves hits up to the
   owning document and results carry a `kind`. **Centroids follow** — two-stage discovery's coarse stage
   scans only centroids (#38, §4 update), so a resource with chunks but no centroid would be searchable yet
   invisible to `b2 similar`; a sibling `resource_centroids` table (same locked call) is maintained through
@@ -165,14 +164,14 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   `![[file.ext]]` embed, capturing the alt/caption text on the edge (it becomes the image's index text).
 - **No migration, ever.** Because the index is disposable this is a `schema_version` bump + rebuild — the
   disposable-index tenet paying rent. The `resources` DDL lands in the **slice-1 build spec**
-  ([tasks.md](tasks.md)); the chunk/centroid generalization and the per-class extraction step land in
+  ([#65](https://github.com/AlteredCraft/B2/issues/65)); the chunk/centroid generalization and the per-class extraction step land in
   slice 3's; the PDF text-extraction *dependency* (which crate, and its home) is deferred to slice 4 by
   design.
 
 Why this shape fits B2 specifically:
 
 - **Edges key on `b2id`, never path** — directly implements the link-identity decision
-  ([user-stories.md](user-stories.md), [data-model.md](data-model.md)). `notes.b2id` is the durable
+  ([data-model.md](data-model.md) §1). `notes.b2id` is the durable
   frontmatter identity (B2's one always-allowed write); `src_id`/`dst_id` and `note_b2id` all hold
   `b2id` values. A move rewrites `notes.path` and inbound `[[path|title]]` text; every row in `edges`
   is untouched because it never referenced the path. "Rename keeps every backlink resolving" becomes a
@@ -203,7 +202,7 @@ edges is what turns the following from full-vault scans (or impossibilities) int
 
 - **Backlinks / inversion.** "Who points at X" cannot be read from X — only from every *other* note.
   The runtime answer is O(vault) per query; the table makes it one lookup. This is also what services
-  *"rename keeps every backlink resolving"* ([user-stories.md](user-stories.md), Story 1): the edges name
+  *"rename keeps every backlink resolving"* ([invariants.md](invariants.md) L1): the edges name
   the exact N inbound files to rewrite on a move instead of scanning the vault to find them (§8).
 - **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`contradicts`" is a scan *per hop*
   at runtime; over `edges` it is one SQL traversal.
@@ -211,7 +210,7 @@ edges is what turns the following from full-vault scans (or impossibilities) int
   join `embeddings ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
   primitive (search *within* an already-related neighborhood). **`b2 similar`'s candidate generation is its
   *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links you
-  *haven't* made (resolved 2026-07-01, see [tasks.md](tasks.md) ①) — where the materialized graph supplies
+  *haven't* made (resolved 2026-07-01, §3) — where the materialized graph supplies
   the "∖ already-connected" exclusion. Both stand on the same reason the graph and search indexes must live
   in **one** store (§2): area-5 discovery is the substrate this enables.
 
@@ -224,7 +223,7 @@ traversable graph is the value-add, not the search. The standing cost of carryin
 `b2id`-under-`[[path]]` write-amplification budgeted in §8.
 
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
-in-process ([research/discovery-scan-strategy.md](research/discovery-scan-strategy.md)). Both are
+in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
 battle-tested at personal-vault scale.
 
 ## 4. Semantic search & the engine-gated decision → verdict
@@ -239,8 +238,7 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
   `note_centroids` — read with one sequential statement and scored in-process (`embed::l2_sq`). A
   `vec0`-style virtual table charges a per-row shadow-table probe on every scan, which dominates at
   real-vault scale; the plain-table scan does not. Full analysis + options:
-  [research/discovery-scan-strategy.md](research/discovery-scan-strategy.md)
-  ([#38](https://github.com/AlteredCraft/B2/issues/38)).
+  [#38](https://github.com/AlteredCraft/B2/issues/38).
 - **Discovery is two-stage:** an O(notes) coarse scan over centroids shortlists candidates, then an
   exact max-sim rescore over only the shortlist's chunk vectors.
 - **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
@@ -265,16 +263,16 @@ Slot it exactly where qmd puts it: **after RRF fusion, before final ranking**, b
 - This is why the reranker is genuinely deferrable with no architectural debt: it changes *ordering*,
   not the store, the schema, or the candidate set. "Eventually add a reranker" is a one-stage insertion,
   not a redesign. It is also **store-agnostic** — a model-side seam above the index, not a property of it,
-  so no vector-store choice simplifies or blocks it ([research/vector-store-alternatives.md](research/vector-store-alternatives.md) §5).
+  so no vector-store choice simplifies or blocks it ([#67](https://github.com/AlteredCraft/B2/issues/67)).
 
 **Scope — this reranks `b2 search`, not `b2 similar`.** The seam signature `(query, candidates) → scores`
 is the tell: it needs *query text*, so it reorders **query search** (`b2 search`). **`b2 similar` has no
-query** — it is passage↔passage KNN, "near ∖ connected" (§3, [tasks.md](tasks.md) ①) — so this reranker
+query** — it is passage↔passage KNN, "near ∖ connected" (§3) — so this reranker
 does **not** apply to it; the discovery-side ranking levers are the qmd chunker upgrade
 ([#19](https://github.com/AlteredCraft/B2/issues/19)) and distance-weighting
 ([#20](https://github.com/AlteredCraft/B2/issues/20)), not this.
 
-**Gate the decision on the eval, not intuition** ([specs/eval-strategy.md](specs/eval-strategy.md)). RRF
+**Gate the decision on the eval, not intuition** (the eval harness under `crates/b2-embed/evals/`). RRF
 is a strong baseline; the reranker buys **top-k precision**, whose value *grows with vault size* (semantic
 near-misses crowd the top past ~1k notes) and is *highest when an agent consumes top-1/top-3 without a
 human eye* (the `serve` adapter, [#24](https://github.com/AlteredCraft/B2/issues/24)). Vault size changes
@@ -293,7 +291,7 @@ somewhere.
 
 qmd's answer is `node-llama-cpp` + auto-downloaded GGUF models + Node 22/Bun, needing ~300 MB–3 GB of
 model files and a JS runtime. That directly tensions B2's single-binary, no-install-ritual goal
-([vision-and-scope.md](vision-and-scope.md), principle #5). Options, roughly in order of single-binary
+([invariants.md](invariants.md)). Options, roughly in order of single-binary
 friendliness:
 
 1. **Bundle a small embedding model + a `llama.cpp`/GGUF runtime, statically linked.** Self-contained,
@@ -308,7 +306,7 @@ friendliness:
 
 **Recommendation:** make the **embedder a seam** (we need it for tests regardless — and a swappable
 model seam *is* the **"build for tomorrow's model"** tenet in practice,
-[vision-and-scope.md](vision-and-scope.md#design-philosophy)), ship a **local model as the default**
+[invariants.md](invariants.md)), ship a **local model as the default**
 (option 1 or 2), and decide model-download-on-first-run vs. bundled-in-binary as a packaging detail
 later. Crucially, **none of this blocks the engine work**: build the SQLite store +
 FTS5 + the vector tables + the typed graph now against the deterministic fake embedder; drop the real
@@ -321,7 +319,7 @@ binary — no external ONNX Runtime to ship; `hf-hub` is the download seam). Mod
 (`~/.local/share/b2/models/`), never a surprise mid-command download; `reindex`/`search` fail fast with
 "run `b2 init`" if it's absent. **The model source is configurable** (default = an HF repo id;
 overridable to a mirror, another repo, or a local path for offline installs) via a global TOML at
-`$XDG_CONFIG_HOME/b2/config.toml`. Build/execution plan in [tasks.md](tasks.md) "Next up".
+`$XDG_CONFIG_HOME/b2/config.toml`. Build/execution plan tracked in [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
 
 **Built (2026-07-01).** Shipped in the **`b2-embed`** crate (`LocalEmbedder` behind the `b2-core`
 `Embedder` seam; candle + `hf-hub`; CLS-pool + L2-normalize; asymmetric query prefix). **Model default
@@ -361,7 +359,7 @@ the fast suite. Eval is a `cargo run -p b2-embed --example eval` pass (precision
 
 The graph buys B2 its reason to exist (typed, `b2id`-stable edges — §2), but the decision to
 keep links written as human-clickable `[[path|title]]` while the graph keys on `b2id`
-([user-stories.md](user-stories.md), "Link format & identity") has standing operational costs. These are
+([data-model.md](data-model.md) §9) has standing operational costs. These are
 *the trade working as designed*, not defects — but they must be budgeted, tested, and watched.
 
 - **Write amplification on move.** The inline `path` is a repairable convenience copy, so moving one note
@@ -389,14 +387,14 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   rows whose file was skipped as unreadable — the walk saw that file, its `b2id` is merely unknowable this
   run, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note and never
   prunes. *(Resources churn more than notes — images/PDFs get added and deleted freely — and their
-  inventory pass prunes the same way; [research/file-type-support.md](research/file-type-support.md) §8.)*
+  inventory pass prunes the same way; [#66](https://github.com/AlteredCraft/B2/issues/66).)*
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
   file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting
   the reindex on one file it cannot read.
 - **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
   projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
-  ([vision-and-scope.md](vision-and-scope.md); the full register: [invariants.md](invariants.md)):
+  (the full register: [invariants.md](invariants.md)):
   round-trip losslessness (`parse → serialize → parse`),
   `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
   (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
@@ -404,7 +402,7 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
 - **Committed edges are only ever authored, never inferred.** B2 writes an edge only on your command
   (`b2 link`, or a body link you write) — there is no agent proposing edges and no review queue to keep
   consistent. Editing the vault can strand a connection — e.g. deleting an authored `A→B` link
-  ([user-stories.md](user-stories.md), Story 2) — but B2 only ever *surfaces* the consequence (an orphan
+  ([invariants.md](invariants.md) W4) — but B2 only ever *surfaces* the consequence (an orphan
   flag in `b2 explain`), never silently rewrites an inbound file or an edge. Files are touched only when asked.
 
 ## 9. Recommendation

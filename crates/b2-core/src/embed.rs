@@ -1,5 +1,5 @@
-//! The embedder seam (planning/index-engine.md §6; the "build for tomorrow's
-//! model" tenet in vision-and-scope). Producing embeddings inside a single binary
+//! The embedder seam (index-engine.md §6; the "build for tomorrow's
+//! model" tenet in invariants.md). Producing embeddings inside a single binary
 //! is the one genuinely hard part, and it is *orthogonal* to the store — so it
 //! sits behind this trait. The engine is built and tested against a deterministic
 //! fake; the real local model (`b2-embed`'s candle-backed `LocalEmbedder`,
@@ -104,7 +104,7 @@ pub fn pack_f32(v: &[f32]) -> Vec<u8> {
 
 /// Inverse of [`pack_f32`]: read a stored BLOB (little-endian float32, no header)
 /// back into a vector. Used to reuse a note's *stored* chunk vectors as discovery
-/// queries without re-embedding (tasks.md ①). A trailing partial group can't occur
+/// queries without re-embedding (index-engine.md §3). A trailing partial group can't occur
 /// for a vector written by [`pack_f32`], so a non-multiple-of-4 length is simply
 /// truncated rather than treated as an error.
 pub fn unpack_f32(bytes: &[u8]) -> Vec<f32> {

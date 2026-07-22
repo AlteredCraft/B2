@@ -1,4 +1,4 @@
-//! Hybrid retrieval (planning/index-engine.md §1, §5; build spec Flow ②).
+//! Hybrid retrieval (index-engine.md §1, §5; build spec Flow ②).
 //!
 //! BM25 (over `chunks_fts`) and brute-force vector KNN (an in-process scan over the
 //! stored `embeddings`) are retrieved in parallel and fused with **Reciprocal Rank
@@ -94,7 +94,7 @@ fn pool_size(limit: usize) -> usize {
 
 /// Keyword-only search: BM25 over `chunks_fts` → top `limit`, resolved to notes —
 /// the fallback that makes a **projected-but-unembedded** vault searchable
-/// (projection-embedding-split.md §5): no query embedding, no model, no vectors.
+/// (index-engine.md): no query embedding, no model, no vectors.
 /// Scores are the RRF of the single BM25 list, so they live on the same scale (and
 /// sort the same way) as [`hybrid_search`]'s fused scores.
 pub fn keyword_only_search(

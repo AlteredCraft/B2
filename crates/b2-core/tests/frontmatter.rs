@@ -1,6 +1,6 @@
 //! Frontmatter `b2_relations:` — the reader (→ origin=frontmatter edges), the
 //! surgical `add_relation` editor (lossless), and frontmatter-wins dedup
-//! (planning/data-model.md §0, §2, §3).
+//! (data-model.md §0, §2, §3).
 
 mod common;
 

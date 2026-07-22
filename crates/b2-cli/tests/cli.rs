@@ -1,6 +1,6 @@
 //! CLI-level tests: run the built `b2` binary against a temp copy of the
 //! golden-vault fixture and assert its output — the "run a command against a
-//! fixture, assert the output" surface vision-and-scope names. The binary path is
+//! fixture, assert the output" surface invariants.md names. The binary path is
 //! `CARGO_BIN_EXE_b2`, which cargo provides to integration tests (so no extra test
 //! harness dependency is needed). The CLI is a dumb adapter over `b2_core::Vault`;
 //! these prove the wiring + output shape, not engine behavior (that's the façade
@@ -38,7 +38,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 
 /// Run `b2 <args...>` and capture the result. The suite runs under the fake
 /// embedder (`B2_EMBEDDER=fake`) so CI never downloads or runs the real model — it
-/// proves the wiring + output shape, not model quality (tasks.md testability 4–5).
+/// proves the wiring + output shape, not model quality (CLAUDE.md).
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_b2"))
         .env("B2_EMBEDDER", "fake")

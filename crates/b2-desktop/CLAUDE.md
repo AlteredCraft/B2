@@ -3,7 +3,7 @@
 Guidance for Claude Code (and humans) working in this crate. It **inherits** the workspace rules in the
 [root CLAUDE.md](../../CLAUDE.md) (idiomatic Rust, error policy, determinism, user-facing-error policy) and
 **adds** the one rule that defines this crate's existence: **stay a dumb adapter.** The full rationale and
-the MVP plan live in [planning/specs/completed/desktop-ui-mvp.md](../../planning/specs/completed/desktop-ui-mvp.md); this file
+the read→discover→link→edit MVP shipped (its build history is in git); this file
 is the enforceable in-crate rule.
 
 ## What this crate is
@@ -40,7 +40,7 @@ what makes that architecture pay off:
 - **Inherited tests.** A thin host means the façade's existing suite already covers the behavior; this crate
   needs only a few per-command tests (args in → right façade call → view out). Logic here would need its own
   parallel tests that the CLI already has.
-- **The promise stays true.** [vision-and-scope.md](../../planning/vision-and-scope.md) says the GUI is "a
+- **The promise stays true.** [invariants.md](../../docs/design/invariants.md) (E3) says the GUI is "a
   second dumb adapter over the same contract, inheriting every test the CLI bought." That is only true while
   this crate stays dumb. Thinness is not tidiness; it's the load-bearing property.
 
@@ -62,9 +62,9 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   ([`Vault::open_with_embedder`](../b2-core/src/vault.rs)) and fails fast with the "run `b2 init`"
   message if it's absent. Three write-side ops are deliberately **model-free** and open the fake:
   `project` — the model-free half of a reindex
-  ([specs/completed/projection-embedding-split.md](../../planning/specs/completed/projection-embedding-split.md) §6),
+  ([#15](https://github.com/AlteredCraft/B2/issues/15)),
   so the first tree paint never waits on a model load — `write_note` — the save path
-  ([specs/completed/desktop-editing.md](../../planning/specs/completed/desktop-editing.md) §3), so editing works with no
+  ([#13](https://github.com/AlteredCraft/B2/issues/13)), so editing works with no
   model provisioned and saved chunks are healed by the trailing background embed — and
   `create_note` — the tree's New-note action, the same posture as the save path (the new
   note is projected immediately; its vectors fill on the next embed pass).
@@ -90,4 +90,4 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
 
 **Tauri IPC only** — the frontend `invoke`s these commands. This crate runs **no HTTP server**. An
 HTTP/`serve` transport is a *different, deferred adapter* for a *different need* (remote / browser /
-agent-over-HTTP); it does not belong here. See [the spec §1/§9](../../planning/specs/completed/desktop-ui-mvp.md).
+agent-over-HTTP); it does not belong here. See [#24](https://github.com/AlteredCraft/B2/issues/24).

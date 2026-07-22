@@ -11,26 +11,23 @@ A personal, local-first Markdown knowledge vault with an AI layer that **surface
 notes** for you to connect. The Markdown files stay plain and yours; B2 is the intelligence layer
 over them, not a container around them. This Cargo workspace is the **index engine + its two dumb
 adapters** — the `b2` CLI and the Tauri desktop app (with the `ui/` frontend); the design lives in
-`planning/`.
+`docs/design/`.
 
 ## Design docs are the source of truth
 
 The code is a *projection of the spec*, and comments cite it constantly (e.g. `data-model.md §2`,
-`build spec §1.2`, `index-engine.md §6`). Before changing behavior, read the relevant doc — the
-schema must satisfy the data model, never the reverse.
+`index-engine.md §6`). Before changing behavior, read the relevant doc — the schema must satisfy the
+data model, never the reverse. The three canonical docs live in `docs/design/`:
 
-- `planning/invariants.md` — the **invariant register**: the one-page normative list of what must
-  always be true (cited by id — S2, G2, …). On conflict with any other doc, it wins.
-- `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
-- `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
-- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + in-process vector scan; see `research/discovery-scan-strategy.md`) projection, table DDL, the build order, data flows.
-- `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
-  Planned-but-unstarted work lives in GitHub Issues; shipped build specs live in `planning/specs/completed/`
-  (index engine, desktop MVP, async indexing, projection/embedding split, desktop editing, live preview).
-- `planning/user-stories.md` — kernel behavior as testable scenarios.
-- `planning/specs/eval-strategy.md` — how model quality (the `Embedder` seam) is measured out-of-CI:
-  the hand-labelled retrieval + discovery evals (BM25-vs-hybrid ablation, note & passage ranks,
-  `b2 similar`), the chunker-sweep gate, the results log, and how to run/grow it all.
+- `docs/design/invariants.md` — the **invariant register**: the one-page normative list of what must
+  always be true, and the source of *why* (cited by id — S2, G2, …). On conflict with any other doc, it wins.
+- `docs/design/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
+- `docs/design/index-engine.md` — the *how*: SQLite (FTS5 + in-process vector scan) projection, table DDL, data flows.
+
+Planned-but-unstarted work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues);
+shipped build history lives in git. Model quality (the `Embedder` seam) is measured out-of-CI by the
+eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + discovery evals
+(BM25-vs-hybrid ablation, note & passage ranks, `b2 similar`), the chunker-sweep gate, and the results log.
 
 ## Commands
 
@@ -110,7 +107,7 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
 
 ### The core invariant
 
-**`index = a pure projection of (the vault directory)`.** (The full register: `planning/invariants.md`.) Two storage tiers:
+**`index = a pure projection of (the vault directory)`.** (The full register: `docs/design/invariants.md`.) Two storage tiers:
 
 1. **The vault directory** — the source of truth. **Markdown is its sole authored subset** — the only
    format whose bytes B2 may write; non-`.md` files are *resources* (path-keyed peers contributing
@@ -187,7 +184,7 @@ adapters wire the real model.
 - **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
   notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
   independent of file order. It is **two separately-invokable passes**
-  (`specs/completed/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
+  (the `project`/`embed` split, #15): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
   falls back to BM25-only on a projected-but-unembedded vault.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (an exact in-process scan
@@ -225,7 +222,7 @@ Vectors live in **plain tables** — `embeddings(chunk_id, vector)` and `note_ce
 centroid)` — created at **embed time**, not in the base migration: their existence is the "this vault
 has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
 computed **in-process** (`embed::l2_sq`, one sequential scan statement; rationale:
-`research/discovery-scan-strategy.md`, #38). `meta` records `(embed_model_id,
+#38). `meta` records `(embed_model_id,
 embed_dim)` — the only place a model swap is detectable. The compute **device** folds into this
 identity: the real embedder tags its recorded `embed_model_id` with the resolved device (CPU stays the
 bare repo id; a `--features metal` GPU build appends `@metal`, `b2-embed/src/model.rs`), so a

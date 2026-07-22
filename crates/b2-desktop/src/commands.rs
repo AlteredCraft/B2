@@ -1,5 +1,5 @@
 //! The `#[tauri::command]` handlers — B2's IPC surface, and the frontend's mirror of
-//! the [`Vault`](b2_core::vault::Vault) façade (specs/completed/desktop-ui-mvp.md §3). Each
+//! the [`Vault`](b2_core::vault::Vault) façade (crates/b2-desktop/CLAUDE.md). Each
 //! handler is **deserialize → call one façade method → serialize**: no branch, no
 //! loop, no rule. If a handler ever needs one, that logic belongs behind the façade
 //! in `b2-core` (add a façade op, not host logic) — that is the whole discipline that
@@ -165,7 +165,7 @@ pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), Cmd
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
-/// Save a note's body — the editing surface's one write (desktop-editing.md §5).
+/// Save a note's body — the editing surface's one write (crates/b2-desktop/CLAUDE.md).
 /// **Model-free** like `project`: `Vault::write` splices the body and re-projects
 /// without touching vectors, so this opens the fake vault (no model load; saving
 /// works with nothing provisioned) and runs **outside** the single-in-flight embed
@@ -301,7 +301,7 @@ pub fn link(
 }
 
 /// The **projection pass** — the fast, model-free half of a reindex
-/// (projection-embedding-split.md §6). One façade call over the **fake** vault (no
+/// (index-engine.md). One façade call over the **fake** vault (no
 /// model load on the first-paint path), so the moment it returns the file tree can
 /// repopulate and keyword search answers; `embed` then streams behind it. Fast and
 /// synchronous-feeling; nothing to stream, nothing to cancel.
@@ -309,7 +309,7 @@ pub fn link(
 /// Deliberately **outside** the single-in-flight reindex slot: the slot exists to
 /// protect the long, vector-writing embed pass, and a `project` racing a vault
 /// switch is harmless — it writes the `.b2/` of the root it captured at dispatch,
-/// idempotently, never the new vault's (§6 "why leaving `project` outside the slot
+/// idempotently, never the new vault's ("why leaving `project` outside the slot
 /// is safe").
 #[tauri::command(async)]
 pub fn project(state: State<'_, AppState>) -> Result<ProjectReport, CmdError> {
@@ -317,7 +317,7 @@ pub fn project(state: State<'_, AppState>) -> Result<ProjectReport, CmdError> {
 }
 
 /// The **embed pass** — fill the missing vectors as an **observable, cancellable
-/// background action** (async-indexing.md §4). Tauri runs the `(async)` body on a
+/// background action**. Tauri runs the `(async)` body on a
 /// worker thread, so the window stays live; progress streams to the webview over
 /// `on_event` (a typed, per-invocation [`Channel`]), and the closure returns
 /// `ControlFlow::Break` once the shared cancel flag is set — the one cancel
@@ -339,7 +339,7 @@ pub fn embed(
 /// Ask the in-flight embed to stop at its next batch boundary. Runs on a *different*
 /// worker thread than `embed`, so it observes/sets the shared flag concurrently; the
 /// embed closure sees it and breaks cooperatively — no thread-killing, no torn
-/// writes (async-indexing.md §4/§5.6). A no-op if nothing is running.
+/// writes. A no-op if nothing is running.
 #[tauri::command(async)]
 pub fn cancel_reindex(state: State<'_, AppState>) {
     state.request_reindex_cancel();
@@ -448,8 +448,8 @@ fn embed_impl(
     state: &AppState,
     on_event: &Channel<ReindexProgress>,
 ) -> Result<EmbedReport, CmdError> {
-    // Single-in-flight: refuse a second embed rather than race two writers on one DB
-    // (async-indexing.md §5.4). The UI also disables the button, so this is rarely hit.
+    // Single-in-flight: refuse a second embed rather than race two writers on one DB.
+    // The UI also disables the button, so this is rarely hit.
     if !state.try_start_reindex() {
         return Err(CmdError::ReindexInFlight);
     }
@@ -467,7 +467,7 @@ fn embed_impl(
         .unwrap_or_else(|_| b2_embed::DEFAULT_MODEL.to_string());
     // Time the embed pass itself — the clock starts *after* the model load above, so the
     // recorded total is embedding throughput, not one-time setup. `chunks_done` is
-    // cumulative, so its last value is this run's chunk count (async-indexing.md §4).
+    // cumulative, so its last value is this run's chunk count.
     let start = std::time::Instant::now();
     let mut chunks_this_run = 0u64;
     let report = vault.embed(&mut |p| {
@@ -512,8 +512,7 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
 /// every subsequent command via [`AppState::current_root`].
 ///
 /// **Cancels any in-flight reindex first**, waiting for it to wind down before
-/// repointing the root, so a reindex can never keep writing the vault the app has left
-/// (async-indexing.md §4/§5.4).
+/// repointing the root, so a reindex can never keep writing the vault the app has left.
 fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdError> {
     state.cancel_and_wait_for_reindex();
     state.set_root(root);
@@ -610,7 +609,7 @@ fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
 #[cfg(test)]
 mod tests {
     //! Thin command-layer tests: args resolve → the façade is called → a view comes
-    //! back (specs/completed/desktop-ui-mvp.md §7 — "thinness *is* the test strategy"; the
+    //! back (crates/b2-desktop/CLAUDE.md — "thinness *is* the test strategy"; the
     //! façade's own suite covers behavior). Model-free: read-path commands open with
     //! the fake, and setup reindexes with the fake directly, so no model is needed.
 
@@ -855,7 +854,7 @@ mod tests {
         assert!(!msg.to_lowercase().contains("sqlite"));
     }
 
-    // --- async-indexing: the host's task-lifecycle bits (§4) ----------------------
+    // --- The host's task-lifecycle bits -------------------------------------------
     //
     // Thin host-infrastructure tests: the guard + cancel state machine and
     // switch-cancels-first, all model-free (no reindex actually runs — the core's own
@@ -980,7 +979,7 @@ mod tests {
         .unwrap();
 
         // …so the stale save is refused with the STABLE message the frontend
-        // string-matches to drive its conflict bar (desktop-editing.md §5) — keep
+        // string-matches to drive its conflict bar (crates/b2-desktop/CLAUDE.md) — keep
         // this assertion in lockstep with ui/src/api.ts.
         let err = write_note_impl(&state, "concepts/memory", "mine", &note.revision).unwrap_err();
         assert!(matches!(
@@ -1067,7 +1066,7 @@ mod tests {
     #[test]
     fn write_note_runs_outside_the_reindex_slot() {
         // Like `project`, a save is deliberately unguarded by the embed slot
-        // (desktop-editing.md §5): short, model-free, must not queue behind a
+        // (crates/b2-desktop/CLAUDE.md): short, model-free, must not queue behind a
         // long-running background embed.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
@@ -1100,7 +1099,7 @@ mod tests {
         let state = AppState::new(Some(root));
 
         // Hold the slot (a stand-in for an in-flight embed): `project` is deliberately
-        // unguarded (projection-embedding-split.md §6) and must still run.
+        // unguarded (index-engine.md) and must still run.
         assert!(state.try_start_reindex());
         let report = project_impl(&state).unwrap();
         assert_eq!(report.indexed, 2);

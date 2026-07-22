@@ -94,7 +94,7 @@ impl ParsedNote {
     /// frontmatter block. Byte-honest like [`body`](Self::body): the actual bytes,
     /// not a re-serialization of the parsed [`fields`](Self::fields), so keys B2
     /// doesn't model (`b2_relations:`, `aliases:`, custom keys) show as written. Powers
-    /// the Desktop UI's frontmatter drawer (specs/completed/desktop-ui-mvp.md §4).
+    /// the Desktop UI's frontmatter drawer (crates/b2-desktop/CLAUDE.md).
     pub fn frontmatter(&self) -> Option<&str> {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
     }
@@ -120,7 +120,7 @@ impl ParsedNote {
     }
 
     /// Replace the note's **body** with `new_body`, verbatim — the byte-honest
-    /// splice behind `Vault::write` (desktop-editing.md §4). Everything up to
+    /// splice behind `Vault::write`. Everything up to
     /// `body_start` (the frontmatter block and its fences — every byte, including
     /// keys B2 doesn't model) is preserved *by construction*; a note with no
     /// frontmatter is replaced wholesale (its body **is** the file). No newline

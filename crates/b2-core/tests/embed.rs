@@ -1,5 +1,5 @@
 //! Step 3 — the vector store + the embedder seam
-//! (planning/specs/completed/index-engine-build.md step 3): a deterministic fake embedder
+//! (index-engine.md): a deterministic fake embedder
 //! produces reproducible KNN; `embed_model_id`/`embed_dim` are recorded; a
 //! model/dim swap recreates the vector space; note centroids (discovery's coarse
 //! stage, #38) track the stored chunk vectors.

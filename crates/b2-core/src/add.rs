@@ -76,7 +76,7 @@ pub fn add_note(
 /// [`ingest::project_file`] (chunks + FTS + edges, **no embedder**), the same pass
 /// `Vault::write` runs after a save. The new note's chunks join the DB-derived
 /// missing-vector set for any later embed/reindex to fill
-/// (projection-embedding-split.md §7.2) — and a body-less note has nothing to
+/// (index-engine.md) — and a body-less note has nothing to
 /// embed anyway. Same validation and refusals as [`add_note`].
 #[allow(clippy::too_many_arguments)]
 pub fn create_note(

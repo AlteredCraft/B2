@@ -1,5 +1,5 @@
-//! The `Vault` façade — B2's one typed core API (vision-and-scope, "the
-//! testability stack" point 1). Everything before this exists only as modules the
+//! The `Vault` façade — B2's one typed core API (invariants.md). Everything before
+//! this exists only as modules the
 //! integration tests call directly; this is the single entry point the `b2` CLI
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
@@ -69,7 +69,7 @@ pub struct Vault {
     conn: Connection,
     // Injected through the seam: the CLI wires the real candle model; `open`
     // defaults to `FakeEmbedder` so the core tests stay deterministic and model-free
-    // (the "build for tomorrow's model" seam, vision-and-scope).
+    // (the "build for tomorrow's model" seam, invariants.md).
     embedder: Box<dyn Embedder>,
     idgen: UlidGen,
     // The vault's one chunking policy (chunk.rs, spec §3 D5). Held here — not
@@ -80,7 +80,7 @@ pub struct Vault {
     // cut under the old policy, so a config change must pair with
     // `project(force)` (as `set_chunk_config`'s doc requires and the eval does).
     // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
-    // that overrides it, to A/B chunker levers in-process (specs/eval-strategy.md).
+    // that overrides it, to A/B chunker levers in-process (the eval harness, crates/b2-embed/evals/).
     chunk_config: ChunkConfig,
 }
 
@@ -88,8 +88,8 @@ pub struct Vault {
 /// (re)embedded (the rest reused their vectors — incremental), and how many needed
 /// a `b2id` stamped (B2's one always-allowed write to the vault, data-model.md §1).
 ///
-/// `cancelled` is `true` when a cooperative cancel cut the embed phase short
-/// (async-indexing.md §3): the counts then describe the partial work truthfully
+/// `cancelled` is `true` when a cooperative cancel cut the embed phase short:
+/// the counts then describe the partial work truthfully
 /// (e.g. "indexed 1000, embedded 240, cancelled") — the index is still consistent
 /// (keyword + graph complete, a prefix embedded) and an incremental re-run finishes
 /// the rest. Always `false` for [`reindex`](Vault::reindex) and the CLI, which never
@@ -114,7 +114,7 @@ pub struct ReindexReport {
 }
 
 /// What [`project`](Vault::project) did — the model-free half of a reindex
-/// (projection-embedding-split.md §4): how many notes were projected and how many
+/// (index-engine.md): how many notes were projected and how many
 /// needed a `b2id` stamped. No embed counts: projection never touches vectors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectReport {
@@ -144,8 +144,8 @@ pub struct EmbedReport {
 }
 
 /// The vault's semantic-embedding coverage — how many of its notes are fully
-/// embedded — for the honest "N/M embedded" signal (#26, projection-embedding-split.md
-/// §5). Model-free: a pure count over the projection, so an adapter can surface
+/// embedded — for the honest "N/M embedded" signal (#26, index-engine.md).
+/// Model-free: a pure count over the projection, so an adapter can surface
 /// "keyword-only for now" *precisely* (not just via the binary "is a model installed"
 /// flag) without loading the model. `embedded == total` (and `total > 0`) means
 /// semantic ranking is complete; `embedded < total` means [`search`](Vault::search) is
@@ -266,7 +266,7 @@ pub struct ExplainView {
 }
 
 /// A note's content + display metadata for a reader — the Desktop UI MVP's left
-/// pane (specs/completed/desktop-ui-mvp.md §4), and the **one new façade op** that surface
+/// pane (crates/b2-desktop/CLAUDE.md), and the **one new façade op** that surface
 /// adds. Carries the note's identity, the frontmatter fields worth showing a human,
 /// and the **raw Markdown body read from disk** (the source of truth, not the index
 /// projection) so an adapter renders Markdown → HTML itself. A pure read — no
@@ -286,10 +286,10 @@ pub struct NoteView {
     /// fences excluded), or `None` when the note has none. This is the byte-honest
     /// block, not a re-serialization of the projected fields above — so `b2_relations:`
     /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
-    /// collapsible drawer (specs/completed/desktop-ui-mvp.md §4).
+    /// collapsible drawer (crates/b2-desktop/CLAUDE.md).
     pub frontmatter: Option<String>,
-    /// blake3 of the **raw file bytes** at read time — the save-guard token
-    /// (desktop-editing.md §3/§4): [`write`](Vault::write) refuses when the file on
+    /// blake3 of the **raw file bytes** at read time — the save-guard token:
+    /// [`write`](Vault::write) refuses when the file on
     /// disk no longer hashes to the revision the edit was based on, so a save can
     /// never silently clobber an external edit. Whole-file (not just the body), so
     /// *any* out-of-band change conflicts honestly.
@@ -357,7 +357,7 @@ pub struct SearchResult {
 /// Same retrieval (BM25 ⊕ vector → RRF, keyword-only fallback), but ranked chunks
 /// are returned as-is instead of deduped up to notes, so a caller can see *which
 /// passage* matched and at what rank. The client is the out-of-CI retrieval eval
-/// (specs/eval-strategy.md): note-rank scoring is blind to sub-note retrieval
+/// (the eval harness, crates/b2-embed/evals/): note-rank scoring is blind to sub-note retrieval
 /// quality — exactly what chunking levers move — so the eval scores passage ranks
 /// through this view. Carries the chunk's **full text** (not a display snippet):
 /// the eval anchors passage-containment scoring on it; an adapter wanting a
@@ -395,7 +395,7 @@ pub struct SimilarView {
 /// What [`write`](Vault::write) did: the saved note's vault-relative path and the
 /// **new revision** (blake3 of the final on-disk bytes) — the token the editor
 /// chains its next save on, so sequential saves never self-conflict
-/// (desktop-editing.md §3, "last save wins — by construction").
+/// ("last save wins — by construction").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WriteReport {
     pub path: String,
@@ -424,7 +424,7 @@ impl Vault {
     /// to inject the real candle model while tests keep the fake.
     ///
     /// `open` **never mutates the embedding space** (the `open()`-time-drop fix,
-    /// tasks.md / index-engine.md §8): shaping the vector tables and any re-embed happen
+    /// GitHub Issues / index-engine.md §8): shaping the vector tables and any re-embed happen
     /// only on `reindex`. That way changing the configured model can never silently
     /// wipe vectors on the next command — a mismatch is caught, and fixed, at
     /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
@@ -452,7 +452,7 @@ impl Vault {
     /// `mv` — cuts with this config, so the index stays self-consistent. The
     /// client is the out-of-CI retrieval eval, which sweeps chunker levers in one
     /// process (`set_chunk_config` → `project(force)` → `embed` → score;
-    /// specs/eval-strategy.md); the shipped adapters never call it. Changing the
+    /// the eval harness, crates/b2-embed/evals/); the shipped adapters never call it. Changing the
     /// config does **not** re-chunk by itself — pair it with `project(force)`.
     pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
         self.chunk_config = cfg;
@@ -473,8 +473,8 @@ impl Vault {
     /// the real model shows a live progress line instead of looking frozen; and the
     /// callback's [`ControlFlow`] return **cooperatively cancels** the embed phase —
     /// returning [`ControlFlow::Break`] stops embedding at that batch boundary while
-    /// Phase 2 still completes, leaving a consistent, resumable index
-    /// (async-indexing.md §3). The desktop host maps a cancel flag to `Break`; the CLI
+    /// Phase 2 still completes, leaving a consistent, resumable index.
+    /// The desktop host maps a cancel flag to `Break`; the CLI
     /// always returns `Continue` (no behavior change for the non-cancel path, which
     /// stays byte-identical). A cancelled run sets [`ReindexReport::cancelled`].
     pub fn reindex_with_progress(
@@ -504,7 +504,7 @@ impl Vault {
         })
     }
 
-    /// The **projection pass** alone (projection-embedding-split.md §4): re-project
+    /// The **projection pass** alone (index-engine.md): re-project
     /// every `.md` note into `notes`/`chunks`(+FTS)/`edges` — stamping missing
     /// `b2id`s — with **no model and no vector work**. After it returns, the file
     /// tree lists, notes open, keyword search answers, and the graph resolves; only
@@ -688,7 +688,7 @@ impl Vault {
     }
 
     /// Read a note for display (`Vault::read`) — the Desktop UI MVP's left pane and
-    /// the one new façade op that surface adds (specs/completed/desktop-ui-mvp.md §4). Resolve
+    /// the one new façade op that surface adds (crates/b2-desktop/CLAUDE.md). Resolve
     /// `note_ref` (path **or** `b2id`) to its file and return the note's **raw
     /// Markdown body from disk** (the source of truth, not the index projection) plus
     /// the frontmatter metadata worth showing a reader. A pure read — no embedding,
@@ -723,7 +723,7 @@ impl Vault {
         })
     }
 
-    /// Save a note's **body** (`Vault::write`, desktop-editing.md §4) — the editing
+    /// Save a note's **body** (`Vault::write`) — the editing
     /// surface's one write op. Markdown-first and **model-free**: validate that the
     /// file on disk still hashes to `base_revision` (else [`Error::WriteConflict`] —
     /// an external editor changed it; nothing is written), splice `body` in
@@ -736,8 +736,7 @@ impl Vault {
     /// Returns the **new revision** (hashing the *final* on-disk bytes — a
     /// missing-`b2id` stamp, the one write beyond the body, is reflected), which the
     /// editor chains its next save on: sequential saves never self-conflict, and
-    /// only an external write trips the guard ("last save wins — by construction",
-    /// desktop-editing.md §3).
+    /// only an external write trips the guard ("last save wins — by construction").
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write", note = note_ref).entered();
         let b2id = self.resolve_ref(note_ref)?;
@@ -878,7 +877,7 @@ impl Vault {
     /// `limit` *notes*. Results are note-level: chunk hits are deduped to the
     /// highest-scoring chunk per note, so one note never appears twice.
     ///
-    /// **Keyword-first fallback** (projection-embedding-split.md §5): when the
+    /// **Keyword-first fallback** (index-engine.md): when the
     /// vector space does not exist yet — a projected-but-unembedded vault — this
     /// runs BM25-only (no query embedding, no model) instead of returning nothing,
     /// so a vault is searchable the moment [`project`](Self::project) finishes.
@@ -975,7 +974,7 @@ impl Vault {
     /// (`db::embed_progress`), so an adapter can tell the user semantic ranking is
     /// *partial* — flag results "keyword-only for now" — rather than silently
     /// under-ranking while a vault embeds behind the first tree paint
-    /// (projection-embedding-split.md §5). `embedded == 0` on a projected-but-unembedded
+    /// (index-engine.md). `embedded == 0` on a projected-but-unembedded
     /// vault; `embedded == total` (with `total > 0`) once every note has vectors.
     pub fn embed_status(&self) -> Result<EmbedStatus> {
         let _op = tracing::debug_span!(target: "b2::vault", "embed_status").entered();
@@ -1136,7 +1135,7 @@ impl Vault {
     /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a
     /// vault-relative path; a `.md` suffix is optional), rewriting every inbound
     /// `[[oldpath|alias]]` link to the new path and re-projecting the index
-    /// (user-stories.md Story 1). The graph never breaks — edges key on `b2id`, so
+    /// (invariants.md). The graph never breaks — edges key on `b2id`, so
     /// `neighbors`/backlinks show the same set before and after; only the human
     /// convenience-copy link text is repaired. Errors with [`Error::NoteNotFound`]
     /// for an unknown source, or [`Error::MoveDestination`] /
@@ -1248,7 +1247,7 @@ impl Vault {
     /// creation works with no model provisioned and a fake-opened vault can never
     /// write foreign vectors into a real-model embedding space. The note's chunks
     /// join the DB-derived missing-vector set, healed by any later
-    /// [`embed`](Self::embed)/reindex (projection-embedding-split.md §7.2) — and an
+    /// [`embed`](Self::embed)/reindex (index-engine.md) — and an
     /// empty body has nothing to embed anyway. Same refusals as `add_note`:
     /// [`Error::AddDestination`] / [`Error::AddTargetExists`].
     pub fn create_note(&self, path: &str) -> Result<AddReport> {
@@ -1301,7 +1300,7 @@ impl Vault {
     }
 }
 
-/// A file's save-guard revision: blake3 of its raw bytes (desktop-editing.md §3).
+/// A file's save-guard revision: blake3 of its raw bytes.
 /// One tiny fn so `read` (capture) and `write` (validate + return) can never drift.
 fn revision_of(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()

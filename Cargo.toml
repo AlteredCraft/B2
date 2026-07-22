@@ -3,9 +3,9 @@ resolver = "2"
 members = ["crates/b2-core", "crates/b2-embed", "crates/b2-cli", "crates/b2-desktop"]
 
 # B2 — local-first Markdown PKM with AI connection discovery.
-# Design lives in planning/; this workspace is the index engine
-# (planning/specs/index-engine-build.md), built step 0→5 against the
-# golden-vault fixtures in fixtures/golden-vault/ (planning/data-model.md §8).
+# Design lives in docs/design/; this workspace is the index engine
+# (docs/design/index-engine.md), built step 0→5 against the
+# golden-vault fixtures in fixtures/golden-vault/ (docs/design/data-model.md §8).
 
 # Build DEPENDENCIES optimized even in dev/debug builds, while keeping our own `b2-*`
 # crates at opt-level 0 so the TDD loop and `cargo test -p b2-core` stay fast. Candle's
@@ -13,7 +13,7 @@ members = ["crates/b2-core", "crates/b2-embed", "crates/b2-cli", "crates/b2-desk
 # matmul backend) is ~13× slower unoptimized, so a plain `tauri dev` / `cargo run`
 # reindex was painfully slow (a 16-chunk embed batch took ~35s instead of ~2.5s). That
 # mattered doubly for the desktop app: a reindex cancel is only observed at each embed-
-# batch boundary (planning/specs/async-indexing.md §3), so a slow batch made the
+# batch boundary (docs/design/index-engine.md), so a slow batch made the
 # **Cancel** button feel stuck. The `"*"` glob optimizes every dependency (targeting
 # just the candle crates missed the matmul backend and left it ~4× slower); the per-
 # crate opt-0 overrides below exclude our own crates so their rebuilds stay instant.

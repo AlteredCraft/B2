@@ -1,4 +1,4 @@
-//! Step 5 — hybrid retrieval (planning/specs/completed/index-engine-build.md step 5):
+//! Step 5 — hybrid retrieval (index-engine.md):
 //! BM25 ⊕ vector → RRF fusion (k=60), resolved to notes, plus the graph-filtered
 //! vector⨝edge join (index-engine.md §3) — the substrate connection discovery
 //! runs on.
@@ -167,7 +167,7 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
 #[test]
 fn search_chunks_exposes_passage_level_hits() {
     // The sub-note view (`Vault::search_chunks`) the retrieval eval scores passage
-    // ranks through (specs/eval-strategy.md): same retrieval as `search`, no note
+    // ranks through (the eval harness, crates/b2-embed/evals/): same retrieval as `search`, no note
     // dedup, each hit resolved to its note path + heading breadcrumb + the chunk's
     // FULL text — containment-scorable, unlike `SearchResult`'s display snippet.
     let tmp = tempfile::TempDir::new().unwrap();

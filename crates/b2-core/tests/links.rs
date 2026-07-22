@@ -1,4 +1,4 @@
-//! Step 2 — link parsing (planning/data-model.md §2). Pure (no DB), so these pin
+//! Step 2 — link parsing (data-model.md §2). Pure (no DB), so these pin
 //! the classification rules directly: every body link is an untyped `references`
 //! edge (the body carries no B2 syntax; decision 2026-07-21), and the verb +
 //! explanation are parsed only from a frontmatter `b2_relations:` entry

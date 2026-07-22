@@ -1,4 +1,4 @@
-//! Move / rename a note and repair inbound links (user-stories.md Story 1).
+//! Move / rename a note and repair inbound links (invariants.md).
 //!
 //! The typed graph keys every edge by `b2id`, never by path, so a move **never
 //! breaks the graph** — the target's `b2id` is untouched and every b2id-keyed edge

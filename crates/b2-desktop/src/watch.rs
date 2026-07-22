@@ -1,8 +1,8 @@
-//! Native filesystem watch → **auto-reload on external edits** (desktop-ui-mvp.md §5,
-//! Step 5, [#14](https://github.com/AlteredCraft/B2/issues/14)). B2's premise is that the
+//! Native filesystem watch → **auto-reload on external edits** (crates/b2-desktop/CLAUDE.md,
+//! [#14](https://github.com/AlteredCraft/B2/issues/14)). B2's premise is that the
 //! vault is *also* edited outside the app (Obsidian/vim, a `git pull`), so the window has
 //! to notice "the files changed under me" and reconcile — replacing the editing spec's
-//! "stale until you try to save" conflict bar (desktop-editing.md §5) with live
+//! "stale until you try to save" conflict bar (crates/b2-desktop/CLAUDE.md) with live
 //! reconciliation. The conflict bar remains the fallback for the one case this can't cover
 //! safely: an external edit to the note you are *actively typing in* (never clobber a live
 //! buffer).

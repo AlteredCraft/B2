@@ -1,5 +1,5 @@
 //! The `Vault` façade — the one typed core API the CLI and tests are clients of
-//! (vision-and-scope testability stack, point 1). This slice's contract:
+//! (invariants.md). This slice's contract:
 //! `open` / `reindex` / `neighbors` / `search`, resolving a note by path **or**
 //! `b2id`, against the golden-vault fixture. Fully deterministic (FakeEmbedder),
 //! so it proves the plumbing, not model quality.

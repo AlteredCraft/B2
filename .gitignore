@@ -28,7 +28,7 @@ crates/b2-desktop/gen/
 # don't ignore logs/.keep
 !/logs/.keep
 
-# The retrieval eval's append-only results log (specs/eval-strategy.md): one JSON
+# The retrieval eval's append-only results log (the eval harness, crates/b2-embed/evals/): one JSON
 # line per scored run, machine-local (scores depend on the machine's model/device).
 crates/b2-embed/evals/results.jsonl
 

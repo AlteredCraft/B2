@@ -1,6 +1,5 @@
 //! Resource classification and document-kind dispatch — file-type support
-//! slice 1 (planning/specs/resources-inventory-graph.md §1/§4; the taxonomy:
-//! research/file-type-support.md §3).
+//! slice 1 (data-model.md §10).
 //!
 //! Class is decided by **extension only** — deterministic, no content sniffing;
 //! a mislabeled file degrades gracefully rather than mis-executing. The table is
@@ -57,7 +56,7 @@ impl ResourceClass {
 }
 
 /// Which arm of the vault an argument names — the pure dispatch rule locked in
-/// research/file-type-support.md §9b #8, kept in core so the CLI and the desktop
+/// data-model.md §10, kept in core so the CLI and the desktop
 /// can never drift on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {

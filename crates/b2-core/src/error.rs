@@ -30,7 +30,7 @@ pub enum Error {
     /// The index's recorded embedding model/dim differs from the active embedder,
     /// so its vectors are incomparable with new query vectors. A read (search)
     /// fails fast with this rather than returning silently wrong results; the fix
-    /// is a `reindex` (which re-embeds). See index-engine.md §8 and tasks.md.
+    /// is a `reindex` (which re-embeds). See index-engine.md §8 and GitHub Issues.
     #[error("index built with embedding model {indexed}, but the active model is {active}; run `b2 reindex`")]
     ModelMismatch { indexed: String, active: String },
 
@@ -76,7 +76,7 @@ pub enum Error {
 
     /// `Vault::write` was handed a `base_revision` that no longer matches the file
     /// on disk — an external editor changed the note since it was read. Refused
-    /// rather than clobbered (desktop-editing.md §3): the caller re-reads (getting
+    /// rather than clobbered: the caller re-reads (getting
     /// the current revision) and either reloads or knowingly re-writes. The path is
     /// carried for the debug detail, never for the user-facing message.
     #[error("write conflict: {0} changed on disk since it was read")]

@@ -1,5 +1,5 @@
 //! Step 2 — the typed graph projection + `neighbors`, and the
-//! `incremental ≡ full` invariant (planning/specs/completed/index-engine-build.md step 2).
+//! `incremental ≡ full` invariant (index-engine.md).
 
 mod common;
 

@@ -84,7 +84,7 @@ function paintTree(): void {
 
 function render(): void {
   paintTree();
-  // The carve-out (desktop-editing.md §6): while editing, the note pane belongs to
+  // The carve-out (crates/b2-desktop/CLAUDE.md): while editing, the note pane belongs to
   // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
   // the editor mid-keystroke. Everything else keeps rendering.
   let noteSwapped = false;
@@ -1230,8 +1230,8 @@ function trackIndexing(run: Promise<void>): void {
   indexingRun = done;
 }
 
-// Reindex as project → embed, sequenced here (Shape A, projection-embedding-split.md
-// §6): the fast, model-free `project` completes the keyword + graph index, the tree
+// Reindex as project → embed, sequenced here (Shape A, docs/design/index-engine.md):
+// the fast, model-free `project` completes the keyword + graph index, the tree
 // paints immediately, and only then does the slow, cancellable `embed` stream behind
 // it. Deliberately does NOT set `state.loading` — the app stays fully usable
 // (read/search/navigate) while it runs; only the Reindex button is disabled and a
@@ -1393,7 +1393,7 @@ async function cancelReindex(): Promise<void> {
   }
 }
 
-// --- editing (desktop-editing.md §6/§8) -------------------------------------------
+// --- editing (crates/b2-desktop/CLAUDE.md) -------------------------------------------
 //
 // Edit mode hands the note pane to a CodeMirror 6 editor and autosaves on idle
 // through the guarded, model-free `write_note`. Everything here that never drives a
@@ -2013,7 +2013,7 @@ function focusGlobalSearch(): void {
   input?.select();
 }
 
-// --- external-edit reconciliation (desktop-ui-mvp.md §5 / #14) --------------------
+// --- external-edit reconciliation (crates/b2-desktop/CLAUDE.md / #14) --------------------
 //
 // The host watches the vault and emits a debounced `vault-changed` pulse whenever the
 // Markdown changes on disk from outside the app (an external editor, a `git pull`). We
@@ -2054,7 +2054,7 @@ async function reconcileExternalChange(): Promise<void> {
   // The open note. Two cases are deliberately left alone:
   //   • editing — the live buffer is the user's unsaved work; never clobber it. An external
   //     edit to the note being typed in surfaces through the save chain's conflict bar
-  //     instead (desktop-editing.md §5), the one case live reload can't own safely.
+  //     instead (crates/b2-desktop/CLAUDE.md), the one case live reload can't own safely.
   //   • reindexing — our own project/embed run owns the open note's refresh (doReindex);
   //     reconciling here would fight it. Its own writes don't pulse anyway (sqlite under
   //     `.b2/`, filtered host-side), but a projection can rewrite `.md` (b2id stamp).

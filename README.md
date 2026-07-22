@@ -14,7 +14,7 @@ A personal, **local-first** knowledge vault — plain Markdown you fully own —
 explained connections between them yourself.
 
 > **Status:** the design is **locked** and the **index engine is built** (`crates/b2-core`: steps 0→5
-> of the [build spec](planning/specs/completed/index-engine-build.md)). The **`b2` CLI over a typed core API** is
+> of the index engine). The **`b2` CLI over a typed core API** is
 > live (`crates/b2-cli`): point B2 at a folder and `reindex` / `search` / `neighbors` / `explain` it
 > from the terminal, with `--json` for agents. **Semantic search is real** (`crates/b2-embed`: a
 > candle-backed local embedder behind the one seam; `b2 init` downloads the model into a shared cache;
@@ -31,10 +31,10 @@ explained connections between them yourself.
 > reconciles external edits live. Reindex is a **cancellable background action** — live progress, a Cancel
 > button, and the UI stays usable while a large vault indexes; projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
-> ([specs/completed/](planning/specs/completed/)). Run it with `just app` — pick a vault from the
+> ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `just app` — pick a vault from the
 > in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —
 > slice 1, inventory & graph, is built; the wider backlog lives in
-> [GitHub Issues](https://github.com/AlteredCraft/B2/issues) ([tasks.md](planning/tasks.md)).
+> [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
 
 ## What B2 is (the north star)
 
@@ -44,12 +44,12 @@ connected yet** — so the structure of your knowledge grows as you link them, i
 The files stay plain Markdown on your disk, yours forever; B2 is the **intelligence layer over them,
 not a container around them**. Humans and AI agents are both first-class users.
 
-Full motivation, scope, and locked decisions: **[vision-and-scope.md](planning/vision-and-scope.md)**.
+Full motivation, scope, and locked decisions: **[docs/design/invariants.md](docs/design/invariants.md)**.
 
 ## How we build it
 
 Two architectural tenets shape every decision (full text:
-[vision-and-scope.md → Design philosophy](planning/vision-and-scope.md#design-philosophy)):
+[docs/design/invariants.md](docs/design/invariants.md)):
 
 - **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
   trim orphans. The index is a pure projection of your vault (drop it, rebuild it identical);
@@ -61,7 +61,7 @@ Two architectural tenets shape every decision (full text:
 
 …in service of five product non-negotiables — plain-Markdown source of truth · local-first · zero
 lock-in · AI-native (not bolted-on) · single binary
-([vision-and-scope.md → Principles](planning/vision-and-scope.md#principles--non-negotiables)).
+([docs/design/invariants.md](docs/design/invariants.md)).
 
 ## The docs
 
@@ -75,14 +75,11 @@ and work with a vault in about ten minutes. Then go deeper:
 
 | Doc | What it owns |
 |---|---|
-| [invariants.md](planning/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, cited by id. On conflict with any other doc, it wins. |
-| [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
-| [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
-| [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
-| [specs/index-engine-build.md](planning/specs/completed/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
-| [specs/completed/desktop-ui-mvp.md](planning/specs/completed/desktop-ui-mvp.md) | The **desktop UI** build spec — Tauri + CodeMirror, the repo layout, the thin-adapter discipline, and the read→discover→link MVP. The first UI adapter. |
-| [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |
-| [tasks.md](planning/tasks.md) | The working queue — what's done, what's next. |
+| [docs/design/invariants.md](docs/design/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
+| [docs/design/data-model.md](docs/design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
+| [docs/design/index-engine.md](docs/design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
+
+Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
 
 
 ## Build and run

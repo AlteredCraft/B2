@@ -1,4 +1,4 @@
-// THE ONE IPC SEAM (specs/completed/desktop-ui-mvp.md §3). Every `invoke()` in the frontend
+// THE ONE IPC SEAM (crates/b2-desktop/CLAUDE.md). Every `invoke()` in the frontend
 // lives here — the presentation-side mirror of the `Vault` façade. Keeping it in one
 // module means the rest of the UI never imports Tauri directly: it can be unit-tested
 // by mocking this module, and a future `serve`/HTTP transport swap touches ~this file
@@ -41,7 +41,7 @@ export function errText(e: unknown): string {
 
 /**
  * The host's exact `WriteConflict` message — part of the IPC contract
- * (desktop-editing.md §5): the frontend recognizes a save conflict by matching this
+ * (crates/b2-desktop/CLAUDE.md): the frontend recognizes a save conflict by matching this
  * stable constant. Pinned host-side by the `write_conflict_is_generic_and_recognizable`
  * test in `b2-desktop/src/commands.rs` — change them together.
  */
@@ -57,7 +57,7 @@ export function isWriteConflict(e: unknown): boolean {
 }
 
 /**
- * The host's filesystem-watch pulse (desktop-ui-mvp.md §5 / #14): the Rust watcher emits
+ * The host's filesystem-watch pulse (crates/b2-desktop/CLAUDE.md / #14): the Rust watcher emits
  * this event, debounced, whenever the vault's Markdown changes on disk from outside the app
  * (an external editor, a `git pull`). Must equal the host's `VAULT_CHANGED_EVENT`
  * (`b2-desktop/src/watch.rs`) — pinned by the `vault_changed_event_matches_the_frontend`
@@ -110,8 +110,8 @@ export const api = {
     invoke("search", { query, limit }),
 
   /**
-   * Save a note's body — Markdown-first through `Vault::write` (desktop-editing.md
-   * §4): a byte-honest body splice guarded by the `revision` captured at read, then
+   * Save a note's body — Markdown-first through `Vault::write`
+   * (crates/b2-desktop/CLAUDE.md): a byte-honest body splice guarded by the `revision` captured at read, then
    * a model-free re-projection. Rejects with `WRITE_CONFLICT_MESSAGE` when the file
    * changed on disk since. (Tauri v2 maps camelCase keys to the command's snake_case
    * params — `baseRevision` → `base_revision` — so no hand-written snake_case here.)
@@ -180,7 +180,7 @@ export const api = {
 
   /**
    * Phase 1 of a reindex — the fast, **model-free** projection pass
-   * (projection-embedding-split.md §6): notes + keyword index + graph, stamping
+   * (docs/design/index-engine.md): notes + keyword index + graph, stamping
    * missing b2ids. Once it resolves, the tree and keyword search are live; call
    * `embed` to fill the vectors behind it.
    */
@@ -189,7 +189,7 @@ export const api = {
   /**
    * Phase 2 of a reindex — fill the missing vectors (real model) as a cancellable
    * background action. `onProgress` fires per embed batch over a typed Tauri
-   * `Channel` (async-indexing.md §4), determinate from the first batch; the returned
+   * `Channel` (docs/design/index-engine.md), determinate from the first batch; the returned
    * Promise resolves with the final report (its `cancelled` flag set if
    * `cancelReindex` was called mid-run).
    */
