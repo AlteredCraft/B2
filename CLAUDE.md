@@ -23,7 +23,7 @@ schema must satisfy the data model, never the reverse.
   always be true (cited by id — S2, G2, …). On conflict with any other doc, it wins.
 - `planning/vision-and-scope.md` — the *why*: principles, the two design tenets, v1 scope, locked decisions.
 - `planning/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
-- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + in-process vector scan; `sqlite-vec` until 2026-07-12, see `research/discovery-scan-strategy.md`) projection, table DDL, the build order, data flows.
+- `planning/index-engine.md` + `planning/specs/completed/index-engine-build.md` — the *how*: SQLite (FTS5 + in-process vector scan; see `research/discovery-scan-strategy.md`) projection, table DDL, the build order, data flows.
 - `planning/tasks.md` — the working queue (what's done, what's next). **Read this first to know current state.**
   Planned-but-unstarted work lives in GitHub Issues; shipped build specs live in `planning/specs/completed/`
   (index engine, desktop MVP, async indexing, projection/embedding split, desktop editing, live preview).
@@ -110,33 +110,32 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
 
 ### The core invariant
 
-**`index = a pure projection of (Markdown)`.** (The full register: `planning/invariants.md`.) Two storage tiers:
+**`index = a pure projection of (the vault directory)`.** (The full register: `planning/invariants.md`.) Two storage tiers:
 
-1. **Markdown files** (`<vault>/*.md`) — the source of truth, plain and portable. Every committed
-   connection lives here: a body `[[link]]` (always untyped), or a frontmatter `b2_relations:` entry
-   (the sole home of a typed relation; written by `b2 link` or by hand).
+1. **The vault directory** — the source of truth. **Markdown is its sole authored subset** — the only
+   format whose bytes B2 may write; non-`.md` files are *resources* (path-keyed peers contributing
+   derived rows only). Every committed connection lives in the Markdown: a body `[[link]]` (always
+   untyped), or a frontmatter `b2_relations:` entry (the sole home of a typed relation; written by
+   `b2 link` or by hand).
 2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings` + `note_centroids`, scored in-process) + the typed `edges` graph.
    Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable
    B2-derived state lives outside the Markdown** (the human's own directory tree is vault material,
    not B2 state — see the folders paragraph below).
 
 Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
-edge is re-derived from Markdown on every reindex; the only writes B2 makes to a note *of its own accord*
-are stamping a missing `b2id` (a ULID) and, on `b2 link`, appending a frontmatter `b2_relations:` entry.
-(The desktop editor's saves go through `Vault::write` — a byte-honest splice of the **human's own** body
-edit, guarded by a content-hash revision; B2 still never authors body content itself.)
+edge is re-derived from Markdown on every reindex; the only write B2 makes to a note *of its own accord*
+is stamping a missing `b2id` (a ULID) — every other write is the mechanics of a command: `b2 link`
+appending a frontmatter `b2_relations:` entry, the move-repair of inbound link paths, the desktop
+editor's saves through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded
+by a content-hash revision; B2 never authors body content itself).
 
 **Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
-"Folders", decision 2026-07-21): a folder — empty or not — is vault material like a note, never projected
+"Folders"): a folder — empty or not — is vault material like a note, never projected
 into the index (nothing to chunk, embed, or link). The tree's structure listing (`Vault::list_dirs`) is a
 **live fs walk**, so the desktop file tree is one-to-one with the vault's managed (non-dot) subtree by
 construction; `create_dir` / `move_dir` / `delete_dir` proxy the OS (create-with-parents — an occupied
 target refused — / `rename` / `remove_dir_all`) and resolve targets against the disk, so empty folders
 work everywhere (`b2 mv`, `b2 rm -r`, the tree).
-
-*(Through 2026-06-30 there was a third tier — a durable `.b2/log/` event log holding the suggestion queue
-+ rejection memory — and the invariant was `(Markdown ∪ log)`. The 2026-07-04 relator cut removed it;
-see `vision-and-scope.md` "Decisions locked (2026-07-04)".)*
 
 ### The one seam (Bitter-Lesson tenet: build for tomorrow's model)
 
@@ -147,17 +146,16 @@ and a real model drops in through the same seam with no schema or flow change.
   `LocalEmbedder` (bge-base-en-v1.5, 768-dim); test/dev impl is `FakeEmbedder` (blake3-hashed,
   content-addressed, *not* semantic). The fake is content-addressed so drop→rebuild is reproducible.
 
-*(A second seam — `Relator`, an LLM that typed/explained candidate note pairs — was cut 2026-07-04: its
-per-pair cost didn't scale to a real vault. Connection discovery is now `b2 similar` (surface candidates,
-no model) + `b2 link` (the human commits). A reranker would be the next seam if/when one lands —
-`index-engine.md` §5.)*
+*(Connection discovery is deliberately model-free at surface time: `b2 similar` surfaces candidates,
+`b2 link` is the human committing — the human is the precision gate. A reranker would be the next seam
+if/when one lands — `index-engine.md` §5.)*
 
 ### Workspace crates
 
 - **`b2-core`** — the whole index engine and the typed `Vault` façade. Deliberately **model-free**
   (no candle) so its test suite stays fast and deterministic. Deps: rusqlite (bundled SQLite + FTS5),
   blake3, ulid, yaml-rust2. (No vector extension: vectors are plain BLOB tables scored in-process —
-  `embed::l2_sq` over `db::for_each_stored_vector`/`for_each_note_centroid` — since #38.)
+  `embed::l2_sq` over `db::for_each_stored_vector`/`for_each_note_centroid`.)
 - **`b2-embed`** — the real candle-backed embedder. Heavy ML deps (candle, tokenizers, hf-hub) live
   **only here**. `provision` (`b2 init`) downloads + verifies the model into a shared XDG cache;
   `LocalEmbedder::load` fails fast with "run `b2 init`" if absent.
@@ -188,7 +186,7 @@ adapters wire the real model.
 
 - **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
   notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
-  independent of file order. Since 2026-07-07 it is **two separately-invokable passes**
+  independent of file order. It is **two separately-invokable passes**
   (`specs/completed/projection-embedding-split.md`): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
   falls back to BM25-only on a projected-but-unembedded vault.
@@ -226,8 +224,8 @@ inverse labels are display-only.
 Vectors live in **plain tables** — `embeddings(chunk_id, vector)` and `note_centroids(note_b2id,
 centroid)` — created at **embed time**, not in the base migration: their existence is the "this vault
 has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
-computed **in-process** (`embed::l2_sq`, one sequential scan statement — the former `sqlite-vec`
-`vec0` table charged a per-row shadow probe on every scan, #36/#38). `meta` records `(embed_model_id,
+computed **in-process** (`embed::l2_sq`, one sequential scan statement; rationale:
+`research/discovery-scan-strategy.md`, #38). `meta` records `(embed_model_id,
 embed_dim)` — the only place a model swap is detectable. The compute **device** folds into this
 identity: the real embedder tags its recorded `embed_model_id` with the resolved device (CPU stays the
 bare repo id; a `--features metal` GPU build appends `@metal`, `b2-embed/src/model.rs`), so a

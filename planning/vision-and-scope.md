@@ -91,22 +91,20 @@ are these tenets made mechanical; this is their canonical statement, and
 
 - **A volatile vault over a disposable index.** Your notes are meant to churn — move, split, merge,
   compress, trim orphans, big refactors — and B2 must *welcome* that, never penalize it. We guarantee
-  it by keeping **nothing** that isn't re-derivable from your Markdown: the index is a pure projection
-  (`index = projection of (Markdown)`), and dropping it and rebuilding yields an identical one (the
-  locked `full-reindex ≡ incremental-update` invariant). There is **no** durable state outside your
-  notes — every connection you commit lives in the Markdown itself (a body link, or a frontmatter
-  `b2_relations:` entry), so losing the index loses nothing at all. An index that is never a source of
-  truth can't drift into a liability; so we spend complexity to keep it *derivable*, not to keep it
-  *correct under edit*. Idempotency is the mechanism; a vault you can rewrite fearlessly is the point.
-  *(Until 2026-07-04 one durable thing lived outside Markdown — a thin event log remembering rejected
-  suggestions; cutting the LLM relator removed the only thing it was for, so the third tier is gone.)*
+  it by keeping **nothing** that isn't re-derivable from your vault: the index is a pure projection
+  (`index = projection of (the vault directory)`), and dropping it and rebuilding yields an identical
+  one (the locked `full-reindex ≡ incremental-update` invariant). There is **no** durable B2-derived
+  state outside your notes — every connection you commit lives in the Markdown itself (a body link, or
+  a frontmatter `b2_relations:` entry), so losing the index loses nothing at all. An index that is
+  never a source of truth can't drift into a liability; so we spend complexity to keep it *derivable*,
+  not to keep it *correct under edit*. Idempotency is the mechanism; a vault you can rewrite
+  fearlessly is the point.
 - **Build for tomorrow's model (the Bitter Lesson).** Model capability is rising faster than any
   scaffolding we could write to compensate for today's limits, so we refuse to freeze those limits
   into B2's structure. Every AI part sits behind a **swappable seam** — today the embedder (a reranker
   when one lands) — so a better model is a drop-in, not a rewrite. Model-compensating machinery (query
   expansion, heavy prompt orchestration, an LLM adjudicating every candidate pair) is deferred or off by
-  default — the 2026-07-04 removal of the per-pair relator is this tenet *applied*, not an exception to
-  it. Where we *do* hand-engineer structure for tractability — the closed relation vocabulary that keeps
+  default. Where we *do* hand-engineer structure for tractability — the closed relation vocabulary that keeps
   queries reliable and gives you a stable typing palette ([data-model.md](data-model.md) §2) — we keep
   it a **policy we can relax**, never a structural assumption, so a more capable model can be let off the
   leash without a redesign. Orchestrate the minimum today's model needs, and no more.
@@ -154,8 +152,7 @@ artifact — UI-last and the binary goal pull the same way.
    whole classes of bugs, not single cases.
 4. *Deterministic seams for the AI parts.* Discovery's mechanism (candidate generation → similarity
    ranking) is fully testable with a fake embedder (deterministic vectors) — no live model is needed to
-   prove the pipeline is correct. The one AI seam left is the embedder; the relator and its scripted fake
-   went with the LLM-relator removal (2026-07-04).
+   prove the pipeline is correct. The one AI seam is the embedder.
 5. *Split "is the plumbing right?" from "is the AI good?"* Fast deterministic tests on every change
    (fake embedder); a separate, occasional eval suite that hits the real embedder and scores retrieval
    quality (precision/MRR) against a hand-labeled set. Model quality never flakes CI.
@@ -181,8 +178,8 @@ already said so. That is what lets the UI be deferred for a long time without fl
    being asked.
 2. **Notes (CRUD)** — create / read / update / move / delete through a stable core API (and its
    CLI), always writing Markdown first.
-3. **Typed links** — relationships carry a *type* (`elaborates`, `contradicts`, `example-of`,
-   `supersedes`, …), not an undifferentiated edge.
+3. **Typed links** — relationships carry a *type* — a small stance core (`references`, `supports`,
+   `contradicts`) plus any hand-written tail verb — not an undifferentiated edge.
 4. **Hybrid retrieval** — keyword + graph (and semantic where the index engine allows) — fixing
    Obsidian's keyword-only limit.
 5. **Connection discovery** ⭐ — for any note, B2 surfaces the notes most *semantically similar* to it
@@ -242,10 +239,9 @@ zero UI.
 
 ## Decisions locked (2026-06-28)
 
-- **Semantic search is engine-gated.** If the index engine we choose (architecture phase) provides
-  vector/semantic search, it's **in v1**; if not, it's a **fast follow** — not a distant deferral.
-  This makes the **index-engine choice a gating decision**, and is where `qmd` and alternatives get
-  evaluated.
+- **Semantic search is in v1.** The rule was engine-gated — in v1 if the chosen index engine provides
+  vector search — and the SQLite engine does, so semantic search ships in v1
+  ([index-engine.md](index-engine.md) §4).
 - **Full CRUD lives in the CLI.** B2 is self-sufficient and testable without any external editor.
 - **v1 connection discovery = discovering & reviewing links only.** Broader agent-maintained
   structure (MOCs, deduplication, tag suggestions) is explicitly post-v1.
@@ -262,15 +258,12 @@ zero UI.
   sees a `b2id → b2id` edge — so reorganizes/splits/merges never lose a connection. Mechanics and
   scenarios in [user-stories.md](user-stories.md) ("Link format & identity").
 - **Data model.** [data-model.md](data-model.md) is locked. Two source-of-truth objects (note, edge) in
-  plain Markdown over **three storage tiers**: pristine Markdown (knowledge) · a disposable SQLite index ·
-  a durable, append-only in-vault `.b2/` event log — with `index = projection of (Markdown ∪ log)`. Typed
-  relations are keyed by `b2id`; agent **suggestions stay in the review layer, inert until accepted**.
-  Edge provenance lives in the **event log, not the note** (accepted edges stay pristine); `b2id` is B2's
+  plain Markdown over **two storage tiers** — pristine Markdown · a disposable SQLite index — with
+  **`index = projection of (the vault directory)`**. Typed relations are keyed by `b2id` and live in
+  frontmatter `b2_relations:`; committed edges are pristine (no provenance stapled on); `b2id` is B2's
   one always-allowed frontmatter write. A bare link is a **directed `references`** edge; the typed
-  vocabulary is a **10-verb core + tolerated tail**. Settles the data-model "central question"
-  ([tasks.md](tasks.md)). *(Superseded twice — see below: where accepted edges are written was revised
-  2026-06-30, and the **third tier + the suggestion review layer were cut 2026-07-04** with the LLM
-  relator, collapsing storage to two tiers and the invariant to `index = projection of (Markdown)`.)*
+  vocabulary is a **stance core + tolerated tail**. Settles the data-model "central question"
+  ([tasks.md](tasks.md)).
 - **Graph is materialized, not parsed on read.** The typed graph is kept as a **disposable `edges` table
   in the index**, not resolved from the Markdown at query time. A note's *outbound* links are re-derivable
   by parsing it (which is why the table is disposable), but **backlinks, typed multi-hop traversal, the
@@ -282,27 +275,18 @@ zero UI.
 
 ## Decisions locked (2026-06-30)
 
-> **Partly superseded 2026-07-04 (see below).** The core here still holds — B2 writes typed edges to
-> frontmatter, never the body (now on `b2 link`). But the LLM relator was cut, so the **review layer /
-> pending-suggestion** references below are gone, and the graph's "three homes … ∪ the log
-> (`origin=suggested`)" collapsed to **two** — body links (`origin=inline`) ∪ frontmatter `relations:`
-> (`origin=frontmatter`).
-
-- **B2 never authors the body; accepted edges live in frontmatter (revises the data-model §0 "central
-  decision").** The body is the rendered/exported document and stays **100% the human's** — B2 must never
-  inject prose or structure into it (a `## Relations` section appearing in a `resume.md` is the
-  anti-example). So **B2-accepted typed edges are written to frontmatter `relations:`**, not the body, as
-  typed-link strings — `- "<verb> [[path|title]] — explanation"`, the *same* syntax a human would write
-  in the body, just located in metadata (**Format A**). Human-authored connections stay where the human
-  wrote them in the body; B2 **reads** those and never rewrites them. Pending suggestions remain in the
-  review layer. **B2's only body write is the mechanical wikilink-path rewrite on move** — repairing a
-  link the human already made, never adding one.
-- **The graph is the union of three homes, one home per edge, no two-way sync.** `edges` is a one-way
-  projection of body links (`origin=inline`) ∪ frontmatter `relations:` (`origin=frontmatter`) ∪ the log
-  (`origin=suggested`). Nothing is mirrored between homes, so there is nothing to keep in sync — drop the
-  index and rebuild. The lone overlap (a human re-authoring in the body an edge already accepted in
-  frontmatter) resolves at projection time **inline-wins**: keep the body row, ignore the redundant
-  frontmatter row, surface it via `b2 explain`, never auto-edit the file.
+- **B2 never authors the body; committed typed edges live in frontmatter.** The body is the
+  rendered/exported document and stays **100% the human's** — B2 must never inject prose or structure
+  into it (a `## Relations` section appearing in a `resume.md` is the anti-example). So **B2-committed
+  typed edges are written to frontmatter `b2_relations:`**, not the body, as typed-link strings —
+  `- "<verb> [[path|title]] — explanation"`. Human-authored connections stay where the human wrote them
+  in the body; B2 **reads** those and never rewrites them. **B2's only body write is the mechanical
+  wikilink-path rewrite on move** — repairing a link the human already made, never adding one.
+- **The graph is the union of two homes, one home per edge, no two-way sync.** `edges` is a one-way
+  projection of body links (`origin=inline`) ∪ frontmatter `b2_relations:` (`origin=frontmatter`).
+  Nothing is mirrored between homes, so there is nothing to keep in sync — drop the index and rebuild.
+  Same-`(target, type)` overlap resolves at projection time **frontmatter-wins**: keep the frontmatter
+  row (it alone can carry an explanation), ignore the redundant body reference, never auto-edit the file.
 - **The trade.** A frontmatter edge is not guaranteed clickable in vanilla Obsidian's reading view.
   Accepted deliberately: human body links stay clickable, Obsidian can't render edge *types* anyway, and
   frontmatter relations are the more OKF-native shape — a small cost for a pristine document. Full
@@ -315,7 +299,7 @@ Settles "the index-engine choice is a gating decision" for semantic search
 
 - **Local embedder = `candle` + `hf-hub`, dim 768.** Pure-Rust inference compiled into the binary (no
   external ONNX Runtime), behind the existing swappable `Embedder` seam — the "build for tomorrow's model"
-  tenet in practice. 768 sets the `chunks_vec` column type; a model/dim change is a full re-embed.
+  tenet in practice. 768 is the embedding dimension recorded in `meta`; a model/dim change is a full re-embed.
   **Built 2026-07-01** in `crates/b2-embed` (`LocalEmbedder`). The default model changed from
   EmbeddingGemma-300M to **`BAAI/bge-base-en-v1.5`** (BERT, 768-dim, ungated): EmbeddingGemma is *gated* on
   Hugging Face (needs a token + license click), which defeats a friction-free `b2 init`; bge was the
@@ -327,40 +311,28 @@ Settles "the index-engine choice is a gating decision" for semantic search
   repo, or a local path for fully-offline installs), set in a global TOML config; the model is cached in a
   shared XDG dir, not per-vault.
 
-## Decisions locked (2026-07-04) — discovery is similarity + human judgment, not an LLM relator
+## Decisions locked (2026-07-04) — discovery is similarity + human judgment
 
-A course-correction from dogfooding B2 on a real 1000+ note vault. It **returns to the two tenets**
-rather than departing from them — the machinery it removes is exactly what those tenets say to avoid.
-
-- **The LLM relator is cut.** Connection discovery was built as *candidate generation → an LLM
-  "relator" that types & explains every candidate pair → a review/accept queue.* On a real vault the
-  relator's per-pair latency and dollar cost don't scale (the first pass is ~notes × candidates model
-  calls), and — the deeper point — a per-pair LLM adjudicator is precisely the **"heavy prompt
-  orchestration / model-compensating machinery" the Bitter-Lesson tenet says to defer.** So it goes: the
-  `Relator` seam, the Claude-backed relator (the `b2-relate` crate), and the suggestion queue
-  (`generate`/`accept`/`reject`) are removed.
-- **Discovery is now semantic-similarity surfacing + human lock-in.** Point B2 at a note and it surfaces
+- **No per-pair LLM adjudication.** An LLM "relator" that types and explains every candidate pair
+  costs ~notes × candidates model calls on a real vault, and is precisely the **"heavy prompt
+  orchestration / model-compensating machinery" the Bitter-Lesson tenet says to defer** — so B2 ships
+  none: no relator seam, no suggestion queue, no review layer.
+- **Discovery is semantic-similarity surfacing + human lock-in.** Point B2 at a note and it surfaces
   the notes most **semantically similar** to it that you haven't linked yet — instantly, locally, over
   your whole vault (vector KNN over already-stored embeddings; no model call, no network). *You* decide
   which are worth a real connection and **lock it in**: a link in the body (which you write), or a typed
-  relation B2 commits to frontmatter `relations:` on **`b2 link`**. The discovery is the machine's; the
-  **judgment stays yours** — you are the precision gate the relator used to be. This is still
-  **AI-native** (principle #4): the intelligence simply moved from expensive per-pair judgment to cheap
-  whole-vault semantic surfacing, which is where the Bitter Lesson says to put it.
-- **Storage collapses from three tiers to two.** With no suggestions to queue and no rejections to
-  remember, the durable `.b2/log/` event tier and its replay have **no load-bearing job left** (the only
-  other thing they held — `b2id.stamped` — is history reconstructible from the Markdown itself, since the
-  id lives in the file). So the log tier is removed and the core invariant **simplifies** from
-  `index = projection of (Markdown ∪ log)` to **`index = projection of (Markdown)`** — which *strengthens*
-  the "volatile vault over a disposable index" tenet: now literally nothing durable exists that your
-  Markdown can't reconstruct. Two tiers remain: **pristine Markdown** (source of truth) + a **disposable
-  SQLite index** (drop it, `reindex` rebuilds it identical).
-- **What's retained, unchanged:** typed links (authored in the body, or committed to frontmatter), the
-  materialized typed graph with **backlinks** (`b2 neighbors` / `b2 explain` — inbound *and* outbound),
-  hybrid keyword + semantic + graph retrieval, the real local embedder behind its seam, and the closed
-  10-verb relation vocabulary — now serving as *your* typing palette on `b2 link` rather than the
-  relator's emit set. Mirrored across [data-model.md](data-model.md), [index-engine.md](index-engine.md),
-  [tasks.md](tasks.md), and [user-stories.md](user-stories.md).
+  relation B2 commits to frontmatter `b2_relations:` on **`b2 link`**. The discovery is the machine's;
+  the **judgment stays yours** — the human is the precision gate. This is still **AI-native**
+  (principle #4): the intelligence lives in cheap whole-vault semantic surfacing, which is where the
+  Bitter Lesson says to put it.
+- **Storage is two tiers.** Pristine **Markdown** (source of truth) + a **disposable SQLite index**
+  (drop it, `reindex` rebuilds it identical) — nothing durable exists that your vault can't
+  reconstruct.
+- **Alongside:** typed links (authored in the body, or committed to frontmatter), the materialized
+  typed graph with **backlinks** (`b2 neighbors` / `b2 explain` — inbound *and* outbound), hybrid
+  keyword + semantic + graph retrieval, the real local embedder behind its seam, and the closed
+  **stance-core relation vocabulary** — your typing palette on `b2 link`
+  ([data-model.md](data-model.md) §2).
 
 ## Decisions locked (2026-07-05) — the first UI: a Tauri desktop app
 
@@ -416,8 +388,8 @@ walk was `.md`-only. This settles how B2 treats them. Full design, taxonomy, ren
   the catch-all — so the taxonomy is *total* ("any file GitHub could store"), degrading gracefully, never
   refusing.
 - **One embedding space in v1.** Every class funnels to *text* through the existing bge space; multimodal
-  image embedding and an LLM/OCR **Describer** are **documented future seams, default-off** — the same
-  Bitter-Lesson posture that cut the relator (2026-07-04), applied again.
+  image embedding and an LLM/OCR **Describer** are **documented future seams, default-off** — the
+  Bitter-Lesson defer-by-default posture again.
 - **Rendering = a viewer registry keyed by class, with a "No viewer available" fallback card** (metadata +
   backlinks + *Open in system default*). The one infrastructure key is the **Tauri asset protocol**
   (scoped, read-only) — which also unblocks inline images in the reading view, the gap
@@ -444,15 +416,7 @@ We take *ideas*, not implementations:
 - The thing the whole field leaves on the table: **typed, explained connection discovery over
   a vault you fully own.** That is B2's reason to exist.
 
-## Open questions / deliberately deferred (not deciding here)
+## Deliberately deferred (not deciding here)
 
-- **Tech stack / language** — shaped partly by the single-binary goal. Open.
-- Architecture: how parsing, the derived index, and discovery are organized.
-- Semantic embeddings from day one vs. keyword + graph first (gated on the index-engine choice
-  above).
 - Multi-device sync.
-
-## Next step
-
-With motivation, problem, vision, and scope pinned here, move to the **data model** — *what a note
-is and what a connection is* — before any code.
+- Multiple vaults; large-scale performance work.

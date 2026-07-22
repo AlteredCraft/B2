@@ -18,14 +18,14 @@ decisions) and [tasks.md](tasks.md) (data-model leans).
 > over it. "Inbound link" / "backlink" = a link *from* some other vault file *to* the file in
 > question.
 
-> **Link format & identity are now decided** (2026-06-29) — see the section below; mirrored in
-> [vision-and-scope.md](vision-and-scope.md) ("Decisions locked") and [tasks.md](tasks.md)
-> (data-model). The broader data model ([data-model.md](data-model.md), still *Next up*) is not yet
-> fully locked; where a story still depends on an open decision it is called out as **Open**.
+> **Link format & identity are decided** — see the section below; mirrored in
+> [vision-and-scope.md](vision-and-scope.md) ("Decisions locked") and locked in
+> [data-model.md](data-model.md). Where a story still depends on an open decision it is called out
+> as **Open**.
 
 ---
 
-## Link format & identity (decided 2026-06-29)
+## Link format & identity (decided)
 
 The decision the stories below rest on. It resolves the central "how is a link written" question
 ([tasks.md](tasks.md), "Typed relations in Markdown") for the *authored reference* layer.
@@ -51,8 +51,7 @@ The decision the stories below rest on. It resolves the central "how is a link w
   deferred-UI period. We spend a bounded rewrite-on-move cost — already a committed, tested kernel
   capability — to keep the vault first-class in Obsidian today. Id-stability is preserved *inside*
   the graph regardless.
-- **B2 never authors the body — and never asks it to carry B2 syntax** *(refined 2026-06-30;
-  typed-body syntax removed 2026-07-21)*. The kernel **reads** the links a human writes in the body —
+- **B2 never authors the body — and never asks it to carry B2 syntax.** The kernel **reads** the links a human writes in the body —
   strictly as ordinary Markdown, every one an untyped `references` edge — but never writes there.
   Typed connections (a verb, an optional explanation) live only in frontmatter **`b2_relations:`** as
   typed-link strings (`- "<verb> [[path|title]] — …"`) — metadata, not document content, so a note
@@ -80,11 +79,11 @@ Two distinct operations, both covered:
    `foo.md` → `bar.md`). The note's *content* and `b2id` are unchanged, but the **inline `path` in
    inbound links is now stale**.
 2. **Alias drift** — an inbound link's display `|alias` no longer matches the target. Since **the title
-   is the filename** (data-model.md §1/§9, 2026-07-14 — the frontmatter `title` is inert), there is no
+   is the filename** (data-model.md §1/§9 — the frontmatter `title` is inert), there is no
    managed "title rename": renaming the *file* is case 1 (a move), and any `|alias` a human wrote is their
    text. The `path` is unchanged here, so inbound links still **resolve**; only the human-authored alias
    reads stale, and B2 leaves it as written (it never authors an alias, and `b2 mv` preserves aliases
-   verbatim). *(Historically this case tracked a frontmatter-title change; that precedence is retired.)*
+   verbatim).
 
 (See **Link format & identity** above for the `[[path|title]]` / `b2id` model these cases follow.)
 

@@ -85,7 +85,7 @@ façade** have shipped:
   the body carries no B2 syntax and every body link is an untyped `references` edge; a `b2_relations:`
   entry *augments* a body link (different verb coexists; same-verb overlap dedupes **frontmatter-wins**,
   keeping the explanation). A generic un-namespaced `relations:` key is no longer read. Canonical:
-  [data-model.md](data-model.md) §0–§3 + §9 (decision entry).
+  [data-model.md](data-model.md) §0–§3.
 - **Folders are fs-authoritative, empty folders first-class (2026-07-21)** — the file tree is now
   **one-to-one with the vault's managed (non-dot) directory tree in both directions**: folders are
   user-authored *structure* (the content sibling of notes), never projected into the index, and read live
@@ -169,7 +169,7 @@ linked doc.
   must always be true, cited by id (S2, G2, …). On conflict with any other doc, it wins.
 
 - **① Connection discovery** (resolved 2026-07-01) — a candidate is the graph's *complement*, **near ∖
-  connected**: per anchor chunk, KNN its **stored** `chunks_vec` vector (no re-embed, passage↔passage),
+  connected**: per anchor chunk, KNN its **stored** vector (no re-embed, passage↔passage),
   score each other note by its **best** chunk-pair (max-sim), subtract the anchor's 1-hop neighbors
   (distance is **exclusion-only** — 2-hop candidates survive unboosted), rank → top-N. Canonical:
   [index-engine.md](index-engine.md) §3; distance-weighting is the deferred experiment
@@ -181,5 +181,5 @@ linked doc.
   above (build steps themselves: [specs/completed/index-engine-build.md](specs/completed/index-engine-build.md) §4).
 - **Typed relations in Markdown** — the authored-reference layer: frontmatter `b2_relations:` (the sole
   typed home — verb + explanation; namespaced, frontmatter-wins dedup) + plain body links (always
-  untyped `references`; the body carries no B2 syntax — the typed-line construct was removed
-  2026-07-21). Canonical: [data-model.md](data-model.md) §0–§3, §9.
+  untyped `references`; the body carries no B2 syntax). Canonical:
+  [data-model.md](data-model.md) §0–§3, §9.

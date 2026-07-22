@@ -20,8 +20,7 @@ explained connections between them yourself.
 > candle-backed local embedder behind the one seam; `b2 init` downloads the model into a shared cache;
 > the fake stays the CI default). **Connection discovery** ships as **`b2 similar`** (surface the
 > nearest *unlinked* notes — local, free, no model call) **+ `b2 link`** (you commit a typed relation
-> to frontmatter). The LLM relator was tried and **cut 2026-07-04** — its per-pair cost didn't scale;
-> the human is the precision gate ([tasks.md](planning/tasks.md)). A tour
+> to frontmatter) — the human is the precision gate; there is no LLM in the loop. A tour
 > grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 >
 > **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
@@ -33,7 +32,8 @@ explained connections between them yourself.
 > button, and the UI stays usable while a large vault indexes; projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
 > ([specs/completed/](planning/specs/completed/)). Run it with `just app` — pick a vault from the
-> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** no single focus queued — the backlog lives in
+> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —
+> slice 1, inventory & graph, is built; the wider backlog lives in
 > [GitHub Issues](https://github.com/AlteredCraft/B2/issues) ([tasks.md](planning/tasks.md)).
 
 ## What B2 is (the north star)
@@ -52,9 +52,9 @@ Two architectural tenets shape every decision (full text:
 [vision-and-scope.md → Design philosophy](planning/vision-and-scope.md#design-philosophy)):
 
 - **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
-  trim orphans. The index is a pure projection of your Markdown (drop it, rebuild it identical);
-  **nothing durable lives outside your notes** (`index = projection of (Markdown)`). Idempotency is the
-  mechanism; a vault you can rewrite without fear is the point.
+  trim orphans. The index is a pure projection of your vault (drop it, rebuild it identical);
+  **nothing durable B2 derives lives outside your notes** (`index = projection of (the vault directory)`).
+  Idempotency is the mechanism; a vault you can rewrite without fear is the point.
 - **Build for tomorrow's model (the Bitter Lesson).** Every AI part sits behind a swappable seam;
   we orchestrate the minimum today's model needs and no more — so a more capable model is a drop-in,
   not a redesign.
@@ -78,7 +78,7 @@ and work with a vault in about ten minutes. Then go deeper:
 | [invariants.md](planning/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, cited by id. On conflict with any other doc, it wins. |
 | [vision-and-scope.md](planning/vision-and-scope.md) | Why B2 exists · principles · **design philosophy** · v1 scope · locked decisions. The canonical *why*. |
 | [data-model.md](planning/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
-| [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + `sqlite-vec`) as a disposable projection. The canonical *how*. |
+| [index-engine.md](planning/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
 | [specs/index-engine-build.md](planning/specs/completed/index-engine-build.md) | The build **spec** — precise table DDL, relations, data flows, and the step 0→5 build order. The buildable contract. |
 | [specs/completed/desktop-ui-mvp.md](planning/specs/completed/desktop-ui-mvp.md) | The **desktop UI** build spec — Tauri + CodeMirror, the repo layout, the thin-adapter discipline, and the read→discover→link MVP. The first UI adapter. |
 | [user-stories.md](planning/user-stories.md) | Kernel behavior as testable scenarios (rename/move, link delete) · link-identity mechanics. |

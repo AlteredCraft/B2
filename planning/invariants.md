@@ -3,24 +3,18 @@ title: "B2 — Invariants"
 type: note
 tags: [b2, invariants, architecture, canonical]
 created: 2026-07-22
-status: draft
+status: active
 ---
 
 # B2 — Invariants
 
-> The normative register of what must always be true of B2 — extracted 2026-07-22 from
-> [vision-and-scope.md](vision-and-scope.md), [data-model.md](data-model.md),
-> [index-engine.md](index-engine.md), [user-stories.md](user-stories.md), the root
-> [CLAUDE.md](../CLAUDE.md), and the code (taken as evidence where doc text had drifted).
-> Each entry is one testable/reviewable claim; the linked doc holds the elaboration and rationale.
-> Product non-negotiables (local-first, zero lock-in, …) stay in vision-and-scope — this page is the
-> *engine and data* contract.
+> The normative register of what must always be true of B2. Each entry is one testable/reviewable
+> claim; the linked doc holds the elaboration and rationale. Product non-negotiables (local-first,
+> zero lock-in, …) stay in [vision-and-scope.md](vision-and-scope.md) — this page is the *engine and
+> data* contract.
 >
 > **On conflict, this page wins and the other doc gets fixed.** Changing this page is a deliberate
 > decision, never a drive-by edit. Cite entries by id (S2, G2, …).
->
-> ⚠ blocks mark contentions found during extraction — places the sources disagree or the code says
-> otherwise. They are review notes, not part of the register: resolve, then delete.
 
 The register is the two design tenets — *a volatile vault over a disposable index* and *build for
 tomorrow's model* ([vision-and-scope.md → Design philosophy](vision-and-scope.md#design-philosophy)) —
@@ -32,24 +26,17 @@ made mechanical.
   source of truth; `.b2/b2.sqlite` is a disposable cache. Nothing in the index is authoritative.
   ([data-model.md](data-model.md) "Two storage tiers")
 - **S2 — The index is a pure projection: `index = projection of (the vault directory)`.** Drop
-  `b2.sqlite`, reindex, get an identical index. Markdown is the *authored* subset — the only format
-  whose bytes B2 may write; resources contribute derived rows only.
-  ([data-model.md](data-model.md) §10, [index-engine.md](index-engine.md) §3)
-
-  > ⚠ **Contention — which formulation is canonical.** The root CLAUDE.md headline, the README, and
-  > older passages still say `projection of (Markdown)`; the 2026-07-08 resources decision generalized
-  > it to the vault directory, and the code walks non-`.md` files into `resources` since slice 1
-  > (schema v4). Recommendation: the vault-directory form is canonical, stated with "Markdown is the
-  > sole authored/writable subset" — update CLAUDE.md/README in the next pass. *(The 2026-07-04 form
-  > `(Markdown)` remains correct history: the tier that was removed then was the event log.)*
-
+  `b2.sqlite`, reindex, get an identical index. **Markdown is the vault's sole authored subset** —
+  the only format whose bytes B2 may write; resources contribute derived rows only, and folders are
+  never projected at all (read live off disk). ([data-model.md](data-model.md) §10,
+  [index-engine.md](index-engine.md) §3)
 - **S3 — `full-reindex ≡ incremental-update`.** Re-deriving one changed note converges on exactly the
   state a from-scratch rebuild would produce — including reconciling path ownership and pruning rows
   for deleted files on a whole-vault pass. ([index-engine.md](index-engine.md) §8)
 - **S4 — No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
   index-only authored facts. Scope: *B2-derived* data — the human's own directory tree is vault
   material, for which the **filesystem is authoritative** (folders are never projected; the tree
-  listing is a live fs walk). ([data-model.md](data-model.md) "Folders", decision 2026-07-21)
+  listing is a live fs walk). ([data-model.md](data-model.md) "Folders")
 - **S5 — Schema change = version bump + rebuild, never a data migration.** Disposability is what
   makes this free; a migration script would be evidence S2 broke.
   ([index-engine.md](index-engine.md) §3)
@@ -67,13 +54,6 @@ made mechanical.
   `b2 link` (frontmatter, never the body); the move-repair of W2; the editor save (`Vault::write` — a
   byte-honest splice of the *human's own* body bytes, guarded by a content-hash revision); and
   create/move/delete of notes, resources, and folders on explicit command.
-
-  > ⚠ **Contention — the sources enumerate this differently.** CLAUDE.md counts the `b2 link` append
-  > among writes "of its own accord" (it's on-command); data-model §6 lists a fourth write, "(d)
-  > optional cosmetic alias refresh" — **no such code exists**, and user-stories Story 1 says stale
-  > aliases are left verbatim. Recommendation: adopt the W1/W3 framing (one unbidden write; the rest
-  > are command mechanics), delete (d) from data-model §6.
-
 - **W4 — B2 never deletes, moves, or archives vault files of its own accord.** Consequences of human
   edits (orphans, dangling links, hash-matched move candidates) are *surfaced*, flagged, or proposed —
   never silently applied. ([user-stories.md](user-stories.md) Story 2,
@@ -91,13 +71,13 @@ made mechanical.
   "Link format & identity")
 - **L2 — A note's title is its filename.** The frontmatter `title:` key is recognized but inert —
   round-tripped, never driving display, aliases, or search. `b2 link` therefore writes a bare
-  `[[path]]`, no alias. (decision 2026-07-14, [data-model.md](data-model.md) §1, §9)
+  `[[path]]`, no alias. ([data-model.md](data-model.md) §1, §9)
 - **L3 — Resources are path-keyed peers with no `b2id` and no sidecar files, ever.** The one
   asymmetry vs. notes is authoring surface, not status: B2 can read them, never write them.
   ([data-model.md](data-model.md) §10)
 - **L4 — The body is read strictly as ordinary Markdown.** Every body link — wikilink, Markdown link,
   embed — is an untyped, **directed** `references` edge; no prose shape (list marker, leading verb)
-  is ever B2 structure. (decision 2026-07-21, [data-model.md](data-model.md) §2)
+  is ever B2 structure. ([data-model.md](data-model.md) §2)
 
 ## G — The typed graph
 
@@ -109,8 +89,8 @@ made mechanical.
   (`origin=inline`, always untyped) ∪ frontmatter `b2_relations:` (`origin=frontmatter`, the **sole**
   home of a verb + explanation). Same `(target, type)` in both homes keeps the frontmatter row (it
   alone carries the explanation); a *different* verb over a body-linked target coexists (the augment
-  case). Nothing is ever copied between homes or auto-removed from a file. (decision 2026-07-21,
-  [data-model.md](data-model.md) §0–§3)
+  case). Nothing is ever copied between homes or auto-removed from a file.
+  ([data-model.md](data-model.md) §0–§3)
 - **G3 — The relation vocabulary is a closed three-verb stance core plus a tolerated tail.**
   `references` (neutral) / `supports` (for) / `contradicts` (against, symmetric) is the typing
   palette and what queries rely on; any other verb is stored verbatim as an opaque tail. The closed
@@ -163,25 +143,3 @@ made mechanical.
   added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md))
 - **E4 — User-facing errors are generic and actionable, never leaking internals.** Full detail goes
   to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../CLAUDE.md) Conventions)
-
----
-
-## Drift found during extraction (fix in the next curation pass)
-
-Stale text noticed while extracting — no decision needed, just reconciliation:
-
-1. **README doc table** still describes index-engine.md as "FTS5 + `sqlite-vec`" — `sqlite-vec` was
-   removed 2026-07-12 (#38; plain tables + in-process scan).
-2. **vision-and-scope "Decisions locked (2026-06-30)"** still describes **inline-wins** dedup; flipped
-   to frontmatter-wins 2026-07-21. The section's supersession callout covers only the relator cut —
-   it needs a second marker.
-3. **vision-and-scope "Decisions locked (2026-07-04)"** says "closed **10-verb** relation vocabulary";
-   the core became the three-verb stance trio 2026-07-21 (39ea4fe). Capability area 3's example verbs
-   (`elaborates`, `example-of`, `supersedes`) are now tail verbs.
-4. **data-model §1**: "`updated` is maintained by B2 on B2-authored edits" — no code path stamps
-   `updated:` today (`Vault::write` splices the body verbatim; `add` doesn't set it).
-5. **data-model §6 write (d)** "optional cosmetic alias refresh" — no such code exists (see ⚠ under W3).
-6. **`ingest.rs` module comment** still says "stamp a missing `b2id` (write file **+ log**)" — the log
-   tier was removed 2026-07-04.
-7. **README status** ("Next: no single focus queued") disagrees with **tasks.md Active** (resources
-   slice 1 built; a live desktop dogfood pass is the remaining gate before slice 2).
