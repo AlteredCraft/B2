@@ -16,7 +16,7 @@ use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
 use std::fs::{File, OpenOptions};
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -94,6 +94,16 @@ enum Command {
         /// Initial body content (Markdown). Omit for an empty note to fill in later.
         #[arg(long)]
         content: Option<String>,
+    },
+    /// Replace a note's **body** with Markdown piped on stdin — the CLI/agent editing
+    /// surface (the counterpart to the desktop editor's save). NOTE is a vault-relative
+    /// path or a b2id; the note must already exist (`b2 add` creates one). Pipe the body
+    /// **alone** — the frontmatter (including B2's managed `b2id` / `b2_relations:`) is
+    /// left untouched, so no `---` block. The note is re-projected (chunks + FTS + graph)
+    /// so the index stays live; a later `b2 reindex` fills the changed body's vectors.
+    Write {
+        /// The note whose body to overwrite: a vault-relative path or a b2id.
+        note: String,
     },
     /// Show a note's typed neighbors. NOTE is a vault-relative path or a b2id.
     Neighbors { note: String },
@@ -442,6 +452,31 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("Created {} (b2id {}).", report.path, report.b2id);
+            }
+        }
+        Command::Write { note } => {
+            // A body splice + re-projection: **model-free** (like the desktop's save and
+            // `rm`), still an explicit vault like every write. Refuse an interactive
+            // terminal up front so the command never silently hangs waiting for
+            // hand-typed input — the new body is always *piped* (an agent, `cat file |`, …).
+            let stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                return Err(CliError::StdinRequired);
+            }
+            let (vault, _semantic) = open_vault(cli.require_vault(None)?, false)?;
+            let mut body = String::new();
+            stdin.lock().read_to_string(&mut body)?;
+            // Stateless one-shot: read the current on-disk revision and chain the write on
+            // it. A CLI holds no long-lived buffer, so there's no external-edit window to
+            // guard here — the content-hash guard exists for the desktop's in-memory
+            // buffer; for a one-shot, the contract is simply "the body becomes exactly
+            // this" (`Vault::write` still keeps the frontmatter bytes untouched).
+            let current = vault.read(note)?;
+            let report = vault.write(note, &body, &current.revision)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("Wrote {} ({} bytes).", report.path, body.len());
             }
         }
         Command::Neighbors { note } => {
@@ -860,6 +895,10 @@ enum CliError {
     /// confirm dialog; there is no interactive prompt to give an agent).
     #[error("folder delete requires --recursive: {0}")]
     RecursiveRequired(String),
+    /// `write` was invoked with stdin attached to a terminal (nothing piped) — refuse
+    /// rather than hang waiting for hand-typed input; the new body must be piped in.
+    #[error("no body piped on stdin")]
+    StdinRequired,
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -914,6 +953,9 @@ fn user_message(err: &CliError) -> String {
         CliError::RecursiveRequired(p) => format!(
             "'{p}' is a folder. Re-run with -r/--recursive to delete it and everything inside it."
         ),
+        CliError::StdinRequired => {
+            "No body piped on stdin. Pipe the new note body in, e.g. `cat new-body.md | b2 write notes/foo`.".to_string()
+        }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
@@ -925,6 +967,7 @@ fn user_message(err: &CliError) -> String {
             CliError::VaultRequired => err.to_string(),
             CliError::ReindexRunning => err.to_string(),
             CliError::RecursiveRequired(_) => err.to_string(),
+            CliError::StdinRequired => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {

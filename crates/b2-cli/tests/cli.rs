@@ -64,6 +64,30 @@ fn run_with_vault_env(vault: &Path, args: &[&str]) -> Output {
         .expect("b2 binary runs")
 }
 
+/// Run `b2 -C <vault> <args...>` with `input` piped to the child's stdin — the path
+/// `b2 write` reads its new body from (an agent, `cat file |`, …).
+fn run_in_stdin(vault: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut full = vec!["-C", vault.to_str().unwrap()];
+    full.extend_from_slice(args);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .args(&full)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("b2 binary spawns");
+    child
+        .stdin
+        .take()
+        .expect("child stdin is piped")
+        .write_all(input.as_bytes())
+        .expect("write to child stdin");
+    child.wait_with_output().expect("b2 binary runs")
+}
+
 fn stdout(o: &Output) -> String {
     String::from_utf8(o.stdout.clone()).unwrap()
 }
@@ -176,6 +200,7 @@ fn write_commands_refuse_without_an_explicit_vault() {
     let write_cmds: &[&[&str]] = &[
         &["reindex"],
         &["add", "notes/new"],
+        &["write", "notes/a"],
         &["mv", "notes/a", "notes/b"],
         &["rm", "notes/a"],
         &["link", "notes/a", "notes/b"],
@@ -311,6 +336,77 @@ fn add_invalid_path_fails_cleanly() {
     assert!(!out.status.success(), "invalid path must be a nonzero exit");
     let err = stderr(&out).to_lowercase();
     assert!(err.contains("path"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}
+
+// --- note CRUD: write (body edit from stdin) ----------------------------------
+
+#[test]
+fn write_replaces_body_from_stdin_and_reprojects() {
+    let (_g, root) = reindexed();
+
+    // Overwrite memory's body with piped Markdown (by path here; b2id works too).
+    let out = run_in_stdin(
+        &root,
+        &["write", "concepts/memory"],
+        "Memory is now all about marmots and their burrows.\n",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Wrote concepts/memory.md"),
+        "{:?}",
+        stdout(&out)
+    );
+
+    // Markdown-first + byte-honest: the frontmatter (b2id, title) is untouched, the
+    // body is the piped text verbatim, and the old body is gone.
+    let text = std::fs::read_to_string(root.join("concepts/memory.md")).unwrap();
+    assert!(
+        text.contains("b2id: 01JMEM0000000000000000000A"),
+        "frontmatter preserved verbatim: {text}"
+    );
+    assert!(text.contains(r#"title: "Human memory""#), "{text}");
+    assert!(
+        text.contains("marmots and their burrows"),
+        "new body written: {text}"
+    );
+    assert!(
+        !text.contains("encodes, stores, and retrieves"),
+        "old body replaced: {text}"
+    );
+
+    // Re-projected without a reindex: the new content is searchable, the old is not.
+    let hit = run_in(&root, &["--json", "search", "marmots"]);
+    let v: Value = serde_json::from_slice(&hit.stdout).unwrap();
+    assert!(
+        v.as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["path"] == "concepts/memory.md"),
+        "the new body is indexed: {v}"
+    );
+}
+
+#[test]
+fn write_json_returns_path_and_new_revision() {
+    let (_g, root) = reindexed();
+
+    let out = run_in_stdin(&root, &["--json", "write", MEMORY_ID], "Fresh body.\n");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["path"], "concepts/memory.md");
+    // The new revision is the blake3 of the final bytes — nonempty, and a *later*
+    // save would chain on it (the desktop's guard token, surfaced for agents too).
+    assert!(v["revision"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+#[test]
+fn write_unknown_note_fails_cleanly() {
+    let (_g, root) = reindexed();
+    let out = run_in_stdin(&root, &["write", "does/not/exist"], "body\n");
+    assert!(!out.status.success(), "unknown note must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("not found"), "actionable message: {err}");
     assert!(!err.contains("panicked"), "no stack trace: {err}");
 }
 
