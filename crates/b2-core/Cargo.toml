@@ -20,6 +20,8 @@ ulid = "1.2.1"
 yaml-rust2 = "0.11.0"
 
 [dev-dependencies]
+proptest = "1.11.0"
+rusqlite = "0.40.1"
 tempfile = "3.27.0"
 # The logging integration test installs a real JSON subscriber to assert the
 # emitted events are parseable, plottable JSONL (tests/logging.rs).
