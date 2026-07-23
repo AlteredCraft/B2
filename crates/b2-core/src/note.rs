@@ -12,7 +12,9 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 /// The frontmatter fields B2 projects into the `notes` table. Extraction is
 /// best-effort: unparseable frontmatter still round-trips (raw is preserved); the
-/// fields just come back empty.
+/// fields just come back empty — except `b2id`, which falls back to a raw line
+/// scan so the stamp write can never re-fire on YAML it can't read (#75, see
+/// [`extract_fields`]).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub b2id: Option<String>,
@@ -212,22 +214,54 @@ fn detect_frontmatter(raw: &str) -> Option<Frontmatter> {
 
 fn extract_fields(yaml: &str) -> NoteFields {
     let mut f = NoteFields::default();
-    let Ok(docs) = YamlLoader::load_from_str(yaml) else {
-        return f;
-    };
-    let Some(doc) = docs.first() else {
-        return f;
-    };
-    f.b2id = doc["b2id"].as_str().map(str::to_string);
-    f.r#type = doc["type"].as_str().map(str::to_string);
-    f.title = doc["title"].as_str().map(str::to_string);
-    f.description = doc["description"].as_str().map(str::to_string);
-    f.created = scalar_to_string(&doc["created"]);
-    f.updated = scalar_to_string(&doc["updated"]);
-    f.aliases = string_list(&doc["aliases"]);
-    f.tags = string_list(&doc["tags"]);
-    f.relations = string_list(&doc["b2_relations"]);
+    if let Ok(docs) = YamlLoader::load_from_str(yaml) {
+        if let Some(doc) = docs.first() {
+            f.b2id = doc["b2id"].as_str().map(str::to_string);
+            f.r#type = doc["type"].as_str().map(str::to_string);
+            f.title = doc["title"].as_str().map(str::to_string);
+            f.description = doc["description"].as_str().map(str::to_string);
+            f.created = scalar_to_string(&doc["created"]);
+            f.updated = scalar_to_string(&doc["updated"]);
+            f.aliases = string_list(&doc["aliases"]);
+            f.tags = string_list(&doc["tags"]);
+            f.relations = string_list(&doc["b2_relations"]);
+        }
+    }
+    // Stamping — B2's one autonomous write — is gated on `b2id` being *definitively
+    // absent*, never on "the YAML wouldn't parse" (#75): without this fallback, a
+    // note with unparseable frontmatter read as id-less on every pass, so ingest
+    // stamped a fresh line each reindex — the file grew forever and the note's
+    // identity churned. When the parsed route yields no id (parse failure, or a
+    // value that isn't a plain string), a conservative raw scan for a `b2id:` line
+    // supplies it: unreadable-but-present still counts, and the projection keeps a
+    // stable identity while the malformed YAML stays the human's to fix.
+    if f.b2id.is_none() {
+        f.b2id = scan_b2id(yaml);
+    }
     f
+}
+
+/// Raw-scan fallback for [`extract_fields`]: the first top-level (column-0)
+/// `b2id:` line's value, whitespace-trimmed with one pair of surrounding quotes
+/// stripped. First match wins — the stamp inserts at the top of the block. This is
+/// a gate for the stamp write plus a stable identity, not a YAML parser: an odd
+/// value is kept verbatim rather than risking a second stamp.
+fn scan_b2id(yaml: &str) -> Option<String> {
+    for line in yaml.lines() {
+        let Some(rest) = line.strip_prefix("b2id:") else {
+            continue;
+        };
+        let v = rest.trim();
+        let v = v
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(v);
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    None
 }
 
 /// Read a scalar as text, tolerating YAML that typed it as a number/bool (e.g. a

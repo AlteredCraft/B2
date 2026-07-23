@@ -62,7 +62,9 @@ fn any_text_round_trips_byte_identical() {
 
 /// The stamp is a *single surgical insertion* (note.rs contract): one `b2id:` line at
 /// the top of the frontmatter — or a minimal block if there is none — every other
-/// byte untouched, and never a re-stamp.
+/// byte untouched. And it is **effective and final** for any input (#75): after one
+/// stamp the id is always readable back, so a second stamp is always a byte no-op —
+/// the property that rules out the invalid-YAML re-stamp loop.
 #[test]
 fn stamping_is_a_single_surgical_insertion() {
     let id = "01JPQ000000000000000000000";
@@ -85,6 +87,16 @@ fn stamping_is_a_single_surgical_insertion() {
             prop_assert_eq!(n.frontmatter(), Some(want.as_str()));
             prop_assert_eq!(n.body(), s.as_str(), "the whole original text is the body");
         }
+        // Whatever the input — valid, invalid, or no YAML — the note now HAS an id…
+        prop_assert!(
+            n.fields().b2id.is_some(),
+            "a stamp must be readable back, or ingest would stamp forever (#75)"
+        );
+        // …and a fresh parse of the bytes agrees, so the stamp can never re-fire.
+        let mut again = parse(n.as_str());
+        prop_assert_eq!(again.fields().b2id.as_deref(), n.fields().b2id.as_deref());
+        again.stamp_b2id("01JPQ000000000000000000001");
+        prop_assert_eq!(again.as_str(), n.as_str(), "a second stamp is a byte no-op");
         Ok(())
     });
 }
@@ -130,6 +142,9 @@ struct NoteSpec {
     title: Option<String>,
     /// A frontmatter key B2 doesn't model — must survive everything verbatim.
     custom: Option<String>,
+    /// Inject lines that make the frontmatter unparseable YAML (#75): the note
+    /// must still index, keep a stable identity, and never be re-stamped.
+    bad_yaml: bool,
     paras: Vec<String>,
     /// Body wikilinks: (target note index (mod n), aliased?).
     links: Vec<(usize, bool)>,
@@ -157,22 +172,26 @@ fn note_spec() -> impl Strategy<Value = NoteSpec> {
         any::<bool>(),
         prop::option::of("[A-Za-z][A-Za-z0-9 ]{0,18}"),
         prop::option::of("[a-z]{2,8}"),
+        prop::bool::weighted(0.15),
         prop::collection::vec(para(), 1..4),
         prop::collection::vec((any::<usize>(), any::<bool>()), 0..4),
         prop::collection::vec((any::<usize>(), 0..VERBS.len()), 0..3),
         prop::collection::vec(any::<usize>(), 0..2),
     )
         .prop_map(
-            |(dir_ix, slug, stamped, title, custom, paras, links, rels, res_links)| NoteSpec {
-                dir_ix,
-                slug,
-                stamped,
-                title,
-                custom,
-                paras,
-                links,
-                rels,
-                res_links,
+            |(dir_ix, slug, stamped, title, custom, bad_yaml, paras, links, rels, res_links)| {
+                NoteSpec {
+                    dir_ix,
+                    slug,
+                    stamped,
+                    title,
+                    custom,
+                    bad_yaml,
+                    paras,
+                    links,
+                    rels,
+                    res_links,
+                }
             },
         )
 }
@@ -260,6 +279,12 @@ fn render_note(
     }
     if let Some(c) = &n.custom {
         fm.push(format!("x_custom: {c}"));
+    }
+    if n.bad_yaml {
+        // The #75 shape: a tab-key line and an unclosed flow sequence — this
+        // frontmatter will never YAML-parse, but the note must behave.
+        fm.push("\t: :".to_string());
+        fm.push("broken: [unclosed".to_string());
     }
     let rel_targets: Vec<(&str, &str)> = n
         .rels
