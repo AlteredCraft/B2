@@ -1518,7 +1518,7 @@ function mountEditor(body: string): void {
           }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
             state.sourceOpen ? "Show live preview" : "Show Markdown source"
           }">&lt;/&gt;</button>
-          <button id="edit-done" class="btn small primary" title="Save and return to reading (⌘S flushes anytime)">Done</button>
+          <button id="edit-done" class="btn small primary" title="Save and return to reading — ⌘E (⌘S flushes anytime)">Done</button>
         </div>
       </div>
       <div id="edit-conflict" class="conflict-bar" hidden>
@@ -2653,6 +2653,20 @@ function wireEvents(): void {
       e.preventDefault();
       if (state.settingsOpen) closeSettings();
       else void openSettings();
+      return;
+    }
+    // ⌘E toggles edit mode — the keyboard sibling of the Edit / Done buttons. A modal
+    // owns the keyboard first; a resource or empty pane has nothing to edit. Works while
+    // editing (CodeMirror leaves Mod-e unbound, so the event bubbles here) to flip back.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {
+      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
+      if (state.editing) {
+        e.preventDefault();
+        void exitEdit();
+      } else if (state.current && !state.currentResource) {
+        e.preventDefault();
+        enterEdit();
+      }
       return;
     }
     if (e.key === "Escape") {

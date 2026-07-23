@@ -332,7 +332,7 @@ function noteBarHtml(state: AppState, frontmatter: string | null): string {
           }">&lt;/&gt;</button>
           <button class="edit-toggle" data-toggle-edit${
             state.loading ? " disabled" : ""
-          } title="Edit this note (autosaves as you type)">Edit</button>
+          } title="Edit this note — ⌘E (autosaves as you type)">Edit</button>
         </div>
       </div>
       ${body}
@@ -884,7 +884,7 @@ function graphPaneHtml(state: AppState, n: NoteView): string {
           ${graphToggleHtml(true)}
           <button class="edit-toggle" data-toggle-edit${
             state.loading ? " disabled" : ""
-          } title="Edit this note (autosaves as you type)">Edit</button>
+          } title="Edit this note — ⌘E (autosaves as you type)">Edit</button>
         </div>
       </div>
       <div class="graph-stage">
