@@ -140,3 +140,11 @@ tomorrow's model* — made mechanical.
   added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md))
 - **E4 — User-facing errors are generic and actionable, never leaking internals.** Full detail goes
   to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../../CLAUDE.md) Conventions)
+- **E5 — Note content is untrusted input; rendering is a trust boundary.** Authorship is not trust: a
+  `.md` can come from anyone (a shared vault, a downloaded or web-clipped note), so B2 treats rendered
+  note content as hostile. Two rules hold together — B2 HTML-escapes every value *it* interpolates into
+  UI chrome, and the **single** Markdown→HTML render seam (`renderMarkdown`) sanitizes its output before
+  it reaches the DOM, so no note can inject executable markup at any call site (reading view, table
+  widget, any future one). The webview CSP (`default-src 'self'`, no inline scripts) is a second,
+  independent layer — defense-in-depth, never the sole guard.
+  ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
