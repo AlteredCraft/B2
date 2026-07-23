@@ -1154,6 +1154,32 @@ body.is-resizing {
   vertical-align: middle;
 }
 
+/* Interactive task checkbox — replaces `[ ]`/`[x]` away from the cursor (spec §8). A
+   click writes the toggled marker back to the buffer (a real, autosaved edit). */
+.editor-host .lp-task {
+  margin: 0 0.4em 0 0;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* Table block widget — the reading view's table rendered in place when the cursor is
+   away (block-widget territory, fed by a StateField — spec §8). Mirrors `.note-body
+   table` so read ↔ edit don't jar; clicking it drops the cursor into the source. */
+.editor-host .lp-table {
+  margin: 0.4em 0;
+  cursor: text;
+}
+.editor-host .lp-table table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.editor-host .lp-table th,
+.editor-host .lp-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+}
+
 /* --- empty states ------------------------------------------------------------- */
 
 .empty {

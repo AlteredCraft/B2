@@ -11,7 +11,13 @@
 // source mode with no remount.
 
 import { syntaxTree } from "@codemirror/language";
-import { type EditorSelection, type Extension, type Range } from "@codemirror/state";
+import {
+  type EditorSelection,
+  type EditorState,
+  type Extension,
+  type Range,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -22,6 +28,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
+import { renderMarkdown } from "./render";
 
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
 //
@@ -112,6 +119,85 @@ class RuleWidget extends WidgetType {
 const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
 const ruleDeco = Decoration.replace({ widget: new RuleWidget() });
 
+// An interactive task checkbox in place of `[ ]`/`[x]`. Unlike every other decoration
+// this one *writes*: a click dispatches the single-byte toggle of the marker's state
+// char, which flows through the normal editor transaction → autosave path (spec §8 —
+// "a widget that writes"). The write stays byte-honest: only `[ ]` ↔ `[x]` changes,
+// `state.doc` remains the source of truth. `from` is the marker's `[`; the state char
+// sits at `from + 1`.
+class TaskWidget extends WidgetType {
+  constructor(
+    readonly checked: boolean,
+    readonly from: number,
+  ) {
+    super();
+  }
+  eq(o: TaskWidget): boolean {
+    return o.checked === this.checked && o.from === this.from;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "lp-task";
+    box.checked = this.checked;
+    // mousedown: keep the editor selection where it is (no focus steal, no cursor jump).
+    box.addEventListener("mousedown", (e) => e.preventDefault());
+    // click: preventDefault suppresses the native toggle — the doc change is the source
+    // of truth, and the rebuilt widget reflects it.
+    box.addEventListener("click", (e) => {
+      e.preventDefault();
+      view.dispatch({
+        changes: { from: this.from + 1, to: this.from + 2, insert: this.checked ? " " : "x" },
+      });
+    });
+    return box;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+// A GFM table rendered in place — block-widget territory, so it is fed by a StateField
+// (block/line-break-spanning decorations can't come from a ViewPlugin — spec §8). The
+// body reuses the reading view's `renderMarkdown` so read ↔ edit stay pixel-identical,
+// wikilinks inside cells carry their `data-target` (the app's click handler follows
+// them), and inline markup renders. A block widget hides its source range, so a plain
+// click can't land a cursor inside; clicking the table (but not a wikilink) drops the
+// cursor at its start, revealing the raw source for editing. `from` is the table's
+// first-line start.
+class TableWidget extends WidgetType {
+  constructor(
+    readonly md: string,
+    readonly from: number,
+  ) {
+    super();
+  }
+  eq(o: TableWidget): boolean {
+    return o.md === this.md && o.from === this.from;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "lp-table";
+    wrap.innerHTML = renderMarkdown(this.md);
+    wrap.addEventListener("mousedown", (e) => {
+      // Let a wikilink click fall through to the app's follow handler.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-target]")) return;
+      e.preventDefault();
+      view.dispatch({ selection: { anchor: this.from } });
+      view.focus();
+    });
+    return wrap;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+// The three spellings of a checked GFM task marker's state char.
+function taskChecked(marker: string): boolean {
+  return marker === "[x]" || marker === "[X]";
+}
+
 /** Run `cb` once per line the range [from, to] covers (line-local block decorations). */
 function eachLine(
   view: EditorView,
@@ -148,7 +234,7 @@ function handleNode(
   view: EditorView,
   sel: EditorSelection,
   decos: Range<Decoration>[],
-): void {
+): boolean | void {
   const doc = view.state.doc;
   const name = node.name;
 
@@ -262,6 +348,29 @@ function handleNode(
       });
       return;
     }
+
+    // Interactive task checkbox: replace `[ ]`/`[x]` with a real checkbox away from the
+    // cursor; reveal the raw marker on the active line (the block-marker reveal policy,
+    // matching the bullet/quote handlers). The list bullet stays — parity with the
+    // reading view, which renders `• ☐ …` for a GFM task item.
+    case "TaskMarker": {
+      const line = doc.lineAt(node.from);
+      if (touches(sel, line.from, line.to)) return;
+      const checked = taskChecked(doc.sliceString(node.from, node.to));
+      decos.push(
+        Decoration.replace({ widget: new TaskWidget(checked, node.from) }).range(
+          node.from,
+          node.to,
+        ),
+      );
+      return;
+    }
+
+    // Tables are block widgets fed by the StateField below; this plugin never decorates
+    // inside one (returning false skips the subtree, so no inline decos land in a
+    // block-replaced range, and an edited table reads as clean raw source).
+    case "Table":
+      return false;
   }
 }
 
@@ -279,11 +388,55 @@ function buildDecorations(view: EditorView): DecorationSet {
   return Decoration.set(decos, true);
 }
 
+// --- block widgets (spec §8) ------------------------------------------------------
+//
+// Block widgets (and any replace spanning a line break) can't come from a ViewPlugin —
+// CM6 forbids it — so tables live in a StateField instead. It has no viewport, so cost
+// scales with the note rather than the screen; tables are rare and cheap to find, so a
+// whole-tree pass on each doc/selection change is fine (only tables are visited deeply).
+
+/** Replace each un-touched GFM table with a rendered block widget; reveal (leave raw)
+ *  the one the selection is inside, so it can be edited as source. */
+function buildBlockDecorations(state: EditorState): DecorationSet {
+  const decos: Range<Decoration>[] = [];
+  const sel = state.selection;
+  const doc = state.doc;
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name !== "Table") return; // keep descending to reach any nested table
+      // Snap to whole lines: a block replace must sit on line boundaries, and the widget
+      // renders the exact lines it hides.
+      const from = doc.lineAt(node.from).from;
+      const to = doc.lineAt(node.to).to;
+      if (!touches(sel, from, to)) {
+        decos.push(
+          Decoration.replace({
+            widget: new TableWidget(doc.sliceString(from, to), from),
+            block: true,
+          }).range(from, to),
+        );
+      }
+      return false; // a table's internals are never block-widget territory
+    },
+  });
+  return Decoration.set(decos, true);
+}
+
+const blockField = StateField.define<DecorationSet>({
+  create: (state) => buildBlockDecorations(state),
+  update(deco, tr) {
+    // Reveal keys on the selection, so a bare cursor move recomputes too.
+    return tr.docChanged || tr.selection ? buildBlockDecorations(tr.state) : deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
 /**
- * The live-preview extension: the ViewPlugin folding tree+selection into decorations,
- * plus the `lp-body` class that swaps the editor to the reading view's proportional
- * voice (spec §3, §5). Cmd/Ctrl+click a wikilink follows it via `onFollow`; a plain
- * click falls through to place the cursor, as an editor must (spec §3).
+ * The live-preview extension: the ViewPlugin folding tree+selection into inline/line
+ * decorations, the `blockField` feeding block widgets (tables — spec §8), plus the
+ * `lp-body` class that swaps the editor to the reading view's proportional voice
+ * (spec §3, §5). Cmd/Ctrl+click a wikilink follows it via `onFollow`; a plain click
+ * falls through to place the cursor, as an editor must (spec §3).
  */
 export function livePreview(onFollow: (target: string) => void): Extension {
   const plugin = ViewPlugin.fromClass(
@@ -313,5 +466,5 @@ export function livePreview(onFollow: (target: string) => void): Extension {
       },
     },
   );
-  return [plugin, EditorView.contentAttributes.of({ class: "lp-body" })];
+  return [plugin, blockField, EditorView.contentAttributes.of({ class: "lp-body" })];
 }
