@@ -19,6 +19,25 @@ export function baseName(path: string): string {
 }
 
 /**
+ * Classify a document reference by shape alone — the UI twin of the core's
+ * `doc_kind` (b2-core `resource.rs`), the *one* rule shared with the adapters'
+ * argument dispatch: **an extension other than `md` means a resource; `.md` or
+ * no extension means a note** (which also covers the extensionless wikilink
+ * habit `[[concepts/memory]]` and a bare b2id). A trailing `#fragment` is
+ * dropped first, matching the core's link resolver. Used to route a followed
+ * wikilink to the note pane vs the resource pane so a `[[file.pdf]]` opens the
+ * resource card instead of failing a note read; the host re-validates either way.
+ */
+export function refKind(ref: string): "note" | "resource" {
+  const name = baseName(ref.split("#")[0]).trim();
+  const dot = name.lastIndexOf(".");
+  // dot <= 0 covers no extension (-1) and a leading-dot dotfile (empty stem).
+  if (dot <= 0) return "note";
+  const ext = name.slice(dot + 1);
+  return ext !== "" && ext.toLowerCase() !== "md" ? "resource" : "note";
+}
+
+/**
  * What the inline rename input starts out holding. Notes drop the `.md` (the
  * tree labels notes without it, and the host re-appends it); resources keep
  * their extension (it *is* the kind identity); folders are just the name.

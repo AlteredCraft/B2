@@ -6,6 +6,7 @@ import {
   baseName,
   canMoveInto,
   moveDestination,
+  refKind,
   remapPath,
   renameDestination,
   renamePrefill,
@@ -113,6 +114,32 @@ check("a path inside a moved folder is prefix-remapped", () => {
 check("prefix-sharing siblings and outsiders are untouched (null)", () => {
   equal(remapPath("docs2/x.md", "docs", "media"), null, "sibling shares the prefix only");
   equal(remapPath("other/x.md", "docs", "media"), null, "outside");
+});
+
+// --- refKind: the note/resource dispatch a followed wikilink routes on --------------
+
+check("a non-.md extension is a resource", () => {
+  equal(refKind("Cascadia Builders Club.pdf"), "resource", "vault-root pdf");
+  equal(refKind("img/photo.png"), "resource", "nested resource");
+  equal(refKind("archive.tar.gz"), "resource", "double extension");
+  equal(refKind("notes/a.md.bak"), "resource", "trailing non-md wins");
+});
+
+check(".md and extensionless refs are notes", () => {
+  equal(refKind("notes/a.md"), "note", "explicit .md");
+  equal(refKind("A.MD"), "note", "uppercase .md");
+  equal(refKind("concepts/memory"), "note", "the extensionless wikilink habit");
+  equal(refKind("01JMEM0000000000000000000A"), "note", "a bare b2id");
+  equal(refKind("LICENSE"), "note", "extensionless file (the documented limit)");
+});
+
+check("a #fragment is dropped before classifying", () => {
+  equal(refKind("Cascadia Builders Club.pdf#page=2"), "resource", "resource + fragment");
+  equal(refKind("concepts/memory#anchor"), "note", "note + fragment");
+});
+
+check("a leading-dot dotfile has no stem, so it is a note ref", () => {
+  equal(refKind(".gitignore"), "note", "dotfile: empty stem");
 });
 
 console.log(`move.test: ${passed} checks passed`);

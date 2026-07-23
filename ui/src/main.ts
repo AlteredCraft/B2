@@ -18,7 +18,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, tooltips } from "@c
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
-import { baseName, canMoveInto, moveDestination, remapPath, renameDestination } from "./move";
+import { baseName, canMoveInto, moveDestination, refKind, remapPath, renameDestination } from "./move";
 import { livePreview, wikilink } from "./livepreview";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, toggleInline, type InlineFormat } from "./format";
@@ -283,6 +283,20 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
 async function openNote(ref: string): Promise<void> {
   if (!(await closeEditor())) return;
   await loadNote(ref, (path) => navPush({ kind: "note", path }));
+}
+
+// Follow a wikilink from the reading view or the editor's mod-click. A `[[link]]`
+// target can name a resource just as readily as a note (`[[report.pdf]]`), so route
+// by the target's shape — the same extension-only rule the core resolves the edge on
+// (`refKind`/`doc_kind`) — to the resource card rather than failing a note read. A
+// wikilink target is vault-root, so it *is* the resource's vault-relative path (minus
+// any `#fragment`); the host re-validates either way.
+async function followWikilink(target: string): Promise<void> {
+  if (refKind(target) === "resource") {
+    await openResource(target.split("#")[0].trim());
+  } else {
+    await openNote(target);
+  }
 }
 
 /** The resource sibling of `loadNote` — same core/commit split, for `openResource`
@@ -1411,7 +1425,7 @@ const lpCompartment = new Compartment();
 function livePreviewConf(): Extension {
   return state.sourceOpen
     ? syntaxHighlighting(defaultHighlightStyle, { fallback: true })
-    : livePreview((target) => void openNote(target));
+    : livePreview((target) => void followWikilink(target));
 }
 /** The in-flight save chain — resolves only when it settles (trailing saves included). */
 let inFlight: Promise<void> | null = null;
@@ -2314,7 +2328,7 @@ function wireEvents(): void {
     if (wiki) {
       e.preventDefault();
       const t = wiki.dataset.target;
-      if (t) void openNote(t);
+      if (t) void followWikilink(t);
       return;
     }
 
