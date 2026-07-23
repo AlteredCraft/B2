@@ -24,6 +24,7 @@ import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, toggleInline, type InlineFormat } from "./format";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
+import { reprojectThenList } from "./reconcile";
 import {
   contextMenuHtml,
   embedBannerHtml,
@@ -2046,10 +2047,17 @@ async function onVaultChanged(): Promise<void> {
 
 async function reconcileExternalChange(): Promise<void> {
   if (state.vaultRoot === null) return;
-  // The tree first — an external add / remove / rename shows up immediately. Safe in every
-  // mode: `render()` rebuilds the tree and side panes but skips the note pane while editing
-  // (the carve-out), so a live editor is never touched.
-  await loadNotes();
+  // The tree first — re-derive, then re-list, so an external add / remove / rename shows
+  // up immediately: the tree lists are index-first, and a Finder-dropped file has no index
+  // row until the (model-free, idempotent) projection runs (#65 item 4; reconcile.ts has
+  // the full argument). Safe in every mode: `render()` rebuilds the tree and side panes
+  // but skips the note pane while editing (the carve-out), so a live editor is never
+  // touched — and projection reads disk, never the live buffer.
+  await reprojectThenList({
+    reindexing: state.reindexing,
+    project: api.project,
+    list: loadNotes,
+  });
 
   // The open note. Two cases are deliberately left alone:
   //   • editing — the live buffer is the user's unsaved work; never clobber it. An external
