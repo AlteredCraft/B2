@@ -148,3 +148,15 @@ tomorrow's model* — made mechanical.
   widget, any future one). The webview CSP (`default-src 'self'`, no inline scripts) is a second,
   independent layer — defense-in-depth, never the sole guard.
   ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
+
+## K — Interaction: keyboard-first
+
+- **K1 — B2 is fully operable from the keyboard; the mouse is an accelerator, never a requirement.**
+  Every action a human can take with the mouse has a keyboard path — a focusable control in a sensible
+  tab order, or a documented shortcut — across the whole desktop surface: file-tree navigation and
+  open/create/rename/move/delete, global search and find-in-note, entering/leaving edit mode (⌘E) and
+  every in-editor formatting chord, connection discovery and linking, the graph, and each menu/modal
+  (`Escape` dismisses, `Enter` confirms, focus is trapped while an overlay is open and restored on
+  close). Focus is always visible and follows platform/ARIA conventions. The `b2` CLI satisfies this by
+  nature; K1 governs the GUI adapter. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md),
+  GH #78)
