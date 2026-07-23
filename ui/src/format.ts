@@ -109,3 +109,33 @@ export function toggleInline(
     selTo: to + len,
   };
 }
+
+/** The ⌘T scaffold: a 3-column GFM table, a header row + two empty body rows. */
+const TABLE_TEMPLATE = [
+  "| Column 1 | Column 2 | Column 3 |",
+  "| --- | --- | --- |",
+  "|  |  |  |",
+  "|  |  |  |",
+].join("\n");
+
+/**
+ * Insert a fresh table at `[from, to]` (⌘T). A GFM table is a block, so it must sit on
+ * its own lines with a blank line between it and any neighbour — this pads only as much
+ * as the surrounding text lacks (never doubling an existing blank line), and ends the
+ * file with a single newline when the table lands at the very end. The caret lands in
+ * the first body cell, ready to type.
+ */
+export function insertTable(
+  doc: string,
+  from: number,
+  to: number,
+): { changes: FormatChange[]; selFrom: number; selTo: number } {
+  const nlBefore = (/\n*$/.exec(doc.slice(0, from))?.[0].length) ?? 0;
+  const nlAfter = (/^\n*/.exec(doc.slice(to))?.[0].length) ?? 0;
+  const lead = from === 0 ? "" : "\n".repeat(Math.max(0, 2 - nlBefore));
+  const trail = to === doc.length ? "\n" : "\n".repeat(Math.max(0, 2 - nlAfter));
+  const insert = lead + TABLE_TEMPLATE + trail;
+  // Caret into the first body cell: after the "| " of the first empty row.
+  const pos = from + lead.length + TABLE_TEMPLATE.indexOf("|  |  |  |") + 2;
+  return { changes: [{ from, to, insert }], selFrom: pos, selTo: pos };
+}

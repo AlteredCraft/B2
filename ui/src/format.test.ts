@@ -2,7 +2,7 @@
 // Run directly:  node --experimental-strip-types src/format.test.ts
 // Hand-rolled asserts, the panes.test.ts / wikicomplete.test.ts idiom.
 
-import { BOLD, FORMATS, ITALIC, toggleInline, type InlineFormat } from "./format.ts";
+import { BOLD, FORMATS, ITALIC, insertTable, toggleInline, type InlineFormat } from "./format.ts";
 
 let checks = 0;
 
@@ -116,6 +116,56 @@ const STRIKE: InlineFormat = { id: "strike", marker: "~~", key: "Mod-Shift-x" };
 {
   const r = toggleInline("~~gone~~", 2, 6, STRIKE);
   assertEq(applied("~~gone~~", r), "gone", "and unwraps");
+}
+
+// --- ⌘T: insert a table --------------------------------------------------------------
+
+const TABLE =
+  "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |";
+
+/** Apply an insertTable result to a doc string (single change, forward-safe). */
+function insApplied(doc: string, r: ReturnType<typeof insertTable>): string {
+  const c = r.changes[0];
+  return doc.slice(0, c.from) + c.insert + doc.slice(c.to);
+}
+
+{
+  const r = insertTable("", 0, 0);
+  assertEq(insApplied("", r), TABLE + "\n", "into an empty doc: the table, newline-terminated");
+  // Caret sits in the first body cell (between its padding spaces).
+  assertEq(insApplied("", r).slice(r.selFrom, r.selFrom + 1), " ", "caret lands inside the first cell");
+  const typed = insApplied("", r);
+  assertEq(
+    typed.slice(0, r.selFrom) + "a" + typed.slice(r.selFrom),
+    "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n| a |  |  |\n|  |  |  |\n",
+    "typing at the caret fills the first cell, padded",
+  );
+}
+
+{
+  // Mid-paragraph: pad both sides to a blank line so the table is its own block.
+  const doc = "item one";
+  const r = insertTable(doc, doc.length, doc.length);
+  assertEq(insApplied(doc, r), "item one\n\n" + TABLE + "\n", "end of a line → blank line before, newline after");
+}
+
+{
+  // A blank line already above → don't double it.
+  const doc = "a\n\n";
+  const r = insertTable(doc, doc.length, doc.length);
+  assertEq(insApplied(doc, r), "a\n\n" + TABLE + "\n", "an existing blank line above isn't doubled");
+}
+
+{
+  // Content follows → a blank line after as well, and only one is added.
+  const doc = "before\n\nafter";
+  const at = "before\n\n".length;
+  const r = insertTable(doc, at, at);
+  assertEq(
+    insApplied(doc, r),
+    "before\n\n" + TABLE + "\n\nafter",
+    "content on both sides → single blank line each side",
+  );
 }
 
 console.log(`format.test: ${checks} checks passed`);

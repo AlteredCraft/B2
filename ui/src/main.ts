@@ -21,7 +21,7 @@ import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { baseName, canMoveInto, moveDestination, refKind, remapPath, renameDestination } from "./move";
 import { livePreview, wikilink } from "./livepreview";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
-import { FORMATS, toggleInline, type InlineFormat } from "./format";
+import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import { reprojectThenList } from "./reconcile";
@@ -1491,6 +1491,20 @@ const formatKeymap = FORMATS.map((f) => ({
   run: (view: EditorView) => runFormat(view, f),
 }));
 
+// ⌘T — drop a fresh 3-column table (header + two rows) at the cursor, caret in the
+// first cell. Block insert, not an inline toggle, so it's its own binding over the pure
+// `insertTable` (format.ts).
+function runInsertTable(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const r = insertTable(view.state.doc.toString(), from, to);
+  view.dispatch({
+    changes: r.changes,
+    selection: EditorSelection.range(r.selFrom, r.selTo),
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 function mountEditor(body: string): void {
   const n = state.current;
   if (!n) return;
@@ -1525,7 +1539,12 @@ function mountEditor(body: string): void {
       markdown({ base: markdownLanguage, extensions: [wikilink] }),
       history(),
       // Formatting chords first so a future format key can shadow a default binding.
-      keymap.of([...formatKeymap, ...defaultKeymap, ...historyKeymap]),
+      keymap.of([
+        ...formatKeymap,
+        { key: "Mod-t", run: runInsertTable },
+        ...defaultKeymap,
+        ...historyKeymap,
+      ]),
       EditorView.lineWrapping,
       // `[[` completion — always on, in both live-preview and source mode. Its
       // keymap (arrows/Enter/Escape while the menu is open) binds at higher

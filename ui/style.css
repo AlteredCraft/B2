@@ -932,10 +932,15 @@ body.is-resizing {
   max-width: 100%;
 }
 
+/* A rendered Markdown table (reading view + the live-preview widget both go through
+   `renderMarkdown`, which wraps every table in `.md-table`). The wrapper is the
+   horizontal-scroll box; the table stays a real `display: table` so its header row
+   border-collapses onto the body. */
+.md-table {
+  overflow-x: auto;
+}
 .note-body table {
   border-collapse: collapse;
-  display: block;
-  overflow-x: auto;
 }
 .note-body th,
 .note-body td {
@@ -1171,8 +1176,6 @@ body.is-resizing {
 }
 .editor-host .lp-table table {
   border-collapse: collapse;
-  display: block;
-  overflow-x: auto;
 }
 .editor-host .lp-table th,
 .editor-host .lp-table td {

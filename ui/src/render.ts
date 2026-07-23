@@ -63,7 +63,16 @@ const wikilink: TokenizerAndRendererExtension = {
 marked.use({ extensions: [wikilink], gfm: true, breaks: false });
 
 export function renderMarkdown(md: string): string {
-  return marked.parse(md, { async: false }) as string;
+  const html = marked.parse(md, { async: false }) as string;
+  // Wrap each table in a scroll box so a wide one scrolls *within* its column instead of
+  // stretching the pane. The table itself must stay a real `display: table` (the wrapper
+  // is what's `display: block; overflow-x: auto`) — a `display: block` table splits
+  // marked's whitespace-separated `<thead>`/`<tbody>` into two anonymous tables, so
+  // `border-collapse` can't join the header row onto the body (the gap bug). marked
+  // escapes cell content, so these are the only literal `<table>` tags in the output.
+  return html
+    .replace(/<table>/g, '<div class="md-table"><table>')
+    .replace(/<\/table>/g, "</table></div>");
 }
 
 // --- file tree --------------------------------------------------------------------
