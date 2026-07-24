@@ -388,6 +388,29 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   run, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note and never
   prunes. *(Resources churn more than notes — images/PDFs get added and deleted freely — and their
   inventory pass prunes the same way; [#66](https://github.com/AlteredCraft/B2/issues/66).)*
+- **Duplicate `b2id`s resolve incumbent-wins and are surfaced, never guessed at**
+  ([#81](https://github.com/AlteredCraft/B2/issues/81)). Two files presenting one id (a Finder
+  duplicate) has no well-defined projection, and no vault-pure signal distinguishes original from
+  copy — a copy preserves every byte, and `note copy.md` even *sorts before* `note.md`, so any
+  walk-order or path-order rule would hand the identity to the copy. The projection pass therefore
+  pre-scans claims and resolves each contested id **before any row is written**: the **incumbent**
+  (the path the index already attributes the id to, when that file still claims it) keeps the
+  identity — the one confident signal, and it lives in index memory, which is why this is a
+  documented carve-out on S3 ([invariants.md](invariants.md)); a memory-less rebuild tie-breaks
+  first-in-sorted-walk, *flagged as a tie-break, not a ruling*. Shadowed claimants stay on disk and
+  in the tree but get **no row** — and the collision is reported (`collisions` on the
+  reindex/project reports, with kept path + precedence + shadowed paths) on **every pass until
+  resolved**: delete the copy; or remove its `b2id:` line (the next pass stamps a fresh identity —
+  the documented fork gesture); or delete the original (the copy then inherits the identity through
+  the ordinary move repointing). Single-note ingest (`add`) **refuses** an identity steal outright
+  (`Error::B2idCollision`) when the incumbent still exists and still claims the id. The same pass
+  also surfaces **identity restamps** (`restamped`): a file whose `b2id:` line was removed/blanked
+  out-of-band reads as absent (#75), so the stamp mints a fresh id — identity churn that dangles
+  every inbound edge keyed to the old id (G5 keeps surfacing those). Deliberately **not**
+  auto-restored: removing the line is also the documented gesture for *requesting* a fresh identity,
+  so restoring the old id would guess intent. Nothing anomaly-shaped is ever stored — every notice
+  re-derives from vault + index each pass (S2), and `reindex --dry-run` previews all of it read-only
+  (which notes lack a `b2id`, which stamps would churn an identity, which files collide).
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
   file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting

@@ -304,6 +304,41 @@ export interface SkippedNote {
 }
 
 /**
+ * Why the kept path kept a contested `b2id` (GH #81): `incumbent` — the index
+ * already attributed the id to that file, the one confident signal (a copy
+ * preserves every byte, so nothing in the vault distinguishes it from the
+ * original); `tie_break` — no incumbent (a fresh index), first-in-path-order
+ * kept purely so the pass is reproducible, NOT an identity ruling.
+ */
+export type CollisionPrecedence = "incumbent" | "tie_break";
+
+/**
+ * A cross-note `b2id` collision the projection pass surfaced (GH #81) — e.g. a
+ * note duplicated in Finder. One file keeps the identity; the `shadowed_paths`
+ * stay on disk (and in the tree) but are NOT indexed until the human resolves:
+ * delete the copy, remove its `b2id:` line (next pass stamps a fresh identity),
+ * or delete the original (the copy inherits). Surfacing only — B2 never edits
+ * either file of its own accord.
+ */
+export interface B2idCollision {
+  b2id: string;
+  kept_path: string;
+  precedence: CollisionPrecedence;
+  shadowed_paths: string[];
+}
+
+/**
+ * An identity restamp the projection pass surfaced (GH #81): the file's `b2id`
+ * line was removed or blanked outside b2, so the pass stamped a fresh id — the
+ * note's identity changed, and inbound links keyed to `old_b2id` now dangle.
+ */
+export interface RestampedNote {
+  path: string;
+  old_b2id: string;
+  new_b2id: string;
+}
+
+/**
  * `Vault::project` — what the fast, model-free projection pass did
  * (docs/design/index-engine.md). Once this resolves, the tree and keyword
  * search are live; only vectors are missing. `skipped` names any unreadable files the
@@ -318,6 +353,10 @@ export interface ProjectReport {
   /** Resources inventoried this pass, and stale inventory rows pruned (slice 1). */
   resources_indexed: number;
   resources_pruned: number;
+  /** Cross-note b2id collisions this pass (GH #81) — re-surfaced every pass until resolved. */
+  collisions: B2idCollision[];
+  /** Identity restamps this pass (GH #81) — per-pass events; the dangling links persist. */
+  restamped: RestampedNote[];
 }
 
 /** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */

@@ -298,6 +298,30 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         "Dry run: would index {} note(s) — {} to embed, {} to stamp. No changes made.",
                         plan.would_index, plan.would_embed, plan.would_stamp
                     );
+                    // The GH #81 previews: which notes have no identity yet, which
+                    // stamps would *change* an identity, and which files contest one.
+                    if !plan.stamp_paths.is_empty() {
+                        println!("Notes without a b2id (a real run stamps these):");
+                        for p in &plan.stamp_paths {
+                            println!("  - {p}");
+                        }
+                    }
+                    if !plan.would_restamp.is_empty() {
+                        println!(
+                            "Would restamp identity (the b2id line was removed or blanked; links to the old id will dangle):"
+                        );
+                        for r in &plan.would_restamp {
+                            println!("  - {} (was {})", r.path, r.old_b2id);
+                        }
+                    }
+                    for c in &plan.collisions {
+                        println!(
+                            "Duplicate b2id {}: a real run keeps {} and leaves {} un-indexed until resolved.",
+                            c.b2id,
+                            c.kept_path,
+                            c.shadowed_paths.join(", ")
+                        );
+                    }
                 }
                 return Ok(());
             }
@@ -384,6 +408,38 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     eprintln!("Skipped {} unreadable file(s):", report.skipped.len());
                     for s in &report.skipped {
                         eprintln!("  - {} ({})", s.path, s.reason);
+                    }
+                }
+                // The GH #81 anomaly notices (stderr, like `skipped`): surfaced every
+                // run until resolved, never auto-fixed — the human decides which file
+                // keeps a contested identity.
+                for c in &report.collisions {
+                    let why = match c.precedence {
+                        b2_core::vault::CollisionPrecedence::Incumbent => {
+                            "it already held the identity"
+                        }
+                        b2_core::vault::CollisionPrecedence::TieBreak => {
+                            "first in path order — b2 could not tell which file is the original"
+                        }
+                    };
+                    eprintln!(
+                        "Duplicate b2id {}: kept {} ({}); not indexed: {}.",
+                        c.b2id,
+                        c.kept_path,
+                        why,
+                        c.shadowed_paths.join(", ")
+                    );
+                    eprintln!(
+                        "  To resolve: delete the copy, or remove its `b2id:` line to give it a fresh identity."
+                    );
+                }
+                if !report.restamped.is_empty() {
+                    eprintln!(
+                        "Restamped identity on {} note(s) — the b2id line was removed or blanked outside b2, so links to the old identity now dangle:",
+                        report.restamped.len()
+                    );
+                    for r in &report.restamped {
+                        eprintln!("  - {} (was {}, now {})", r.path, r.old_b2id, r.new_b2id);
                     }
                 }
                 // The counts above already report the partial work truthfully; add the
@@ -944,6 +1000,9 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::FrontmatterIdentity(_)) => {
             "That edit would change or remove the note's b2id — the note's identity, which every link keys on. Keep the b2id line exactly as it is.".to_string()
         }
+        CliError::Core(b2_core::Error::B2idCollision { path, holder, .. }) => format!(
+            "'{path}' carries the same b2id as '{holder}' — two files can't share an identity. Remove the `b2id:` line from the copy to give it a fresh one, then run `b2 reindex`."
+        ),
         CliError::Core(b2_core::Error::ResourceNotFound(r)) => format!(
             "File not found in the vault: '{r}'. Check the path, and run `b2 reindex` first."
         ),

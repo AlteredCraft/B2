@@ -42,6 +42,11 @@ pub use crate::dirs::DirCreateReport;
 /// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
 /// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
+/// Re-exported for the same reason: the GH #81 anomaly notices carried by
+/// [`ReindexReport`]/[`ProjectReport`]/[`ReindexPlan`] are part of the façade
+/// contract (cross-note `b2id` collisions and identity restamps, surfaced —
+/// never auto-fixed — per W4).
+pub use crate::ingest::{B2idCollision, CollisionPrecedence, RestampedNote};
 /// Re-exported for the same reason: [`move_dir`](Vault::move_dir)'s report is
 /// part of the façade contract.
 pub use crate::mv::DirMoveReport;
@@ -111,6 +116,15 @@ pub struct ReindexReport {
     /// this run, and stale inventory rows pruned.
     pub resources_indexed: usize,
     pub resources_pruned: usize,
+    /// Cross-note `b2id` collisions this run (GH #81): each contested id, the path
+    /// that kept it (incumbent-wins; sorted-first tie-break on a memory-less
+    /// rebuild), and the shadowed claimants left un-indexed. Re-surfaced on every
+    /// run until the human resolves — never auto-fixed (W4).
+    pub collisions: Vec<B2idCollision>,
+    /// Identity restamps this run (GH #81): notes stamped a fresh `b2id` at a path
+    /// the index attributed to a different id (an external edit blanked/removed
+    /// the line) — the reason inbound links to the old id now dangle.
+    pub restamped: Vec<RestampedNote>,
 }
 
 /// What [`project`](Vault::project) did — the model-free half of a reindex
@@ -131,6 +145,11 @@ pub struct ProjectReport {
     /// this pass, and stale inventory rows pruned.
     pub resources_indexed: usize,
     pub resources_pruned: usize,
+    /// The GH #81 anomaly notices, exactly as on [`ReindexReport`] — the desktop's
+    /// `project` command is the pass the fs-watch pulse runs, so this is where an
+    /// external duplicate-file collision first becomes visible.
+    pub collisions: Vec<B2idCollision>,
+    pub restamped: Vec<RestampedNote>,
 }
 
 /// What [`embed`](Vault::embed) did — the model-bound half of a reindex: how many
@@ -159,11 +178,22 @@ pub struct EmbedStatus {
     pub total: usize,
 }
 
+/// One identity restamp a real reindex would perform (GH #81): the file at
+/// `path` no longer presents a `b2id`, but the index attributes `old_b2id` to
+/// that path — a real run stamps fresh, and inbound edges keyed to `old_b2id`
+/// dangle. The dry-run's pre-warning; no `new_b2id` because nothing is minted
+/// read-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlannedRestamp {
+    pub path: String,
+    pub old_b2id: String,
+}
+
 /// What a reindex **would** do — the `reindex --dry-run` preview. The `would_*`
 /// keys (vs [`ReindexReport`]'s past-tense `indexed`/`embedded`/`stamped`) are the
 /// honesty signal: this is a projection, computed read-only with **no** writes —
 /// notably no `b2id` stamped to the vault (B2's one write, data-model.md §1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexPlan {
     /// Notes a real reindex would project into the index (every `.md` file).
     pub would_index: usize,
@@ -171,6 +201,15 @@ pub struct ReindexPlan {
     pub would_embed: usize,
     /// Notes currently missing a `b2id` that a real reindex would stamp.
     pub would_stamp: usize,
+    /// Those notes' paths — the read-only "which notes have no identity yet" view
+    /// (GH #81); `would_stamp` is this list's length.
+    pub stamp_paths: Vec<String>,
+    /// Stamps that would *change* an identity (GH #81) — surfaced before the
+    /// churn happens, not just reported after.
+    pub would_restamp: Vec<PlannedRestamp>,
+    /// Cross-note `b2id` collisions a real run would surface (and resolve
+    /// incumbent-wins), detected read-only from the same parse (GH #81).
+    pub collisions: Vec<B2idCollision>,
 }
 
 /// One neighbor of a note, resolved for display: the note at the other end of an
@@ -509,6 +548,8 @@ impl Vault {
             notes_pruned: ingested.notes_pruned,
             resources_indexed: ingested.resources_indexed,
             resources_pruned: ingested.resources_pruned,
+            collisions: ingested.collisions,
+            restamped: ingested.restamped,
         })
     }
 
@@ -540,6 +581,8 @@ impl Vault {
             notes_pruned: outcome.notes_pruned,
             resources_indexed: outcome.resources_indexed,
             resources_pruned: outcome.resources_pruned,
+            collisions: outcome.collisions,
+            restamped: outcome.restamped,
         })
     }
 
@@ -574,10 +617,29 @@ impl Vault {
     pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
         let _op = tracing::debug_span!(target: "b2::vault", "plan_reindex", force).entered();
         let planned = ingest::plan_reindex(&self.conn, &self.root, force)?;
+        let stamp_paths: Vec<String> = planned
+            .notes
+            .iter()
+            .filter(|p| p.would_stamp)
+            .map(|p| p.path.clone())
+            .collect();
+        let would_restamp: Vec<PlannedRestamp> = planned
+            .notes
+            .iter()
+            .filter_map(|p| {
+                p.would_restamp_from.as_ref().map(|old| PlannedRestamp {
+                    path: p.path.clone(),
+                    old_b2id: old.clone(),
+                })
+            })
+            .collect();
         Ok(ReindexPlan {
-            would_index: planned.len(),
-            would_embed: planned.iter().filter(|p| p.would_embed).count(),
-            would_stamp: planned.iter().filter(|p| p.would_stamp).count(),
+            would_index: planned.notes.len(),
+            would_embed: planned.notes.iter().filter(|p| p.would_embed).count(),
+            would_stamp: stamp_paths.len(),
+            stamp_paths,
+            would_restamp,
+            collisions: planned.collisions,
         })
     }
 
