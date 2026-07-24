@@ -42,7 +42,9 @@ fn add_writes_a_stamped_note_and_projects_it() {
     let file = root.join("notes/widgets.md");
     let text = fs::read_to_string(&file).unwrap();
     assert!(text.contains(&format!("b2id: {}", report.b2id)), "{text}");
-    assert!(text.contains("type: note"), "{text}");
+    // `type:` is not seeded — the template stamps only what can't be reconstructed
+    // later; ingest defaults an absent type to "note" (GH #80).
+    assert!(!text.contains("type:"), "{text}");
     assert!(text.contains(r#"title: "All about widgets""#), "{text}");
     assert!(text.contains("created:"), "{text}");
     assert!(
@@ -164,7 +166,8 @@ fn create_note_writes_a_stamped_minimal_note_model_free() {
     // filename, data-model.md §1), stamped, body-less, in a freshly-created dir.
     let text = fs::read_to_string(root.join("inbox/idea.md")).unwrap();
     assert!(text.contains(&format!("b2id: {}", report.b2id)), "{text}");
-    assert!(text.contains("type: note"), "{text}");
+    // `type:` is not seeded — ingest defaults it to "note" (GH #80).
+    assert!(!text.contains("type:"), "{text}");
     assert!(text.contains("created:"), "{text}");
     assert!(!text.contains("title:"), "{text}");
 

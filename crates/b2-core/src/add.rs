@@ -36,9 +36,8 @@ pub struct AddReport {
 }
 
 /// Create a new note at `path_input` (a vault-relative path; a `.md` suffix is
-/// optional and added if missing) with a minimal, valid frontmatter (`type: note`,
-/// an optional `title`, and `created`) and `content` as its body, then project it
-/// into the index.
+/// optional and added if missing) with a minimal, valid frontmatter (an optional
+/// `title`, and `created`) and `content` as its body, then project it into the index.
 ///
 /// Refuses to clobber: [`Error::AddTargetExists`] if a file already sits at the
 /// destination, [`Error::AddDestination`] for an empty/absolute/vault-escaping path
@@ -127,8 +126,15 @@ fn write_new_note(
 /// when `None`; `content` is trimmed of trailing newlines and, when non-empty,
 /// placed after one blank line. The `b2id` is intentionally absent — ingest stamps
 /// it (§1), keeping one identity-minting code path for every note.
+///
+/// The template seeds only what can't be reconstructed later: `created` (deterministic,
+/// lost forever if not stamped now) and an optional `title`. `type:` is deliberately
+/// *not* seeded — ingest defaults an absent `type` to `"note"` (data-model.md §1), so
+/// stamping it here would be pure redundancy (GH #80). And no key is `b2`-namespaced:
+/// these are seeded courtesies owned by the human the moment they're written, not keys
+/// B2 owns and machines on (`b2id`, `b2_relations:` are the only such keys).
 fn render_note(title: Option<&str>, content: Option<&str>, created: &str) -> String {
-    let mut s = String::from("---\ntype: note\n");
+    let mut s = String::from("---\n");
     if let Some(t) = title {
         s.push_str(&format!("title: {}\n", yaml_quote(t)));
     }
@@ -153,17 +159,25 @@ mod tests {
         let out = render_note(Some("My Title"), Some("Hello world."), "2026-07-03");
         assert_eq!(
             out,
-            "---\ntype: note\ntitle: \"My Title\"\ncreated: 2026-07-03\n---\n\nHello world.\n"
+            "---\ntitle: \"My Title\"\ncreated: 2026-07-03\n---\n\nHello world.\n"
         );
     }
 
     #[test]
     fn omits_title_when_absent_and_body_when_empty() {
         let out = render_note(None, None, "2026-07-03");
-        assert_eq!(out, "---\ntype: note\ncreated: 2026-07-03\n---\n");
+        assert_eq!(out, "---\ncreated: 2026-07-03\n---\n");
         // An explicitly-empty content string is treated like no body.
         let blank = render_note(None, Some("\n\n"), "2026-07-03");
-        assert_eq!(blank, "---\ntype: note\ncreated: 2026-07-03\n---\n");
+        assert_eq!(blank, "---\ncreated: 2026-07-03\n---\n");
+    }
+
+    #[test]
+    fn does_not_seed_type_ingest_defaults_it() {
+        // `type:` is not seeded (GH #80) — the template stamps only what can't be
+        // reconstructed later; ingest defaults an absent type to "note".
+        let out = render_note(None, None, "2026-07-03");
+        assert!(!out.contains("type:"), "{out}");
     }
 
     #[test]
@@ -180,7 +194,7 @@ mod tests {
         let parsed = crate::note::parse(&out);
         assert_eq!(parsed.as_str(), out, "renders round-trip losslessly");
         let f = parsed.fields();
-        assert_eq!(f.r#type.as_deref(), Some("note"));
+        assert!(f.r#type.is_none(), "type is not seeded (GH #80)");
         assert_eq!(f.title.as_deref(), Some("Spaced repetition"));
         assert_eq!(f.created.as_deref(), Some("2026-07-03"));
         assert!(f.b2id.is_none(), "b2id is stamped by ingest, not by render");
