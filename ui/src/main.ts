@@ -1527,8 +1527,11 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
     if (r.cancelled && !state.reindexCancelling) return;
     await refreshEmbedStatus(startedRoot);
     // If the user opened a note while embedding ran, its vectors exist now — re-read it
-    // (projection may have stamped it) and refresh discovery so `similar` can rank.
-    if (state.current && !state.editing) {
+    // (projection may have stamped it) and refresh discovery so `similar` can rank. Not
+    // under a live editor (body or frontmatter): adopting a fresh revision beneath an
+    // open buffer would let its save silently clobber what changed on disk — the same
+    // carve-out as reconcile and doReindex.
+    if (state.current && !state.editing && !state.fmEditing) {
       state.current = await api.readNote(state.current.path);
       await refreshDiscovery();
     }
