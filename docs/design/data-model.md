@@ -131,7 +131,7 @@ A note is one `.md` file: YAML frontmatter, then a Markdown body.
 ```markdown
 ---
 b2id: 01J9Z3K7QX8V2B4N6M0PQR7TS         # durable identity (ULID); B2's one mandatory key, never changes
-type: concept                           # required; OKF-compatible discriminator
+type: concept                           # optional, defaults to `note`; OKF-compatible discriminator
 title: "Spaced repetition"              # optional, inert: recognized but NOT special — the title is the filename
 description: "Why expanding intervals beat massed practice."
 tags: [learning, memory]
@@ -167,11 +167,15 @@ exactly the body-vs-metadata line §0 draws.
   anchor everything else keys off and must travel in the file itself (it's what lets an out-of-band move
   be repaired, [invariants.md](invariants.md)). The stamp *is* the write — it lands in the note's
   frontmatter, so identity travels with the file and needs no separate record.
-- **`type`** — what *kind* of note this is (`note`, `concept`, `source`, `person`, `daily`, …).
-  Controlled-but-extensible; unknown values tolerated. This is the OKF entity discriminator (§5).
 
 **Optional (B2-recognized)**
 
+- **`type`** — what *kind* of note this is (`note`, `concept`, `source`, `person`, `daily`, …).
+  Controlled-but-extensible; unknown values tolerated. This is the OKF entity discriminator (§5).
+  **Optional, defaulting to `note`** — ingest treats an absent `type` as `note`, and its only consumer
+  is display, so nothing keys on its presence. The new-note template therefore does **not** seed it
+  (GH #80): the template stamps only what can't be reconstructed later. Not `b2`-namespaced, on purpose
+  — it's a courtesy the human owns, not a key B2 machines on (only `b2id` and `b2_relations:` are that).
 - **`title`** — **recognized but inert (no special meaning).** A note's title **is its filename**
   (basename with the `.md` extension removed); B2 derives the display title from the path alone and never
   privileges this frontmatter field. The key is still parsed and round-tripped losslessly like any other

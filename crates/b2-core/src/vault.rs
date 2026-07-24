@@ -1294,8 +1294,8 @@ impl Vault {
     }
 
     /// Create a new note (`b2 add`): write `path` (a vault-relative path; `.md`
-    /// optional) with a minimal valid frontmatter (`type: note`, an optional
-    /// `title`, today's `created`) and `content` as its body, then project it into
+    /// optional) with a minimal valid frontmatter (an optional `title`, today's
+    /// `created`) and `content` as its body, then project it into
     /// the index — the created note is immediately searchable and in the graph.
     /// Errors with [`Error::AddDestination`] for a bad path or
     /// [`Error::AddTargetExists`] rather than clobber an existing file.
