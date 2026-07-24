@@ -60,14 +60,17 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   ([`Vault::open`](../b2-core/src/vault.rs)); anything that embeds a query or writes vectors (`search`,
   `link`'s re-projection, `embed`) opens the real model
   ([`Vault::open_with_embedder`](../b2-core/src/vault.rs)) and fails fast with the "run `b2 init`"
-  message if it's absent. Three write-side ops are deliberately **model-free** and open the fake:
+  message if it's absent. Four write-side ops are deliberately **model-free** and open the fake:
   `project` — the model-free half of a reindex
   ([#15](https://github.com/AlteredCraft/B2/issues/15)),
   so the first tree paint never waits on a model load — `write_note` — the save path
   ([#13](https://github.com/AlteredCraft/B2/issues/13)), so editing works with no
-  model provisioned and saved chunks are healed by the trailing background embed — and
+  model provisioned and saved chunks are healed by the trailing background embed —
   `create_note` — the tree's New-note action, the same posture as the save path (the new
-  note is projected immediately; its vectors fill on the next embed pass).
+  note is projected immediately; its vectors fill on the next embed pass) — and
+  `write_frontmatter` — the drawer's frontmatter save
+  ([#79](https://github.com/AlteredCraft/B2/issues/79)): an unchanged body keeps its
+  chunks and vectors, so nothing ever re-embeds on that path.
 - **Errors stay generic to the webview.** Map façade errors to user-facing, actionable messages exactly as
   the CLI funnels through `user_message` in [`b2-cli/src/main.rs`](../b2-cli/src/main.rs) — **never** leak
   sqlite/io/serde internals into the UI. Use a `thiserror` enum for this crate's errors (matched → mapped),

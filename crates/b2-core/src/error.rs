@@ -17,6 +17,13 @@ pub enum Error {
     #[error("frontmatter edit unsupported: {0}")]
     Frontmatter(String),
 
+    /// `write_frontmatter` would change, remove, or duplicate the note's `b2id`
+    /// — the identity every edge keys on (invariants L1), and the one line B2
+    /// protects in an otherwise human-owned block (GH #79). Refused before any
+    /// byte reaches disk; the path is carried for debug detail.
+    #[error("frontmatter edit would change note identity (b2id): {0}")]
+    FrontmatterIdentity(String),
+
     /// A note reference (path or `b2id`) did not resolve to any indexed note —
     /// the one domain error the façade distinguishes from "found, no results".
     #[error("note not found: {0}")]

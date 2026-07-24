@@ -52,8 +52,10 @@ tomorrow's model* — made mechanical.
   never adding one, aliases preserved verbatim. ([data-model.md](data-model.md) §0)
 - **W3 — The on-command writes are enumerated and minimal:** append one `b2_relations:` entry on
   `b2 link` (frontmatter, never the body); the move-repair of W2; the editor save (`Vault::write` — a
-  byte-honest splice of the *human's own* body bytes, guarded by a content-hash revision); and
-  create/move/delete of notes, resources, and folders on explicit command.
+  byte-honest splice of the *human's own* body bytes, guarded by a content-hash revision); the
+  frontmatter save (`Vault::write_frontmatter` — the same-guard splice of the *human's own*
+  frontmatter bytes, body untouched, refusing only an edit that changes/removes the `b2id` — GH #79);
+  and create/move/delete of notes, resources, and folders on explicit command.
 - **W4 — B2 never deletes, moves, or archives vault files of its own accord.** Consequences of human
   edits (orphans, dangling links, hash-matched move candidates) are *surfaced*, flagged, or proposed —
   never silently applied. ([index-engine.md](index-engine.md) §8)

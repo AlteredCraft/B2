@@ -93,6 +93,15 @@ pub fn user_message(err: &CmdError) -> String {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit."
                 .to_string()
         }
+        CmdError::Core(b2_core::Error::Frontmatter(d)) => {
+            // The detail is a domain message (never an internal): today either the
+            // fence refusal from `write_frontmatter` or `b2 link`'s flow-style refusal.
+            format!("Can't save this frontmatter: {d}.")
+        }
+        CmdError::Core(b2_core::Error::FrontmatterIdentity(_)) => {
+            "This edit would change or remove the note's b2id — B2's identity line, which every link to this note depends on. Keep the b2id line exactly as it is, then save again."
+                .to_string()
+        }
         CmdError::Core(b2_core::Error::ResourceNotFound(r)) => {
             format!("File not found in the vault: '{r}'. Check the path, and reindex first.")
         }

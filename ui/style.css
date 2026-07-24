@@ -815,6 +815,82 @@ body.is-resizing {
   font-style: italic;
 }
 
+/* --- the drawer's frontmatter mini-editor (GH #79) ------------------------------ */
+
+/* The unreadable-YAML flag on the drawer toggle: visible even collapsed, so a broken
+   block (in-app save or external hand-edit alike) is noticed without opening. */
+.fm-flag {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* The non-blocking warning above the peek — informative, never a wall. */
+.fm-warning {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+/* The raw-YAML buffer: the peek block's box, but live. Same monospace voice and the
+   same viewport cap (the buffer scrolls inside). */
+.fm-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0 0;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
+  max-height: 40vh;
+}
+.fm-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The Save/Cancel row (also the read-mode Edit affordance's home), hint on the left,
+   actions on the right. */
+.fm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+.fm-hint {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The inline refusal/conflict strip under the buffer — the conflict bar's recipe,
+   drawer-sized. `[hidden]` re-asserted for the same UA-override reason. */
+.fm-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.fm-error[hidden] {
+  display: none;
+}
+
 .note-head {
   margin-bottom: 28px;
   padding-bottom: 16px;

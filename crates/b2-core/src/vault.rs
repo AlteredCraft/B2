@@ -288,6 +288,14 @@ pub struct NoteView {
     /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
     /// collapsible drawer (crates/b2-desktop/CLAUDE.md).
     pub frontmatter: Option<String>,
+    /// Whether that block *reads* as YAML metadata
+    /// ([`note::ParsedNote::frontmatter_readable`]): `false` means the raw bytes
+    /// above are shown verbatim but the projected fields came back empty
+    /// (malformed YAML, or not a key/value mapping). The drawer renders a
+    /// non-blocking "B2 can't read this frontmatter" notice off it — and because
+    /// every read passes through here, an external hand-edit surfaces the same
+    /// warning as an in-app save (GH #79).
+    pub frontmatter_readable: bool,
     /// blake3 of the **raw file bytes** at read time — the save-guard token:
     /// [`write`](Vault::write) refuses when the file on
     /// disk no longer hashes to the revision the edit was based on, so a save can
@@ -719,12 +727,14 @@ impl Vault {
             tags: fields.tags.clone(),
             body: parsed.body().to_string(),
             frontmatter: parsed.frontmatter().map(str::to_string),
+            frontmatter_readable: parsed.frontmatter_readable(),
             revision,
         })
     }
 
-    /// Save a note's **body** (`Vault::write`) — the editing
-    /// surface's one write op. Markdown-first and **model-free**: validate that the
+    /// Save a note's **body** (`Vault::write`) — the editing surface's body write
+    /// op ([`write_frontmatter`](Self::write_frontmatter) is its frontmatter
+    /// sibling). Markdown-first and **model-free**: validate that the
     /// file on disk still hashes to `base_revision` (else [`Error::WriteConflict`] —
     /// an external editor changed it; nothing is written), splice `body` in
     /// **verbatim** after the untouched frontmatter ([`note::ParsedNote::replace_body`]),
@@ -765,6 +775,81 @@ impl Vault {
         )?;
 
         // Hash the FINAL on-disk bytes (a stamp re-wrote the file after our splice).
+        let final_raw = fs::read_to_string(&abs)?;
+        Ok(WriteReport {
+            path,
+            revision: revision_of(&final_raw),
+        })
+    }
+
+    /// Save a note's **frontmatter** (`Vault::write_frontmatter`) — the drawer's
+    /// write op, [`write`](Self::write)'s frontmatter sibling (GH #79). The same
+    /// shape: validate the content-hash `base_revision` (else
+    /// [`Error::WriteConflict`]), splice `frontmatter` in **verbatim** between the
+    /// fences ([`note::ParsedNote::replace_frontmatter`] — every body byte
+    /// preserved by construction), write, re-project **model-free**. An unchanged
+    /// body keeps its chunks and vectors (the re-chunk keys on the body hash), so
+    /// a frontmatter save never re-embeds; the notes row and the typed edges
+    /// re-derive from the new block.
+    ///
+    /// Two refusals, both before any byte reaches disk:
+    /// - a top-level `---` line in `frontmatter` ([`Error::Frontmatter`]) — it
+    ///   would close the block early and shift the rest into the body, and the
+    ///   body is not this op's to change;
+    /// - a changed, removed, or duplicated `b2id` ([`Error::FrontmatterIdentity`])
+    ///   — the one line B2 protects (L1: every edge keys on it). Validated on the
+    ///   **re-parsed spliced candidate**, so the guard sees exactly what a reindex
+    ///   would see; re-quoting the same id is fine (identity, not bytes).
+    ///
+    /// Everything else in the block is the human's (W4/W5): malformed YAML saves
+    /// fine — it round-trips verbatim, projects best-effort, and surfaces through
+    /// [`NoteView::frontmatter_readable`] as a warning, exactly as the same edit
+    /// made in an external editor would.
+    pub fn write_frontmatter(
+        &self,
+        note_ref: &str,
+        frontmatter: &str,
+        base_revision: &str,
+    ) -> Result<WriteReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "write_frontmatter", note = note_ref)
+            .entered();
+        let b2id = self.resolve_ref(note_ref)?;
+        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let abs = self.root.join(&path);
+        let raw = fs::read_to_string(&abs)?;
+
+        // The guard: the bytes the edit was based on must still be the bytes on disk.
+        if revision_of(&raw) != base_revision {
+            return Err(Error::WriteConflict(path));
+        }
+        if frontmatter
+            .lines()
+            .any(|l| l.trim_end_matches('\r') == "---")
+        {
+            return Err(Error::Frontmatter(
+                "a `---` line inside frontmatter would end the block early".into(),
+            ));
+        }
+
+        // Splice in memory and validate the CANDIDATE before any byte reaches disk.
+        let mut parsed = note::parse(&raw);
+        parsed.replace_frontmatter(frontmatter);
+        let identity_kept = parsed.fields().b2id.as_deref() == Some(b2id.as_str())
+            && parsed.frontmatter().map_or(0, note::b2id_line_count) <= 1;
+        if !identity_kept {
+            return Err(Error::FrontmatterIdentity(path));
+        }
+
+        fs::write(&abs, parsed.as_str())?;
+        ingest::project_file(
+            &self.conn,
+            &self.root,
+            &path,
+            &self.idgen,
+            &self.chunk_config,
+        )?;
+
         let final_raw = fs::read_to_string(&abs)?;
         Ok(WriteReport {
             path,

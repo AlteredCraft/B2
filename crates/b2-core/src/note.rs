@@ -54,20 +54,22 @@ pub struct ParsedNote {
     raw: String,
     fm: Option<Frontmatter>,
     fields: NoteFields,
+    fm_readable: bool,
 }
 
 /// Parse `raw` into a [`ParsedNote`]. Never fails: text with no/!invalid
 /// frontmatter is still represented (and still round-trips).
 pub fn parse(raw: &str) -> ParsedNote {
     let fm = detect_frontmatter(raw);
-    let fields = match &fm {
+    let (fields, fm_readable) = match &fm {
         Some(f) => extract_fields(&raw[f.content_start..f.content_end]),
-        None => NoteFields::default(),
+        None => (NoteFields::default(), true),
     };
     ParsedNote {
         raw: raw.to_string(),
         fm,
         fields,
+        fm_readable,
     }
 }
 
@@ -101,6 +103,18 @@ impl ParsedNote {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
     }
 
+    /// Whether the frontmatter block reads as YAML metadata: `true` when there is
+    /// no block, an empty one, or one that parses to a key/value mapping; `false`
+    /// when the YAML is malformed or isn't a mapping — the raw bytes still
+    /// round-trip verbatim, but the projected [`fields`](Self::fields) came back
+    /// empty-handed. Surfaced so an adapter can tell the human "B2 can't read this
+    /// frontmatter" instead of silently showing blank metadata (GH #79) — the
+    /// warn-don't-block side of the self-healing stance (#75); parse tolerance
+    /// itself is unchanged.
+    pub fn frontmatter_readable(&self) -> bool {
+        self.fm_readable
+    }
+
     /// Stamp a missing `b2id`. A no-op if one is already present (never
     /// re-stamp). Inserts exactly one line at the top of the frontmatter, or
     /// creates a minimal frontmatter block if the note has none. This is B2's one
@@ -115,10 +129,7 @@ impl ParsedNote {
                 .insert_str(f.content_start, &format!("b2id: {id}\n")),
             None => self.raw.insert_str(0, &format!("---\nb2id: {id}\n---\n")),
         }
-        // Re-derive spans + fields from the mutated text so state stays exact.
-        let reparsed = parse(&self.raw);
-        self.fm = reparsed.fm;
-        self.fields = reparsed.fields;
+        self.reparse();
     }
 
     /// Replace the note's **body** with `new_body`, verbatim — the byte-honest
@@ -141,9 +152,37 @@ impl ParsedNote {
         // Re-derive spans + fields from the mutated text so state stays exact
         // (the same discipline as stamp_b2id/add_relation; a body could even
         // introduce a frontmatter block if it starts with `---`).
-        let reparsed = parse(&self.raw);
-        self.fm = reparsed.fm;
-        self.fields = reparsed.fields;
+        self.reparse();
+    }
+
+    /// Replace the note's **frontmatter YAML** with `new_yaml`, verbatim — the
+    /// byte-honest splice behind `Vault::write_frontmatter`, and
+    /// [`replace_body`](Self::replace_body)'s frontmatter sibling (GH #79). Only
+    /// the bytes between the fences change; the fences and every body byte are
+    /// preserved by construction. A note with no frontmatter gains a block; an
+    /// empty `new_yaml` removes the block entirely (fences included), exactly as
+    /// a hand-edit deleting it would leave the file. The one mechanical touch: a
+    /// non-empty `new_yaml` missing its final newline gains one, so the closing
+    /// fence always sits on its own line — every other byte is the caller's,
+    /// unformatted and unjudged.
+    ///
+    /// A `new_yaml` containing a top-level `---` line would end the block early
+    /// and shift the following bytes into the body; callers that must not touch
+    /// the body (the façade op) refuse that input before splicing.
+    pub fn replace_frontmatter(&mut self, new_yaml: &str) {
+        let mut block = new_yaml.to_string();
+        if !block.is_empty() && !block.ends_with('\n') {
+            block.push('\n');
+        }
+        match self.fm {
+            Some(f) if block.is_empty() => self.raw.replace_range(..f.body_start, ""),
+            Some(f) => self
+                .raw
+                .replace_range(f.content_start..f.content_end, &block),
+            None if block.is_empty() => {}
+            None => self.raw.insert_str(0, &format!("---\n{block}---\n")),
+        }
+        self.reparse();
     }
 
     /// Append a typed-link `spec` (e.g. `contradicts [[path|title]] — why`) to the
@@ -166,10 +205,17 @@ impl ParsedNote {
                     .insert_str(fm.content_end, &format!("b2_relations:\n  - {quoted}\n")),
             },
         }
+        self.reparse();
+        Ok(())
+    }
+
+    /// Re-derive spans + fields + readability from the mutated `raw` so state
+    /// stays exact — every mutator's closing step.
+    fn reparse(&mut self) {
         let reparsed = parse(&self.raw);
         self.fm = reparsed.fm;
         self.fields = reparsed.fields;
-        Ok(())
+        self.fm_readable = reparsed.fm_readable;
     }
 }
 
@@ -212,19 +258,30 @@ fn detect_frontmatter(raw: &str) -> Option<Frontmatter> {
     }
 }
 
-fn extract_fields(yaml: &str) -> NoteFields {
+/// Extract the projected fields from a frontmatter region, plus whether the
+/// region *read* as YAML metadata (the [`ParsedNote::frontmatter_readable`]
+/// flag): `true` for an empty/comments-only block (nothing to read, nothing
+/// wrong) or a key/value mapping; `false` when the YAML fails to parse or parses
+/// to a non-mapping (a bare scalar, a list) — the fields then come back empty
+/// while the raw bytes stay the human's to fix.
+fn extract_fields(yaml: &str) -> (NoteFields, bool) {
     let mut f = NoteFields::default();
+    let mut readable = false;
     if let Ok(docs) = YamlLoader::load_from_str(yaml) {
-        if let Some(doc) = docs.first() {
-            f.b2id = doc["b2id"].as_str().map(str::to_string);
-            f.r#type = doc["type"].as_str().map(str::to_string);
-            f.title = doc["title"].as_str().map(str::to_string);
-            f.description = doc["description"].as_str().map(str::to_string);
-            f.created = scalar_to_string(&doc["created"]);
-            f.updated = scalar_to_string(&doc["updated"]);
-            f.aliases = string_list(&doc["aliases"]);
-            f.tags = string_list(&doc["tags"]);
-            f.relations = string_list(&doc["b2_relations"]);
+        match docs.first() {
+            None => readable = true,
+            Some(doc) => {
+                readable = doc.as_hash().is_some() || matches!(doc, Yaml::Null);
+                f.b2id = doc["b2id"].as_str().map(str::to_string);
+                f.r#type = doc["type"].as_str().map(str::to_string);
+                f.title = doc["title"].as_str().map(str::to_string);
+                f.description = doc["description"].as_str().map(str::to_string);
+                f.created = scalar_to_string(&doc["created"]);
+                f.updated = scalar_to_string(&doc["updated"]);
+                f.aliases = string_list(&doc["aliases"]);
+                f.tags = string_list(&doc["tags"]);
+                f.relations = string_list(&doc["b2_relations"]);
+            }
         }
     }
     // Stamping — B2's one autonomous write — is gated on `b2id` being *definitively
@@ -238,7 +295,15 @@ fn extract_fields(yaml: &str) -> NoteFields {
     if f.b2id.is_none() {
         f.b2id = scan_b2id(yaml);
     }
-    f
+    (f, readable)
+}
+
+/// Count the top-level (column-0) `b2id:` lines in a frontmatter region — the
+/// duplicate half of `Vault::write_frontmatter`'s identity guard. Two lines make
+/// identity ambiguous ([`scan_b2id`] takes the first, a YAML parse the last), so
+/// the guard refuses rather than letting the ambiguity land on disk.
+pub(crate) fn b2id_line_count(yaml: &str) -> usize {
+    yaml.lines().filter(|l| l.starts_with("b2id:")).count()
 }
 
 /// Raw-scan fallback for [`extract_fields`]: the first top-level (column-0)
@@ -379,6 +444,62 @@ mod tests {
         // distinct from no frontmatter at all (None).
         let note = parse("---\n---\nbody\n");
         assert_eq!(note.frontmatter(), Some(""));
+    }
+
+    #[test]
+    fn frontmatter_readable_reflects_whether_the_yaml_reads_as_metadata() {
+        // No block, an empty block, and a mapping all read fine.
+        assert!(parse("just a body\n").frontmatter_readable());
+        assert!(parse("---\n---\nbody\n").frontmatter_readable());
+        assert!(parse("---\nb2id: 01A\ntags: [x]\n---\nbody\n").frontmatter_readable());
+        // Malformed YAML and a non-mapping block don't — the fields come back
+        // empty while the bytes round-trip, so the human should be told.
+        let broken = parse("---\ntitle: \"unclosed\ntags: [a\n---\nbody\n");
+        assert!(!broken.frontmatter_readable());
+        assert_eq!(broken.frontmatter(), Some("title: \"unclosed\ntags: [a\n"));
+        assert!(!parse("---\njust a sentence\n---\nbody\n").frontmatter_readable());
+    }
+
+    #[test]
+    fn replace_frontmatter_splices_only_between_the_fences() {
+        let mut note = parse("---\nb2id: 01A\ntitle: Old\n---\nThe body stays.\n");
+        note.replace_frontmatter("b2id: 01A\ntags: [new]\n");
+        assert_eq!(
+            note.as_str(),
+            "---\nb2id: 01A\ntags: [new]\n---\nThe body stays.\n"
+        );
+        assert_eq!(note.body(), "The body stays.\n");
+        assert_eq!(note.fields().tags, vec!["new"]);
+    }
+
+    #[test]
+    fn replace_frontmatter_adds_the_missing_final_newline() {
+        // The one mechanical touch: without it the closing fence would join the
+        // last YAML line and the block would never close.
+        let mut note = parse("---\nb2id: 01A\n---\nbody\n");
+        note.replace_frontmatter("b2id: 01A\ntitle: X");
+        assert_eq!(note.as_str(), "---\nb2id: 01A\ntitle: X\n---\nbody\n");
+    }
+
+    #[test]
+    fn replace_frontmatter_creates_and_removes_the_block() {
+        // No block + non-empty YAML → fences created around it.
+        let mut note = parse("only a body\n");
+        note.replace_frontmatter("b2id: 01A\n");
+        assert_eq!(note.as_str(), "---\nb2id: 01A\n---\nonly a body\n");
+        // Non-empty → empty removes the block entirely, fences included.
+        note.replace_frontmatter("");
+        assert_eq!(note.as_str(), "only a body\n");
+        assert_eq!(note.frontmatter(), None);
+    }
+
+    #[test]
+    fn b2id_line_count_sees_only_top_level_lines() {
+        assert_eq!(b2id_line_count("b2id: 01A\ntitle: X\n"), 1);
+        assert_eq!(b2id_line_count("b2id: 01A\nb2id: 01B\n"), 2);
+        // Indented (nested) and absent keys don't count.
+        assert_eq!(b2id_line_count("meta:\n  b2id: 01A\n"), 0);
+        assert_eq!(b2id_line_count("title: X\n"), 0);
     }
 
     #[test]

@@ -124,7 +124,9 @@ edge is re-derived from Markdown on every reindex; the only write B2 makes to a 
 is stamping a missing `b2id` (a ULID) — every other write is the mechanics of a command: `b2 link`
 appending a frontmatter `b2_relations:` entry, the move-repair of inbound link paths, the desktop
 editor's saves through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded
-by a content-hash revision; B2 never authors body content itself).
+by a content-hash revision; B2 never authors body content itself), and the frontmatter drawer's saves
+through `Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes,
+body untouched, refusing only a changed/removed `b2id` — GH #79).
 
 **Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
 "Folders"): a folder — empty or not — is vault material like a note, never projected
