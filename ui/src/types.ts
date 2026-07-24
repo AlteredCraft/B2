@@ -65,6 +65,14 @@ export interface NoteView {
    */
   frontmatter: string | null;
   /**
+   * Whether that block reads as YAML metadata (GH #79). `false` ⇒ the raw bytes
+   * above round-trip verbatim but B2 projected no fields from them (malformed
+   * YAML, or not a key/value mapping) — the drawer shows a non-blocking warning.
+   * Because every read carries it, an external hand-edit surfaces the same
+   * warning as an in-app save.
+   */
+  frontmatter_readable: boolean;
+  /**
    * blake3 of the raw file bytes at read time — the save-guard token
    * (crates/b2-desktop/CLAUDE.md): a save presents it, and the host refuses if the file
    * changed on disk since, so an external edit is never silently clobbered.

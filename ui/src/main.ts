@@ -87,9 +87,10 @@ function render(): void {
   paintTree();
   // The carve-out (crates/b2-desktop/CLAUDE.md): while editing, the note pane belongs to
   // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
-  // the editor mid-keystroke. Everything else keeps rendering.
+  // the editor mid-keystroke. The frontmatter mini-editor (GH #79) gets the same
+  // deal: its buffer is a live textarea in the pane. Everything else keeps rendering.
   let noteSwapped = false;
-  if (!state.editing) {
+  if (!state.editing && !state.fmEditing) {
     // Memoized: an unrelated render (a toast timer, streamed progress) with identical
     // pane HTML skips the innerHTML swap, so reading scroll position survives and the
     // graph view's entrance animation plays on real changes only — never on a toast.
@@ -243,6 +244,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     const note = await api.readNote(ref);
     state.current = note;
     state.currentResource = null; // one document owns the pane
+    state.fmEditing = false; // a new document ends any drawer edit (guards ran upstream)
     commit(note.path);
     expandAncestors(note.path);
     state.selectedDir = parentDir(note.path); // the create context follows the selection
@@ -281,6 +283,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
 // the editor — and the user's buffer — alive instead. A successful load records the
 // document in the history stack (#52); back/forward call `loadNote` directly.
 async function openNote(ref: string): Promise<void> {
+  if (!fmEditGuard()) return;
   if (!(await closeEditor())) return;
   await loadNote(ref, (path) => navPush({ kind: "note", path }));
 }
@@ -337,6 +340,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
 // openNote — same edit-mode flush, same one-document-owns-the-pane rule, same
 // history push.
 async function openResource(path: string): Promise<void> {
+  if (!fmEditGuard()) return;
   if (!(await closeEditor())) return;
   await loadResource(path, (p) => navPush({ kind: "resource", path: p }));
 }
@@ -419,8 +423,9 @@ function paintNav(): void {
 // so navigation isn't wedged on it.
 async function navGo(delta: -1 | 1): Promise<void> {
   if (state.loading) return;
-  // The guard first (it can await a save flush); the cursor math after, against
-  // whatever the stack is once navigation is actually allowed to proceed.
+  // The guards first (closeEditor can await a save flush); the cursor math after,
+  // against whatever the stack is once navigation is actually allowed to proceed.
+  if (!fmEditGuard()) return;
   if (!(await closeEditor())) return;
   const target = navCursor + delta;
   if (target < 0 || target >= navStack.length) return;
@@ -453,8 +458,143 @@ function toggleDir(path: string): void {
 }
 
 function toggleFrontmatter(): void {
+  if (state.fmEditing) return; // the toggle is disabled while the mini-editor is live
   state.frontmatterOpen = !state.frontmatterOpen;
   render();
+}
+
+// --- frontmatter mini-editor (GH #79) ---------------------------------------------
+//
+// The drawer's editing surface: the raw YAML in a plain textarea with explicit
+// Save/Cancel — no autosave, deliberately: half-typed YAML isn't a body sentence,
+// and the host's b2id guard wants a deliberate save to refuse cleanly. While it's
+// live the note pane is under the render carve-out (the body editor's pattern), so
+// the buffer lives only in the DOM and the inline error is painted imperatively.
+// The rules live behind the façade (E3): b2id must survive unchanged, a `---` line
+// is refused, and anything else saves — including YAML B2 can't read, which comes
+// back flagged `frontmatter_readable: false` and warns in the drawer, the same as
+// an external hand-edit would.
+
+function enterFmEdit(): void {
+  const n = state.current;
+  if (!n || state.editing || state.fmEditing || state.loading) return;
+  state.fmEditing = true;
+  state.frontmatterOpen = true; // the editor lives in the open drawer
+  // One explicit pane paint WITH the editor; render() then treats the pane as
+  // carved out (and nulls its memo), so nothing rebuilds under the buffer.
+  el("note-pane").innerHTML = notePaneHtml(state);
+  render();
+  (document.getElementById("fm-editor") as HTMLTextAreaElement | null)?.focus();
+}
+
+/** The live buffer, or null when the mini-editor isn't mounted. */
+function fmBuffer(): string | null {
+  const ta = document.getElementById("fm-editor");
+  return ta instanceof HTMLTextAreaElement ? ta.value : null;
+}
+
+/**
+ * Cancel (Esc / the button / the conflict bar's Reload): drop the buffer and adopt
+ * disk. The re-read matters — reconcile defers the open note to this editor while
+ * it's live, so an external edit that arrived mid-edit lands now, not never.
+ */
+async function cancelFmEdit(): Promise<void> {
+  if (!state.fmEditing) return;
+  state.fmEditing = false;
+  render(); // instant: back to the read-only peek
+  const n = state.current;
+  if (!n) return;
+  try {
+    const fresh = await api.readNote(n.path);
+    // Adopt only if this note still owns the pane and no new edit began meanwhile.
+    if (state.current?.path === n.path && !state.fmEditing && !state.editing) {
+      state.current = fresh;
+      render();
+    }
+  } catch {
+    // The note may be gone (an external delete) — the watcher's reconcile owns that.
+  }
+}
+
+/**
+ * Resolve the mini-editor before an action that would repaint or repoint the note
+ * pane (navigation, the view toggles, a link commit, a move/delete of the open
+ * note). A pristine buffer just closes; a dirty one blocks with the way out —
+ * explicit-save semantics cut both ways, so typed YAML is never silently discarded.
+ */
+function fmEditGuard(): boolean {
+  if (!state.fmEditing) return true;
+  const buf = fmBuffer();
+  if (buf === null || buf === (state.current?.frontmatter ?? "")) {
+    state.fmEditing = false;
+    return true;
+  }
+  flash("Finish editing the frontmatter first — Save it, or press Esc to discard.");
+  return false;
+}
+
+async function saveFmEdit(): Promise<void> {
+  const n = state.current;
+  const buf = fmBuffer();
+  if (!n || !state.fmEditing || buf === null) return;
+  try {
+    await api.writeFrontmatter(n.path, buf, n.revision);
+    await finishFmSave(n.path);
+  } catch (e) {
+    showFmError(errText(e), isWriteConflict(e));
+  }
+}
+
+// After a successful save: leave edit mode and re-read from disk — the revision to
+// chain on, the verbatim block, the header metadata (type/created/tags) and the
+// readability flag may all have changed — then refresh discovery, since an edited
+// `b2_relations:` is a graph change.
+async function finishFmSave(path: string): Promise<void> {
+  state.fmEditing = false;
+  try {
+    const fresh = await api.readNote(path);
+    if (state.current?.path === path) state.current = fresh;
+  } catch (e) {
+    flash(errText(e));
+    render();
+    return;
+  }
+  render();
+  flash("Frontmatter saved.");
+  void refreshDiscovery();
+}
+
+// The conflict bar's "Keep mine": re-read only to chain the fresh revision, then
+// re-save the buffer over it — a deliberate overwrite of the external edit, the
+// body editor's conflict semantics drawer-sized. (Reload is `cancelFmEdit`.)
+async function fmConflictKeepMine(): Promise<void> {
+  const n = state.current;
+  const buf = fmBuffer();
+  if (!n || !state.fmEditing || buf === null) return;
+  try {
+    const fresh = await api.readNote(n.path);
+    await api.writeFrontmatter(n.path, buf, fresh.revision);
+    await finishFmSave(n.path);
+  } catch (e) {
+    showFmError(errText(e), isWriteConflict(e));
+  }
+}
+
+/** Paint the inline error under the buffer; `conflict` also reveals Reload/Keep mine. */
+function showFmError(msg: string, conflict: boolean): void {
+  const box = document.getElementById("fm-error");
+  const text = document.getElementById("fm-error-text");
+  const actions = document.getElementById("fm-conflict-actions");
+  if (!box || !text || !actions) return;
+  text.textContent = msg;
+  actions.hidden = !conflict;
+  box.hidden = false;
+}
+
+/** Typing again clears the message — it belonged to the save attempt that failed. */
+function hideFmError(): void {
+  const box = document.getElementById("fm-error");
+  if (box) box.hidden = true;
 }
 
 // Fold a whole discovery section (Similar & unlinked / Connections). Sticky across
@@ -666,6 +806,7 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   const affected =
     curPath !== null &&
     (node.nodeKind === "folder" ? remapPath(curPath, node.path, to) !== null : curPath === node.path);
+  if (affected && !fmEditGuard()) return false;
   if (affected && state.editing && !(await closeEditor())) return false;
 
   moveInFlight = true;
@@ -777,6 +918,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
     (node.nodeKind === "folder"
       ? curPath === node.path || curPath.startsWith(`${node.path}/`)
       : curPath === node.path);
+  if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
 
   deleteInFlight = true;
@@ -832,6 +974,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
  *  here). Sticky across notes, like sourceOpen. */
 function toggleGraph(): void {
   if (!state.current) return; // the graph anchors on an open note
+  if (!fmEditGuard()) return; // the graph takes the pane the mini-editor holds
   state.graphOpen = !state.graphOpen;
   render();
 }
@@ -842,6 +985,7 @@ function toggleGraph(): void {
 // live-preview compartment in place — decorations off = raw + syntax colors, monospace
 // (today's editor) — with cursor and undo intact, then repaints just the bar button.
 function toggleSource(): void {
+  if (!fmEditGuard()) return; // a reading-view flip would rebuild the pane
   state.sourceOpen = !state.sourceOpen;
   if (state.editing) {
     editorView?.dispatch({ effects: lpCompartment.reconfigure(livePreviewConf()) });
@@ -932,6 +1076,9 @@ function clearSearch(): void {
 }
 
 function openLinkModal(path: string, title: string): void {
+  // A committed link rewrites the open note's frontmatter — the exact bytes the
+  // mini-editor is holding — so resolve that edit before offering to link.
+  if (!fmEditGuard()) return;
   state.linkTarget = { path, title: title || null };
   state.linkRelation = "references";
   render();
@@ -1159,6 +1306,7 @@ async function switchVault(): Promise<void> {
   // Flush + leave edit mode before the picker (same hook as openNote); then drop any
   // pending trailing embed — it belongs to the vault we may be about to leave, and
   // its DB-derived pending set heals on that vault's next embed/reindex anyway.
+  if (!fmEditGuard()) return;
   if (!(await closeEditor())) return;
   if (embedTimer !== undefined) {
     clearTimeout(embedTimer);
@@ -1319,7 +1467,9 @@ async function doReindex(): Promise<void> {
       // the editor's revision chain owns the note then (an indexed note is already
       // stamped), and adopting a re-read racing an in-flight save could regress the
       // chain into a false conflict.
-      if (!state.editing) state.current = await api.readNote(state.current.path);
+      if (!state.editing && !state.fmEditing) {
+        state.current = await api.readNote(state.current.path);
+      }
       await refreshDiscovery();
     }
   } catch (e) {
@@ -1442,6 +1592,7 @@ const TRAILING_EMBED_MS = 2000;
 function enterEdit(): void {
   const n = state.current;
   if (!n || state.editing || state.loading) return;
+  if (!fmEditGuard()) return; // one editor at a time — resolve the drawer first
   state.editing = true;
   state.editConflict = false;
   render();
@@ -2093,13 +2244,15 @@ async function reconcileExternalChange(): Promise<void> {
   });
 
   // The open note. Two cases are deliberately left alone:
-  //   • editing — the live buffer is the user's unsaved work; never clobber it. An external
-  //     edit to the note being typed in surfaces through the save chain's conflict bar
-  //     instead (crates/b2-desktop/CLAUDE.md), the one case live reload can't own safely.
+  //   • editing (the body editor OR the frontmatter mini-editor) — the live buffer is
+  //     the user's unsaved work; never clobber it, and never adopt a fresh revision
+  //     under it (that would let its save silently overwrite the external edit). The
+  //     conflict surfaces through each editor's own save guard instead
+  //     (crates/b2-desktop/CLAUDE.md), the one case live reload can't own safely.
   //   • reindexing — our own project/embed run owns the open note's refresh (doReindex);
   //     reconciling here would fight it. Its own writes don't pulse anyway (sqlite under
   //     `.b2/`, filtered host-side), but a projection can rewrite `.md` (b2id stamp).
-  if (state.current && !state.editing && !state.reindexing) {
+  if (state.current && !state.editing && !state.fmEditing && !state.reindexing) {
     const cur = state.current;
     try {
       const fresh = await api.readNote(cur.path);
@@ -2217,6 +2370,15 @@ function buildShell(): void {
 }
 
 function wireEvents(): void {
+  // Typing in the frontmatter mini-editor clears its inline error — the message
+  // belonged to the save attempt that failed. Delegated (like the clicks below)
+  // because the textarea renders dynamically.
+  document.addEventListener("input", (e) => {
+    if (state.fmEditing && e.target instanceof HTMLTextAreaElement && e.target.id === "fm-editor") {
+      hideFmError();
+    }
+  });
+
   // Delegated clicks for everything that renders dynamically.
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
@@ -2360,6 +2522,27 @@ function wireEvents(): void {
     const foldCard = target.closest<HTMLElement>("[data-fold-card]");
     if (foldCard) {
       toggleCard(foldCard.dataset.foldCard ?? "");
+      return;
+    }
+
+    if (target.closest("[data-fm-edit]")) {
+      enterFmEdit();
+      return;
+    }
+    if (target.closest("#fm-save")) {
+      void saveFmEdit();
+      return;
+    }
+    if (target.closest("#fm-cancel")) {
+      void cancelFmEdit();
+      return;
+    }
+    if (target.closest("#fm-reload")) {
+      void cancelFmEdit(); // Reload = discard the buffer and adopt disk
+      return;
+    }
+    if (target.closest("#fm-keep")) {
+      void fmConflictKeepMine();
       return;
     }
 
@@ -2682,6 +2865,11 @@ function wireEvents(): void {
         closeModal();
         return;
       }
+      // The frontmatter mini-editor: Esc is its documented discard (the hint says so).
+      if (state.fmEditing) {
+        void cancelFmEdit();
+        return;
+      }
       // An open find bar dismisses next (Escape from anywhere, not just its input).
       if (findOpen) {
         closeFind();
@@ -2694,6 +2882,17 @@ function wireEvents(): void {
     if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void saveNow();
+      return;
+    }
+    // ⌘⏎ / ⌘S save the frontmatter mini-editor — its explicit-save chords (the
+    // buttons' keyboard siblings, K1). Plain Enter stays a newline in the textarea.
+    if (
+      state.fmEditing &&
+      (e.metaKey || e.ctrlKey) &&
+      (e.key === "Enter" || e.key.toLowerCase() === "s")
+    ) {
+      e.preventDefault();
+      void saveFmEdit();
       return;
     }
     // ⌘[ / ⌘] (and the ⌘←/⌘→ aliases) walk the pane's history (#52) — but never over

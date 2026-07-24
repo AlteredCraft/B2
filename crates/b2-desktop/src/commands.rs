@@ -165,7 +165,8 @@ pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), Cmd
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
-/// Save a note's body — the editing surface's one write (crates/b2-desktop/CLAUDE.md).
+/// Save a note's body — the editing surface's body write (crates/b2-desktop/CLAUDE.md;
+/// [`write_frontmatter`] is its frontmatter sibling).
 /// **Model-free** like `project`: `Vault::write` splices the body and re-projects
 /// without touching vectors, so this opens the fake vault (no model load; saving
 /// works with nothing provisioned) and runs **outside** the single-in-flight embed
@@ -181,6 +182,22 @@ pub fn write_note(
     base_revision: String,
 ) -> Result<WriteReport, CmdError> {
     write_note_impl(state.inner(), &note, &body, &base_revision)
+}
+
+/// Save a note's frontmatter — the drawer's write op (GH #79), `write_note`'s
+/// frontmatter sibling with the identical posture: **model-free** (an unchanged
+/// body keeps its vectors, so no model is ever needed), outside the embed slot,
+/// and guarded by the same `base_revision` conflict contract the frontend
+/// recognizes. The b2id identity guard and the fence refusal live behind the
+/// façade (`Vault::write_frontmatter`), not here.
+#[tauri::command(async)]
+pub fn write_frontmatter(
+    state: State<'_, AppState>,
+    note: String,
+    frontmatter: String,
+    base_revision: String,
+) -> Result<WriteReport, CmdError> {
+    write_frontmatter_impl(state.inner(), &note, &frontmatter, &base_revision)
 }
 
 /// Create a new, empty note — the file tree's New-note action (and ⌘N). **Model-free**
@@ -547,6 +564,16 @@ fn write_note_impl(
 ) -> Result<WriteReport, CmdError> {
     let (vault, _) = open_vault(state, false)?;
     Ok(vault.write(note, body, base_revision)?)
+}
+
+fn write_frontmatter_impl(
+    state: &AppState,
+    note: &str,
+    frontmatter: &str,
+    base_revision: &str,
+) -> Result<WriteReport, CmdError> {
+    let (vault, _) = open_vault(state, false)?;
+    Ok(vault.write_frontmatter(note, frontmatter, base_revision)?)
 }
 
 fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError> {
@@ -960,6 +987,64 @@ mod tests {
             user_message(&err),
             "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
         );
+    }
+
+    #[test]
+    fn write_frontmatter_saves_through_the_facade_and_chains_revisions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        // Save a new block based on the read's revision (keeping the golden b2id);
+        // the returned revision chains the next save, and a fresh read round-trips
+        // the block verbatim with the body untouched.
+        let note = read_note_impl(&state, "concepts/memory").unwrap();
+        let body_before = note.body.clone();
+        let new_fm = "b2id: 01JMEM0000000000000000000A\ntags: [edited]\n";
+        let report =
+            write_frontmatter_impl(&state, "concepts/memory", new_fm, &note.revision).unwrap();
+        assert_ne!(report.revision, note.revision);
+
+        let reread = read_note_impl(&state, "concepts/memory").unwrap();
+        assert_eq!(reread.frontmatter.as_deref(), Some(new_fm));
+        assert_eq!(reread.body, body_before);
+        assert_eq!(reread.tags, vec!["edited"]);
+        assert_eq!(reread.revision, report.revision);
+    }
+
+    #[test]
+    fn write_frontmatter_identity_refusal_is_generic_and_actionable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        // Dropping the b2id line is the one edit the drawer refuses outright.
+        let note = read_note_impl(&state, "concepts/memory").unwrap();
+        let err = write_frontmatter_impl(&state, "concepts/memory", "tags: [x]\n", &note.revision)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::FrontmatterIdentity(_))
+        ));
+        let msg = user_message(&err);
+        assert!(msg.contains("b2id"), "names the protected line: {msg}");
+        assert!(!msg.to_lowercase().contains("sqlite"), "no internals");
+
+        // The fence refusal surfaces its domain detail, still no internals.
+        let err = write_frontmatter_impl(
+            &state,
+            "concepts/memory",
+            "b2id: 01JMEM0000000000000000000A\n---\nleak\n",
+            &note.revision,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::Frontmatter(_))
+        ));
+        assert!(user_message(&err).starts_with("Can't save this frontmatter:"));
     }
 
     #[test]

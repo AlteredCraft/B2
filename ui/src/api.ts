@@ -120,6 +120,21 @@ export const api = {
     invoke("write_note", { note, body, baseRevision }),
 
   /**
+   * Save a note's frontmatter — `writeNote`'s frontmatter sibling (GH #79):
+   * the raw YAML is spliced verbatim between the fences (`Vault::write_frontmatter`),
+   * body untouched, model-free, guarded by the same `revision` contract (rejects
+   * with `WRITE_CONFLICT_MESSAGE` on an external change). The host refuses an
+   * edit that would change/remove/duplicate the `b2id` line, or a `---` line that
+   * would end the block early — both come back as actionable messages to show
+   * inline; anything else (including YAML B2 can't read) saves fine.
+   */
+  writeFrontmatter: (
+    note: string,
+    frontmatter: string,
+    baseRevision: string,
+  ): Promise<WriteReport> => invoke("write_frontmatter", { note, frontmatter, baseRevision }),
+
+  /**
    * Create a new, empty note at a vault-relative path (`.md` optional; missing
    * parent folders are created, like `b2 add`). Model-free like `writeNote`: the
    * note is projected immediately (tree/search/graph) and its vectors fill on

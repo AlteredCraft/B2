@@ -938,6 +938,12 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::WriteConflict(_)) => {
             "This note changed on disk since it was opened. Reload the note, then reapply your edit.".to_string()
         }
+        CliError::Core(b2_core::Error::Frontmatter(d)) => {
+            format!("Can't edit that frontmatter: {d}.")
+        }
+        CliError::Core(b2_core::Error::FrontmatterIdentity(_)) => {
+            "That edit would change or remove the note's b2id — the note's identity, which every link keys on. Keep the b2id line exactly as it is.".to_string()
+        }
         CliError::Core(b2_core::Error::ResourceNotFound(r)) => format!(
             "File not found in the vault: '{r}'. Check the path, and run `b2 reindex` first."
         ),

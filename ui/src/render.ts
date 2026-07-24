@@ -310,20 +310,69 @@ export function treePaneHtml(state: AppState): string {
 // or tree toggle triggers, and both stay sticky across notes. The bar is always
 // rendered, so the note pane's chrome is stable; a note with no frontmatter unfolds to
 // an explicit empty state.
-function noteBarHtml(state: AppState, frontmatter: string | null): string {
+//
+// The drawer is also the frontmatter's *editing* surface (GH #79): Edit swaps the peek
+// for a raw-YAML textarea with explicit Save/Cancel (no autosave — half-typed YAML is
+// not a body sentence, and the host's b2id guard wants a deliberate save to refuse).
+// While `fmEditing`, the pane is under the render carve-out (main.ts), so this HTML is
+// built once on entry and the buffer lives in the DOM. A block B2 can't read as YAML
+// gets a non-blocking warning (`frontmatter_readable`) — the same flag an external
+// hand-edit raises, since every read carries it.
+function noteBarHtml(state: AppState, note: NoteView): string {
   const open = state.frontmatterOpen;
+  const editing = state.fmEditing;
   const source = state.sourceOpen;
-  const yaml = frontmatter?.replace(/\s+$/, "") ?? "";
-  const body = !open
-    ? ""
-    : yaml
+  const fm = note.frontmatter ?? "";
+  const yaml = fm.replace(/\s+$/, ""); // display trim only — the edit buffer seeds verbatim
+  const unreadable = note.frontmatter !== null && !note.frontmatter_readable;
+  const flag = unreadable
+    ? ` <span class="fm-flag" title="B2 can't read this frontmatter as YAML">⚠︎</span>`
+    : "";
+  let body = "";
+  if (open && editing) {
+    // Seeded VERBATIM (not the display-trimmed `yaml`): what you edit is what's on
+    // disk. b2id stays visible — hiding it would make the drawer lie about the
+    // bytes — and the host guard is what protects it (E3: the rule lives in core).
+    const rows = Math.min(16, Math.max(4, fm.split("\n").length + 1));
+    // The extra "\n" right after the opening tag is sacrificial: HTML parsing strips
+    // exactly one leading newline from a textarea's content, so without it a block
+    // that *starts* with a blank line would seed one byte short of disk.
+    body = `<div class="fm-editor">
+        <textarea id="fm-editor" class="fm-input" rows="${rows}" spellcheck="false" aria-label="Frontmatter YAML">\n${escapeHtml(fm)}</textarea>
+        <div id="fm-error" class="fm-error" hidden>
+          <span id="fm-error-text"></span>
+          <span id="fm-conflict-actions" class="conflict-actions" hidden>
+            <button id="fm-reload" class="btn small" title="Discard my frontmatter edit and load the note from disk">Reload</button>
+            <button id="fm-keep" class="btn small" title="Overwrite the note's frontmatter on disk with my edit">Keep mine</button>
+          </span>
+        </div>
+        <div class="fm-actions">
+          <span class="fm-hint">b2id is the note's identity — B2 keeps it as is · ⌘⏎ saves · Esc cancels</span>
+          <button id="fm-cancel" class="btn small">Cancel</button>
+          <button id="fm-save" class="btn small primary">Save</button>
+        </div>
+      </div>`;
+  } else if (open) {
+    const warning = unreadable
+      ? `<p class="fm-warning">B2 can't read this frontmatter as YAML — its metadata and <code>b2_relations:</code> stay unprojected until it's fixed (the bytes are kept exactly as written).</p>`
+      : "";
+    const peek = yaml
       ? `<pre class="frontmatter-block">${escapeHtml(yaml)}</pre>`
       : `<p class="frontmatter-empty">No frontmatter.</p>`;
+    body = `${warning}${peek}
+      <div class="fm-actions">
+        <button class="btn small" data-fm-edit title="${
+          yaml ? "Edit the raw frontmatter YAML" : "Add frontmatter to this note"
+        }">${yaml ? "Edit" : "Add"}</button>
+      </div>`;
+  }
   return `<div class="frontmatter-bar">
       <div class="note-bar-head">
-        <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}">
+        <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}"${
+          editing ? " disabled" : ""
+        }>
           <span class="tree-caret">${open ? "▼" : "▶"}</span>
-          <span class="frontmatter-label">Frontmatter</span>
+          <span class="frontmatter-label">Frontmatter</span>${flag}
         </button>
         <div class="note-bar-actions">
           ${graphToggleHtml(false)}
@@ -331,8 +380,12 @@ function noteBarHtml(state: AppState, frontmatter: string | null): string {
             source ? "Show rendered Markdown" : "Show Markdown source"
           }">&lt;/&gt;</button>
           <button class="edit-toggle" data-toggle-edit${
-            state.loading ? " disabled" : ""
-          } title="Edit this note — ⌘E (autosaves as you type)">Edit</button>
+            state.loading || editing ? " disabled" : ""
+          } title="${
+            editing
+              ? "Finish the frontmatter edit first"
+              : "Edit this note — ⌘E (autosaves as you type)"
+          }">Edit</button>
         </div>
       </div>
       ${body}
@@ -408,7 +461,7 @@ export function notePaneHtml(state: AppState): string {
     const body = state.sourceOpen
       ? `<pre class="note-source">${escapeHtml(n.body)}</pre>`
       : renderMarkdown(n.body);
-    return `${noteBarHtml(state, n.frontmatter)}
+    return `${noteBarHtml(state, n)}
       <article class="note">
         <header class="note-head">
           <h1>${escapeHtml(n.title ?? n.path)}</h1>

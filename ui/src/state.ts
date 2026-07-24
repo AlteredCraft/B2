@@ -115,6 +115,15 @@ export interface AppState {
   currentResource: ResourceExplainView | null;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
+  /**
+   * The drawer's frontmatter mini-editor is live (GH #79): the note pane belongs
+   * to it — `render()` must NOT rebuild the pane (the same carve-out as
+   * `editing`), and pane-changing actions (navigation, the view toggles) resolve
+   * the edit first (`fmEditGuard` in main.ts). Only this renderable flag lives
+   * here; the buffer is the textarea's DOM value, and the inline error is painted
+   * imperatively — both die with the editor.
+   */
+  fmEditing: boolean;
   /** Whether the note body shows raw Markdown source instead of rendered (sticky). */
   sourceOpen: boolean;
   /**
@@ -231,6 +240,7 @@ export const state: AppState = {
   current: null,
   currentResource: null,
   frontmatterOpen: false,
+  fmEditing: false,
   sourceOpen: false,
   editing: false,
   editConflict: false,
