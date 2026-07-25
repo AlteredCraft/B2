@@ -391,8 +391,14 @@ fn check_batch_matches_single(model: &LocalEmbedder) -> Result<(), Box<dyn std::
             return Err(format!("batched/single dim mismatch for {text:?}").into());
         }
         // Both rows are L2-normalized, so the dot product is cosine similarity;
-        // padding must not move it off ~1.0.
+        // padding must not move it off ~1.0. Non-finite is checked first and
+        // explicitly: every comparison against a NaN is false, so `cos <= 0.9999`
+        // alone would wave a NaN row *through* the gate — the one failure mode a
+        // correctness check must not have.
         let cos: f32 = batched_row.iter().zip(&single).map(|(a, b)| a * b).sum();
+        if !cos.is_finite() {
+            return Err(format!("batched embedding is non-finite for {text:?}: {cos}").into());
+        }
         worst = worst.min(cos);
         if cos <= 0.9999 {
             return Err(format!(

@@ -54,11 +54,16 @@ check:
 # branch shows up as a gap rather than as a hole nobody named. Real-model paths
 # (b2-embed's candle code) are deliberately out: they are exercised by `just eval`,
 # not by `cargo test`, so instrumenting them would report a permanent, meaningless 0%.
+#
+# No `--summary-only` here: cargo-llvm-cov documents it as valid only alongside
+# --json/--lcov/--cobertura. 0.8.7 doesn't enforce that (it accepts and ignores the
+# flag in text mode), but the default text report already *is* the per-file summary,
+# so the flag buys nothing and would break if a later release starts rejecting it.
 
 # Engine coverage — the daily number. Mirrors `just test` (b2-core only), so it is as
 # fast as the suite itself and pulls in no ML deps.
 coverage:
-    cargo llvm-cov -p b2-core --summary-only
+    cargo llvm-cov -p b2-core
 
 # Same, as a browsable HTML report (per-file, line-by-line) under target/llvm-cov/html.
 coverage-html:
@@ -70,7 +75,7 @@ coverage-html:
 # depends on b2-embed, so this compiles candle once (excluded crates are still built
 # when a covered crate depends on them).
 coverage-all:
-    cargo llvm-cov --workspace --exclude b2-desktop --exclude b2-embed --summary-only
+    cargo llvm-cov --workspace --exclude b2-desktop --exclude b2-embed
 
 # Coverage for the desktop host's own unit tests. Separate and heavier for the same
 # reason `check-app` is: it embeds ui/dist (so the frontend builds first) and needs
@@ -78,7 +83,7 @@ coverage-all:
 # design — b2-desktop is a dumb adapter, and the behaviour behind its commands is
 # covered by the façade suite (crates/b2-desktop/CLAUDE.md, "inherited tests").
 coverage-app: ui-build
-    cargo llvm-cov -p b2-desktop --summary-only
+    cargo llvm-cov -p b2-desktop
 
 # lcov.info for editor gutters (VS Code Coverage Gutters, etc.) or a CI upload.
 coverage-lcov:
