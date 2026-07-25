@@ -1016,58 +1016,71 @@ body.is-resizing {
   padding: 0;
 }
 
-/* Fenced-code syntax highlighting — the `tok-*` vocabulary from highlight.ts, painted by
-   both surfaces from this one block: the reading view's `<pre>` (a post-render pass over
-   the HTML) and the editor's live-preview fence lines (CodeMirror's `syntaxHighlighting`).
-   Scoped to code on both sides — unscoped, the editor's rules would also repaint the
-   *Markdown's* own tokens, which live preview already styles in the `.lp-*` voice. */
-:is(.note-body pre, .editor-host .lp-fence) .tok-comment {
+/* Syntax colors — the `tok-*` vocabulary from highlight.ts, one palette for all three
+   surfaces from this one block:
+
+     .note-body pre           the reading view (a post-render pass over the HTML)
+     .editor-host .lp-fence   live preview's fence lines
+     .editor-host .src-body   source mode (`</>`), the whole document
+
+   The scopes are what make the three differ, and each earns its bound. Reading and live
+   preview stop at code because a fence is the only thing they render as code; live preview
+   in particular must NOT reach the Markdown's own markup, which its `.lp-*` decorations
+   already speak for. Source mode is raw Markdown, so it takes the palette document-wide —
+   there `tok-punct` is the markup itself (`#`, `**`, the fences), which is why
+   highlight.ts files `processingInstruction` under punctuation rather than keywords.
+
+   Order matters below: a token can carry two classes (a heading's `#` is `tok-fn
+   tok-punct`), and at equal specificity the later rule wins — `tok-punct` after `tok-fn`
+   is what keeps the mark muted while the heading text stays coloured. highlight.test.ts
+   pins the class pairs this relies on. */
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-comment {
   color: var(--syn-comment);
   font-style: italic;
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-keyword {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-keyword {
   color: var(--syn-keyword);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-string {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-string {
   color: var(--syn-string);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-number {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-number {
   color: var(--syn-number);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-type {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-type {
   color: var(--syn-type);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-fn {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-fn {
   color: var(--syn-fn);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-name {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-name {
   color: var(--syn-name);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-punct {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-punct {
   color: var(--syn-punct);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-link {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-link {
   color: var(--syn-name);
   text-decoration: underline;
 }
 /* Markup grammars (a ```html or ```markdown fence) carry weight, not colour. */
-:is(.note-body pre, .editor-host .lp-fence) .tok-strong {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-strong {
   font-weight: 600;
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-emphasis {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-emphasis {
   font-style: italic;
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-strike {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-strike {
   text-decoration: line-through;
 }
 /* A ```diff fence: added/removed lines read as the graph's stance colours. */
-:is(.note-body pre, .editor-host .lp-fence) .tok-ins {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-ins {
   color: var(--cat-supports);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-del {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-del {
   color: var(--cat-contradicts);
 }
-:is(.note-body pre, .editor-host .lp-fence) .tok-invalid {
+:is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-invalid {
   color: var(--danger);
 }
 

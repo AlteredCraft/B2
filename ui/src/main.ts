@@ -12,7 +12,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import {
   Compartment,
   EditorSelection,
@@ -1600,18 +1600,19 @@ let embedTimer: number | undefined;
 // Live-preview lives in a Compartment (spec §5) so `</>` can swap it for raw source
 // mode with no remount. Two configs off the sticky `sourceOpen`: decorated (the
 // document feel) or raw + today's syntax colors.
+//
+// Both configs paint with `b2Highlighter` — one palette across all three surfaces
+// (highlight.ts). What differs is *reach*, and the CSS scope is what expresses it: source
+// mode colors the whole document (`.src-body`), live preview only the fence lines
+// (`.lp-fence`), because there the Markdown's own markup is already spoken for by the
+// `.lp-*` decorations. CodeMirror's stock `defaultHighlightStyle` is deliberately gone:
+// its colors are hard-coded for a light background, so source mode read as ink-on-ink in
+// dark mode — the `--syn-*` palette is theme-aware.
 const lpCompartment = new Compartment();
 function livePreviewConf(): Extension {
   return state.sourceOpen
-    ? syntaxHighlighting(defaultHighlightStyle, { fallback: true })
-    : [
-        livePreview((target) => void followWikilink(target)),
-        // Fenced-code colours. `codeLanguages` (below) parses the fence body with the
-        // tagged language's grammar; this paints that sub-tree with the same `tok-*`
-        // classes the reading view uses (highlight.ts), so read ↔ edit match. The CSS
-        // scopes them to `.lp-fence`, leaving the Markdown's own tokens to live preview.
-        syntaxHighlighting(b2Highlighter),
-      ];
+    ? [syntaxHighlighting(b2Highlighter), EditorView.contentAttributes.of({ class: "src-body" })]
+    : [livePreview((target) => void followWikilink(target)), syntaxHighlighting(b2Highlighter)];
 }
 /** The in-flight save chain — resolves only when it settles (trailing saves included). */
 let inFlight: Promise<void> | null = null;

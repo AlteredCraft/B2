@@ -180,8 +180,9 @@ if/when one lands — `index-engine.md` §5.)*
 - **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
   toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Fenced code is
   syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
-  loaded one language per chunk) — `ui/src/highlight.ts` drives *both* surfaces from one resolver and
-  one `tok-*` palette, so a fence looks the same read or edited.
+  loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
+  preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the
+  same read or edited.
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
 

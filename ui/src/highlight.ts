@@ -1,14 +1,16 @@
-// Syntax highlighting for fenced code blocks — one engine, one palette, both surfaces.
+// Syntax highlighting — one engine, one palette, every surface: the reading view, live
+// preview's fences, and source mode's whole document (main.ts wires all three; style.css
+// scopes each).
 //
 // The dependency is CodeMirror's own registry: `@codemirror/language-data` (MIT, the CM6
 // project's ~140 Lezer grammars, each behind its own dynamic `import()` so a vault of
 // plain prose downloads none of them). It's the pragmatic pick *because the editor is
-// already CodeMirror*: handing its `languages` to `markdown({ codeLanguages })` highlights
+// already CodeMirror*: handing `resolveLang` to `markdown({ codeLanguages })` highlights
 // the editor's fenced blocks with no second engine, and running the same grammars over the
 // reading view's `<pre><code>` here keeps read ↔ edit identical — the property the
-// live-preview table widget already leans on — with one `tok-*` palette (style.css)
-// coloring both. A standalone highlighter (highlight.js, Shiki) would have meant a second
-// grammar set, a second token vocabulary, and read/edit drift.
+// live-preview table widget already leans on. A standalone highlighter (highlight.js,
+// Shiki) would have meant a second grammar set, a second token vocabulary, and read/edit
+// drift.
 //
 // Nothing here changes a byte of the note: this is a post-render pass over B2's own
 // already-escaped HTML (render.ts), and every text run is re-escaped on the way back in.
@@ -42,7 +44,6 @@ export const b2Highlighter = tagHighlighter([
       t.tagName,
       t.meta,
       t.documentMeta,
-      t.processingInstruction,
       t.annotation,
     ],
     class: "tok-keyword",
@@ -73,7 +74,18 @@ export const b2Highlighter = tagHighlighter([
   { tag: [t.propertyName, t.attributeName, t.special(t.variableName)], class: "tok-name" },
   { tag: [t.link, t.url], class: "tok-link" },
   {
-    tag: [t.operator, t.derefOperator, t.punctuation, t.separator, t.bracket, t.angleBracket],
+    // `processingInstruction` is here rather than with the keywords because it's what
+    // lezer-markdown tags *its own* markup with (`#`, `**`, `-`, the fences) — and source
+    // mode paints the whole document, where loud markup would drown the prose.
+    tag: [
+      t.operator,
+      t.derefOperator,
+      t.punctuation,
+      t.separator,
+      t.bracket,
+      t.angleBracket,
+      t.processingInstruction,
+    ],
     class: "tok-punct",
   },
   { tag: t.strong, class: "tok-strong" },

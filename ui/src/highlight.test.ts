@@ -6,7 +6,9 @@
 // `@codemirror/language-data` loads and parses in bare node exactly as it does in the
 // webview. `highlightCodeBlocks` is the one DOM-touching export and stays out of scope.
 
-import { highlightHtml, langFromClass, resolveLang } from "./highlight.ts";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { highlightCode } from "@lezer/highlight";
+import { b2Highlighter, highlightHtml, langFromClass, resolveLang } from "./highlight.ts";
 
 let checks = 0;
 
@@ -121,5 +123,53 @@ assertEq(await highlightHtml("...", "no-such-language"), null, "an unknown tag y
 // Nor is an oversized block: past MAX_CHARS it's a data dump, not a code sample, and
 // parsing it would block the paint.
 assertEq(await highlightHtml("x".repeat(100_001), "rust"), null, "an oversized block is skipped");
+
+// --- the editor surfaces ------------------------------------------------------------
+//
+// The editor paints through the *same* highlighter, over the Markdown parser main.ts
+// mounts. Two properties the CSS scoping in style.css depends on, checked here because
+// they're where the surfaces could silently drift apart.
+
+// The parser the editor mounts — `codeLanguages` wired to the shared resolver. Grammars
+// load lazily, and until one lands CodeMirror parses the fence as opaque text (it
+// reparses when the chunk arrives), so preload the one this exercises.
+const mdParser = markdown({ base: markdownLanguage, codeLanguages: resolveLang }).language.parser;
+await resolveLang("rust")?.load();
+
+/** Every classed token the editor would paint in `doc`, as [text, classes] pairs. */
+function editorTokens(doc: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const put = (text: string, cls: string): void => {
+    if (cls) out.push([text, cls]);
+  };
+  highlightCode(doc, mdParser.parse(doc), b2Highlighter, put, () => {});
+  return out;
+}
+
+/** The classes on the first token reading `text`, or null if it went unclassed. Compared
+ *  trimmed: a token's run can carry the space after a mark (`# ` → mark, ` Heading`). */
+function classOf(tokens: Array<[string, string]>, text: string): string | null {
+  return tokens.find(([tok]) => tok.trim() === text)?.[1] ?? null;
+}
+
+// Source mode (`</>`) paints the *whole* document, so the palette has to read as prose
+// with markup rather than as code: Markdown's own marks are punctuation, not keywords.
+// This is why highlight.ts files `processingInstruction` under `tok-punct` — get it wrong
+// and every `#`, `-` and `**` in a note turns keyword-loud.
+// A mark inside a styled construct carries both classes (`#` is punctuation *and* part of
+// the heading); style.css resolves that by rule order — `tok-punct` sits after `tok-fn`,
+// so the mark stays muted while the heading text keeps its colour.
+const md = editorTokens("# Heading\n\n- **bold** text\n");
+assertEq(classOf(md, "#"), "tok-fn tok-punct", "a heading mark is punctuation, not a keyword");
+assertEq(classOf(md, "-"), "tok-punct", "a list mark is punctuation");
+assertEq(classOf(md, "**"), "tok-strong tok-punct", "an emphasis mark is bold punctuation");
+assertEq(classOf(md, "Heading"), "tok-fn", "heading text carries the palette's name colour");
+
+// And the fence body is parsed by the tagged language's grammar — the wiring that makes
+// the editor's fences match the reading view's, rather than staying plain text.
+const fenced = editorTokens("```rust\nfn main() {}\n```\n");
+assertEq(classOf(fenced, "```"), "tok-punct", "the fence itself is markup");
+assertEq(classOf(fenced, "fn"), "tok-keyword", "the fence body is parsed as Rust");
+assertEq(classOf(fenced, "main"), "tok-fn", "…including its definitions");
 
 console.log(`highlight.test.ts: ${checks} checks passed`);
