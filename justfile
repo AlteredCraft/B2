@@ -72,6 +72,14 @@ coverage-html:
 coverage-all:
     cargo llvm-cov --workspace --exclude b2-desktop --exclude b2-embed --summary-only
 
+# Coverage for the desktop host's own unit tests. Separate and heavier for the same
+# reason `check-app` is: it embeds ui/dist (so the frontend builds first) and needs
+# the platform webview toolchain, exactly like `just app`. Expect a low number by
+# design — b2-desktop is a dumb adapter, and the behaviour behind its commands is
+# covered by the façade suite (crates/b2-desktop/CLAUDE.md, "inherited tests").
+coverage-app: ui-build
+    cargo llvm-cov -p b2-desktop --summary-only
+
 # lcov.info for editor gutters (VS Code Coverage Gutters, etc.) or a CI upload.
 coverage-lcov:
     cargo llvm-cov -p b2-core --lcov --output-path target/llvm-cov/lcov.info
