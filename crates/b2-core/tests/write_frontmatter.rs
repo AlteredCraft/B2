@@ -9,38 +9,18 @@
 mod common;
 
 use b2_core::vault::Vault;
-use b2_core::{open, Error};
-use common::golden_vault_copy;
+use b2_core::Error;
+use common::{count, golden_vault_copy, index_conn, reindexed_vault};
 use rusqlite::Connection;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 const SRS_PATH: &str = "notes/spaced-repetition.md";
 const SRS_ID: &str = "01JSRS0000000000000000000B";
 
-/// A reindexed (projected + fake-embedded) golden vault under a temp dir.
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
-
-/// Open a second connection onto a vault's index for direct assertions.
-fn index_conn(root: &Path) -> Connection {
-    open(&root.join(".b2").join("b2.sqlite")).unwrap()
-}
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
-}
-
 #[test]
 fn saves_the_block_verbatim_and_leaves_the_body_untouched() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let note = vault.read(SRS_PATH).unwrap();
     let body_before = note.body.clone();
@@ -68,7 +48,7 @@ fn saves_the_block_verbatim_and_leaves_the_body_untouched() {
 #[test]
 fn refuses_a_changed_removed_or_duplicated_b2id() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let note = vault.read(SRS_PATH).unwrap();
     let on_disk_before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
 
@@ -103,7 +83,7 @@ fn refuses_a_changed_removed_or_duplicated_b2id() {
 #[test]
 fn refuses_a_fence_line_that_would_leak_into_the_body() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let note = vault.read(SRS_PATH).unwrap();
     let on_disk_before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
 
@@ -126,7 +106,7 @@ fn refuses_a_fence_line_that_would_leak_into_the_body() {
 #[test]
 fn conflicts_when_the_file_changed_on_disk() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let note = vault.read(SRS_PATH).unwrap();
 
     // An external editor changes the file after our read…
@@ -158,7 +138,7 @@ fn malformed_yaml_saves_and_surfaces_as_unreadable_not_an_error() {
     // (the b2id line still raw-scans, #75), keeps the bytes verbatim, and flags
     // the block unreadable on every subsequent read.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
     let note = vault.read(SRS_PATH).unwrap();
     assert!(note.frontmatter_readable, "golden note starts clean");
 
@@ -186,7 +166,7 @@ fn malformed_yaml_saves_and_surfaces_as_unreadable_not_an_error() {
 #[test]
 fn reprojects_edges_from_the_new_block_without_touching_vectors() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let conn = index_conn(&root);
     let embeddings_before = count(&conn, "embeddings");
     assert_eq!(embeddings_before, count(&conn, "chunks"));
@@ -260,7 +240,7 @@ fn sequential_saves_chain_revisions_and_mix_with_body_saves() {
     // One whole-file revision guards both write sites: a frontmatter save chains
     // off a body save's revision and vice versa, never self-conflicting.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let note = vault.read(SRS_PATH).unwrap();
     let fm1 = vault

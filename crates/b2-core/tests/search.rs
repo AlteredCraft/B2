@@ -14,18 +14,8 @@ use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
 use b2_core::{open, search::Hit};
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
-use rusqlite::Connection;
+use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
 use std::fs;
-use std::path::Path;
-
-fn ingest_golden(dir: &Path) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
-    conn
-}
 
 fn note_set(hits: &[Hit]) -> std::collections::BTreeSet<String> {
     hits.iter().map(|h| h.note_b2id.clone()).collect()
@@ -56,7 +46,7 @@ fn rrf_ranks_a_doc_present_in_both_lists_above_single_list_winners() {
 #[test]
 fn keyword_search_finds_chunks_by_term() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     let ids = search::keyword_search(&conn, "forgetting", 10).unwrap();
     assert!(!ids.is_empty());
@@ -77,7 +67,7 @@ fn keyword_search_tolerates_natural_language_punctuation() {
     // FTS5 *syntax* and would raise a parse error if passed raw (the bug the eval
     // surfaced). They must be sanitized to a safe MATCH, still matching real terms.
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     for q in [
         "why can't I remember? the \"forgetting\" curve!",
@@ -107,7 +97,7 @@ fn fts5_query_sanitizes_to_ored_literals() {
 #[test]
 fn hybrid_search_combines_signals_and_resolves_to_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
     assert!(!hits.is_empty());
@@ -162,6 +152,80 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
     assert!(notes
         .iter()
         .all(|n| n == "01JA0000000000000000000001" || n == "01JB0000000000000000000002"));
+
+    // …and `limit` genuinely truncates that reachable set. This is the complement of
+    // tests/vector_pool_scale.rs, which pins the other side — that a limit *above*
+    // what is reachable returns everything rather than a silently capped prefix.
+    assert!(hits.len() > 1, "the fixture must have room to truncate");
+    let capped = search::graph_filtered_search(
+        &conn,
+        &FakeEmbedder::new(64),
+        "shared topic",
+        "01JA0000000000000000000001",
+        1,
+        1,
+    )
+    .unwrap();
+    assert_eq!(capped.len(), 1, "the scan stops at the limit");
+}
+
+/// A result's `snippet` must **window around the matched term**, not just show the
+/// chunk's head. Under qmd chunking (#19) a chunk is section-sized — far longer than
+/// the snippet budget — so a term buried past the head would otherwise never appear
+/// in what the human reads, and every hit would look identical.
+#[test]
+fn a_long_chunks_snippet_windows_around_the_matched_term() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    // ~470 characters of lead-in, then the term — well past the snippet head.
+    let lead = "Filler prose that exists only to push the matched term out of the head. ".repeat(7);
+    fs::write(
+        root.join("long.md"),
+        format!(
+            "---\nb2id: 01JLONG000000000000000001\ntype: note\n---\n\
+             {lead}\nThe capybara paragraph is the one the query is looking for.\n"
+        ),
+    )
+    .unwrap();
+    let vault = b2_core::Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+
+    let hits = vault.search("capybara", 5).unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h.path == "long.md")
+        .expect("the keyword match must surface");
+    assert!(
+        hit.snippet.contains("capybara"),
+        "the matched term must be inside the window: {:?}",
+        hit.snippet
+    );
+    assert!(
+        hit.snippet.starts_with('…'),
+        "a windowed snippet opens with an ellipsis: {:?}",
+        hit.snippet
+    );
+    // Bounded: the 160-char budget plus at most a leading and trailing ellipsis.
+    assert!(hit.snippet.chars().count() <= 162, "{:?}", hit.snippet);
+
+    // A term already inside the head needs no window — the snippet is the head, so
+    // it opens with the text itself rather than an ellipsis.
+    let head_hit = vault
+        .search("Filler", 5)
+        .unwrap()
+        .into_iter()
+        .find(|h| h.path == "long.md")
+        .expect("the head term must surface too");
+    assert!(
+        head_hit.snippet.starts_with("Filler prose"),
+        "a match in the head keeps the head: {:?}",
+        head_hit.snippet
+    );
+    assert!(
+        head_hit.snippet.ends_with('…'),
+        "…still truncated to budget"
+    );
 }
 
 #[test]
@@ -194,7 +258,7 @@ fn search_chunks_exposes_passage_level_hits() {
 #[test]
 fn graph_filter_with_zero_hops_is_just_the_anchor() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     // 0 hops from memory → only memory's own chunks are eligible.
     let hits =

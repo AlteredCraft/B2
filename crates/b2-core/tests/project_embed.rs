@@ -13,16 +13,10 @@ use b2_core::id::UlidGen;
 use b2_core::ingest::{embed_vault, ingest_file, ingest_vault, project_file, project_vault};
 use b2_core::open;
 use b2_core::vault::Vault;
-use common::golden_vault_copy;
-use rusqlite::Connection;
+use common::{count, golden_vault_copy};
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::Path;
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
-}
 
 #[test]
 fn project_only_builds_keyword_graph_index_with_no_vectors() {

@@ -16,7 +16,7 @@ use b2_core::embed::FakeEmbedder;
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
+use common::{ingest_golden, MEMORY_ID, SRS_ID};
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs;
@@ -44,14 +44,6 @@ fn linked_chain_vault(dir: &Path) -> Connection {
     write_note(&vault, "b.md", B, "shared topic beta. See [[e]].");
     write_note(&vault, "c.md", C, "shared topic gamma.");
     write_note(&vault, "e.md", E, "shared topic delta.");
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
-    conn
-}
-
-fn ingest_golden(dir: &Path) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
     ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
     conn
@@ -140,7 +132,7 @@ fn a_directly_connected_pair_yields_no_candidates() {
     // The golden vault is two notes, directly connected (spaced-repetition supports
     // /references human-memory), so each is within 1 hop of the other → no candidates.
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     assert!(discover::candidates(&conn, SRS_ID, 10).unwrap().is_empty());
     assert!(discover::candidates(&conn, MEMORY_ID, 10)

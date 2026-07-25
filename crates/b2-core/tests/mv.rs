@@ -7,18 +7,9 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
+use common::{reindexed_vault, MEMORY_ID, SRS_ID};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-/// A reindexed golden vault under a temp dir; returns (vault, vault_root).
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
+use std::path::Path;
 
 /// The inbound set of a note, as sortable `(label, b2id)` pairs — the shape the
 /// graph exposes and the thing a move must leave unchanged.
@@ -37,7 +28,7 @@ fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
 #[test]
 fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     // The backlink set of memory, before the move (SRS supports + references it).
     let before = inbound(&vault, MEMORY_ID);
@@ -87,7 +78,7 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
 #[test]
 fn move_changes_only_the_link_path_every_other_byte_identical() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let memory_before = fs::read_to_string(root.join("concepts/memory.md")).unwrap();
     let srs_before = fs::read_to_string(root.join("notes/spaced-repetition.md")).unwrap();
@@ -112,7 +103,7 @@ fn move_changes_only_the_link_path_every_other_byte_identical() {
 #[test]
 fn move_leaves_unrelated_files_byte_identical() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     // A note that links to nothing relevant.
     let bystander = root.join("unrelated.md");
     fs::write(
@@ -133,7 +124,7 @@ fn move_leaves_unrelated_files_byte_identical() {
 #[test]
 fn move_without_md_suffix_appends_it() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let report = vault.move_note(MEMORY_ID, "concepts/human-memory").unwrap();
 
@@ -144,7 +135,7 @@ fn move_without_md_suffix_appends_it() {
 #[test]
 fn move_into_a_new_subdirectory_creates_it() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     vault
         .move_note("concepts/memory.md", "archive/deep/memory.md")
@@ -158,7 +149,7 @@ fn move_into_a_new_subdirectory_creates_it() {
 #[test]
 fn move_onto_an_existing_file_is_refused() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let err = vault
         .move_note("concepts/memory.md", "notes/spaced-repetition.md")
@@ -171,7 +162,7 @@ fn move_onto_an_existing_file_is_refused() {
 #[test]
 fn an_invalid_destination_is_rejected() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     for dest in ["../escape.md", "/abs/path.md", "  "] {
         assert!(
@@ -194,7 +185,7 @@ fn an_invalid_destination_is_rejected() {
 #[test]
 fn moving_an_unknown_note_is_note_not_found() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let err = vault
         .move_note("does/not/exist", "wherever.md")

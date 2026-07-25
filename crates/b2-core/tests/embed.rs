@@ -11,26 +11,13 @@ use b2_core::embed::{Embedder, FakeEmbedder};
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{golden_vault_copy, SRS_ID};
+use common::{count, golden_vault_copy, ingest_golden, SRS_ID};
 use rusqlite::Connection;
 use std::ops::ControlFlow;
-
-fn ingest_golden(dir: &std::path::Path, embedder: &FakeEmbedder) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, embedder).unwrap();
-    conn
-}
 
 fn meta(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
         .ok()
-}
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
 }
 
 #[test]
@@ -300,4 +287,48 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
         0,
         "swap drops centroids with the vectors they summarize"
     );
+}
+
+/// The other half of the model-swap contract. `ensure_embedding_space` (above)
+/// covers what a *reindex* does — drop the stale vectors and re-embed. This covers
+/// what happens **before** anyone reindexes: `open` deliberately never touches the
+/// vector space, so a vault can sit with vectors from one model while a different
+/// one is configured. Ranking those stored vectors against a query vector from the
+/// new model would be silently wrong, so `search` refuses instead.
+#[test]
+fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
+    use b2_core::vault::Vault;
+    use b2_core::Error;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+
+    // Index the vault under a 64-dim embedder.
+    let vault = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(64))).unwrap();
+    vault.reindex().unwrap();
+    assert!(!vault.search("forgetting", 5).unwrap().is_empty());
+    drop(vault);
+
+    // Reopen with a different dimension — a model swap, as far as the recorded
+    // identity is concerned.
+    let swapped = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
+    let err = swapped.search("forgetting", 5).unwrap_err();
+    assert!(
+        matches!(err, Error::ModelMismatch { .. }),
+        "a swap must fail fast, not rank on incomparable vectors: {err:?}"
+    );
+
+    // `open` left the stored vectors alone (so a misconfigured model can never wipe
+    // a vault's embeddings) — the refusal is a query-time guard, not a migration.
+    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    assert!(count(&conn, "embeddings") > 0, "vectors survive the reopen");
+    assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
+    drop(conn);
+
+    // The documented fix: reindex re-creates the space at the new dimension.
+    swapped.reindex().unwrap();
+    assert!(!swapped.search("forgetting", 5).unwrap().is_empty());
+    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
 }

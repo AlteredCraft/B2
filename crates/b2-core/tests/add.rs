@@ -7,24 +7,13 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{golden_vault_copy, MEMORY_ID};
+use common::{reindexed_vault, MEMORY_ID};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-/// A reindexed golden vault under a temp dir; returns (vault, vault_root). Gives
-/// `add` real notes to link to for the edge-projection test.
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
 
 #[test]
 fn add_writes_a_stamped_note_and_projects_it() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let report = vault
         .add_note(
@@ -69,7 +58,7 @@ fn add_writes_a_stamped_note_and_projects_it() {
 #[test]
 fn add_projects_the_edges_its_body_authors() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     // A note whose body links to an existing golden note.
     let report = vault
@@ -101,7 +90,7 @@ fn add_projects_the_edges_its_body_authors() {
 #[test]
 fn add_creates_missing_parent_directories() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     vault
         .add_note("deeply/nested/dir/note", None, None)
@@ -130,7 +119,7 @@ fn add_works_on_a_never_reindexed_vault() {
 #[test]
 fn add_refuses_to_clobber_an_existing_file() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     // Onto an existing golden note.
     let err = vault
@@ -155,7 +144,7 @@ fn add_refuses_to_clobber_an_existing_file() {
 #[test]
 fn create_note_writes_a_stamped_minimal_note_model_free() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let before = vault.embed_status().unwrap();
 
     let report = vault.create_note("inbox/idea").unwrap();
@@ -193,7 +182,7 @@ fn create_note_writes_a_stamped_minimal_note_model_free() {
 #[test]
 fn create_note_refuses_clobber_and_invalid_paths() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let err = vault.create_note("concepts/memory").unwrap_err();
     assert!(matches!(err, Error::AddTargetExists(p) if p == "concepts/memory.md"));
@@ -211,7 +200,7 @@ fn create_note_refuses_clobber_and_invalid_paths() {
 #[test]
 fn add_rejects_an_invalid_path() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     for bad in ["../escape.md", "/abs/path.md", "  "] {
         assert!(

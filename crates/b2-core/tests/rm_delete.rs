@@ -7,34 +7,13 @@
 
 mod common;
 
-use b2_core::vault::Vault;
-use b2_core::{open, Error};
-use common::{golden_vault_copy, MEMORY_ID};
+use b2_core::Error;
+use common::{count, index_conn, reindexed_vault, MEMORY_ID};
 use rusqlite::Connection;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 const MEMORY_PATH: &str = "concepts/memory.md";
 const SRS_PATH: &str = "notes/spaced-repetition.md";
-
-/// A reindexed golden vault under a temp dir; returns (vault, vault_root).
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
-
-/// Open a second connection onto a vault's index for direct assertions.
-fn index_conn(root: &Path) -> Connection {
-    open(&root.join(".b2").join("b2.sqlite")).unwrap()
-}
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
-}
 
 /// Every edge row's identity + resolution, ordered — the shape that must match a
 /// from-scratch rebuild for `delete ≡ external-delete + reindex` to hold.
@@ -63,7 +42,7 @@ fn edge_rows(conn: &Connection) -> Vec<(String, String, Option<String>, String, 
 #[test]
 fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let srs_before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
 
     let report = vault.delete_note(MEMORY_PATH).unwrap();
@@ -121,7 +100,7 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
     let (vault_a, root_a) = {
         let dir = tmp.path().join("a");
         fs::create_dir_all(&dir).unwrap();
-        reindexed(&dir)
+        reindexed_vault(&dir)
     };
     vault_a.delete_note(MEMORY_PATH).unwrap();
 
@@ -129,7 +108,7 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
     let (vault_b, root_b) = {
         let dir = tmp.path().join("b");
         fs::create_dir_all(&dir).unwrap();
-        reindexed(&dir)
+        reindexed_vault(&dir)
     };
     fs::remove_file(root_b.join(MEMORY_PATH)).unwrap();
     let report = vault_b.reindex().unwrap();
@@ -150,7 +129,7 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
 #[test]
 fn delete_note_unknown_ref_refuses() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     assert!(matches!(
         vault.delete_note("no/such-note.md").unwrap_err(),
@@ -164,7 +143,7 @@ fn delete_note_unknown_ref_refuses() {
 #[test]
 fn delete_resource_removes_file_and_inventory_and_dangles_links() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     // Give SRS a body link at the resource, through the ordinary save path.
     let note = vault.read(SRS_PATH).unwrap();
@@ -206,7 +185,7 @@ fn delete_resource_removes_file_and_inventory_and_dangles_links() {
 #[test]
 fn delete_resource_unknown_path_refuses() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
     assert!(matches!(
         vault.delete_resource("resources/nope.png").unwrap_err(),
         Error::ResourceNotFound(_)
@@ -216,7 +195,7 @@ fn delete_resource_unknown_path_refuses() {
 #[test]
 fn delete_dir_removes_subtree_and_dangles_outside_links() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let report = vault.delete_dir("concepts").unwrap();
     assert_eq!(report.dir, "concepts");
@@ -243,7 +222,7 @@ fn delete_dir_removes_subtree_and_dangles_outside_links() {
 #[test]
 fn delete_dir_containing_the_linker_leaves_the_target_intact() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     // Deleting `notes/` removes SRS (the linker). Memory survives untouched, and
     // no surviving file needs re-projection (the linker died with the folder).
@@ -261,7 +240,7 @@ fn delete_dir_containing_the_linker_leaves_the_target_intact() {
 #[test]
 fn delete_dir_removes_resources_and_their_inventory() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let report = vault.delete_dir("resources").unwrap();
     assert_eq!(report.deleted_notes, 0);
@@ -273,7 +252,7 @@ fn delete_dir_removes_resources_and_their_inventory() {
 #[test]
 fn delete_dir_deletes_an_empty_folder() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     fs::create_dir_all(root.join("scratch")).unwrap();
 
     // An empty folder is a real vault member (fs-authoritative structure): the
@@ -289,7 +268,7 @@ fn delete_dir_deletes_an_empty_folder() {
 #[test]
 fn delete_dir_missing_or_invalid_refuses() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     assert!(matches!(
         vault.delete_dir("no-such-folder").unwrap_err(),
