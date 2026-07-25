@@ -46,6 +46,37 @@ check:
     cargo clippy --workspace --exclude b2-desktop
     cargo test -p b2-core
 
+# --- Coverage (cargo-llvm-cov; `cargo install cargo-llvm-cov` + `rustup component add
+# llvm-tools-preview`) ------------------------------------------------------------
+#
+# Source-based coverage over the same model-free suite CI runs — the numbers answer
+# "which engine lines does the deterministic suite actually execute", so an untested
+# branch shows up as a gap rather than as a hole nobody named. Real-model paths
+# (b2-embed's candle code) are deliberately out: they are exercised by `just eval`,
+# not by `cargo test`, so instrumenting them would report a permanent, meaningless 0%.
+
+# Engine coverage — the daily number. Mirrors `just test` (b2-core only), so it is as
+# fast as the suite itself and pulls in no ML deps.
+coverage:
+    cargo llvm-cov -p b2-core --summary-only
+
+# Same, as a browsable HTML report (per-file, line-by-line) under target/llvm-cov/html.
+coverage-html:
+    cargo llvm-cov -p b2-core --html
+    @echo "report: target/llvm-cov/html/index.html"
+
+# Engine + the CLI adapter. The CLI suite spawns the real `b2` binary, which is
+# instrumented too, so its process-level runs count. Heavier on a cold cache: b2-cli
+# depends on b2-embed, so this compiles candle once (excluded crates are still built
+# when a covered crate depends on them).
+coverage-all:
+    cargo llvm-cov --workspace --exclude b2-desktop --exclude b2-embed --summary-only
+
+# lcov.info for editor gutters (VS Code Coverage Gutters, etc.) or a CI upload.
+coverage-lcov:
+    cargo llvm-cov -p b2-core --lcov --output-path target/llvm-cov/lcov.info
+    @echo "lcov: target/llvm-cov/lcov.info"
+
 # Download + verify bge-base-en-v1.5 into the shared XDG cache (needed for the real embedder)
 init:
     cargo run -p b2-cli -- init

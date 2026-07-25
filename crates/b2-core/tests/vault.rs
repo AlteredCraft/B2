@@ -8,17 +8,7 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
-use std::path::{Path, PathBuf};
-
-/// A reindexed golden vault under a temp dir; returns (vault, vault_root).
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
+use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
 
 #[test]
 fn open_creates_the_b2_dir_and_index() {
@@ -51,33 +41,9 @@ fn reindex_reports_counts_and_is_idempotent() {
 }
 
 #[test]
-fn reindex_stamps_a_note_missing_a_b2id() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    // an extra note with no b2id → reindex must stamp exactly it.
-    std::fs::write(
-        root.join("orphan.md"),
-        "---\ntype: note\ntitle: Orphan\n---\nbody\n",
-    )
-    .unwrap();
-
-    let vault = Vault::open(&root).unwrap();
-    let report = vault.reindex().unwrap();
-    assert_eq!(report.indexed, 3);
-    assert_eq!(report.stamped, 1);
-    // the stamp is durable in the note's frontmatter (the id travels in the file).
-    let stamped = std::fs::read_to_string(root.join("orphan.md")).unwrap();
-    assert!(
-        stamped.contains("b2id:"),
-        "the missing b2id must be written to disk"
-    );
-}
-
-#[test]
 fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let ns = vault.neighbors(MEMORY_ID).unwrap();
     let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
@@ -100,7 +66,7 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
 #[test]
 fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     // by path, by path-without-.md, and by b2id must all resolve to the same set.
     let by_path = vault.neighbors("notes/spaced-repetition.md").unwrap();
@@ -121,19 +87,44 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     assert_eq!(by_stem.len(), by_id.len());
 }
 
+/// Every façade op that resolves a note ref rejects an unknown one the same way,
+/// echoing the ref back verbatim — the single refusal the adapters map to their
+/// "not found" message. Asserted once here rather than per-op across files.
 #[test]
-fn unknown_ref_is_note_not_found() {
+fn unknown_ref_is_note_not_found_on_every_resolving_op() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
-    let err = vault.neighbors("does/not/exist").unwrap_err();
-    assert!(matches!(err, Error::NoteNotFound(r) if r == "does/not/exist"));
+    let ops: [(&str, Box<dyn Fn() -> Error>); 4] = [
+        (
+            "read",
+            Box::new(|| vault.read("does/not/exist").unwrap_err()),
+        ),
+        (
+            "neighbors",
+            Box::new(|| vault.neighbors("does/not/exist").unwrap_err()),
+        ),
+        (
+            "explain",
+            Box::new(|| vault.explain("does/not/exist").unwrap_err()),
+        ),
+        (
+            "similar",
+            Box::new(|| vault.similar("does/not/exist", 5).unwrap_err()),
+        ),
+    ];
+    for (op, call) in ops {
+        assert!(
+            matches!(call(), Error::NoteNotFound(r) if r == "does/not/exist"),
+            "{op} must refuse an unknown ref as NoteNotFound"
+        );
+    }
 }
 
 #[test]
 fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let hits = vault.search("forgetting", 10).unwrap();
     assert!(!hits.is_empty());
@@ -160,14 +151,16 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     assert_eq!(ids, deduped, "search results must be deduped by note");
 }
 
+/// Index-first honesty: before the first reindex the projection is empty, so the
+/// read surfaces answer *empty*, never an error — the adapters render "nothing
+/// indexed yet", not a failure.
 #[test]
-fn search_before_reindex_is_empty() {
+fn reads_before_reindex_are_empty_not_errors() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);
     let vault = Vault::open(&root).unwrap();
 
-    // no reindex → no chunks → no hits (and no error).
-    let hits = vault.search("forgetting", 10).unwrap();
-    assert!(hits.is_empty());
+    assert!(vault.search("forgetting", 10).unwrap().is_empty());
+    assert!(vault.list_notes().unwrap().is_empty());
 }

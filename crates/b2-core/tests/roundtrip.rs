@@ -4,6 +4,12 @@
 //! frontmatter keys + order, comments, and whitespace (data-model.md §6). B2
 //! achieves this by keeping the raw text and only ever making the surgical edits
 //! it is asked to make — never re-dumping YAML.
+//!
+//! The *headingless* case (text with no frontmatter block at all) is not pinned
+//! here: `tests/props.rs::any_text_round_trips_byte_identical` already proves it
+//! over 512 generated strings, which are overwhelmingly frontmatter-free. What
+//! that property cannot reach — a real, messy, human-authored block — is exactly
+//! what the cases below hold.
 
 use b2_core::note::parse;
 use std::fs;
@@ -45,14 +51,6 @@ fn round_trip_preserves_unknown_keys_comments_and_whitespace() {
         "Last line, no trailing newline",
     );
     assert_eq!(parse(raw).as_str(), raw);
-}
-
-#[test]
-fn round_trip_note_without_frontmatter() {
-    let raw = "Just a body, no frontmatter at all.\n";
-    let n = parse(raw);
-    assert_eq!(n.as_str(), raw);
-    assert!(n.fields().b2id.is_none());
 }
 
 #[test]

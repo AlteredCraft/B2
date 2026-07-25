@@ -373,6 +373,39 @@ mod tests {
         assert!(!l.embed);
     }
 
+    /// The exact hazard that killed the body typed-line syntax (decision
+    /// 2026-07-21): a *lowercase* verb lookalike opening a list item must stay
+    /// prose. `- see [[x]]` becoming a typed edge of verb "see" is the failure
+    /// mode; only the wikilink may project, always untyped.
+    #[test]
+    fn lowercase_verb_lookalikes_in_prose_stay_prose() {
+        let links = parse_links("- see [[concepts/memory|Human memory]] for the mechanism\n");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].edge_type, "references");
+        assert!(!links[0].typed);
+    }
+
+    /// A prose link and a verb-led list item are the same thing to the parser: two
+    /// `references` edges in document order, neither typed and neither carrying an
+    /// explanation — no body shape is ever "special".
+    #[test]
+    fn body_links_never_gain_a_type_from_surrounding_prose() {
+        let body = "Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.\n\n## Relations\n- supports [[concepts/memory|Human memory]] — applies the forgetting curve\n";
+        let links = parse_links(body);
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|l| l.edge_type == "references"));
+        assert!(links.iter().all(|l| !l.typed && l.explanation.is_none()));
+    }
+
+    /// `alias` is the wikilink's own `|`-part, distinct from the display `caption`
+    /// the other cases assert: absent means `None`, never an empty string.
+    #[test]
+    fn a_wikilink_without_an_alias_keeps_a_none_alias() {
+        let links = parse_links("Refer to [[concepts/memory]].\n");
+        assert_eq!(links[0].target_path, "concepts/memory");
+        assert_eq!(links[0].alias, None);
+    }
+
     #[test]
     fn parse_relation_reads_verb_link_and_explanation() {
         let l = parse_relation("supports [[papers/x.pdf|the paper]] — key evidence").unwrap();
@@ -389,6 +422,22 @@ mod tests {
 
         // No wikilink at all ⇒ no edge.
         assert!(parse_relation("just some words").is_none());
+    }
+
+    /// The two accepted explanation separators and the tolerated verb tail
+    /// (relation.rs): `—` is asserted above, `:` here, and a non-core verb is
+    /// stored verbatim rather than coerced into the closed core.
+    #[test]
+    fn relation_accepts_a_colon_separator_and_keeps_a_tail_verb_verbatim() {
+        let colon =
+            parse_relation("supersedes [[notes/old-plan|Old plan]] : replaced after Q2").unwrap();
+        assert_eq!(colon.edge_type, "supersedes");
+        assert_eq!(colon.explanation.as_deref(), Some("replaced after Q2"));
+
+        let tail = parse_relation("inspired-by [[notes/x|X]]").unwrap();
+        assert!(tail.typed);
+        assert_eq!(tail.edge_type, "inspired-by");
+        assert_eq!(tail.explanation, None);
     }
 
     #[test]

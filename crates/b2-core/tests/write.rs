@@ -9,38 +9,17 @@ mod common;
 
 use b2_core::db;
 use b2_core::vault::Vault;
-use b2_core::{open, Error};
-use common::golden_vault_copy;
-use rusqlite::Connection;
+use b2_core::Error;
+use common::{count, golden_vault_copy, index_conn, reindexed_vault};
 use std::fs;
 use std::ops::ControlFlow;
-use std::path::{Path, PathBuf};
 
 const SRS_PATH: &str = "notes/spaced-repetition.md";
-
-/// A reindexed (projected + fake-embedded) golden vault under a temp dir.
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
-}
-
-/// Open a second connection onto a vault's index for direct assertions.
-fn index_conn(root: &Path) -> Connection {
-    open(&root.join(".b2").join("b2.sqlite")).unwrap()
-}
 
 #[test]
 fn write_replaces_body_and_preserves_frontmatter_bytes() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
     let fm_end = before.find("\n---\n").unwrap() + "\n---\n".len();
@@ -64,7 +43,7 @@ fn write_replaces_body_and_preserves_frontmatter_bytes() {
 #[test]
 fn write_conflicts_when_the_file_changed_on_disk() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let note = vault.read(SRS_PATH).unwrap();
 
@@ -96,7 +75,7 @@ fn write_conflicts_when_the_file_changed_on_disk() {
 #[test]
 fn sequential_writes_chain_revisions_without_conflict() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     // Each save is based on the revision the previous save returned — the
     // serialized chain (§3 "last save wins — by construction").
@@ -114,7 +93,7 @@ fn sequential_writes_chain_revisions_without_conflict() {
 #[test]
 fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
@@ -198,7 +177,7 @@ fn write_an_empty_body_and_recover() {
     // upsetting the index, and the revision chain must continue out of the empty
     // state. `chunk_body` documents the empty case; this pins it end to end.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
 
     let note = vault.read(SRS_PATH).unwrap();
     let report = vault.write(SRS_PATH, "", &note.revision).unwrap();

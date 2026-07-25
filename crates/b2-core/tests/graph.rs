@@ -8,7 +8,7 @@ use b2_core::graph::{neighbors, unresolved_outbound, Direction};
 use b2_core::id::UlidGen;
 use b2_core::ingest::{ingest_file, ingest_vault};
 use b2_core::open;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
+use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
 use rusqlite::Connection;
 use std::fs;
 
@@ -49,18 +49,10 @@ fn edge_snapshot(conn: &Connection) -> Vec<EdgeTuple> {
     .collect()
 }
 
-fn ingest_golden(dir: &std::path::Path) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
-    conn
-}
-
 #[test]
 fn golden_graph_has_inline_references_and_frontmatter_supports() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::default());
 
     let edges = edge_snapshot(&conn);
     assert_eq!(
@@ -91,35 +83,33 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
     );
 }
 
+/// `graph::neighbors` at the raw-edge layer: the same stored edge reads as the
+/// verb from the source end and as its inverse label from the target end, with no
+/// reciprocal row (B2 stores each edge once, directed). The façade's resolved view
+/// of the same pair — paths, titles, ref-form equivalence — is `tests/vault.rs`.
 #[test]
-fn neighbors_of_memory_are_referenced_by_and_supported_by() {
+fn neighbors_label_by_direction_at_both_ends() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::default());
 
-    let ns = neighbors(&conn, MEMORY_ID).unwrap();
-    let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
+    // The target end: inbound edges, inverse-labelled, all from spaced-repetition.
+    let inbound = neighbors(&conn, MEMORY_ID).unwrap();
+    let mut labels: Vec<&str> = inbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
     assert_eq!(labels, vec!["referenced-by", "supported-by"]);
-
-    // both are inbound edges from spaced-repetition (B2 stores no reciprocal link)
-    assert!(ns
+    assert!(inbound
         .iter()
         .all(|n| n.other == SRS_ID && n.direction == Direction::Inbound));
-}
 
-#[test]
-fn neighbors_of_spaced_repetition_are_outbound() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
-
-    let ns = neighbors(&conn, SRS_ID).unwrap();
-    let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
+    // The source end: the very same two edges, outbound, labelled by their verbs.
+    let outbound = neighbors(&conn, SRS_ID).unwrap();
+    let mut labels: Vec<&str> = outbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
-    // outbound labels are the verbs themselves
     assert_eq!(labels, vec!["references", "supports"]);
-    assert!(ns
+    assert!(outbound
         .iter()
         .all(|n| n.other == MEMORY_ID && n.direction == Direction::Outbound));
+    assert_eq!(inbound.len(), outbound.len(), "one edge set, two views");
 }
 
 #[test]

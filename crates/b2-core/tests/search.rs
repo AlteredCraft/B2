@@ -14,18 +14,8 @@ use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
 use b2_core::{open, search::Hit};
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
-use rusqlite::Connection;
+use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
 use std::fs;
-use std::path::Path;
-
-fn ingest_golden(dir: &Path) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
-    conn
-}
 
 fn note_set(hits: &[Hit]) -> std::collections::BTreeSet<String> {
     hits.iter().map(|h| h.note_b2id.clone()).collect()
@@ -56,7 +46,7 @@ fn rrf_ranks_a_doc_present_in_both_lists_above_single_list_winners() {
 #[test]
 fn keyword_search_finds_chunks_by_term() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     let ids = search::keyword_search(&conn, "forgetting", 10).unwrap();
     assert!(!ids.is_empty());
@@ -77,7 +67,7 @@ fn keyword_search_tolerates_natural_language_punctuation() {
     // FTS5 *syntax* and would raise a parse error if passed raw (the bug the eval
     // surfaced). They must be sanitized to a safe MATCH, still matching real terms.
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     for q in [
         "why can't I remember? the \"forgetting\" curve!",
@@ -107,7 +97,7 @@ fn fts5_query_sanitizes_to_ored_literals() {
 #[test]
 fn hybrid_search_combines_signals_and_resolves_to_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
     assert!(!hits.is_empty());
@@ -194,7 +184,7 @@ fn search_chunks_exposes_passage_level_hits() {
 #[test]
 fn graph_filter_with_zero_hops_is_just_the_anchor() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path());
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     // 0 hops from memory → only memory's own chunks are eligible.
     let hits =

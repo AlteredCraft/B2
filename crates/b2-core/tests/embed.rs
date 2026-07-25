@@ -11,26 +11,13 @@ use b2_core::embed::{Embedder, FakeEmbedder};
 use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{golden_vault_copy, SRS_ID};
+use common::{count, golden_vault_copy, ingest_golden, SRS_ID};
 use rusqlite::Connection;
 use std::ops::ControlFlow;
-
-fn ingest_golden(dir: &std::path::Path, embedder: &FakeEmbedder) -> Connection {
-    let vault = dir.join("vault");
-    golden_vault_copy(&vault);
-    let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, embedder).unwrap();
-    conn
-}
 
 fn meta(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
         .ok()
-}
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
 }
 
 #[test]
