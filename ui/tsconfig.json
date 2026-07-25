@@ -6,6 +6,10 @@
     // panes.test.ts imports "./panes.ts" by full filename — what node's type-stripping
     // needs to run the suite off the source. Safe here: noEmit, so tsc rewrites nothing.
     "allowImportingTsExtensions": true,
+    // turndown (paste.ts) is CommonJS with `export =`. Vite takes its ESM `browser`
+    // build and node's require-interop yields the same default, so this only tells tsc
+    // to read `import TurndownService from "turndown"` the way both hosts already do.
+    "allowSyntheticDefaultImports": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

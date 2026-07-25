@@ -290,6 +290,9 @@ fn main() {
         // (`open_resource`, file-type slice 1). Same posture: host-side only, the
         // webview holds no opener permission.
         .plugin(tauri_plugin_opener::init())
+        // The clipboard plugin backs the editor's ⌘⇧V (`clipboard_text`, paste as plain
+        // text). Same posture again: host-side only, no clipboard permission in the webview.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(state)
         // Filesystem auto-reload (#14 / crates/b2-desktop/CLAUDE.md): its own managed state so the
         // pure `AppState` machine stays free of an OS watch handle. Started below once the
@@ -315,6 +318,7 @@ fn main() {
             commands::list_resources,
             commands::explain_resource,
             commands::open_resource,
+            commands::clipboard_text,
             commands::write_note,
             commands::write_frontmatter,
             commands::create_note,

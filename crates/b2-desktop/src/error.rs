@@ -34,6 +34,11 @@ pub enum CmdError {
     /// logged in full server-side, generic to the webview like everything else.
     #[error("open in system default failed: {0}")]
     OpenFailed(String),
+    /// The OS refused the clipboard read behind ⌘⇧V (`clipboard_text`). Same shape as
+    /// [`CmdError::OpenFailed`]: the plugin's detail, logged in full server-side, generic
+    /// to the webview.
+    #[error("clipboard read failed: {0}")]
+    ClipboardFailed(String),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -116,6 +121,9 @@ pub fn user_message(err: &CmdError) -> String {
             "Couldn't open the file in its default app. Try opening it from your file manager."
                 .to_string()
         }
+        CmdError::ClipboardFailed(_) => {
+            "Couldn't read the clipboard. Copy the text again, then paste.".to_string()
+        }
         CmdError::VaultRequired => {
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."
                 .to_string()
@@ -129,9 +137,10 @@ pub fn user_message(err: &CmdError) -> String {
         let detail = match err {
             CmdError::Core(e) => e.to_string(),
             CmdError::Embed(e) => e.to_string(),
-            CmdError::VaultRequired | CmdError::ReindexInFlight | CmdError::OpenFailed(_) => {
-                err.to_string()
-            }
+            CmdError::VaultRequired
+            | CmdError::ReindexInFlight
+            | CmdError::OpenFailed(_)
+            | CmdError::ClipboardFailed(_) => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
     } else {
@@ -150,9 +159,10 @@ fn log_internal(err: &CmdError) {
     let detail = match err {
         CmdError::Core(e) => e.to_string(),
         CmdError::Embed(e) => e.to_string(),
-        CmdError::VaultRequired | CmdError::ReindexInFlight | CmdError::OpenFailed(_) => {
-            err.to_string()
-        }
+        CmdError::VaultRequired
+        | CmdError::ReindexInFlight
+        | CmdError::OpenFailed(_)
+        | CmdError::ClipboardFailed(_) => err.to_string(),
     };
     eprintln!("[b2] command failed: {detail}");
 }

@@ -165,6 +165,20 @@ pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), Cmd
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
+/// The clipboard's plain-text flavor — what the editor's ⌘⇧V pastes (paste as plain
+/// text, the escape hatch from the rich paste in `ui/src/paste.ts`). Host infrastructure
+/// like the folder dialog and [`open_resource`], and host-side *necessarily*: WebKit runs
+/// no editing command for a raw ⌘⇧V, and it gates a programmatic `navigator.clipboard`
+/// read behind a native confirmation — so the webview cannot do this itself. Touches no
+/// vault; an empty or non-text clipboard reads as "".
+#[tauri::command(async)]
+pub fn clipboard_text(app: tauri::AppHandle) -> Result<String, CmdError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard()
+        .read_text()
+        .map_err(|e| CmdError::ClipboardFailed(e.to_string()))
+}
+
 /// Save a note's body — the editing surface's body write (crates/b2-desktop/CLAUDE.md;
 /// [`write_frontmatter`] is its frontmatter sibling).
 /// **Model-free** like `project`: `Vault::write` splices the body and re-projects

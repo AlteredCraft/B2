@@ -30,6 +30,12 @@ tauri-plugin-dialog = "2"
 # dialog — the host-side `open_resource` command calls it in Rust after validating
 # the path against the inventory; the webview is granted no opener permission.
 tauri-plugin-opener = "2"
+# Plain-text clipboard read for the editor's ⌘⇧V (paste as plain text, ui/src/paste.ts).
+# Host-side for the same least-privilege reason as the two above — and because it has to
+# be: WebKit runs no editing command for a raw ⌘⇧V (the key event reaches the page and
+# nothing pastes), and it gates a programmatic `navigator.clipboard` read behind a native
+# confirmation. The webview is granted no clipboard permission; only `clipboard_text` reads.
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 # Platform data dir for the "last opened vault" state file, so the app reopens the

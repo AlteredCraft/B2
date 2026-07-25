@@ -12,8 +12,15 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, EditorSelection, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { defaultHighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import {
+  Compartment,
+  EditorSelection,
+  type EditorState,
+  StateEffect,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, tooltips } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
@@ -22,6 +29,7 @@ import { baseName, canMoveInto, moveDestination, refKind, remapPath, renameDesti
 import { livePreview, wikilink } from "./livepreview";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
+import { markdownForPaste } from "./paste";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import { anomalyNotice, type IndexAnomalies, reprojectThenList } from "./reconcile";
@@ -1663,6 +1671,68 @@ function runInsertTable(view: EditorView): boolean {
   return true;
 }
 
+// Rich paste — the CodeMirror adapter over the pure paste.ts. A copy from a web page
+// carries a `text/html` flavor next to `text/plain`; CodeMirror's own paste takes the
+// plain one, which is why every heading, bold and list used to vanish on the way in.
+// This converts the HTML to Markdown instead, and *declines* in two cases, leaving
+// CodeMirror's paste to run untouched:
+//   - the cursor sits in code, where pasted text must stay literal;
+//   - the HTML carried no formatting the plain flavor didn't already have (paste.ts's
+//     `markdownForPaste` returns null) — pasting escaped Markdown there would be a loss.
+// The third way out is the ⌘⇧V chord below, which does its own plain paste.
+
+/** Is the cursor inside code — a fenced block, an indented block, or an inline span? */
+function inCodeContext(state: EditorState): boolean {
+  const at = syntaxTree(state).resolveInner(state.selection.main.from, -1);
+  for (let n: typeof at | null = at; n; n = n.parent) {
+    if (n.name.includes("Code")) return true; // FencedCode / CodeBlock / CodeText / InlineCode
+  }
+  return false;
+}
+
+function handlePaste(event: ClipboardEvent, view: EditorView): boolean {
+  const data = event.clipboardData;
+  if (!data || inCodeContext(view.state)) return false;
+  const md = markdownForPaste(data.getData("text/html"), data.getData("text/plain"));
+  if (md === null) return false;
+  event.preventDefault();
+  view.dispatch({
+    ...view.state.replaceSelection(md),
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  });
+  return true;
+}
+
+const richPaste = EditorView.domEventHandlers({ paste: handlePaste });
+
+/**
+ * ⌘⇧V — paste as plain text, the escape hatch from the conversion above.
+ *
+ * It performs the paste itself rather than deferring to the webview, because the
+ * webview does nothing: WebKit's *Paste and Match Style* is a menu command, so a raw
+ * ⌘⇧V reaches the page and no paste event ever fires (verified in the app). Reading the
+ * clipboard is therefore ours to do, and it goes through the **host** — WebKit gates a
+ * programmatic `navigator.clipboard` read behind a native confirmation, and the webview
+ * holds no clipboard permission by design (crates/b2-desktop/CLAUDE.md).
+ *
+ * The binding claims the chord (returns true) so a platform whose webview *does* paste
+ * on ⌘⇧V can't also insert its own copy.
+ */
+async function pastePlain(view: EditorView): Promise<void> {
+  try {
+    const text = await api.clipboardText();
+    if (!text) return;
+    view.dispatch({
+      ...view.state.replaceSelection(text),
+      scrollIntoView: true,
+      userEvent: "input.paste",
+    });
+  } catch (e) {
+    flash(errText(e));
+  }
+}
+
 function mountEditor(body: string): void {
   const n = state.current;
   if (!n) return;
@@ -1700,10 +1770,20 @@ function mountEditor(body: string): void {
       keymap.of([
         ...formatKeymap,
         { key: "Mod-t", run: runInsertTable },
+        {
+          key: "Mod-Shift-v",
+          run: (view: EditorView) => {
+            void pastePlain(view);
+            return true;
+          },
+        },
         ...defaultKeymap,
         ...historyKeymap,
       ]),
       EditorView.lineWrapping,
+      // Web-page formatting survives the clipboard (see `richPaste` above); an
+      // unformatted paste still takes CodeMirror's own path.
+      richPaste,
       // `[[` completion — always on, in both live-preview and source mode. Its
       // keymap (arrows/Enter/Escape while the menu is open) binds at higher
       // precedence than defaultKeymap, so Enter accepts rather than newlines.

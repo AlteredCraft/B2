@@ -101,6 +101,13 @@ export const api = {
    */
   openResource: (path: string): Promise<void> => invoke("open_resource", { path }),
 
+  /**
+   * The clipboard's plain-text flavor, for the editor's ⌘⇧V (paste as plain text).
+   * Host-side of necessity: WebKit runs no editing command for a raw ⌘⇧V and gates a
+   * programmatic `navigator.clipboard` read behind a native confirmation.
+   */
+  clipboardText: (): Promise<string> => invoke("clipboard_text"),
+
   /** Semantically-near, not-yet-linked candidates for a note. */
   similar: (note: string, limit = 10): Promise<SimilarView[]> =>
     invoke("similar", { note, limit }),
