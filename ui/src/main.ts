@@ -27,6 +27,7 @@ import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./sta
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { baseName, canMoveInto, moveDestination, refKind, remapPath, renameDestination } from "./move";
 import { livePreview, wikilink } from "./livepreview";
+import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { markdownForPaste } from "./paste";
@@ -142,6 +143,16 @@ function render(): void {
   // Focus the explanation field the moment the modal appears.
   document.getElementById("link-explanation")?.focus();
   syncFind(noteSwapped);
+  if (noteSwapped) void paintCodeHighlights();
+}
+
+/** The reading view's half of syntax highlighting (highlight.ts): a post-render pass over
+ *  the pane's `<pre><code>` blocks. Async — a language grammar is a lazily loaded chunk —
+ *  so a fence paints plain first and gains its colours a tick later. Find-in-note anchors
+ *  Ranges into the pane's text nodes, so a repaint under an open bar re-derives them. */
+async function paintCodeHighlights(): Promise<void> {
+  if (!(await highlightCodeBlocks(el("note-pane")))) return;
+  if (findOpen && !state.editing) applyReadingFind();
 }
 
 // Paint just the reindex affordance — the Reindex button's disabled state and the
@@ -492,6 +503,9 @@ function enterFmEdit(): void {
   // carved out (and nulls its memo), so nothing rebuilds under the buffer.
   el("note-pane").innerHTML = notePaneHtml(state);
   render();
+  // render() treats the pane as carved out, so the highlight pass it normally schedules
+  // won't fire for this hand-built one — the body below the drawer still wants colours.
+  void paintCodeHighlights();
   (document.getElementById("fm-editor") as HTMLTextAreaElement | null)?.focus();
 }
 
@@ -1590,7 +1604,14 @@ const lpCompartment = new Compartment();
 function livePreviewConf(): Extension {
   return state.sourceOpen
     ? syntaxHighlighting(defaultHighlightStyle, { fallback: true })
-    : livePreview((target) => void followWikilink(target));
+    : [
+        livePreview((target) => void followWikilink(target)),
+        // Fenced-code colours. `codeLanguages` (below) parses the fence body with the
+        // tagged language's grammar; this paints that sub-tree with the same `tok-*`
+        // classes the reading view uses (highlight.ts), so read ↔ edit match. The CSS
+        // scopes them to `.lp-fence`, leaving the Markdown's own tokens to live preview.
+        syntaxHighlighting(b2Highlighter),
+      ];
 }
 /** The in-flight save chain — resolves only when it settles (trailing saves included). */
 let inFlight: Promise<void> | null = null;
@@ -1764,7 +1785,11 @@ function mountEditor(body: string): void {
       // GFM base + the wikilink node: the reading view's `gfm: true` twin, and without
       // `markdownLanguage` there's no `Strikethrough` node (the default base is
       // CommonMark-only). Always on — the parser feeds both live preview and source mode.
-      markdown({ base: markdownLanguage, extensions: [wikilink] }),
+      // `codeLanguages` lets a ```lang fence's body be parsed by that language's own
+      // grammar (loaded lazily, reparsed when it lands) — the editor half of highlight.ts,
+      // sharing its resolver so a fence resolves identically here and in the reading view.
+      // Source mode picks the colours up too, in its own style.
+      markdown({ base: markdownLanguage, extensions: [wikilink], codeLanguages: resolveLang }),
       history(),
       // Formatting chords first so a future format key can shadow a default binding.
       keymap.of([

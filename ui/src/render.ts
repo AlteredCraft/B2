@@ -9,6 +9,7 @@
 // not needed for a local-first, own-content MVP.
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
+import { escapeHtml } from "./escape";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state";
 import { allDirs, canMoveInto, renamePrefill } from "./move";
 import { shouldPromptEmbedInstall } from "./embedreminder";
@@ -24,14 +25,9 @@ import {
   type GraphScene,
 } from "./graph";
 
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+// Re-exported so this module stays the view layer's single import surface (main.ts
+// reaches for it here); the definition lives in escape.ts.
+export { escapeHtml };
 
 // A `[[target]]` / `[[target|label]]` wikilink becomes an in-app anchor carrying the
 // raw target; main.ts delegates a click on `.wikilink` to open that note. This is the

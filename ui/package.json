@@ -8,15 +8,17 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types src/panes.test.ts && node --experimental-strip-types src/graph.test.ts && node --experimental-strip-types src/newentry.test.ts && node --experimental-strip-types src/embedreminder.test.ts && node --experimental-strip-types src/move.test.ts && node --experimental-strip-types src/wikicomplete.test.ts && node --experimental-strip-types src/format.test.ts && node --experimental-strip-types src/findbar.test.ts && node --experimental-strip-types src/reconcile.test.ts && node --experimental-strip-types src/paste.test.ts"
+    "test": "node --experimental-strip-types src/panes.test.ts && node --experimental-strip-types src/graph.test.ts && node --experimental-strip-types src/newentry.test.ts && node --experimental-strip-types src/embedreminder.test.ts && node --experimental-strip-types src/move.test.ts && node --experimental-strip-types src/wikicomplete.test.ts && node --experimental-strip-types src/format.test.ts && node --experimental-strip-types src/findbar.test.ts && node --experimental-strip-types src/reconcile.test.ts && node --experimental-strip-types src/paste.test.ts && node --experimental-strip-types src/highlight.test.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.0.0",
     "@codemirror/lang-markdown": "^6.0.0",
     "@codemirror/language": "^6.0.0",
+    "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.0.0",
     "@codemirror/view": "^6.0.0",
+    "@lezer/highlight": "^1.2.3",
     "@tauri-apps/api": "^2.9.0",
     "marked": "^15.0.0",
     "turndown": "^7.2.4",
