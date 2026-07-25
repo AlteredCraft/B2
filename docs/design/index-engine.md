@@ -402,8 +402,11 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   reindex/project reports, with kept path + precedence + shadowed paths) on **every pass until
   resolved**: delete the copy; or remove its `b2id:` line (the next pass stamps a fresh identity —
   the documented fork gesture); or delete the original (the copy then inherits the identity through
-  the ordinary move repointing). Single-note ingest (`add`) **refuses** an identity steal outright
-  (`Error::B2idCollision`) when the incumbent still exists and still claims the id. The same pass
+  the ordinary move repointing). Single-note ingest through `ingest_file` (the `add`/`mv`/`link`
+  path) **refuses** an identity steal outright (`Error::B2idCollision`) when the incumbent still
+  exists and still claims the id; `project_file` (the in-app save path — `write`/`create_note`)
+  deliberately does not guard, since refusing after the bytes hit disk would strand the index
+  stale — the whole-vault pass owns reconciling and surfacing that state. The same pass
   also surfaces **identity restamps** (`restamped`): a file whose `b2id:` line was removed/blanked
   out-of-band reads as absent (#75), so the stamp mints a fresh id — identity churn that dangles
   every inbound edge keyed to the old id (G5 keeps surfacing those). Deliberately **not**

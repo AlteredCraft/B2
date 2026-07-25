@@ -740,6 +740,14 @@ pub struct EmbedOutcome {
 /// [`note::parse`] the projection reads, so the scan and the pass can never
 /// disagree about what a file claims. An unreadable file takes no part — the
 /// main loop skips (and reports) it.
+///
+/// Phase 1 then reads each file a second time — deliberate, not an oversight:
+/// the re-read is page-cache-warm (this scan touched the file moments earlier),
+/// and re-reading at stamp time keeps the window in which a stamp write-back
+/// (`project_note_and_chunks`'s `fs::write`) could clobber a mid-pass external
+/// edit as small as it has always been — caching this scan's bytes would widen
+/// that window to the whole pre-scan. Revisit (cache the parse, id-carrying
+/// files only) only if `B2_LOG` timings ever show this pass hot.
 fn scan_b2id_claims(vault_root: &Path, rel_paths: &[String]) -> HashMap<String, Vec<String>> {
     let mut claims: HashMap<String, Vec<String>> = HashMap::new();
     for rel in rel_paths {
