@@ -127,6 +127,28 @@ body {
   height: 100vh;
 }
 
+/* --- focus (invariant K1) ------------------------------------------------------
+   "Focus is always visible" is half of "fully operable from the keyboard": a control
+   you can reach but can't see you've reached is not reachable. One ring, everywhere,
+   so the whole app reads the same way under the keyboard — a 2px accent outline with
+   an offset so it clears the control rather than hugging its border.
+
+   `:focus-visible`, not `:focus`: the ring appears for keyboard focus and stays out of
+   the way of a mouse click, which is the browser heuristic doing exactly what we want.
+   Individual controls override this where their own affordance IS the ring (the pane
+   gutters' accent line) — never to remove it. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The panes are script-focus targets for ⌘1/⌘2/⌘3, not tab stops — the ring would be a
+   window-sized box around a whole column. Their contents ring normally. */
+#tree-pane:focus,
+#note-pane:focus,
+#side-pane:focus {
+  outline: none;
+}
+
 /* --- top bar ------------------------------------------------------------------ */
 
 .topbar {
@@ -652,6 +674,15 @@ body.is-resizing {
 }
 .tree-row:hover {
   background: var(--surface-2);
+}
+/* The keyboard's row (K1). The tree is one Tab stop with a roving tabindex, so this
+   ring is the *only* thing telling an arrow-key user where they are — it has to read
+   as clearly as the mouse's hover wash, hence the wash underneath it too. Inset, since
+   a row spans the pane's full width and an outset ring would clip on both edges. */
+.tree-row:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .tree-caret {
@@ -1685,7 +1716,10 @@ body.is-loading {
   padding: 4px;
 }
 .context-item {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
   width: 100%;
   text-align: left;
   background: none;
@@ -1697,15 +1731,37 @@ body.is-loading {
   padding: 7px 10px;
   cursor: pointer;
 }
-.context-item:hover {
+/* Arrow-keying a menu highlights exactly as hovering it does — the menu shouldn't
+   look like a different control depending on which hand opened it. */
+.context-item:hover,
+.context-item:focus-visible,
+.context-item:focus {
+  outline: none;
   background: var(--accent);
   color: #fff;
+}
+/* The direct chord beside an item — a menu is where a keyboard user *learns* the
+   shortcut that lets them skip the menu next time (K1). Quiet: it's a footnote to the
+   label, not a second label. */
+.context-chord {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+.context-item:hover .context-chord,
+.context-item:focus-visible .context-chord,
+.context-item:focus .context-chord {
+  color: #fff;
+  opacity: 0.75;
 }
 /* A destructive menu item (Delete) reads as such before it's hovered. */
 .context-item.is-danger {
   color: var(--danger);
 }
-.context-item.is-danger:hover {
+.context-item.is-danger:hover,
+.context-item.is-danger:focus-visible,
+.context-item.is-danger:focus {
   background: var(--danger);
   color: #fff;
 }
@@ -1845,9 +1901,80 @@ body.is-loading {
 
 .modal-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 4px;
+}
+
+/* The ⏎/⎋ line in a modal's action row (K1): a dialog that only tells you about its
+   buttons is a dialog you have to reach for the mouse to be sure of. `margin-right:
+   auto` pushes it left so it reads as a caption, not a third button. */
+.modal-hint {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+/* Settings' link to the keyboard sheet sits left of Done: it's a way *out* to another
+   surface, not one of the dialog's own confirm/cancel pair. */
+.modal-actions [data-shortcuts-open] {
+  margin-right: auto;
+}
+
+/* --- the keyboard sheet (?) -----------------------------------------------------
+   The discoverable half of K1: every chord in one place. Wider than a normal modal
+   and columned, so the whole reference is one screen rather than a scroll. */
+.modal-wide {
+  max-width: 720px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+/* CSS multi-column, not a grid: the groups are wildly different lengths, and a grid
+   would leave a short column stranded beside a long one (rows align, so every group
+   pays for the tallest in its row). Columns flow, so the page packs. */
+.keys-grid {
+  columns: 2;
+  column-gap: 34px;
+  margin: 14px 0 18px;
+}
+.keys-group {
+  break-inside: avoid;
+}
+.keys-group h4 {
+  margin: 10px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* Chord column fixed, description flowing — the chords line up down the page, which is
+   what makes the sheet scannable rather than a wall of pairs. */
+.keys-list {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) 1fr;
+  align-items: baseline;
+  gap: 3px 12px;
+  margin: 0;
+}
+.keys-list dt {
+  margin: 0;
+}
+.keys-list dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.keys-list kbd {
+  display: inline-block;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  white-space: nowrap;
 }
 
 /* --- Move… modal ---------------------------------------------------------------
@@ -2185,9 +2312,23 @@ button.move-dest:hover {
     stroke 120ms ease,
     stroke-width 120ms ease;
 }
-.gnode:hover .gshape {
+/* Keyboard focus lights a node exactly as hovering it does (K1): graph nodes are ⇥
+   stops now, and a focused node has to be as obvious as a hovered one. The extra
+   outline ring on top is what distinguishes "the keyboard is here" from "the pointer
+   is passing over" — the default UA outline can't do this job on an SVG <g>, which is
+   why it's drawn on the shape. */
+.gnode:hover .gshape,
+.gnode:focus-visible .gshape {
   stroke: var(--accent);
   stroke-width: 2.2;
+}
+.gnode:focus {
+  outline: none;
+}
+.gnode:focus-visible .gshape {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 50%;
 }
 
 .gnode.is-anchor .gshape {
@@ -2210,7 +2351,8 @@ button.move-dest:hover {
   stroke: var(--cat-latent);
   stroke-dasharray: 5 5;
 }
-.gnode.is-ghost:hover .gshape {
+.gnode.is-ghost:hover .gshape,
+.gnode.is-ghost:focus-visible .gshape {
   stroke: var(--cat-latent);
   stroke-width: 2.4;
 }
@@ -2258,9 +2400,14 @@ button.move-dest:hover {
   stroke-linejoin: round;
 }
 
-/* Hovering one node spotlights it and its edges; the rest of the scene steps back
-   (the anchor stays — it is the frame of reference). */
+/* Hovering — or ⇥-ing to — one node spotlights it and its edges; the rest of the scene
+   steps back (the anchor stays — it is the frame of reference). Two rules rather than
+   one selector list: `:has()` can't be folded here without the dim also applying to the
+   focused node itself. */
 .graph-svg:has(.gnode:hover) .gnode:not(:hover):not(.is-anchor) {
+  opacity: 0.4;
+}
+.graph-svg:has(.gnode:focus-visible) .gnode:not(:focus-visible):not(.is-anchor) {
   opacity: 0.4;
 }
 

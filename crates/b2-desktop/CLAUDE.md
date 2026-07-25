@@ -89,6 +89,63 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   GUI/reindex threads), and the *implied* default scoped to `b2=debug` (not bare `debug`) so Tauri/wry/hyper
   tracing stays out of the file. `main` must hold the returned `WorkerGuard` for the whole run.
 
+## The keyboard contract (invariant K1)
+
+[invariants.md](../../docs/design/invariants.md) **K1** — *B2 is fully operable from the keyboard; the
+mouse is an accelerator, never a requirement* — names this file as its elaboration home. This is it.
+K1 governs the **GUI**: the `b2` CLI satisfies it by nature, so everything below is about
+`b2-desktop` + [`ui/`](../../ui) ([#78](https://github.com/AlteredCraft/B2/issues/78)).
+
+**The rule, in one line: no action reachable only by pointer.** If a gesture exists only as a click,
+a right-click, or a drag, it is a bug — not a missing nicety.
+
+### The four obligations
+
+Every new surface owes all four. They are cheap while you're building it and expensive to retrofit.
+
+1. **Reachable.** A focusable control in a sensible tab order, or a documented chord. A `<div>` you
+   attach a click handler to is a mouse-only control; make it a `<button>`, or give it `tabindex` +
+   `role` + a key that activates it. Graph nodes are the worked example: SVG `<g>` elements with
+   `tabindex="0"` + `role="button"`, whose ⏎/Space handler **dispatches the same click** the mouse
+   sends, so there is one activation path rather than two to keep in step.
+2. **Visible.** `:focus-visible` rings, in `style.css`'s focus block. A control you can reach but
+   can't see you've reached is not reachable. Never `outline: none` without putting an equal-or-louder
+   affordance in its place (the pane gutters' accent line is the one legitimate case).
+3. **Escapable.** An overlay takes focus on open, **traps ⇥** while it's up, and **restores focus** to
+   whatever opened it on close. `Escape` dismisses innermost-first; `Enter` confirms. All of this is
+   one hook — `syncOverlayFocus()` in `main.ts`, called at the end of every `render()` and acting only
+   on the open/close *edge*, so a toast timer's repaint never steals focus mid-⇥.
+4. **Discoverable.** A chord nobody can find is not kept. Add the row to `ui/src/shortcuts.ts` (the
+   `?` sheet) **in the same change** that wires it, and put the chord in the control's `title` — and,
+   where the action lives in a menu, beside the menu item, which is where a keyboard user learns the
+   shortcut that lets them skip the menu next time.
+
+### Where the pieces live
+
+- **`ui/src/treenav.ts`** — the file tree's pure logic, and the reason it's a separate module: the
+  paint (`render.ts`) and the arrow keys **must** agree on row order down to the last tie-break, so
+  the sort and the flatten live in one tested place. A tree you can arrow through in a different
+  order than you can see is worse than no arrows at all. The tree follows the ARIA `tree` pattern —
+  `role="tree"`/`treeitem`, `aria-level`, a **roving `tabindex`** (one Tab stop for the whole tree, not
+  one per file: a 1500-note vault is not a tab sequence), ↑↓ between visible rows, →← to expand/enter
+  and collapse/exit, Home/End, and first-letter typeahead.
+- **`ui/src/shortcuts.ts`** — the `?` sheet's one table. Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys
+  macOS spells out in its own menus stay words (Esc, Tab, Space, Home/End).
+- **`ui/src/main.ts`** — the wiring: the tree's own `keydown` (bound to the pane, so it answers before
+  the global chords), the global chord table, and the focus plumbing under
+  *"keyboard: focus plumbing"*.
+
+### Two things that bite
+
+- **A repaint destroys focus.** `innerHTML` swaps are how this UI renders, so anything holding focus
+  is gone after one — and the keyboard user is silently ejected to `<body>` by an unrelated toast or
+  watcher pulse. Restore by *identity that outlives the swap*, never by element: `paintTree` re-focuses
+  the tree's row **by path**, and `captureReturnFocus` returns a thunk (path → id → element) rather
+  than an element reference.
+- **WebKit doesn't focus a button on click.** So a `focusin` listener alone won't see a mouse user's
+  selection, and the keyboard's idea of "where I am" would drift from the mouse's. The tree's click
+  delegation sets `state.treeFocus` explicitly for this reason.
+
 ## Transport
 
 **Tauri IPC only** — the frontend `invoke`s these commands. This crate runs **no HTTP server**. An

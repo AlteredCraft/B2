@@ -13,7 +13,17 @@ import { escapeHtml } from "./escape";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state";
 import { allDirs, canMoveInto, renamePrefill } from "./move";
 import { shouldPromptEmbedInstall } from "./embedreminder";
-import type { NoteSummary, NoteView, ResourceExplainView, ResourceSummary } from "./types";
+import { SHORTCUTS } from "./shortcuts";
+import {
+  buildTree,
+  CLASS_GLYPHS,
+  rovingPath,
+  sortedFiles,
+  sortedSubdirs,
+  visibleRows,
+  type TreeDir,
+} from "./treenav";
+import type { NoteView, ResourceExplainView } from "./types";
 import {
   buildScene,
   NODE_R,
@@ -79,86 +89,10 @@ export function renderMarkdown(md: string): string {
 // the host stays a dumb adapter). Note rows reuse the `[data-open]` delegation that
 // search/discovery cards already use; resource rows get `[data-open-resource]`, which
 // opens the fallback card.
-
-/** One tree leaf — a note or a resource, normalized for display. */
-interface TreeFile {
-  kind: "note" | "resource";
-  path: string;
-  label: string;
-  /** The resource class glyph slot ("" for notes). */
-  glyph: string;
-}
-
-interface TreeDir {
-  name: string;
-  /** Vault-relative folder path, no trailing slash ("" for the root). */
-  path: string;
-  dirs: Map<string, TreeDir>;
-  files: TreeFile[];
-}
-
-/** A small, unobtrusive per-class marker so a resource reads as "not a note". */
-const CLASS_GLYPHS: Record<string, string> = {
-  image: "▣",
-  media: "▶",
-  pdf: "▤",
-  html: "◇",
-  text: "≡",
-  binary: "◆",
-};
-
-/** Fold the flat, path-ordered note + resource lists into one nested folder tree.
- *  `dirs` is the vault's full folder list (`list_dirs`, a live fs walk) — the
- *  structure half of the tree, so a folder renders even when it holds no file
- *  (the fs supports empty folders, so the tree does); a folder that also appears
- *  as a file's path prefix merges harmlessly. */
-function buildTree(
-  notes: NoteSummary[],
-  resources: ResourceSummary[],
-  dirs: Iterable<string>,
-): TreeDir {
-  const root: TreeDir = { name: "", path: "", dirs: new Map(), files: [] };
-  const descend = (dirPath: string): TreeDir => {
-    let dir = root;
-    if (!dirPath) return dir;
-    for (const seg of dirPath.split("/")) {
-      const full = dir.path ? `${dir.path}/${seg}` : seg;
-      let child = dir.dirs.get(seg);
-      if (!child) {
-        child = { name: seg, path: full, dirs: new Map(), files: [] };
-        dir.dirs.set(seg, child);
-      }
-      dir = child;
-    }
-    return dir;
-  };
-  const insert = (file: TreeFile) => {
-    const parts = file.path.split("/");
-    descend(parts.slice(0, -1).join("/")).files.push(file);
-  };
-  for (const note of notes) {
-    insert({ kind: "note", path: note.path, label: fileLabel(note), glyph: "" });
-  }
-  for (const r of resources) {
-    insert({
-      kind: "resource",
-      path: r.path,
-      label: r.path.split("/").pop() ?? r.path,
-      glyph: CLASS_GLYPHS[r.class] ?? CLASS_GLYPHS.binary,
-    });
-  }
-  for (const dir of dirs) {
-    descend(dir);
-  }
-  return root;
-}
-
-/** A note's display label: its title, else the filename without the `.md`. */
-function fileLabel(note: NoteSummary): string {
-  if (note.title) return note.title;
-  const base = note.path.split("/").pop() ?? note.path;
-  return base.replace(/\.md$/i, "");
-}
+//
+// The tree's shape and its *row order* live in treenav.ts — pure, tested, and shared
+// with the arrow-key navigation (K1, GH #78), because a tree you can arrow through in
+// a different order than you can see is worse than no arrows at all.
 
 /** The inline name input for a pending create (new note / new folder), rendered at
  *  the top of its target folder's children. The typed value lives only in the DOM —
@@ -187,13 +121,29 @@ function treeRenameRowHtml(prefill: string, glyph: string, pad: string): string 
     </div>`;
 }
 
-/** Render one folder's children (its sub-folders, then its files), recursively. */
-function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string {
-  const subdirs = [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const files = [...dir.files].sort((a, b) => a.label.localeCompare(b.label));
+/**
+ * Render one folder's children (its sub-folders, then its files), recursively — in
+ * treenav.ts's order, which is also the order the arrow keys walk.
+ *
+ * `roving` is the one row that carries `tabindex="0"`: every other row is `-1`, so
+ * the tree is a *single* Tab stop and the arrow keys move within it (the ARIA tree
+ * pattern — a 1500-note vault is not a tab sequence). `data-tree-row` is the row's
+ * keyboard identity: main.ts looks a row up by path to move focus after a repaint,
+ * without having to build a CSS selector out of an arbitrary filename.
+ */
+function treeChildrenHtml(
+  dir: TreeDir,
+  state: AppState,
+  depth: number,
+  roving: string | null,
+): string {
   // Indent by depth; a folder's own chevron occupies the same slot a file's icon does,
   // so files sit one notch deeper than the folder header above them.
   const pad = (d: number) => `padding-left:${8 + d * 14}px`;
+  // ARIA levels are 1-based; the DOM is flat (rows are siblings, not nested lists),
+  // so `aria-level` is what tells a screen reader how deep a row sits.
+  const level = ` aria-level="${depth + 1}"`;
+  const tab = (path: string) => ` tabindex="${path === roving ? "0" : "-1"}"`;
 
   // An open create input renders first in its target folder (startTreeCreate
   // expanded the chain down to here, so a match is always visible).
@@ -202,25 +152,27 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
       ? treeCreateRowHtml(state.treeCreate.kind, pad(depth))
       : "";
 
-  const dirHtml = subdirs
+  const dirHtml = sortedSubdirs(dir)
     .map((sub) => {
       const open = state.expandedDirs.has(sub.path);
       const selected = state.selectedDir === sub.path ? " is-selected" : "";
       const header =
         state.treeRename?.path === sub.path
           ? treeRenameRowHtml(renamePrefill(sub.path, "folder"), open ? "▼" : "▶", pad(depth))
-          : `<button class="tree-row tree-dir${selected}" data-dir="${escapeHtml(
+          : `<button class="tree-row tree-dir${selected}" role="treeitem"${level}${tab(
+              sub.path,
+            )} data-tree-row="${escapeHtml(sub.path)}" data-dir="${escapeHtml(
               sub.path,
             )}" style="${pad(depth)}" aria-expanded="${open}" draggable="true">
           <span class="tree-caret">${open ? "▼" : "▶"}</span>
           <span class="tree-label">${escapeHtml(sub.name)}</span>
         </button>`;
-      const body = open ? treeChildrenHtml(sub, state, depth + 1) : "";
+      const body = open ? treeChildrenHtml(sub, state, depth + 1, roving) : "";
       return header + body;
     })
     .join("");
 
-  const fileHtml = files
+  const fileHtml = sortedFiles(dir)
     .map((file) => {
       if (state.treeRename?.path === file.path) {
         return treeRenameRowHtml(
@@ -231,7 +183,11 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
       }
       if (file.kind === "resource") {
         const active = state.currentResource?.path === file.path ? " is-active" : "";
-        return `<button class="tree-row tree-file tree-resource${active}" data-open-resource="${escapeHtml(
+        return `<button class="tree-row tree-file tree-resource${active}" role="treeitem"${level}${tab(
+          file.path,
+        )} aria-selected="${state.currentResource?.path === file.path}" data-tree-row="${escapeHtml(
+          file.path,
+        )}" data-open-resource="${escapeHtml(
           file.path,
         )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
             <span class="tree-caret tree-glyph">${file.glyph}</span>
@@ -239,7 +195,11 @@ function treeChildrenHtml(dir: TreeDir, state: AppState, depth: number): string 
           </button>`;
       }
       const active = state.current?.path === file.path ? " is-active" : "";
-      return `<button class="tree-row tree-file${active}" data-open="${escapeHtml(
+      return `<button class="tree-row tree-file${active}" role="treeitem"${level}${tab(
+        file.path,
+      )} aria-selected="${state.current?.path === file.path}" data-tree-row="${escapeHtml(
+        file.path,
+      )}" data-open="${escapeHtml(
         file.path,
       )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
           <span class="tree-caret"></span>
@@ -283,10 +243,23 @@ export function treePaneHtml(state: AppState): string {
     </div>`;
   if (state.vaultRoot === null)
     return head + `<p class="tree-empty">No vault open.</p>`;
-  const body = treeChildrenHtml(buildTree(state.notes, state.resources, state.dirs), state, 0);
+  const tree = buildTree(state.notes, state.resources, state.dirs);
+  // The roving tabstop is resolved against the *visible* rows, so a folder collapsing
+  // under the focused row hands the tabstop back to something reachable rather than
+  // leaving the tree with no tabbable row at all.
+  const roving = rovingPath(
+    visibleRows(tree, state.expandedDirs),
+    state.treeFocus,
+    state.current?.path ?? state.currentResource?.path ?? null,
+  );
+  const body = treeChildrenHtml(tree, state, 0, roving);
   if (!body)
     return head + `<p class="tree-empty">No files indexed yet — Reindex to populate.</p>`;
-  return head + `<div class="tree">${body}</div>`;
+  return (
+    head +
+    `<div class="tree" role="tree" aria-label="Vault files"
+       title="↑↓ move · →← expand/collapse · ⏎ open · F2 rename · ⇧F10 menu">${body}</div>`
+  );
 }
 
 // --- pane builders --------------------------------------------------------------
@@ -737,7 +710,10 @@ const GRAPH_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden=
 /** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). */
 function graphToggleHtml(active: boolean): string {
   return `<button class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
-      aria-pressed="${active}" title="${active ? "Back to reading" : "Show the connection graph"}">${GRAPH_ICON}</button>`;
+      aria-pressed="${active}" aria-label="${active ? "Back to reading" : "Show the connection graph"}"
+      title="${
+        active ? "Back to reading — Esc" : "Show the connection graph — nodes are Tab-reachable, ⏎ opens"
+      }">${GRAPH_ICON}</button>`;
 }
 
 /** Fixed-point SVG coordinate — keeps the markup compact and diff-stable. */
@@ -786,19 +762,36 @@ function nodeShapeHtml(n: GraphNode): string {
   }
 }
 
-/** The tooltip line(s) for a node — also the click affordance's explanation. */
+/** The tooltip line(s) for a node — also the activation affordance's explanation.
+ *  Phrased for both hands: an activatable node says "⏎", because the graph is
+ *  reachable by Tab and arrow keys too (K1, GH #78), not by mouse alone. */
 function nodeTitle(n: GraphNode): string {
   switch (n.kind) {
     case "anchor":
-      return `${n.full} — the open note. Click to return to reading.`;
+      return `${n.full} — the open note. Click or ⏎ to return to reading.`;
     case "ghost":
-      return `${n.full} — similar but not linked (similarity ${n.sub ?? "?"}). Click to link it; right-click for more.`;
+      return `${n.full} — similar but not linked (similarity ${n.sub ?? "?"}). Click or ⏎ to link it; right-click (or ⇧F10) for more.`;
     case "dangling":
       return `${n.full} resolves to no note or file — fix the link in the note.`;
     case "resource":
-      return `${n.full} (${n.sub ?? "file"}) — click to open.`;
+      return `${n.full} (${n.sub ?? "file"}) — click or ⏎ to open.`;
     default:
-      return `${n.full} — click to open.`;
+      return `${n.full} — click or ⏎ to open.`;
+  }
+}
+
+/** The accessible name for a focusable node — what a screen reader announces, and
+ *  what the node's own `<title>` can't be (that one is the mouse tooltip prose). */
+function nodeAriaLabel(n: GraphNode): string {
+  switch (n.kind) {
+    case "anchor":
+      return `${n.full} — the open note; back to reading`;
+    case "ghost":
+      return `${n.full} — similar but unlinked; link it`;
+    case "resource":
+      return `${n.full} — open this file`;
+    default:
+      return `${n.full} — open this note`;
   }
 }
 
@@ -808,6 +801,12 @@ function nodeTitle(n: GraphNode): string {
  * affordance rides existing delegation: notes reuse `data-open`, resources
  * `data-open-resource`; ghosts get `data-ghost-link` (→ the link palette) plus the
  * `data-card-*` pair the right-click menu reads; the anchor toggles back to reading.
+ *
+ * An activatable node is also a **keyboard** control (K1, GH #78): `tabindex="0"` puts
+ * it in the Tab order and `role="button"` says what it is, so a graph is walkable and
+ * openable with no mouse. main.ts turns ⏎/Space on a focused node into the same click
+ * these attributes already answer — one activation path, not two. A `dangling` node
+ * stays inert: it opens nothing (there's nothing there), so it isn't a tab stop.
  */
 function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string {
   const attrs: string[] = [`class="gnode is-${n.kind}"`, `style="--i:${order}"`];
@@ -820,6 +819,9 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
       `data-card-path="${escapeHtml(n.path)}"`,
       `data-card-title="${escapeHtml(n.title ?? "")}"`,
     );
+  }
+  if (n.kind !== "dangling") {
+    attrs.push(`tabindex="0"`, `role="button"`, `aria-label="${escapeHtml(nodeAriaLabel(n))}"`);
   }
   const r = NODE_R[n.kind];
   // Text goes on the side of the node facing *away* from the anchor (above for the
@@ -1074,10 +1076,20 @@ function settingsModalHtml(state: AppState): string {
             : ""
         }
         <div class="modal-actions">
+          <button class="btn ghost" data-shortcuts-open title="Every chord B2 answers to — ?">Keyboard shortcuts</button>
           <button class="btn primary" data-settings-close>Done</button>
         </div>
       </div>
     </div>`;
+}
+
+/** One menu row. `chord` names the direct shortcut where one exists — a menu is where
+ *  a keyboard user *learns* the chord that lets them skip the menu next time. */
+function contextItemHtml(attr: string, label: string, chord = "", danger = false): string {
+  const hint = chord ? `<span class="context-chord">${chord}</span>` : "";
+  return `<button class="context-item${
+    danger ? " is-danger" : ""
+  }" ${attr} role="menuitem" tabindex="-1">${label}${hint}</button>`;
 }
 
 // The right-click menu — one overlay, two surfaces (state.ts `ContextMenuState`):
@@ -1097,19 +1109,21 @@ export function contextMenuHtml(state: AppState): string {
     // targeting the folder context either way.
     const node = m.node
       ? `<div class="context-label">${escapeHtml(m.node.path)}</div>
-        <button class="context-item" data-ctx-rename role="menuitem">Rename</button>
-        <button class="context-item" data-ctx-move role="menuitem">Move…</button>
-        <button class="context-item is-danger" data-ctx-delete role="menuitem">Delete</button>
+        ${contextItemHtml("data-ctx-rename", "Rename", "F2")}
+        ${contextItemHtml("data-ctx-move", "Move…")}
+        ${contextItemHtml("data-ctx-delete", "Delete", "⌘⌫", true)}
         <div class="context-sep" role="separator"></div>`
       : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
     items = `${node}
-        <button class="context-item" data-ctx-new-note role="menuitem">New note</button>
-        <button class="context-item" data-ctx-new-folder role="menuitem">New folder</button>`;
+        ${contextItemHtml("data-ctx-new-note", "New note", "⌘N")}
+        ${contextItemHtml("data-ctx-new-folder", "New folder", "⇧⌘N")}`;
   } else {
-    items = `<button class="context-item" data-ctx-open role="menuitem">Open note</button>
-        <button class="context-item" data-ctx-link role="menuitem">Link…</button>`;
+    items = `${contextItemHtml("data-ctx-open", "Open note", "⏎")}
+        ${contextItemHtml("data-ctx-link", "Link…")}`;
   }
-  return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu">${items}</div>`;
+  // `tabindex="-1"` on the menu itself makes the container focusable-by-script but not
+  // by Tab: main.ts moves focus to the first item on open and traps ↑↓/⏎/Esc inside.
+  return `<div class="context-menu" style="left:${m.x}px;top:${m.y}px" role="menu" tabindex="-1">${items}</div>`;
 }
 
 /** The Move… modal: pick a destination folder for the targeted tree node. Every
@@ -1138,6 +1152,7 @@ function moveModalHtml(state: AppState): string {
         <h3>Move ${escapeHtml(t.label)} to…</h3>
         <div class="move-dest-list">${rows}</div>
         <div class="modal-actions">
+          <span class="modal-hint">Tab / ↑↓ pick a folder · ⏎ moves · Esc cancels</span>
           <button class="btn ghost" data-cancel>Cancel</button>
         </div>
       </div>
@@ -1155,6 +1170,7 @@ function deleteModalHtml(state: AppState): string {
         <h3>Delete ${escapeHtml(t.label)}?</h3>
         <p class="muted">${escapeHtml(t.path)}/ and everything inside it will be deleted from the vault and the disk.</p>
         <div class="modal-actions">
+          <span class="modal-hint">⏎ deletes · Esc cancels</span>
           <button class="btn ghost" data-cancel>Cancel</button>
           <button class="btn danger" id="delete-confirm">Delete folder</button>
         </div>
@@ -1162,7 +1178,37 @@ function deleteModalHtml(state: AppState): string {
     </div>`;
 }
 
+/**
+ * The keyboard reference (`?`, or the Settings link) — the discoverable half of
+ * invariant K1: every chord the app answers to, in one place, from the one table in
+ * shortcuts.ts. Rendered *over* whatever else is open (Settings included), so closing
+ * it returns to exactly what was underneath.
+ */
+function shortcutsModalHtml(): string {
+  const groups = SHORTCUTS.map(
+    (g) => `<section class="keys-group">
+        <h4>${escapeHtml(g.title)}</h4>
+        <dl class="keys-list">${g.items
+          .map(
+            (s) => `<dt><kbd>${escapeHtml(s.keys)}</kbd></dt><dd>${escapeHtml(s.action)}</dd>`,
+          )
+          .join("")}</dl>
+      </section>`,
+  ).join("");
+  return `<div class="modal-backdrop">
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <h3>Keyboard shortcuts</h3>
+        <p class="muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement.</p>
+        <div class="keys-grid">${groups}</div>
+        <div class="modal-actions">
+          <button class="btn primary" data-shortcuts-close>Done</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 export function modalHtml(state: AppState): string {
+  if (state.shortcutsOpen) return shortcutsModalHtml();
   if (state.settingsOpen) return settingsModalHtml(state);
   if (state.moveTarget) return moveModalHtml(state);
   if (state.deleteTarget) return deleteModalHtml(state);
@@ -1190,6 +1236,7 @@ export function modalHtml(state: AppState): string {
           <input id="link-explanation" type="text" placeholder="why they connect" />
         </label>
         <div class="modal-actions">
+          <span class="modal-hint">⏎ commits · Esc cancels</span>
           <button class="btn ghost" data-cancel>Cancel</button>
           <button class="btn primary" id="link-commit">Commit link</button>
         </div>

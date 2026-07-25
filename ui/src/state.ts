@@ -94,6 +94,15 @@ export interface AppState {
    * last folder row clicked/right-clicked. "" is the vault root (the default).
    */
   selectedDir: string;
+  /**
+   * The tree row the keyboard is on (its vault-relative path), or null before any
+   * arrow key has been pressed. Distinct from `selectedDir` (the *create* context)
+   * and from `current` (the *open* document): a keyboard user arrows across rows
+   * without opening them, which is the whole point of arrow navigation. Drives the
+   * roving `tabindex` (treenav.ts `rovingPath`), so the tree is one Tab stop rather
+   * than one per file — invariant K1, GH #78.
+   */
+  treeFocus: string | null;
   /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
   treeCreate: { kind: "note" | "folder"; dir: string } | null;
   /** An inline rename input open on a tree row, or null. */
@@ -188,6 +197,12 @@ export interface AppState {
   linkRelation: string;
   /** The settings modal (⌘,) is open. */
   settingsOpen: boolean;
+  /**
+   * The keyboard-reference sheet (`?`) is open. Rendered *over* whatever else is up
+   * (it opens from Settings too), so it takes precedence in `modalHtml` and closes
+   * first on Escape — leaving the overlay underneath exactly as it was. K1, GH #78.
+   */
+  shortcutsOpen: boolean;
   /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
   theme: ThemePref;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
@@ -233,6 +248,7 @@ export const state: AppState = {
   dirs: [],
   expandedDirs: new Set<string>(),
   selectedDir: "",
+  treeFocus: null,
   treeCreate: null,
   treeRename: null,
   moveTarget: null,
@@ -259,6 +275,7 @@ export const state: AppState = {
   linkTarget: null,
   linkRelation: "references",
   settingsOpen: false,
+  shortcutsOpen: false,
   theme: "system",
   models: [],
   embedStats: [],

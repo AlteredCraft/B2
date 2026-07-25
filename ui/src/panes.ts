@@ -196,8 +196,16 @@ export function initPanes(root: HTMLElement): void {
     });
 
     // Keyboard: a separator that only responds to a mouse is a separator half the
-    // people here can't move.
+    // people here can't move. Enter is the double-click above — the reset the drag
+    // gesture's own escape hatch offers, owed a key like every other click (K1).
     gutter.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        desired[pane] = BOUNDS[pane].default;
+        apply();
+        save(desired);
+        return;
+      }
       const step = e.shiftKey ? 48 : 16;
       let delta = 0;
       if (e.key === "ArrowLeft") delta = pane === "tree" ? -step : step;
