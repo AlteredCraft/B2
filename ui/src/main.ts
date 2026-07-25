@@ -24,7 +24,7 @@ import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
-import { reprojectThenList } from "./reconcile";
+import { anomalyNotice, type IndexAnomalies, reprojectThenList } from "./reconcile";
 import {
   contextMenuHtml,
   embedBannerHtml,
@@ -1423,6 +1423,10 @@ async function doReindex(): Promise<void> {
           .map((s) => `${s.path} (${s.reason})`)
           .join(", ")}`
       : "";
+    // The GH #81 anomaly notices (duplicate b2ids, identity restamps) — appended to
+    // every reindex flash below, exactly like `skipped`: surfaced, never auto-fixed.
+    const anomaly = anomalyNotice(p);
+    const anomalies = anomaly ? ` ⚠ ${anomaly}` : "";
     // The tree paints HERE — a projection can add, remove, or rename notes, and the
     // vault is browsable + keyword-searchable while embedding runs.
     await loadNotes();
@@ -1435,7 +1439,7 @@ async function doReindex(): Promise<void> {
       // host would clear the flag and run to completion). The projected index is
       // complete and consistent; vectors fill on the next run.
       flash(
-        `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}`,
+        `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}${anomalies}`,
       );
       return;
     }
@@ -1458,8 +1462,8 @@ async function doReindex(): Promise<void> {
     await refreshEmbedStatus(startedRoot);
     flash(
       r.cancelled
-        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}`
-        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.${skipped}`,
+        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}${anomalies}`
+        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.${skipped}${anomalies}`,
     );
     if (state.current) {
       // Projection may have stamped the open note on disk; re-read it, and refresh
@@ -2244,6 +2248,13 @@ async function reconcileExternalChange(): Promise<void> {
     reindexing: state.reindexing,
     project: api.project,
     list: loadNotes,
+    // The GH #81 anomaly notices, on the very pulse the anomaly landed (a Finder
+    // duplicate collides HERE, not on the next manual reindex). Clean passes stay
+    // silent — pulses are frequent, and `anomalyNotice` is null on a clean report.
+    onReport: (report) => {
+      const msg = anomalyNotice(report as IndexAnomalies);
+      if (msg) flash(`⚠ ${msg}`);
+    },
   });
 
   // The open note. Two cases are deliberately left alone:

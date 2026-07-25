@@ -78,6 +78,9 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::AddTargetExists(p)) => format!(
             "A note already exists at '{p}'. Choose a different name, or open that note."
         ),
+        CmdError::Core(b2_core::Error::B2idCollision { path, holder, .. }) => format!(
+            "'{path}' carries the same b2id as '{holder}' — two files can't share an identity. Remove the `b2id:` line from the copy to give it a fresh one, then reindex."
+        ),
         CmdError::Core(b2_core::Error::AddDestination(_)) => {
             "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
                 .to_string()

@@ -64,6 +64,19 @@ pub enum Error {
     #[error("invalid new-note path: {0}")]
     AddDestination(String),
 
+    /// A single-note ingest presented a `b2id` the index attributes to a
+    /// *different* file that still exists on disk and still claims it (GH #81).
+    /// Projecting would silently transfer the identity — and every inbound edge —
+    /// to this file, so the ingest refuses instead; the whole-vault projection
+    /// pass resolves the same state incumbent-wins and *surfaces* it
+    /// (`ProjectOutcome::collisions`) rather than erroring.
+    #[error("note '{path}' claims b2id {b2id}, already held by '{holder}'")]
+    B2idCollision {
+        b2id: String,
+        path: String,
+        holder: String,
+    },
+
     /// `b2 add` would overwrite an existing file — refused (the vault never clobbers,
     /// data-model.md §1). The path is echoed for the user-facing message.
     #[error("note already exists: {0}")]

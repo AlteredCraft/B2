@@ -188,7 +188,12 @@ adapters wire the real model.
   independent of file order. It is **two separately-invokable passes**
   (the `project`/`embed` split, #15): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
-  falls back to BM25-only on a projected-but-unembedded vault.
+  falls back to BM25-only on a projected-but-unembedded vault. The projection pass also *surfaces*
+  vault anomalies instead of absorbing them (#81, index-engine.md §8): a cross-note `b2id`
+  collision (a Finder-duplicated note) resolves **incumbent-wins** — never walk-order — with the
+  shadowed copy un-indexed and reported on every pass until the human resolves it, and an identity
+  **restamp** (a `b2id:` line blanked/removed outside b2, re-stamped fresh) is reported old → new.
+  Surfacing only, no auto-fix (W4); `reindex --dry-run` previews all of it read-only.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (an exact in-process scan
   of `embeddings`) fused with Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL
   queries are sanitized into a safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would

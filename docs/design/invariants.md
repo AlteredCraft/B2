@@ -33,6 +33,14 @@ tomorrow's model* — made mechanical.
 - **S3 — `full-reindex ≡ incremental-update`.** Re-deriving one changed note converges on exactly the
   state a from-scratch rebuild would produce — including reconciling path ownership and pruning rows
   for deleted files on a whole-vault pass. ([index-engine.md](index-engine.md) §8)
+  *Carve-out (GH #81):* a **cross-note `b2id` collision** — two files presenting one id, e.g. a copy
+  made in Finder — is a vault state with **no well-defined projection**, and no vault-pure signal
+  distinguishes original from copy (a copy preserves every byte). While one stands, the contested id
+  resolves **incumbent-wins**: the file the index already attributed it to keeps it; a memory-less
+  rebuild tie-breaks first-in-sorted-walk, flagged as such — so an incremental pass and a
+  from-scratch rebuild may disagree *about the colliding rows only*. The collision is re-surfaced on
+  **every** pass until the human resolves it (per W4: surfaced, never auto-fixed); equivalence
+  resumes the moment they do. ([index-engine.md](index-engine.md) §8)
 - **S4 — No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
   index-only authored facts. Scope: *B2-derived* data — the human's own directory tree is vault
   material, for which the **filesystem is authoritative** (folders are never projected; the tree
