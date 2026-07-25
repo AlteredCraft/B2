@@ -152,6 +152,80 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
     assert!(notes
         .iter()
         .all(|n| n == "01JA0000000000000000000001" || n == "01JB0000000000000000000002"));
+
+    // …and `limit` genuinely truncates that reachable set. This is the complement of
+    // tests/vector_pool_scale.rs, which pins the other side — that a limit *above*
+    // what is reachable returns everything rather than a silently capped prefix.
+    assert!(hits.len() > 1, "the fixture must have room to truncate");
+    let capped = search::graph_filtered_search(
+        &conn,
+        &FakeEmbedder::new(64),
+        "shared topic",
+        "01JA0000000000000000000001",
+        1,
+        1,
+    )
+    .unwrap();
+    assert_eq!(capped.len(), 1, "the scan stops at the limit");
+}
+
+/// A result's `snippet` must **window around the matched term**, not just show the
+/// chunk's head. Under qmd chunking (#19) a chunk is section-sized — far longer than
+/// the snippet budget — so a term buried past the head would otherwise never appear
+/// in what the human reads, and every hit would look identical.
+#[test]
+fn a_long_chunks_snippet_windows_around_the_matched_term() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    // ~470 characters of lead-in, then the term — well past the snippet head.
+    let lead = "Filler prose that exists only to push the matched term out of the head. ".repeat(7);
+    fs::write(
+        root.join("long.md"),
+        format!(
+            "---\nb2id: 01JLONG000000000000000001\ntype: note\n---\n\
+             {lead}\nThe capybara paragraph is the one the query is looking for.\n"
+        ),
+    )
+    .unwrap();
+    let vault = b2_core::Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+
+    let hits = vault.search("capybara", 5).unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h.path == "long.md")
+        .expect("the keyword match must surface");
+    assert!(
+        hit.snippet.contains("capybara"),
+        "the matched term must be inside the window: {:?}",
+        hit.snippet
+    );
+    assert!(
+        hit.snippet.starts_with('…'),
+        "a windowed snippet opens with an ellipsis: {:?}",
+        hit.snippet
+    );
+    // Bounded: the 160-char budget plus at most a leading and trailing ellipsis.
+    assert!(hit.snippet.chars().count() <= 162, "{:?}", hit.snippet);
+
+    // A term already inside the head needs no window — the snippet is the head, so
+    // it opens with the text itself rather than an ellipsis.
+    let head_hit = vault
+        .search("Filler", 5)
+        .unwrap()
+        .into_iter()
+        .find(|h| h.path == "long.md")
+        .expect("the head term must surface too");
+    assert!(
+        head_hit.snippet.starts_with("Filler prose"),
+        "a match in the head keeps the head: {:?}",
+        head_hit.snippet
+    );
+    assert!(
+        head_hit.snippet.ends_with('…'),
+        "…still truncated to budget"
+    );
 }
 
 #[test]

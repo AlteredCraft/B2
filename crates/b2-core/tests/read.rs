@@ -7,7 +7,6 @@
 mod common;
 
 use b2_core::vault::Vault;
-use b2_core::Error;
 use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
 
 #[test]

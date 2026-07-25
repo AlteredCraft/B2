@@ -463,23 +463,47 @@ fn prepend_heading_path_seeds_the_embedded_text() {
     assert!(!body[hit.char_start..hit.char_end].starts_with(hp));
 }
 
+/// `weights` is a real lever, not decoration — the scorer reads the numbers from
+/// the config rather than hard-coding the qmd gradient.
+///
+/// Two halves: with the default gradient (H2 = 90 ≫ blank_line = 20) a cut near a
+/// section break snaps to the heading, so each section keeps its own breadcrumb;
+/// demote headings *below* every other boundary and the same body cuts somewhere
+/// else. Only `weights.heading` differs between the two runs, so the difference is
+/// attributable to it alone.
 #[test]
-fn weights_are_a_lever_a_giant_heading_weight_pulls_the_cut() {
-    // Sanity that the scorer is wired to the config: default weights split a two-
-    // section body at the heading boundary, so each section keeps its own path.
+fn heading_weight_is_a_lever_on_where_the_cut_lands() {
     let cfg = ChunkConfig {
         target_tokens: 10,
         overlap_frac: 0.0,
-        weights: BreakWeights::default(),
         ..ChunkConfig::default()
     };
     let body = "## Alpha\n\n\
                 Alpha section prose with a unique aardvark token inside of it here.\n\n\
                 ## Beta\n\n\
                 Beta section prose with a unique buffalo token inside of it here.\n";
+
     let chunks = chunk_body(body, &cfg);
     let a = chunks.iter().find(|c| c.text.contains("aardvark")).unwrap();
     let b = chunks.iter().find(|c| c.text.contains("buffalo")).unwrap();
     assert_eq!(a.heading_path.as_deref(), Some("Alpha"));
     assert_eq!(b.heading_path.as_deref(), Some("Beta"));
+    let default_cuts: Vec<usize> = chunks.iter().map(|c| c.char_start).collect();
+
+    let flattened = ChunkConfig {
+        weights: BreakWeights {
+            heading: [0; 6],
+            ..BreakWeights::default()
+        },
+        ..cfg.clone()
+    };
+    let flat_cuts: Vec<usize> = chunk_body(body, &flattened)
+        .iter()
+        .map(|c| c.char_start)
+        .collect();
+    assert_ne!(
+        default_cuts, flat_cuts,
+        "zeroing the heading weights must move the cuts — else `weights` is inert \
+         and the qmd gradient is hard-coded ({default_cuts:?} vs {flat_cuts:?})"
+    );
 }

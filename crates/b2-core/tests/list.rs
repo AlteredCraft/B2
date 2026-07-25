@@ -5,8 +5,7 @@
 
 mod common;
 
-use b2_core::vault::Vault;
-use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
+use common::{reindexed_vault, MEMORY_ID, SRS_ID};
 
 #[test]
 fn list_notes_returns_every_note_ordered_by_path() {

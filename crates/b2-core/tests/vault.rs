@@ -95,28 +95,17 @@ fn unknown_ref_is_note_not_found_on_every_resolving_op() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    let ops: [(&str, Box<dyn Fn() -> Error>); 4] = [
-        (
-            "read",
-            Box::new(|| vault.read("does/not/exist").unwrap_err()),
-        ),
-        (
-            "neighbors",
-            Box::new(|| vault.neighbors("does/not/exist").unwrap_err()),
-        ),
-        (
-            "explain",
-            Box::new(|| vault.explain("does/not/exist").unwrap_err()),
-        ),
-        (
-            "similar",
-            Box::new(|| vault.similar("does/not/exist", 5).unwrap_err()),
-        ),
+    const MISSING: &str = "does/not/exist";
+    let refusals = [
+        ("read", vault.read(MISSING).err()),
+        ("neighbors", vault.neighbors(MISSING).err()),
+        ("explain", vault.explain(MISSING).err()),
+        ("similar", vault.similar(MISSING, 5).err()),
     ];
-    for (op, call) in ops {
+    for (op, err) in refusals {
         assert!(
-            matches!(call(), Error::NoteNotFound(r) if r == "does/not/exist"),
-            "{op} must refuse an unknown ref as NoteNotFound"
+            matches!(err, Some(Error::NoteNotFound(ref r)) if r == MISSING),
+            "{op} must refuse an unknown ref as NoteNotFound, got {err:?}"
         );
     }
 }

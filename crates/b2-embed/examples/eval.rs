@@ -165,6 +165,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let dim = embedder.dim();
     eprintln!("[eval] model = {model_id} (dim {dim})\n");
 
+    // A correctness gate, not a score: every number below is computed from batched
+    // embeddings, so they only mean anything if batching is faithful.
+    check_batch_matches_single(&embedder)?;
+
     // Build a throwaway vault from the corpus.
     let tmp = tempfile::TempDir::new()?;
     let vault_root = tmp.path().join("vault");
@@ -350,6 +354,55 @@ fn score_similar(vault: &Vault, set: &SimilarSet) -> Result<Agg, Box<dyn std::er
         agg.add(rank);
     }
     Ok(agg)
+}
+
+/// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding
+/// short rows to the batch's longest and masking them out has to leave each row's
+/// CLS vector unchanged. The reindex path batches freely, so a regression here
+/// would silently corrupt every stored vector — and every score this eval prints.
+///
+/// This lives in the eval rather than in `cargo test` because it needs the
+/// provisioned model, which the fast suite deliberately never touches (root
+/// `CLAUDE.md`, "Keep `cargo test` fast, deterministic, and model-free"). Running
+/// it here means it actually runs, on every `just eval`, instead of sitting behind
+/// an `#[ignore]` nobody passes `--ignored` to.
+fn check_batch_matches_single(model: &LocalEmbedder) -> Result<(), Box<dyn std::error::Error>> {
+    // Deliberately varied lengths, so batching pads the short rows to the longest.
+    let texts = [
+        "Spaced repetition schedules reviews at increasing intervals.",
+        "Sleep consolidates memory.",
+        "Short.",
+        "Focus and sustained attention shape what is later recalled from long-term memory across days.",
+    ];
+    let refs: Vec<&str> = texts.to_vec();
+    let batched = model.embed_batch(&refs)?;
+    if batched.len() != texts.len() {
+        return Err(format!(
+            "embed_batch returned {} rows for {} texts",
+            batched.len(),
+            texts.len()
+        )
+        .into());
+    }
+    let mut worst = f32::INFINITY;
+    for (text, batched_row) in texts.iter().zip(&batched) {
+        let single = model.embed(text)?;
+        if batched_row.len() != single.len() {
+            return Err(format!("batched/single dim mismatch for {text:?}").into());
+        }
+        // Both rows are L2-normalized, so the dot product is cosine similarity;
+        // padding must not move it off ~1.0.
+        let cos: f32 = batched_row.iter().zip(&single).map(|(a, b)| a * b).sum();
+        worst = worst.min(cos);
+        if cos <= 0.9999 {
+            return Err(format!(
+                "batched embedding differs from single for {text:?}: cosine {cos}"
+            )
+            .into());
+        }
+    }
+    eprintln!("[eval] batch ≡ single: worst-row cosine {worst:.6}\n");
+    Ok(())
 }
 
 /// Run the embed pass, timing it and counting the chunks it filled.

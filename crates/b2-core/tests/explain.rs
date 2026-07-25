@@ -5,7 +5,6 @@
 
 mod common;
 
-use b2_core::Error;
 use common::{reindexed_vault, MEMORY_ID, SRS_ID};
 use std::fs;
 
