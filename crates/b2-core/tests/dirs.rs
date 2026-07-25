@@ -6,25 +6,14 @@
 
 mod common;
 
-use b2_core::vault::Vault;
 use b2_core::Error;
-use common::golden_vault_copy;
+use common::opened_vault;
 use std::fs;
-use std::path::{Path, PathBuf};
-
-/// A golden vault copied under a temp dir (no reindex — structure reads are
-/// index-free); returns (vault, vault_root).
-fn opened(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    (vault, root)
-}
 
 #[test]
 fn list_dirs_returns_every_folder_sorted_including_empty_ones() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = opened(tmp.path());
+    let (vault, root) = opened_vault(tmp.path());
 
     // An empty folder (with an empty nested child) made outside B2 — Finder, mkdir.
     fs::create_dir_all(root.join("projects/2026")).unwrap();
@@ -45,7 +34,7 @@ fn list_dirs_returns_every_folder_sorted_including_empty_ones() {
 #[test]
 fn list_dirs_is_index_free_and_skips_dot_folders() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = opened(tmp.path());
+    let (vault, root) = opened_vault(tmp.path());
 
     // Never reindexed — `.b2/` exists (Vault::open creates it) and `.obsidian/`
     // simulates a sibling tool; both are dot-folders, never vault structure.
@@ -58,7 +47,7 @@ fn list_dirs_is_index_free_and_skips_dot_folders() {
 #[test]
 fn create_dir_makes_a_real_folder_on_disk_that_lists() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = opened(tmp.path());
+    let (vault, root) = opened_vault(tmp.path());
 
     let report = vault.create_dir("projects").unwrap();
     assert_eq!(report.dir, "projects");
@@ -69,7 +58,7 @@ fn create_dir_makes_a_real_folder_on_disk_that_lists() {
 #[test]
 fn create_dir_creates_missing_parents_and_tolerates_a_trailing_slash() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = opened(tmp.path());
+    let (vault, root) = opened_vault(tmp.path());
 
     // The UI's inline input allows nesting ("projects/2026"), like `mkdir -p`.
     let report = vault.create_dir("projects/2026/q3/").unwrap();
@@ -80,7 +69,7 @@ fn create_dir_creates_missing_parents_and_tolerates_a_trailing_slash() {
 #[test]
 fn create_dir_refuses_an_existing_folder_or_file() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = opened(tmp.path());
+    let (vault, _root) = opened_vault(tmp.path());
 
     // An existing folder: refused, not silently a no-op — the user asked to
     // *create* something, and it's already there.
@@ -98,7 +87,7 @@ fn create_dir_refuses_an_existing_folder_or_file() {
 #[test]
 fn create_dir_rejects_invalid_and_hidden_paths() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = opened(tmp.path());
+    let (vault, root) = opened_vault(tmp.path());
 
     for bad in ["", "  ", "/abs", "../up", "a/../../b", ".b2", "a/.git/b"] {
         assert!(

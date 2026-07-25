@@ -3,6 +3,12 @@
 **/*.rs.bk
 Cargo.lock.orig
 
+# cargo-llvm-cov artifacts (`just coverage*`). Both live under /target above, but the
+# raw profiles are named here because a stale set silently skews the next report —
+# `cargo llvm-cov clean` is the fix, never committing them.
+/target/llvm-cov/
+/target/llvm-cov-target/
+
 # B2's disposable index — a pure projection of the Markdown, never authoritative.
 # Drop it and `b2 reindex` rebuilds it identical, so it must never be committed.
 .b2/

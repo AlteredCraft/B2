@@ -13,14 +13,8 @@ use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault_with_progress;
 use b2_core::open;
 use b2_core::vault::Vault;
-use common::golden_vault_copy;
-use rusqlite::Connection;
+use common::{count, golden_vault_copy};
 use std::ops::ControlFlow;
-
-fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
-        .unwrap()
-}
 
 #[test]
 fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {

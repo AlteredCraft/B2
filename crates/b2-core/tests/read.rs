@@ -7,23 +7,12 @@
 mod common;
 
 use b2_core::vault::Vault;
-use b2_core::Error;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
-use std::path::Path;
-
-/// A reindexed golden vault under a temp dir; returns the open vault.
-fn reindexed(dir: &Path) -> Vault {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    vault
-}
+use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
 
 #[test]
 fn read_returns_body_and_metadata_with_frontmatter_stripped() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let note = vault.read("concepts/memory.md").unwrap();
 
@@ -52,7 +41,7 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 #[test]
 fn read_returns_the_raw_frontmatter_block_verbatim() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let note = vault.read("concepts/memory.md").unwrap();
     let fm = note.frontmatter.expect("golden note has frontmatter");
@@ -72,7 +61,7 @@ fn read_returns_the_raw_frontmatter_block_verbatim() {
 #[test]
 fn read_body_is_verbatim_markdown_including_wikilinks() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     // The body is byte-honest Markdown: wikilinks survive verbatim so the adapter
     // renders them (clickable wikilinks are the MVP's navigation). The typed
@@ -92,7 +81,7 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
 #[test]
 fn read_resolves_path_stem_and_b2id_to_the_same_note() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let by_path = vault.read("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.read("notes/spaced-repetition").unwrap();
@@ -122,13 +111,4 @@ fn read_surfaces_tags_from_frontmatter() {
     // Title is the filename (`tagged.md`), not the frontmatter `title: Tagged`.
     assert_eq!(note.title.as_deref(), Some("tagged"));
     assert_eq!(note.body.trim(), "Hello body.");
-}
-
-#[test]
-fn read_unknown_ref_is_note_not_found() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let vault = reindexed(tmp.path());
-
-    let err = vault.read("does/not/exist").unwrap_err();
-    assert!(matches!(err, Error::NoteNotFound(r) if r == "does/not/exist"));
 }

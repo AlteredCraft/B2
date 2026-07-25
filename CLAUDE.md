@@ -46,11 +46,20 @@ cargo test                              # whole workspace (compiles candle in b2
 cargo test -p b2-core --test discover   # one integration-test file (targets in tests/*.rs)
 cargo test -p b2-core one_note_reindex  # filter by test-name substring
 
+# Coverage (cargo-llvm-cov; `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`)
+just coverage                           # engine line/region coverage — mirrors `just test`, no ML deps
+just coverage-html                      # the same as a browsable per-line report under target/llvm-cov/
+just coverage-all                       # + the CLI adapter (its tests spawn the instrumented `b2`
+                                        # binary, so those runs count); heavier cold — b2-cli pulls candle
+just coverage-lcov                      # lcov.info for editor gutters / a CI upload
+
 # Real embedder (out of CI; needs the model provisioned first)
 cargo run -p b2-cli -- init             # download + verify bge-base-en-v1.5 into the XDG cache
 cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (never in `cargo test`):
                                         # BM25-vs-hybrid lift, passage ranks, `similar`; appends each
-                                        # run to crates/b2-embed/evals/results.jsonl (gitignored)
+                                        # run to crates/b2-embed/evals/results.jsonl (gitignored). Also
+                                        # gates batch ≡ single embedding (a correctness check that needs
+                                        # the real model, so it lives here rather than behind #[ignore])
 cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
 # Metal GPU embedder — research lever (GH #40, macOS-only). The `metal` cargo feature moves the
@@ -69,8 +78,11 @@ just ui-install                         # one-time: install the frontend's npm d
 B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
 B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structured JSONL log ($PWD: cwd is crates/b2-desktop)
 just check-app                          # clippy for b2-desktop (builds ui/dist first)
-(cd ui && npm test)                     # the frontend's pure-logic suite (pane sizing); no deps —
-                                        # node strips the TS types and runs off the source
+(cd ui && npm test)                     # the frontend's pure-logic suite — node's own test runner over
+                                        # src/*.test.ts (globbed, so a new file is never silently
+                                        # skipped), stripping the TS types and running off the source.
+                                        # Needs `just ui-install` first: most cases are dependency-free,
+                                        # but paste.test.ts exercises the real turndown conversion
 
 cargo fmt
 cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)
@@ -259,7 +271,19 @@ invalidation exists or is needed.
   implementation detail (a retired dependency's constant, a since-changed fixture assumption) rather than
   a real invariant — re-anchor it on the invariant, or fix the system. When the resolution isn't obvious,
   **open a conversation with the user** to work through it; do not reach for `#[ignore]`, a slow/brittle
-  fixture, or a weakened assertion to move on. 
+  fixture, or a weakened assertion to move on. **A check that genuinely needs the real model belongs in the
+  eval harness, not in `cargo test` wearing an `#[ignore]`** — `--example eval` runs on demand and actually
+  runs, which is the whole point (the batch ≡ single embedding check is the worked example).
+- **Shared test scaffolding lives in `crates/b2-core/tests/common/mod.rs`.** Fixture setup
+  (`reindexed_vault` / `opened_vault` / `ingest_golden`) and the read-back shims (`index_conn`, `count`)
+  are there; a helper wanted by more than one file goes there rather than being copied. What only one file
+  needs — a purpose-built vault, a bespoke row snapshot — stays in that file. The one deliberate exception
+  is the tracing `Capture` writer duplicated by `tests/logging.rs` and `tests/discover_query_count.rs`:
+  hoisting it would make every test binary link `tracing-subscriber` to serve two, and those two already
+  need their own binaries (tracing's global callsite-interest cache races across parallel test threads).
+- **A test's name is part of its contract.** If the name claims more than the body asserts, the suite reads
+  as covering ground it doesn't — the same silent gap as `#[ignore]`. `just coverage` is how you find the
+  other half of that problem: a line the suite never executes.
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
   CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
   This matches the repo-wide logging policy in the parent `CLAUDE.md`.

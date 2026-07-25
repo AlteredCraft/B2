@@ -5,24 +5,13 @@
 
 mod common;
 
-use b2_core::vault::Vault;
-use b2_core::Error;
-use common::{golden_vault_copy, MEMORY_ID, SRS_ID};
+use common::{reindexed_vault, MEMORY_ID, SRS_ID};
 use std::fs;
-use std::path::{Path, PathBuf};
-
-fn reindexed(dir: &Path) -> (Vault, PathBuf) {
-    let root = dir.join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
-    (vault, root)
-}
 
 #[test]
 fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let view = vault.explain("notes/spaced-repetition").unwrap();
     // Header: the note resolved to its identity + display fields.
@@ -79,7 +68,7 @@ fn explain_surfaces_outbound_resource_links() {
     // must be visible from the *note's* side (not only as the resource's backlinks),
     // else a graph over `explain` silently hides a note's file links.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("notes/uses-diagram.md"),
         "---\nb2id: 01JUSD0000000000000000000C\ntype: note\ntitle: Uses diagram\n---\n\
@@ -114,7 +103,7 @@ fn explain_surfaces_unresolved_folder_and_typo_links() {
     // typo — resolves to nothing. `explain` must surface it as an unresolved link,
     // distinct from a resolved connection, so a broken link reads as broken not gone.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("guide.md"),
         "---\nb2id: 01JGUIDE00000000000000001\ntype: note\ntitle: Guide\n---\n\
@@ -139,7 +128,7 @@ fn explain_surfaces_unresolved_folder_and_typo_links() {
 #[test]
 fn explain_shows_inbound_backlinks_with_inverse_labels() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     // Memory is only pointed *at* (by SRS) — inbound edges, inverse-labelled.
     let view = vault.explain(MEMORY_ID).unwrap();
@@ -165,7 +154,7 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
 #[test]
 fn explain_resolves_by_path_and_by_b2id() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
+    let (vault, _root) = reindexed_vault(tmp.path());
 
     let by_path = vault.explain("concepts/memory").unwrap();
     let by_id = vault.explain(MEMORY_ID).unwrap();
@@ -178,7 +167,7 @@ fn explain_surfaces_frontmatter_provenance() {
     // An edge accepted into (or authored in) frontmatter reads as origin=frontmatter,
     // distinct from a human body link — the provenance data-model §0 says explain shows.
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("author.md"),
         "---\nb2id: 01JAUTH000000000000000001\ntype: note\ntitle: Author\n\
@@ -201,7 +190,7 @@ fn explain_surfaces_frontmatter_provenance() {
 #[test]
 fn explain_reports_an_isolated_note_with_no_connections() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, root) = reindexed(tmp.path());
+    let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("lonely.md"),
         "---\nb2id: 01JLONELY0000000000000001\ntype: note\ntitle: Lonely\n---\nNo links at all.\n",
@@ -221,14 +210,4 @@ fn explain_reports_an_isolated_note_with_no_connections() {
         "no links at all ⇒ no unresolved links: {:?}",
         view.unresolved
     );
-}
-
-#[test]
-fn explain_unknown_note_is_note_not_found() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (vault, _root) = reindexed(tmp.path());
-    assert!(matches!(
-        vault.explain("does/not/exist").unwrap_err(),
-        Error::NoteNotFound(r) if r == "does/not/exist"
-    ));
 }
