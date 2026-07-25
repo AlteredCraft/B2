@@ -137,11 +137,16 @@ Every new surface owes all four. They are cheap while you're building it and exp
 
 ### Two things that bite
 
-- **A repaint destroys focus.** `innerHTML` swaps are how this UI renders, so anything holding focus
-  is gone after one — and the keyboard user is silently ejected to `<body>` by an unrelated toast or
-  watcher pulse. Restore by *identity that outlives the swap*, never by element: `paintTree` re-focuses
-  the tree's row **by path**, and `captureReturnFocus` returns a thunk (path → id → element) rather
-  than an element reference.
+- **A repaint destroys focus — and it has already happened by the time you look.** `innerHTML` swaps
+  are how this UI renders, so anything holding focus is gone after one, and the keyboard user is
+  silently ejected to `<body>` by an unrelated toast or watcher pulse. Two consequences, and the
+  second is the one that bites: (a) restore by *identity that outlives the swap*, never by element —
+  `paintTree` re-focuses the tree's row **by path**, and `captureReturnFocus` returns a thunk
+  (path → id → element); (b) you cannot read `document.activeElement` at the end of `render()` to
+  learn what triggered an overlay, because `render()` swapped `#modal-root`/`#menu-root` on the way
+  there and the answer is already `<body>`. Hence `lastFocused`, tracked continuously from `focusin`
+  — destroying a focused node fires no `focusin`, so the last value is still the trigger. Any control
+  that has to be *returned to* therefore needs a stable `id` (`#settings-shortcuts` is one).
 - **WebKit doesn't focus a button on click.** So a `focusin` listener alone won't see a mouse user's
   selection, and the keyboard's idea of "where I am" would drift from the mouse's. The tree's click
   delegation sets `state.treeFocus` explicitly for this reason.

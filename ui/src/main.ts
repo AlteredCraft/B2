@@ -544,9 +544,24 @@ function focusSidePane(): void {
 
 type OverlayKind = "shortcuts" | "settings" | "move" | "delete" | "link" | "menu" | null;
 
-/** Which overlay is up, in the same precedence `modalHtml` renders them. */
+/**
+ * Which overlay is up, in the same precedence `modalHtml` renders them — the guard
+ * every global chord asks before acting.
+ *
+ * Focus, though, treats this as **two layers**, because the `?` sheet is the one
+ * overlay that *stacks*: it renders over Settings (a button there is one of its two
+ * entry points) while Settings stays open underneath, so closing it must return to
+ * that button. Every other overlay is exclusive — a menu that hands off to Move… is
+ * *replaced*, not covered, so the modal returns to whatever opened the menu, never to
+ * a menu item that no longer exists. `baseOverlay` is this minus the sheet.
+ */
 function currentOverlay(): OverlayKind {
   if (state.shortcutsOpen) return "shortcuts";
+  return baseOverlay();
+}
+
+/** The exclusive overlay layer: at most one of these is ever up. */
+function baseOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
   if (state.moveTarget) return "move";
   if (state.deleteTarget) return "delete";
@@ -569,18 +584,32 @@ function overlayFocusables(): HTMLElement[] {
 }
 
 /**
+ * The last element that actually received focus.
+ *
+ * Tracked continuously rather than read on demand, because by the time an overlay's
+ * open edge is handled — at the end of `render()` — the DOM that held focus is already
+ * gone: `render()` swaps `#modal-root`/`#menu-root` wholesale, so `document.activeElement`
+ * has fallen back to `<body>` and the trigger is unrecoverable. `focusin` fires long
+ * before that, and *destroying* a focused node fires no `focusin` (only blur), so this
+ * still names the trigger at the moment we come to remember it. Set in `wireEvents`.
+ */
+let lastFocused: HTMLElement | SVGElement | null = null;
+
+/**
  * A thunk that puts focus back where it was before an overlay opened. A *thunk*, not
  * the element, because the element usually doesn't survive: opening a menu repaints
- * the tree, which swaps the row that triggered it. Restore by identity that outlives a
- * repaint — a tree row by its path (falling back to the roving row when the path is
- * gone, e.g. it was just deleted), anything else by its element id, and only then by
- * the element itself.
+ * the tree, which swaps the row that triggered it, and opening the `?` sheet swaps the
+ * Settings button that opened it. Restore by identity that outlives a repaint — a tree
+ * row by its path (falling back to the roving row when the path is gone, e.g. it was
+ * just deleted), anything else by its element id, and only then by the element itself.
  */
 function captureReturnFocus(): (() => void) | null {
-  const active = document.activeElement;
-  if (!(active instanceof HTMLElement) && !(active instanceof SVGElement)) return null;
-  if (active === document.body) return null;
-  const row = active.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
+  const active = lastFocused;
+  if (active === null || active === document.body) return null;
+  // Unscoped on purpose: `active` is usually *detached* by now, so an ancestor-matching
+  // selector (`#tree-pane .tree-row`) would find nothing. `data-tree-row` is emitted by
+  // the tree and nowhere else, so it identifies a row on its own.
+  const row = active.closest<HTMLElement>(".tree-row[data-tree-row]");
   if (row) {
     const path = row.dataset.treeRow ?? null;
     return () => (treeRowEl(path) ?? rovingRowEl())?.focus();
@@ -594,31 +623,62 @@ function captureReturnFocus(): (() => void) | null {
   };
 }
 
-let overlayShowing: OverlayKind = null;
-let overlayReturn: (() => void) | null = null;
+// One return target per layer (see `currentOverlay`). The base layer's is captured
+// when the *chain* starts, so menu → Move… → close lands back on the tree row; the
+// sheet's is captured every time it opens, since what it covers is still on screen.
+let baseShowing: OverlayKind = null;
+let baseReturn: (() => void) | null = null;
+let sheetShowing = false;
+let sheetReturn: (() => void) | null = null;
 
-/** Called at the end of every `render()`: acts only on the open/close edge. */
-function syncOverlayFocus(): void {
-  const now = currentOverlay();
-  if (now === overlayShowing) return;
-  // The *first* overlay of a chain remembers where the keyboard was; a menu that hands
-  // off to a modal (Move… / Delete) keeps that original target, so closing the modal
-  // returns to the tree row, not to a menu item that no longer exists.
-  if (overlayShowing === null) overlayReturn = captureReturnFocus();
-  overlayShowing = now;
-  if (now === null) {
-    const back = overlayReturn;
-    overlayReturn = null;
-    // …unless an inline tree input just took the keyboard: Rename and New note are
-    // reached *through* the menu, so the menu closing must not yank focus back out
-    // of the input it just opened.
-    if (state.treeCreate || state.treeRename) return;
-    back?.();
-    return;
-  }
+/** Move focus into the overlay that just opened. */
+function focusIntoOverlay(kind: OverlayKind): void {
   // The link modal opens on its explanation field — the one thing you came here to type.
-  const preferred = now === "link" ? document.getElementById("link-explanation") : null;
+  const preferred = kind === "link" ? document.getElementById("link-explanation") : null;
   (preferred ?? overlayFocusables()[0])?.focus();
+}
+
+/**
+ * Called at the end of every `render()`: acts only on open/close *edges*, never on a
+ * plain repaint — otherwise a toast timer would yank focus back to an overlay's first
+ * control while the user is mid-Tab.
+ */
+function syncOverlayFocus(): void {
+  const base = baseOverlay();
+  const sheet = state.shortcutsOpen;
+
+  if (base !== baseShowing) {
+    if (baseShowing === null) baseReturn = captureReturnFocus();
+    baseShowing = base;
+    if (base === null) {
+      const back = baseReturn;
+      baseReturn = null;
+      // Don't restore if the sheet is covering us (it owns focus and will restore on
+      // its own close), and not when an inline tree input just took the keyboard:
+      // Rename and New note are reached *through* the menu, so the menu closing must
+      // not yank focus back out of the input it just opened.
+      if (!sheet && !state.treeCreate && !state.treeRename) back?.();
+    } else if (!sheet) {
+      focusIntoOverlay(base);
+    }
+  }
+
+  // The sheet last, so it wins focus whenever it's up — it is the topmost layer.
+  if (sheet !== sheetShowing) {
+    sheetShowing = sheet;
+    if (sheet) {
+      sheetReturn = captureReturnFocus();
+      focusIntoOverlay("shortcuts");
+    } else {
+      const back = sheetReturn;
+      sheetReturn = null;
+      // No captured target means the sheet was opened by mouse (WebKit doesn't focus a
+      // button on click, so there was nothing focused to remember). Don't strand focus
+      // on <body> when the sheet was covering something — hand it to what's underneath.
+      if (back) back();
+      else if (base !== null) focusIntoOverlay(base);
+    }
+  }
 }
 
 // Paint just the Back/Forward buttons' enabled state — never a pane rebuild. Disabled
@@ -2720,6 +2780,17 @@ function buildShell(): void {
 }
 
 function wireEvents(): void {
+  // Remember where the keyboard is, continuously (K1). `syncOverlayFocus` needs the
+  // element that *triggered* an overlay, and by the time it runs that element has been
+  // swapped out of the DOM — see `lastFocused`. Capture-phase isn't needed (`focusin`
+  // bubbles); `<body>` is skipped so a destroyed control doesn't read as a real target.
+  document.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if ((t instanceof HTMLElement || t instanceof SVGElement) && t !== document.body) {
+      lastFocused = t;
+    }
+  });
+
   // Typing in the frontmatter mini-editor clears its inline error — the message
   // belonged to the save attempt that failed. Delegated (like the clicks below)
   // because the textarea renders dynamically.
@@ -3191,9 +3262,12 @@ function wireEvents(): void {
     // modal — focus vanishes under the backdrop and the overlay becomes dismissible
     // only with the mouse. Wrapping keeps every control in it reachable, forever.
     if (e.key === "Tab" && currentOverlay() !== null) {
+      // Swallowed unconditionally — an overlay that somehow renders with no focusable
+      // control must still not let Tab walk the page behind it, which is the exact
+      // failure this block exists to prevent.
+      e.preventDefault();
       const items = overlayFocusables();
       if (items.length > 0) {
-        e.preventDefault();
         const i = items.indexOf(document.activeElement as HTMLElement);
         const step = e.shiftKey ? -1 : 1;
         const next =
@@ -3293,9 +3367,11 @@ function wireEvents(): void {
       return;
     }
     // ? — the keyboard reference. Bare `?` (⇧/ on a US layout), so it can't collide
-    // with typing: any text surface is excluded, editing included.
+    // with typing: any text surface is excluded, editing included. A context menu owns
+    // the keyboard like any other overlay (Escape first); the sheet is allowed over a
+    // *modal* because Settings is one of its two entry points.
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      if (state.editing || inTextEntry()) return;
+      if (state.editing || inTextEntry() || state.contextMenu) return;
       e.preventDefault();
       if (state.shortcutsOpen) closeShortcuts();
       else openShortcuts();

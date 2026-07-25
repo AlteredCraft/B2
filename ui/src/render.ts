@@ -97,9 +97,14 @@ export function renderMarkdown(md: string): string {
 /** The inline name input for a pending create (new note / new folder), rendered at
  *  the top of its target folder's children. The typed value lives only in the DOM —
  *  main.ts commits on Enter/blur, cancels on Escape, and carries it across an
- *  unrelated tree repaint. */
+ *  unrelated tree repaint.
+ *
+ *  `role="none"` because this row sits inside the `role="tree"` container but is *not*
+ *  a `treeitem` — it's a text field. Without it the tree owns a child of no known
+ *  role, and it does so exactly while a screen-reader user is naming a note. The role
+ *  is not inherited by the focusable input inside, which keeps its own `aria-label`. */
 function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
-  return `<div class="tree-row tree-create" style="${pad}">
+  return `<div class="tree-row tree-create" role="none" style="${pad}">
       <span class="tree-caret">${kind === "folder" ? "▶" : ""}</span>
       <input id="tree-create-input" class="tree-create-input" type="text"
         placeholder="${kind === "note" ? "New note…" : "New folder…"}"
@@ -111,9 +116,10 @@ function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
 /** The inline rename input, rendered in place of the row being renamed — the
  *  rename sibling of `treeCreateRowHtml` (same commit/cancel wiring in main.ts,
  *  same value-carrying across repaints in paintTree). `glyph` keeps the row's
- *  own marker so the input reads as "this row, editable". */
+ *  own marker so the input reads as "this row, editable". `role="none"` for the same
+ *  reason as the create row above: a text field is not a `treeitem`. */
 function treeRenameRowHtml(prefill: string, glyph: string, pad: string): string {
-  return `<div class="tree-row tree-create" style="${pad}">
+  return `<div class="tree-row tree-create" role="none" style="${pad}">
       <span class="tree-caret">${glyph}</span>
       <input id="tree-rename-input" class="tree-create-input" type="text"
         value="${escapeHtml(prefill)}"
@@ -1000,6 +1006,11 @@ function embedStatsHtml(state: AppState): string {
 // holds the embedding model picker + the per-model embedding-time ledger; built to hold
 // more settings later. Mutually exclusive with the link modal in practice, so it takes
 // precedence in `modalHtml`.
+//
+// `#settings-shortcuts` (the link out to the `?` sheet) carries a *load-bearing* id:
+// the sheet renders over this modal, and closing it restores focus to that button —
+// which main.ts's `captureReturnFocus` can only re-find across the modal-root repaint
+// by id, since the element it was focused on is long gone by then.
 function settingsModalHtml(state: AppState): string {
   const models = state.models;
   const current = models.find((m) => m.current) ?? models[0];
@@ -1076,7 +1087,8 @@ function settingsModalHtml(state: AppState): string {
             : ""
         }
         <div class="modal-actions">
-          <button class="btn ghost" data-shortcuts-open title="Every chord B2 answers to — ?">Keyboard shortcuts</button>
+          <button class="btn ghost" id="settings-shortcuts" data-shortcuts-open
+                  title="Every chord B2 answers to — ?">Keyboard shortcuts</button>
           <button class="btn primary" data-settings-close>Done</button>
         </div>
       </div>
