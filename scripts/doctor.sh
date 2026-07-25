@@ -57,9 +57,21 @@ else
 fi
 
 # --- just itself (informational — you're running this via `just doctor` most likely) --------
+# Version floor is 1.27, where `[group(…)]` and `[doc(…)]` recipe attributes landed. The whole
+# justfile uses them (GH #87), so an older `just` fails to *parse* it — meaning `just doctor`
+# can't reach this check and only a direct `scripts/doctor.sh` run will see it. Worth naming
+# anyway: the parse error points at an attribute, not at the version that would accept it.
 section "just"
 if command -v just >/dev/null 2>&1; then
-  pass "just found ($(just --version))"
+  JUST_VERSION="$(just --version 2>/dev/null | awk '{print $2}')"
+  JUST_MAJOR="${JUST_VERSION%%.*}"
+  JUST_MINOR="${JUST_VERSION#*.}"; JUST_MINOR="${JUST_MINOR%%.*}"
+  if [[ "$JUST_MAJOR" =~ ^[0-9]+$ && "$JUST_MINOR" =~ ^[0-9]+$ ]] \
+     && (( JUST_MAJOR < 1 || (JUST_MAJOR == 1 && JUST_MINOR < 27) )); then
+    fail "just $JUST_VERSION is too old — the justfile uses [group]/[doc] recipe attributes (just 1.27+); upgrade with: brew upgrade just (or: cargo install just --force)"
+  else
+    pass "just found ($(just --version))"
+  fi
 else
   warn "just not found — install with: brew install just (or: cargo install just). cargo/cargo run still work without it."
 fi

@@ -9,6 +9,8 @@ status: draft
 
 # B2 — "second brain"
 
+[![CI](https://github.com/AlteredCraft/B2/actions/workflows/ci.yml/badge.svg)](https://github.com/AlteredCraft/B2/actions/workflows/ci.yml)
+
 A personal, **local-first** knowledge vault — plain Markdown you fully own — with an AI layer that
 **surfaces the semantically similar notes you haven't linked yet**, so you can commit the typed,
 explained connections between them yourself.
@@ -105,14 +107,19 @@ For engine iteration where you don't want to reinstall each time, `cargo run -p 
 ```bash
 just doctor     # sanity-check your local setup — run this first on a fresh clone
 just install    # build + install `b2` onto your PATH (~/.cargo/bin)
-just test       # fast, deterministic, model-free engine suite (what CI runs)
-just test-all   # every test in the repo — the frontend suite plus the whole cargo workspace
-just check      # fmt-check + clippy (-D warnings) + engine & frontend tests — the pre-commit
-                # gate: ~3s, and nothing enforces it, so run it yourself before committing
+just test       # fast, deterministic, model-free engine suite
+just check      # THE FAST GATE (~3s): fmt-check + clippy (-D warnings) + engine & frontend
+                # tests — the loop you run while working
+just ci         # THE COMPLETE GATE (~18s): the above over the whole workspace, plus the
+                # desktop crate, every test in the repo, and an `npm audit` of ui/.
+                # GitHub Actions runs this exact recipe, so green here is green there.
 just init       # download + verify the embedding model into the shared cache
-just eval       # semantic-retrieval quality eval (real model)
-just            # list every recipe
+just eval       # semantic-retrieval quality eval (real model; never part of CI)
+just            # list every recipe, grouped: setup / dev / gates / coverage / model
 ```
+
+There is no git hook and none is wanted (`.git/hooks` isn't cloneable) — CI is the enforcement,
+and `just ci` is how you get the same answer before you push.
 
 ### The desktop app (`crates/b2-desktop` + `ui/`)
 

@@ -37,9 +37,10 @@ cargo build
 cargo run -p b2-cli -- --help          # run the CLI in place (binary is named `b2`)
 cargo install --path crates/b2-cli --locked --force   # install `b2` onto PATH (~/.cargo/bin)
 
-# `just` (optional) wraps these: `just install`, `just test`, `just check`, `just eval`, …
+# `just` wraps these; `just` (no args) lists every recipe, grouped: setup / dev / gates /
+# coverage / model. The two gates are `just check` (fast) and `just ci` (complete) — see below.
 
-# Fast test suite — deterministic, model-free, what CI runs
+# Fast test suite — deterministic, model-free; the bulk of what CI runs
 cargo test -p b2-core                   # the engine suite (fake embedder; no ML deps)
 cargo test                              # whole workspace (compiles candle in b2-embed, and b2-desktop
                                         # embeds ui/dist — run `just ui-build` once first)
@@ -50,10 +51,7 @@ cargo test -p b2-core one_note_reindex  # filter by test-name substring
 # Prefer these over the raw commands when you want the prerequisites handled for you:
 just test                               # = cargo test -p b2-core (the fast engine suite above)
 just test-ui                            # = the ui/ suite (installs npm deps first)
-just test-all                           # BOTH: ui build + ui suite, then the whole cargo workspace.
-                                        # The frontend half runs first (fails in seconds, not after
-                                        # candle compiles), and ui-build satisfies b2-desktop's
-                                        # ui/dist embed — so this works from a cold clone.
+                                        # Both suites together, plus fmt/lint/audit, is `just ci`.
 
 # Coverage (needs `cargo install cargo-llvm-cov` — or `brew install cargo-llvm-cov` — plus
 # `rustup component add llvm-tools-preview`; BOTH, and the component is per-toolchain. Without
@@ -63,6 +61,8 @@ just coverage                           # engine line/region coverage — mirror
 just coverage-html                      # the same as a browsable per-line report under target/llvm-cov/
 just coverage-all                       # + the CLI adapter (its tests spawn the instrumented `b2`
                                         # binary, so those runs count); heavier cold — b2-cli pulls candle
+just coverage-app                       # the desktop host's own unit tests (builds ui/dist first);
+                                        # a low number by design — b2-desktop is a dumb adapter
 just coverage-lcov                      # lcov.info for editor gutters / a CI upload
 
 # Real embedder (out of CI; needs the model provisioned first)
@@ -106,13 +106,50 @@ just test-ui                            # the frontend's pure-logic suite — no
 cargo fmt
 cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)
 
-just check                              # THE PRE-COMMIT GATE (~3s warm): fmt-check, then clippy with
-                                        # `-D warnings`, then the engine suite, then the ui/ suite.
-                                        # Clippy exits 0 on warnings, so `-D warnings` is what makes
-                                        # the lint stage gate anything at all — leave it on. Nothing
-                                        # enforces the gate: there is no git hook and none is wanted
-                                        # (.git/hooks isn't cloneable), so run it before committing.
+# THE TWO GATES. Same commands, same order, whether you run them or GitHub does.
+just check                              # FAST (~3s warm): fmt-check, then clippy with `-D warnings`,
+                                        # then the engine suite, then the ui/ suite. The loop you run
+                                        # while working — no network, no desktop build.
+just ci                                 # COMPLETE (~18s warm): ui-build, then fmt-check, clippy over
+                                        # the WHOLE workspace (no `--exclude b2-desktop` — ui-build
+                                        # already satisfied its ui/dist embed), the whole cargo suite,
+                                        # the ui/ suite, and `audit` last. This is verbatim what
+                                        # .github/workflows/ci.yml runs; run it before pushing.
+just audit                              # npm audit --audit-level=high over ui/ (needs the network).
+                                        # Its own recipe, and deliberately NOT a prerequisite of
+                                        # ui-install (which is upstream of `just app` — a fresh
+                                        # advisory must not stop the app launching) nor of `check`.
 ```
+
+### Gates, CI, and the justfile (GH #87)
+
+**`.github/workflows/ci.yml` runs `just ci` and nothing else.** Every check lives in the recipe;
+the workflow supplies only the environment (the `rust-toolchain.toml` toolchain, Node + `npm ci`,
+`just`, and `Swatinem/rust-cache`). That split is the point — a check re-specified in YAML is a
+check that can drift from the one you run locally. It runs on **macos-latest**: B2 ships on macOS
+only, and the Xcode CLT that `b2-desktop`'s WebView links against are preinstalled, so the whole
+workspace builds with no platform setup step. CI is model-free by construction — `b2-core` never
+links candle, and `b2-cli`'s tests spawn the binary under `B2_EMBEDDER=fake`. One extra CI-only
+step follows the gate: **`git diff --exit-code`**, asserting no stage edited a tracked file. That
+turns two standing conventions into enforcement — the lockfile can't drift out from under
+`package.json`, and the engine suite can't mutate `fixtures/golden-vault/` (the tests copy it to a
+tempdir first precisely so `b2id` stamping never touches the repo copy).
+
+**Advisory-but-exit-0 output is a hole in any gate.** A tool that reports a problem and exits `0`
+passes green: clippy does it with warnings (hence `-D warnings` on every lint stage), and
+`npm install` does it with vulnerabilities — which is how a high-severity `postcss` advisory
+(GHSA-r28c-9q8g-f849) rode along under `vite` until it was spotted by hand. When you wire a new
+tool into a recipe, check its exit code on a *failing* input, not just its output. `ui/package.json`
+carries an `allowScripts` field for the same reason at the other end: npm 12 blocks
+`esbuild`/`fsevents` postinstall scripts and warns about it on every `npm install`, so the denial
+is recorded explicitly (the build works without them) rather than left as five lines of recurring
+noise that trains you to skim npm output.
+
+**Authoring recipes:** every recipe carries `[group('…')]` + `[doc("…")]`. `just` otherwise renders
+a recipe's *last comment line* as its `--list` summary, so multi-line rationale surfaces as a
+nonsense fragment. The doc attribute states the summary explicitly, which frees the comment block
+above a recipe to be as long as the reasoning needs — and the group is what makes `just` (no args)
+readable at ~27 recipes.
 
 Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
 Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`rm`/`link`) require
