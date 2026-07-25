@@ -155,6 +155,25 @@ else
   warn "default model not found at the default cache path — this only checks the default location (a custom cache_dir in config.toml won't show up here); run: just init (idempotent — a no-op if already installed). Not needed if you run with B2_EMBEDDER=fake."
 fi
 
+# --- Optional: coverage tooling (`just coverage*`) ------------------------------------------
+# Same reason this script exists at all: `just coverage` fails with cargo's bare
+# "error: no such command: `llvm-cov`", which names neither of the two things that are
+# actually missing. Both are needed — the subcommand *and* the rustup component it drives
+# (the component is per-toolchain, so it can be absent even when the binary is installed).
+section "Coverage tooling (optional — needed by \`just coverage\`)"
+if cargo llvm-cov --version >/dev/null 2>&1; then
+  pass "cargo-llvm-cov found ($(cargo llvm-cov --version 2>/dev/null))"
+else
+  warn "cargo-llvm-cov not found — run: cargo install cargo-llvm-cov (or: brew install cargo-llvm-cov). Only needed for \`just coverage\`."
+fi
+if command -v rustup >/dev/null 2>&1; then
+  if rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'; then
+    pass "llvm-tools-preview component installed"
+  else
+    warn "rustup component llvm-tools-preview missing — run: rustup component add llvm-tools-preview. Only needed for \`just coverage\`."
+  fi
+fi
+
 # --- Informational: B2_VAULT_PATH --------------------------------------------------------
 # Not required either way: `just app` opens the in-app vault switcher when unset. This is
 # purely FYI, so it never counts as a warning.

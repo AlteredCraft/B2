@@ -106,7 +106,9 @@ For engine iteration where you don't want to reinstall each time, `cargo run -p 
 just doctor     # sanity-check your local setup — run this first on a fresh clone
 just install    # build + install `b2` onto your PATH (~/.cargo/bin)
 just test       # fast, deterministic, model-free engine suite (what CI runs)
-just check      # fmt-check + clippy + tests — the pre-commit gate
+just test-all   # every test in the repo — the frontend suite plus the whole cargo workspace
+just check      # fmt-check + clippy (-D warnings) + engine & frontend tests — the pre-commit
+                # gate: ~3s, and nothing enforces it, so run it yourself before committing
 just init       # download + verify the embedding model into the shared cache
 just eval       # semantic-retrieval quality eval (real model)
 just            # list every recipe
@@ -124,10 +126,10 @@ macOS), and tells you exactly what's missing and how to fix it (this is what cat
 
 ```bash
 just doctor           # confirm Node, npm, and the Tauri CLI are all in place
-just ui-install       # one-time: install the frontend's npm deps
 just app              # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
 just app-cpu          # …same, but force the CPU embedder
 just app-build        # bundle a per-platform app
+just ui-install       # (rarely needed by hand — every recipe above depends on it)
 ```
 
 On first launch (nothing remembered yet) the window opens with no vault selected — click the

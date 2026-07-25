@@ -58,6 +58,19 @@ fn slow_query_threshold() -> Duration {
     })
 }
 
+/// Whether a finished statement is worth the string work in [`on_sqlite_profile`]:
+/// true only when something would actually receive the event — a **slow** statement
+/// with WARN enabled, or **any** statement with DEBUG enabled.
+///
+/// Split out of the callback because it is the one part with branches worth pinning.
+/// It reads as pure optimization, but the `slow && warn` term is load-bearing: drop it
+/// (the tempting "just check DEBUG" simplification) and slow-query WARNs disappear for
+/// anyone running a WARN-only subscriber — silently, since a suppressed log has no
+/// other symptom. The unit test below is the truth table.
+fn should_emit(slow: bool, warn_enabled: bool, debug_enabled: bool) -> bool {
+    (slow && warn_enabled) || debug_enabled
+}
+
 /// SQLite's own per-statement profiler, surfaced as structured `tracing` events:
 /// `sqlite3_trace_v2(SQLITE_TRACE_PROFILE)` fires this when a statement finishes,
 /// with the statement and its execution time measured by SQLite itself. Each event
@@ -83,9 +96,11 @@ fn on_sqlite_profile(event: TraceEvent<'_>) {
     };
     let slow = elapsed >= slow_query_threshold();
     // Skip the string work when nobody is listening at the level this would emit at.
-    if !(slow && tracing::enabled!(target: "b2::sqlite", tracing::Level::WARN))
-        && !tracing::enabled!(target: "b2::sqlite", tracing::Level::DEBUG)
-    {
+    if !should_emit(
+        slow,
+        tracing::enabled!(target: "b2::sqlite", tracing::Level::WARN),
+        tracing::enabled!(target: "b2::sqlite", tracing::Level::DEBUG),
+    ) {
         return;
     }
     // Collapse the multi-line SQL literals used in this file to one line, so each
@@ -1177,4 +1192,39 @@ pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &st
         )
         .optional()?;
     Ok(found.is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_emit;
+
+    /// The full truth table for the profiler's emit guard (all 8 combinations).
+    /// Both listening paths have to survive independently: a slow statement logs at
+    /// WARN, so it must emit with DEBUG **off**, and DEBUG on emits regardless of speed.
+    #[test]
+    fn emits_only_when_some_level_would_receive_the_event() {
+        // Something is listening at the level this event would use.
+        assert!(
+            should_emit(true, true, false),
+            "slow + WARN on: the slow-query log, and the case a naive simplification drops"
+        );
+        assert!(should_emit(true, true, true));
+        assert!(
+            should_emit(true, false, true),
+            "DEBUG on catches it even with WARN off"
+        );
+        assert!(should_emit(false, true, true));
+        assert!(
+            should_emit(false, false, true),
+            "DEBUG on: every statement logs"
+        );
+
+        // Nothing would receive it — skip the string work.
+        assert!(
+            !should_emit(false, true, false),
+            "fast statement, only WARN on: nothing to say"
+        );
+        assert!(!should_emit(true, false, false), "slow, but no WARN sink");
+        assert!(!should_emit(false, false, false), "nobody listening at all");
+    }
 }

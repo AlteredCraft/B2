@@ -30,20 +30,38 @@ build:
 test:
     cargo test -p b2-core
 
-# Whole-workspace tests (compiles candle in b2-embed — slower)
-test-all:
+# Defined here so the npm half of the repo is reachable from `just` like the cargo half;
+# `test-all` is what runs both.
+# The frontend's pure-logic suite (node's own test runner over ui/src/*.test.ts).
+test-ui: ui-install
+    npm --prefix ui test
+
+# The two prerequisites are what make this runnable from a cold clone — ui-build because the
+# workspace includes b2-desktop, which embeds ui/dist at compile time, and test-ui because the
+# frontend's tests are otherwise invisible to cargo. The frontend half runs first so a typo
+# there fails in seconds rather than after the ML build.
+# Every test in the repo — frontend suite + whole cargo workspace (compiles candle; slow).
+test-all: ui-build test-ui
     cargo test
 
 # Auto-format the workspace
 fmt:
     cargo fmt
 
-# Format-check + lint + fast tests — the pre-commit gate. Excludes b2-desktop from
-# clippy: linting it embeds ui/dist (needs a frontend build), so it's a separate,
-# heavier job (`just check-app`), out of the fast gate — like b2-embed's candle build.
-check:
+# Excludes b2-desktop from clippy: linting it embeds ui/dist (needs a frontend build), so
+# it's a separate, heavier job (`just check-app`), out of the fast gate — like b2-embed's
+# candle build. `-D warnings` is what makes the lint stage a gate at all: clippy exits 0 on
+# warnings, so without it the stage caught only lints severe enough to be errors, and
+# everything clippy actually exists to say slid through green.
+# test-ui is a `&&` (subsequent) dependency so it runs *after* the body rather than before:
+# the cargo stages are the cheaper failures (0.1s fmt, 0.2s clippy) and the bulk of the code,
+# so they should be what a broken commit trips on first.
+# Nothing enforces this: there is no git hook, and none is wanted (.git/hooks isn't cloneable),
+# so it's a command you run yourself before committing.
+# Format-check + lint (-D warnings) + engine and frontend tests — the pre-commit gate (~3s).
+check: && test-ui
     cargo fmt --check
-    cargo clippy --workspace --exclude b2-desktop
+    cargo clippy --workspace --exclude b2-desktop -- -D warnings
     cargo test -p b2-core
 
 # --- Coverage (cargo-llvm-cov; `cargo install cargo-llvm-cov` + `rustup component add
@@ -119,16 +137,20 @@ compare-device vault="fixtures/test-vault":
 # One-time frontend prerequisites: `npm i -D @tauri-apps/cli` is *not* needed if the
 # Tauri CLI is installed via cargo: `cargo install tauri-cli --locked`.
 
-# Install the frontend's npm dependencies (run once, or after package.json changes).
+# Every recipe that needs node_modules depends on this, so you rarely run it by hand. A no-op
+# `npm install` costs ~0.3s against an already satisfied lockfile — nothing next to the Tauri
+# build it precedes — and that price buys the invariant that a pull adding a frontend dep
+# can't leave you at a Vite "failed to resolve import" with node_modules a commit behind.
+# Install the frontend's npm dependencies (a prerequisite of every recipe that needs them).
 ui-install:
     npm --prefix ui install
 
 # Vite dev server on :5173 (usually started automatically by `just app`).
-ui-dev:
+ui-dev: ui-install
     npm --prefix ui run dev
 
 # Type-check + build the frontend bundle into ui/dist (what the Tauri host embeds).
-ui-build:
+ui-build: ui-install
     npm --prefix ui run build
 
 # Embed on the Metal GPU by default on Apple Silicon (GH #40); CPU everywhere else. The `metal`
@@ -139,18 +161,22 @@ metal_feature := if os() == "macos" { if arch() == "aarch64" { "--features metal
 # Run the desktop app in dev (Vite HMR + a live Tauri window). Point it at a vault with
 # B2_VAULT_PATH, e.g. `B2_VAULT_PATH=~/notes just app`. Settings (⌘,) shows a CPU/Metal badge;
 # switching device re-embeds the vault (a `@metal` model swap).
+# Depends on ui-install because Tauri's beforeDevCommand shells out to `npm run dev` itself,
+# outside `just` — so the deps have to be there before cargo hands off.
 # Auto-selects Metal on Apple Silicon; `just app-cpu` forces CPU.
-app:
+app: ui-install
     cd crates/b2-desktop && cargo tauri dev {{metal_feature}}
 
 # Force the CPU embedder regardless of platform — the A/B counterpart to the default `just app`.
-app-cpu:
+app-cpu: ui-install
     cd crates/b2-desktop && cargo tauri dev
 
 # Bundle the desktop app (per-platform); builds the frontend first (beforeBuildCommand).
-app-build:
+app-build: ui-install
     cd crates/b2-desktop && cargo tauri build
 
+# `-D warnings` for the same reason `check` carries it: clippy exits 0 on warnings, so
+# without it this stage passes green on everything clippy actually exists to say.
 # Lint + type-check the desktop crate (needs ui/dist, so build the frontend first).
 check-app: ui-build
-    cargo clippy -p b2-desktop
+    cargo clippy -p b2-desktop -- -D warnings

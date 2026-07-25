@@ -46,7 +46,19 @@ cargo test                              # whole workspace (compiles candle in b2
 cargo test -p b2-core --test discover   # one integration-test file (targets in tests/*.rs)
 cargo test -p b2-core one_note_reindex  # filter by test-name substring
 
-# Coverage (cargo-llvm-cov; `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`)
+# The repo has two suites — cargo's and the frontend's — and `just` is where both are named.
+# Prefer these over the raw commands when you want the prerequisites handled for you:
+just test                               # = cargo test -p b2-core (the fast engine suite above)
+just test-ui                            # = the ui/ suite (installs npm deps first)
+just test-all                           # BOTH: ui build + ui suite, then the whole cargo workspace.
+                                        # The frontend half runs first (fails in seconds, not after
+                                        # candle compiles), and ui-build satisfies b2-desktop's
+                                        # ui/dist embed — so this works from a cold clone.
+
+# Coverage (needs `cargo install cargo-llvm-cov` — or `brew install cargo-llvm-cov` — plus
+# `rustup component add llvm-tools-preview`; BOTH, and the component is per-toolchain. Without
+# them the recipes die on cargo's bare "no such command: `llvm-cov`", which names neither —
+# `just doctor` checks for both and prints the fix.)
 just coverage                           # engine line/region coverage — mirrors `just test`, no ML deps
 just coverage-html                      # the same as a browsable per-line report under target/llvm-cov/
 just coverage-all                       # + the CLI adapter (its tests spawn the instrumented `b2`
@@ -74,18 +86,32 @@ just app               # desktop app — auto-selects Metal on Apple Silicon (`j
 just compare-device    # CPU-vs-Metal embed A/B on fixtures/test-vault → chunks/s + speedup
 
 # Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
-just ui-install                         # one-time: install the frontend's npm deps
+just ui-install                         # install the frontend's npm deps — rarely run by hand: every
+                                        # recipe that needs node_modules (app / app-cpu / app-build /
+                                        # ui-dev / ui-build, so check-app + coverage-app transitively)
+                                        # depends on it, so a pull that adds a frontend dep can't leave
+                                        # you at a Vite "failed to resolve import". A satisfied
+                                        # `npm install` is a ~0.3s no-op, hence no staleness guard.
 B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
 B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structured JSONL log ($PWD: cwd is crates/b2-desktop)
-just check-app                          # clippy for b2-desktop (builds ui/dist first)
-(cd ui && npm test)                     # the frontend's pure-logic suite — node's own test runner over
+just check-app                          # clippy -D warnings for b2-desktop (builds ui/dist first) —
+                                        # the desktop half of `just check`, split out because it's heavier
+just test-ui                            # the frontend's pure-logic suite — node's own test runner over
                                         # src/*.test.ts (globbed, so a new file is never silently
                                         # skipped), stripping the TS types and running off the source.
-                                        # Needs `just ui-install` first: most cases are dependency-free,
+                                        # (Raw: `cd ui && npm test`, which needs `just ui-install`
+                                        # first — the recipe handles that.) Most cases are dependency-free,
                                         # but paste.test.ts exercises the real turndown conversion
 
 cargo fmt
 cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)
+
+just check                              # THE PRE-COMMIT GATE (~3s warm): fmt-check, then clippy with
+                                        # `-D warnings`, then the engine suite, then the ui/ suite.
+                                        # Clippy exits 0 on warnings, so `-D warnings` is what makes
+                                        # the lint stage gate anything at all — leave it on. Nothing
+                                        # enforces the gate: there is no git hook and none is wanted
+                                        # (.git/hooks isn't cloneable), so run it before committing.
 ```
 
 Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
