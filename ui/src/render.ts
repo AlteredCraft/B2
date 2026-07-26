@@ -23,6 +23,13 @@ import {
   visibleRows,
   type TreeDir,
 } from "./treenav";
+import {
+  cardKey,
+  cardRowKey,
+  rovingSideKey,
+  sectionRowKey,
+  sideRows,
+} from "./sidenav";
 import type { NoteView, ResourceExplainView } from "./types";
 import {
   buildScene,
@@ -459,8 +466,27 @@ export function notePaneHtml(state: AppState): string {
     </div>`;
 }
 
+/**
+ * The right column: search results, or the open note's discovery.
+ *
+ * Its rows follow the file tree's ARIA `tree` pattern (K1, GH #78) — `role="treeitem"`,
+ * `aria-level`, and a **roving `tabindex`**, so the pane is one Tab stop and ↑↓→← move
+ * within it. Like the tree, the DOM is flat: rows are siblings and `aria-level` is what
+ * tells a screen reader that a card sits under its section head, so the `.cards`
+ * wrappers are `role="none"` rather than groups. The row keys come from sidenav.ts,
+ * which both this paint and the arrow keys derive from the same state — the one place
+ * their order can't drift apart.
+ */
 export function sidePaneHtml(state: AppState): string {
-  return state.searchQuery ? searchSectionHtml(state) : discoverySectionHtml(state);
+  const roving = rovingSideKey(sideRows(state), state.sideFocus);
+  return state.searchQuery
+    ? searchSectionHtml(state, roving)
+    : discoverySectionHtml(state, roving);
+}
+
+/** A row's slot in the roving tabstop: exactly one row is tabbable, the rest are -1. */
+function sideTab(key: string, roving: string | null): string {
+  return ` tabindex="${key === roving ? "0" : "-1"}"`;
 }
 
 // The honest search-ranking caveat (#26). Search always answers over the keyword (BM25)
@@ -519,7 +545,7 @@ export function embedBannerHtml(state: AppState): string {
     </div>`;
 }
 
-function searchSectionHtml(state: AppState): string {
+function searchSectionHtml(state: AppState, roving: string | null): string {
   const head = `<div class="side-head">
       <h2>Results</h2>
       <button class="linklike" data-clear-search>clear</button>
@@ -528,24 +554,34 @@ function searchSectionHtml(state: AppState): string {
   if (state.loading) return head + `<p class="side-empty">Searching…</p>`;
   if (state.searchResults.length === 0)
     return head + `<p class="side-empty">No matches.</p>`;
+  // A result card is the whole button, so it *is* the row — no fold, one level.
   const items = state.searchResults
-    .map(
-      (r) => `<button class="card" data-open="${escapeHtml(r.path)}">
+    .map((r, i) => {
+      const key = cardRowKey("search", i, r.path);
+      return `<button class="card" role="treeitem" aria-level="1"${sideTab(
+        key,
+        roving,
+      )} data-side-row="${escapeHtml(key)}" data-open="${escapeHtml(r.path)}">
         <div class="card-title">${escapeHtml(r.title ?? r.path)}</div>
         <div class="card-path">${escapeHtml(r.path)} · ${r.score.toFixed(3)}</div>
         ${r.snippet ? `<div class="card-snip">${escapeHtml(r.snippet)}</div>` : ""}
-      </button>`,
-    )
+      </button>`;
+    })
     .join("");
-  return head + `<div class="cards">${items}</div>`;
+  return (
+    head + `<div class="cards" role="tree" aria-label="Search results">${items}</div>`
+  );
 }
 
-function discoverySectionHtml(state: AppState): string {
+function discoverySectionHtml(state: AppState, roving: string | null): string {
   if (!state.current) {
     return `<div class="side-head"><h2>Discovery</h2></div>
       <p class="side-empty">Open a note to see similar notes and its connections.</p>`;
   }
-  return similarSectionHtml(state) + connectionsSectionHtml(state);
+  return `<div class="side-nav" role="tree" aria-label="Discovery">${similarSectionHtml(
+    state,
+    roving,
+  )}${connectionsSectionHtml(state, roving)}</div>`;
 }
 
 // A collapsible discovery-section header (chevron + title + count) — the same fold
@@ -557,38 +593,45 @@ function sideFoldHead(
   label: string,
   count: number,
   collapsed: boolean,
+  roving: string | null,
 ): string {
-  return `<button class="side-head side-fold" data-fold-section="${section}" aria-expanded="${!collapsed}">
+  const key = sectionRowKey(section);
+  return `<button class="side-head side-fold" role="treeitem" aria-level="1"${sideTab(
+    key,
+    roving,
+  )} data-side-row="${escapeHtml(
+    key,
+  )}" data-fold-section="${section}" aria-expanded="${!collapsed}">
       <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
       <span class="side-title">${label}</span>
       ${count ? `<span class="side-count">${count}</span>` : ""}
     </button>`;
 }
 
-/** A card's per-note fold key — unique across the two sections a path can appear in. */
-function cardKey(section: SideSection, path: string): string {
-  return `${section}:${path}`;
-}
-
 // The card's own fold chevron. Cards default expanded (the snippet is the signal you
 // link on); this collapses the body (path + snippet) to just the title row. Kept out of
 // the `.card-open` button so a click on the chevron folds without opening the note
 // (nested buttons aren't allowed — the chevron and the open-region are siblings).
+//
+// A **mouse** affordance only, hence `tabindex="-1"` + `aria-hidden`: the row it sits on
+// is the treeitem, it carries the `aria-expanded` a screen reader reads, and →← is the
+// keyboard's fold (K1) — exactly as the file tree's caret is a span, not a tab stop.
 function cardFold(key: string, collapsed: boolean): string {
-  return `<button class="card-fold" data-fold-card="${escapeHtml(
+  return `<button class="card-fold" tabindex="-1" aria-hidden="true" data-fold-card="${escapeHtml(
     key,
-  )}" aria-expanded="${!collapsed}" aria-label="Toggle details">
+  )}">
       <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
     </button>`;
 }
 
-function similarSectionHtml(state: AppState): string {
+function similarSectionHtml(state: AppState, roving: string | null): string {
   const collapsed = state.collapsedSections.has("similar");
   const head = sideFoldHead(
     "similar",
     "Similar &amp; unlinked",
     state.similar.length,
     collapsed,
+    roving,
   );
   if (collapsed) return head;
   if (state.similar.length === 0) {
@@ -603,8 +646,9 @@ function similarSectionHtml(state: AppState): string {
     return head + `<p class="side-empty">${hint}</p>`;
   }
   const items = state.similar
-    .map((c) => {
+    .map((c, i) => {
       const key = cardKey("similar", c.path);
+      const rowKey = cardRowKey("similar", i, c.path);
       const folded = state.collapsedCards.has(key);
       const body = folded
         ? ""
@@ -613,13 +657,20 @@ function similarSectionHtml(state: AppState): string {
             ${c.evidence ? `<div class="card-snip">${escapeHtml(c.evidence)}</div>` : ""}
           </div>`;
       // `data-card-path`/`-title` on the root feed the right-click menu (Open / Link…);
-      // the whole card is the target now that the inline Link button is gone.
-      return `<div class="card foldable candidate${folded ? " is-collapsed" : ""}" data-card-path="${escapeHtml(
+      // the whole card is the target now that the inline Link button is gone. The card is
+      // also the keyboard's *row* (`data-side-row`), which is why the whole box — title,
+      // path, and snippet — is what a screen reader reads and what the ring wraps.
+      return `<div class="card foldable candidate${
+        folded ? " is-collapsed" : ""
+      }" role="treeitem" aria-level="2" aria-expanded="${!folded}"${sideTab(
+        rowKey,
+        roving,
+      )} data-side-row="${escapeHtml(rowKey)}" data-card-path="${escapeHtml(
         c.path,
       )}" data-card-title="${escapeHtml(c.title ?? "")}">
           <div class="card-head">
             ${cardFold(key, folded)}
-            <button class="card-open" data-open="${escapeHtml(c.path)}">
+            <button class="card-open" tabindex="-1" data-open="${escapeHtml(c.path)}">
               <span class="card-title">${escapeHtml(c.title ?? c.path)}</span>
               <span class="card-score">${c.score.toFixed(3)}</span>
             </button>
@@ -628,13 +679,13 @@ function similarSectionHtml(state: AppState): string {
         </div>`;
     })
     .join("");
-  return head + `<div class="cards">${items}</div>`;
+  return head + `<div class="cards" role="none">${items}</div>`;
 }
 
-function connectionsSectionHtml(state: AppState): string {
+function connectionsSectionHtml(state: AppState, roving: string | null): string {
   const count = state.connections.length + state.unresolved.length;
   const collapsed = state.collapsedSections.has("connections");
-  const head = sideFoldHead("connections", "Connections", count, collapsed);
+  const head = sideFoldHead("connections", "Connections", count, collapsed, roving);
   if (collapsed) return head;
   if (count === 0)
     return (
@@ -644,9 +695,10 @@ function connectionsSectionHtml(state: AppState): string {
       }</p>`
     );
   const items = state.connections
-    .map((c) => {
+    .map((c, i) => {
       const arrow = c.direction === "outbound" ? "→" : "←";
       const key = cardKey("connections", c.path);
+      const rowKey = cardRowKey("connections", i, c.path);
       const folded = state.collapsedCards.has(key);
       const why = c.explanation
         ? `<div class="card-snip">${escapeHtml(c.explanation)}</div>`
@@ -657,10 +709,15 @@ function connectionsSectionHtml(state: AppState): string {
             <div class="card-path">${escapeHtml(c.title ?? c.path)}</div>
             ${why}
           </div>`;
-      return `<div class="card edge foldable${folded ? " is-collapsed" : ""}">
+      return `<div class="card edge foldable${
+        folded ? " is-collapsed" : ""
+      }" role="treeitem" aria-level="2" aria-expanded="${!folded}"${sideTab(
+        rowKey,
+        roving,
+      )} data-side-row="${escapeHtml(rowKey)}">
           <div class="card-head">
             ${cardFold(key, folded)}
-            <button class="card-open" data-open="${escapeHtml(c.path)}">
+            <button class="card-open" tabindex="-1" data-open="${escapeHtml(c.path)}">
               <span class="card-title"><span class="edge-arrow">${arrow}</span> ${escapeHtml(
                 c.label,
               )} <span class="edge-origin">${escapeHtml(c.origin)}</span></span>
@@ -670,20 +727,32 @@ function connectionsSectionHtml(state: AppState): string {
         </div>`;
     })
     .join("");
-  return head + `<div class="cards">${items}${unresolvedCardsHtml(state)}</div>`;
+  return (
+    head + `<div class="cards" role="none">${items}${unresolvedCardsHtml(state, roving)}</div>`
+  );
 }
 
 // Dangling outbound links — a `[[folder]]` or a typo that resolves to no note or
 // file (GH #12). Not clickable (nothing to open), so a plain `div`, flagged with a
 // broken-link emblem so it reads as broken rather than silently missing. The target
 // is shown as written (`[[Hermes]]`), which is what the user can fix in the note.
-function unresolvedCardsHtml(state: AppState): string {
+//
+// A row all the same: nothing to open and nothing to fold, but a row you can *see* is a
+// row you must be able to reach (K1), so ↑↓ walk through these too rather than jumping
+// the last few cards in the section. ⏎ on one does nothing, which is the honest answer.
+function unresolvedCardsHtml(state: AppState, roving: string | null): string {
   return state.unresolved
-    .map((u) => {
+    .map((u, i) => {
+      const key = cardRowKey("unresolved", i, u.target);
       const why = u.explanation
         ? `<div class="card-snip">${escapeHtml(u.explanation)}</div>`
         : "";
-      return `<div class="card edge broken" title="This link points to nothing — no note or file named “${escapeHtml(
+      return `<div class="card edge broken" role="treeitem" aria-level="2"${sideTab(
+        key,
+        roving,
+      )} data-side-row="${escapeHtml(
+        key,
+      )}" title="This link points to nothing — no note or file named “${escapeHtml(
         u.target,
       )}”. A note is a single .md file, so a folder can’t be linked.">
           <div class="card-title"><span class="edge-broken" aria-label="Broken link">⚠</span> ${escapeHtml(
