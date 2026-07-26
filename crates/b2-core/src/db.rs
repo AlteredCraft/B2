@@ -134,25 +134,90 @@ pub fn open(path: &Path) -> Result<Connection> {
         TraceEventCodes::SQLITE_TRACE_PROFILE,
         Some(on_sqlite_profile),
     );
-    // execute_batch tolerates the rows PRAGMA journal_mode / mmap_size return.
+    // execute_batch tolerates the row PRAGMA mmap_size returns.
     // busy_timeout: WAL allows one writer at a time, and two short-statement
     // writers can now legitimately race (a save during the background embed).
     // A modest wait turns that contention into a few-ms
-    // stall instead of an immediate SQLITE_BUSY error.
+    // stall instead of an immediate SQLITE_BUSY error. (Set explicitly rather than
+    // leaned on: rusqlite happens to arm the same 5 s at `Connection::open`, but
+    // that is its default, not our contract.)
     // mmap_size + cache_size: the whole-space vector scans stream ~100+ MB of blob
     // rows per call on a real vault; under the 2 MB default cache with no mmap that
     // read path was pread/syscall-bound — the bulk of `b2 similar`'s ~4.4 s (#38).
     // mmap_size is a *cap*, not an allocation (the OS page cache does the work — the
     // one cache B2 is happy to lean on); cache_size is in KiB when negative (32 MiB).
     conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
+        "PRAGMA busy_timeout = 5000;
          PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;
          PRAGMA mmap_size = 1073741824;
          PRAGMA cache_size = -32768;",
     )?;
+    // Separate, and retried, because the busy timeout above does not cover it (#111).
+    enter_wal_mode(&conn)?;
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// How many times [`enter_wal_mode`] attempts the flip before surfacing the busy
+/// error, and the pause schedule between attempts: doubling from
+/// [`WAL_FLIP_BACKOFF_START`] up to [`WAL_FLIP_BACKOFF_MAX`], ≈4 s of total wait —
+/// the same order as the `busy_timeout` the rest of the connection gets, since it is
+/// standing in for it.
+const WAL_FLIP_ATTEMPTS: u32 = 16;
+const WAL_FLIP_BACKOFF_START: Duration = Duration::from_millis(2);
+const WAL_FLIP_BACKOFF_MAX: Duration = Duration::from_millis(500);
+
+/// Put the connection in WAL mode, waiting out a concurrent opener (#111).
+///
+/// `journal_mode = WAL` is the one statement in [`open`] that takes a write lock, and
+/// only when it actually *changes* the mode — so exactly once per vault, on the
+/// first-ever open, and never again. **`busy_timeout` does not cover it.** The flip
+/// upgrades an already-open read transaction, and SQLite only consults the busy
+/// handler for a write lock taken from no transaction at all (`btreeBeginTrans`'s
+/// retry loop is guarded on `inTransaction == TRANS_NONE`; the RESERVED lock inside
+/// `sqlite3PagerBegin` is documented as taken without the handler). A second opener
+/// therefore gets an immediate `SQLITE_BUSY` no matter how the pragmas are ordered —
+/// measured here at ~4% of racing opens with the timeout set first, and it is the
+/// documented cold-vault flow that pays: `b2 reindex &` then `b2 status`, where the
+/// reindex is usually the loser and silently doesn't happen.
+///
+/// So the retry is ours to do. It converges fast because it only has to outlast the
+/// *other* opener's flip: on the next attempt we either take the lock or find the
+/// database already in WAL, where the pragma is a no-op needing no lock at all.
+///
+/// The backoff sleeps, but reads no clock and decides nothing from one — the core's
+/// determinism guarantee (ids and timestamps passed in, never sampled) is untouched;
+/// this only changes how long a contended open waits, never what it computes.
+fn enter_wal_mode(conn: &Connection) -> Result<()> {
+    let mut backoff = WAL_FLIP_BACKOFF_START;
+    let mut attempt = 1;
+    loop {
+        match conn.execute_batch("PRAGMA journal_mode = WAL;") {
+            Ok(()) => return Ok(()),
+            // Out of budget, or not contention at all — surface it.
+            Err(e) if attempt >= WAL_FLIP_ATTEMPTS || !is_locked(&e) => return Err(e.into()),
+            Err(_) => {
+                tracing::debug!(
+                    target: "b2::sqlite",
+                    attempt, backoff_ms = backoff.as_millis() as u64,
+                    "journal_mode=WAL contended by a concurrent opener; retrying"
+                );
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(WAL_FLIP_BACKOFF_MAX);
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// Whether a SQLite error is lock contention — the retryable kind. `SQLITE_BUSY` is
+/// what the WAL flip loses with; `SQLITE_LOCKED` is its same-process sibling, matched
+/// too since the desktop host opens the index from more than one thread.
+fn is_locked(err: &rusqlite::Error) -> bool {
+    matches!(
+        err.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 /// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
