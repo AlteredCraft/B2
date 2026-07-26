@@ -103,6 +103,14 @@ export interface AppState {
    * than one per file — invariant K1, GH #78.
    */
   treeFocus: string | null;
+  /**
+   * The discovery row the keyboard is on (a `sidenav.ts` row key), or null before any
+   * arrow key has been pressed there — `treeFocus`'s counterpart for the right column.
+   * Drives that pane's roving `tabindex` (`rovingSideKey`), so the whole card list is one
+   * Tab stop rather than three per card, and it is what `paintSide` restores focus *by*:
+   * the element holding focus never survives the pane's `innerHTML` swap.
+   */
+  sideFocus: string | null;
   /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
   treeCreate: { kind: "note" | "folder"; dir: string } | null;
   /** An inline rename input open on a tree row, or null. */
@@ -249,6 +257,7 @@ export const state: AppState = {
   expandedDirs: new Set<string>(),
   selectedDir: "",
   treeFocus: null,
+  sideFocus: null,
   treeCreate: null,
   treeRename: null,
   moveTarget: null,

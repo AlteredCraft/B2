@@ -65,10 +65,22 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: "⌘⏎", action: "Save the frontmatter drawer (Esc discards)" },
     ],
   },
+  // Discovery gets its own group now that the right column navigates like the tree
+  // (sidenav.ts): ↑↓ there means something different from ↑↓ in an open menu, and one
+  // chord with two meanings in a single group is a group the reader can't trust.
   {
-    title: "Discovery, graph, and menus",
+    title: "Discovery (the right column)",
     items: [
+      { keys: "↑ / ↓", action: "Move between section heads and cards" },
+      { keys: "→ / ←", action: "Unfold / fold a section or a card's details" },
+      { keys: "Home / End", action: "First / last row" },
+      { keys: "⏎ / Space", action: "Open the card's note; fold a section head" },
       { keys: "⇧F10", action: "Open a card's menu — Open note, Link…" },
+    ],
+  },
+  {
+    title: "The graph and menus",
+    items: [
       { keys: "⏎ / Space", action: "Open a graph node; a ghost opens the link palette" },
       { keys: "↑ / ↓", action: "Move through an open menu" },
       { keys: "Esc", action: "Close a menu, a modal, the find bar, or the graph" },

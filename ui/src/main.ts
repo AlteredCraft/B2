@@ -43,6 +43,7 @@ import {
   visibleRows,
   type TreeRow,
 } from "./treenav";
+import { sideArrowMove, sideRowIndex, sideRows } from "./sidenav";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -116,6 +117,26 @@ function paintTree(): void {
   if (hadRowFocus && !state.treeCreate && !state.treeRename) rovingRowEl()?.focus();
 }
 
+// The side pane's memo, and the same focus contract the tree has — discovery is a keyboard
+// surface too now (sidenav.ts, K1): an `innerHTML` swap destroys the row holding focus, so
+// an unrelated repaint — a toast timer, a watcher pulse, the *other* discovery read landing
+// — would silently eject a keyboard user to `<body>` mid-list. Restored by row key, since
+// the element it was on no longer exists. Memoized for the reason the note pane is:
+// identical HTML skips the swap, so the pane's scroll position survives a repaint that
+// changes nothing about it.
+let lastSidePaneHtml: string | null = null;
+
+function paintSide(): void {
+  const html = sidePaneHtml(state);
+  if (html === lastSidePaneHtml) return;
+  const hadRowFocus = focusedSideRow() !== null;
+  el("side-pane").innerHTML = html;
+  lastSidePaneHtml = html;
+  // Opening a note from a card replaces discovery wholesale, so there may be no row to
+  // come back to: the pane itself then holds the keyboard rather than dropping it.
+  if (hadRowFocus) (rovingSideRowEl() ?? el("side-pane")).focus();
+}
+
 function render(): void {
   paintTree();
   // The carve-out (crates/b2-desktop/CLAUDE.md): while editing, the note pane belongs to
@@ -142,7 +163,7 @@ function render(): void {
     "is-graph",
     state.graphOpen && !state.editing && state.current !== null && state.currentResource === null,
   );
-  el("side-pane").innerHTML = sidePaneHtml(state);
+  paintSide();
   // The "semantic search is off — install the model" banner, under the top bar. Empty
   // string when the gate (embedreminder.ts) says not to prompt, so the strip collapses.
   el("embed-banner").innerHTML = embedBannerHtml(state);
@@ -508,6 +529,42 @@ function focusTreeRow(path: string): void {
   row?.scrollIntoView({ block: "nearest" });
 }
 
+// --- keyboard: the discovery pane's rows (sidenav.ts) --------------------------------
+//
+// The tree's helpers above, for the right column. Rows are keyed by `data-side-row` rather
+// than looked up by CSS selector for the same reason: a row key carries a note path, and a
+// path may contain anything a selector would choke on.
+
+/** The DOM row for a `sidenav.ts` row key. */
+function sideRowEl(key: string | null): HTMLElement | null {
+  if (key === null) return null;
+  const rows = el("side-pane").querySelectorAll<HTMLElement>("[data-side-row]");
+  for (const row of rows) if (row.dataset.sideRow === key) return row;
+  return null;
+}
+
+/** The row carrying the roving tabstop, as painted (sidenav.ts `rovingSideKey`). */
+function rovingSideRowEl(): HTMLElement | null {
+  return el("side-pane").querySelector<HTMLElement>('[data-side-row][tabindex="0"]');
+}
+
+/** The discovery row the keyboard is on right now, or null when focus is elsewhere. */
+function focusedSideRow(): HTMLElement | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  return active.closest<HTMLElement>("#side-pane [data-side-row]");
+}
+
+/** Move keyboard focus to a discovery row — state first (so the roving tabstop travels
+ *  with it), then the repaint, then the DOM. `focusTreeRow`'s counterpart. */
+function focusSideRow(key: string): void {
+  state.sideFocus = key;
+  paintSide();
+  const row = sideRowEl(key);
+  row?.focus();
+  row?.scrollIntoView({ block: "nearest" });
+}
+
 /** Put the keyboard in the file tree (⌘1) — on the row it last left off at. */
 function focusTreePane(): void {
   const row = rovingRowEl();
@@ -525,11 +582,13 @@ function focusNotePane(): void {
   el("note-pane").focus();
 }
 
-/** Put the keyboard in discovery (⌘3) — its first card, else the empty pane. */
+/** Put the keyboard in discovery (⌘3) — on the row it last left off at (the roving
+ *  tabstop, like ⌘1), else whatever chrome the pane has, else the empty pane itself. */
 function focusSidePane(): void {
   const pane = el("side-pane");
+  const row = rovingSideRowEl();
   const first = pane.querySelector<HTMLElement>("button:not([disabled])");
-  (first ?? pane).focus();
+  (row ?? first ?? pane).focus();
 }
 
 // --- keyboard: overlay focus (K1) ---------------------------------------------------
@@ -613,6 +672,13 @@ function captureReturnFocus(): (() => void) | null {
   if (row) {
     const path = row.dataset.treeRow ?? null;
     return () => (treeRowEl(path) ?? rovingRowEl())?.focus();
+  }
+  // A discovery row, by its key — the ⇧F10 → Link… path a keyboard user takes, where
+  // committing the link re-runs discovery and so detaches the row that opened the menu.
+  const side = active.closest<HTMLElement>("[data-side-row]");
+  if (side) {
+    const key = side.dataset.sideRow ?? null;
+    return () => (sideRowEl(key) ?? rovingSideRowEl())?.focus();
   }
   if (active.id) {
     const id = active.id;
@@ -2950,6 +3016,13 @@ function wireEvents(): void {
       return;
     }
 
+    // A click on a discovery row moves the keyboard's idea of "where I am" with it, exactly
+    // as the tree's rows do below — and for the same reason: WebKit doesn't focus a button
+    // on click, so the `focusin` path alone would never see a mouse user's choice. Ahead of
+    // the fold/open handlers, which return.
+    const sideRow = target.closest<HTMLElement>("#side-pane [data-side-row]");
+    if (sideRow) state.sideFocus = sideRow.dataset.sideRow ?? null;
+
     const foldSection = target.closest<HTMLElement>("[data-fold-section]");
     if (foldSection) {
       const s = foldSection.dataset.foldSection;
@@ -3163,6 +3236,55 @@ function wireEvents(): void {
         e.preventDefault();
         focusTreeRow(hit);
       }
+    }
+  });
+
+  // Discovery's own keyboard — the *same* ARIA `tree` pattern as the file tree (K1, GH #78),
+  // bound to the pane so it answers before the global chords. The moves are pure and tested
+  // (sidenav.ts `sideArrowMove`); this half is the DOM and the folding, plus one wrinkle the
+  // tree doesn't have: a card row is a `<div>` because it *contains* the open button (nested
+  // buttons are illegal), so ⏎/Space dispatch that button's own click rather than inventing a
+  // second activation path — the graph nodes' rule (crates/b2-desktop/CLAUDE.md). Section
+  // heads and search results *are* buttons, so there the platform's activation is left alone.
+  el("side-pane").addEventListener("keydown", (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>("[data-side-row]");
+    if (!row) return;
+    const key = row.dataset.sideRow ?? "";
+    const rows = sideRows(state);
+
+    const move = sideArrowMove(rows, sideRowIndex(rows, key), e.key);
+    if (move) {
+      e.preventDefault();
+      if (move.kind === "focus") {
+        focusSideRow(move.key);
+        return;
+      }
+      // Folding keeps the focus where it is; the fold is the whole gesture. Note the
+      // inverted sets: state tracks what's *collapsed*, so expanding is a delete.
+      const open = move.kind === "expand";
+      if (move.fold.kind === "section") {
+        if (open) state.collapsedSections.delete(move.fold.section);
+        else state.collapsedSections.add(move.fold.section);
+      } else if (open) {
+        state.collapsedCards.delete(move.fold.key);
+      } else {
+        state.collapsedCards.add(move.fold.key);
+      }
+      state.sideFocus = move.key;
+      render();
+      sideRowEl(move.key)?.focus();
+      return;
+    }
+
+    if (e.key === "Enter" || e.key === " ") {
+      // Only when the *row* holds focus: a row that is itself a button (a section head, a
+      // search result) activates through the platform, and an inner control would already
+      // be sending its own click — dispatching a second one would open the note twice.
+      if (e.target !== row || row instanceof HTMLButtonElement) return;
+      const open = row.querySelector<HTMLElement>(".card-open");
+      if (!open) return; // an unresolved link points at nothing — ⏎ is a no-op
+      e.preventDefault();
+      open.click();
     }
   });
 

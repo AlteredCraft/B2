@@ -136,7 +136,9 @@ body {
    `:focus-visible`, not `:focus`: the ring appears for keyboard focus and stays out of
    the way of a mouse click, which is the browser heuristic doing exactly what we want.
    Individual controls override this where their own affordance IS the ring (the pane
-   gutters' accent line) — never to remove it. */
+   gutters' accent line) — never to remove it. The two surfaces whose rows survive a
+   repaint go the other way and ring on plain `:focus`, because the repaint erases the
+   heuristic they'd depend on; see `.tree-row:focus` and `[data-side-row]:focus`. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -678,8 +680,19 @@ body.is-resizing {
 /* The keyboard's row (K1). The tree is one Tab stop with a roving tabindex, so this
    ring is the *only* thing telling an arrow-key user where they are — it has to read
    as clearly as the mouse's hover wash, hence the wash underneath it too. Inset, since
-   a row spans the pane's full width and an outset ring would clip on both edges. */
-.tree-row:focus-visible {
+   a row spans the pane's full width and an outset ring would clip on both edges.
+
+   `:focus`, not the app-wide `:focus-visible` — the one deliberate exception, and it
+   has to be. Every arrow key repaints the tree (the roving tabindex moves), and the
+   innerHTML swap destroys the element that earned `:focus-visible`; WebKit grants it to
+   a script-focused node only by inheriting from the currently-focused one, which after
+   the swap is `<body>`. So the row main.ts re-focuses by path came back focused but
+   ringless until the *next* keystroke re-armed the heuristic — the ring lagged a key
+   behind the arrows. `:focus` is the state the repaint actually restores, so the ring
+   can't drift from it. Sound here because WebKit never focuses a button on click (the
+   click delegation in main.ts depends on the same fact): a row holds focus only from a
+   key — the arrows, typeahead, ⌘1, Tab, or an overlay handing it back. */
+.tree-row:focus {
   outline: none;
   background: var(--surface-2);
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -1502,6 +1515,18 @@ body.is-resizing {
 .card:hover {
   border-color: var(--accent);
   background: var(--surface);
+}
+
+/* The keyboard's row in discovery (K1): section heads, cards, and search results all carry
+   `data-side-row`, so one rule rings whichever the roving tabstop is on. `:focus` rather
+   than the app-wide `:focus-visible` for exactly the reason `.tree-row` is — every fold and
+   every arriving discovery read repaints the pane, and the swap destroys the element WebKit
+   granted `:focus-visible` to, so the row `paintSide` re-focuses by key would come back
+   ringless until the next keystroke. A row here only ever holds focus from a key (WebKit
+   never focuses a button on click), so `:focus` is both truthful and stable. */
+[data-side-row]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .card-title {

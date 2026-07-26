@@ -110,7 +110,15 @@ Every new surface owes all four. They are cheap while you're building it and exp
    sends, so there is one activation path rather than two to keep in step.
 2. **Visible.** `:focus-visible` rings, in `style.css`'s focus block. A control you can reach but
    can't see you've reached is not reachable. Never `outline: none` without putting an equal-or-louder
-   affordance in its place (the pane gutters' accent line is the one legitimate case).
+   affordance in its place (the pane gutters' accent line is the one legitimate case). **A row in a
+   pane that repaints rings on plain `:focus`** instead — `.tree-row`, and discovery's
+   `[data-side-row]`. Not a style preference: WebKit grants `:focus-visible` to a script-focused node
+   only by inheriting it from the *currently* focused one, and an `innerHTML` swap leaves that as
+   `<body>`, so a row re-focused by key after a repaint comes back focused but **ringless** until the
+   user's next keystroke re-arms the heuristic — which reads as the ring lagging one key behind the
+   arrows (the reported bug). `:focus` is the state the repaint actually restores, and it costs
+   nothing here because WebKit never focuses a button on click (below), so those rows only ever hold
+   focus from a key.
 3. **Escapable.** An overlay takes focus on open, **traps ⇥** while it's up, and **restores focus** to
    whatever opened it on close. `Escape` dismisses innermost-first; `Enter` confirms. All of this is
    one hook — `syncOverlayFocus()` in `main.ts`, called at the end of every `render()` and acting only
@@ -129,10 +137,17 @@ Every new surface owes all four. They are cheap while you're building it and exp
   `role="tree"`/`treeitem`, `aria-level`, a **roving `tabindex`** (one Tab stop for the whole tree, not
   one per file: a 1500-note vault is not a tab sequence), ↑↓ between visible rows, →← to expand/enter
   and collapse/exit, Home/End, and first-letter typeahead.
+- **`ui/src/sidenav.ts`** — treenav's sibling for the **discovery pane**: the same ARIA `tree` pattern
+  over section heads and cards (↑↓, →← to fold or step in/out, Home/End, a roving `tabindex`), and the
+  row *keys* the paint and the arrows share. One thing genuinely differs, and it's why this is its own
+  module rather than a parameter of treenav's: a tree row expands to reveal *child rows*, a card
+  expands to reveal *its own body*, so "foldable" and "has child rows" come apart. A card row is a
+  `<div>` (it contains the open `<button>`; nested buttons are illegal), so ⏎/Space there **dispatch
+  that button's click** — the graph nodes' rule again, one activation path.
 - **`ui/src/shortcuts.ts`** — the `?` sheet's one table. Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys
   macOS spells out in its own menus stay words (Esc, Tab, Space, Home/End).
-- **`ui/src/main.ts`** — the wiring: the tree's own `keydown` (bound to the pane, so it answers before
-  the global chords), the global chord table, and the focus plumbing under
+- **`ui/src/main.ts`** — the wiring: the tree's and the side pane's own `keydown` (bound to each pane,
+  so they answer before the global chords), the global chord table, and the focus plumbing under
   *"keyboard: focus plumbing"*.
 
 ### Two things that bite
@@ -141,15 +156,18 @@ Every new surface owes all four. They are cheap while you're building it and exp
   are how this UI renders, so anything holding focus is gone after one, and the keyboard user is
   silently ejected to `<body>` by an unrelated toast or watcher pulse. Two consequences, and the
   second is the one that bites: (a) restore by *identity that outlives the swap*, never by element —
-  `paintTree` re-focuses the tree's row **by path**, and `captureReturnFocus` returns a thunk
-  (path → id → element); (b) you cannot read `document.activeElement` at the end of `render()` to
+  `paintTree` re-focuses the tree's row **by path**, `paintSide` the discovery row **by row key**, and
+  `captureReturnFocus` returns a thunk (tree path → row key → id → element). A pane that swaps its
+  `innerHTML` with no such restoration is a pane that ejects the keyboard on every toast, which is
+  exactly how discovery behaved until it got one; (b) you cannot read `document.activeElement` at the end of `render()` to
   learn what triggered an overlay, because `render()` swapped `#modal-root`/`#menu-root` on the way
   there and the answer is already `<body>`. Hence `lastFocused`, tracked continuously from `focusin`
   — destroying a focused node fires no `focusin`, so the last value is still the trigger. Any control
   that has to be *returned to* therefore needs a stable `id` (`#settings-shortcuts` is one).
 - **WebKit doesn't focus a button on click.** So a `focusin` listener alone won't see a mouse user's
-  selection, and the keyboard's idea of "where I am" would drift from the mouse's. The tree's click
-  delegation sets `state.treeFocus` explicitly for this reason.
+  selection, and the keyboard's idea of "where I am" would drift from the mouse's. The click
+  delegation sets `state.treeFocus` and `state.sideFocus` explicitly for this reason — and it is the
+  same fact that makes the `:focus` ring above safe.
 
 ## Transport
 
