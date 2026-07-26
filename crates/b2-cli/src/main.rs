@@ -16,16 +16,18 @@ use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use clap::{Parser, Subcommand};
 use std::fs::{File, OpenOptions};
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Set by the Ctrl-C handler installed for a foreground `reindex`. The embed loop
-/// reads it at each batch boundary (through the [`ControlFlow`] the progress closure
-/// returns — the shipped cancel seam) and stops *after* the current batch: a
-/// consistent, re-runnable partial index, never a torn write (index-engine.md).
+/// Set by the SIGINT handler installed for a `reindex` — by Ctrl-C in the foreground,
+/// or by another process's `b2 reindex --cancel` (GH #55), which raises the *same*
+/// signal so both reach here. The embed loop reads it at each batch boundary (through
+/// the [`ControlFlow`] the progress closure returns — the shipped cancel seam) and
+/// stops *after* the current batch: a consistent, re-runnable partial index, never a
+/// torn write (index-engine.md).
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Map the Ctrl-C flag onto the reindex embed loop's cooperative-cancel signal —
@@ -77,11 +79,17 @@ enum Command {
         /// stamped, no index or log change, no embedding.
         #[arg(long)]
         dry_run: bool,
+        /// Stop a reindex already running on this vault — the way to reach one
+        /// backgrounded with `b2 reindex &`, which has no controlling terminal for
+        /// Ctrl-C. It stops after the current batch, leaving the same consistent,
+        /// re-runnable partial index a foreground Ctrl-C does.
+        #[arg(long, conflicts_with_all = ["force", "dry_run"])]
+        cancel: bool,
     },
     /// Report embedding coverage — how many notes are embedded (so semantic ranking
-    /// is live vs. keyword-only) and whether a reindex is currently running. A pure,
-    /// model-free read; handy after kicking off a slow reindex in the background with
-    /// `b2 reindex &`.
+    /// is live vs. keyword-only) and whether a reindex is currently running, with the
+    /// process id to stop it by. A pure, model-free read; handy after kicking off a
+    /// slow reindex in the background with `b2 reindex &`.
     Status,
     /// Create a new note and project it into the index (it's immediately in the
     /// graph + searchable). PATH is vault-relative (the `.md` extension is optional).
@@ -281,10 +289,16 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             vault,
             force,
             dry_run,
+            cancel,
         } => {
             // Reindex writes an index → require an explicit vault (positional wins),
             // never a silent cwd fallback. See `Cli::require_vault`.
             let root = cli.require_vault(vault.as_deref())?;
+            if *cancel {
+                // Signals another process and returns; it never opens the vault (no
+                // model load, no index read) — the run being cancelled owns all of that.
+                return cancel_reindex(root, cli.json);
+            }
             if *dry_run {
                 // A dry-run neither embeds nor stamps → no model needed (open with
                 // the fake, like `neighbors`); it's a pure read, so there's no slow
@@ -337,6 +351,11 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::ReindexRunning),
                 Err(std::fs::TryLockError::Error(e)) => return Err(CliError::Io(e)),
             }
+            // Now that the lock is ours, stamp who holds it: the address `b2 reindex
+            // --cancel` signals, and what `b2 status` prints so a manual `kill` stays
+            // available (GH #55). Best-effort — a failed write costs the cancel
+            // affordance, not the reindex.
+            let _ = record_reindex_pid(&lock);
             // Reindex embeds every changed chunk → it needs the real model.
             let (vault, _semantic) = open_vault(root, true)?;
             // Wire Ctrl-C to the cooperative-cancel flag now that the model is loaded and
@@ -459,14 +478,17 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             let root = cli.vault_or_cwd();
             let (vault, _semantic) = open_vault(&root, false)?;
             let status = vault.embed_status()?;
-            let running = reindex_in_flight(&root);
+            let holder = reindex_holder(&root);
             if cli.json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "embedded": status.embedded,
                         "total": status.total,
-                        "reindex_running": running,
+                        "reindex_running": holder.is_some(),
+                        // The running process's id — `null` when nothing is running (and
+                        // on the sliver of a moment before a fresh holder stamps it).
+                        "reindex_pid": holder.as_ref().and_then(|h| h.pid),
                     }))?
                 );
             } else {
@@ -490,8 +512,16 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                         status.embedded, status.total
                     );
                 }
-                if running {
-                    println!("A reindex is currently running.");
+                // Name the process, not just the fact: `--cancel` is the supported stop,
+                // and the pid keeps a plain `kill -INT` as the documented fallback.
+                match holder.as_ref().map(|h| h.pid) {
+                    Some(Some(pid)) => println!(
+                        "A reindex is currently running (pid {pid}). Stop it with `b2 reindex --cancel` (or `kill -INT {pid}`)."
+                    ),
+                    Some(None) => println!(
+                        "A reindex is currently running. Stop it with `b2 reindex --cancel`."
+                    ),
+                    None => {}
                 }
             }
         }
@@ -908,20 +938,108 @@ fn open_reindex_lock(root: &Path) -> Result<File, CliError> {
         .open(reindex_lock_path(root))?)
 }
 
-/// Whether a reindex currently holds the lock — a best-effort peek for `b2 status`:
-/// open the *existing* lock file and try to take it; a contended lock means a run is
-/// in flight. Never creates the file (a read-only command), so a missing lock file
+/// Stamp this process's id into the reindex lock — **only ever called with the lock
+/// held**, which is what makes truncate-then-write safe here (we are its sole writer;
+/// `open_reindex_lock` deliberately doesn't truncate, since that would race a holder).
+///
+/// The pid outlives the run — nothing clears it on exit — and that is harmless by
+/// construction: [`reindex_holder`] reads it *only* when the lock is contended, so the
+/// **lock**, never the file's contents, decides whether a run is in flight. A leftover
+/// pid from a finished run is therefore never mistaken for a live one.
+fn record_reindex_pid(lock: &File) -> std::io::Result<()> {
+    let mut handle = lock;
+    handle.set_len(0)?;
+    handle.seek(SeekFrom::Start(0))?;
+    // A trailing newline so the file reads sanely under `cat`; parsing trims it.
+    writeln!(handle, "{}", std::process::id())?;
+    handle.flush()
+}
+
+/// A reindex holding the lock, seen from another process.
+#[derive(Debug)]
+struct ReindexHolder {
+    /// The pid it stamped into the lock. `None` when the lock is held but no readable
+    /// pid is there — a holder that took the lock microseconds ago and hasn't written
+    /// yet, an older `b2` that stamped none, or an unreadable file. "Running" is the
+    /// lock's answer; the pid is the extra affordance that may be missing.
+    pid: Option<u32>,
+}
+
+/// Peek at the reindex lock — the best-effort read behind `b2 status` and `b2 reindex
+/// --cancel`: open the *existing* lock file and try to take it; a contended lock means
+/// a run is in flight, and its pid is read from the file we could not lock. Never
+/// creates the file (both callers are read-only on the vault), so a missing lock file
 /// simply means no reindex has run; any I/O hiccup degrades to "not running".
-fn reindex_in_flight(root: &Path) -> bool {
-    let Ok(file) = OpenOptions::new()
+fn reindex_holder(root: &Path) -> Option<ReindexHolder> {
+    let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(reindex_lock_path(root))
-    else {
-        return false;
-    };
+        .ok()?;
     // If we *can* take it, nobody holds it; `file` drops here and releases at once.
-    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    if !matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)) {
+        return None;
+    }
+    let mut buf = String::new();
+    let pid = file
+        .read_to_string(&mut buf)
+        .ok()
+        .and_then(|_| buf.trim().parse().ok());
+    Some(ReindexHolder { pid })
+}
+
+/// `b2 reindex --cancel` (GH #55): stop a reindex running on this vault by signalling
+/// the pid its lock names. It adds **no cancellation machinery** — SIGINT is exactly
+/// what Ctrl-C delivers, so the holder takes the shipped path (the handler installed in
+/// the `reindex` arm → the [`CANCEL`] flag → [`ControlFlow::Break`] at the next batch
+/// boundary → a consistent, re-runnable partial index). That's the whole point: a run
+/// backgrounded with `b2 reindex &` has no controlling terminal for Ctrl-C to reach.
+///
+/// One window is inherent and accepted: a holder still loading the model hasn't
+/// installed the handler yet, so SIGINT terminates it outright — the same as Ctrl-C
+/// there today, and safe for the same reason (nothing is written until embedding starts).
+fn cancel_reindex(root: &Path, json: bool) -> Result<(), CliError> {
+    let Some(holder) = reindex_holder(root) else {
+        return Err(CliError::NoReindexRunning);
+    };
+    let Some(pid) = holder.pid else {
+        return Err(CliError::ReindexPidUnknown);
+    };
+    signal_reindex(pid)?;
+    if json {
+        // `signalled`, not `cancelled`: the request landed; the run stops at its next
+        // batch boundary and reports the partial work itself (honest tense, like the
+        // dry-run's `would_*` keys).
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "signalled": true,
+                "pid": pid,
+            }))?
+        );
+    } else {
+        println!(
+            "Cancelling the reindex on this vault (pid {pid}). It stops after the current batch, leaving a consistent index — re-run `b2 reindex` to finish."
+        );
+    }
+    Ok(())
+}
+
+/// Send the cancel signal to a reindex holder. SIGINT, deliberately: the identical
+/// signal a foreground Ctrl-C raises, so there is one cancel path, not two.
+fn signal_reindex(pid: u32) -> Result<(), CliError> {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    // A pid that doesn't fit `pid_t` was never one we wrote — treat a garbled lock as
+    // nothing to cancel rather than signalling whatever the truncation would name.
+    let raw = i32::try_from(pid).map_err(|_| CliError::NoReindexRunning)?;
+    match kill(Pid::from_raw(raw), Signal::SIGINT) {
+        Ok(()) => Ok(()),
+        // The holder exited between the lock peek and the signal: there is nothing left
+        // to cancel — the outcome the user wanted, reported as such rather than as I/O.
+        Err(nix::errno::Errno::ESRCH) => Err(CliError::NoReindexRunning),
+        Err(e) => Err(CliError::Io(std::io::Error::from_raw_os_error(e as i32))),
+    }
 }
 
 /// The CLI's error, composing the two crates it drives. Kept internal; `user_message`
@@ -946,6 +1064,13 @@ enum CliError {
     /// Another `reindex` already holds the single-in-flight lock on this vault.
     #[error("a reindex is already running")]
     ReindexRunning,
+    /// `reindex --cancel` found no run in flight on this vault — nothing to signal.
+    #[error("no reindex is running")]
+    NoReindexRunning,
+    /// `reindex --cancel` found a run in flight whose lock names no readable pid, so
+    /// there is no address to signal (see [`ReindexHolder::pid`]).
+    #[error("the running reindex recorded no pid")]
+    ReindexPidUnknown,
     /// `rm` was pointed at a folder without `--recursive` — refuse rather than
     /// silently remove a whole subtree (the CLI's stand-in for the desktop's
     /// confirm dialog; there is no interactive prompt to give an agent).
@@ -1013,7 +1138,13 @@ fn user_message(err: &CliError) -> String {
             "No vault specified. Point B2 at your vault with `-C <path>`, or set B2_VAULT_PATH.".to_string()
         }
         CliError::ReindexRunning => {
-            "A reindex is already running on this vault. Wait for it to finish (check `b2 status`), or stop the other run.".to_string()
+            "A reindex is already running on this vault. Wait for it to finish (check `b2 status`), or stop it with `b2 reindex --cancel`.".to_string()
+        }
+        CliError::NoReindexRunning => {
+            "No reindex is running on this vault — nothing to cancel. Check `b2 status`.".to_string()
+        }
+        CliError::ReindexPidUnknown => {
+            "A reindex is running on this vault, but it recorded no process id to signal. Try `b2 reindex --cancel` again in a moment, or stop the run from the shell it was started in.".to_string()
         }
         CliError::RecursiveRequired(p) => format!(
             "'{p}' is a folder. Re-run with -r/--recursive to delete it and everything inside it."
@@ -1031,6 +1162,8 @@ fn user_message(err: &CliError) -> String {
             CliError::Io(e) => e.to_string(),
             CliError::VaultRequired => err.to_string(),
             CliError::ReindexRunning => err.to_string(),
+            CliError::NoReindexRunning => err.to_string(),
+            CliError::ReindexPidUnknown => err.to_string(),
             CliError::RecursiveRequired(_) => err.to_string(),
             CliError::StdinRequired => err.to_string(),
         };

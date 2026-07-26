@@ -375,18 +375,20 @@ b2 reindex --force</pre>
   <!-- ========================================================= -->
   <section id="later">
     <h2><span class="num">7</span>What's deferred (and why it's clean)</h2>
-    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap, and two former entries here have
+    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap, and three former entries here have
     since shipped: the <b>keyword-first progressive index</b> (the projection/embedding split above — FTS lands
-    instantly, vectors stream in behind) and, on the desktop, a <b>background reindex</b> with live progress and
-    a Cancel button. Still open, tracked in GitHub Issues:</p>
+    instantly, vectors stream in behind); on the desktop, a <b>background reindex</b> with live progress and
+    a Cancel button; and, on the CLI, the <b>cross-process background reindex</b> — <code>b2 reindex &amp;</code>
+    detaches through the shell, <code>b2 status</code> reports coverage plus the running process's pid, and
+    <code>b2 reindex --cancel</code> signals that pid onto the <em>same</em> cooperative-cancel path Ctrl-C uses
+    (search/similar read the index live throughout; SQLite WAL already permits one writer + concurrent readers
+    across processes). Self-daemonization was <em>dropped</em>, not deferred: it existed for Windows, which B2
+    doesn't ship to. Still open, tracked in GitHub Issues:</p>
     <ul class="tidy" style="font-size:13.5px">
-      <li><b>Cross-process CLI background reindex + <code>b2 status</code></b> — detach and return immediately;
-      search/similar read the index live (SQLite WAL already permits one writer + concurrent readers across
-      processes).</li>
       <li><b>Faster / smaller embedder</b> — bge-small (384-dim) or a quantized/ONNX path behind the same
       <code>Embedder</code> seam; a raw-speed lever, measured against the eval before it becomes the default.</li>
     </ul>
-    <p class="cap">Each drops in behind an existing seam or invariant — none needs a schema or flow change,
+    <p class="cap">It drops in behind an existing seam or invariant — no schema or flow change needed,
     which is the whole point of the deterministic-seam discipline.</p>
   </section>
 

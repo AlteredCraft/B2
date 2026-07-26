@@ -344,7 +344,7 @@ Spaced repetition exploits the retrieval curve.
     <tbody>
       <tr><td><code>b2 init</code></td><td class="d">Download + verify the embedding model (one-time, per machine).</td><td class="d">downloads it</td></tr>
       <tr><td><code>b2 add &lt;path&gt;</code></td><td class="d">Create a note (<code>--title</code>, <code>--content</code>) and index it.</td><td class="d">embeds</td></tr>
-      <tr><td><code>b2 reindex</code></td><td class="d">Re-project the vault; incremental. <code>--dry-run</code>, <code>--force</code>.</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 reindex</code></td><td class="d">Re-project the vault; incremental. <code>--dry-run</code>, <code>--force</code>, <code>--cancel</code> (stop a run backgrounded with <code>&amp;</code>; <code>b2 status</code> names its pid).</td><td class="d">embeds</td></tr>
       <tr><td><code>b2 search &lt;query&gt;</code></td><td class="d">Hybrid keyword + semantic search. <code>--limit N</code>.</td><td class="d">embeds query</td></tr>
       <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's typed links, in and out.</td><td class="d">no</td></tr>
       <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its "why" + provenance; flags orphans.</td><td class="d">no</td></tr>
