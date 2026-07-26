@@ -248,8 +248,9 @@ if/when one lands — `index-engine.md` §5.)*
   same read or edited. The GUI is **keyboard-complete** (invariant K1): the file tree *and* the
   discovery pane follow the ARIA `tree` pattern over the row order of `ui/src/treenav.ts` /
   `ui/src/sidenav.ts` — the *same* order `render.ts` paints, so the arrows and the eye can't disagree
-  — each pane restores focus across its own repaint (`paintTree` by path, `paintSide` by row key),
-  every overlay traps and restores it, `⇧F10` is the keyboard's right-click, and `?` shows the whole
+  — every pane restores focus across its own repaint (`paintTree` by path; `capturePaneFocus` by row
+  key, graph-node scene id, or a control's stable `id` for the other two), every overlay traps and
+  restores it, `⇧F10` is the keyboard's right-click, and `?` shows the whole
   chord table (`ui/src/shortcuts.ts`). The four obligations a new surface owes are in
   [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 

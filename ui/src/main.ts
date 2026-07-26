@@ -70,6 +70,44 @@ function el(id: string): HTMLElement {
   return node;
 }
 
+/**
+ * Where the keyboard is inside `pane`, as a thunk that finds it again after the pane's
+ * `innerHTML` is swapped — the one mechanism every repaint here owes the keyboard
+ * (crates/b2-desktop/CLAUDE.md, "Two things that bite"). The swap destroys the focused
+ * element and WebKit silently drops the keyboard to `<body>`, so the element itself is
+ * never the thing to hold on to: what survives is an identity the next paint re-emits —
+ * a discovery row's key (sidenav.ts), a graph node's scene id (graph.ts), or a control's
+ * stable `id`. Null when the keyboard was somewhere else entirely, because a repaint
+ * must only ever *give back* focus, never take it.
+ *
+ * One capture serves both panes: the two row attributes are pane-specific by
+ * construction (`data-side-row` is painted only by the side pane, `data-gnode` only by
+ * the note pane). What a pane paints *without* an identity — a wikilink in a note's
+ * body, a backlink card — falls back to the pane itself, which at least leaves the
+ * keyboard in the column it was in (⌘1/⌘2/⌘3's own landing spot) instead of at the top
+ * of the window.
+ */
+function capturePaneFocus(pane: HTMLElement): (() => void) | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement || active instanceof SVGElement)) return null;
+  if (!pane.contains(active)) return null;
+  const row = active.closest<HTMLElement>("[data-side-row]");
+  if (row) {
+    // A row that didn't survive the repaint (its section folded, a new note replaced
+    // discovery wholesale) hands off to the roving tabstop rather than to nothing.
+    const key = row.dataset.sideRow ?? null;
+    return () => (sideRowEl(key) ?? rovingSideRowEl() ?? pane).focus();
+  }
+  const gnode = active.closest<SVGElement>("[data-gnode]");
+  if (gnode) {
+    const id = gnode.dataset.gnode ?? null;
+    return () => (gnodeEl(id) ?? pane).focus();
+  }
+  const id = active.id;
+  if (id) return () => (document.getElementById(id) ?? pane).focus();
+  return () => pane.focus();
+}
+
 // The note pane's last-written HTML, for the render memo below. Cleared whenever the
 // pane is owned imperatively (edit mode writes its own DOM) so exiting always repaints.
 let lastNotePaneHtml: string | null = null;
@@ -121,7 +159,8 @@ function paintTree(): void {
 // surface too now (sidenav.ts, K1): an `innerHTML` swap destroys the row holding focus, so
 // an unrelated repaint — a toast timer, a watcher pulse, the *other* discovery read landing
 // — would silently eject a keyboard user to `<body>` mid-list. Restored by row key, since
-// the element it was on no longer exists. Memoized for the reason the note pane is:
+// the element it was on no longer exists — and by `id` for the pane's one focusable that
+// *isn't* a row, search mode's `clear` (GH #91). Memoized for the reason the note pane is:
 // identical HTML skips the swap, so the pane's scroll position survives a repaint that
 // changes nothing about it.
 let lastSidePaneHtml: string | null = null;
@@ -129,12 +168,34 @@ let lastSidePaneHtml: string | null = null;
 function paintSide(): void {
   const html = sidePaneHtml(state);
   if (html === lastSidePaneHtml) return;
-  const hadRowFocus = focusedSideRow() !== null;
+  const restore = capturePaneFocus(el("side-pane"));
   el("side-pane").innerHTML = html;
   lastSidePaneHtml = html;
-  // Opening a note from a card replaces discovery wholesale, so there may be no row to
-  // come back to: the pane itself then holds the keyboard rather than dropping it.
-  if (hadRowFocus) (rovingSideRowEl() ?? el("side-pane")).focus();
+  restore?.();
+}
+
+/**
+ * Repaint the note pane, putting the keyboard back on what it was on — a graph node by
+ * its scene id, a bar chip by its `id` (GH #91).
+ *
+ * Memoized: an unrelated render (a toast timer, streamed progress) with identical pane
+ * HTML skips the swap entirely, so reading scroll position survives and the graph view's
+ * entrance animation plays on real changes only. That memo is also why this pane's focus
+ * bug was the narrow one — a swap here means the pane *genuinely* changed: discovery
+ * landing while the graph is open and focused, or the drawer/source/graph chip you just
+ * pressed rebuilding the bar it lives in. Both dropped the keyboard to `<body>`.
+ *
+ * Reports whether the swap actually happened — the find bar's Ranges and the syntax
+ * highlight pass are re-derived off that, not off every render.
+ */
+function paintNote(): boolean {
+  const html = notePaneHtml(state);
+  if (html === lastNotePaneHtml) return false;
+  const restore = capturePaneFocus(el("note-pane"));
+  el("note-pane").innerHTML = html;
+  lastNotePaneHtml = html;
+  restore?.();
+  return true;
 }
 
 function render(): void {
@@ -144,19 +205,8 @@ function render(): void {
   // the editor mid-keystroke. The frontmatter mini-editor (GH #79) gets the same
   // deal: its buffer is a live textarea in the pane. Everything else keeps rendering.
   let noteSwapped = false;
-  if (!state.editing && !state.fmEditing) {
-    // Memoized: an unrelated render (a toast timer, streamed progress) with identical
-    // pane HTML skips the innerHTML swap, so reading scroll position survives and the
-    // graph view's entrance animation plays on real changes only — never on a toast.
-    const noteHtml = notePaneHtml(state);
-    if (noteHtml !== lastNotePaneHtml) {
-      el("note-pane").innerHTML = noteHtml;
-      lastNotePaneHtml = noteHtml;
-      noteSwapped = true;
-    }
-  } else {
-    lastNotePaneHtml = null;
-  }
+  if (!state.editing && !state.fmEditing) noteSwapped = paintNote();
+  else lastNotePaneHtml = null;
   // Graph mode owns the pane's box: padding off, scrolling off, column flex on
   // (the stage flexes to fill; the SVG viewBox scales the scene into it).
   el("note-pane").classList.toggle(
@@ -543,16 +593,19 @@ function sideRowEl(key: string | null): HTMLElement | null {
   return null;
 }
 
+/** The graph node for a scene id (graph.ts `GraphNode.id`) — the note pane's `sideRowEl`,
+ *  and iterating rather than selecting for the same reason: a node id carries a vault
+ *  path, and a path may contain anything a selector would choke on. */
+function gnodeEl(id: string | null): SVGElement | null {
+  if (id === null) return null;
+  const nodes = el("note-pane").querySelectorAll<SVGElement>("[data-gnode]");
+  for (const node of nodes) if (node.dataset.gnode === id) return node;
+  return null;
+}
+
 /** The row carrying the roving tabstop, as painted (sidenav.ts `rovingSideKey`). */
 function rovingSideRowEl(): HTMLElement | null {
   return el("side-pane").querySelector<HTMLElement>('[data-side-row][tabindex="0"]');
-}
-
-/** The discovery row the keyboard is on right now, or null when focus is elsewhere. */
-function focusedSideRow(): HTMLElement | null {
-  const active = document.activeElement;
-  if (!(active instanceof HTMLElement)) return null;
-  return active.closest<HTMLElement>("#side-pane [data-side-row]");
 }
 
 /** Move keyboard focus to a discovery row — state first (so the roving tabstop travels
@@ -679,6 +732,17 @@ function captureReturnFocus(): (() => void) | null {
   if (side) {
     const key = side.dataset.sideRow ?? null;
     return () => (sideRowEl(key) ?? rovingSideRowEl())?.focus();
+  }
+  // A graph node, by its scene id — the same ⇧F10 → Link… path taken from a *ghost*, where
+  // committing re-runs discovery and repaints the graph out from under the node. The
+  // committed ghost is exactly the authored node for the same b2id (graph.ts ids a ghost
+  // `ghost:<b2id>`), so the solidified node is where the keyboard belongs; failing that,
+  // the pane, which keeps the keyboard in the graph rather than at the top of the window.
+  const gnode = active.closest<SVGElement>("[data-gnode]");
+  if (gnode) {
+    const id = gnode.dataset.gnode ?? null;
+    const linked = id?.startsWith("ghost:") === true ? id.slice("ghost:".length) : null;
+    return () => (gnodeEl(id) ?? gnodeEl(linked) ?? el("note-pane")).focus();
   }
   if (active.id) {
     const id = active.id;

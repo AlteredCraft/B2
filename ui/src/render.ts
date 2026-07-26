@@ -9,11 +9,15 @@
 // not needed for a local-first, own-content MVP.
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
-import { escapeHtml } from "./escape";
-import { RELATION_VERBS, type AppState, type SideSection } from "./state";
-import { allDirs, canMoveInto, renamePrefill } from "./move";
-import { shouldPromptEmbedInstall } from "./embedreminder";
-import { SHORTCUTS } from "./shortcuts";
+// Relative imports carry their `.ts` here (the idiom highlight.ts and reconcile.ts already
+// use) because render.test.ts runs this module off the source under node's type-stripping,
+// which resolves by real filename — a bundler-style extensionless value import doesn't
+// resolve there. tsc rewrites nothing (noEmit).
+import { escapeHtml } from "./escape.ts";
+import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
+import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
+import { shouldPromptEmbedInstall } from "./embedreminder.ts";
+import { SHORTCUTS } from "./shortcuts.ts";
 import {
   buildTree,
   CLASS_GLYPHS,
@@ -22,15 +26,15 @@ import {
   sortedSubdirs,
   visibleRows,
   type TreeDir,
-} from "./treenav";
+} from "./treenav.ts";
 import {
   cardKey,
   cardRowKey,
   rovingSideKey,
   sectionRowKey,
   sideRows,
-} from "./sidenav";
-import type { NoteView, ResourceExplainView } from "./types";
+} from "./sidenav.ts";
+import type { NoteView, ResourceExplainView } from "./types.ts";
 import {
   buildScene,
   NODE_R,
@@ -40,7 +44,7 @@ import {
   type GraphEdge,
   type GraphNode,
   type GraphScene,
-} from "./graph";
+} from "./graph.ts";
 
 // Re-exported so this module stays the view layer's single import surface (main.ts
 // reaches for it here); the definition lives in escape.ts.
@@ -343,14 +347,18 @@ function noteBarHtml(state: AppState, note: NoteView): string {
       : `<p class="frontmatter-empty">No frontmatter.</p>`;
     body = `${warning}${peek}
       <div class="fm-actions">
-        <button class="btn small" data-fm-edit title="${
+        <button id="fm-edit" class="btn small" data-fm-edit title="${
           yaml ? "Edit the raw frontmatter YAML" : "Add frontmatter to this note"
         }">${yaml ? "Edit" : "Add"}</button>
       </div>`;
   }
+  // Every chip here carries a stable `id`: pressing one *is* a note-pane repaint, and the
+  // `innerHTML` swap destroys the button under the keyboard — the id is the identity
+  // `paintNote` puts focus back by (GH #91, crates/b2-desktop/CLAUDE.md). Each is unique
+  // because the pane paints exactly one of its three modes at a time.
   return `<div class="frontmatter-bar">
       <div class="note-bar-head">
-        <button class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}"${
+        <button id="fm-toggle" class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}"${
           editing ? " disabled" : ""
         }>
           <span class="tree-caret">${open ? "▼" : "▶"}</span>
@@ -358,10 +366,10 @@ function noteBarHtml(state: AppState, note: NoteView): string {
         </button>
         <div class="note-bar-actions">
           ${graphToggleHtml(false)}
-          <button class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
+          <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
             source ? "Show rendered Markdown" : "Show Markdown source"
           }">&lt;/&gt;</button>
-          <button class="edit-toggle" data-toggle-edit${
+          <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
             state.loading || editing ? " disabled" : ""
           } title="${
             editing
@@ -416,7 +424,7 @@ function resourceCardHtml(r: ResourceExplainView): string {
       </header>
       <div class="resource-card-body">
         <p class="resource-no-viewer">No viewer available for this file type yet.</p>
-        <button class="resource-open" data-open-system="${escapeHtml(r.path)}">
+        <button id="resource-open" class="resource-open" data-open-system="${escapeHtml(r.path)}">
           Open in system default
         </button>
         <div class="resource-hash" title="${escapeHtml(r.content_hash)}">
@@ -545,10 +553,13 @@ export function embedBannerHtml(state: AppState): string {
     </div>`;
 }
 
+// Search mode. `clear` is the one focusable in this pane that is *not* a row, so it carries
+// a stable `id` — `paintSide` restores a row by its row key and everything else by id, and
+// without one the button was dropped to `<body>` by any repaint (GH #91).
 function searchSectionHtml(state: AppState, roving: string | null): string {
   const head = `<div class="side-head">
       <h2>Results</h2>
-      <button class="linklike" data-clear-search>clear</button>
+      <button id="clear-search" class="linklike" data-clear-search>clear</button>
     </div>
     <p class="side-sub">for “${escapeHtml(state.searchQuery)}”${searchCaveat(state)}</p>`;
   if (state.loading) return head + `<p class="side-empty">Searching…</p>`;
@@ -784,7 +795,7 @@ const GRAPH_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden=
 
 /** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). */
 function graphToggleHtml(active: boolean): string {
-  return `<button class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
+  return `<button id="graph-toggle" class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
       aria-pressed="${active}" aria-label="${active ? "Back to reading" : "Show the connection graph"}"
       title="${
         active ? "Back to reading — Esc" : "Show the connection graph — nodes are Tab-reachable, ⏎ opens"
@@ -882,6 +893,11 @@ function nodeAriaLabel(n: GraphNode): string {
  * openable with no mouse. main.ts turns ⏎/Space on a focused node into the same click
  * these attributes already answer — one activation path, not two. A `dangling` node
  * stays inert: it opens nothing (there's nothing there), so it isn't a tab stop.
+ *
+ * It also carries `data-gnode` — the scene id (graph.ts), which is what the note pane's
+ * focus restoration re-finds it *by* after an `innerHTML` swap destroys the element
+ * itself (GH #91). The discovery row's `data-side-row` for the graph: an identity that
+ * outlives the repaint, not a pointer into it.
  */
 function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string {
   const attrs: string[] = [`class="gnode is-${n.kind}"`, `style="--i:${order}"`];
@@ -896,7 +912,12 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
     );
   }
   if (n.kind !== "dangling") {
-    attrs.push(`tabindex="0"`, `role="button"`, `aria-label="${escapeHtml(nodeAriaLabel(n))}"`);
+    attrs.push(
+      `tabindex="0"`,
+      `role="button"`,
+      `aria-label="${escapeHtml(nodeAriaLabel(n))}"`,
+      `data-gnode="${escapeHtml(n.id)}"`,
+    );
   }
   const r = NODE_R[n.kind];
   // Text goes on the side of the node facing *away* from the anchor (above for the
@@ -1008,7 +1029,7 @@ function graphPaneHtml(state: AppState, n: NoteView): string {
       <div class="graph-bar">
         <div class="note-bar-actions">
           ${graphToggleHtml(true)}
-          <button class="edit-toggle" data-toggle-edit${
+          <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
             state.loading ? " disabled" : ""
           } title="Edit this note — ⌘E (autosaves as you type)">Edit</button>
         </div>
