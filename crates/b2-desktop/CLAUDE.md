@@ -110,15 +110,18 @@ Every new surface owes all four. They are cheap while you're building it and exp
    sends, so there is one activation path rather than two to keep in step.
 2. **Visible.** `:focus-visible` rings, in `style.css`'s focus block. A control you can reach but
    can't see you've reached is not reachable. Never `outline: none` without putting an equal-or-louder
-   affordance in its place (the pane gutters' accent line is the one legitimate case). **A row in a
-   pane that repaints rings on plain `:focus`** instead — `.tree-row`, and discovery's
-   `[data-side-row]`. Not a style preference: WebKit grants `:focus-visible` to a script-focused node
-   only by inheriting it from the *currently* focused one, and an `innerHTML` swap leaves that as
-   `<body>`, so a row re-focused by key after a repaint comes back focused but **ringless** until the
-   user's next keystroke re-arms the heuristic — which reads as the ring lagging one key behind the
+   affordance in its place (the pane gutters' accent line is the one legitimate case). **Anything a
+   pane re-focuses across its own repaint rings on plain `:focus`** instead — `.tree-row`,
+   discovery's `[data-side-row]`, the graph's `.gnode`, and the pane chrome restored by `id`. Not a
+   style preference: WebKit grants `:focus-visible` to a script-focused node only by inheriting it
+   from the *currently* focused one, and an `innerHTML` swap leaves that as `<body>`, so a row
+   re-focused by key after a repaint comes back focused but **ringless** until the user's next
+   keystroke re-arms the heuristic — which reads as the ring lagging one key behind the
    arrows (the reported bug). `:focus` is the state the repaint actually restores, and it costs
-   nothing here because WebKit never focuses a button on click (below), so those rows only ever hold
-   focus from a key.
+   nothing on a button because WebKit never focuses one on click (below), so those rows and chips
+   only ever hold focus from a key. A graph node is the one non-button in the list — a `<g>` *is*
+   focused by a click — but every node click re-anchors the scene, leaves the graph, or opens the
+   link modal, so the ring never outlives the frame it appeared in.
 3. **Escapable.** An overlay takes focus on open, **traps ⇥** while it's up, and **restores focus** to
    whatever opened it on close. `Escape` dismisses innermost-first; `Enter` confirms. All of this is
    one hook — `syncOverlayFocus()` in `main.ts`, called at the end of every `render()` and acting only
@@ -156,14 +159,20 @@ Every new surface owes all four. They are cheap while you're building it and exp
   are how this UI renders, so anything holding focus is gone after one, and the keyboard user is
   silently ejected to `<body>` by an unrelated toast or watcher pulse. Two consequences, and the
   second is the one that bites: (a) restore by *identity that outlives the swap*, never by element —
-  `paintTree` re-focuses the tree's row **by path**, `paintSide` the discovery row **by row key**, and
-  `captureReturnFocus` returns a thunk (tree path → row key → id → element). A pane that swaps its
-  `innerHTML` with no such restoration is a pane that ejects the keyboard on every toast, which is
-  exactly how discovery behaved until it got one; (b) you cannot read `document.activeElement` at the end of `render()` to
-  learn what triggered an overlay, because `render()` swapped `#modal-root`/`#menu-root` on the way
-  there and the answer is already `<body>`. Hence `lastFocused`, tracked continuously from `focusin`
-  — destroying a focused node fires no `focusin`, so the last value is still the trigger. Any control
-  that has to be *returned to* therefore needs a stable `id` (`#settings-shortcuts` is one).
+  `paintTree` re-focuses the tree's row **by path**; `capturePaneFocus` is the note and side panes'
+  one mechanism (discovery row key → graph node's scene id → stable `id` → the pane itself, which is
+  the honest floor for a wikilink or a backlink card that has no durable identity); and
+  `captureReturnFocus` returns the overlay's own thunk (tree path → row key → node id → id →
+  element). A pane that swaps its `innerHTML` with no such restoration is a pane that ejects the
+  keyboard on every toast, which is exactly how discovery behaved until it got one — and how the
+  note pane behaved until [#91](https://github.com/AlteredCraft/B2/issues/91). **A control that has
+  to be restored therefore needs a durable identity in the markup**: a stable `id` on pane chrome
+  (the note bar's chips, search mode's `clear`), `data-gnode` on a graph node; (b) you cannot read
+  `document.activeElement` at the end of `render()` to learn what triggered an overlay, because
+  `render()` swapped `#modal-root`/`#menu-root` on the way there and the answer is already
+  `<body>`. Hence `lastFocused`, tracked continuously from `focusin` — destroying a focused node
+  fires no `focusin`, so the last value is still the trigger. The identity rule from (a) is what it
+  returns *by*, which is why `#settings-shortcuts` has an id.
 - **WebKit doesn't focus a button on click.** So a `focusin` listener alone won't see a mouse user's
   selection, and the keyboard's idea of "where I am" would drift from the mouse's. The click
   delegation sets `state.treeFocus` and `state.sideFocus` explicitly for this reason — and it is the
