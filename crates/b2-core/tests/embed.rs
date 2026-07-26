@@ -289,6 +289,79 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     );
 }
 
+/// Concurrent embed passes leave **one** intact vector space (#114, invariant C1).
+///
+/// `ensure_embedding_space` is the file's second drop-and-rebuild, and it had the same
+/// defect as the schema migration: read whether the space matches, then drop and
+/// recreate — unwrapped and unserialized. Two embed passes can genuinely overlap, and
+/// nothing structural prevents it: the `#55` advisory lock is taken by `b2-cli` alone,
+/// so a desktop reindex and a `b2 reindex` are exactly this test.
+///
+/// Where the migration race needed twenty rounds to bite, this one is near-certain —
+/// every caller runs the batch, so the window is four statements wide rather than a
+/// stale-version read. Measured against the unfixed engine: **70 of 80 workers errored**
+/// (`table embeddings already exists`) and **every** round lost vectors, in each of three
+/// runs. Both halves are asserted here, and losing vectors is the quiet one — a `DROP`
+/// landing after another pass has started writing takes the vectors it already wrote
+/// with it, leaving an index that reports a complete embed over a half-empty space.
+#[test]
+fn concurrent_embed_passes_leave_one_intact_vector_space() {
+    use std::sync::{Arc, Barrier};
+
+    const ROUNDS: usize = 3;
+    const PASSES: i64 = 8;
+
+    for round in 0..ROUNDS {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("b2.sqlite");
+        // A projected-but-unembedded index: one note, one chunk per racing pass.
+        {
+            let conn = open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
+                 VALUES ('01NOTE', 'n.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            for seq in 0..PASSES {
+                conn.execute(
+                    "INSERT INTO chunks(id, note_b2id, seq, char_start, char_end, token_count, text)
+                     VALUES (?1, '01NOTE', ?1, 0, 1, 1, 'text')",
+                    [seq],
+                )
+                .unwrap();
+            }
+        }
+
+        let start = Arc::new(Barrier::new(PASSES as usize));
+        let passes: Vec<_> = (0..PASSES)
+            .map(|chunk_id| {
+                let db_path = db_path.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    let conn = open(&db_path).unwrap();
+                    start.wait();
+                    // What `embed_vault` does: ensure the space, then write vectors into it.
+                    db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128)?;
+                    db::set_chunk_vector(&conn, chunk_id, &[0.5; 128])
+                })
+            })
+            .collect();
+        for pass in passes {
+            pass.join()
+                .unwrap()
+                .unwrap_or_else(|e| panic!("round {round}: a concurrent embed pass failed: {e}"));
+        }
+
+        let conn = open(&db_path).unwrap();
+        assert_eq!(
+            count(&conn, "embeddings"),
+            PASSES,
+            "round {round}: a rebuild dropped vectors another pass had already written"
+        );
+    }
+}
+
 /// The other half of the model-swap contract. `ensure_embedding_space` (above)
 /// covers what a *reindex* does — drop the stale vectors and re-embed. This covers
 /// what happens **before** anyone reindexes: `open` deliberately never touches the

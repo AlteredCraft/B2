@@ -203,6 +203,15 @@ by a content-hash revision; B2 never authors body content itself), and the front
 through `Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes,
 body untouched, refusing only a changed/removed `b2id` — GH #79).
 
+**Many processes hold one index open at once** (invariant C1, index-engine.md §3 "Opening the index
+concurrently"): `b2 reindex &` racing a `b2 status`, the desktop app launching against a vault a CLI
+reindex is building, the desktop host's own threads. Readers are unrestricted and **never refused** — the
+common `open` reads two rows and takes no write lock. The two *drop-and-rebuild* paths are the ones that
+must be serialized, and both are, on SQLite's own write lock: the `schema_version` migration and the
+embed-time vector tables each check, re-check inside `BEGIN IMMEDIATE`, and rebuild once (GH #114). Note
+what does **not** cover this: the `reindex` advisory lock (GH #55) lives in `b2-cli` and is taken by
+writers only, so it can't serialize a reader — or a desktop reindex — against anything.
+
 **Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
 "Folders"): a folder — empty or not — is vault material like a note, never projected
 into the index (nothing to chunk, embed, or link). The tree's structure listing (`Vault::list_dirs`) is a

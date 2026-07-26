@@ -16,9 +16,11 @@
 
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use rusqlite::trace::{TraceEvent, TraceEventCodes};
-use rusqlite::{params, Connection, OptionalExtension, StatementStatus};
+use rusqlite::{
+    params, Connection, OptionalExtension, StatementStatus, Transaction, TransactionBehavior,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -127,7 +129,7 @@ fn on_sqlite_profile(event: TraceEvent<'_>) {
 /// Open (creating if needed) the B2 index at `path` with the locked pragmas and an
 /// idempotent migration. Safe to call on a fresh or an already-built index.
 pub fn open(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     // Profile every statement on this connection through SQLite's trace_v2 hook —
     // the source of the `b2::sqlite` query-timing events (see `on_sqlite_profile`).
     conn.trace_v2(
@@ -154,18 +156,65 @@ pub fn open(path: &Path) -> Result<Connection> {
     )?;
     // Separate, and retried, because the busy timeout above does not cover it (#111).
     enter_wal_mode(&conn)?;
-    migrate(&conn)?;
+    migrate(&mut conn)?;
     Ok(conn)
 }
 
 /// How many times [`enter_wal_mode`] attempts the flip before surfacing the busy
-/// error, and the pause schedule between attempts: doubling from
-/// [`WAL_FLIP_BACKOFF_START`] up to [`WAL_FLIP_BACKOFF_MAX`], ≈4 s of total wait —
-/// the same order as the `busy_timeout` the rest of the connection gets, since it is
-/// standing in for it.
+/// error. Large, because these retries are *standing in for* `busy_timeout` — the one
+/// statement it does not cover — so the whole wait budget is here: doubling from
+/// [`LOCK_RETRY_BACKOFF_START`] up to [`LOCK_RETRY_BACKOFF_MAX`], ≈4 s of total wait,
+/// the same order as the timeout the rest of the connection gets.
 const WAL_FLIP_ATTEMPTS: u32 = 16;
-const WAL_FLIP_BACKOFF_START: Duration = Duration::from_millis(2);
-const WAL_FLIP_BACKOFF_MAX: Duration = Duration::from_millis(500);
+
+/// How many times the DDL rebuilds ([`migrate`], [`ensure_embedding_space`]) re-attempt
+/// their `BEGIN IMMEDIATE` before surfacing the busy error. Small where the flip's is
+/// large, and for the opposite reason: these retries sit *on top of* `busy_timeout`
+/// rather than standing in for it — each attempt already waits the full 5 s for the
+/// write lock, so three is ≈15 s of patience. Past that it isn't a race to wait out,
+/// it's a stuck writer, and saying so beats hanging.
+const REBUILD_ATTEMPTS: u32 = 3;
+
+/// The pause schedule [`retry_while_locked`] uses between attempts.
+const LOCK_RETRY_BACKOFF_START: Duration = Duration::from_millis(2);
+const LOCK_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(500);
+
+/// Run `op`, retrying while SQLite reports the lock it wants is held by someone else —
+/// the one shape of failure in this module that is a *race*, not a fault, and so the
+/// one worth re-attempting. `what` names the contended step for the log line only.
+///
+/// The backoff sleeps, but reads no clock and decides nothing from one — the core's
+/// determinism guarantee (ids and timestamps passed in, never sampled) is untouched;
+/// this only changes how long a contended step waits, never what it computes.
+///
+/// Both callers hand it an operation that is **idempotent and self-checking**: a retry
+/// re-reads the state it is about to change, so the attempt that follows a lost race
+/// finds the work already done rather than doing it twice.
+fn retry_while_locked<T>(
+    what: &str,
+    attempts: u32,
+    mut op: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    let mut backoff = LOCK_RETRY_BACKOFF_START;
+    let mut attempt = 1;
+    loop {
+        match op() {
+            Ok(value) => return Ok(value),
+            // Out of budget, or not contention at all — surface it.
+            Err(e) if attempt >= attempts || !is_locked(&e) => return Err(e),
+            Err(_) => {
+                tracing::debug!(
+                    target: "b2::sqlite",
+                    what, attempt, backoff_ms = backoff.as_millis() as u64,
+                    "contended by a concurrent opener; retrying"
+                );
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(LOCK_RETRY_BACKOFF_MAX);
+                attempt += 1;
+            }
+        }
+    }
+}
 
 /// Put the connection in WAL mode, waiting out a concurrent opener (#111).
 ///
@@ -181,13 +230,10 @@ const WAL_FLIP_BACKOFF_MAX: Duration = Duration::from_millis(500);
 /// documented cold-vault flow that pays: `b2 reindex &` then `b2 status`, where the
 /// reindex is usually the loser and silently doesn't happen.
 ///
-/// So the retry is ours to do. It converges fast because it only has to outlast the
-/// *other* opener's flip: on the next attempt we either take the lock or find the
-/// database already in WAL, where the pragma is a no-op needing no lock at all.
-///
-/// The backoff sleeps, but reads no clock and decides nothing from one — the core's
-/// determinism guarantee (ids and timestamps passed in, never sampled) is untouched;
-/// this only changes how long a contended open waits, never what it computes.
+/// So the retry is ours to do ([`retry_while_locked`]). It converges fast because it
+/// only has to outlast the *other* opener's flip: on the next attempt we either take
+/// the lock or find the database already in WAL, where the pragma is a no-op needing no
+/// lock at all.
 ///
 /// **The mode is read back, not assumed.** The pragma reports the mode it *ended* on as
 /// a row, and there is one case where it declines the flip with no error at all: a
@@ -200,75 +246,167 @@ const WAL_FLIP_BACKOFF_MAX: Duration = Duration::from_millis(500);
 /// silently assumed, and it is **not** retried: nothing is holding a lock, so no amount
 /// of waiting would change the answer.
 fn enter_wal_mode(conn: &Connection) -> Result<()> {
-    let mut backoff = WAL_FLIP_BACKOFF_START;
-    let mut attempt = 1;
-    loop {
-        match conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0)) {
-            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
-            // Declined rather than contended — this filesystem cannot do WAL at all.
-            Ok(mode) => {
-                tracing::warn!(
-                    target: "b2::sqlite",
-                    journal_mode = %mode,
-                    "this filesystem does not support WAL; the index stays in rollback-journal mode"
-                );
-                return Ok(());
-            }
-            // Out of budget, or not contention at all — surface it.
-            Err(e) if attempt >= WAL_FLIP_ATTEMPTS || !is_locked(&e) => return Err(e.into()),
-            Err(_) => {
-                tracing::debug!(
-                    target: "b2::sqlite",
-                    attempt, backoff_ms = backoff.as_millis() as u64,
-                    "journal_mode=WAL contended by a concurrent opener; retrying"
-                );
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(WAL_FLIP_BACKOFF_MAX);
-                attempt += 1;
-            }
-        }
+    // A *declined* flip comes back as `Ok` carrying the old mode, so it falls out of the
+    // retry immediately — nothing holds a lock, and no amount of waiting changes it.
+    let mode = retry_while_locked("journal_mode=WAL", WAL_FLIP_ATTEMPTS, || {
+        Ok(conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0))?)
+    })?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        tracing::warn!(
+            target: "b2::sqlite",
+            journal_mode = %mode,
+            "this filesystem does not support WAL; the index stays in rollback-journal mode"
+        );
     }
+    Ok(())
 }
 
-/// Whether a SQLite error is lock contention — the retryable kind. `SQLITE_BUSY` is
-/// what the WAL flip loses with; `SQLITE_LOCKED` is its same-process sibling, matched
-/// too since the desktop host opens the index from more than one thread.
-fn is_locked(err: &rusqlite::Error) -> bool {
-    matches!(
-        err.sqlite_error_code(),
+/// Whether an error is SQLite lock contention — the retryable kind. `SQLITE_BUSY` is
+/// what the WAL flip and a contended `BEGIN IMMEDIATE` lose with; `SQLITE_LOCKED` is its
+/// same-process sibling, matched too since the desktop host opens the index from more
+/// than one thread.
+fn is_locked(err: &Error) -> bool {
+    matches!(err, Error::Sqlite(e) if matches!(
+        e.sqlite_error_code(),
         Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
-    )
+    ))
 }
 
-/// Create the schema and stamp `schema_version`. `IF NOT EXISTS` keeps the CREATEs a
-/// no-op on reopen; a `schema_version` mismatch drops the derived tables first so the
-/// next `reindex` rebuilds them (the index is disposable). The DDL mirrors
-/// index-engine.md (the vector tables are created at
-/// embed time — see [`ensure_embedding_space`]).
-fn migrate(conn: &Connection) -> Result<()> {
-    // `meta` must exist before we can read the schema version the index was built at.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-    )?;
-    // Schema-version gate: a mismatch means the derived tables have the wrong shape.
-    // The index is disposable (invariants.md, "volatile vault over a disposable
-    // index"), so drop the stale derived tables and clear `meta` — the next `reindex`
-    // rebuilds everything under the new schema. Children first (FKs); dropping `chunks`
-    // takes its FTS triggers with it.
-    let prior: Option<i64> = conn
+/// The tables [`apply_schema`] creates — the structural half of [`schema_is_current`],
+/// and the list a completed migration is checked against.
+///
+/// Tables only, and that is sufficient rather than lazy: the damage this guards against
+/// is a concurrent `DROP TABLE` (#114), and dropping a table takes its indexes and
+/// triggers down with it — so a missing table is the visible edge of *every* partial
+/// rebuild, and the list stays short enough to stay honest. The unit test at the foot of
+/// this file pins it to what the DDL actually creates, so a table added without updating
+/// this list fails the suite rather than silently narrowing the check.
+const SCHEMA_TABLES: [&str; 7] = [
+    "meta",
+    "notes",
+    "note_aliases",
+    "chunks",
+    "chunks_fts",
+    "resources",
+    "edges",
+];
+
+/// Bring the index to [`SCHEMA_VERSION`] — **atomically, and serialized against every
+/// other opener** (invariants C1, #114).
+///
+/// Two properties, and the reasons they cost what they cost:
+///
+/// **Serialized.** `migrate` is a read-then-decide-then-write sequence, so two openers
+/// that both read a stale version will both rebuild, and unsynchronized their ~30 DDL
+/// statements interleave freely: opener B's `DROP TABLE resources` lands after opener
+/// A's `CREATE TABLE resources`, and A then stamps the current version over a schema B
+/// has partly demolished. Measured before the fix over 320 racing opens (40 rounds × 8):
+/// **10 opens failed outright** with `no such table: main.resources`, and **8
+/// missing-table observations** were left behind by rounds where *every* opener returned
+/// `Ok` — the quiet half, found later by a `search` that can't. `busy_timeout` never applied —
+/// nothing was contending for a lock; the statements all succeeded, in the wrong order.
+///
+/// The serialization is SQLite's own write lock (`BEGIN IMMEDIATE`), not a second
+/// mechanism layered over the database: the loser of the race blocks on the winner's
+/// transaction under the `busy_timeout` already set in [`open`], and the re-check inside
+/// that transaction is where it learns the work is done. An advisory lock file would
+/// serialize this too, but it would be a *third* concurrency mechanism (alongside the
+/// `#55` reindex lock and the `#111` flip retry) guarding state the database is already
+/// able to guard — and it would be the weaker guard exactly where it matters, since a
+/// vault on a network share or synced folder is where `flock` quietly stops meaning
+/// anything.
+///
+/// **Atomic.** The drop-and-rebuild runs in one transaction (DDL is transactional in
+/// SQLite), so a crash, a cancel, or an error mid-rebuild rolls back to the schema that
+/// was there before. Nothing observes the half-built shape — the stamp and the tables it
+/// vouches for commit together, which is what lets [`schema_is_current`] trust the stamp.
+///
+/// **The fast path takes no write lock at all.** An index already at the current version
+/// is the overwhelmingly common case (every open after the first), and it now costs two
+/// reads instead of the ~30 `IF NOT EXISTS` DDL statements plus a `meta` write it used to
+/// re-run on every single open. That is what keeps C1's "a reader is never refused" true:
+/// a reader opening a current index cannot be blocked by a writer, because it asks for
+/// nothing a writer holds.
+fn migrate(conn: &mut Connection) -> Result<()> {
+    if schema_is_current(conn)? {
+        return Ok(());
+    }
+    retry_while_locked("schema migration", REBUILD_ATTEMPTS, || {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Re-checked *inside* the write lock, which is the whole point of taking it: if
+        // we lost the race to another opener, we waited on its transaction and this is
+        // where we find its work already committed. Idempotent by construction — the
+        // winner's rebuild and this check cannot interleave.
+        if !schema_is_current(&tx)? {
+            apply_schema(&tx)?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// Whether this connection sees a **complete** schema at the current [`SCHEMA_VERSION`]:
+/// every table in [`SCHEMA_TABLES`] present *and* the stamp current.
+///
+/// Both halves are load-bearing. The stamp alone was the whole test before #114, and a
+/// current stamp over an incomplete schema is precisely what that bug could leave behind
+/// — so an index damaged by an older `b2` is detected here and rebuilt, rather than
+/// carried forward to fail far from its cause on the next `search`.
+fn schema_is_current(conn: &Connection) -> Result<bool> {
+    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+    let present: HashSet<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !SCHEMA_TABLES.iter().all(|t| present.contains(*t)) {
+        return Ok(false);
+    }
+    Ok(stamped_version(conn)? == Some(SCHEMA_VERSION))
+}
+
+/// The `schema_version` recorded in `meta`, or `None` on an index that has never been
+/// stamped. Callers must know `meta` exists — both reach it only past a check that it
+/// does.
+fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
+    Ok(conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
             [],
             |r| r.get::<_, String>(0),
         )
         .optional()?
-        .and_then(|s| s.parse().ok());
+        .and_then(|s| s.parse().ok()))
+}
+
+/// Create the schema and stamp `schema_version`, dropping a prior one first. `IF NOT
+/// EXISTS` keeps the CREATEs a no-op over anything a half-finished predecessor left. The
+/// DDL mirrors index-engine.md (the vector tables are created at embed time — see
+/// [`ensure_embedding_space`]).
+///
+/// **Called only from inside [`migrate`]'s transaction**, which is what makes the
+/// drop-then-create sequence safe; it is not a standalone entry point.
+fn apply_schema(conn: &Connection) -> Result<()> {
+    // `meta` must exist before we can read the schema version the index was built at.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )?;
+    let prior = stamped_version(conn)?;
+    // A prior stamp *and* we got here means [`schema_is_current`] said no: the derived
+    // tables are either the wrong shape (version bump) or structurally incomplete (a
+    // rebuild an older `b2` lost a race in the middle of, #114). Both rebuild from
+    // empty, and for the same reason — the index is disposable (invariants.md, "volatile
+    // vault over a disposable index"), while rows *surviving* in the tables that remain
+    // are worse than none: an incremental reindex skips notes whose `body_hash` matches,
+    // so it would leave the recreated tables empty forever and quietly break S3
+    // (`full-reindex ≡ incremental-update`). Dropping them all means the next `reindex`
+    // refills everything. Children first (FKs); dropping `chunks` takes its FTS triggers
+    // with it.
+    //
     // The legacy vec0 `chunks_vec` (schema ≤ 2) is deliberately absent from this
     // list: its module is no longer linked, so SQLite cannot DROP it — any orphaned
     // entry stays inert in `sqlite_master` and nothing ever queries it (delete the
     // index file for a byte-clean slate). `DELETE FROM meta` clears the recorded
     // embedder, so the next embed pass recreates the vector tables from nothing.
-    if prior.is_some_and(|v| v != SCHEMA_VERSION) {
+    if prior.is_some() {
         conn.execute_batch(
             "DROP TABLE IF EXISTS edge_provenance;
              DROP TABLE IF EXISTS edges;
@@ -718,7 +856,49 @@ pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
 /// so vectors never go silently stale. (`dim` is bookkeeping only now — a plain
 /// BLOB column needs no `FLOAT[N]` DDL literal — but it still gates the swap and
 /// the read-time fail-fast.)
+///
+/// **Serialized and atomic on the same terms as [`migrate`]** (#114). This is the second
+/// drop-and-rebuild in the file and it had the identical defect: two embed passes that
+/// both find the space missing — the desktop's reindex task and a `b2 reindex`, which
+/// nothing stops from overlapping, since the `#55` advisory lock is taken by the CLI
+/// alone — would both run the batch, and B's `DROP TABLE embeddings` landing after A's
+/// `CREATE` leaves A inserting vectors into a table that no longer exists. Same
+/// structure, same fix: check, then re-check under `BEGIN IMMEDIATE`, rebuild once.
 pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> Result<()> {
+    if embedding_space_matches(conn, model_id, dim)? {
+        return Ok(());
+    }
+    retry_while_locked("embedding-space rebuild", REBUILD_ATTEMPTS, || {
+        // `new_unchecked` because this takes `&Connection`, not `&mut` — the embed pass
+        // threads a shared connection through. Sound here because `b2-core` opens no
+        // other transaction on it: nothing in this crate can already be inside one.
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        if !embedding_space_matches(&tx, model_id, dim)? {
+            tx.execute_batch(
+                "DROP TABLE IF EXISTS note_centroids;
+                 DROP TABLE IF EXISTS embeddings;
+                 CREATE TABLE embeddings (
+                   chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+                   vector   BLOB NOT NULL
+                 );
+                 CREATE TABLE note_centroids (
+                   note_b2id TEXT PRIMARY KEY REFERENCES notes(b2id) ON DELETE CASCADE,
+                   centroid  BLOB NOT NULL
+                 );",
+            )?;
+            upsert_meta(&tx, "embed_model_id", model_id)?;
+            upsert_meta(&tx, "embed_dim", &dim.to_string())?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// Whether the vector tables exist *and* were built by this exact embedder identity —
+/// the "nothing to do" test [`ensure_embedding_space`] runs twice, once cheaply and once
+/// under the write lock. Identity first: a recorded model that differs settles it
+/// without the `sqlite_master` lookup.
+fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Result<bool> {
     let cur_model: Option<String> = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'embed_model_id'",
@@ -734,25 +914,7 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
 
     let unchanged = cur_model.as_deref() == Some(model_id)
         && cur_dim.as_deref() == Some(dim.to_string().as_str());
-    if unchanged && embedding_space_exists(conn)? {
-        return Ok(());
-    }
-
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS note_centroids;
-         DROP TABLE IF EXISTS embeddings;
-         CREATE TABLE embeddings (
-           chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-           vector   BLOB NOT NULL
-         );
-         CREATE TABLE note_centroids (
-           note_b2id TEXT PRIMARY KEY REFERENCES notes(b2id) ON DELETE CASCADE,
-           centroid  BLOB NOT NULL
-         );",
-    )?;
-    upsert_meta(conn, "embed_model_id", model_id)?;
-    upsert_meta(conn, "embed_dim", &dim.to_string())?;
-    Ok(())
+    Ok(unchanged && embedding_space_exists(conn)?)
 }
 
 /// The `(embed_model_id, embed_dim)` a prior ingest recorded in `meta`, if any.
@@ -1281,7 +1443,40 @@ pub fn edge_exists(conn: &Connection, src_id: &str, dst_id: &str, edge_type: &st
 
 #[cfg(test)]
 mod tests {
-    use super::should_emit;
+    use super::{apply_schema, should_emit, SCHEMA_TABLES};
+    use rusqlite::Connection;
+    use std::collections::HashSet;
+
+    /// [`SCHEMA_TABLES`] is what a completed migration is *checked* against, so a table
+    /// added to the DDL and not to the list would narrow the completeness check in
+    /// silence — the check would keep passing over an index missing the new table. This
+    /// pins the list to what the DDL actually creates, in both directions.
+    ///
+    /// Runs against an in-memory database: the claim is about the DDL, not about files.
+    #[test]
+    fn schema_tables_lists_exactly_what_the_ddl_creates() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap();
+        let created: HashSet<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|n| n.unwrap())
+            // FTS5 keeps its own shadow tables (`chunks_fts_data`, `_idx`, …) alongside
+            // the virtual table; they are SQLite's bookkeeping, created and dropped with
+            // it, never ours to list. `sqlite_%` is reserved for the same reason.
+            .filter(|n| !n.starts_with("chunks_fts_") && !n.starts_with("sqlite_"))
+            .collect();
+
+        let listed: HashSet<String> = SCHEMA_TABLES.iter().map(|t| t.to_string()).collect();
+        assert_eq!(
+            created, listed,
+            "SCHEMA_TABLES must match the tables the migration DDL creates"
+        );
+    }
 
     /// The full truth table for the profiler's emit guard (all 8 combinations).
     /// Both listening paths have to survive independently: a slow statement logs at
