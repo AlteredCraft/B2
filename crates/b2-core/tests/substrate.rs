@@ -174,8 +174,12 @@ fn concurrent_openers_of_a_fresh_index_coexist() {
     let tmp = tempfile::TempDir::new().unwrap();
     let db_path = tmp.path().join("b2.sqlite");
 
-    let start = Arc::new(Barrier::new(8));
-    let openers: Vec<_> = (0..8)
+    // One binding for both the barrier's count and the thread count: if those two ever
+    // drift, the barrier simply never releases and the test *hangs* — a CI timeout with
+    // no failing assertion to read, which is a far worse way to learn about a typo.
+    const OPENERS: usize = 8;
+    let start = Arc::new(Barrier::new(OPENERS));
+    let openers: Vec<_> = (0..OPENERS)
         .map(|_| {
             let db_path = db_path.clone();
             let start = Arc::clone(&start);
