@@ -90,6 +90,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
     title: "The app",
     items: [
       { keys: "⌘,", action: "Settings" },
+      { keys: "⇧⌘A", action: "Review the last index pass's anomalies" },
       { keys: "?", action: "This sheet" },
       { keys: "Tab", action: "Step through the controls on screen" },
     ],

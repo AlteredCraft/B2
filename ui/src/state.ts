@@ -17,6 +17,7 @@ import type {
   UnresolvedLink,
 } from "./types";
 import type { NodeKind } from "./move";
+import type { IndexAnomalies } from "./anomalies";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
@@ -206,6 +207,19 @@ export interface AppState {
   /** The settings modal (⌘,) is open. */
   settingsOpen: boolean;
   /**
+   * The GH #81 anomalies the **latest** projection pass surfaced — duplicate `b2id`s
+   * and identity restamps — or null before any pass has run in this session. Drives
+   * the top bar's ⚠ badge and the review panel (GH #88).
+   *
+   * Deliberately just the last report, replaced wholesale on every pass and cleared by
+   * a clean one: nothing anomaly-shaped is ever *stored* (index-engine.md §8, S2), so
+   * this is a view of what the vault + index say right now, not an accumulating queue.
+   * A restart shows nothing until the next pass re-derives the same anomaly.
+   */
+  anomalies: IndexAnomalies | null;
+  /** The anomaly review panel (⇧⌘A, or the ⚠ badge) is open. */
+  anomaliesOpen: boolean;
+  /**
    * The keyboard-reference sheet (`?`) is open. Rendered *over* whatever else is up
    * (it opens from Settings too), so it takes precedence in `modalHtml` and closes
    * first on Escape — leaving the overlay underneath exactly as it was. K1, GH #78.
@@ -284,6 +298,8 @@ export const state: AppState = {
   linkTarget: null,
   linkRelation: "references",
   settingsOpen: false,
+  anomalies: null,
+  anomaliesOpen: false,
   shortcutsOpen: false,
   theme: "system",
   models: [],

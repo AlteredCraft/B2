@@ -315,10 +315,14 @@ export type CollisionPrecedence = "incumbent" | "tie_break";
 /**
  * A cross-note `b2id` collision the projection pass surfaced (GH #81) — e.g. a
  * note duplicated in Finder. One file keeps the identity; the `shadowed_paths`
- * stay on disk (and in the tree) but are NOT indexed until the human resolves:
- * delete the copy, remove its `b2id:` line (next pass stamps a fresh identity),
- * or delete the original (the copy inherits). Surfacing only — B2 never edits
- * either file of its own accord.
+ * stay on disk but are NOT indexed until the human resolves: delete the copy,
+ * remove its `b2id:` line (next pass stamps a fresh identity), or delete the
+ * original (the copy inherits). Surfacing only — B2 never edits either file of
+ * its own accord.
+ *
+ * With no index row a shadowed path is also absent from the file tree (which lists
+ * `list_notes`), so the review panel (GH #88) can offer it for *copying* but never
+ * for opening — see `anomalies.ts`.
  */
 export interface B2idCollision {
   b2id: string;

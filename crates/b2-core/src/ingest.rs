@@ -115,8 +115,10 @@ pub enum CollisionPrecedence {
 /// A cross-note `b2id` collision surfaced by a projection pass (GH #81): two or
 /// more files presented the same id — e.g. a note duplicated in Finder. One file
 /// keeps the identity (see [`CollisionPrecedence`]); the rest are **shadowed** —
-/// on disk and in the file tree, but not indexed (no row, no search hits, no
-/// graph presence) — and re-surfaced on *every* pass until the human resolves it:
+/// still on disk, but with no row they have no search hits, no graph presence, and
+/// no entry in an adapter's file tree either (those list notes from the index) — so
+/// this notice is the only place a shadowed copy is visible at all. Re-surfaced on
+/// *every* pass until the human resolves it:
 /// delete the copy, remove the copy's `b2id:` line (the next pass stamps a fresh
 /// identity), or delete the original (the copy then inherits the identity).
 /// Surfacing only — B2 never edits either file of its own accord (W4).
