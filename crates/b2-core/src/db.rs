@@ -188,12 +188,32 @@ const WAL_FLIP_BACKOFF_MAX: Duration = Duration::from_millis(500);
 /// The backoff sleeps, but reads no clock and decides nothing from one — the core's
 /// determinism guarantee (ids and timestamps passed in, never sampled) is untouched;
 /// this only changes how long a contended open waits, never what it computes.
+///
+/// **The mode is read back, not assumed.** The pragma reports the mode it *ended* on as
+/// a row, and there is one case where it declines the flip with no error at all: a
+/// filesystem with no shared-memory support (`sqlite3PagerWalSupported` — a network
+/// share, or a synced folder on some setups, both plausible homes for a personal
+/// vault), where SQLite returns the *old* mode and `SQLITE_OK`. A row-discarding
+/// `execute_batch` would report success having changed nothing, so this queries instead.
+/// A decline is **not** an error — B2 is correct in rollback-journal mode, and refusing
+/// to open such a vault would be the worse bug — but it is said out loud rather than
+/// silently assumed, and it is **not** retried: nothing is holding a lock, so no amount
+/// of waiting would change the answer.
 fn enter_wal_mode(conn: &Connection) -> Result<()> {
     let mut backoff = WAL_FLIP_BACKOFF_START;
     let mut attempt = 1;
     loop {
-        match conn.execute_batch("PRAGMA journal_mode = WAL;") {
-            Ok(()) => return Ok(()),
+        match conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0)) {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            // Declined rather than contended — this filesystem cannot do WAL at all.
+            Ok(mode) => {
+                tracing::warn!(
+                    target: "b2::sqlite",
+                    journal_mode = %mode,
+                    "this filesystem does not support WAL; the index stays in rollback-journal mode"
+                );
+                return Ok(());
+            }
             // Out of budget, or not contention at all — surface it.
             Err(e) if attempt >= WAL_FLIP_ATTEMPTS || !is_locked(&e) => return Err(e.into()),
             Err(_) => {
