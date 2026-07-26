@@ -159,6 +159,23 @@ tomorrow's model* — made mechanical.
   independent layer — defense-in-depth, never the sole guard.
   ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
 
+## C — Concurrency: many readers, one builder
+
+- **C1 — Any number of processes may hold one vault's index open at once.** The index is a
+  disposable projection, so concurrent *readers* are unrestricted and **a reader is never
+  refused** — opening an index already at the current `schema_version` takes no write lock at
+  all, so a running reindex cannot turn a `search` into an error. Creating and rebuilding that
+  projection is the one step that must be **atomic and serialized**: an `open` observes a complete
+  schema at the current `schema_version`, or waits out a bounded budget for the opener that is
+  building one — **never a partial schema**, and never one another opener is still rebuilding. The
+  no-partial half is absolute; the waiting half is not, and deliberately: past the budget a stuck
+  writer is reported rather than hung on. "Complete" is checked, not assumed:
+  a current stamp over missing tables is treated as stale and rebuilt from empty, since surviving
+  rows would look up-to-date to an incremental reindex and break S3. The same holds for the
+  index's *other* drop-and-rebuild, the vector tables (M4). Concurrent *writers* remain
+  single-in-flight by the `reindex` advisory lock — which readers never take, and so cannot cover
+  this. ([index-engine.md](index-engine.md) §3, GH #111, #114)
+
 ## K — Interaction: keyboard-first
 
 - **K1 — B2 is fully operable from the keyboard; the mouse is an accelerator, never a requirement.**

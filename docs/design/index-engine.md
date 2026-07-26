@@ -191,6 +191,44 @@ Why this shape fits B2 specifically:
   the whole pipeline is assertable with no live model (testability stack, points 4–5). The embedder is the
   one AI seam.
 
+### Opening the index concurrently — many readers, one builder
+
+Nothing in B2 opens the index exclusively, and several things open it at once: `b2 reindex &` racing a
+`b2 status`, the desktop app launching while a CLI reindex runs, the desktop host's own threads. The
+locked stance is **C1** ([invariants.md](invariants.md)) — unrestricted readers, a serialized builder —
+and `db::open` is where it is enforced, in three layers that each answer a different failure:
+
+- **The `WAL` flip is retried** ([#111](https://github.com/AlteredCraft/B2/issues/111)). Setting
+  `journal_mode = WAL` is the one statement in `open` that takes a write lock, and the one
+  `busy_timeout` cannot cover (SQLite skips the busy handler for a write lock upgraded from an already-open
+  read transaction), so a second opener took an immediate `SQLITE_BUSY`. The wait is ours to do.
+- **The schema migration is one `BEGIN IMMEDIATE` transaction, entered only when there is work**
+  ([#114](https://github.com/AlteredCraft/B2/issues/114)). It is a read-then-decide-then-write sequence,
+  and its rebuild is ~30 DDL statements; unserialized, two openers that both read a stale
+  `schema_version` interleave — one's `DROP TABLE resources` landing after the other's `CREATE`, and the
+  current version stamped over a half-demolished schema. `busy_timeout` was irrelevant: nothing contended
+  for a lock, every statement succeeded, in the wrong order. Serializing on SQLite's own write lock makes
+  the loser wait and then find the work done; wrapping it makes a rebuild all-or-nothing, which is what
+  lets the stamp be trusted. The check that decides whether to enter is a **read** — so the common open,
+  against a current schema, takes no write lock and can never be refused by a writer.
+- **Completeness is checked, not assumed.** A stamp is believed only alongside the tables it vouches
+  for; a current stamp over missing tables (the wreckage a pre-#114 `b2` could leave) is treated as stale
+  and rebuilt from empty. Recreating just the missing tables would be worse than useless: an incremental
+  reindex skips notes whose `body_hash` matches, so the recreated tables would stay empty and `S3`
+  (`full-reindex ≡ incremental-update`) would quietly fail.
+
+The vector tables (created at embed time, §4/M4) are the same drop-and-rebuild shape and get the same
+treatment — two embed passes can genuinely overlap, since the `reindex` advisory lock
+([#55](https://github.com/AlteredCraft/B2/issues/55)) is taken by `b2-cli` alone and never by the desktop
+host or by readers.
+
+**Why not an advisory lock file for this**, given B2 already has one for `reindex`? Because it would be a
+*third* concurrency mechanism guarding state the database already knows how to guard, and the weaker one
+where it counts: a vault on a network share or a synced folder — a plausible home for a personal vault —
+is exactly where `flock` quietly stops meaning anything. The `reindex` lock answers a question SQLite
+cannot (*is another **process** already doing this expensive work?*); schema atomicity is not that
+question.
+
 ### Why materialize the graph at all — vs. resolving links at runtime
 
 A note's *outbound* links (and their type + explanation) are parseable from that one file on demand, so

@@ -10,13 +10,47 @@
 //!   - the **first** open of a vault's index survives contention (#111): the one
 //!     pragma `busy_timeout` cannot cover is retried until it lands, and concurrent
 //!     openers of one fresh index coexist.
-//!
-//! Note what is *not* covered here: `open` is only concurrency-safe up to its
-//! **`schema_version` migration**, which still runs unwrapped DDL — see #114.
+//!   - `open` is concurrency-safe *through* its `schema_version` migration (#114,
+//!     invariant C1): a stale-schema rebuild is atomic and serialized, an incomplete
+//!     schema is rebuilt rather than trusted, and a reader is never refused. (C1's other
+//!     drop-and-rebuild — the vector tables, created at embed time — is covered where it
+//!     lives, in `embed.rs`.)
 
 use b2_core::{open, SCHEMA_VERSION};
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::Duration;
+
+/// The tables `db::migrate` must leave behind — restated here because an integration
+/// test sees only the public API, never the engine's own `SCHEMA_TABLES`.
+///
+/// The engine's list is pinned to the DDL by a unit test in `db.rs`; this copy is not,
+/// and doesn't need to be. A table added there and forgotten here only makes the
+/// assertions in *this* file weaker, never wrong — the completeness check that actually
+/// guards the index reads the pinned list, not this one.
+const SCHEMA_TABLES: [&str; 7] = [
+    "meta",
+    "notes",
+    "note_aliases",
+    "chunks",
+    "chunks_fts",
+    "resources",
+    "edges",
+];
+
+/// Every table in [`SCHEMA_TABLES`] present in this index, named in the panic if not.
+fn assert_schema_complete(db_path: &std::path::Path, context: &str) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    for table in SCHEMA_TABLES {
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "{context}: `{table}` missing from the index");
+    }
+}
 
 /// The load-bearing bet: BM25 full-text search in the statically-linked bundled
 /// SQLite, no runtime `load_extension`.
@@ -196,4 +230,201 @@ fn concurrent_openers_of_a_fresh_index_coexist() {
             .unwrap()
             .expect("a concurrent first open must not fail");
     }
+}
+
+/// Build an index at the *previous* schema version, so every opener of it takes the
+/// drop-and-rebuild branch of the migration — the state a vault is in on the first `b2`
+/// run after an upgrade that bumps `SCHEMA_VERSION`.
+fn stale_index(db_path: &std::path::Path) {
+    let conn = open(db_path).unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
+        [(SCHEMA_VERSION - 1).to_string()],
+    )
+    .unwrap();
+}
+
+/// Eight openers reaching a **stale-schema** index at once leave one complete schema
+/// behind, and none of them fails (#114, invariant C1).
+///
+/// The migration is a read-then-decide-then-write sequence, and its rebuild was ~30
+/// separately-committed DDL statements: two openers that both read the stale version
+/// both rebuilt, and their statements interleaved — opener B's `DROP TABLE resources`
+/// landing after opener A's `CREATE TABLE resources`, leaving A to stamp the current
+/// version over a schema B had partly demolished. `busy_timeout` never applied, because
+/// nothing was contending for a lock; every statement succeeded, in the wrong order.
+///
+/// **Both assertions are the test, and the second is the one that matters.** Failing
+/// opens (`no such table: main.resources`) are the loud half — bad, but self-announcing.
+/// The quiet half is an index left missing tables while *every* opener returned `Ok`,
+/// which surfaces later as a broken `search` or `reindex`, arbitrarily far from the
+/// cause. Measured against the unfixed engine at 20 rounds × 8 openers: 2–12 failed
+/// opens per run and up to 8 missing-table observations, caught in **7 of 8** runs.
+///
+/// So: a strong probe, not a certainty — the same honest caveat
+/// [`concurrent_openers_of_a_fresh_index_coexist`] carries, and for the same reason (a
+/// race only bites when the threads actually interleave). The deterministic gates for
+/// this fix are its two siblings below; this is the one that reproduces the bug as
+/// reported. Rounds are capped at 20 because detection flattens out past that while the
+/// wall-clock does not — the correlation is per-run machine mood, not per-round luck.
+#[test]
+fn concurrent_opens_of_a_stale_index_leave_a_complete_schema() {
+    const ROUNDS: usize = 20;
+    const OPENERS: usize = 8;
+
+    for round in 0..ROUNDS {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("b2.sqlite");
+        stale_index(&db_path);
+
+        let start = Arc::new(Barrier::new(OPENERS));
+        let openers: Vec<_> = (0..OPENERS)
+            .map(|_| {
+                let db_path = db_path.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    open(&db_path).map(|_| ())
+                })
+            })
+            .collect();
+        for opener in openers {
+            opener
+                .join()
+                .unwrap()
+                .unwrap_or_else(|e| panic!("round {round}: a concurrent open failed: {e}"));
+        }
+
+        // Every opener returned Ok, so each believes the index is migrated. Is it?
+        assert_schema_complete(&db_path, &format!("round {round}"));
+    }
+}
+
+/// An index whose stamp says "current" but whose tables say otherwise is **rebuilt**,
+/// not trusted (#114, invariant C1).
+///
+/// This is the wreckage the bug leaves in the field: a stamped-but-incomplete index,
+/// written by a `b2` old enough to have raced itself. The fix makes new ones impossible,
+/// and this is the other half — the existing ones have to heal, or the fix only helps
+/// vaults that were never bitten.
+///
+/// **Dropping the surviving rows is the assertion with teeth**, and the reason the
+/// repair is a full rebuild rather than a patch: recreating just the missing tables
+/// would leave `notes` rows claiming to be indexed while their chunks are gone, and an
+/// incremental reindex skips a note whose `body_hash` still matches — so the recreated
+/// tables would stay empty forever, quietly breaking S3 (`full-reindex ≡
+/// incremental-update`). The stamp is honest only if the whole projection is.
+#[test]
+fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("b2.sqlite");
+
+    {
+        let conn = open(&db_path).unwrap();
+        // A note the index believes is projected — the row that must not outlive the repair.
+        conn.execute(
+            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
+             VALUES ('01SURVIVOR', 'kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        // What a lost race left behind: the chunk tables gone, the stamp still current.
+        conn.execute_batch("DROP TABLE chunks_fts; DROP TABLE chunks;")
+            .unwrap();
+    }
+
+    let conn = open(&db_path).expect("an incomplete index must be repaired, not refused");
+    assert_schema_complete(&db_path, "after reopening an incomplete index");
+
+    let surviving: i64 = conn
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        surviving, 0,
+        "a repaired index must be rebuilt from empty, or an incremental reindex \
+         will never refill the tables it just recreated"
+    );
+}
+
+/// An index whose tables are all present but whose **stamp is gone** is rebuilt from
+/// empty too — the other way `schema_is_current` can say no (#114).
+///
+/// The sibling above loses a table and keeps the stamp; this one keeps every table and
+/// loses the stamp, which is the shape a guard on "was there a prior stamp?" waves
+/// through: nothing to compare, so nothing dropped, and the `CREATE … IF NOT EXISTS`
+/// batch settles over surviving tables of an unknown shape and re-stamps them current.
+/// Whatever wrote that state — a rebuild killed between clearing `meta` and re-stamping
+/// it, a half-restored backup, a hand-edited index — the tables are of no known version,
+/// and the rows in them are exactly the ones an incremental reindex would decline to
+/// refresh (S3). So the rebuild is unconditional: `apply_schema` has one outcome, an
+/// empty schema at the current version, whatever it finds.
+#[test]
+fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("b2.sqlite");
+
+    {
+        let conn = open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
+             VALUES ('01SURVIVOR', 'kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'schema_version'", [])
+            .unwrap();
+    }
+
+    let conn = open(&db_path).expect("an unstamped index must be repaired, not refused");
+    assert_schema_complete(&db_path, "after reopening an unstamped index");
+
+    let surviving: i64 = conn
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        surviving, 0,
+        "an index of no known version must be rebuilt from empty, not adopted as current"
+    );
+}
+
+/// Opening an index at the current schema is a **read**, so a writer holding the index
+/// cannot refuse it (#114, invariant C1: concurrent readers are unrestricted).
+///
+/// The migration used to re-run its ~30 `IF NOT EXISTS` DDL statements and re-stamp
+/// `meta` on *every* open, current schema or not — a write, on the one path that must
+/// never need one. Against a held write lock that stamp waited out the full 5 s
+/// `busy_timeout` and then failed the open outright: `b2 search` refused, in a vault
+/// whose only sin was having a reindex running. Now the common path reads two rows and
+/// writes nothing, so there is no lock to lose.
+///
+/// The writer here is a reindex mid-batch as a second process sees it. Its lock is
+/// proven held rather than assumed — a `busy_timeout = 0` probe must bounce off it —
+/// because a `BEGIN IMMEDIATE` that quietly took nothing would make this test pass
+/// against the very code it exists to catch.
+#[test]
+fn an_open_of_a_current_index_is_not_refused_by_a_writer() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("b2.sqlite");
+    drop(open(&db_path).unwrap()); // an index at the current schema
+
+    let writer = rusqlite::Connection::open(&db_path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    // Non-vacuity: the write lock is genuinely held right now.
+    let probe = rusqlite::Connection::open(&db_path).unwrap();
+    probe.execute_batch("PRAGMA busy_timeout = 0").unwrap();
+    assert!(
+        probe.execute_batch("BEGIN IMMEDIATE").is_err(),
+        "the writer must actually hold the write lock, or this test asserts nothing"
+    );
+
+    let conn = open(&db_path).expect("a reader must never be refused by a writer (C1)");
+
+    // And it is a working connection over the real schema, not a hollow one.
+    let notes: i64 = conn
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(notes, 0);
+
+    writer.execute_batch("ROLLBACK").unwrap();
 }
