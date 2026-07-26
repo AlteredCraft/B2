@@ -178,6 +178,40 @@ Every new surface owes all four. They are cheap while you're building it and exp
   delegation sets `state.treeFocus` and `state.sideFocus` explicitly for this reason — and it is the
   same fact that makes the `:focus` ring above safe.
 
+## The rendering trust boundary (invariant E5)
+
+[invariants.md](../../docs/design/invariants.md) **E5** — *note content is untrusted input; rendering is a
+trust boundary* — names this file as its elaboration home, the way K1 does above. E5 governs the **GUI**:
+the `b2` CLI prints text, so nothing there parses into a document
+([#77](https://github.com/AlteredCraft/B2/issues/77)).
+
+**The threat model, in one line: authorship is not trust.** A `.md` is a file, and files travel — a shared
+or synced vault, a note someone sent you, a web clip, a repo you cloned to read. So "it's the user's own
+local Markdown" is not a security property, and a note body is **hostile input** that B2 renders into its
+own window.
+
+**The rule: exactly one Markdown→HTML path, and it sanitizes.** `renderMarkdown` ([`ui/src/render.ts`](../../ui/src/render.ts))
+is that path, and the sanitizer ([`ui/src/sanitize.ts`](../../ui/src/sanitize.ts), DOMPurify) is wired into
+it as `marked`'s `postprocess` hook rather than called by each caller. That placement is the whole design:
+the reading view, live preview's `TableWidget`, and any surface added tomorrow are covered **by
+construction**, and sanitizing is the *last* thing that touches the HTML — nothing, not even B2's own
+`md-table` wrapper, is spliced in afterwards. `sanitize.ts` documents each of the four points where the
+config tightens DOMPurify's document-friendly default (`data-*` except the wikilink's `data-target`,
+`<form>`, `id`/`name`), and each one is a claim about what a *note* may do, not a Markdown feature removed.
+
+**CSP is the second layer, never the only one.** The webview policy
+([`tauri.conf.json`](tauri.conf.json)) — `default-src 'self'; img-src 'self' data:; style-src 'self'
+'unsafe-inline'` — does neutralize script execution, and it owns remote loads. It is not a substitute:
+`form-action` doesn't fall back to `default-src` (so a note-authored `<form action="https://…">` posts
+outward under a policy that looks locked down), CSP says nothing about DOM clobbering of the ids this UI
+re-finds its controls by, and a future relaxation would silently re-open everything. Two independent
+layers, and neither one is allowed to be the argument for skipping the other.
+
+**What a new surface owes:** anything that reaches `innerHTML` gets its content from `renderMarkdown` (note
+bodies) or from `escapeHtml` (every value B2 interpolates into chrome — titles, paths, snippets). There is
+no third option; a raw string built from vault data and assigned to `innerHTML` is the bug this invariant
+exists to prevent.
+
 ## Transport
 
 **Tauri IPC only** — the frontend `invoke`s these commands. This crate runs **no HTTP server**. An
