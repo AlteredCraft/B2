@@ -3281,9 +3281,12 @@ function wireEvents(): void {
       // search result) activates through the platform, and an inner control would already
       // be sending its own click — dispatching a second one would open the note twice.
       if (e.target !== row || row instanceof HTMLButtonElement) return;
-      const open = row.querySelector<HTMLElement>(".card-open");
-      if (!open) return; // an unresolved link points at nothing — ⏎ is a no-op
+      // Cancelled before the lookup below, not after: an unresolved row has no open
+      // button, and a *focusable div* that lets Space through gets the browser default —
+      // scrolling the pane — where the row's contract says nothing happens (PR #90 review).
       e.preventDefault();
+      const open = row.querySelector<HTMLElement>(".card-open");
+      if (!open) return; // an unresolved link points at nothing — ⏎/Space do nothing
       open.click();
     }
   });
