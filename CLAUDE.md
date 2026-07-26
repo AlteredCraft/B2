@@ -245,7 +245,11 @@ if/when one lands — `index-engine.md` §5.)*
   syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
   loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
   preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the
-  same read or edited.
+  same read or edited. The GUI is **keyboard-complete** (invariant K1): the file tree follows the
+  ARIA `tree` pattern over `ui/src/treenav.ts`'s row order — the *same* order `render.ts` paints, so
+  the arrows and the eye can't disagree — every overlay traps and restores focus, `⇧F10` is the
+  keyboard's right-click, and `?` shows the whole chord table (`ui/src/shortcuts.ts`). The four
+  obligations a new surface owes are in [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
 

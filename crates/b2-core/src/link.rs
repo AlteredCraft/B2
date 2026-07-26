@@ -236,6 +236,9 @@ fn extract_explanation(tail: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// One expected link, as the case tables spell it: `(type, target, caption, embed, typed)`.
+    type Expected<'a> = (&'a str, &'a str, Option<&'a str>, bool, bool);
+
     /// Shorthand: parse one line, return `(type, target, caption, embed, typed)`.
     fn parsed(line: &str) -> Vec<(String, String, Option<String>, bool, bool)> {
         parse_links(line)
@@ -246,7 +249,7 @@ mod tests {
 
     #[test]
     fn markdown_forms_yield_references_with_caption_and_embed() {
-        let cases: &[(&str, &[(&str, &str, Option<&str>, bool, bool)])] = &[
+        let cases: &[(&str, &[Expected])] = &[
             // ![alt](path) — embed with caption
             (
                 "See ![a sailboat](img/IMG_2041.jpg) here.",

@@ -25,7 +25,24 @@ import { Decoration, type DecorationSet, EditorView, keymap, tooltips } from "@c
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
-import { baseName, canMoveInto, moveDestination, refKind, remapPath, renameDestination } from "./move";
+import {
+  baseName,
+  canMoveInto,
+  moveDestination,
+  type NodeKind,
+  refKind,
+  remapPath,
+  renameDestination,
+} from "./move";
+import {
+  arrowMove,
+  buildTree,
+  neighborPath,
+  rowIndex,
+  typeaheadTarget,
+  visibleRows,
+  type TreeRow,
+} from "./treenav";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -86,10 +103,17 @@ function paintTree(): void {
   };
   const restoreCreate = carry("tree-create-input", state.treeCreate !== null, false);
   const restoreRename = carry("tree-rename-input", state.treeRename !== null, true);
+  // Whether the keyboard is *in* the tree right now (K1): the innerHTML swap destroys
+  // the focused row and focus silently falls back to <body>, so an unrelated repaint —
+  // a toast timer, a watcher pulse, streamed reindex progress — would eject a keyboard
+  // user from the tree mid-navigation. Restored by path, not by element, since the
+  // element the focus was on no longer exists after the swap.
+  const hadRowFocus = focusedTreeRow() !== null;
   el("tree-pane").innerHTML = html;
   lastTreePaneHtml = html;
   restoreCreate();
   restoreRename();
+  if (hadRowFocus && !state.treeCreate && !state.treeRename) rovingRowEl()?.focus();
 }
 
 function render(): void {
@@ -140,8 +164,7 @@ function render(): void {
   } else {
     toast.hidden = true;
   }
-  // Focus the explanation field the moment the modal appears.
-  document.getElementById("link-explanation")?.focus();
+  syncOverlayFocus();
   syncFind(noteSwapped);
   if (noteSwapped) void paintCodeHighlights();
 }
@@ -421,6 +444,241 @@ function inTextEntry(): boolean {
     a instanceof HTMLTextAreaElement ||
     (a instanceof HTMLElement && a.isContentEditable)
   );
+}
+
+// --- keyboard: focus plumbing (invariant K1, GH #78) --------------------------------
+//
+// B2 is fully operable from the keyboard; the mouse is an accelerator, never a
+// requirement (docs/design/invariants.md K1). Three things make that true and all three
+// live here: the file tree navigates by arrow key (the ARIA `tree` pattern, walking the
+// row order treenav.ts also paints), every overlay takes focus on open and gives it back
+// on close, and every mouse-only gesture — the right-click menu above all — has a key
+// that reaches it. The chords themselves are wired in the global keydown handler at the
+// bottom of `wireEvents`; what's here is the focus bookkeeping they share.
+
+/** Every row the tree currently paints, in paint order — the list the arrows walk. */
+function treeRows(): TreeRow[] {
+  return visibleRows(buildTree(state.notes, state.resources, state.dirs), state.expandedDirs);
+}
+
+/** The DOM row for a vault path. Looked up by data attribute rather than by CSS
+ *  selector because a filename may contain anything a selector would choke on. */
+function treeRowEl(path: string | null): HTMLElement | null {
+  if (path === null) return null;
+  const rows = el("tree-pane").querySelectorAll<HTMLElement>(".tree-row[data-tree-row]");
+  for (const row of rows) if (row.dataset.treeRow === path) return row;
+  return null;
+}
+
+/** The row carrying the roving tabstop, as painted (treenav.ts `rovingPath`). */
+function rovingRowEl(): HTMLElement | null {
+  return el("tree-pane").querySelector<HTMLElement>('.tree-row[tabindex="0"]');
+}
+
+/** The tree row the keyboard is on right now, or null when focus is elsewhere. */
+function focusedTreeRow(): HTMLElement | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  return active.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
+}
+
+/** A tree row element as the node ref that rename / move / delete all speak. */
+function treeRowRef(row: HTMLElement): TreeNodeRef {
+  const path = row.dataset.treeRow ?? "";
+  const nodeKind: NodeKind =
+    row.dataset.dir !== undefined
+      ? "folder"
+      : row.dataset.openResource !== undefined
+        ? "resource"
+        : "note";
+  return { path, nodeKind, label: baseName(path) };
+}
+
+/**
+ * Move keyboard focus to a tree row: state first (so the roving tabstop travels with
+ * it), then the repaint, then the DOM. `scrollIntoView` is what keeps a long vault
+ * navigable — arrowing off the bottom of the viewport must bring the row into view,
+ * exactly as a mouse-driven scroll would.
+ */
+function focusTreeRow(path: string): void {
+  state.treeFocus = path;
+  paintTree();
+  const row = treeRowEl(path);
+  row?.focus();
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+/** Put the keyboard in the file tree (⌘1) — on the row it last left off at. */
+function focusTreePane(): void {
+  const row = rovingRowEl();
+  if (row) row.focus();
+  else el("tree-pane").focus();
+}
+
+/** Put the keyboard in the note (⌘2): the live editor while editing, else the pane
+ *  itself — which is the scroll container, so the arrows read the note from there. */
+function focusNotePane(): void {
+  if (state.editing && editorView) {
+    editorView.focus();
+    return;
+  }
+  el("note-pane").focus();
+}
+
+/** Put the keyboard in discovery (⌘3) — its first card, else the empty pane. */
+function focusSidePane(): void {
+  const pane = el("side-pane");
+  const first = pane.querySelector<HTMLElement>("button:not([disabled])");
+  (first ?? pane).focus();
+}
+
+// --- keyboard: overlay focus (K1) ---------------------------------------------------
+//
+// An overlay that opens without taking focus is a mouse-only control: the keyboard is
+// still on the page behind it, ⏎ hits whatever was focused before, and Tab walks the
+// page *under* the modal. So each overlay takes focus on open, keeps it (the Tab trap in
+// the keydown handler), and hands it back on close. One transition hook rather than a
+// per-modal dance: `render()` paints overlays declaratively, so the open/close *edge*
+// is the only honest place to move focus — moving it on every render would fight the
+// user's own Tab while a modal is up.
+
+type OverlayKind = "shortcuts" | "settings" | "move" | "delete" | "link" | "menu" | null;
+
+/**
+ * Which overlay is up, in the same precedence `modalHtml` renders them — the guard
+ * every global chord asks before acting.
+ *
+ * Focus, though, treats this as **two layers**, because the `?` sheet is the one
+ * overlay that *stacks*: it renders over Settings (a button there is one of its two
+ * entry points) while Settings stays open underneath, so closing it must return to
+ * that button. Every other overlay is exclusive — a menu that hands off to Move… is
+ * *replaced*, not covered, so the modal returns to whatever opened the menu, never to
+ * a menu item that no longer exists. `baseOverlay` is this minus the sheet.
+ */
+function currentOverlay(): OverlayKind {
+  if (state.shortcutsOpen) return "shortcuts";
+  return baseOverlay();
+}
+
+/** The exclusive overlay layer: at most one of these is ever up. */
+function baseOverlay(): OverlayKind {
+  if (state.settingsOpen) return "settings";
+  if (state.moveTarget) return "move";
+  if (state.deleteTarget) return "delete";
+  if (state.linkTarget) return "link";
+  if (state.contextMenu) return "menu";
+  return null;
+}
+
+const FOCUSABLE =
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+/** The overlay's own focusable controls, in DOM order — what Tab cycles through, and
+ *  whose first entry receives focus on open. Menu items are deliberately `tabindex=-1`
+ *  (the menu is one stop, arrow-navigated), so they're collected by class instead. */
+function overlayFocusables(): HTMLElement[] {
+  const modal = document.querySelector<HTMLElement>("#modal-root .modal");
+  if (modal) return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  const menu = document.querySelector<HTMLElement>("#menu-root .context-menu");
+  return menu ? [...menu.querySelectorAll<HTMLElement>(".context-item")] : [];
+}
+
+/**
+ * The last element that actually received focus.
+ *
+ * Tracked continuously rather than read on demand, because by the time an overlay's
+ * open edge is handled — at the end of `render()` — the DOM that held focus is already
+ * gone: `render()` swaps `#modal-root`/`#menu-root` wholesale, so `document.activeElement`
+ * has fallen back to `<body>` and the trigger is unrecoverable. `focusin` fires long
+ * before that, and *destroying* a focused node fires no `focusin` (only blur), so this
+ * still names the trigger at the moment we come to remember it. Set in `wireEvents`.
+ */
+let lastFocused: HTMLElement | SVGElement | null = null;
+
+/**
+ * A thunk that puts focus back where it was before an overlay opened. A *thunk*, not
+ * the element, because the element usually doesn't survive: opening a menu repaints
+ * the tree, which swaps the row that triggered it, and opening the `?` sheet swaps the
+ * Settings button that opened it. Restore by identity that outlives a repaint — a tree
+ * row by its path (falling back to the roving row when the path is gone, e.g. it was
+ * just deleted), anything else by its element id, and only then by the element itself.
+ */
+function captureReturnFocus(): (() => void) | null {
+  const active = lastFocused;
+  if (active === null || active === document.body) return null;
+  // Unscoped on purpose: `active` is usually *detached* by now, so an ancestor-matching
+  // selector (`#tree-pane .tree-row`) would find nothing. `data-tree-row` is emitted by
+  // the tree and nowhere else, so it identifies a row on its own.
+  const row = active.closest<HTMLElement>(".tree-row[data-tree-row]");
+  if (row) {
+    const path = row.dataset.treeRow ?? null;
+    return () => (treeRowEl(path) ?? rovingRowEl())?.focus();
+  }
+  if (active.id) {
+    const id = active.id;
+    return () => document.getElementById(id)?.focus();
+  }
+  return () => {
+    if (active.isConnected) active.focus();
+  };
+}
+
+// One return target per layer (see `currentOverlay`). The base layer's is captured
+// when the *chain* starts, so menu → Move… → close lands back on the tree row; the
+// sheet's is captured every time it opens, since what it covers is still on screen.
+let baseShowing: OverlayKind = null;
+let baseReturn: (() => void) | null = null;
+let sheetShowing = false;
+let sheetReturn: (() => void) | null = null;
+
+/** Move focus into the overlay that just opened. */
+function focusIntoOverlay(kind: OverlayKind): void {
+  // The link modal opens on its explanation field — the one thing you came here to type.
+  const preferred = kind === "link" ? document.getElementById("link-explanation") : null;
+  (preferred ?? overlayFocusables()[0])?.focus();
+}
+
+/**
+ * Called at the end of every `render()`: acts only on open/close *edges*, never on a
+ * plain repaint — otherwise a toast timer would yank focus back to an overlay's first
+ * control while the user is mid-Tab.
+ */
+function syncOverlayFocus(): void {
+  const base = baseOverlay();
+  const sheet = state.shortcutsOpen;
+
+  if (base !== baseShowing) {
+    if (baseShowing === null) baseReturn = captureReturnFocus();
+    baseShowing = base;
+    if (base === null) {
+      const back = baseReturn;
+      baseReturn = null;
+      // Don't restore if the sheet is covering us (it owns focus and will restore on
+      // its own close), and not when an inline tree input just took the keyboard:
+      // Rename and New note are reached *through* the menu, so the menu closing must
+      // not yank focus back out of the input it just opened.
+      if (!sheet && !state.treeCreate && !state.treeRename) back?.();
+    } else if (!sheet) {
+      focusIntoOverlay(base);
+    }
+  }
+
+  // The sheet last, so it wins focus whenever it's up — it is the topmost layer.
+  if (sheet !== sheetShowing) {
+    sheetShowing = sheet;
+    if (sheet) {
+      sheetReturn = captureReturnFocus();
+      focusIntoOverlay("shortcuts");
+    } else {
+      const back = sheetReturn;
+      sheetReturn = null;
+      // No captured target means the sheet was opened by mouse (WebKit doesn't focus a
+      // button on click, so there was nothing focused to remember). Don't strand focus
+      // on <body> when the sheet was covering something — hand it to what's underneath.
+      if (back) back();
+      else if (base !== null) focusIntoOverlay(base);
+    }
+  }
 }
 
 // Paint just the Back/Forward buttons' enabled state — never a pane rebuild. Disabled
@@ -943,6 +1201,13 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
   if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
 
+  // Where the keyboard lands once this row is gone (K1): the next visible row, else the
+  // previous one — the platform reflex after a delete, and the difference between arrow
+  // navigation that survives a delete and one that dumps focus back at the top. Computed
+  // *before* the delete, while the row is still in the list. Harmless for mouse users:
+  // it only moves the tree's roving tabstop.
+  const nextFocus = neighborPath(treeRows(), node.path);
+
   deleteInFlight = true;
   try {
     let what: string;
@@ -964,6 +1229,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
     // Clear state that pointed into the deleted subtree — before the watcher's
     // debounced pulse re-reads it and flashes "moved or removed" for our own delete.
     if (node.nodeKind === "folder") dropDirState(node.path);
+    state.treeFocus = nextFocus;
     if (affected) {
       state.current = null;
       state.currentResource = null;
@@ -1187,6 +1453,24 @@ async function openSettings(): Promise<void> {
 
 function closeSettings(): void {
   state.settingsOpen = false;
+  render();
+}
+
+// --- the keyboard reference (?) ----------------------------------------------------
+//
+// K1's discoverable half: a promise nobody can find is not kept. The table lives in
+// shortcuts.ts; this is only the overlay's open/close. It renders *over* Settings (one
+// of its two entry points is a button there), so closing it leaves Settings as it was.
+
+function openShortcuts(): void {
+  state.contextMenu = null;
+  state.shortcutsOpen = true;
+  render();
+}
+
+function closeShortcuts(): void {
+  if (!state.shortcutsOpen) return;
+  state.shortcutsOpen = false;
   render();
 }
 
@@ -2431,7 +2715,8 @@ function buildShell(): void {
         </button>
       </div>
       <form id="search-form" class="search" autocomplete="off">
-        <input id="search-input" type="search" placeholder="Search the vault…" aria-label="Search" />
+        <input id="search-input" type="search" placeholder="Search the vault…  ⇧⌘F" aria-label="Search"
+               title="Search the vault — ⇧⌘F (⌘F finds inside the open note)" />
       </form>
       <div class="topbar-right">
         <div id="reindex-progress" class="reindex-progress" hidden aria-live="polite">
@@ -2456,15 +2741,20 @@ function buildShell(): void {
     </header>
     <div id="embed-banner"></div>
     <main id="layout" class="layout">
-      <nav id="tree-pane" class="tree-pane"></nav>
+      <!-- The three panes carry tabindex="-1" so ⌘1/⌘2/⌘3 can put the keyboard *in* a
+           pane (K1) without adding three more stops to the Tab order. The note pane is
+           also the scroll container, so focusing it is what lets the arrows read a note. -->
+      <nav id="tree-pane" class="tree-pane" tabindex="-1"></nav>
       <div id="gutter-tree" class="gutter" role="separator" aria-orientation="vertical"
            aria-label="Resize the file tree" aria-controls="tree-pane" tabindex="0"
+           title="Drag, or ←/→ to resize (⇧ for a bigger step, Home/End for the limits, ⏎ to reset)"
            aria-valuemin="${BOUNDS.tree.min}" aria-valuemax="${BOUNDS.tree.max}"></div>
-      <section id="note-pane" class="note-pane"></section>
+      <section id="note-pane" class="note-pane" tabindex="-1"></section>
       <div id="gutter-side" class="gutter" role="separator" aria-orientation="vertical"
            aria-label="Resize the discovery pane" aria-controls="side-pane" tabindex="0"
+           title="Drag, or ←/→ to resize (⇧ for a bigger step, Home/End for the limits, ⏎ to reset)"
            aria-valuemin="${BOUNDS.side.min}" aria-valuemax="${BOUNDS.side.max}"></div>
-      <aside id="side-pane" class="side-pane"></aside>
+      <aside id="side-pane" class="side-pane" tabindex="-1"></aside>
       <div id="find-bar" class="find-bar" role="search" aria-label="Find in note" hidden>
         <div class="find-field">
           <svg class="find-glass" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
@@ -2490,6 +2780,17 @@ function buildShell(): void {
 }
 
 function wireEvents(): void {
+  // Remember where the keyboard is, continuously (K1). `syncOverlayFocus` needs the
+  // element that *triggered* an overlay, and by the time it runs that element has been
+  // swapped out of the DOM — see `lastFocused`. Capture-phase isn't needed (`focusin`
+  // bubbles); `<body>` is skipped so a destroyed control doesn't read as a real target.
+  document.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if ((t instanceof HTMLElement || t instanceof SVGElement) && t !== document.body) {
+      lastFocused = t;
+    }
+  });
+
   // Typing in the frontmatter mini-editor clears its inline error — the message
   // belonged to the save attempt that failed. Delegated (like the clicks below)
   // because the textarea renders dynamically.
@@ -2557,6 +2858,18 @@ function wireEvents(): void {
       return;
     }
 
+    // The keyboard sheet renders over everything (Settings included), so it claims the
+    // click first — otherwise the Settings branch below would swallow it.
+    if (state.shortcutsOpen) {
+      if (
+        target.closest("[data-shortcuts-close]") ||
+        target.classList.contains("modal-backdrop")
+      ) {
+        closeShortcuts();
+      }
+      return;
+    }
+
     if (target.closest("#open-settings")) {
       void openSettings();
       return;
@@ -2576,6 +2889,10 @@ function wireEvents(): void {
     // click on the backdrop itself closes it. Checked before the link-modal backdrop
     // branch so settings wins when it's up.
     if (state.settingsOpen) {
+      if (target.closest("[data-shortcuts-open]")) {
+        openShortcuts();
+        return;
+      }
       if (target.closest("#settings-provision")) {
         void provisionModel();
         return;
@@ -2705,6 +3022,13 @@ function wireEvents(): void {
       return;
     }
 
+    // A click on a tree row moves the keyboard's idea of "where I am" with it, so
+    // switching from mouse to keyboard resumes at the row just clicked rather than
+    // teleporting to the roving tabstop's fallback. (WebKit doesn't focus a button on
+    // click, so the `focusin` path alone wouldn't see this.)
+    const treeRow = target.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
+    if (treeRow) state.treeFocus = treeRow.dataset.treeRow ?? null;
+
     const dir = target.closest<HTMLElement>("[data-dir]");
     if (dir) {
       toggleDir(dir.dataset.dir ?? "");
@@ -2795,6 +3119,51 @@ function wireEvents(): void {
     if (!card) return;
     e.preventDefault();
     openCardMenu(e.clientX, e.clientY, card.dataset.cardPath ?? "", card.dataset.cardTitle ?? "");
+  });
+
+  // The file tree's own keyboard, the ARIA `tree` pattern (K1, GH #78). Bound to the
+  // pane rather than the document so it answers *before* the global chords below, and
+  // only while the keyboard is actually on a row. The moves themselves are pure and
+  // tested (treenav.ts `arrowMove`) — this half is just the DOM and the folding.
+  //
+  // ⏎ and Space are deliberately absent: a row IS a <button>, so the platform already
+  // turns both into the click the delegation above answers. Re-binding them here would
+  // be a second activation path to keep in sync with the first.
+  el("tree-pane").addEventListener("keydown", (e) => {
+    // The inline create/rename inputs live in this pane but are text entry — they own
+    // their keys (Enter/Escape), handled with the other text surfaces below.
+    if (e.target instanceof HTMLInputElement) return;
+    const row = (e.target as HTMLElement).closest<HTMLElement>(".tree-row[data-tree-row]");
+    if (!row) return;
+    const path = row.dataset.treeRow ?? "";
+    const rows = treeRows();
+
+    const move = arrowMove(rows, rowIndex(rows, path), e.key);
+    if (move) {
+      e.preventDefault();
+      if (move.kind === "focus") {
+        focusTreeRow(move.path);
+      } else {
+        // Expand/collapse keeps the focus where it is; the fold is the whole gesture.
+        if (move.kind === "expand") state.expandedDirs.add(move.path);
+        else state.expandedDirs.delete(move.path);
+        state.selectedDir = move.path; // folding a folder makes it the create context, as a click does
+        state.treeFocus = move.path;
+        render();
+        treeRowEl(move.path)?.focus();
+      }
+      return;
+    }
+
+    // First-letter typeahead — the reflex every file browser answers to. Guarded to
+    // bare printable keys so ⌘N, ⌘F and friends still reach the global handler.
+    if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const hit = typeaheadTarget(rows, rowIndex(rows, path), e.key);
+      if (hit !== null) {
+        e.preventDefault();
+        focusTreeRow(hit);
+      }
+    }
   });
 
   // The floating menu is positioned at fixed viewport coords, so any scroll or resize
@@ -2889,6 +3258,38 @@ function wireEvents(): void {
       }
       return;
     }
+    // An open overlay owns Tab (K1): without a trap, Tab walks the page *behind* the
+    // modal — focus vanishes under the backdrop and the overlay becomes dismissible
+    // only with the mouse. Wrapping keeps every control in it reachable, forever.
+    if (e.key === "Tab" && currentOverlay() !== null) {
+      // Swallowed unconditionally — an overlay that somehow renders with no focusable
+      // control must still not let Tab walk the page behind it, which is the exact
+      // failure this block exists to prevent.
+      e.preventDefault();
+      const items = overlayFocusables();
+      if (items.length > 0) {
+        const i = items.indexOf(document.activeElement as HTMLElement);
+        const step = e.shiftKey ? -1 : 1;
+        const next =
+          i < 0 ? (e.shiftKey ? items.length - 1 : 0) : (i + step + items.length) % items.length;
+        items[next].focus();
+      }
+      return;
+    }
+    // ↑/↓ walk an open context menu — the menu-pattern sibling of the tree's arrows.
+    // (⏎ needs no binding: the items are buttons.)
+    if (state.contextMenu && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      const items = overlayFocusables();
+      if (items.length > 0) {
+        e.preventDefault();
+        const i = items.indexOf(document.activeElement as HTMLElement);
+        const n = items.length;
+        const next =
+          i < 0 ? (e.key === "ArrowDown" ? 0 : n - 1) : (i + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+        items[next].focus();
+      }
+      return;
+    }
     // The find bar's input: Enter steps (⇧Enter back), Escape closes. Everything else
     // falls through so the global chords (⌘F itself, ⇧⌘F) still work from the bar.
     if (findOpen && (e.target as HTMLElement).id === "find-input") {
@@ -2905,7 +3306,7 @@ function wireEvents(): void {
     }
     // ⌘F — find in the open note; ⇧⌘F — jump to the global vault-search box.
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
+      if (currentOverlay() !== null) return;
       e.preventDefault();
       if (e.shiftKey) focusGlobalSearch();
       else openFind();
@@ -2918,9 +3319,85 @@ function wireEvents(): void {
       return;
     }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return; // a modal owns the keyboard
+      if (currentOverlay() !== null) return; // an overlay owns the keyboard
       e.preventDefault();
       startTreeCreate(e.shiftKey ? "folder" : "note", state.selectedDir);
+      return;
+    }
+    // ⇧F10 / the Menu key — the keyboard's right-click, and the entry point that makes
+    // Rename / Move… / Link… reachable without a mouse at all (they live only in the
+    // context menu). Opens the *same* menu the mouse does, anchored under whatever the
+    // keyboard is on: a tree row, or a discovery card / graph ghost.
+    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      if (currentOverlay() !== null || state.vaultRoot === null) return;
+      const row = focusedTreeRow();
+      if (row) {
+        e.preventDefault();
+        const node = treeRowRef(row);
+        const dir = node.nodeKind === "folder" ? node.path : parentDir(node.path);
+        state.selectedDir = dir;
+        const box = row.getBoundingClientRect();
+        openTreeMenu(box.left + 12, box.bottom, dir, node.path ? node : null);
+        return;
+      }
+      const active = document.activeElement;
+      const card =
+        active instanceof HTMLElement || active instanceof SVGElement
+          ? active.closest<HTMLElement>(".card.candidate, .gnode.is-ghost")
+          : null;
+      if (card) {
+        e.preventDefault();
+        const box = card.getBoundingClientRect();
+        openCardMenu(
+          box.left + 12,
+          box.bottom,
+          card.dataset.cardPath ?? "",
+          card.dataset.cardTitle ?? "",
+        );
+      }
+      return;
+    }
+    // F2 — rename the focused tree row. The platform rename chord, and the direct path
+    // the context menu advertises next to the item.
+    if (e.key === "F2" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      const row = focusedTreeRow();
+      if (!row) return;
+      e.preventDefault();
+      startTreeRename(treeRowRef(row));
+      return;
+    }
+    // ? — the keyboard reference. Bare `?` (⇧/ on a US layout), so it can't collide
+    // with typing: any text surface is excluded, editing included. A context menu owns
+    // the keyboard like any other overlay (Escape first); the sheet is allowed over a
+    // *modal* because Settings is one of its two entry points.
+    if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (state.editing || inTextEntry() || state.contextMenu) return;
+      e.preventDefault();
+      if (state.shortcutsOpen) closeShortcuts();
+      else openShortcuts();
+      return;
+    }
+    // ⌘1 / ⌘2 / ⌘3 — put the keyboard in the files, the note, or discovery. Without
+    // them, reaching the tree means Tab-ing through the whole top bar first, which is
+    // "operable" only in the letter of K1, not its spirit.
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === "1" || e.key === "2" || e.key === "3")
+    ) {
+      if (currentOverlay() !== null) return;
+      e.preventDefault();
+      if (e.key === "1") focusTreePane();
+      else if (e.key === "2") focusNotePane();
+      else focusSidePane();
+      return;
+    }
+    // Enter commits the link modal from anywhere inside it — the keyboard sibling of
+    // "Commit link" (the explanation field is a plain input, so ⏎ would do nothing).
+    if (state.linkTarget && e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void commitLink();
       return;
     }
     // Enter commits the folder-delete confirm (its keyboard sibling of the button).
@@ -2931,25 +3408,44 @@ function wireEvents(): void {
       void executeDelete(node);
       return;
     }
-    // ⌘⌫ — delete the selected file (the tree's active row IS the open document).
-    // Reading view only: while editing — or in any text field — ⌘⌫ is the platform
-    // delete-to-line-start and must not be hijacked. Folders have no ⌘⌫ path (no
-    // folder-focus state exists); they delete via the context menu, which confirms.
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Backspace") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
-      if (state.editing || inTextEntry()) return;
-      const node: TreeNodeRef | null = state.current
-        ? { path: state.current.path, nodeKind: "note", label: baseName(state.current.path) }
-        : state.currentResource
-          ? {
-              path: state.currentResource.path,
-              nodeKind: "resource",
-              label: baseName(state.currentResource.path),
-            }
+    // ⏎ / Space on a focused graph node. SVG has no native button activation, so the
+    // key becomes the click the delegation above already answers — one activation path
+    // for both hands, not two implementations to keep in step.
+    if (e.key === "Enter" || e.key === " ") {
+      const active = document.activeElement;
+      const node =
+        active instanceof SVGElement || active instanceof HTMLElement
+          ? active.closest(".gnode[tabindex]")
           : null;
+      if (node) {
+        e.preventDefault();
+        node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        return;
+      }
+    }
+    // ⌘⌫ — delete. The focused tree row wins (a folder among them: it opens the
+    // confirm, so the one gesture now covers folders too); with the keyboard elsewhere
+    // it falls back to the open document, the reader's expectation. Reading view only:
+    // while editing — or in any text field — ⌘⌫ is the platform delete-to-line-start
+    // and must not be hijacked.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Backspace") {
+      if (currentOverlay() !== null) return;
+      if (state.editing || inTextEntry()) return;
+      const row = focusedTreeRow();
+      const node: TreeNodeRef | null = row
+        ? treeRowRef(row)
+        : state.current
+          ? { path: state.current.path, nodeKind: "note", label: baseName(state.current.path) }
+          : state.currentResource
+            ? {
+                path: state.currentResource.path,
+                nodeKind: "resource",
+                label: baseName(state.currentResource.path),
+              }
+            : null;
       if (!node) return;
       e.preventDefault();
-      void executeDelete(node);
+      requestDelete(node);
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key === ",") {
@@ -2962,7 +3458,7 @@ function wireEvents(): void {
     // owns the keyboard first; a resource or empty pane has nothing to edit. Works while
     // editing (CodeMirror leaves Mod-e unbound, so the event bubbles here) to flip back.
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
+      if (currentOverlay() !== null) return;
       if (state.editing) {
         e.preventDefault();
         void exitEdit();
@@ -2973,6 +3469,12 @@ function wireEvents(): void {
       return;
     }
     if (e.key === "Escape") {
+      // Innermost first, always: the sheet renders over Settings, so Esc closes it and
+      // leaves Settings exactly as it was.
+      if (state.shortcutsOpen) {
+        closeShortcuts();
+        return;
+      }
       if (state.contextMenu) {
         closeContextMenu();
         return;
@@ -3022,7 +3524,7 @@ function wireEvents(): void {
     // search field). The buttons and mouse back/forward stay live everywhere — they
     // flush through navGo's edit-mode guard.
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !state.editing) {
-      if (state.settingsOpen || state.linkTarget || state.moveTarget || state.deleteTarget) return;
+      if (currentOverlay() !== null) return;
       const back = e.key === "[" || e.key === "ArrowLeft";
       const forward = e.key === "]" || e.key === "ArrowRight";
       if (!back && !forward) return;
