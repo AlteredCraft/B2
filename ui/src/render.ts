@@ -1358,14 +1358,24 @@ function anomalyRowHtml(row: AnomalyRow): string {
  * cleared on a 4.5s timer regardless of length. What it is *not* is a notification
  * log: it paints `state.anomalies` — the last report, nothing accumulated, nothing
  * persisted (index-engine.md §8, S2) — so an anomaly resolved on disk is gone from
- * here the moment a pass comes back clean, which is also why the empty state says
- * what it says rather than "no notifications".
+ * here the moment a pass comes back clean, which is also why the empty states say
+ * what they say rather than "no notifications".
+ *
+ * And there are **two** of those, because "no pass has run" is not "the pass found
+ * nothing" — a distinction this panel of all surfaces has to keep. `null` is the
+ * ordinary state of a healthy vault: auto-index-on-open returns early when the index
+ * is already complete, so a session that opens a fully-indexed vault and touches
+ * nothing never runs a whole-vault pass at all. Reporting "found none" there would
+ * vouch for a vault nothing has looked at, which is exactly the silent-shadowing
+ * failure #81 exists to end.
  */
 function anomaliesModalHtml(state: AppState): string {
-  const rows = anomalyRows(state.anomalies ?? { collisions: [], restamped: [] });
-  const body = rows.length
-    ? `<div class="anomaly-list">${rows.map(anomalyRowHtml).join("")}</div>`
-    : `<p class="muted anomaly-empty">The latest pass found none. These notices are re-derived from the vault every pass — resolve a file and it stops appearing here.</p>`;
+  const rows = state.anomalies ? anomalyRows(state.anomalies) : [];
+  const body = !state.anomalies
+    ? `<p class="muted anomaly-empty">No index pass has run this session, so there is nothing to report yet — Reindex to check the vault. (An external change to the vault also triggers a pass.)</p>`
+    : rows.length
+      ? `<div class="anomaly-list">${rows.map(anomalyRowHtml).join("")}</div>`
+      : `<p class="muted anomaly-empty">The latest pass found none. These notices are re-derived from the vault every pass — resolve a file and it stops appearing here.</p>`;
   return `<div class="modal-backdrop">
       <div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="Index anomalies">
         <h3>Index anomalies</h3>

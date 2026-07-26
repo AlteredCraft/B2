@@ -706,8 +706,9 @@ function currentOverlay(): OverlayKind {
 /** The exclusive overlay layer: at most one of these is ever up. */
 function baseOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
-  // Exclusive with Settings by construction (each open closes the other), so the order
-  // between the two here never has to arbitrate a stack — same as every other pair.
+  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` each
+  // clear the other's flag — so the order between the two here never has to arbitrate
+  // a stack, same as every other pair on this layer.
   if (state.anomaliesOpen) return "anomalies";
   if (state.moveTarget) return "move";
   if (state.deleteTarget) return "delete";
@@ -1593,6 +1594,12 @@ async function commitLink(): Promise<void> {
 
 async function openSettings(): Promise<void> {
   state.contextMenu = null; // a card menu could be up via the ⌘, shortcut path
+  // ⌘, has no `currentOverlay()` guard, so it can fire over the anomaly panel. Close
+  // it rather than leaving both flags set: `baseOverlay` would then report "settings"
+  // while `anomaliesOpen` stayed true, and closing Settings would *reveal* the panel
+  // again — an accidental two-layer stack, which only the `?` sheet is meant to have.
+  // The reverse direction (`openAnomalies`) does the same, so the pair is exclusive.
+  state.anomaliesOpen = false;
   state.settingsOpen = true;
   render(); // show the modal shell immediately; the list fills when it resolves
   try {
