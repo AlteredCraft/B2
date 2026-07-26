@@ -8,7 +8,11 @@
 //!   - open→reopen is stable; `WAL` + `foreign_keys=ON` hold; the #38 scan pragmas
 //!     (`mmap_size`/`cache_size`) are applied; `schema_version` seeded.
 //!   - the **first** open of a vault's index survives contention (#111): the one
-//!     pragma `busy_timeout` cannot cover is retried until it lands.
+//!     pragma `busy_timeout` cannot cover is retried until it lands, and concurrent
+//!     openers of one fresh index coexist.
+//!
+//! Note what is *not* covered here: `open` is only concurrency-safe up to its
+//! **`schema_version` migration**, which still runs unwrapped DDL — see #114.
 
 use b2_core::{open, SCHEMA_VERSION};
 use std::sync::{mpsc, Arc, Barrier};
@@ -145,21 +149,37 @@ fn first_open_waits_out_a_held_lock() {
     assert_eq!(journal_mode.to_lowercase(), "wal", "WAL must be engaged");
 }
 
-/// The reported shape of #111: several openers reaching a brand-new index at once —
-/// `b2 reindex &` racing a `b2 status`, or the desktop app launching against a vault a
-/// CLI reindex is building. Every one of them must come back with a connection.
+/// Eight openers reaching a brand-new index at once all come back with a connection —
+/// the user-visible shape of #111 (`b2 reindex &` racing a `b2 status`, or the desktop
+/// app launching against a vault a CLI reindex is building).
+///
+/// **This is a coexistence smoke test, not the #111 gate.** Say so plainly, because the
+/// name would otherwise promise a regression it does not catch: the flip's race window
+/// is ~200 µs wide, so eight barrier-released threads land inside it only sometimes —
+/// measured at **3 failures in 25 runs** against the unfixed `open`, i.e. green ~88% of
+/// the time on the very bug it appears to name. [`first_open_waits_out_a_held_lock`] is
+/// the gate; it holds the contended lock outright instead of racing for it, and fails
+/// 100% of the time when the retry is removed. What this test *does* buy is the property
+/// no deterministic single-lock test can state: that N concurrent openers finish at all
+/// — no deadlock, no starved thread, no error escaping the retry — which is what would
+/// break if `open` ever took a lock it holds rather than one it waits out.
 ///
 /// Threads rather than processes because the contention is SQLite's, not the OS's:
 /// locking is per-*connection*, so same-process openers race the mode flip exactly as
-/// separate `b2` invocations do. The barrier is what makes it bite — released one by
-/// one, eight opens finish before they can overlap, and the bug never shows.
+/// separate `b2` invocations do. The barrier is what gives it any chance of biting —
+/// without it the eight opens are released one by one and finish before they can
+/// overlap, and the race never even starts.
 #[test]
-fn concurrent_first_opens_all_succeed() {
+fn concurrent_openers_of_a_fresh_index_coexist() {
     let tmp = tempfile::TempDir::new().unwrap();
     let db_path = tmp.path().join("b2.sqlite");
 
-    let start = Arc::new(Barrier::new(8));
-    let openers: Vec<_> = (0..8)
+    // One binding for both the barrier's count and the thread count: if those two ever
+    // drift, the barrier simply never releases and the test *hangs* — a CI timeout with
+    // no failing assertion to read, which is a far worse way to learn about a typo.
+    const OPENERS: usize = 8;
+    let start = Arc::new(Barrier::new(OPENERS));
+    let openers: Vec<_> = (0..OPENERS)
         .map(|_| {
             let db_path = db_path.clone();
             let start = Arc::clone(&start);
