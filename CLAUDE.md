@@ -241,7 +241,11 @@ if/when one lands — `index-engine.md` §5.)*
   the fs-watch `vault-changed` pulse, the OS folder dialog). Has its own `CLAUDE.md` with the
   thin-adapter rules — read it before touching this crate.
 - **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
-  toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Fenced code is
+  toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Rendering a note is a
+  **trust boundary** (invariant E5, GH #77): a `.md` can come from anyone, so the one Markdown→HTML
+  path (`renderMarkdown`) sanitizes its output — DOMPurify in `ui/src/sanitize.ts`, wired as `marked`'s
+  `postprocess` hook so every call site is covered by construction — and every value B2 itself
+  interpolates goes through `escapeHtml`. The webview CSP is the second layer, not the guard. Fenced code is
   syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
   loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
   preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the

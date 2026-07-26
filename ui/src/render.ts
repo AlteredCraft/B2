@@ -1,12 +1,15 @@
 // The view: Markdown → HTML (with clickable wikilinks) and the pane HTML builders.
 // Pure functions of state — no IPC, no DOM mutation (main.ts writes the output in).
 //
-// Safety: output comes from the user's *own* local notes, and the webview CSP
-// (script-src 'self', no 'unsafe-inline') neutralizes inline `<script>`/`onclick`
-// from a note and blocks remote script/style loads (crates/b2-desktop/CLAUDE.md). We
-// still HTML-escape every value B2 itself interpolates (titles, paths, snippets) so
-// UI chrome can't be broken by note content. A DOMPurify pass is a later hardening,
-// not needed for a local-first, own-content MVP.
+// Safety (invariant E5 — **note content is untrusted input**): authorship is not trust, a
+// `.md` can come from anyone (a shared vault, a downloaded or clipped note), so this
+// module treats every note body as hostile. Two rules hold together here: B2 HTML-escapes
+// every value *it* interpolates (titles, paths, snippets) so UI chrome can't be broken by
+// note content, and the one Markdown→HTML path sanitizes its output — `sanitize.ts`, wired
+// below as `marked`'s `postprocess` hook, so *every* caller is covered by construction
+// rather than by remembering. The webview CSP (`default-src 'self'`, no inline scripts)
+// is a second, independent layer, never the only one
+// (crates/b2-desktop/CLAUDE.md, GH #77).
 
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 // Relative imports carry their `.ts` here (the idiom highlight.ts and reconcile.ts already
@@ -14,6 +17,7 @@ import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked"
 // which resolves by real filename — a bundler-style extensionless value import doesn't
 // resolve there. tsc rewrites nothing (noEmit).
 import { escapeHtml } from "./escape.ts";
+import { sanitizeHtml } from "./sanitize.ts";
 import { anomalyRows, type AnomalyPath, type AnomalyRow } from "./anomalies.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
@@ -78,19 +82,33 @@ const wikilink: TokenizerAndRendererExtension = {
   },
 };
 
-marked.use({ extensions: [wikilink], gfm: true, breaks: false });
-
-export function renderMarkdown(md: string): string {
-  const html = marked.parse(md, { async: false }) as string;
-  // Wrap each table in a scroll box so a wide one scrolls *within* its column instead of
-  // stretching the pane. The table itself must stay a real `display: table` (the wrapper
-  // is what's `display: block; overflow-x: auto`) — a `display: block` table splits
-  // marked's whitespace-separated `<thead>`/`<tbody>` into two anonymous tables, so
-  // `border-collapse` can't join the header row onto the body (the gap bug). marked
-  // escapes cell content, so these are the only literal `<table>` tags in the output.
+// Wrap each table in a scroll box so a wide one scrolls *within* its column instead of
+// stretching the pane. The table itself must stay a real `display: table` (the wrapper
+// is what's `display: block; overflow-x: auto`) — a `display: block` table splits
+// marked's whitespace-separated `<thead>`/`<tbody>` into two anonymous tables, so
+// `border-collapse` can't join the header row onto the body (the gap bug). marked
+// escapes cell content, so these are the only literal `<table>` tags in the output.
+function wrapTables(html: string): string {
   return html
     .replace(/<table>/g, '<div class="md-table"><table>')
     .replace(/<\/table>/g, "</table></div>");
+}
+
+// The postprocess hook is where the trust boundary sits (E5, GH #77). Two properties come
+// from putting it *here* rather than inside `renderMarkdown`: sanitizing is the last thing
+// that happens to the HTML — nothing, not even B2's own table wrapper, is spliced in
+// afterwards — and it holds for every `marked.parse` in the app, so a future second call
+// site cannot render an unsanitized note by forgetting a step.
+marked.use({
+  extensions: [wikilink],
+  gfm: true,
+  breaks: false,
+  hooks: { postprocess: (html: string) => sanitizeHtml(wrapTables(html)) },
+});
+
+/** Note body → the HTML the panes write into the DOM. Sanitized (see the hook above). */
+export function renderMarkdown(md: string): string {
+  return marked.parse(md, { async: false }) as string;
 }
 
 // --- file tree --------------------------------------------------------------------

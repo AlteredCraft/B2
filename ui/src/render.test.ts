@@ -9,6 +9,7 @@
 // Pure strings in, assertions out, hand-rolled asserts like graph.test.ts: node runs it
 // straight off the source (`npm test`).
 
+import { JSDOM } from "jsdom";
 import { buildScene } from "./graph.ts";
 import { modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
 import { state, type AppState } from "./state.ts";
@@ -20,6 +21,13 @@ import type {
   SimilarView,
   UnresolvedLink,
 } from "./types.ts";
+
+// `notePaneHtml` renders a note body, and the render seam sanitizes with the host's own
+// HTML parser (E5, sanitize.ts) — so the pane needs a DOM even here, where the subject is
+// focus identity. Two lines rather than a shared shim module: the alternative is a
+// non-test module in `src/` that only tests import. sanitize.test.ts is where the seam
+// itself is exercised.
+(globalThis as unknown as { window: unknown }).window = new JSDOM("").window;
 
 let passed = 0;
 
