@@ -364,8 +364,8 @@ fn schema_is_current(conn: &Connection) -> Result<bool> {
 }
 
 /// The `schema_version` recorded in `meta`, or `None` on an index that has never been
-/// stamped. Callers must know `meta` exists — both reach it only past a check that it
-/// does.
+/// stamped — or whose stamp was lost, which [`apply_schema`] treats the same way.
+/// Callers must know `meta` exists; its one caller reads it only past that check.
 fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
     Ok(conn
         .query_row(
@@ -377,49 +377,55 @@ fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
         .and_then(|s| s.parse().ok()))
 }
 
-/// Create the schema and stamp `schema_version`, dropping a prior one first. `IF NOT
-/// EXISTS` keeps the CREATEs a no-op over anything a half-finished predecessor left. The
+/// Create the schema and stamp `schema_version`, dropping whatever was there first. The
 /// DDL mirrors index-engine.md (the vector tables are created at embed time — see
 /// [`ensure_embedding_space`]).
+///
+/// **One outcome, whatever it finds:** an empty schema at the current version. Reaching
+/// here means [`schema_is_current`] said no, and every way it can say no rebuilds from
+/// the same empty slate — the tables are the wrong shape (a version bump), structurally
+/// incomplete (a rebuild an older `b2` lost a race in the middle of, #114), or present
+/// but unstamped, which is an index of *no known version* however it got that way.
+///
+/// So the drop is unconditional, and deliberately so: guarding it on "was there a prior
+/// stamp?" reads like an optimization for the fresh-index case, but `DROP TABLE IF
+/// EXISTS` over an empty catalog is already a no-op — all the guard actually does is
+/// wave through the unstamped-but-populated index, letting `CREATE … IF NOT EXISTS`
+/// settle over surviving tables and stamp them current.
+///
+/// Dropping is safe *because* of where we are: the index is disposable (invariants.md,
+/// "volatile vault over a disposable index"), and rows surviving in tables of an unknown
+/// shape are worse than no rows at all — an incremental reindex skips notes whose
+/// `body_hash` still matches, so it would leave the recreated tables empty forever and
+/// quietly break S3 (`full-reindex ≡ incremental-update`). Dropping them all means the
+/// next `reindex` refills everything.
 ///
 /// **Called only from inside [`migrate`]'s transaction**, which is what makes the
 /// drop-then-create sequence safe; it is not a standalone entry point.
 fn apply_schema(conn: &Connection) -> Result<()> {
-    // `meta` must exist before we can read the schema version the index was built at.
+    // `meta` must exist before the batch below can clear it.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
-    let prior = stamped_version(conn)?;
-    // A prior stamp *and* we got here means [`schema_is_current`] said no: the derived
-    // tables are either the wrong shape (version bump) or structurally incomplete (a
-    // rebuild an older `b2` lost a race in the middle of, #114). Both rebuild from
-    // empty, and for the same reason — the index is disposable (invariants.md, "volatile
-    // vault over a disposable index"), while rows *surviving* in the tables that remain
-    // are worse than none: an incremental reindex skips notes whose `body_hash` matches,
-    // so it would leave the recreated tables empty forever and quietly break S3
-    // (`full-reindex ≡ incremental-update`). Dropping them all means the next `reindex`
-    // refills everything. Children first (FKs); dropping `chunks` takes its FTS triggers
-    // with it.
+    // Children first (FKs); dropping `chunks` takes its FTS triggers with it.
     //
     // The legacy vec0 `chunks_vec` (schema ≤ 2) is deliberately absent from this
     // list: its module is no longer linked, so SQLite cannot DROP it — any orphaned
     // entry stays inert in `sqlite_master` and nothing ever queries it (delete the
     // index file for a byte-clean slate). `DELETE FROM meta` clears the recorded
     // embedder, so the next embed pass recreates the vector tables from nothing.
-    if prior.is_some() {
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS edge_provenance;
-             DROP TABLE IF EXISTS edges;
-             DROP TABLE IF EXISTS resources;
-             DROP TABLE IF EXISTS note_centroids;
-             DROP TABLE IF EXISTS embeddings;
-             DROP TABLE IF EXISTS chunks_fts;
-             DROP TABLE IF EXISTS chunks;
-             DROP TABLE IF EXISTS note_aliases;
-             DROP TABLE IF EXISTS notes;
-             DELETE FROM meta;",
-        )?;
-    }
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS edge_provenance;
+         DROP TABLE IF EXISTS edges;
+         DROP TABLE IF EXISTS resources;
+         DROP TABLE IF EXISTS note_centroids;
+         DROP TABLE IF EXISTS embeddings;
+         DROP TABLE IF EXISTS chunks_fts;
+         DROP TABLE IF EXISTS chunks;
+         DROP TABLE IF EXISTS note_aliases;
+         DROP TABLE IF EXISTS notes;
+         DELETE FROM meta;",
+    )?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS notes (
            b2id        TEXT PRIMARY KEY,

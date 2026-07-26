@@ -346,6 +346,47 @@ fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
     );
 }
 
+/// An index whose tables are all present but whose **stamp is gone** is rebuilt from
+/// empty too — the other way `schema_is_current` can say no (#114).
+///
+/// The sibling above loses a table and keeps the stamp; this one keeps every table and
+/// loses the stamp, which is the shape a guard on "was there a prior stamp?" waves
+/// through: nothing to compare, so nothing dropped, and the `CREATE … IF NOT EXISTS`
+/// batch settles over surviving tables of an unknown shape and re-stamps them current.
+/// Whatever wrote that state — a rebuild killed between clearing `meta` and re-stamping
+/// it, a half-restored backup, a hand-edited index — the tables are of no known version,
+/// and the rows in them are exactly the ones an incremental reindex would decline to
+/// refresh (S3). So the rebuild is unconditional: `apply_schema` has one outcome, an
+/// empty schema at the current version, whatever it finds.
+#[test]
+fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("b2.sqlite");
+
+    {
+        let conn = open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
+             VALUES ('01SURVIVOR', 'kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'schema_version'", [])
+            .unwrap();
+    }
+
+    let conn = open(&db_path).expect("an unstamped index must be repaired, not refused");
+    assert_schema_complete(&db_path, "after reopening an unstamped index");
+
+    let surviving: i64 = conn
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        surviving, 0,
+        "an index of no known version must be rebuilt from empty, not adopted as current"
+    );
+}
+
 /// Opening an index at the current schema is a **read**, so a writer holding the index
 /// cannot refuse it (#114, invariant C1: concurrent readers are unrestricted).
 ///
