@@ -397,9 +397,13 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
   (the path the index already attributes the id to, when that file still claims it) keeps the
   identity — the one confident signal, and it lives in index memory, which is why this is a
   documented carve-out on S3 ([invariants.md](invariants.md)); a memory-less rebuild tie-breaks
-  first-in-sorted-walk, *flagged as a tie-break, not a ruling*. Shadowed claimants stay on disk and
-  in the tree but get **no row** — and the collision is reported (`collisions` on the
-  reindex/project reports, with kept path + precedence + shadowed paths) on **every pass until
+  first-in-sorted-walk, *flagged as a tie-break, not a ruling*. Shadowed claimants stay on disk
+  but get **no row** — and therefore no presence in the file tree either, which lists notes from
+  the index (`list_notes`); only folders are read live off the filesystem. That is what makes the
+  notice the *only* way a human learns the copy exists, and why the desktop's review panel offers
+  a shadowed path for copying rather than a reveal that could not resolve
+  ([#88](https://github.com/AlteredCraft/B2/issues/88)). The collision is reported (`collisions` on
+  the reindex/project reports, with kept path + precedence + shadowed paths) on **every pass until
   resolved**: delete the copy; or remove its `b2id:` line (the next pass stamps a fresh identity —
   the documented fork gesture); or delete the original (the copy then inherits the identity through
   the ordinary move repointing). Single-note ingest through `ingest_file` (the `add`/`mv`/`link`
