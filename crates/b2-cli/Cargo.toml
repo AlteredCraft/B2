@@ -19,6 +19,12 @@ thiserror = "2.0.18"
 # flag the embed loop reads at each batch boundary (the shipped `ControlFlow` seam), so
 # a cancel leaves a consistent, re-runnable partial index rather than a torn one.
 ctrlc = "3.4"
+# `reindex --cancel` → the *same* SIGINT, sent to the pid the lock names (GH #55), so a
+# run backgrounded with `b2 reindex &` (no controlling terminal, so Ctrl-C can't reach it)
+# takes the shipped cooperative-cancel path rather than a new one. A safe `kill(2)` wrapper,
+# so the signal costs no `unsafe`; already in the tree as ctrlc's own dependency. Unix-only —
+# as is B2 (macOS-only, which is why CI runs `macos-latest`; CLAUDE.md).
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 # The opt-in structured-log sink (B2_LOG/B2_DEBUG): the kernel's tracing events —
 # per-query SQLite timings, façade-op spans — rendered as JSON Lines on stderr.
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }

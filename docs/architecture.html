@@ -662,9 +662,11 @@ b2_relations:
       plumbing, not ranking quality. The real model is measured by one separate out-of-CI eval — retrieval
       precision/MRR (<code>cargo run -p b2-embed --example eval</code>). Model quality never flakes CI.</li>
       <li><b>Cold-index scale, CLI side.</b> Incremental reindex is done, projection and embedding are decoupled
-      (keyword-first: a cold vault is searchable before it's embedded), and the desktop runs the embed pass as a
-      cancellable background task. Still open: a cross-process CLI background reindex + <code>b2 status</code>,
-      and a smaller/quantized embedder — both compose behind the existing seam.</li>
+      (keyword-first: a cold vault is searchable before it's embedded), the desktop runs the embed pass as a
+      cancellable background task, and the CLI's cross-process story is complete — <code>b2 reindex &amp;</code>
+      backgrounds through the shell, <code>b2 status</code> names the running pid, and
+      <code>b2 reindex --cancel</code> signals it onto the same cooperative-cancel path as Ctrl-C. Still open:
+      a smaller/quantized embedder — it composes behind the existing seam.</li>
       <li><b>Deferred, behind clean seams.</b> A cross-encoder reranker (the likely <em>next</em> seam — changes
       <em>ordering</em>, not the store), query expansion, the qmd-style ~900-token overlap-aware chunker (a pure
       re-projection — the <code>chunks</code> schema already carries <code>token_count</code> +

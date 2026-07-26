@@ -190,6 +190,203 @@ fn reindex_dry_run_previews_and_writes_nothing() {
     assert_eq!(v["stamped"], 1);
 }
 
+/// Hold a vault's reindex lock exactly the way a running `b2 reindex` does — take the
+/// advisory lock, then stamp a pid into it — so the cross-process readers (`b2 status`,
+/// `b2 reindex --cancel`) see what a live run presents. The returned `File` must outlive
+/// the assertions: dropping it releases the lock, i.e. ends the "run".
+fn hold_reindex_lock(vault: &Path, pid: u32) -> std::fs::File {
+    use std::io::Write as _;
+    let dir = vault.join(".b2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join("reindex.lock"))
+        .unwrap();
+    lock.try_lock()
+        .expect("nothing else holds the fixture's lock");
+    lock.set_len(0).unwrap();
+    writeln!(&lock, "{pid}").unwrap();
+    lock
+}
+
+#[test]
+fn reindex_records_its_pid_in_the_lock() {
+    let (_g, root) = golden_vault();
+    // Spawned rather than `run_in`, so the test knows which pid to expect: the address
+    // `--cancel` (and a manual `kill`) signals is the running process's own (GH #55).
+    let child = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .args(["-C", root.to_str().unwrap(), "reindex"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("b2 binary spawns");
+    let pid = child.id();
+    let out = child.wait_with_output().expect("b2 binary runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let recorded = std::fs::read_to_string(root.join(".b2/reindex.lock")).unwrap();
+    assert_eq!(
+        recorded.trim().parse::<u32>().ok(),
+        Some(pid),
+        "the run stamps its own pid into the lock it holds, got: {recorded:?}"
+    );
+}
+
+#[test]
+fn status_reports_the_running_reindex_and_its_pid() {
+    let (_g, root) = reindexed();
+
+    // Nothing in flight — even though the finished run above left its pid in the lock.
+    // The *lock*, not the file's contents, answers "is a reindex running".
+    let idle = run_in(&root, &["--json", "status"]);
+    assert!(idle.status.success(), "{}", stderr(&idle));
+    let v: Value = serde_json::from_slice(&idle.stdout).unwrap();
+    assert_eq!(v["reindex_running"], false);
+    assert!(v["reindex_pid"].is_null(), "no run, no pid: {v}");
+
+    // A run in flight: reported, and named. (A synthetic pid — `status` only prints it.)
+    let lock = hold_reindex_lock(&root, 4242);
+    let busy = run_in(&root, &["--json", "status"]);
+    assert!(busy.status.success(), "{}", stderr(&busy));
+    let v: Value = serde_json::from_slice(&busy.stdout).unwrap();
+    assert_eq!(v["reindex_running"], true);
+    assert_eq!(v["reindex_pid"], 4242);
+
+    let human = run_in(&root, &["status"]);
+    assert!(
+        stdout(&human).contains("pid 4242"),
+        "the pid keeps a manual `kill` available: {:?}",
+        stdout(&human)
+    );
+    drop(lock);
+}
+
+#[test]
+fn cancel_signals_the_process_the_lock_names() {
+    use std::os::unix::process::ExitStatusExt as _;
+    /// SIGINT — what Ctrl-C raises, and so what `--cancel` must raise: one cancel path.
+    const SIGINT: i32 = 2;
+
+    let (_g, root) = reindexed();
+    // A stand-in for a run backgrounded with `b2 reindex &`: a child that just sits
+    // there until signalled. What `--cancel` owns is *delivering SIGINT to the pid the
+    // lock names*; what the real reindex then does with it is the shipped Ctrl-C path.
+    let mut victim = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep spawns");
+    let lock = hold_reindex_lock(&root, victim.id());
+
+    let out = run_in(&root, &["reindex", "--cancel"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&format!("pid {}", victim.id())),
+        "{:?}",
+        stdout(&out)
+    );
+
+    let status = victim.wait().expect("the signalled child is reaped");
+    assert_eq!(
+        status.signal(),
+        Some(SIGINT),
+        "--cancel must deliver the same signal Ctrl-C does"
+    );
+    drop(lock);
+}
+
+#[test]
+fn cancel_reports_json_for_agents() {
+    let (_g, root) = reindexed();
+    let mut victim = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep spawns");
+    let lock = hold_reindex_lock(&root, victim.id());
+
+    let out = run_in(&root, &["--json", "reindex", "--cancel"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Honest tense, like the dry-run's `would_*` keys: the request landed; the run
+    // itself stops at its next batch boundary and reports the partial work.
+    assert_eq!(v["signalled"], true);
+    assert_eq!(v["pid"], victim.id());
+    assert!(v.get("cancelled").is_none(), "not the reindex-report shape");
+
+    let _ = victim.wait();
+    drop(lock);
+}
+
+#[test]
+fn cancel_with_no_run_in_flight_is_an_error() {
+    // The reindex left its pid behind in the lock (nothing clears it), but the lock is
+    // free — so there is nothing to cancel, and nothing to signal. A stale pid must
+    // never be mistaken for a live run.
+    let (_g, root) = reindexed();
+    let out = run_in(&root, &["reindex", "--cancel"]);
+    assert!(
+        !out.status.success(),
+        "nothing to cancel is a non-zero exit"
+    );
+    assert!(
+        stderr(&out).contains("No reindex is running"),
+        "{:?}",
+        stderr(&out)
+    );
+
+    // Same on a vault that has never been indexed at all (no lock file to read).
+    let (_g2, fresh) = golden_vault();
+    let out = run_in(&fresh, &["reindex", "--cancel"]);
+    assert!(
+        !out.status.success(),
+        "nothing to cancel is a non-zero exit"
+    );
+    assert!(
+        stderr(&out).contains("No reindex is running"),
+        "{:?}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn cancel_refuses_without_an_explicit_vault() {
+    // `--cancel` is a `reindex` invocation and keeps its guard: with no vault it must
+    // refuse rather than fall back to the cwd and peek at some other vault's lock.
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env_remove("B2_VAULT_PATH")
+        .args(["reindex", "--cancel"])
+        .output()
+        .expect("b2 binary runs");
+    assert!(!out.status.success(), "no vault must exit non-zero");
+    assert!(
+        stderr(&out).contains("No vault specified"),
+        "{:?}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn cancel_conflicts_with_the_flags_that_would_run_a_reindex() {
+    let (_g, root) = golden_vault();
+    for args in [
+        ["reindex", "--cancel", "--force"],
+        ["reindex", "--cancel", "--dry-run"],
+    ] {
+        let out = run_in(&root, &args);
+        assert!(
+            !out.status.success(),
+            "`b2 {}` must be rejected",
+            args.join(" ")
+        );
+    }
+    // And nothing ran: `--cancel` signals, it never indexes.
+    assert!(!root.join(".b2/b2.sqlite").exists());
+}
+
 #[test]
 fn write_commands_refuse_without_an_explicit_vault() {
     // Every command that writes to the vault (builds the index, or creates/moves/edits
