@@ -29,11 +29,15 @@
 //
 // The chord syntax is CodeMirror's (`Mod-Shift-v`) on purpose: the editor's own bindings
 // come out of this same table and are handed to `keymap.of` verbatim, so there is one
-// spelling of a chord for both halves of the app.
+// spelling of a chord for both halves of the app. Sharing the syntax means sharing the
+// *semantics* too — `Mod` is ⌘ here because `Mod` is ⌘ there (CodeMirror's
+// `normalizeKeyName` resolves it to meta on mac). That agreement is load-bearing, and
+// see `Chord.mod` for what it cost to notice. `Any-` is B2's one addition to the syntax,
+// and the one thing that must not be handed to CodeMirror.
 
 /** Where a chord applies. `global` is the whole window; the rest are surfaces inside it,
- *  each named after the state that turns it on. `:` nests (`modal:link` is inside
- *  `modal`), which is what lets two ⏎ bindings coexist without ambiguity. */
+ *  each named after the state that turns it on. `:` nests (`overlay:link` is inside
+ *  `overlay`), which is what lets two ⏎ bindings coexist without ambiguity. */
 export type Scope =
   | "global"
   | "editor" // CodeMirror has the keyboard (state.editing)
@@ -148,9 +152,23 @@ export type BindingId = (typeof BINDINGS)[number]["id"];
 export interface Chord {
   /** Canonical key name — a lowercase character, or a named key ("Enter", "ArrowUp"). */
   key: string;
-  /** ⌘. Matched against `metaKey || ctrlKey`, the alias B2's handlers have always taken. */
+  /** ⌘ — and only ⌘.
+   *
+   *  The handlers used to read `metaKey || ctrlKey`, taking ⌃ as a synonym. That's the
+   *  right reflex on Windows and Linux, where ⌃ *is* the platform modifier, and the wrong
+   *  one here: B2 ships on macOS (crates/b2-desktop), where ⌃ is not spare. Cocoa gives
+   *  ⌃F/⌃B/⌃N/⌃P/⌃A/⌃E their emacs meanings in every text field on the machine, and
+   *  CodeMirror implements the same set so its editor feels native — so the alias put six
+   *  of B2's chords on top of standard system bindings. ⌃E ran `cursorLineEnd` *and* left
+   *  edit mode, from two listeners, because CodeMirror's keymap handler calls
+   *  `preventDefault` but never `stopPropagation`, so the event still reached the
+   *  document. See editorkeys.ts.
+   *
+   *  Dropping it also makes `Mod` mean the same thing here as it does in CodeMirror
+   *  (`normalizeKeyName` resolves it to meta on mac), which matters because the two share
+   *  this syntax — `chordFor` hands specs straight to `keymap.of`. */
   mod: boolean;
-  /** Literal ⌃, held *without* ⌘ — the Settings rail's ⌃Tab is the only chord wanting it. */
+  /** ⌃ — the Settings rail's ⌃Tab is the only chord that asks for it. */
   ctrl: boolean;
   shift: boolean;
   alt: boolean;
@@ -262,11 +280,6 @@ export function parseChord(spec: string): Chord {
   if (chord.key.length > 1 && !isNamed(chord.key)) {
     throw new Error(`unknown key "${chord.key}" in chord: ${spec}`);
   }
-  if (chord.mod && chord.ctrl) {
-    // ⌃ is accepted as ⌘'s alias when matching, so "Mod-Ctrl-x" would describe a chord
-    // whose two halves contradict each other. Nothing needs it; refuse it.
-    throw new Error(`chord combines Mod and Ctrl, which alias each other: ${spec}`);
-  }
   if (chord.any && (chord.mod || chord.ctrl || chord.shift || chord.alt)) {
     // "Any modifier" and "this exact modifier" are the same contradiction the other way.
     throw new Error(`chord combines Any with a named modifier: ${spec}`);
@@ -280,10 +293,10 @@ export function chordMatches(chord: Chord, e: KeyEventLike): boolean {
   if (chord.any) return true;
   if (chord.alt !== e.altKey) return false;
   if (shiftDistinguishes(chord.key) && chord.shift !== e.shiftKey) return false;
-  if (chord.ctrl) return e.ctrlKey && !e.metaKey;
-  // ⌘ or ⌃ both count as Mod: B2 ships on macOS, but the handlers have always taken ⌃ as
-  // the alias so the app is drivable from a browser during development.
-  return chord.mod === (e.metaKey || e.ctrlKey);
+  // Every modifier compared, none aliased: ⌃X is ⌃X and ⌘X is ⌘X. A chord that doesn't
+  // ask for ⌃ must not answer to it — that's what keeps B2 off the system's own ⌃
+  // bindings, and it's the whole of the fix described on `Chord.mod`.
+  return chord.mod === e.metaKey && chord.ctrl === e.ctrlKey;
 }
 
 // --- lookup ------------------------------------------------------------------------
@@ -321,12 +334,11 @@ export function isBound(e: KeyEventLike, id: BindingId): boolean {
 
 /** The physical key presses a chord answers to.
  *
- *  A `Mod-` chord has two: ⌘X and ⌃X, because the matcher takes either. That is exactly
- *  the overlap a collision check has to see — a `Ctrl-` chord and a `Mod-` chord over the
- *  same key are one keystroke apart from the hardware's point of view, however different
- *  they look in the table. Comparing *these* rather than the chords themselves is what
+ *  One, for every chord except `Any-` — which claims the lot, and is the reason this
+ *  returns a list at all. Comparing *these* rather than the chords themselves is what
  *  makes "do these two answer to the same keystroke?" a set intersection, and it's why
- *  editorkeys.ts can ask the same question of a keymap B2 didn't write. */
+ *  editorkeys.ts can ask the same question of a keymap B2 didn't write, whose chords are
+ *  spelled by someone else's conventions. */
 export function keystrokes(spec: string): string[] {
   return physicalForms(parseChord(spec));
 }
@@ -337,26 +349,33 @@ export function chordsOverlap(a: string, b: string): boolean {
   return keystrokes(b).some((f) => forms.has(f));
 }
 
+/** One chord, as one keystroke string — modifiers in Apple's order, then the key. */
+function formOf(chord: Chord): string {
+  return (
+    (chord.ctrl ? "⌃" : "") +
+    (chord.alt ? "⌥" : "") +
+    (shiftDistinguishes(chord.key) && chord.shift ? "⇧" : "") +
+    (chord.mod ? "⌘" : "") +
+    chord.key
+  );
+}
+
 function physicalForms(chord: Chord): string[] {
+  if (!chord.any) return [formOf(chord)];
   // An `Any-` chord answers to every keystroke over its key, so it claims every form a
-  // strict chord over that key could produce — which is what makes it collide with, and
-  // shadow, exactly the bindings it would really take the key from.
-  if (chord.any) {
-    const out: string[] = [];
-    for (const primary of ["", "⌘", "⌃"]) {
-      for (const alt of ["", "⌥"]) {
-        for (const shift of shiftDistinguishes(chord.key) ? ["", "⇧"] : [""]) {
-          out.push(`${primary}${alt}${shift}${chord.key}`);
+  // strict chord over that key could produce — enumerated through the same `formOf`, so
+  // the two can't drift apart into a near-miss that never intersects.
+  const out: string[] = [];
+  for (const ctrl of [false, true]) {
+    for (const alt of [false, true]) {
+      for (const shift of shiftDistinguishes(chord.key) ? [false, true] : [false]) {
+        for (const mod of [false, true]) {
+          out.push(formOf({ ...chord, any: false, ctrl, alt, shift, mod }));
         }
       }
     }
-    return out;
   }
-  const mods = (chord.alt ? "⌥" : "") + (shiftDistinguishes(chord.key) && chord.shift ? "⇧" : "");
-  const tail = `${mods}${chord.key}`;
-  if (chord.ctrl) return [`⌃${tail}`];
-  if (chord.mod) return [`⌘${tail}`, `⌃${tail}`];
-  return [tail];
+  return out;
 }
 
 /** `global` contains every scope; otherwise containment is the `:` namespace prefix, so
@@ -368,7 +387,10 @@ export function scopeContains(outer: Scope | string, inner: Scope | string): boo
 /** Two commands in the same scope that answer to the same keystroke. Which one runs
  *  depends on the order of the handler's branches, which is not a contract anyone can
  *  read — so this is the error tier, and bindings.test.ts fails the suite on a non-empty
- *  result. That check is the gate: `npm test` runs in both `just check` and `just ci`. */
+ *  result. That check is the gate: `npm test` runs in both `just check` and `just ci`.
+ *
+ *  Keystrokes rather than chords, because the two aren't the same question: `Any-Escape`
+ *  and `Escape` are different chords that the same key press satisfies. */
 export interface Conflict {
   a: string;
   b: string;

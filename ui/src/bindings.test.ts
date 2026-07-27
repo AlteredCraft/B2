@@ -27,6 +27,7 @@ import {
   displayChord,
   displayKeys,
   isBound,
+  keystrokes,
   parseChord,
   scopeContains,
   shadows,
@@ -106,14 +107,14 @@ check("an alias collides as loudly as a listed chord", () => {
   assertEq(conflicts(table).map((c) => c.form), ["⌘ArrowLeft"], "the alias clashes");
 });
 
-check("⌃X collides with a Mod chord, because Mod answers to ⌃ too", () => {
-  // The subtle one. `Mod-x` and `Ctrl-x` look like different rows and are one keystroke
-  // apart in the hardware: the matcher takes ⌃ as ⌘'s alias, so both fire on ⌃X.
+check("an Any- chord collides with every strict chord over its key", () => {
+  // The subtle one, now that modifiers are compared literally. `Any-Escape` and
+  // `Mod-Escape` look like unrelated rows and are the same key press.
   const table: Binding[] = [
-    { id: "a", keys: ["Mod-Tab"], scope: "global" },
-    { id: "b", keys: ["Ctrl-Tab"], scope: "global" },
+    { id: "a", keys: ["Any-Escape"], scope: "global" },
+    { id: "b", keys: ["Mod-Escape"], scope: "global" },
   ];
-  assertEq(conflicts(table).map((c) => c.form), ["⌃Tab"], "⌃ is where they meet");
+  assertEq(conflicts(table).map((c) => c.form), ["⌘Escape"], "⌘Esc is where they meet");
 });
 
 check("the same chord in sibling scopes is not a conflict", () => {
@@ -170,11 +171,45 @@ check("scope containment is global-over-all, then the : namespace", () => {
 
 // --- matching -----------------------------------------------------------------------
 
-check("a Mod chord answers to ⌘ and to ⌃, and to nothing else", () => {
+check("a Mod chord answers to ⌘, and to nothing else", () => {
   assert(isBound(press("f", { metaKey: true }), "find.open"), "⌘F opens find");
-  assert(isBound(press("f", { ctrlKey: true }), "find.open"), "⌃F does too — the dev alias");
   assert(!isBound(press("f"), "find.open"), "bare F types an f");
   assert(!isBound(press("f", { metaKey: true, altKey: true }), "find.open"), "⌥⌘F is not ⌘F");
+  assert(!isBound(press("f", { ctrlKey: true }), "find.open"), "and ⌃F is not ⌘F");
+});
+
+check("⌃ is not a synonym for ⌘, anywhere in the table", () => {
+  // The regression guard for the alias B2 used to have. `(e.metaKey || e.ctrlKey)` is the
+  // right reflex on Windows and Linux and the wrong one on the only platform B2 ships on:
+  // macOS gives ⌃F/⌃B/⌃N/⌃P/⌃A/⌃E emacs meanings in every text field, CodeMirror
+  // implements them, and a CodeMirror binding calls `preventDefault` without
+  // `stopPropagation` — so the keystroke ran the caret move *and* B2's command. ⌃E went to
+  // end-of-line and left edit mode at once.
+  //
+  // Stated as a property rather than a list of six, so it holds for chords not yet
+  // written: a binding may claim a ⌃ keystroke only by asking for ⌃.
+  for (const b of BINDINGS) {
+    for (const spec of allKeys(b)) {
+      const declares = spec.includes("Ctrl-") || spec.includes("Any-");
+      for (const form of keystrokes(spec)) {
+        assert(
+          !form.startsWith("⌃") || declares,
+          `${b.id} answers to ${form} but its chord (${spec}) never asks for ⌃`,
+        );
+      }
+    }
+  }
+});
+
+check("⌃X and ⌘X are two different chords", () => {
+  // Which is what makes the Settings rail's ⌃Tab a chord of its own rather than a second
+  // spelling of something else.
+  assert(isBound(press("Tab", { ctrlKey: true }), "settings.section.next"), "⌃Tab");
+  const table: Binding[] = [
+    { id: "meta", keys: ["Mod-k"], scope: "global" },
+    { id: "control", keys: ["Ctrl-k"], scope: "global" },
+  ];
+  assertEq(conflicts(table), [], "they no longer meet");
 });
 
 check("⇧ separates two commands on one letter", () => {
@@ -213,10 +248,9 @@ check("the space bar is spelled, not written as a literal space", () => {
   assert(isBound(press("Enter"), "graph.activate"), "so does ⏎");
 });
 
-check("⌃Tab is literal Control, not Mod", () => {
-  // The one chord in the app that wants ⌃ itself. If it went through Mod it would also
-  // fire on ⌘Tab — which macOS owns — and would collide with anything bound to Mod-Tab.
-  assert(isBound(press("Tab", { ctrlKey: true }), "settings.section.next"), "⌃Tab");
+check("⌃Tab is literal Control, and ⌘Tab is not it", () => {
+  // The one chord in the app that asks for ⌃. ⌘Tab is macOS's app switcher and never
+  // reaches the webview at all, which is exactly why the rail wants the other one.
   assert(!isBound(press("Tab", { metaKey: true }), "settings.section.next"), "⌘Tab is not ⌃Tab");
   assert(
     isBound(press("Tab", { ctrlKey: true, shiftKey: true }), "settings.section.prev"),
@@ -278,7 +312,9 @@ check("chordMatches reads the modifiers it is given, not the ones it isn't", () 
 });
 
 check("parseChord refuses what it can't honour", () => {
-  const rejects = ["Cmd+f", "Mod-Ctrl-x", "Mod-Meh", "Mod-Retrun", ""];
+  // `Mod-Ctrl-x` is absent on purpose: ⌘⌃X is a real chord now that the two modifiers
+  // are compared separately, so the parser has nothing to object to. Nothing binds it.
+  const rejects = ["Cmd+f", "Mod-Meh", "Mod-Retrun", ""];
   for (const spec of rejects) {
     let threw = false;
     try {

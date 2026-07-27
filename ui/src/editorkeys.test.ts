@@ -18,7 +18,6 @@ import {
   STOCK_KEYMAPS,
   editorChords,
   editorOverlaps,
-  isAliasOnly,
 } from "./editorkeys.ts";
 
 let passed = 0;
@@ -73,10 +72,7 @@ check("the chords B2 needs to reach it while editing are unbound by CodeMirror",
     ["tree.new-note", "⌘N creates a note without leaving the one you're writing"],
     ["pane.tree", "⌘1 is how the keyboard gets *out* of the editor"],
   ];
-  // Alias-only rows are excluded on purpose: the question here is whether CodeMirror has
-  // taken the chord the sheet documents (⌘E), not whether ⌃E means something else — it
-  // does, and the check below is where that lives.
-  const taken = editorOverlaps().filter((o) => !isAliasOnly(o));
+  const taken = editorOverlaps();
   for (const [id, why] of mustBubble) {
     const hit = taken.find((o) => o.id === id);
     assert(!hit, `CodeMirror now binds ${hit?.chord} to ${hit?.command} — ${why}`);
@@ -105,9 +101,7 @@ check("B2 and CodeMirror overlap on exactly these chords", () => {
   // stop guarding against something. Either way it should be looked at, not re-pinned
   // reflexively.
   assertEq(
-    editorOverlaps()
-      .filter((o) => !isAliasOnly(o))
-      .map((o) => `${o.id} ${o.chord} — ${o.source}: ${o.command}`),
+    editorOverlaps().map((o) => `${o.id} ${o.chord} — ${o.source}: ${o.command}`),
     [
       "delete.focused Mod-Backspace — defaultKeymap: deleteLineBoundaryBackward",
       "dismiss Any-Escape — defaultKeymap: simplifySelection",
@@ -122,36 +116,23 @@ check("B2 and CodeMirror overlap on exactly these chords", () => {
   );
 });
 
-check("the ⌃ alias lands on macOS's emacs bindings, on exactly these ten chords", () => {
-  // Not a CodeMirror problem — a consequence of B2's matcher taking ⌃X wherever it takes
-  // ⌘X (`(e.metaKey || e.ctrlKey)`, as the handler has always been written). macOS gives
-  // ⌃F/⌃B/⌃N/⌃P/⌃A/⌃E their emacs meanings system-wide and CodeMirror implements them,
-  // so inside the editor each row below is one keystroke running two commands: the caret
-  // moves *and* B2's chord fires. ⌃F is the clearest — forward-a-character, plus the
-  // find bar opening over the note.
+check("B2 and the editor never meet on a ⌃ keystroke — the emacs bindings are CodeMirror's", () => {
+  // The check that found the bug this file exists for, kept as the guard that it stays
+  // fixed. B2's matcher used to read `(e.metaKey || e.ctrlKey)`, so every ⌘ chord answered
+  // to ⌃ as well. On macOS that lands on the system's emacs text bindings — which
+  // CodeMirror implements — and since a CodeMirror binding calls `preventDefault` without
+  // `stopPropagation`, the event still reached the document handler. One keystroke ran
+  // both commands: ⌃E moved the caret to end-of-line *and* left edit mode; ⌃F moved it
+  // forward a character *and* opened the find bar. Six chords did this (⌃E ⌃F ⌃⇧F ⌃N ⌃⇧N
+  // ⌃⇧A), and two more would have but for an unrelated `!state.editing` guard.
   //
-  // Pinned rather than fixed, because the fix is a behavior change with its own argument
-  // to have: B2 ships on macOS, where ⌃ is not the platform modifier, so `Mod` could
-  // simply stop accepting it. That would retire all ten at once and cost only the
-  // convenience of driving the app from a desktop browser. Left as it was found; this is
-  // the record of what it costs.
+  // bindings.test.ts holds the matcher's end of this — no chord claims ⌃ without asking
+  // for it. This is the other end: whatever B2 binds, it doesn't land on the editor's ⌃.
+  const onControl = editorOverlaps().filter((o) => o.shared.some((f) => f.startsWith("⌃")));
   assertEq(
-    editorOverlaps()
-      .filter(isAliasOnly)
-      .map((o) => `${o.id} ${o.chord} [${o.shared.join(" ")}] — ${o.command}`),
-    [
-      "find.open Mod-f [⌃f] — cursorCharRight",
-      "search.focus Mod-Shift-f [⌃⇧f] — selectCharRight",
-      "tree.new-note Mod-n [⌃n] — cursorLineDown",
-      "tree.new-folder Mod-Shift-n [⌃⇧n] — selectLineDown",
-      "anomalies.toggle Mod-Shift-a [⌃⇧a] — selectLineStart",
-      "edit.toggle Mod-e [⌃e] — cursorLineEnd",
-      "nav.back Mod-ArrowLeft [⌃ArrowLeft] — cursorSyntaxLeft",
-      "nav.forward Mod-ArrowRight [⌃ArrowRight] — cursorSyntaxRight",
-      "format.bold Mod-b [⌃b] — cursorCharLeft",
-      "editor.table Mod-t [⌃t] — transposeChars",
-    ],
-    "the alias set",
+    onControl.map((o) => `${o.id} ${o.chord} [${o.shared.join(" ")}] — ${o.command}`),
+    [],
+    "B2 chords meeting CodeMirror on ⌃",
   );
 });
 

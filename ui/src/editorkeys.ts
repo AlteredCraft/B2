@@ -15,6 +15,13 @@
 // comment beside each handler. A CodeMirror release that binds Mod-e would break ⌘E
 // silently, in the one code path a user hits constantly and a test suite never does.
 // `editorOverlaps` turns that assumption into a list, and editorkeys.test.ts pins it.
+//
+// The first thing it found was a bug rather than a risk. B2's matcher used to take ⌃X
+// wherever it took ⌘X, and macOS gives ⌃F/⌃B/⌃N/⌃P/⌃A/⌃E emacs meanings in every text
+// field — which CodeMirror implements. So six of B2's chords sat on standard system
+// bindings, and because a CodeMirror binding calls `preventDefault` but not
+// `stopPropagation`, the keystroke ran *both* commands: ⌃E moved the caret to end-of-line
+// and left edit mode. The alias is gone (see `Chord.mod`); this is the check that noticed.
 import { completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import type { KeyBinding } from "@codemirror/view";
@@ -77,26 +84,11 @@ export interface EditorOverlap {
   id: string;
   /** B2's chord, as the registry spells it. */
   chord: string;
-  /** The keystrokes the two actually share — the useful detail, because a `Mod-` chord
-   *  answers to two of them and the two collide for completely different reasons. */
+  /** The keystrokes the two actually share — normally one, but `Any-` chords claim a
+   *  spread of them, and knowing *which* is what tells you whether a row matters. */
   shared: string[];
   source: string;
   command: string;
-}
-
-/** Does this overlap exist only on the ⌃ alias — never on the chord as documented?
- *
- *  B2's matcher takes ⌃X wherever it takes ⌘X, a convenience for driving the app in a
- *  browser during development. On macOS that alias lands on the system's emacs-style
- *  text bindings, which CodeMirror implements: ⌃F is forward-a-character, ⌃E is
- *  end-of-line, ⌃N is next-line. So ⌃F inside the editor moves the caret *and* opens
- *  B2's find bar — one keystroke, two commands.
- *
- *  Kept separate from the real clashes because the fix is different in kind: these all
- *  go away at once if `Mod` stops accepting ⌃, and none of them is about the chord the
- *  sheet documents. */
-export function isAliasOnly(o: EditorOverlap): boolean {
-  return o.shared.every((form) => form.startsWith("⌃"));
 }
 
 /** The scopes that can be live while CodeMirror holds the keyboard, and so the only ones
@@ -120,9 +112,11 @@ export function editorOverlaps(bindings: readonly Binding[] = BINDINGS): EditorO
       const mine = keystrokes(spec);
       for (const c of stock) {
         // Keystrokes, not chord equality: `Any-Escape` and CodeMirror's plain `Escape`
-        // are different chords that answer to the same key, and `Mod-f` meets `Ctrl-f`
-        // on one of its two forms and not the other. Both pairs are worth knowing about,
-        // and only this comparison sees either.
+        // are different chords that the same key press satisfies, and that pair is one
+        // of the ones worth knowing about. Reading CodeMirror's specs through B2's
+        // parser is sound because the two agree on what every modifier means — `Mod` in
+        // both is ⌘ on macOS. That agreement is load-bearing here and is the reason the
+        // ⌃ alias had to go rather than be worked around.
         const shared = mine.filter((f) => c.forms.has(f));
         if (shared.length > 0) {
           out.push({ id: b.id, chord: spec, shared, source: c.source, command: c.command });
