@@ -25,13 +25,16 @@ function applied(doc: string, r: ReturnType<typeof toggleInline>): string {
 
 // --- the format table: what main.ts builds the keymap from -------------------------
 
+// The chord each of these toggles lives in the keyboard registry as `format.<id>`, and
+// bindings.test.ts asserts every row here has one — so the pair stays complete without
+// the marker table carrying a key it doesn't use.
 assertEq(
-  FORMATS.map((f) => [f.id, f.marker, f.key]),
+  FORMATS.map((f) => [f.id, f.marker]),
   [
-    ["bold", "**", "Mod-b"],
-    ["italic", "*", "Mod-i"],
+    ["bold", "**"],
+    ["italic", "*"],
   ],
-  "the table carries id + marker + key — a future format is one new row",
+  "the table carries id + marker — a future format is one new row",
 );
 
 // --- wrapping a selection ----------------------------------------------------------
@@ -108,7 +111,7 @@ assertEq(
 
 // --- extensibility: a distinct-marker format works through the same engine ---------
 
-const STRIKE: InlineFormat = { id: "strike", marker: "~~", key: "Mod-Shift-x" };
+const STRIKE: InlineFormat = { id: "strike", marker: "~~" };
 {
   const r = toggleInline("gone", 0, 4, STRIKE);
   assertEq(applied("gone", r), "~~gone~~", "a future format wraps with no new logic");

@@ -126,10 +126,21 @@ Every new surface owes all four. They are cheap while you're building it and exp
    whatever opened it on close. `Escape` dismisses innermost-first; `Enter` confirms. All of this is
    one hook — `syncOverlayFocus()` in `main.ts`, called at the end of every `render()` and acting only
    on the open/close *edge*, so a toast timer's repaint never steals focus mid-⇥.
-4. **Discoverable.** A chord nobody can find is not kept. Add the row to `ui/src/shortcuts.ts` (the
-   `?` sheet) **in the same change** that wires it, and put the chord in the control's `title` — and,
-   where the action lives in a menu, beside the menu item, which is where a keyboard user learns the
-   shortcut that lets them skip the menu next time.
+4. **Discoverable.** A chord nobody can find is not kept. A chord is **declared once**, in
+   `ui/src/bindings.ts` — id, chord, scope — and everything else derives: the handler matches it with
+   `isBound(e, id)`, the editor's keymap takes it from `chordFor(id)`, and the `?` sheet
+   (`ui/src/shortcuts.ts`) names the id rather than spelling the chord. So add the binding, then add
+   its row to the sheet: `shortcuts.test.ts` fails on a binding no row documents, which is what makes
+   "in the same change" a rule the suite keeps rather than one you have to remember. Put the chord in
+   the control's `title` too — projected with `displayKeys([id])`, never typed out — and, where the
+   action lives in a menu, beside the menu item, which is where a keyboard user learns the shortcut
+   that lets them skip the menu next time.
+
+   Two things the registry will tell you before a user does. `conflicts()` fails the suite if your
+   chord already means something else in the same scope, so pick the scope honestly — it's what
+   separates "⏎ commits *this* dialog" from a clash. And `editorkeys.test.ts` compares B2's chords
+   against CodeMirror's ~100 stock bindings, so if your chord needs to work while the note is being
+   edited, that check is what proves the editor isn't already using it.
 
 ### Where the pieces live
 
