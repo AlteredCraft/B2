@@ -733,15 +733,40 @@ type OverlayKind = "settings" | "anomalies" | "move" | "delete" | "link" | "menu
  */
 function currentOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
-  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` each
-  // clear the other's flag — so the order between the two here never has to arbitrate
-  // a stack, same as every other pair on this layer.
+  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` both
+  // run `dismissOverlays` first — so the order between the two here never has to
+  // arbitrate a stack, same as every other pair on this layer.
   if (state.anomaliesOpen) return "anomalies";
   if (state.moveTarget) return "move";
   if (state.deleteTarget) return "delete";
   if (state.linkTarget) return "link";
   if (state.contextMenu) return "menu";
   return null;
+}
+
+/**
+ * Take down every overlay, so the caller's own can be the one that is up.
+ *
+ * This is what makes "exactly one is ever up" true rather than aspirational. ⌘, and ⇧⌘A
+ * are deliberately **unguarded** toggles — you can hit them from anywhere, editing
+ * included — so they are the two paths that open an overlay while another is already on
+ * screen. `currentOverlay` and `modalHtml` both rank Settings and Anomalies above the
+ * rest, so the newcomer *paints*; but a `moveTarget` left set is not a dismissed modal,
+ * it is a **hidden** one, and it comes back the moment the newcomer closes. ⌘, over
+ * Move… then Esc used to put the Move modal on screen with nothing having asked for it.
+ *
+ * Discarding beats deferring here, and beats refusing: pressing ⌘, is an unambiguous
+ * "take me to Settings", and a modal you have to dismiss twice is worse than one that
+ * closed when you looked away from it. Only the *targets* are cleared — no side effects,
+ * so nothing is committed on the way out.
+ */
+function dismissOverlays(): void {
+  state.contextMenu = null;
+  state.settingsOpen = false;
+  state.anomaliesOpen = false;
+  state.moveTarget = null;
+  state.deleteTarget = null;
+  state.linkTarget = null;
 }
 
 const FOCUSABLE =
@@ -1611,15 +1636,11 @@ async function commitLink(): Promise<void> {
  *  "semantic search is off" banner lands on Embedding where its Download button is.
  *  Without one, the dialog comes back where it was left (`state.settingsTab`). */
 async function openSettings(tab?: SettingsTabId): Promise<void> {
-  state.contextMenu = null; // a card menu could be up via the ⌘, shortcut path
-  // ⌘, has no `currentOverlay()` guard, so it can fire over the anomaly panel. Close it
-  // rather than leaving both flags set: `currentOverlay` would then report "settings"
-  // while `anomaliesOpen` stayed true, and closing Settings would *reveal* the panel
-  // again — an accidental stack, which the overlay layer no longer has anywhere.
-  // The reverse direction (`openAnomalies`) does the same, so the pair is exclusive.
-  state.anomaliesOpen = false;
-  if (tab) state.settingsTab = tab;
+  // Read before `dismissOverlays` — it clears this flag along with everyone else's, and
+  // "was the dialog already up" is what decides whether this is an open or a jump.
   const wasOpen = state.settingsOpen;
+  dismissOverlays();
+  if (tab) state.settingsTab = tab;
   state.settingsOpen = true;
   render(); // show the dialog shell immediately; the model list fills when it resolves
   if (wasOpen) {
@@ -1707,8 +1728,7 @@ function adoptAnomalies(report: IndexAnomalies): { summary: string | null; chang
 }
 
 function openAnomalies(): void {
-  state.contextMenu = null;
-  state.settingsOpen = false; // one exclusive overlay at a time (`currentOverlay`)
+  dismissOverlays(); // one exclusive overlay at a time (`currentOverlay`)
   state.anomaliesOpen = true;
   render();
 }
