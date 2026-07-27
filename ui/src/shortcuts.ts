@@ -91,8 +91,20 @@ export const SHORTCUTS: ShortcutGroup[] = [
     items: [
       { keys: "⌘,", action: "Settings" },
       { keys: "⇧⌘A", action: "Review the last index pass's anomalies" },
-      { keys: "?", action: "This sheet" },
+      { keys: "?", action: "This table (Settings → Keyboard)" },
       { keys: "Tab", action: "Step through the controls on screen" },
+    ],
+  },
+  // The settings dialog is a tabbed surface (settingstabs.ts), and a tab rail is exactly
+  // the kind of thing that ends up mouse-only if its moves aren't written down: the
+  // sections are visibly *there*, so nobody thinks to look for a chord.
+  {
+    title: "Settings (⌘,)",
+    items: [
+      { keys: "↑ / ↓", action: "Move between the sections, with the rail focused" },
+      { keys: "Home / End", action: "First / last section" },
+      { keys: "⌃Tab / ⇧⌃Tab", action: "Next / previous section, from anywhere in the dialog" },
+      { keys: "Esc", action: "Close Settings" },
     ],
   },
 ];

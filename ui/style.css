@@ -1936,7 +1936,13 @@ body.is-loading {
   color: var(--accent);
   font-weight: 600;
 }
-.segmented .seg:focus-visible {
+/* Plain `:focus`, not `:focus-visible` — a theme choice repaints the dialog it lives in,
+   and `paintModal` re-focuses this button by id afterwards. WebKit grants `:focus-visible`
+   to a script-focused node only by inheriting it from the currently focused one, which an
+   `innerHTML` swap has already reset to `<body>`, so the ring would lag a keystroke behind
+   the choice (crates/b2-desktop/CLAUDE.md, obligation 2). Costs nothing on a button:
+   WebKit never focuses one on click. */
+.segmented .seg:focus {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -1960,15 +1966,10 @@ body.is-loading {
   font-size: 11.5px;
   color: var(--muted);
 }
-/* Settings' link to the keyboard sheet sits left of Done: it's a way *out* to another
-   surface, not one of the dialog's own confirm/cancel pair. */
-.modal-actions [data-shortcuts-open] {
-  margin-right: auto;
-}
-
-/* --- the keyboard sheet (?) -----------------------------------------------------
-   The discoverable half of K1: every chord in one place. Wider than a normal modal
-   and columned, so the whole reference is one screen rather than a scroll. */
+/* --- the keyboard reference (?) --------------------------------------------------
+   The discoverable half of K1: every chord in one place. It lives in Settings' Keyboard
+   section now, but the two-column pack is the same, and `.modal-wide` is still what the
+   anomaly panel is built on. */
 .modal-wide {
   max-width: 720px;
   max-height: calc(100vh - 96px);
@@ -2147,7 +2148,110 @@ button.move-dest:hover {
   cursor: default;
 }
 
-/* --- settings modal ----------------------------------------------------------- */
+/* --- settings: the tabbed dialog ------------------------------------------------
+   Settings outgrew a single scrolling column (appearance + the whole embedding story +
+   the whole keyboard reference), so it is a rail of sections beside one panel.
+
+   The box is deliberately **fixed**, not content-sized — `height`, not `max-height`, which
+   would still let a two-line section shrink the dialog and a page of shortcuts grow it. It
+   must not resize under the cursor: the rail is the one thing you navigate *back* to, and
+   a rail that moves every time you pick a section is a rail you have to re-find. So the
+   box holds still, the body fills it, and only the panel scrolls. The `min()` is the short
+   window: the dialog gives up height before it gives up fitting on screen. */
+.modal-settings {
+  max-width: 880px;
+  height: min(600px, calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+}
+.settings-body {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  gap: 20px;
+  flex: 1;
+  /* A grid item's default `min-height: auto` sizes it to its content, which would push the
+     panel's overflow out through the dialog instead of scrolling it. */
+  min-height: 0;
+  margin: 4px 0 16px;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 14px;
+  border-right: 1px solid var(--border);
+}
+.stab {
+  text-align: left;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.stab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.stab-on {
+  background: var(--accent-soft);
+  border-color: var(--border);
+  color: var(--accent);
+  font-weight: 600;
+}
+/* Plain `:focus`, for `.segmented .seg`'s reason one section up: the rail is a roving
+   tabstop whose selected tab is re-focused by script after the dialog repaints, and
+   `:focus-visible` would arrive a keystroke late. */
+.stab:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The panel is focusable (`tabindex="0"` in render.ts) because it is the scroll
+   container: a region you can't focus is a region you can't scroll without the mouse,
+   and the Keyboard section is a page of table with no controls of its own. Hence a ring
+   it can actually show — inset, so it reads as "this region has the keyboard" rather
+   than as a control. */
+.settings-panel {
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.settings-panel:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+  border-radius: 8px;
+}
+.settings-panel > :last-child {
+  margin-bottom: 0;
+}
+/* A control's width is a claim about its content: the modal's `.field` stretches to a
+   440px dialog, but stretched across the panel a three-segment theme switch reads as a
+   toolbar and a one-line model name sits in a field of whitespace. Cap them at a form
+   column; the prose beside them keeps the full width. */
+.settings-panel .field {
+  max-width: 400px;
+}
+/* `.settings-subhead`'s rule above the heading separates *stacked* groups; the one that
+   opens a panel has nothing to separate from. */
+.settings-panel > .settings-subhead:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+/* The reference packs into two columns in the note-pane-width panel, one when the window
+   is narrow enough that the dialog itself has shrunk. */
+.settings-panel .keys-grid {
+  margin: 12px 0 4px;
+}
+@media (max-width: 720px) {
+  .settings-panel .keys-grid {
+    columns: 1;
+  }
+}
 
 .settings-detail {
   margin: -6px 0 16px;
