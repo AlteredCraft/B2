@@ -262,9 +262,11 @@ if/when one lands — `index-engine.md` §5.)*
   discovery pane follow the ARIA `tree` pattern over the row order of `ui/src/treenav.ts` /
   `ui/src/sidenav.ts` — the *same* order `render.ts` paints, so the arrows and the eye can't disagree
   — every pane restores focus across its own repaint (`paintTree` by path; `capturePaneFocus` by row
-  key, graph-node scene id, or a control's stable `id` for the other two), every overlay traps and
-  restores it, `⇧F10` is the keyboard's right-click, and `?` shows the whole
-  chord table (`ui/src/shortcuts.ts`). The four obligations a new surface owes are in
+  key, graph-node scene id, or a control's stable `id` for the other two; `captureModalFocus` by `id`
+  for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
+  and the Settings dialog (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
+  `ui/src/settingstabs.ts` — General / Embedding / **Keyboard**, the last being the whole chord table
+  (`ui/src/shortcuts.ts`) that `?` jumps straight to. The four obligations a new surface owes are in
   [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)

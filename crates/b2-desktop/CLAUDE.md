@@ -147,8 +147,13 @@ Every new surface owes all four. They are cheap while you're building it and exp
   expands to reveal *its own body*, so "foldable" and "has child rows" come apart. A card row is a
   `<div>` (it contains the open `<button>`; nested buttons are illegal), so ⏎/Space there **dispatch
   that button's click** — the graph nodes' rule again, one activation path.
-- **`ui/src/shortcuts.ts`** — the `?` sheet's one table. Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys
-  macOS spells out in its own menus stay words (Esc, Tab, Space, Home/End).
+- **`ui/src/shortcuts.ts`** — the one chord table, rendered as Settings' **Keyboard** section (`?`
+  opens the dialog there). Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys macOS spells out in its own
+  menus stay words (Esc, Tab, Space, Home/End).
+- **`ui/src/settingstabs.ts`** — the Settings dialog's rail: the section list and its ARIA `tabs`
+  moves (↑↓ with wrap, Home/End; ⌃Tab cycles from anywhere in the dialog). Its own module for
+  treenav.ts's reason — the paint and the arrows must agree on order, so the order is defined once
+  and both read it. Adding a section is a row there plus a panel in `render.ts`.
 - **`ui/src/main.ts`** — the wiring: the tree's and the side pane's own `keydown` (bound to each pane,
   so they answer before the global chords), the global chord table, and the focus plumbing under
   *"keyboard: focus plumbing"*.
@@ -161,18 +166,25 @@ Every new surface owes all four. They are cheap while you're building it and exp
   second is the one that bites: (a) restore by *identity that outlives the swap*, never by element —
   `paintTree` re-focuses the tree's row **by path**; `capturePaneFocus` is the note and side panes'
   one mechanism (discovery row key → graph node's scene id → stable `id` → the pane itself, which is
-  the honest floor for a wikilink or a backlink card that has no durable identity); and
+  the honest floor for a wikilink or a backlink card that has no durable identity);
+  `captureModalFocus` is the overlay layer's, by `id` alone — a modal control that can't be named
+  after the swap is one a repaint must leave alone rather than guess a replacement for; and
   `captureReturnFocus` returns the overlay's own thunk (tree path → row key → node id → id →
   element). A pane that swaps its `innerHTML` with no such restoration is a pane that ejects the
   keyboard on every toast, which is exactly how discovery behaved until it got one — and how the
   note pane behaved until [#91](https://github.com/AlteredCraft/B2/issues/91). **A control that has
   to be restored therefore needs a durable identity in the markup**: a stable `id` on pane chrome
-  (the note bar's chips, search mode's `clear`), `data-gnode` on a graph node; (b) you cannot read
+  (the note bar's chips, search mode's `clear`) and on *every* Settings control (the rail's tabs,
+  the theme segments, the panel itself), `data-gnode` on a graph node; (b) you cannot read
   `document.activeElement` at the end of `render()` to learn what triggered an overlay, because
   `render()` swapped `#modal-root`/`#menu-root` on the way there and the answer is already
   `<body>`. Hence `lastFocused`, tracked continuously from `focusin` — destroying a focused node
   fires no `focusin`, so the last value is still the trigger. The identity rule from (a) is what it
-  returns *by*, which is why `#settings-shortcuts` has an id.
+  returns *by*, which is why the Settings button `#open-settings` has an id.
+
+  The overlay layer is also **memoized** (`paintModal`), for the reason the panes are plus one of
+  its own: a modal's *typed* state lives only in the DOM, so identical HTML must not swap the link
+  modal's half-written explanation away because a toast fired.
 - **WebKit doesn't focus a button on click.** So a `focusin` listener alone won't see a mouse user's
   selection, and the keyboard's idea of "where I am" would drift from the mouse's. The click
   delegation sets `state.treeFocus` and `state.sideFocus` explicitly for this reason — and it is the

@@ -23,6 +23,7 @@ import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
 import { SHORTCUTS } from "./shortcuts.ts";
+import { SETTINGS_TABS, type SettingsTabId } from "./settingstabs.ts";
 import {
   buildTree,
   CLASS_GLYPHS,
@@ -1111,16 +1112,64 @@ function embedStatsHtml(state: AppState): string {
   return head + `<div class="settings-stats">${list}</div>`;
 }
 
-// The Settings modal (⌘,). Reuses the link modal's `.modal-*`/`.field` chrome. Today it
-// holds the embedding model picker + the per-model embedding-time ledger; built to hold
-// more settings later. Mutually exclusive with the link modal in practice, so it takes
-// precedence in `modalHtml`.
+// --- Settings (⌘,) --------------------------------------------------------------
 //
-// `#settings-shortcuts` (the link out to the `?` sheet) carries a *load-bearing* id:
-// the sheet renders over this modal, and closing it restores focus to that button —
-// which main.ts's `captureReturnFocus` can only re-find across the modal-root repaint
-// by id, since the element it was focused on is long gone by then.
-function settingsModalHtml(state: AppState): string {
+// A tabbed dialog over a rail (settingstabs.ts) — General, Embedding, Keyboard — rather
+// than the one scrolling column it grew out of. Reuses the link modal's `.modal-*`/
+// `.field` chrome; `.modal-settings` is the wider, fixed-height box, so switching
+// sections never resizes the dialog under the cursor.
+//
+// **Every control in here carries a stable `id`**, and that is load-bearing, not tidy:
+// `#modal-root` is swapped wholesale on a repaint, so main.ts's `captureModalFocus` can
+// only put the keyboard back on what it was on by re-finding it by id after the swap
+// (crates/b2-desktop/CLAUDE.md, "Two things that bite"). A settings control with no id
+// is a control that ejects the keyboard to `<body>` the moment it's used.
+
+/** The panel for one section. Split per tab rather than one long builder so a new
+ *  section is a `case` plus a builder, and the others can't shift under it. */
+function settingsPanelHtml(state: AppState): string {
+  switch (state.settingsTab) {
+    case "general":
+      return generalPanelHtml(state);
+    case "embedding":
+      return embeddingPanelHtml(state);
+    case "keyboard":
+      return keyboardPanelHtml();
+  }
+}
+
+// General — app-wide preferences that belong to no subsystem. Appearance is the only one
+// today; this is the tab a vault or editor preference lands in rather than being wedged
+// beside the embedding model, which it has nothing to do with.
+function generalPanelHtml(state: AppState): string {
+  // Appearance: System (follow the OS) / Light / Dark. A segmented control rather than a
+  // <select> so the three mutually-exclusive choices read at a glance.
+  const themes: { id: "system" | "light" | "dark"; label: string }[] = [
+    { id: "system", label: "System" },
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+  ];
+  const themeButtons = themes
+    .map((t) => {
+      const on = state.theme === t.id;
+      return `<button type="button" class="seg${on ? " seg-on" : ""}" id="settings-theme-${
+        t.id
+      }" data-theme-choice="${t.id}" aria-pressed="${on}">${t.label}</button>`;
+    })
+    .join("");
+  return `<div class="settings-subhead">Appearance</div>
+      <p class="settings-detail muted">System follows macOS; Light and Dark pin B2 regardless.</p>
+      <div class="field">
+        <span class="field-label">Theme</span>
+        <div class="segmented" role="group" aria-label="Appearance">${themeButtons}</div>
+      </div>`;
+}
+
+// Embedding — everything about the model: which one, where its files are, what device it
+// runs on, whether it's downloaded, and how long it takes. The time ledger lives here
+// rather than in a diagnostics tab of its own because its whole purpose is judging a
+// model *swap*, which is the decision made two controls above it.
+function embeddingPanelHtml(state: AppState): string {
   const models = state.models;
   const current = models.find((m) => m.current) ?? models[0];
   const options = models
@@ -1154,51 +1203,87 @@ function settingsModalHtml(state: AppState): string {
           )}… this can take a few minutes.</span></div>`
         : `<div class="settings-provision"><button class="btn small primary" id="settings-provision">Download model</button><span class="muted">Required before this model can embed.</span></div>`
       : "";
-  // Appearance: System (follow the OS) / Light / Dark. A segmented control rather than a
-  // <select> so the three mutually-exclusive choices read at a glance.
-  const themes: { id: "system" | "light" | "dark"; label: string }[] = [
-    { id: "system", label: "System" },
-    { id: "light", label: "Light" },
-    { id: "dark", label: "Dark" },
-  ];
-  const themeButtons = themes
-    .map((t) => {
-      const on = state.theme === t.id;
-      return `<button type="button" class="seg${on ? " seg-on" : ""}" data-theme-choice="${
-        t.id
-      }" aria-pressed="${on}">${t.label}</button>`;
-    })
-    .join("");
+  return `<div class="settings-subhead">Model</div>
+      <label class="field">Embedding model
+        <select id="settings-model"${
+          models.length && !state.provisioning ? "" : " disabled"
+        }>${options}</select>
+      </label>
+      ${detail}
+      ${deviceRow}
+      ${provisionRow}
+      <p class="settings-note">Changing the model re-embeds the whole vault on the next
+        Reindex. A newly-chosen model is downloaded with the button above.</p>
+      ${embedStatsHtml(state)}
+      ${
+        state.modelsDir
+          ? `<div class="settings-subhead">Model files</div>
+             <p class="settings-path" title="${escapeHtml(state.modelsDir)}">${escapeHtml(
+               state.modelsDir,
+             )}</p>`
+          : ""
+      }`;
+}
+
+// Keyboard — the discoverable half of invariant K1, and now its home rather than a sheet
+// stacked over this dialog: one surface for the table, reached by `?` from anywhere or by
+// walking the rail. The table itself is `shortcuts.ts` (GH #78).
+function keyboardPanelHtml(): string {
+  return `<div class="settings-subhead">Keyboard shortcuts</div>
+      <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement.</p>
+      ${shortcutsGridHtml()}`;
+}
+
+/** Every chord B2 answers to, grouped, from the one table in shortcuts.ts. */
+function shortcutsGridHtml(): string {
+  const groups = SHORTCUTS.map(
+    (g) => `<section class="keys-group">
+        <h4>${escapeHtml(g.title)}</h4>
+        <dl class="keys-list">${g.items
+          .map((s) => `<dt><kbd>${escapeHtml(s.keys)}</kbd></dt><dd>${escapeHtml(s.action)}</dd>`)
+          .join("")}</dl>
+      </section>`,
+  ).join("");
+  return `<div class="keys-grid">${groups}</div>`;
+}
+
+/** The tab id's element id — the one both the rail and `aria-labelledby` derive from,
+ *  and what main.ts re-focuses a tab by after the modal repaints. */
+function tabDomId(id: SettingsTabId): string {
+  return `settings-tab-${id}`;
+}
+
+/**
+ * The dialog: a vertical rail of sections beside the active panel.
+ *
+ * The rail is the ARIA `tabs` pattern (settingstabs.ts owns the moves): `role="tablist"`,
+ * one `role="tab"` per section, and a **roving `tabindex`** so the whole rail is a single
+ * Tab stop — a settings dialog whose Tab sequence starts with N section buttons is a
+ * dialog you Tab *past*, not through. The panel carries `tabindex="0"` on purpose even
+ * when it holds its own controls: it is the scroll container, and a region you can't focus
+ * is a region you can't scroll without the mouse (the Keyboard section is a page of table
+ * and nothing else, so this is the only way to read past the fold).
+ */
+function settingsModalHtml(state: AppState): string {
+  const active = state.settingsTab;
+  const tabs = SETTINGS_TABS.map((t) => {
+    const on = t.id === active;
+    return `<button class="stab${on ? " stab-on" : ""}" id="${tabDomId(t.id)}" role="tab"
+              aria-selected="${on}" aria-controls="settings-panel" tabindex="${on ? "0" : "-1"}"
+              data-settings-tab="${t.id}" title="${escapeHtml(t.hint)}">${escapeHtml(t.label)}</button>`;
+  }).join("");
   return `<div class="modal-backdrop" data-settings-backdrop>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="modal modal-settings" role="dialog" aria-modal="true" aria-label="Settings">
         <h3>Settings</h3>
-        <div class="field">
-          <span class="field-label">Appearance</span>
-          <div class="segmented" role="group" aria-label="Appearance">${themeButtons}</div>
+        <div class="settings-body">
+          <div class="settings-tabs" role="tablist" aria-orientation="vertical"
+               aria-label="Settings sections">${tabs}</div>
+          <div class="settings-panel" id="settings-panel" role="tabpanel" tabindex="0"
+               aria-labelledby="${tabDomId(active)}">${settingsPanelHtml(state)}</div>
         </div>
-        <label class="field">Embedding model
-          <select id="settings-model"${
-            models.length && !state.provisioning ? "" : " disabled"
-          }>${options}</select>
-        </label>
-        ${detail}
-        ${deviceRow}
-        ${provisionRow}
-        <p class="settings-note">Changing the model re-embeds the whole vault on the next
-          Reindex. A newly-chosen model is downloaded with the button above.</p>
-        ${embedStatsHtml(state)}
-        ${
-          state.modelsDir
-            ? `<div class="settings-subhead">Model files</div>
-               <p class="settings-path" title="${escapeHtml(state.modelsDir)}">${escapeHtml(
-                 state.modelsDir,
-               )}</p>`
-            : ""
-        }
         <div class="modal-actions">
-          <button class="btn ghost" id="settings-shortcuts" data-shortcuts-open
-                  title="Every chord B2 answers to — ?">Keyboard shortcuts</button>
-          <button class="btn primary" data-settings-close>Done</button>
+          <span class="modal-hint">↑↓ picks a section · ⌃Tab cycles · Esc closes</span>
+          <button class="btn primary" id="settings-done" data-settings-close>Done</button>
         </div>
       </div>
     </div>`;
@@ -1299,35 +1384,6 @@ function deleteModalHtml(state: AppState): string {
     </div>`;
 }
 
-/**
- * The keyboard reference (`?`, or the Settings link) — the discoverable half of
- * invariant K1: every chord the app answers to, in one place, from the one table in
- * shortcuts.ts. Rendered *over* whatever else is open (Settings included), so closing
- * it returns to exactly what was underneath.
- */
-function shortcutsModalHtml(): string {
-  const groups = SHORTCUTS.map(
-    (g) => `<section class="keys-group">
-        <h4>${escapeHtml(g.title)}</h4>
-        <dl class="keys-list">${g.items
-          .map(
-            (s) => `<dt><kbd>${escapeHtml(s.keys)}</kbd></dt><dd>${escapeHtml(s.action)}</dd>`,
-          )
-          .join("")}</dl>
-      </section>`,
-  ).join("");
-  return `<div class="modal-backdrop">
-      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
-        <h3>Keyboard shortcuts</h3>
-        <p class="muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement.</p>
-        <div class="keys-grid">${groups}</div>
-        <div class="modal-actions">
-          <button class="btn primary" data-shortcuts-close>Done</button>
-        </div>
-      </div>
-    </div>`;
-}
-
 /** The role caption in front of a path — what this file's part in the anomaly was. */
 const ANOMALY_ROLE: Record<AnomalyPath["role"], string> = {
   shadowed: "not indexed",
@@ -1408,7 +1464,6 @@ function anomaliesModalHtml(state: AppState): string {
 }
 
 export function modalHtml(state: AppState): string {
-  if (state.shortcutsOpen) return shortcutsModalHtml();
   if (state.settingsOpen) return settingsModalHtml(state);
   if (state.anomaliesOpen) return anomaliesModalHtml(state);
   if (state.moveTarget) return moveModalHtml(state);

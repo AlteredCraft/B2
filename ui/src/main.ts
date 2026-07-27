@@ -44,6 +44,7 @@ import {
   type TreeRow,
 } from "./treenav";
 import { sideArrowMove, sideRowIndex, sideRows } from "./sidenav";
+import { isSettingsTab, tabMove, tabStep, type SettingsTabId } from "./settingstabs";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -107,6 +108,45 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
   const id = active.id;
   if (id) return () => (document.getElementById(id) ?? pane).focus();
   return () => pane.focus();
+}
+
+/**
+ * `capturePaneFocus`'s counterpart for the overlay layer. `#modal-root` is swapped
+ * wholesale on a repaint, so a modal control holding the keyboard — a Settings tab, the
+ * theme segment you just pressed, the link modal's verb — is destroyed by a toast timer,
+ * a watcher pulse, or the dialog's own state change, and WebKit drops focus to `<body>`.
+ *
+ * Restored by **`id`**: a modal control's id is the identity that outlives the swap
+ * (render.ts's Settings builder says so out loud, which is why every control in there
+ * carries one). Null when the keyboard was somewhere else entirely, or on a control with
+ * no id — a repaint must only ever *give back* focus, never take it, and guessing a
+ * replacement for an unidentifiable control is taking it.
+ *
+ * When the named control genuinely didn't survive — Settings' Download button *becomes*
+ * a spinner the moment you press it — the floor is the overlay's first stop rather than
+ * nothing, the way `capturePaneFocus`'s is the pane itself. Dropping the keyboard on
+ * `<body>` behind a backdrop is the one outcome an overlay may never produce.
+ */
+function captureModalFocus(root: HTMLElement): (() => void) | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id) return null;
+  const id = active.id;
+  return () => (document.getElementById(id) ?? overlayFocusables()[0])?.focus();
+}
+
+// The overlay layer's memo, and the reason it is worth having beyond the focus contract
+// above: a modal's *typed* state lives only in the DOM (the link modal's explanation
+// field), so an unrelated repaint with identical HTML must not swap it away mid-sentence.
+let lastModalHtml: string | null = null;
+
+function paintModal(): void {
+  const html = modalHtml(state);
+  if (html === lastModalHtml) return;
+  const root = el("modal-root");
+  const restore = captureModalFocus(root);
+  root.innerHTML = html;
+  lastModalHtml = html;
+  restore?.();
 }
 
 // The note pane's last-written HTML, for the render memo below. Cleared whenever the
@@ -219,7 +259,7 @@ function render(): void {
   // string when the gate (embedreminder.ts) says not to prompt, so the strip collapses.
   el("embed-banner").innerHTML = embedBannerHtml(state);
   el("menu-root").innerHTML = contextMenuHtml(state);
-  el("modal-root").innerHTML = modalHtml(state);
+  paintModal();
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
   paintReindex();
@@ -677,44 +717,56 @@ function focusSidePane(): void {
 // is the only honest place to move focus — moving it on every render would fight the
 // user's own Tab while a modal is up.
 
-type OverlayKind =
-  | "shortcuts"
-  | "settings"
-  | "anomalies"
-  | "move"
-  | "delete"
-  | "link"
-  | "menu"
-  | null;
+type OverlayKind = "settings" | "anomalies" | "move" | "delete" | "link" | "menu" | null;
 
 /**
  * Which overlay is up, in the same precedence `modalHtml` renders them — the guard
- * every global chord asks before acting.
+ * every global chord asks before acting, and what the focus transition below keys on.
  *
- * Focus, though, treats this as **two layers**, because the `?` sheet is the one
- * overlay that *stacks*: it renders over Settings (a button there is one of its two
- * entry points) while Settings stays open underneath, so closing it must return to
- * that button. Every other overlay is exclusive — a menu that hands off to Move… is
- * *replaced*, not covered, so the modal returns to whatever opened the menu, never to
- * a menu item that no longer exists. `baseOverlay` is this minus the sheet.
+ * **Exactly one is ever up**, which is what keeps this a single value rather than a
+ * stack: an overlay that hands off to another (a menu → Move…) is *replaced*, not
+ * covered, so closing returns focus to whatever opened the menu and never to a menu item
+ * that no longer exists. The `?` sheet used to be the one exception — it rendered *over*
+ * Settings, because a button there was one of its two entry points — and it is now the
+ * Keyboard section of the Settings dialog itself (settingstabs.ts), so the second layer,
+ * and the pair of return-focus slots it needed, are gone.
  */
 function currentOverlay(): OverlayKind {
-  if (state.shortcutsOpen) return "shortcuts";
-  return baseOverlay();
-}
-
-/** The exclusive overlay layer: at most one of these is ever up. */
-function baseOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
-  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` each
-  // clear the other's flag — so the order between the two here never has to arbitrate
-  // a stack, same as every other pair on this layer.
+  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` both
+  // run `dismissOverlays` first — so the order between the two here never has to
+  // arbitrate a stack, same as every other pair on this layer.
   if (state.anomaliesOpen) return "anomalies";
   if (state.moveTarget) return "move";
   if (state.deleteTarget) return "delete";
   if (state.linkTarget) return "link";
   if (state.contextMenu) return "menu";
   return null;
+}
+
+/**
+ * Take down every overlay, so the caller's own can be the one that is up.
+ *
+ * This is what makes "exactly one is ever up" true rather than aspirational. ⌘, and ⇧⌘A
+ * are deliberately **unguarded** toggles — you can hit them from anywhere, editing
+ * included — so they are the two paths that open an overlay while another is already on
+ * screen. `currentOverlay` and `modalHtml` both rank Settings and Anomalies above the
+ * rest, so the newcomer *paints*; but a `moveTarget` left set is not a dismissed modal,
+ * it is a **hidden** one, and it comes back the moment the newcomer closes. ⌘, over
+ * Move… then Esc used to put the Move modal on screen with nothing having asked for it.
+ *
+ * Discarding beats deferring here, and beats refusing: pressing ⌘, is an unambiguous
+ * "take me to Settings", and a modal you have to dismiss twice is worse than one that
+ * closed when you looked away from it. Only the *targets* are cleared — no side effects,
+ * so nothing is committed on the way out.
+ */
+function dismissOverlays(): void {
+  state.contextMenu = null;
+  state.settingsOpen = false;
+  state.anomaliesOpen = false;
+  state.moveTarget = null;
+  state.deleteTarget = null;
+  state.linkTarget = null;
 }
 
 const FOCUSABLE =
@@ -725,7 +777,14 @@ const FOCUSABLE =
  *  (the menu is one stop, arrow-navigated), so they're collected by class instead. */
 function overlayFocusables(): HTMLElement[] {
   const modal = document.querySelector<HTMLElement>("#modal-root .modal");
-  if (modal) return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  // The `tabIndex >= 0` filter is what makes a **roving tabstop inside a modal** work:
+  // `button:not([disabled])` matches a `tabindex="-1"` button regardless of the last
+  // clause, so without it Settings' rail would put every section in the Tab cycle —
+  // which is precisely the "Tab past N buttons to reach the controls" the roving
+  // tabindex exists to prevent (settingstabs.ts).
+  if (modal) {
+    return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((n) => n.tabIndex >= 0);
+  }
   const menu = document.querySelector<HTMLElement>("#menu-root .context-menu");
   return menu ? [...menu.querySelectorAll<HTMLElement>(".context-item")] : [];
 }
@@ -788,17 +847,16 @@ function captureReturnFocus(): (() => void) | null {
   };
 }
 
-// One return target per layer (see `currentOverlay`). The base layer's is captured
-// when the *chain* starts, so menu → Move… → close lands back on the tree row; the
-// sheet's is captured every time it opens, since what it covers is still on screen.
-let baseShowing: OverlayKind = null;
-let baseReturn: (() => void) | null = null;
-let sheetShowing = false;
-let sheetReturn: (() => void) | null = null;
+// The one return target, captured when the *chain* starts, so menu → Move… → close
+// lands back on the tree row rather than on the menu item that handed off.
+let overlayShowing: OverlayKind = null;
+let overlayReturn: (() => void) | null = null;
 
 /** Move focus into the overlay that just opened. */
 function focusIntoOverlay(kind: OverlayKind): void {
   // The link modal opens on its explanation field — the one thing you came here to type.
+  // Settings opens on its rail: `overlayFocusables()[0]` is the *selected* tab, since the
+  // unselected ones are the roving tabstop's `tabindex="-1"`.
   const preferred = kind === "link" ? document.getElementById("link-explanation") : null;
   (preferred ?? overlayFocusables()[0])?.focus();
 }
@@ -806,43 +864,23 @@ function focusIntoOverlay(kind: OverlayKind): void {
 /**
  * Called at the end of every `render()`: acts only on open/close *edges*, never on a
  * plain repaint — otherwise a toast timer would yank focus back to an overlay's first
- * control while the user is mid-Tab.
+ * control while the user is mid-Tab. (A repaint *while* an overlay is up is
+ * `paintModal`'s job, which restores what the keyboard was actually on.)
  */
 function syncOverlayFocus(): void {
-  const base = baseOverlay();
-  const sheet = state.shortcutsOpen;
-
-  if (base !== baseShowing) {
-    if (baseShowing === null) baseReturn = captureReturnFocus();
-    baseShowing = base;
-    if (base === null) {
-      const back = baseReturn;
-      baseReturn = null;
-      // Don't restore if the sheet is covering us (it owns focus and will restore on
-      // its own close), and not when an inline tree input just took the keyboard:
-      // Rename and New note are reached *through* the menu, so the menu closing must
-      // not yank focus back out of the input it just opened.
-      if (!sheet && !state.treeCreate && !state.treeRename) back?.();
-    } else if (!sheet) {
-      focusIntoOverlay(base);
-    }
-  }
-
-  // The sheet last, so it wins focus whenever it's up — it is the topmost layer.
-  if (sheet !== sheetShowing) {
-    sheetShowing = sheet;
-    if (sheet) {
-      sheetReturn = captureReturnFocus();
-      focusIntoOverlay("shortcuts");
-    } else {
-      const back = sheetReturn;
-      sheetReturn = null;
-      // No captured target means the sheet was opened by mouse (WebKit doesn't focus a
-      // button on click, so there was nothing focused to remember). Don't strand focus
-      // on <body> when the sheet was covering something — hand it to what's underneath.
-      if (back) back();
-      else if (base !== null) focusIntoOverlay(base);
-    }
+  const overlay = currentOverlay();
+  if (overlay === overlayShowing) return;
+  if (overlayShowing === null) overlayReturn = captureReturnFocus();
+  overlayShowing = overlay;
+  if (overlay === null) {
+    const back = overlayReturn;
+    overlayReturn = null;
+    // Not when an inline tree input just took the keyboard: Rename and New note are
+    // reached *through* the menu, so the menu closing must not yank focus back out of
+    // the input it just opened.
+    if (!state.treeCreate && !state.treeRename) back?.();
+  } else {
+    focusIntoOverlay(overlay);
   }
 }
 
@@ -1588,20 +1626,32 @@ async function commitLink(): Promise<void> {
 
 // --- settings (⌘,) ----------------------------------------------------------------
 //
-// A small modal over the global embedder config. Its one setting today is the model
-// picker; selecting a model persists to the shared config the CLI also reads, and a real
-// switch is completed by the user (b2 init + Reindex), which the flashed guidance names.
+// A tabbed dialog (settingstabs.ts owns the rail) over the app's preferences: General
+// (appearance), Embedding (the model picker — selecting one persists to the shared config
+// the CLI also reads, and a real switch is completed by the user with b2 init + Reindex,
+// which the flashed guidance names), and Keyboard (K1's discoverable half — the table
+// lives in shortcuts.ts). This is the wiring; the paint is render.ts.
 
-async function openSettings(): Promise<void> {
-  state.contextMenu = null; // a card menu could be up via the ⌘, shortcut path
-  // ⌘, has no `currentOverlay()` guard, so it can fire over the anomaly panel. Close
-  // it rather than leaving both flags set: `baseOverlay` would then report "settings"
-  // while `anomaliesOpen` stayed true, and closing Settings would *reveal* the panel
-  // again — an accidental two-layer stack, which only the `?` sheet is meant to have.
-  // The reverse direction (`openAnomalies`) does the same, so the pair is exclusive.
-  state.anomaliesOpen = false;
+/** Open Settings, optionally jumping straight to a section — `?` lands on Keyboard, the
+ *  "semantic search is off" banner lands on Embedding where its Download button is.
+ *  Without one, the dialog comes back where it was left (`state.settingsTab`). */
+async function openSettings(tab?: SettingsTabId): Promise<void> {
+  // Read before `dismissOverlays` — it clears this flag along with everyone else's, and
+  // "was the dialog already up" is what decides whether this is an open or a jump.
+  const wasOpen = state.settingsOpen;
+  dismissOverlays();
+  if (tab) state.settingsTab = tab;
   state.settingsOpen = true;
-  render(); // show the modal shell immediately; the list fills when it resolves
+  render(); // show the dialog shell immediately; the model list fills when it resolves
+  if (wasOpen) {
+    // Already up, so this was a *jump* between sections (`?` from inside the dialog).
+    // Move the keyboard with the selection exactly as the rail's own arrows do —
+    // `paintModal` restores focus to the tab that had it, which is no longer the
+    // selected one, and a roving tabstop that disagrees with the highlight is worse
+    // than no tabstop. The reads below are skipped too: nothing about the host changed.
+    if (tab) document.getElementById(`settings-tab-${tab}`)?.focus();
+    return;
+  }
   try {
     // Models, their embedding-time history, where model files live, and the active compute
     // device (Metal/CPU) — parallel reads.
@@ -1618,8 +1668,9 @@ async function openSettings(): Promise<void> {
   } catch (e) {
     flash(errText(e));
   }
+  // No explicit focus call: the open edge put the keyboard on the selected tab, and
+  // `paintModal` hands it back across this repaint by the tab's id.
   render();
-  document.getElementById("settings-model")?.focus();
 }
 
 function closeSettings(): void {
@@ -1627,22 +1678,21 @@ function closeSettings(): void {
   render();
 }
 
-// --- the keyboard reference (?) ----------------------------------------------------
-//
-// K1's discoverable half: a promise nobody can find is not kept. The table lives in
-// shortcuts.ts; this is only the overlay's open/close. It renders *over* Settings (one
-// of its two entry points is a button there), so closing it leaves Settings as it was.
-
-function openShortcuts(): void {
-  state.contextMenu = null;
-  state.shortcutsOpen = true;
+/**
+ * Show a section. `focusTab` is the keyboard's half of the ARIA tabs pattern — an arrow
+ * or ⌃Tab moves focus *with* the selection, so the rail keeps the keyboard; a click does
+ * not, because WebKit never focuses a button on click and forcing it would light a ring
+ * the mouse user didn't ask for.
+ *
+ * The explicit focus is also the one case `paintModal` can't cover: it restores by id,
+ * and the id that had focus (the *previous* tab) still exists after the repaint, so
+ * without this the keyboard would stay behind on the tab you just moved off.
+ */
+function selectSettingsTab(tab: SettingsTabId, focusTab: boolean): void {
+  if (state.settingsTab === tab && !focusTab) return;
+  state.settingsTab = tab;
   render();
-}
-
-function closeShortcuts(): void {
-  if (!state.shortcutsOpen) return;
-  state.shortcutsOpen = false;
-  render();
+  if (focusTab) document.getElementById(`settings-tab-${tab}`)?.focus();
 }
 
 // --- the index anomalies (GH #81 → #88) --------------------------------------------
@@ -1678,8 +1728,7 @@ function adoptAnomalies(report: IndexAnomalies): { summary: string | null; chang
 }
 
 function openAnomalies(): void {
-  state.contextMenu = null;
-  state.settingsOpen = false; // one exclusive base overlay at a time (`baseOverlay`)
+  dismissOverlays(); // one exclusive overlay at a time (`currentOverlay`)
   state.anomaliesOpen = true;
   render();
 }
@@ -3117,39 +3166,30 @@ function wireEvents(): void {
       return;
     }
 
-    // The keyboard sheet renders over everything (Settings included), so it claims the
-    // click first — otherwise the Settings branch below would swallow it.
-    if (state.shortcutsOpen) {
-      if (
-        target.closest("[data-shortcuts-close]") ||
-        target.classList.contains("modal-backdrop")
-      ) {
-        closeShortcuts();
-      }
-      return;
-    }
-
     if (target.closest("#open-settings")) {
       void openSettings();
       return;
     }
     // The install banner (the "semantic search is off" strip): its primary action opens
-    // Settings → Download; the ✕ dismisses for this session. ("Don't remind me again" is a
-    // checkbox — handled in the `change` delegation below.)
+    // Settings → Embedding, where the Download button it is pointing at lives; the ✕
+    // dismisses for this session. ("Don't remind me again" is a checkbox — handled in the
+    // `change` delegation below.)
     if (target.closest("[data-install-open-settings]")) {
-      void openSettings();
+      void openSettings("embedding");
       return;
     }
     if (target.closest("[data-install-dismiss]")) {
       dismissEmbedReminder(false);
       return;
     }
-    // Settings modal: the Download button (in-app `b2 init`), else the Done button or a
-    // click on the backdrop itself closes it. Checked before the link-modal backdrop
-    // branch so settings wins when it's up.
+    // Settings dialog: a rail tab, the Download button (in-app `b2 init`), else the Done
+    // button or a click on the backdrop itself closes it. Checked before the link-modal
+    // backdrop branch so settings wins when it's up.
     if (state.settingsOpen) {
-      if (target.closest("[data-shortcuts-open]")) {
-        openShortcuts();
+      const tab = target.closest<HTMLElement>("[data-settings-tab]");
+      if (tab) {
+        const id = tab.dataset.settingsTab ?? null;
+        if (isSettingsTab(id)) selectSettingsTab(id, false);
         return;
       }
       if (target.closest("#settings-provision")) {
@@ -3603,6 +3643,33 @@ function wireEvents(): void {
       }
       return;
     }
+    // Settings' rail (K1, the ARIA tabs pattern — settingstabs.ts owns the moves). Above
+    // the Tab trap because ⌃Tab is a Tab: the trap swallows the key unconditionally, so a
+    // section chord placed after it would never run.
+    //
+    // The two moves differ in reach on purpose. ⌃Tab / ⇧⌃Tab cycle sections from
+    // *anywhere* in the dialog — you should never have to walk back to the rail to switch
+    // — while ↑↓ and Home/End apply only with the keyboard actually **on** a tab, since
+    // those keys belong to the panel's own controls (and to the panel itself, which
+    // scrolls) the moment focus leaves the rail.
+    if (state.settingsOpen) {
+      if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        selectSettingsTab(tabStep(state.settingsTab, e.shiftKey ? -1 : 1), true);
+        return;
+      }
+      const onRail =
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.closest("[data-settings-tab]") !== null;
+      if (onRail && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        const next = tabMove(state.settingsTab, e.key);
+        if (next) {
+          e.preventDefault();
+          selectSettingsTab(next, true);
+          return;
+        }
+      }
+    }
     // An open overlay owns Tab (K1): without a trap, Tab walks the page *behind* the
     // modal — focus vanishes under the backdrop and the overlay becomes dismissible
     // only with the mouse. Wrapping keeps every control in it reachable, forever.
@@ -3711,15 +3778,19 @@ function wireEvents(): void {
       startTreeRename(treeRowRef(row));
       return;
     }
-    // ? — the keyboard reference. Bare `?` (⇧/ on a US layout), so it can't collide
-    // with typing: any text surface is excluded, editing included. A context menu owns
-    // the keyboard like any other overlay (Escape first); the sheet is allowed over a
-    // *modal* because Settings is one of its two entry points.
+    // ? — the keyboard reference, which is Settings' Keyboard section (settingstabs.ts).
+    // Bare `?` (⇧/ on a US layout), so it can't collide with typing: any text surface is
+    // excluded, editing included. Any *other* overlay owns the keyboard first (Escape,
+    // then ask again) — the sheet used to render over them, and folding it into Settings
+    // is what makes this chord an ordinary one. A toggle, like ⌘,: pressing it while
+    // already reading the section closes the dialog.
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      if (state.editing || inTextEntry() || state.contextMenu) return;
+      if (state.editing || inTextEntry()) return;
+      const overlay = currentOverlay();
+      if (overlay !== null && overlay !== "settings") return;
       e.preventDefault();
-      if (state.shortcutsOpen) closeShortcuts();
-      else openShortcuts();
+      if (state.settingsOpen && state.settingsTab === "keyboard") closeSettings();
+      else void openSettings("keyboard");
       return;
     }
     // ⌘1 / ⌘2 / ⌘3 — put the keyboard in the files, the note, or discovery. Without
@@ -3803,13 +3874,7 @@ function wireEvents(): void {
     // toggle like ⌘,, and reachable while editing for the same reason: it opens a modal
     // over the pane rather than touching the live buffer. Nothing to review is not a
     // reason to refuse — the panel then says so, which beats a chord that looks broken.
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      e.shiftKey &&
-      !e.altKey &&
-      e.key.toLowerCase() === "a" &&
-      !state.shortcutsOpen
-    ) {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
       e.preventDefault();
       if (state.anomaliesOpen) closeAnomalies();
       else openAnomalies();
@@ -3830,12 +3895,8 @@ function wireEvents(): void {
       return;
     }
     if (e.key === "Escape") {
-      // Innermost first, always: the sheet renders over Settings, so Esc closes it and
-      // leaves Settings exactly as it was.
-      if (state.shortcutsOpen) {
-        closeShortcuts();
-        return;
-      }
+      // Innermost first, always — and with the `?` sheet folded into Settings, the
+      // overlay layer is flat, so this is simply the one overlay that is up.
       if (state.contextMenu) {
         closeContextMenu();
         return;

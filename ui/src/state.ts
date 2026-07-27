@@ -18,6 +18,10 @@ import type {
 } from "./types";
 import type { NodeKind } from "./move";
 import type { IndexAnomalies } from "./anomalies";
+// Carries its `.ts` because it is a *value* import (the others here are type-only, and
+// erase): render.test.ts / sanitize.test.ts reach this module through render.ts under
+// node's type-stripping, which resolves by real filename. render.ts says the same.
+import { DEFAULT_SETTINGS_TAB, type SettingsTabId } from "./settingstabs.ts";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
@@ -207,6 +211,13 @@ export interface AppState {
   /** The settings modal (⌘,) is open. */
   settingsOpen: boolean;
   /**
+   * Which section of the settings dialog is showing (settingstabs.ts). Outlives a
+   * close, so ⌘, comes back where you left it — a dialog that resets to page one every
+   * time is a dialog you re-navigate on every visit. `?` overrides it to "keyboard",
+   * which is the chord's whole meaning.
+   */
+  settingsTab: SettingsTabId;
+  /**
    * The GH #81 anomalies the **latest** projection pass surfaced — duplicate `b2id`s
    * and identity restamps — or null before any pass has run in this session. Drives
    * the top bar's ⚠ badge and the review panel (GH #88).
@@ -219,12 +230,6 @@ export interface AppState {
   anomalies: IndexAnomalies | null;
   /** The anomaly review panel (⇧⌘A, or the ⚠ badge) is open. */
   anomaliesOpen: boolean;
-  /**
-   * The keyboard-reference sheet (`?`) is open. Rendered *over* whatever else is up
-   * (it opens from Settings too), so it takes precedence in `modalHtml` and closes
-   * first on Escape — leaving the overlay underneath exactly as it was. K1, GH #78.
-   */
-  shortcutsOpen: boolean;
   /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
   theme: ThemePref;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
@@ -298,9 +303,9 @@ export const state: AppState = {
   linkTarget: null,
   linkRelation: "references",
   settingsOpen: false,
+  settingsTab: DEFAULT_SETTINGS_TAB,
   anomalies: null,
   anomaliesOpen: false,
-  shortcutsOpen: false,
   theme: "system",
   models: [],
   embedStats: [],
