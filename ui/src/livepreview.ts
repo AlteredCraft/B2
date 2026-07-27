@@ -28,7 +28,9 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
-import { renderMarkdown } from "./render";
+// Extension-qualified, unlike the app-only modules: node's test runner resolves
+// specifiers literally, and this file is in the suite now (livepreview.test.ts).
+import { renderMarkdown } from "./render.ts";
 
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
 //
@@ -126,11 +128,16 @@ const ruleDeco = Decoration.replace({ widget: new RuleWidget() });
 // `state.doc` remains the source of truth. `from` is the marker's `[`; the state char
 // sits at `from + 1`.
 class TaskWidget extends WidgetType {
-  constructor(
-    readonly checked: boolean,
-    readonly from: number,
-  ) {
+  // Fields declared and assigned rather than written as constructor parameter
+  // properties: those are the one TypeScript construct node's `--experimental-strip-types`
+  // can't erase, and using them here made the *whole module* unimportable by the test
+  // runner — including the pure rules at the bottom of the file. Same below.
+  readonly checked: boolean;
+  readonly from: number;
+  constructor(checked: boolean, from: number) {
     super();
+    this.checked = checked;
+    this.from = from;
   }
   eq(o: TaskWidget): boolean {
     return o.checked === this.checked && o.from === this.from;
@@ -166,11 +173,12 @@ class TaskWidget extends WidgetType {
 // cursor at its start, revealing the raw source for editing. `from` is the table's
 // first-line start.
 class TableWidget extends WidgetType {
-  constructor(
-    readonly md: string,
-    readonly from: number,
-  ) {
+  readonly md: string;
+  readonly from: number;
+  constructor(md: string, from: number) {
     super();
+    this.md = md;
+    this.from = from;
   }
   eq(o: TableWidget): boolean {
     return o.md === this.md && o.from === this.from;
@@ -432,11 +440,28 @@ const blockField = StateField.define<DecorationSet>({
 });
 
 /**
+ * Does this click mean "follow the wikilink" rather than "put the cursor here"?
+ *
+ * ⌘ only. It used to take ⌃ as well — the same `metaKey || ctrlKey` reflex the keyboard
+ * handlers had (bindings.ts `Chord.mod`), and wrong here for a sharper reason than there:
+ * on macOS **⌃-click *is* the secondary click**. The OS synthesizes a context-menu gesture
+ * from it, so ⌃-clicking a wikilink navigated away *and* right-clicked, which is not a
+ * thing any one gesture should do.
+ *
+ * Its own function, exported, because a mouse handler buried in a `ViewPlugin`'s
+ * `eventHandlers` is unreachable from the suite — and this rule is exactly the sort that
+ * gets casually re-broken by someone restoring "cross-platform" symmetry.
+ */
+export function isFollowClick(e: Pick<MouseEvent, "metaKey">): boolean {
+  return e.metaKey;
+}
+
+/**
  * The live-preview extension: the ViewPlugin folding tree+selection into inline/line
  * decorations, the `blockField` feeding block widgets (tables — spec §8), plus the
  * `lp-body` class that swaps the editor to the reading view's proportional voice
- * (spec §3, §5). Cmd/Ctrl+click a wikilink follows it via `onFollow`; a plain click
- * falls through to place the cursor, as an editor must (spec §3).
+ * (spec §3, §5). ⌘-click a wikilink follows it via `onFollow`; a plain click falls
+ * through to place the cursor, as an editor must (spec §3).
  */
 export function livePreview(onFollow: (target: string) => void): Extension {
   const plugin = ViewPlugin.fromClass(
@@ -455,7 +480,7 @@ export function livePreview(onFollow: (target: string) => void): Extension {
       decorations: (v) => v.decorations,
       eventHandlers: {
         mousedown(e: MouseEvent): boolean {
-          if (!(e.metaKey || e.ctrlKey)) return false;
+          if (!isFollowClick(e)) return false;
           const span = (e.target as HTMLElement | null)?.closest?.("[data-target]");
           const target = (span as HTMLElement | null)?.dataset.target;
           if (!target) return false;
