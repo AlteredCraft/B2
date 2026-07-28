@@ -4104,6 +4104,16 @@ async function loadMenuChords(): Promise<void> {
   try {
     const chords = await api.menuChords();
     state.menuChords = chords;
+    // The sheet reads this, so a panel that is already up has to be told. `boot` fires
+    // this fetch without awaiting it and `wireEvents` has already bound ⌘, by then, so
+    // "Settings is open before the host answers" is reachable, and without a repaint the
+    // reader would sit looking at the mirror — the one thing the host list exists to
+    // replace. Guarded rather than unconditional because during boot the answer normally
+    // lands *before* the first `render()`, and painting there would flash the empty shell
+    // ahead of the vault read. In the healthy case the two lists agree, so the HTML is
+    // identical and `paintModal`'s memo skips the swap; the case where the DOM really
+    // changes is drift, which is the case worth showing.
+    if (state.settingsOpen) render();
     const drift = menuDrift(chords);
     if (drift.length > 0) {
       console.error(
