@@ -187,7 +187,7 @@ tomorrow's model* — made mechanical.
   close). Focus is always visible and follows platform/ARIA conventions. **A chord that is live in the
   app is B2's to document, whoever authored it**: the macOS menu bar's accelerators are declared rather
   than inherited from Tauri's default (`b2-desktop/src/menu.rs`), so the reference sheet can list them
-  and the collision gate can see them — a chord nothing enumerates cannot be found, and the app cannot
+  and the conflict gate can see them — a chord nothing enumerates cannot be found, and the app cannot
   warn about landing on it. The `b2` CLI satisfies this by
   nature; K1 governs the GUI adapter. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md),
   GH #78, #119)

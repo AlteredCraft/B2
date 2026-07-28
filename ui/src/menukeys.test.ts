@@ -2,7 +2,7 @@
 // gate itself.
 //
 // The gate is `menuOverlaps()` being empty: no B2 binding may be spelled with a chord the
-// menu bar already takes. It matters more than the ordinary collision check, because it is
+// menu bar already takes. It matters more than the ordinary conflict check, because it is
 // the one clash a user reports as "that shortcut does nothing" — the keystroke never
 // reaches the webview, so no handler runs, nothing logs, and there is no ordering trick
 // that would let B2 have it back. Before #119 nothing could see these chords at all: they
