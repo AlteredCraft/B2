@@ -1,25 +1,27 @@
 // Inline formatting, the pure half — the ⌘B/⌘I toggle engine, and the table future
-// chords extend. main.ts derives the CodeMirror keymap from `FORMATS` and dispatches
-// what `toggleInline` computes; this module never touches the editor, so it runs
-// under plain node (the wikicomplete.ts / move.ts pattern).
+// chords extend. main.ts builds the CodeMirror keymap by pairing each row here with its
+// chord from the keyboard registry (`format.<id>` in bindings.ts) and dispatches what
+// `toggleInline` computes; this module never touches the editor, so it runs under plain
+// node (the wikicomplete.ts / move.ts pattern).
 //
 // Adding a format later (strikethrough, inline code, highlight) is one new row in
-// `FORMATS` — the engine is generic over the marker. The one wrinkle it encodes:
+// `FORMATS` plus its `format.<id>` chord in bindings.ts — the engine is generic over the
+// marker, and the keymap is built from the two together. The one wrinkle it encodes:
 // bold (`**`) and italic (`*`) share a character, so "is this format already here?"
 // is a *parity* question on the star run (`*a*` italic, `**a**` bold, `***a***`
 // both), not a substring match.
 
-/** One inline mark: its Markdown marker and the key chord that toggles it. */
+/** One inline mark and the Markdown that expresses it. The chord that toggles it lives
+ *  in the keyboard registry as `format.<id>` (bindings.ts) — one table owns every chord
+ *  in the app, and the engine here needs only the marker. */
 export interface InlineFormat {
   id: string;
   /** The delimiter written on each side of the content (`**`, `*`, `~~`, …). */
   marker: string;
-  /** The CodeMirror key name main.ts binds (`Mod-` = ⌘ on macOS, Ctrl elsewhere). */
-  key: string;
 }
 
-export const BOLD: InlineFormat = { id: "bold", marker: "**", key: "Mod-b" };
-export const ITALIC: InlineFormat = { id: "italic", marker: "*", key: "Mod-i" };
+export const BOLD: InlineFormat = { id: "bold", marker: "**" };
+export const ITALIC: InlineFormat = { id: "italic", marker: "*" };
 
 /** The keymap's source of truth — extend here and the binding exists. */
 export const FORMATS: InlineFormat[] = [BOLD, ITALIC];

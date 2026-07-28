@@ -10,7 +10,7 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import {
@@ -49,11 +49,19 @@ import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
+import { canonicalKey, chordFor, displayKeys, isBound } from "./bindings";
+import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
 import { markdownForPaste } from "./paste";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import { reprojectThenList } from "./reconcile";
-import { anomalyCount, anomalyKey, anomalySummary, type IndexAnomalies } from "./anomalies";
+import {
+  anomalyCount,
+  anomalyKey,
+  anomalySummary,
+  REVIEW_CHORD,
+  type IndexAnomalies,
+} from "./anomalies";
 import {
   contextMenuHtml,
   embedBannerHtml,
@@ -353,7 +361,7 @@ function paintAnomalyBadge(): void {
   badge.hidden = n === 0 && !state.anomaliesOpen;
   badge.textContent = `⚠ ${n}`;
   const what = n === 1 ? "1 index anomaly" : `${n} index anomalies`;
-  badge.title = `${what} from the last index pass — review (⇧⌘A)`;
+  badge.title = `${what} from the last index pass — review (${REVIEW_CHORD})`;
   badge.setAttribute("aria-label", `Review ${what}`);
 }
 
@@ -2245,8 +2253,9 @@ function wikiSource(ctx: CompletionContext): CompletionResult | null {
 }
 
 // Formatting chords (⌘B/⌘I, …) — the CodeMirror adapter over the pure format.ts
-// engine. The keymap derives from the `FORMATS` table, so adding a chord is one new
-// table row, no wiring here. `changeByRange` runs the toggle per selection range and
+// engine. The keymap derives from the `FORMATS` table paired with each row's chord from
+// the keyboard registry (`format.<id>`, bindings.ts), so adding a format is one new row
+// in each and no wiring here. `changeByRange` runs the toggle per selection range and
 // maps the coordinates, so multi-cursor edits come free.
 function runFormat(view: EditorView, fmt: InlineFormat): boolean {
   const doc = view.state.doc.toString();
@@ -2259,7 +2268,7 @@ function runFormat(view: EditorView, fmt: InlineFormat): boolean {
   return true;
 }
 const formatKeymap = FORMATS.map((f) => ({
-  key: f.key,
+  key: chordFor(`format.${f.id}`),
   run: (view: EditorView) => runFormat(view, f),
 }));
 
@@ -2377,18 +2386,21 @@ function mountEditor(body: string): void {
       markdown({ base: markdownLanguage, extensions: [wikilink], codeLanguages: resolveLang }),
       history(),
       // Formatting chords first so a future format key can shadow a default binding.
+      // Every `key` here comes out of the registry, which is why its syntax is
+      // CodeMirror's: one spelling of a chord serves the editor and the sheet alike.
       keymap.of([
         ...formatKeymap,
-        { key: "Mod-t", run: runInsertTable },
+        { key: chordFor("editor.table"), run: runInsertTable },
         {
-          key: "Mod-Shift-v",
+          key: chordFor("editor.paste-plain"),
           run: (view: EditorView) => {
             void pastePlain(view);
             return true;
           },
         },
-        ...defaultKeymap,
-        ...historyKeymap,
+        // CodeMirror's own, declared in editorkeys.ts so the set that runs here is the
+        // set editorkeys.test.ts checks B2's chords against.
+        ...STOCK_EDITOR_KEYMAP,
       ]),
       EditorView.lineWrapping,
       // Web-page formatting survives the clipboard (see `richPaste` above); an
@@ -3077,7 +3089,9 @@ function buildShell(): void {
         <button id="find-next" class="btn ghost icon-btn" title="Next match (Enter)" aria-label="Next match">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
         </button>
-        <button id="find-close" class="btn ghost icon-btn" title="Close (Esc)" aria-label="Close find">
+        <button id="find-close" class="btn ghost icon-btn" title="Close (${escapeHtml(
+          displayKeys(["dismiss"]),
+        )})" aria-label="Close find">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
         </button>
       </div>
@@ -3615,18 +3629,21 @@ function wireEvents(): void {
     }
   });
 
-  // ⌘, toggles Settings (the macOS Preferences reflex); Escape closes whichever modal is
-  // up; Cmd/Ctrl+S forces an immediate flush while editing (autosave means it's never
-  // *required* — this is for the reflex); ⌘N / ⇧⌘N create a note / folder in the
-  // selection's folder (the tree-head icons' shortcuts).
+  // The app's chords. Every `isBound(e, …)` below asks the keyboard registry
+  // (bindings.ts) whether this keystroke is that command — the registry owns *what* the
+  // chord is, and the sheet in Settings → Keyboard is projected from the same table, so
+  // the two can't drift. What stays here is everything the table deliberately doesn't
+  // model: the order the surfaces get their turn (innermost first), and the guard beside
+  // each branch saying when its command applies at all — an overlay owns the keyboard,
+  // the tree has no focused row, ⌘⌫ must not hijack delete-to-line-start while editing.
   document.addEventListener("keydown", (e) => {
     // The tree's inline create input owns its keys first: Enter commits, Escape
     // cancels, and nothing else typed there leaks into the global chords below.
     if (state.treeCreate && (e.target as HTMLElement).id === "tree-create-input") {
-      if (e.key === "Enter") {
+      if (isBound(e, "create.commit")) {
         e.preventDefault();
         void commitTreeCreate((e.target as HTMLInputElement).value, true);
-      } else if (e.key === "Escape") {
+      } else if (isBound(e, "create.cancel")) {
         e.preventDefault();
         cancelTreeCreate();
       }
@@ -3634,10 +3651,10 @@ function wireEvents(): void {
     }
     // The rename input owns its keys the same way.
     if (state.treeRename && (e.target as HTMLElement).id === "tree-rename-input") {
-      if (e.key === "Enter") {
+      if (isBound(e, "rename.commit")) {
         e.preventDefault();
         void commitTreeRename((e.target as HTMLInputElement).value);
-      } else if (e.key === "Escape") {
+      } else if (isBound(e, "rename.cancel")) {
         e.preventDefault();
         cancelTreeRename();
       }
@@ -3653,9 +3670,10 @@ function wireEvents(): void {
     // those keys belong to the panel's own controls (and to the panel itself, which
     // scrolls) the moment focus leaves the rail.
     if (state.settingsOpen) {
-      if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+      const forward = isBound(e, "settings.section.next");
+      if (forward || isBound(e, "settings.section.prev")) {
         e.preventDefault();
-        selectSettingsTab(tabStep(state.settingsTab, e.shiftKey ? -1 : 1), true);
+        selectSettingsTab(tabStep(state.settingsTab, forward ? 1 : -1), true);
         return;
       }
       const onRail =
@@ -3673,10 +3691,12 @@ function wireEvents(): void {
     // An open overlay owns Tab (K1): without a trap, Tab walks the page *behind* the
     // modal — focus vanishes under the backdrop and the overlay becomes dismissible
     // only with the mouse. Wrapping keeps every control in it reachable, forever.
-    if (e.key === "Tab" && currentOverlay() !== null) {
-      // Swallowed unconditionally — an overlay that somehow renders with no focusable
-      // control must still not let Tab walk the page behind it, which is the exact
-      // failure this block exists to prevent.
+    if (isBound(e, "overlay.focus.step") && currentOverlay() !== null) {
+      // The binding is `Any-Tab`: this branch's contract is that *no* Tab reaches the
+      // page, so a modifier the user is still holding must not defeat it. Swallowed
+      // unconditionally for the same reason — an overlay that somehow renders with no
+      // focusable control must still not let Tab walk the page behind it, which is the
+      // exact failure this block exists to prevent.
       e.preventDefault();
       const items = overlayFocusables();
       if (items.length > 0) {
@@ -3690,57 +3710,65 @@ function wireEvents(): void {
     }
     // ↑/↓ walk an open context menu — the menu-pattern sibling of the tree's arrows.
     // (⏎ needs no binding: the items are buttons.)
-    if (state.contextMenu && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      const items = overlayFocusables();
-      if (items.length > 0) {
-        e.preventDefault();
-        const i = items.indexOf(document.activeElement as HTMLElement);
-        const n = items.length;
-        const next =
-          i < 0 ? (e.key === "ArrowDown" ? 0 : n - 1) : (i + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
-        items[next].focus();
+    if (state.contextMenu) {
+      const down = isBound(e, "menu.item.next");
+      if (down || isBound(e, "menu.item.prev")) {
+        const items = overlayFocusables();
+        if (items.length > 0) {
+          e.preventDefault();
+          const i = items.indexOf(document.activeElement as HTMLElement);
+          const n = items.length;
+          const next = i < 0 ? (down ? 0 : n - 1) : (i + (down ? 1 : -1) + n) % n;
+          items[next].focus();
+        }
+        return;
       }
-      return;
     }
     // The find bar's input: Enter steps (⇧Enter back), Escape closes. Everything else
     // falls through so the global chords (⌘F itself, ⇧⌘F) still work from the bar.
     if (findOpen && (e.target as HTMLElement).id === "find-input") {
-      if (e.key === "Enter") {
+      const forward = isBound(e, "find.input.next");
+      if (forward || isBound(e, "find.input.prev")) {
         e.preventDefault();
-        findStep(e.shiftKey ? -1 : 1);
+        findStep(forward ? 1 : -1);
         return;
       }
-      if (e.key === "Escape") {
+      if (isBound(e, "find.input.close")) {
         e.preventDefault();
         closeFind();
         return;
       }
     }
     // ⌘F — find in the open note; ⇧⌘F — jump to the global vault-search box.
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
+    const vaultSearch = isBound(e, "search.focus");
+    if (vaultSearch || isBound(e, "find.open")) {
       if (currentOverlay() !== null) return;
       e.preventDefault();
-      if (e.shiftKey) focusGlobalSearch();
+      if (vaultSearch) focusGlobalSearch();
       else openFind();
       return;
     }
     // ⌘G / ⇧⌘G — the classic find-next/previous chords, live while the bar is open.
-    if (findOpen && (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "g") {
-      e.preventDefault();
-      findStep(e.shiftKey ? -1 : 1);
-      return;
+    if (findOpen) {
+      const forward = isBound(e, "find.next");
+      if (forward || isBound(e, "find.prev")) {
+        e.preventDefault();
+        findStep(forward ? 1 : -1);
+        return;
+      }
     }
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "n") {
+    const newFolder = isBound(e, "tree.new-folder");
+    if (newFolder || isBound(e, "tree.new-note")) {
       if (currentOverlay() !== null) return; // an overlay owns the keyboard
       e.preventDefault();
-      startTreeCreate(e.shiftKey ? "folder" : "note", state.selectedDir);
+      startTreeCreate(newFolder ? "folder" : "note", state.selectedDir);
       return;
     }
     // ⇧F10 / the Menu key — the keyboard's right-click, and the entry point that makes
     // Rename / Move… / Link… reachable without a mouse at all (they live only in the
     // context menu). Opens the *same* menu the mouse does, anchored under whatever the
     // keyboard is on: a tree row, or a discovery card / graph ghost.
-    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    if (isBound(e, "menu.open")) {
       if (currentOverlay() !== null || state.vaultRoot === null) return;
       const row = focusedTreeRow();
       if (row) {
@@ -3771,7 +3799,7 @@ function wireEvents(): void {
     }
     // F2 — rename the focused tree row. The platform rename chord, and the direct path
     // the context menu advertises next to the item.
-    if (e.key === "F2" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+    if (isBound(e, "tree.rename")) {
       const row = focusedTreeRow();
       if (!row) return;
       e.preventDefault();
@@ -3784,7 +3812,7 @@ function wireEvents(): void {
     // then ask again) — the sheet used to render over them, and folding it into Settings
     // is what makes this chord an ordinary one. A toggle, like ⌘,: pressing it while
     // already reading the section closes the dialog.
-    if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (isBound(e, "help.keyboard")) {
       if (state.editing || inTextEntry()) return;
       const overlay = currentOverlay();
       if (overlay !== null && overlay !== "settings") return;
@@ -3796,28 +3824,28 @@ function wireEvents(): void {
     // ⌘1 / ⌘2 / ⌘3 — put the keyboard in the files, the note, or discovery. Without
     // them, reaching the tree means Tab-ing through the whole top bar first, which is
     // "operable" only in the letter of K1, not its spirit.
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.altKey &&
-      !e.shiftKey &&
-      (e.key === "1" || e.key === "2" || e.key === "3")
-    ) {
+    const focusPane = isBound(e, "pane.tree")
+      ? focusTreePane
+      : isBound(e, "pane.note")
+        ? focusNotePane
+        : isBound(e, "pane.discovery")
+          ? focusSidePane
+          : null;
+    if (focusPane) {
       if (currentOverlay() !== null) return;
       e.preventDefault();
-      if (e.key === "1") focusTreePane();
-      else if (e.key === "2") focusNotePane();
-      else focusSidePane();
+      focusPane();
       return;
     }
     // Enter commits the link modal from anywhere inside it — the keyboard sibling of
     // "Commit link" (the explanation field is a plain input, so ⏎ would do nothing).
-    if (state.linkTarget && e.key === "Enter" && !e.shiftKey) {
+    if (state.linkTarget && isBound(e, "link.commit")) {
       e.preventDefault();
       void commitLink();
       return;
     }
     // Enter commits the folder-delete confirm (its keyboard sibling of the button).
-    if (state.deleteTarget && e.key === "Enter") {
+    if (state.deleteTarget && isBound(e, "delete.confirm")) {
       e.preventDefault();
       const node = state.deleteTarget;
       state.deleteTarget = null;
@@ -3827,7 +3855,7 @@ function wireEvents(): void {
     // ⏎ / Space on a focused graph node. SVG has no native button activation, so the
     // key becomes the click the delegation above already answers — one activation path
     // for both hands, not two implementations to keep in step.
-    if (e.key === "Enter" || e.key === " ") {
+    if (isBound(e, "graph.activate")) {
       const active = document.activeElement;
       const node =
         active instanceof SVGElement || active instanceof HTMLElement
@@ -3844,7 +3872,7 @@ function wireEvents(): void {
     // it falls back to the open document, the reader's expectation. Reading view only:
     // while editing — or in any text field — ⌘⌫ is the platform delete-to-line-start
     // and must not be hijacked.
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Backspace") {
+    if (isBound(e, "delete.focused")) {
       if (currentOverlay() !== null) return;
       if (state.editing || inTextEntry()) return;
       const row = focusedTreeRow();
@@ -3864,7 +3892,7 @@ function wireEvents(): void {
       requestDelete(node);
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+    if (isBound(e, "settings.toggle")) {
       e.preventDefault();
       if (state.settingsOpen) closeSettings();
       else void openSettings();
@@ -3874,7 +3902,7 @@ function wireEvents(): void {
     // toggle like ⌘,, and reachable while editing for the same reason: it opens a modal
     // over the pane rather than touching the live buffer. Nothing to review is not a
     // reason to refuse — the panel then says so, which beats a chord that looks broken.
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
+    if (isBound(e, "anomalies.toggle")) {
       e.preventDefault();
       if (state.anomaliesOpen) closeAnomalies();
       else openAnomalies();
@@ -3883,7 +3911,7 @@ function wireEvents(): void {
     // ⌘E toggles edit mode — the keyboard sibling of the Edit / Done buttons. A modal
     // owns the keyboard first; a resource or empty pane has nothing to edit. Works while
     // editing (CodeMirror leaves Mod-e unbound, so the event bubbles here) to flip back.
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") {
+    if (isBound(e, "edit.toggle")) {
       if (currentOverlay() !== null) return;
       if (state.editing) {
         e.preventDefault();
@@ -3894,7 +3922,7 @@ function wireEvents(): void {
       }
       return;
     }
-    if (e.key === "Escape") {
+    if (isBound(e, "dismiss")) {
       // Innermost first, always — and with the `?` sheet folded into Settings, the
       // overlay layer is flat, so this is simply the one overlay that is up.
       if (state.contextMenu) {
@@ -3927,18 +3955,14 @@ function wireEvents(): void {
       if (state.graphOpen && state.current && !state.editing) toggleGraph();
       return;
     }
-    if (state.editing && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    if (state.editing && isBound(e, "editor.save")) {
       e.preventDefault();
       void saveNow();
       return;
     }
     // ⌘⏎ / ⌘S save the frontmatter mini-editor — its explicit-save chords (the
     // buttons' keyboard siblings, K1). Plain Enter stays a newline in the textarea.
-    if (
-      state.fmEditing &&
-      (e.metaKey || e.ctrlKey) &&
-      (e.key === "Enter" || e.key.toLowerCase() === "s")
-    ) {
+    if (state.fmEditing && isBound(e, "fm.save")) {
       e.preventDefault();
       void saveFmEdit();
       return;
@@ -3949,12 +3973,10 @@ function wireEvents(): void {
     // mean caret-to-edge, so the brackets still navigate (e.g. straight from the
     // search field). The buttons and mouse back/forward stay live everywhere — they
     // flush through navGo's edit-mode guard.
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !state.editing) {
+    const back = isBound(e, "nav.back");
+    if ((back || isBound(e, "nav.forward")) && !state.editing) {
       if (currentOverlay() !== null) return;
-      const back = e.key === "[" || e.key === "ArrowLeft";
-      const forward = e.key === "]" || e.key === "ArrowRight";
-      if (!back && !forward) return;
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && inTextEntry()) return;
+      if (canonicalKey(e.key).startsWith("Arrow") && inTextEntry()) return;
       e.preventDefault();
       void navGo(back ? -1 : 1);
     }

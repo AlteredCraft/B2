@@ -17,6 +17,7 @@
 // index still say so, and it stops existing the moment a pass comes back clean. A panel
 // reopened after a restart shows nothing until the next pass re-derives the same anomaly.
 
+import { displayKeys } from "./bindings.ts";
 import type { B2idCollision, RestampedNote } from "./types.ts";
 
 /** The slice of a `ProjectReport` the anomaly surfaces read (GH #81). */
@@ -26,9 +27,10 @@ export interface IndexAnomalies {
 }
 
 /** The chord that opens the review panel — quoted in the ping, so the toast tells you
- *  how to get the detail back after it clears. Its row in the `?` sheet
- *  (shortcuts.ts) and its wiring (main.ts) spell the same chord; keep the three in step. */
-export const REVIEW_CHORD = "⇧⌘A";
+ *  how to get the detail back after it clears. Projected from the keyboard registry
+ *  (bindings.ts), which is what keeps it equal to the wiring and to the `?` sheet
+ *  rather than being a third place the same chord is spelled by hand. */
+export const REVIEW_CHORD = displayKeys(["anomalies.toggle"]);
 
 /**
  * One path an anomaly row names, and what B2 can do with it.

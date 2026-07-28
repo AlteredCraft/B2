@@ -266,7 +266,11 @@ if/when one lands — `index-engine.md` §5.)*
   for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
   and the Settings dialog (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
   `ui/src/settingstabs.ts` — General / Embedding / **Keyboard**, the last being the whole chord table
-  (`ui/src/shortcuts.ts`) that `?` jumps straight to. The four obligations a new surface owes are in
+  (`ui/src/shortcuts.ts`) that `?` jumps straight to. Chords themselves are declared once in
+  `ui/src/bindings.ts` — the keyboard registry — and the dispatcher, the editor's keymap and that
+  sheet all derive from it, so none of the three can drift; `conflicts()` fails the suite on two
+  commands sharing a keystroke in one scope, and `ui/src/editorkeys.ts` checks B2's chords against
+  CodeMirror's own ~100 stock bindings so an upgrade can't quietly take one. The four obligations a new surface owes are in
   [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
