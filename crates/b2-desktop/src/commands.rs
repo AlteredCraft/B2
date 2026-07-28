@@ -458,7 +458,7 @@ pub fn embed_stats() -> Vec<EmbedStat> {
 
 /// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI
 /// folds these into its keyboard registry as reserved chords: the reference sheet lists
-/// them, and the collision check can finally see the one set of chords it was blind to
+/// them, and the conflict check can finally see the one set of chords it was blind to
 /// — AppKit dispatches a menu key equivalent before the webview receives the key at all,
 /// so no amount of watching `keydown` would have found them.
 ///

@@ -1,12 +1,12 @@
-// The keyboard registry (bindings.ts), pinned — and the collision gate itself. Pure —
+// The keyboard registry (bindings.ts), pinned — and the conflict gate itself. Pure —
 // no DOM — so node runs it straight off the source: `npm test`. Dependency-free like the
 // others.
 //
-// Two jobs. The first is that B2's own chords don't collide: `conflicts(BINDINGS)` must
+// Two jobs. The first is that B2's own chords don't conflict: `conflicts(BINDINGS)` must
 // be empty, and because `npm test` runs inside both `just check` and `just ci`, that
 // assertion *is* the gate. The second is proving the gate can fail — a checker that has
 // only ever seen a clean table is indistinguishable from one that returns `[]`
-// unconditionally, so the interesting cases below are synthetic tables built to collide.
+// unconditionally, so the interesting cases below are synthetic tables built to clash.
 //
 // The matcher gets the same treatment. What a keyboard layer actually gets wrong is
 // dull and invisible: a chord that never fires because the table spells a key the way
@@ -83,9 +83,9 @@ check("every format in FORMATS has a chord in the registry", () => {
 
 // --- the gate -----------------------------------------------------------------------
 
-check("B2's own chords do not collide", () => {
+check("B2's own chords do not conflict", () => {
   const found = conflicts();
-  assertEq(found, [], `${found.length} colliding chord(s)`);
+  assertEq(found, [], `${found.length} conflicting chord(s)`);
 });
 
 check("two commands on one chord in one scope is a conflict", () => {
@@ -97,7 +97,7 @@ check("two commands on one chord in one scope is a conflict", () => {
   assertEq(conflicts(table), [{ a: "a", b: "b", form: "⌘k", scope: "global" }], "the clash");
 });
 
-check("an alias collides as loudly as a listed chord", () => {
+check("an alias conflicts as loudly as a listed chord", () => {
   // ⌘← fires nav.back without appearing in the sheet. A chord nobody can *see* in the
   // reference is exactly the one a new binding would land on unnoticed.
   const table: Binding[] = [
@@ -107,7 +107,7 @@ check("an alias collides as loudly as a listed chord", () => {
   assertEq(conflicts(table).map((c) => c.form), ["⌘ArrowLeft"], "the alias clashes");
 });
 
-check("an Any- chord collides with every strict chord over its key", () => {
+check("an Any- chord conflicts with every strict chord over its key", () => {
   // The subtle one, now that modifiers are compared literally. `Any-Escape` and
   // `Mod-Escape` look like unrelated rows and are the same key press.
   const table: Binding[] = [
@@ -124,7 +124,7 @@ check("the same chord in sibling scopes is not a conflict", () => {
     { id: "a", keys: ["Enter"], scope: "overlay:link" },
     { id: "b", keys: ["Enter"], scope: "overlay:delete" },
   ];
-  assertEq(conflicts(table), [], "siblings don't collide");
+  assertEq(conflicts(table), [], "siblings don't conflict");
 });
 
 check("an inner scope shadows the outer one, and that is reported, not failed", () => {
@@ -275,7 +275,7 @@ check("Esc gets you out with anything held down", () => {
 });
 
 check("an Any- chord claims every keystroke over its key", () => {
-  // Which is what makes it shadow — and collide with — the bindings it would really take
+  // Which is what makes it shadow — and conflict with — the bindings it would really take
   // the key from. A strict ⌃Tab under a scope the trap covers is not a free chord.
   const table: Binding[] = [
     { id: "trap", keys: ["Any-Tab"], scope: "overlay" },

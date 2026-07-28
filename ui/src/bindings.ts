@@ -55,7 +55,7 @@ export type Scope =
   // The overlay layer. `currentOverlay()` returns exactly one of these or null — the
   // openers all run `dismissOverlays` first, so they can never stack — which is what
   // makes them siblings, and what makes two ⏎ bindings unambiguous rather than a
-  // collision. They nest under `overlay` because the Tab trap is bound to the *layer*:
+  // conflict. They nest under `overlay` because the Tab trap is bound to the *layer*:
   // it takes Tab from whichever one is up, so it shadows all of them.
   | "overlay"
   | "overlay:settings"
@@ -338,7 +338,12 @@ export function isBound(e: KeyEventLike, id: BindingId): boolean {
   return allKeys(binding(id)).some((k) => chordMatches(parseChord(k), e));
 }
 
-// --- collisions --------------------------------------------------------------------
+// --- conflicts ---------------------------------------------------------------------
+//
+// "Conflict" is the keyboard word throughout — this section, menukeys.ts, editorkeys.ts
+// and their tests. "Collision" is spoken for: it is the cross-note `b2id` collision of
+// GH #81 (`B2idCollision` in types.ts, `collisions` on a projection report), which has
+// nothing to do with keystrokes. One word each, so neither needs its context read (#120).
 
 /** The physical key presses a chord answers to.
  *
@@ -446,7 +451,7 @@ export function conflicts(bindings: readonly Binding[] = BINDINGS): Conflict[] {
     for (let j = i + 1; j < all.length; j++) {
       const [x, y] = [all[i], all[j]];
       if (x.id === y.id || x.form !== y.form || x.scope !== y.scope) continue;
-      // One row per colliding *pair*, not per overlapping keystroke: a Mod-vs-Mod clash
+      // One row per conflicting *pair*, not per overlapping keystroke: a Mod-vs-Mod clash
       // meets on both ⌘X and ⌃X, and saying so twice is noise around one problem.
       const key = `${x.id} ${y.id} ${x.scope}`;
       if (seen.has(key)) continue;

@@ -16,7 +16,7 @@
 //
 // What's here is the **mirror** of that declaration. The host is the authority — it is
 // the one that builds the menu — and the UI holds a copy for the two jobs a runtime
-// fetch can't do: the collision gate below runs in node, in the suite, with no host to
+// fetch can't do: the conflict gate below runs in node, in the suite, with no host to
 // ask; and the sheet has to paint before the first `invoke` resolves. The copy is
 // checked against the host on every launch (`menuDrift`, called from main.ts's boot),
 // which is the same "change them together, and the app says so if you didn't" posture as

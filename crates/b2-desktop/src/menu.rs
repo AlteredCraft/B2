@@ -16,7 +16,7 @@
 //! items, and the chord macOS gives each one — and it has exactly two readers:
 //! [`build`], which is what the window actually gets, and [`chords`], which the
 //! `menu_chords` command hands the UI so the reference sheet can list them and the
-//! registry's collision check can see them (`ui/src/menukeys.ts`).
+//! registry's conflict check can see them (`ui/src/menukeys.ts`).
 //!
 //! **The items stay predefined on purpose.** The Edit menu is load-bearing rather than
 //! decorative — Cut/Copy/Paste/Select All work in the webview *because* the native
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn the_exported_chords_are_what_the_ui_mirrors() {
         // `ui/src/menukeys.ts` carries this same list — it is the UI's only offline
-        // knowledge of what the menu takes, and what its collision gate reads. **Change
+        // knowledge of what the menu takes, and what its conflict gate reads. **Change
         // the two together**: the app compares them at startup (`menuDrift`, called from
         // the frontend's boot) and reports a mismatch, the same posture as
         // `WRITE_CONFLICT_MESSAGE` and `VAULT_CHANGED_EVENT`.

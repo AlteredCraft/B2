@@ -93,7 +93,7 @@ export interface EditorOverlap {
 
 /** The scopes that can be live while CodeMirror holds the keyboard, and so the only ones
  *  an overlap can actually bite in. A modal's ⏎, the tree rename field's Esc and the
- *  graph's Space all collide with a stock binding on paper, but none of those surfaces
+ *  graph's Space all conflict with a stock binding on paper, but none of those surfaces
  *  exists while the editor has focus — reporting them would bury the four that matter. */
 const SCOPES_LIVE_IN_EDITOR: readonly Scope[] = ["global", "editor"];
 

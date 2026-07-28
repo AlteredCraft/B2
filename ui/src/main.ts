@@ -3808,7 +3808,7 @@ function wireEvents(): void {
       return;
     }
     // ? — the keyboard reference, which is Settings' Keyboard section (settingstabs.ts).
-    // Bare `?` (⇧/ on a US layout), so it can't collide with typing: any text surface is
+    // Bare `?` (⇧/ on a US layout), so it can't conflict with typing: any text surface is
     // excluded, editing included. Any *other* overlay owns the keyboard first (Escape,
     // then ask again) — the sheet used to render over them, and folding it into Settings
     // is what makes this chord an ordinary one. A toggle, like ⌘,: pressing it while
@@ -4093,7 +4093,7 @@ function wireEvents(): void {
  * the keyboard reference, and the one set of chords the webview never sees a keydown for.
  *
  * It doubles as the mirror's only check. `menukeys.ts` carries an offline copy — the
- * suite's collision gate reads it, and the sheet paints from it until this resolves — and
+ * suite's conflict gate reads it, and the sheet paints from it until this resolves — and
  * a copy free to fall behind the menu is precisely what #119 set out to end. A difference
  * goes to the console, not to the user: it means someone edited `menu.rs` without editing
  * the mirror, which is a developer's bug, and the sheet has already switched to the host's
