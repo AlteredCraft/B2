@@ -3089,9 +3089,9 @@ function buildShell(): void {
         <button id="find-next" class="btn ghost icon-btn" title="Next match (Enter)" aria-label="Next match">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
         </button>
-        <button id="find-close" class="btn ghost icon-btn" title="Close (${displayKeys([
-          "dismiss",
-        ])})" aria-label="Close find">
+        <button id="find-close" class="btn ghost icon-btn" title="Close (${escapeHtml(
+          displayKeys(["dismiss"]),
+        )})" aria-label="Close find">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
         </button>
       </div>
