@@ -5,10 +5,17 @@
 // this feature — every construct decorates *within* lines (marks, inline replaces,
 // line classes), so the whole engine is one ViewPlugin (spec insight §2.4).
 //
-// Two exports: `wikilink` (the Lezer inline node giving the tree B2's most important
-// construct) and `livePreview(onFollow)` (the ViewPlugin + the proportional-font body
-// class). main.ts keeps `livePreview` in a Compartment so `</>` can swap it for raw
+// Two exports the app uses: `wikilink` (the Lezer inline node giving the tree B2's most
+// important construct) and `livePreview(onFollow)` (the ViewPlugin + the proportional-font
+// body class). main.ts keeps `livePreview` in a Compartment so `</>` can swap it for raw
 // source mode with no remount.
+//
+// The rest of the exports are for the suite. Everything that decides *what* to decorate is
+// a pure function of (tree, selection, viewport) — so `inlineDecorations` and
+// `blockDecorations` take an `EditorState` plus the ranges rather than an `EditorView`,
+// which is the only thing the view ever contributed. That makes the whole engine reachable
+// from node: the real Lezer grammar parses with no DOM (highlight.test.ts leans on the same
+// fact), so livepreview.test.ts asserts against real trees rather than a mock (#120).
 
 import { syntaxTree } from "@codemirror/language";
 import {
@@ -17,6 +24,7 @@ import {
   type Extension,
   type Range,
   StateField,
+  type Text,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -72,9 +80,13 @@ export const wikilink: MarkdownConfig = {
   ],
 };
 
-// The engine re-derives the `[[..]]` structure from the node text — its span is exactly
-// the wikilink, so an anchored match yields the label/pipe offsets and the target.
-const WIKILINK_RE = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/;
+/** The engine re-derives the `[[..]]` structure from the node text — its span is exactly
+ *  the wikilink, so an anchored match yields the label/pipe offsets and the target.
+ *
+ *  Deliberately *stricter* than the parse rule above, which accepts a `[[a|]]` the empty
+ *  `([^\]]+)` label group rejects. The two are allowed to disagree: the node exists, the
+ *  match fails, and the Wikilink handler leaves the text raw (spec §4). */
+export const WIKILINK_RE = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/;
 
 // --- the decoration engine (spec §4) ----------------------------------------------
 
@@ -201,20 +213,20 @@ class TableWidget extends WidgetType {
   }
 }
 
-// The three spellings of a checked GFM task marker's state char.
-function taskChecked(marker: string): boolean {
+/** Is this GFM task marker checked? `[x]` and `[X]` are; the third spelling the grammar
+ *  emits a `TaskMarker` for, `[ ]`, is not — and nothing else is a marker at all. */
+export function taskChecked(marker: string): boolean {
   return marker === "[x]" || marker === "[X]";
 }
 
 /** Run `cb` once per line the range [from, to] covers (line-local block decorations). */
 function eachLine(
-  view: EditorView,
+  doc: Text,
   from: number,
   to: number,
   cb: (lineFrom: number, lineTo: number) => void,
 ): void {
   if (to < from) return;
-  const doc = view.state.doc;
   const first = doc.lineAt(from).number;
   const last = doc.lineAt(to).number;
   for (let n = first; n <= last; n++) {
@@ -227,8 +239,7 @@ function eachLine(
 
 /** Extend `to` past any spaces that follow a concealed block marker (so `## `, `> `
  *  conceal cleanly, matching the reading view which drops them). */
-function skipSpaces(view: EditorView, to: number, lineTo: number): number {
-  const doc = view.state.doc;
+function skipSpaces(doc: Text, to: number, lineTo: number): number {
   while (to < lineTo && doc.sliceString(to, to + 1) === " ") to++;
   return to;
 }
@@ -239,11 +250,10 @@ function skipSpaces(view: EditorView, to: number, lineTo: number): number {
 // legal and this is a pure function of (tree, selection, viewport).
 function handleNode(
   node: SyntaxNodeRef,
-  view: EditorView,
+  doc: Text,
   sel: EditorSelection,
   decos: Range<Decoration>[],
 ): boolean | void {
-  const doc = view.state.doc;
   const name = node.name;
 
   // Headings: line-scale style + conceal the leading `#`s (and their trailing space).
@@ -253,7 +263,7 @@ function handleNode(
     decos.push(Decoration.line({ class: `lp-h${level}` }).range(line.from));
     const revealed = touches(sel, line.from, line.to);
     for (const mark of node.node.getChildren("HeaderMark")) {
-      conceal(decos, revealed, mark.from, skipSpaces(view, mark.to, line.to));
+      conceal(decos, revealed, mark.from, skipSpaces(doc, mark.to, line.to));
     }
     return;
   }
@@ -314,16 +324,24 @@ function handleNode(
       return;
     }
 
-    // Blockquote: border + muted per line, conceal each `>` (reveal per its own line).
+    // Blockquote: border + muted per line. The `>` markers conceal themselves, one case
+    // down — the tree does not hang them all off the Blockquote (see there).
     case "Blockquote": {
-      eachLine(view, node.from, node.to, (lineFrom) => {
+      eachLine(doc, node.from, node.to, (lineFrom) => {
         decos.push(Decoration.line({ class: "lp-quote" }).range(lineFrom));
       });
-      for (const m of node.node.getChildren("QuoteMark")) {
-        const line = doc.lineAt(m.from);
-        const revealed = touches(sel, line.from, line.to);
-        conceal(decos, revealed, m.from, skipSpaces(view, m.to, line.to));
-      }
+      return;
+    }
+
+    // A `>` marker, concealed wherever the tree keeps it (reveal per its own line, like
+    // every other block marker). Its own case rather than the Blockquote's children,
+    // because only the *first* line's mark is a child of the Blockquote: the continuation
+    // lines of a wrapped quote hang theirs off the inner Paragraph, so collecting by
+    // direct child left every line but the first showing a raw `>` under the quote bar.
+    case "QuoteMark": {
+      const line = doc.lineAt(node.from);
+      const revealed = touches(sel, line.from, line.to);
+      conceal(decos, revealed, node.from, skipSpaces(doc, node.to, line.to));
       return;
     }
 
@@ -351,7 +369,7 @@ function handleNode(
     // Fenced code: block background per line; the fences stay visible (spec §3 — hiding
     // them would hide the language tag for little gain), so no conceal.
     case "FencedCode": {
-      eachLine(view, node.from, node.to, (lineFrom) => {
+      eachLine(doc, node.from, node.to, (lineFrom) => {
         decos.push(Decoration.line({ class: "lp-fence" }).range(lineFrom));
       });
       return;
@@ -382,14 +400,19 @@ function handleNode(
   }
 }
 
-/** Fold the visible syntax tree + selection into a sorted DecorationSet. Cost scales
- *  with the *viewport*, not the note (insight §2.1). */
-function buildDecorations(view: EditorView): DecorationSet {
+/** Fold the syntax tree + selection over `ranges` into a sorted DecorationSet. `ranges` is
+ *  the view's *viewport* in the app, which is what makes cost scale with the screen rather
+ *  than the note (insight §2.1) — and the only thing the plugin's `EditorView` was for. */
+export function inlineDecorations(
+  state: EditorState,
+  ranges: readonly { from: number; to: number }[],
+): DecorationSet {
   const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection;
-  const tree = syntaxTree(view.state);
-  for (const { from, to } of view.visibleRanges) {
-    tree.iterate({ from, to, enter: (node) => handleNode(node, view, sel, decos) });
+  const sel = state.selection;
+  const doc = state.doc;
+  const tree = syntaxTree(state);
+  for (const { from, to } of ranges) {
+    tree.iterate({ from, to, enter: (node) => handleNode(node, doc, sel, decos) });
   }
   // `sort: true` orders line/mark/replace decorations for us — the one place ordering
   // across the mixed decoration kinds is fiddly to get right by hand.
@@ -405,7 +428,7 @@ function buildDecorations(view: EditorView): DecorationSet {
 
 /** Replace each un-touched GFM table with a rendered block widget; reveal (leave raw)
  *  the one the selection is inside, so it can be edited as source. */
-function buildBlockDecorations(state: EditorState): DecorationSet {
+export function blockDecorations(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = [];
   const sel = state.selection;
   const doc = state.doc;
@@ -431,10 +454,10 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
 }
 
 const blockField = StateField.define<DecorationSet>({
-  create: (state) => buildBlockDecorations(state),
+  create: (state) => blockDecorations(state),
   update(deco, tr) {
     // Reveal keys on the selection, so a bare cursor move recomputes too.
-    return tr.docChanged || tr.selection ? buildBlockDecorations(tr.state) : deco;
+    return tr.docChanged || tr.selection ? blockDecorations(tr.state) : deco;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -468,11 +491,11 @@ export function livePreview(onFollow: (target: string) => void): Extension {
     class {
       decorations: DecorationSet;
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view);
+        this.decorations = inlineDecorations(view.state, view.visibleRanges);
       }
       update(u: ViewUpdate): void {
         if (u.docChanged || u.selectionSet || u.viewportChanged) {
-          this.decorations = buildDecorations(u.view);
+          this.decorations = inlineDecorations(u.view.state, u.view.visibleRanges);
         }
       }
     },
