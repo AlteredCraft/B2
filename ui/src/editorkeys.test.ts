@@ -12,7 +12,7 @@
 // that binds Mod-e would break ⌘E in the one path a user hits constantly — no error, no
 // failing test, just a chord that stopped working. So the assumption is a list now, and
 // the list is asserted.
-import { BINDINGS, chordFor, parseChord } from "./bindings.ts";
+import { DEFAULT_BINDINGS, chordFor, parseChord } from "./bindings.ts";
 import {
   STOCK_EDITOR_KEYMAP,
   STOCK_KEYMAPS,
@@ -140,7 +140,7 @@ check("the editor's own B2 chords are the ones installed ahead of the stock keym
   // ⌘B / ⌘I / ⌘T / ⇧⌘V go into the editor's keymap; ⌘S is the document handler's. All
   // five are scope `editor`, which is what makes the overlap check consider them at all
   // — a chord filed under the wrong scope would be compared against the wrong keyboard.
-  const editorIds = BINDINGS.filter((b) => b.scope === "editor").map((b) => b.id);
+  const editorIds = DEFAULT_BINDINGS.filter((b) => b.scope === "editor").map((b) => b.id);
   assertEq(
     editorIds,
     ["format.bold", "format.italic", "editor.table", "editor.paste-plain", "editor.save"],

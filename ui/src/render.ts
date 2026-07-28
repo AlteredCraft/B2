@@ -22,7 +22,9 @@ import { anomalyRows, type AnomalyPath, type AnomalyRow } from "./anomalies.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
-import { shortcuts } from "./shortcuts.ts";
+import { type ShortcutKey, shortcuts } from "./shortcuts.ts";
+import { DEFAULT_BINDINGS, activeBindings, displayChord, findBinding } from "./bindings.ts";
+import { customized, refused } from "./keymap.ts";
 import { SETTINGS_TABS, type SettingsTabId } from "./settingstabs.ts";
 import {
   buildTree,
@@ -1225,28 +1227,127 @@ function embeddingPanelHtml(state: AppState): string {
       }`;
 }
 
-// Keyboard — the discoverable half of invariant K1, and now its home rather than a sheet
-// stacked over this dialog: one surface for the table, reached by `?` from anywhere or by
-// walking the rail. The table itself is `shortcuts.ts` (GH #78).
+// Keyboard — the discoverable half of invariant K1, and now its *editable* half too: one
+// surface for the table, reached by `?` from anywhere or by walking the rail, where every
+// chord B2 owns is a button that rebinds it (#121). The table itself is `shortcuts.ts`
+// (GH #78); the algebra and the judgement are keymap.ts.
+//
+// The recorder is a strip at the top of the panel rather than a widget spliced into the
+// row it edits. The grid is CSS multi-column, so an inline block would land wherever the
+// column flow put it — and the panel is a page of table you scroll, so a control that
+// appeared below the fold would be a control nobody saw. The chip being edited carries
+// `.kbd-recording` instead, which is what ties the strip to its row.
 function keyboardPanelHtml(state: AppState): string {
+  const changed = customized(DEFAULT_BINDINGS, state.keyOverrides).length;
+  const resetAll = changed
+    ? `<button class="btn small" id="keys-reset-all">Reset all (${changed})</button>`
+    : "";
   return `<div class="settings-subhead">Keyboard shortcuts</div>
-      <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement.</p>
+      <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement. Click a chord to change it.</p>
+      <div class="keys-toolbar">${resetAll}</div>
+      ${recorderHtml(state)}
       ${shortcutsGridHtml(state)}`;
+}
+
+/** The recorder: what is being rebound, what has been pressed, and what that would mean.
+ *
+ *  Empty markup when nothing is recording, so the strip costs no vertical space until it
+ *  is asked for. Every control carries a stable `id` — the settings builder's rule above
+ *  — because a captured chord repaints the dialog under the keyboard that captured it. */
+function recorderHtml(state: AppState): string {
+  const rec = state.recorder;
+  if (!rec) return "";
+  const b = findBinding(activeBindings(), rec.id);
+  if (!b) return "";
+  const now = b.keys.map((k) => `<kbd>${escapeHtml(displayChord(k))}</kbd>`).join(" ");
+  const captured = rec.candidate
+    ? `<kbd class="keys-captured">${escapeHtml(displayChord(rec.candidate))}</kbd>`
+    : `<span class="keys-waiting">Press a chord…</span>`;
+  const lines = [
+    ...(rec.hint ? [{ tier: "warn" as const, message: rec.hint }] : []),
+    ...rec.problems,
+  ]
+    .map(
+      (p) =>
+        `<li class="keys-problem keys-${p.tier}">${escapeHtml(p.message)}</li>`,
+    )
+    .join("");
+  const blocked = refused(rec.problems);
+  const canSave = rec.candidate !== null && !blocked;
+  const isChanged = state.keyOverrides[rec.id] !== undefined;
+  // `tabindex="-1"`: focusable so main.ts can take the keyboard off whatever had it (a
+  // tree row, or CodeMirror, which would otherwise type the chord into the buffer behind
+  // the dialog), but not a Tab stop — the strip is a target to press keys at, not a
+  // control to land on. The id is what `captureModalFocus` hands focus back by, which
+  // matters here more than anywhere: every captured chord repaints this dialog.
+  return `<div class="keys-recorder" id="keys-recorder" tabindex="-1"
+        role="group" aria-label="Record a new chord for ${escapeHtml(b.label)}">
+      <div class="keys-recorder-head">
+        <span class="keys-recorder-what">${escapeHtml(b.label)}</span>
+        <span class="keys-recorder-now muted">now ${now}</span>
+      </div>
+      <div class="keys-recorder-target">${captured}</div>
+      ${lines ? `<ul class="keys-problems">${lines}</ul>` : ""}
+      <p class="keys-recorder-note muted">Esc cancels, ⏎ accepts — every other key is recorded. If a chord you press never appears above, macOS or another app took it before B2 could see it; B2 can only tell you about the chord you actually pressed.</p>
+      <div class="keys-recorder-actions">
+        <button class="btn small primary" id="keys-save"${canSave ? "" : " disabled"}>Use this chord</button>
+        <button class="btn small" id="keys-cancel">Cancel</button>
+        ${isChanged ? `<button class="btn small" id="keys-reset-one">Reset to default</button>` : ""}
+      </div>
+    </div>`;
 }
 
 /** Every chord the app answers to, grouped, from the one table in shortcuts.ts — plus
  *  the menu bar's, which are the host's declaration (`state.menuChords`, #119) rather
  *  than B2 bindings. `null` until the boot fetch lands, and the sheet falls back to
- *  menukeys.ts's mirror for that window. */
+ *  menukeys.ts's mirror for that window.
+ *
+ *  A chip that names a command is a `<button>`; everything else — the platform's own
+ *  keys, the menu bar's, a chord two commands print alike — stays a `<kbd>`. That split
+ *  is the whole affordance: what looks pressable is what B2 can actually move.
+ *
+ *  Every chip is a Tab stop, and on this section that is forty of them. Deliberate: they
+ *  are the controls the section exists to offer, and unlike the file tree's 1500 rows the
+ *  list is bounded and every entry is genuinely actionable. Esc still closes the dialog
+ *  from anywhere in it, which is the property K1 actually asks for. */
 function shortcutsGridHtml(state: AppState): string {
-  const groups = shortcuts(state.menuChords ?? undefined).map(
-    (g) => `<section class="keys-group">
+  const recording = state.recorder?.id ?? null;
+  // A chip's `id` is what `captureModalFocus` puts the keyboard back on after the repaint
+  // a click here causes, so it has to be **unique in the document** — and a command can
+  // legitimately appear in more than one row (⇧F10 opens a menu on a tree row *and* on a
+  // discovery card). The sheet's position disambiguates, and is stable across repaints
+  // because the sheet is a pure function of this same state.
+  let seat = 0;
+  const chip = (k: ShortcutKey): string => {
+    const text = escapeHtml(k.text);
+    seat++;
+    if (!k.id) {
+      const why = k.fixed ? ` title="${escapeHtml(k.fixed)}"` : "";
+      return `<kbd${why}>${text}</kbd>`;
+    }
+    const b = findBinding(activeBindings(), k.id);
+    const changed = state.keyOverrides[k.id] !== undefined;
+    const cls = [
+      "kbd-edit",
+      changed ? "kbd-changed" : "",
+      recording === k.id ? "kbd-recording" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const hint = `Change the chord for ${b?.label ?? k.id}${changed ? " (changed from the default)" : ""}`;
+    return `<button type="button" class="${cls}" id="keys-chip-${seat}-${escapeHtml(k.id)}"
+        data-rebind="${escapeHtml(k.id)}" title="${escapeHtml(hint)}">${text}</button>`;
+  };
+  const groups = shortcuts(state.menuChords ?? undefined)
+    .map(
+      (g) => `<section class="keys-group">
         <h4>${escapeHtml(g.title)}</h4>
         <dl class="keys-list">${g.items
-          .map((s) => `<dt><kbd>${escapeHtml(s.keys)}</kbd></dt><dd>${escapeHtml(s.action)}</dd>`)
+          .map((s) => `<dt>${s.keys.map(chip).join(" ")}</dt><dd>${escapeHtml(s.action)}</dd>`)
           .join("")}</dl>
       </section>`,
-  ).join("");
+    )
+    .join("");
   return `<div class="keys-grid">${groups}</div>`;
 }
 

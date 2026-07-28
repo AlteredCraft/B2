@@ -2011,7 +2011,8 @@ body.is-loading {
   font-size: 13px;
   color: var(--text);
 }
-.keys-list kbd {
+.keys-list kbd,
+.kbd-edit {
   display: inline-block;
   font: inherit;
   font-size: 12px;
@@ -2021,6 +2022,126 @@ body.is-loading {
   border-radius: 5px;
   padding: 1px 6px;
   white-space: nowrap;
+}
+/* A chord B2 owns and the user may move is a button; everything else stays a <kbd>. The
+   two look identical at rest on purpose — the sheet is a reference first — and the chip
+   declares itself pressable on hover/focus, which is where the question gets asked. */
+.kbd-edit {
+  cursor: pointer;
+  text-align: center;
+}
+.kbd-edit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.kbd-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Changed from the default: a dot rather than a colour, so the chord itself stays legible
+   and the mark reads the same in both themes. */
+.kbd-changed::after {
+  content: "•";
+  margin-left: 4px;
+  color: var(--accent);
+}
+.kbd-recording {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* --- the chord recorder (GH #121) ---------------------------------------------- */
+.keys-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 0;
+  margin: -8px 0 0;
+}
+.keys-recorder {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.keys-recorder:focus {
+  outline: none; /* the strip is a keystroke target, not a control — the border says so */
+}
+.keys-recorder-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.keys-recorder-what {
+  font-weight: 600;
+}
+.keys-recorder-now kbd {
+  font: inherit;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+/* The capture target: one fixed-height row, so the strip doesn't jump as chords land. */
+.keys-recorder-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  margin: 10px 0;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+.keys-captured {
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.keys-waiting {
+  font-size: 13px;
+  color: var(--muted);
+}
+.keys-problems {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+.keys-problem {
+  font-size: 12px;
+  line-height: 1.45;
+  padding-left: 16px;
+  position: relative;
+}
+.keys-problem::before {
+  position: absolute;
+  left: 0;
+}
+/* Refusal and advisory read differently at a glance, which is the whole point of the two
+   tiers: one blocks the Save button, the other is said and saved anyway. */
+.keys-refuse {
+  color: var(--danger);
+}
+.keys-refuse::before {
+  content: "✕";
+}
+.keys-warn {
+  color: var(--muted);
+}
+.keys-warn::before {
+  content: "!";
+}
+.keys-recorder-note {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.keys-recorder-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 /* --- index anomalies: the badge + the review panel (GH #88) ---------------------

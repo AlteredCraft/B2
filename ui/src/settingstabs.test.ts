@@ -7,13 +7,20 @@
 // tab is added, a `data-settings-tab` attribute that no longer names a real section. The
 // paint reads the same list the arrows do (settingstabs.ts says why), so pinning the list
 // pins both — which is the point of the module existing at all (K1, GH #78).
+import type { KeyEventLike } from "./bindings.ts";
 import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,
   isSettingsTab,
   tabMove,
+  tabNavFor,
   tabStep,
 } from "./settingstabs.ts";
+
+/** A keydown, as the registry's matcher sees it. */
+function press(key: string): KeyEventLike {
+  return { key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+}
 
 let passed = 0;
 
@@ -71,21 +78,36 @@ check("stepping backward wraps the other way", () => {
   );
 });
 
-check("↑↓ step, Home/End land on the ends", () => {
+check("the rail's moves step and wrap, and land on the ends", () => {
   const first = SETTINGS_TABS[0].id;
   const last = SETTINGS_TABS[SETTINGS_TABS.length - 1].id;
-  assert(tabMove(first, "ArrowDown") === SETTINGS_TABS[1].id, "↓ moves to the next tab");
-  assert(tabMove(first, "ArrowUp") === last, "↑ off the first wraps to the last");
-  assert(tabMove(last, "Home") === first, "Home lands on the first tab");
-  assert(tabMove(first, "End") === last, "End lands on the last tab");
+  assert(tabMove(first, "settings.tab.next") === SETTINGS_TABS[1].id, "next moves on");
+  assert(tabMove(first, "settings.tab.prev") === last, "off the first wraps to the last");
+  assert(tabMove(last, "settings.tab.first") === first, "first lands on the first tab");
+  assert(tabMove(first, "settings.tab.last") === last, "last lands on the last tab");
 });
 
-check("tabMove leaves keys it has no move for alone", () => {
+check("the shipped keys are ↑↓ and Home/End", () => {
+  // Which key means which move is the registry's since #121 (settingstabs.ts's header
+  // says why), so it is pinned here where the tabs pattern this implements is documented.
+  assert(tabNavFor(press("ArrowDown")) === "settings.tab.next", "↓");
+  assert(tabNavFor(press("ArrowUp")) === "settings.tab.prev", "↑");
+  assert(tabNavFor(press("Home")) === "settings.tab.first", "Home");
+  assert(tabNavFor(press("End")) === "settings.tab.last", "End");
+});
+
+check("a key the rail has no move for is left alone", () => {
   // A rail that answered every key would swallow Tab out of the dialog, ⏎ on the tab,
-  // and every global chord that fires while Settings is open.
+  // and every global chord that fires while Settings is open. ⌃Tab is the pointed one:
+  // it cycles sections from *anywhere* in the dialog, so it is a chord of its own
+  // (`settings.section.next`) and must not be answered here as well.
   for (const key of ["Tab", "Enter", " ", "Escape", "ArrowLeft", "ArrowRight", "a"]) {
-    assert(tabMove(SETTINGS_TABS[0].id, key) === null, `${JSON.stringify(key)} is not a rail move`);
+    assert(tabNavFor(press(key)) === null, `${JSON.stringify(key)} is not a rail move`);
   }
+  assert(
+    tabNavFor({ key: "Tab", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }) === null,
+    "⌃Tab belongs to settings.section.next",
+  );
 });
 
 console.log(`settingstabs: ${passed} checks passed`);

@@ -127,8 +127,8 @@ Every new surface owes all four. They are cheap while you're building it and exp
    one hook — `syncOverlayFocus()` in `main.ts`, called at the end of every `render()` and acting only
    on the open/close *edge*, so a toast timer's repaint never steals focus mid-⇥.
 4. **Discoverable.** A chord nobody can find is not kept. A chord is **declared once**, in
-   `ui/src/bindings.ts` — id, chord, scope — and everything else derives: the handler matches it with
-   `isBound(e, id)`, the editor's keymap takes it from `chordFor(id)`, and the `?` sheet
+   `ui/src/bindings.ts` — id, label, chord, scope — and everything else derives: the handler matches
+   it with `isBound(e, id)`, the editor's keymap takes it from `chordFor(id)`, and the `?` sheet
    (`ui/src/shortcuts.ts`) names the id rather than spelling the chord. So add the binding, then add
    its row to the sheet: `shortcuts.test.ts` fails on a binding no row documents, which is what makes
    "in the same change" a rule the suite keeps rather than one you have to remember. Put the chord in
@@ -136,13 +136,23 @@ Every new surface owes all four. They are cheap while you're building it and exp
    action lives in a menu, beside the menu item, which is where a keyboard user learns the shortcut
    that lets them skip the menu next time.
 
+   The `label` is not decoration: since [#121](https://github.com/AlteredCraft/B2/issues/121) that
+   sheet **edits** the table as well as printing it, so your chord appears as a button the user can
+   re-record, and the label is what the recorder and the conflict messages call your command. A row's
+   prose covers several commands at once ("Focus the files, the note, or discovery"); the label names
+   exactly one. If your chord genuinely isn't B2's to hand out — ⏎ in a text field, ⏎ on a dialog's
+   default button, the ⏎/Space a `<button>` would answer to — set `fixed` to the reason instead, and
+   expect to argue for it: `bindings.test.ts` pins that set.
+
    Three things the registry will tell you before a user does. `conflicts()` fails the suite if your
    chord already means something else in the same scope, so pick the scope honestly — it's what
    separates "⏎ commits *this* dialog" from a clash. `editorkeys.test.ts` compares B2's chords
    against CodeMirror's ~100 stock bindings, so if your chord needs to work while the note is being
    edited, that check is what proves the editor isn't already using it. And `menukeys.test.ts`
    compares them against the **menu bar's** (below) — the one clash no scope and no ordering can
-   win, because the keystroke never reaches the webview.
+   win, because the keystroke never reaches the webview. All three now answer to the *user* as well:
+   `ui/src/keymap.ts` asks the same functions about the table a candidate rebinding would produce,
+   so the honest scope you picked is also what keeps the recorder from crying wolf at them.
 
 ### Where the pieces live
 
@@ -152,7 +162,11 @@ Every new surface owes all four. They are cheap while you're building it and exp
   order than you can see is worse than no arrows at all. The tree follows the ARIA `tree` pattern —
   `role="tree"`/`treeitem`, `aria-level`, a **roving `tabindex`** (one Tab stop for the whole tree, not
   one per file: a 1500-note vault is not a tab sequence), ↑↓ between visible rows, →← to expand/enter
-  and collapse/exit, Home/End, and first-letter typeahead.
+  and collapse/exit, Home/End, and first-letter typeahead. Since #121 the *keys* those moves answer to
+  are the registry's, not this module's: `arrowMove` switches on a binding id (`tree.row.next`), and
+  `treeNavFor(e)` is the lookup — so the arrows are rebindable and the checkers can see them, while
+  command → move stays here where the pattern is documented. `sidenav.ts` and `settingstabs.ts` moved
+  the same way.
 - **`ui/src/sidenav.ts`** — treenav's sibling for the **discovery pane**: the same ARIA `tree` pattern
   over section heads and cards (↑↓, →← to fold or step in/out, Home/End, a roving `tabindex`), and the
   row *keys* the paint and the arrows share. One thing genuinely differs, and it's why this is its own
@@ -162,7 +176,24 @@ Every new surface owes all four. They are cheap while you're building it and exp
   that button's click** — the graph nodes' rule again, one activation path.
 - **`ui/src/shortcuts.ts`** — the one chord table, rendered as Settings' **Keyboard** section (`?`
   opens the dialog there). Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys macOS spells out in its own
-  menus stay words (Esc, Tab, Space, Home/End).
+  menus stay words (Esc, Tab, Space, Home/End). A row's chords are *chips*, one per chord: a chip
+  naming a movable B2 command paints as a `<button>` that opens the recorder, and everything else —
+  the platform's own keys, the menu bar's, a `fixed` chord — paints as a `<kbd>`. The affordance is
+  the contract, so what looks pressable is exactly what B2 can move.
+- **`ui/src/keymap.ts` + `ui/src/recorder.ts`** — the customizable keyboard
+  ([#121](https://github.com/AlteredCraft/B2/issues/121)). `keymap.ts` is the algebra (lay the user's
+  rebindings over `DEFAULT_BINDINGS`, install the result with `setActiveBindings`) and the judgement
+  (`chordProblems` runs all four checkers over the *candidate* table: a same-scope clash or a menu-bar
+  chord refuses, a shadow or a CodeMirror overlap advises). `recorder.ts` turns a keydown into a chord
+  spelled the way the table spells it, and reads the one thing no table can: **silence**. A chord that
+  produces no keydown was taken upstream — macOS or another app — and since nothing can enumerate
+  another process's hotkeys, that observation stays true across OS updates and third-party installs in
+  a way a static table can't. It under-reports rather than false-alarms, deliberately; the UI copy says
+  so. (That reasoning is why [#122](https://github.com/AlteredCraft/B2/issues/122)'s Carbon
+  `CopySymbolicHotKeys` table was closed rather than built.) The layout lives in `localStorage` beside
+  the theme — a viewing choice, never vault state, so it never reaches the host — and `adoptOverrides`
+  re-judges every stored entry on load, because a hand-edited store must not be able to install a
+  keyboard you can't use to fix itself.
 - **`src/menu.rs` + `ui/src/menukeys.ts`** — the **menu bar**, and the app's third keyboard
   ([#119](https://github.com/AlteredCraft/B2/issues/119)). Set no menu and Tauri installs
   `Menu::default()`, whose dozen accelerators (⌘Q ⌘W ⌘M ⌘H ⌥⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌃⌘F) are live in

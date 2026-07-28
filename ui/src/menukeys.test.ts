@@ -16,6 +16,12 @@ import { editorChords } from "./editorkeys.ts";
 import { MENU_CHORDS, menuDrift, menuOverlaps } from "./menukeys.ts";
 import { sheet } from "./shortcuts.ts";
 
+/** A synthetic row. These tables exist to make the checker *fail*, so the label carries
+ *  no meaning here — it is required by the type and named after the id to stay honest. */
+function row(b: Omit<Binding, "label">): Binding {
+  return { label: b.id, ...b };
+}
+
 let passed = 0;
 
 function assert(cond: boolean, msg: string): void {
@@ -64,7 +70,7 @@ check("no B2 chord lands on one the menu bar takes", () => {
 check("the gate fails on a chord the menu already has", () => {
   // The check above proves nothing on its own — this is what proves it can fail. ⌘M is
   // Minimize; a B2 command spelled that way would simply never run.
-  const table: Binding[] = [{ id: "pane.minimap", keys: ["Mod-m"], scope: "global" }];
+  const table: Binding[] = [row({ id: "pane.minimap", keys: ["Mod-m"], scope: "global" })];
   assertEq(
     menuOverlaps(table).map((o) => `${o.id} ${o.chord} → ${o.item} (${o.form})`),
     ["pane.minimap Mod-m → window.minimize (⌘m)"],
@@ -73,15 +79,15 @@ check("the gate fails on a chord the menu already has", () => {
 });
 
 check("a menu chord is taken from every scope, not just the global one", () => {
-  // The reason this is its own function rather than more rows in BINDINGS run through
+  // The reason this is its own function rather than more rows in the registry run through
   // `conflicts()`. Scope is how B2 lets an inner surface answer first — the rename field's
   // Esc before the overlay cascade, the Settings rail's ⌃Tab before the Tab trap — and it
   // is exactly the move that does *not* work here: AppKit dispatches a menu key equivalent
   // inside `NSApplication.sendEvent`, before the key window's responder chain, so the
   // webview is never asked. An editor-scoped ⌘Z is not "nearer the user"; it is dead.
   const table: Binding[] = [
-    { id: "editor.history", keys: ["Mod-z"], scope: "editor" },
-    { id: "link.select-all", keys: ["Mod-a"], scope: "overlay:link" },
+    row({ id: "editor.history", keys: ["Mod-z"], scope: "editor" }),
+    row({ id: "link.select-all", keys: ["Mod-a"], scope: "overlay:link" }),
   ];
   assertEq(
     menuOverlaps(table).map((o) => `${o.id} (${o.scope}) → ${o.item}`),
@@ -94,7 +100,7 @@ check("an Any- chord meets every menu chord over its key", () => {
   // `Any-Escape` claims every way of holding Escape, so an `Any-` chord over a letter the
   // menu uses would claim the menu's form too. Nothing binds one today; this is what
   // notices if something does.
-  const table: Binding[] = [{ id: "panic", keys: ["Any-q"], scope: "global" }];
+  const table: Binding[] = [row({ id: "panic", keys: ["Any-q"], scope: "global" })];
   assertEq(
     menuOverlaps(table).map((o) => o.form),
     ["⌘q"],

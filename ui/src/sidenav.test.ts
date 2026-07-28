@@ -3,10 +3,13 @@
 // Dependency-free like treenav.test.ts (hand-rolled assert), and deliberately its mirror:
 // the right column now answers the same ARIA `tree` pattern the file tree does, so these
 // cases are the guard against the paint (render.ts) and the arrows drifting apart.
+import type { KeyEventLike } from "./bindings.ts";
 import {
   cardKey,
   rovingSideKey,
   sideArrowMove,
+  sideNavFor,
+  type SideNav,
   sideRowIndex,
   sideRows,
   type SideNavState,
@@ -118,7 +121,7 @@ check("duplicate edges to one note are distinct rows sharing one fold key", () =
   assert(first.key !== second.key, "row keys are unique");
   equal(first.fold?.kind === "card" && first.fold.key, cardKey("connections", "notes/a.md"), "fold key");
   equal(second.fold?.kind === "card" && second.fold.key, cardKey("connections", "notes/a.md"), "the same");
-  equal(sideArrowMove(rows, sideRowIndex(rows, first.key), "ArrowDown")?.key, second.key, "↓ lands");
+  equal(sideArrowMove(rows, sideRowIndex(rows, first.key), "side.row.next")?.key, second.key, "↓ lands");
 });
 
 check("unresolved links are rows too — after the edges, and unfoldable", () => {
@@ -145,81 +148,97 @@ check("a search still running has no rows — the pane paints “Searching…”
 
 // --- sideArrowMove: the ARIA tree pattern over those rows -----------------------------
 
-function move(rows: readonly SideRow[], from: string | null, key: string) {
-  return sideArrowMove(rows, from === null ? -1 : sideRowIndex(rows, from), key);
+function move(rows: readonly SideRow[], from: string | null, nav: SideNav) {
+  return sideArrowMove(rows, from === null ? -1 : sideRowIndex(rows, from), nav);
+}
+
+/** A keydown, as the registry's matcher sees it. */
+function press(key: string): KeyEventLike {
+  return { key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
 }
 
 check("up/down step between visible rows and stop at the ends", () => {
   const rows = sideRows(pane());
-  equal(move(rows, "section:similar", "ArrowDown")?.key, "similar:0:notes/kivo.md", "down");
-  equal(move(rows, "similar:0:notes/kivo.md", "ArrowUp")?.key, "section:similar", "up");
-  equal(move(rows, "section:similar", "ArrowUp"), null, "no wrap off the top");
-  equal(move(rows, "connections:0:notes/onsite.md", "ArrowDown"), null, "no wrap off the bottom");
+  equal(move(rows, "section:similar", "side.row.next")?.key, "similar:0:notes/kivo.md", "down");
+  equal(move(rows, "similar:0:notes/kivo.md", "side.row.prev")?.key, "section:similar", "up");
+  equal(move(rows, "section:similar", "side.row.prev"), null, "no wrap off the top");
+  equal(move(rows, "connections:0:notes/onsite.md", "side.row.next"), null, "no wrap off the bottom");
 });
 
 check("down never descends into a collapsed section", () => {
   const rows = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  equal(move(rows, "section:similar", "ArrowDown")?.key, "section:connections", "skips the cards");
+  equal(move(rows, "section:similar", "side.row.next")?.key, "section:connections", "skips the cards");
 });
 
 check("Home/End jump to the first and last rows", () => {
   const rows = sideRows(pane());
-  equal(move(rows, "section:connections", "Home")?.key, "section:similar", "Home");
-  equal(move(rows, "section:similar", "End")?.key, "connections:0:notes/onsite.md", "End");
+  equal(move(rows, "section:connections", "side.row.first")?.key, "section:similar", "Home");
+  equal(move(rows, "section:similar", "side.row.last")?.key, "connections:0:notes/onsite.md", "End");
 });
 
 check("the first arrow press lands even with nothing focused", () => {
   const rows = sideRows(pane());
-  equal(move(rows, null, "ArrowDown")?.key, "section:similar", "down → first");
-  equal(move(rows, null, "ArrowUp")?.key, "connections:0:notes/onsite.md", "up → last");
-  equal(move(rows, null, "ArrowRight")?.key, "section:similar", "right → first");
+  equal(move(rows, null, "side.row.next")?.key, "section:similar", "down → first");
+  equal(move(rows, null, "side.row.prev")?.key, "connections:0:notes/onsite.md", "up → last");
+  equal(move(rows, null, "side.row.in")?.key, "section:similar", "right → first");
 });
 
 check("right expands a collapsed section, then steps into it", () => {
   const closed = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  const expand = move(closed, "section:similar", "ArrowRight");
+  const expand = move(closed, "section:similar", "side.row.in");
   equal(expand?.kind, "expand", "collapsed → expand");
   equal(expand?.kind === "expand" && expand.fold.kind === "section" && expand.fold.section, "similar", "which");
   const open = sideRows(pane());
-  const into = move(open, "section:similar", "ArrowRight");
+  const into = move(open, "section:similar", "side.row.in");
   equal(into?.kind, "focus", "expanded → step in");
   equal(into?.key, "similar:0:notes/kivo.md", "its first card");
 });
 
 check("right opens a card's body, and stops there — a card has no children", () => {
   const folded = sideRows(pane({ collapsedCards: new Set([cardKey("similar", "notes/kivo.md")]) }));
-  const open = move(folded, "similar:0:notes/kivo.md", "ArrowRight");
+  const open = move(folded, "similar:0:notes/kivo.md", "side.row.in");
   equal(open?.kind, "expand", "folded body → expand");
   equal(open?.kind === "expand" && open.fold.kind === "card" && open.fold.key, "similar:notes/kivo.md", "which");
-  equal(move(sideRows(pane()), "similar:0:notes/kivo.md", "ArrowRight"), null, "already open → nothing");
+  equal(move(sideRows(pane()), "similar:0:notes/kivo.md", "side.row.in"), null, "already open → nothing");
 });
 
 check("right does nothing where there is no fold: an empty section, a search result", () => {
   const empty = sideRows(pane({ similar: [], connections: [] }));
-  equal(move(empty, "section:similar", "ArrowRight"), null, "expanded and empty");
+  equal(move(empty, "section:similar", "side.row.in"), null, "expanded and empty");
   const results = sideRows(pane({ searchQuery: "k", searchResults: [hit("a.md")] }));
-  equal(move(results, "search:0:a.md", "ArrowRight"), null, "a result has nothing to open");
+  equal(move(results, "search:0:a.md", "side.row.in"), null, "a result has nothing to open");
 });
 
 check("left folds what is open, else steps out to the section head", () => {
   const rows = sideRows(pane());
-  const body = move(rows, "similar:0:notes/kivo.md", "ArrowLeft");
+  const body = move(rows, "similar:0:notes/kivo.md", "side.row.out");
   equal(body?.kind, "collapse", "an open card folds its body first");
   const folded = sideRows(pane({ collapsedCards: new Set([cardKey("similar", "notes/kivo.md")]) }));
-  const out = move(folded, "similar:0:notes/kivo.md", "ArrowLeft");
+  const out = move(folded, "similar:0:notes/kivo.md", "side.row.out");
   equal(out?.kind, "focus", "a folded card steps out");
   equal(out?.key, "section:similar", "to its head");
-  const head = move(rows, "section:similar", "ArrowLeft");
+  const head = move(rows, "section:similar", "side.row.out");
   equal(head?.kind, "collapse", "an expanded head collapses");
   const closed = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  equal(move(closed, "section:similar", "ArrowLeft"), null, "a collapsed head has nowhere out to");
+  equal(move(closed, "section:similar", "side.row.out"), null, "a collapsed head has nowhere out to");
+});
+
+check("the shipped keys mean what the ARIA tree pattern says", () => {
+  // Pinned here rather than derived, for treenav.test.ts's reason: the registry owns the
+  // keys since #121, and this pane's set is a *sibling* of the tree's — same keys, its own
+  // commands, so rebinding one leaves the other where it was.
+  equal(sideNavFor(press("ArrowDown")), "side.row.next", "↓ is the next row");
+  equal(sideNavFor(press("ArrowUp")), "side.row.prev", "↑ is the previous one");
+  equal(sideNavFor(press("Home")), "side.row.first", "Home");
+  equal(sideNavFor(press("End")), "side.row.last", "End");
+  equal(sideNavFor(press("ArrowRight")), "side.row.in", "→ unfolds or steps in");
+  equal(sideNavFor(press("ArrowLeft")), "side.row.out", "← folds or steps out");
 });
 
 check("a key the pane doesn't own is left alone", () => {
-  const rows = sideRows(pane());
-  equal(sideArrowMove(rows, 0, "Enter"), null, "Enter belongs to the row's button");
-  equal(sideArrowMove(rows, 0, "k"), null, "letters fall through to the global chords");
-  equal(sideArrowMove([], -1, "ArrowDown"), null, "an empty pane has no moves");
+  equal(sideNavFor(press("Enter")), null, "Enter belongs to the row's button");
+  equal(sideNavFor(press("k")), null, "letters fall through to the global chords");
+  equal(sideArrowMove([], -1, "side.row.next"), null, "and an empty pane has no moves at all");
 });
 
 // --- the roving tabstop ----------------------------------------------------------------

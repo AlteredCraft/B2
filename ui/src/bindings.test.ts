@@ -2,8 +2,8 @@
 // no DOM — so node runs it straight off the source: `npm test`. Dependency-free like the
 // others.
 //
-// Two jobs. The first is that B2's own chords don't conflict: `conflicts(BINDINGS)` must
-// be empty, and because `npm test` runs inside both `just check` and `just ci`, that
+// Two jobs. The first is that B2's own chords don't conflict: `conflicts(DEFAULT_BINDINGS)`
+// must be empty, and because `npm test` runs inside both `just check` and `just ci`, that
 // assertion *is* the gate. The second is proving the gate can fail — a checker that has
 // only ever seen a clean table is indistinguishable from one that returns `[]`
 // unconditionally, so the interesting cases below are synthetic tables built to clash.
@@ -17,21 +17,36 @@
 import { FORMATS } from "./format.ts";
 import {
   type Binding,
-  BINDINGS,
+  DEFAULT_BINDINGS,
   type KeyEventLike,
   allKeys,
+  boundOf,
   canonicalKey,
   chordFor,
   chordMatches,
   conflicts,
   displayChord,
   displayKeys,
+  isBindableKey,
   isBound,
   keystrokes,
   parseChord,
   scopeContains,
   shadows,
+  shiftDistinguishes,
 } from "./bindings.ts";
+
+/** A synthetic row. These tables exist to make a checker *fail*, so the label carries no
+ *  meaning here — it is required by the type and named after the id to keep it honest. */
+function row(b: Omit<Binding, "label">): Binding {
+  return { label: b.id, ...b };
+}
+
+/** The shipped table under its declared type. `DEFAULT_BINDINGS` is `as const` so that
+ *  `BindingId` can be derived from it, which also means reading `.fixed` off a row that
+ *  hasn't got one is a type error rather than `undefined` — the widening is here so the
+ *  checks below can ask the questions a reader would. */
+const SHIPPED: readonly Binding[] = DEFAULT_BINDINGS;
 
 let passed = 0;
 
@@ -59,7 +74,7 @@ check("every chord in the table parses", () => {
   // parseChord throws on an unknown key or modifier, so a typo — "Mod-Delete" for
   // "Mod-Backspace", "Cmd+f" for "Mod-f" — fails here rather than shipping a dead chord
   // that nothing reports because nothing was ever bound to notice.
-  for (const b of BINDINGS) {
+  for (const b of DEFAULT_BINDINGS) {
     for (const spec of allKeys(b)) parseChord(spec);
   }
 });
@@ -68,9 +83,52 @@ check("command ids are unique", () => {
   // The lookup is a Map, so a duplicated id wouldn't error — the later row would quietly
   // win and the earlier command would stop responding.
   const seen = new Set<string>();
-  for (const b of BINDINGS) {
+  for (const b of DEFAULT_BINDINGS) {
     assert(!seen.has(b.id), `duplicate command id: ${b.id}`);
     seen.add(b.id);
+  }
+});
+
+check("every command carries a label a human could read", () => {
+  // The recorder names what it is rebinding and the conflict messages name what they
+  // clash with, so an empty or id-shaped label is a sentence that reads like a stack
+  // trace — "⌘F already runs pane.discovery here."
+  for (const b of SHIPPED) {
+    assert(b.label.trim() !== "", `${b.id} has no label`);
+    assert(b.label !== b.id, `${b.id}'s label is just its id`);
+  }
+});
+
+check("the chords that can't be rebound are exactly the platform's own reflexes", () => {
+  // `fixed` is a promise about *why* something can't be moved, not a convenience list, so
+  // it is pinned rather than left to accumulate: every row here is ⏎/Esc in a text field,
+  // ⏎ on a dialog's default button, the ⏎/Space a <button> would answer to, or one of the
+  // two `Any-` chords no recorder could capture in the first place. A sixth category has
+  // to be argued for.
+  assertEq(
+    SHIPPED.filter((b) => b.fixed !== undefined).map((b) => b.id),
+    [
+      "dismiss",
+      "overlay.focus.step",
+      "link.commit",
+      "delete.confirm",
+      "graph.activate",
+      "create.commit",
+      "create.cancel",
+      "rename.commit",
+      "rename.cancel",
+      "find.input.next",
+      "find.input.prev",
+      "find.input.close",
+    ],
+    "the fixed set",
+  );
+  // The other half of the promise: an `Any-` chord is unrecordable by construction (a
+  // recorder observes one keystroke), so one that was *not* fixed would be a chip
+  // offering to record something nobody can press.
+  for (const b of SHIPPED) {
+    const any = allKeys(b).some((k) => k.startsWith("Any-"));
+    assert(!any || b.fixed !== undefined, `${b.id} has an Any- chord but is rebindable`);
   }
 });
 
@@ -84,15 +142,15 @@ check("every format in FORMATS has a chord in the registry", () => {
 // --- the gate -----------------------------------------------------------------------
 
 check("B2's own chords do not conflict", () => {
-  const found = conflicts();
+  const found = conflicts(DEFAULT_BINDINGS);
   assertEq(found, [], `${found.length} conflicting chord(s)`);
 });
 
 check("two commands on one chord in one scope is a conflict", () => {
   // The gate above proves nothing on its own — this is what proves it can fail.
   const table: Binding[] = [
-    { id: "a", keys: ["Mod-k"], scope: "global" },
-    { id: "b", keys: ["Mod-k"], scope: "global" },
+    row({ id: "a", keys: ["Mod-k"], scope: "global" }),
+    row({ id: "b", keys: ["Mod-k"], scope: "global" }),
   ];
   assertEq(conflicts(table), [{ a: "a", b: "b", form: "⌘k", scope: "global" }], "the clash");
 });
@@ -101,8 +159,8 @@ check("an alias conflicts as loudly as a listed chord", () => {
   // ⌘← fires nav.back without appearing in the sheet. A chord nobody can *see* in the
   // reference is exactly the one a new binding would land on unnoticed.
   const table: Binding[] = [
-    { id: "a", keys: ["Mod-["], aliases: ["Mod-ArrowLeft"], scope: "global" },
-    { id: "b", keys: ["Mod-ArrowLeft"], scope: "global" },
+    row({ id: "a", keys: ["Mod-["], aliases: ["Mod-ArrowLeft"], scope: "global" }),
+    row({ id: "b", keys: ["Mod-ArrowLeft"], scope: "global" }),
   ];
   assertEq(conflicts(table).map((c) => c.form), ["⌘ArrowLeft"], "the alias clashes");
 });
@@ -111,8 +169,8 @@ check("an Any- chord conflicts with every strict chord over its key", () => {
   // The subtle one, now that modifiers are compared literally. `Any-Escape` and
   // `Mod-Escape` look like unrelated rows and are the same key press.
   const table: Binding[] = [
-    { id: "a", keys: ["Any-Escape"], scope: "global" },
-    { id: "b", keys: ["Mod-Escape"], scope: "global" },
+    row({ id: "a", keys: ["Any-Escape"], scope: "global" }),
+    row({ id: "b", keys: ["Mod-Escape"], scope: "global" }),
   ];
   assertEq(conflicts(table).map((c) => c.form), ["⌘Escape"], "⌘Esc is where they meet");
 });
@@ -121,16 +179,16 @@ check("the same chord in sibling scopes is not a conflict", () => {
   // ⏎ commits the link dialog and the delete confirm. Only one can be open, so they are
   // not competing — modelling that as two scopes is what keeps the gate from crying wolf.
   const table: Binding[] = [
-    { id: "a", keys: ["Enter"], scope: "overlay:link" },
-    { id: "b", keys: ["Enter"], scope: "overlay:delete" },
+    row({ id: "a", keys: ["Enter"], scope: "overlay:link" }),
+    row({ id: "b", keys: ["Enter"], scope: "overlay:delete" }),
   ];
   assertEq(conflicts(table), [], "siblings don't conflict");
 });
 
 check("an inner scope shadows the outer one, and that is reported, not failed", () => {
   const table: Binding[] = [
-    { id: "outer", keys: ["Escape"], scope: "global" },
-    { id: "inner", keys: ["Escape"], scope: "textentry:rename" },
+    row({ id: "outer", keys: ["Escape"], scope: "global" }),
+    row({ id: "inner", keys: ["Escape"], scope: "textentry:rename" }),
   ];
   assertEq(conflicts(table), [], "shadowing is legal");
   assertEq(shadows(table), [{ outer: "outer", inner: "inner", form: "Escape" }], "and reported");
@@ -149,7 +207,7 @@ check("B2 shadows exactly these five, and each is an ordering the handler relies
   //
   // Pinned, so a sixth has to be argued for rather than accumulated.
   assertEq(
-    shadows().map((s) => `${s.outer} > ${s.inner} (${s.form})`),
+    shadows(DEFAULT_BINDINGS).map((s) => `${s.outer} > ${s.inner} (${s.form})`),
     [
       "dismiss > create.cancel (Escape)",
       "dismiss > rename.cancel (Escape)",
@@ -188,7 +246,7 @@ check("⌃ is not a synonym for ⌘, anywhere in the table", () => {
   //
   // Stated as a property rather than a list of six, so it holds for chords not yet
   // written: a binding may claim a ⌃ keystroke only by asking for ⌃.
-  for (const b of BINDINGS) {
+  for (const b of DEFAULT_BINDINGS) {
     for (const spec of allKeys(b)) {
       const declares = spec.includes("Ctrl-") || spec.includes("Any-");
       for (const form of keystrokes(spec)) {
@@ -206,8 +264,8 @@ check("⌃X and ⌘X are two different chords", () => {
   // spelling of something else.
   assert(isBound(press("Tab", { ctrlKey: true }), "settings.section.next"), "⌃Tab");
   const table: Binding[] = [
-    { id: "meta", keys: ["Mod-k"], scope: "global" },
-    { id: "control", keys: ["Ctrl-k"], scope: "global" },
+    row({ id: "meta", keys: ["Mod-k"], scope: "global" }),
+    row({ id: "control", keys: ["Ctrl-k"], scope: "global" }),
   ];
   assertEq(conflicts(table), [], "they no longer meet");
 });
@@ -278,9 +336,9 @@ check("an Any- chord claims every keystroke over its key", () => {
   // Which is what makes it shadow — and conflict with — the bindings it would really take
   // the key from. A strict ⌃Tab under a scope the trap covers is not a free chord.
   const table: Binding[] = [
-    { id: "trap", keys: ["Any-Tab"], scope: "overlay" },
-    { id: "rail", keys: ["Ctrl-Tab"], scope: "overlay:settings" },
-    { id: "elsewhere", keys: ["Ctrl-Tab"], scope: "editor" },
+    row({ id: "trap", keys: ["Any-Tab"], scope: "overlay" }),
+    row({ id: "rail", keys: ["Ctrl-Tab"], scope: "overlay:settings" }),
+    row({ id: "elsewhere", keys: ["Ctrl-Tab"], scope: "editor" }),
   ];
   assertEq(
     shadows(table).map((s) => `${s.outer} > ${s.inner}`),
@@ -347,6 +405,55 @@ check("a row prints its commands' chords, distinct ones only", () => {
   assertEq(displayKeys(["find.next", "find.prev"]), "⌘G / ⇧⌘G", "two chords, two cells");
   assertEq(displayKeys(["link.commit", "delete.confirm"]), "⏎", "one chord, said once");
   assertEq(displayKeys(["graph.activate"]), "⏎ / Space", "one command, two chords");
+});
+
+// --- resolving a keystroke to one of several commands ----------------------------------
+
+check("boundOf picks the command a keystroke fires, and nothing when none does", () => {
+  // What the arrow families ask now that their keys are the registry's (#121). The tree's
+  // six navigation commands are tried as a set, and exactly one — or none — answers.
+  const nav = ["tree.row.prev", "tree.row.next", "tree.row.in", "tree.row.out"] as const;
+  assertEq(boundOf(press("ArrowDown"), nav), "tree.row.next", "↓ is the next row");
+  assertEq(boundOf(press("ArrowLeft"), nav), "tree.row.out", "← steps out");
+  assertEq(boundOf(press("k"), nav), null, "a letter is not a move, so the caller leaves it alone");
+  // And the modifier discipline holds here too: ⌘↓ is a different chord, so it falls
+  // through to the global handler rather than being eaten as a tree move.
+  assertEq(boundOf(press("ArrowDown", { metaKey: true }), nav), null, "⌘↓ is not ↓");
+});
+
+check("↑ means a different thing in each pane, and that is not a conflict", () => {
+  // The reason the two panes get scopes of their own rather than sharing one set of
+  // navigation commands. Both answer to ↑; neither is ambiguous, because only one pane
+  // has the keyboard at a time — and rebinding one leaves the other alone.
+  const up = press("ArrowUp");
+  assert(isBound(up, "tree.row.prev"), "↑ walks the tree");
+  assert(isBound(up, "side.row.prev"), "↑ walks discovery");
+  assert(isBound(up, "menu.item.prev"), "↑ walks an open menu");
+  assertEq(conflicts(DEFAULT_BINDINGS), [], "and the gate is unmoved by any of it");
+});
+
+// --- what a recorder may write down -----------------------------------------------------
+
+check("isBindableKey admits what parseChord can hold, and refuses what it can't", () => {
+  // The recorder asks this before spelling a chord, so the answer has to agree with the
+  // parser exactly — a key that passes here and throws there is a crash in the one place
+  // the user is deliberately pressing strange keys.
+  for (const key of ["a", "?", "1", "Enter", "ArrowUp", "F12", "Space"]) {
+    assert(isBindableKey(key), `${key} should be bindable`);
+    parseChord(key); // the agreement, asserted rather than assumed
+  }
+  for (const key of ["Meta", "Shift", "Dead", "Unidentified", "AudioVolumeUp"]) {
+    assert(!isBindableKey(key), `${key} should not be bindable`);
+  }
+});
+
+check("shiftDistinguishes separates a real ⇧ from one already in the character", () => {
+  // The rule the recorder has to reproduce when it writes a chord down: ⇧F10 is a chord,
+  // `Shift-?` is the same keystroke as `?` said twice.
+  assert(shiftDistinguishes("a"), "letters");
+  assert(shiftDistinguishes("F10"), "named keys");
+  assert(!shiftDistinguishes("?"), "? is what ⇧/ already reports");
+  assert(!shiftDistinguishes("["), "and [ is not { ");
 });
 
 check("a row does not print the aliases the prose covers", () => {

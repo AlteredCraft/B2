@@ -25,7 +25,7 @@
 import { completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import type { KeyBinding } from "@codemirror/view";
-import { type Binding, BINDINGS, type Scope, allKeys, keystrokes } from "./bindings.ts";
+import { type Binding, type Scope, activeBindings, allKeys, keystrokes } from "./bindings.ts";
 
 /** A stock keymap that is live in B2's editor, and how it gets installed. */
 interface StockKeymap {
@@ -103,7 +103,7 @@ const SCOPES_LIVE_IN_EDITOR: readonly Scope[] = ["global", "editor"];
  *  into `keymap.of` ahead of the stock ones; the document-level handler runs only after
  *  CodeMirror's command declines), and it differs row by row. editorkeys.test.ts pins the
  *  list with that reasoning spelled out per row. */
-export function editorOverlaps(bindings: readonly Binding[] = BINDINGS): EditorOverlap[] {
+export function editorOverlaps(bindings: readonly Binding[] = activeBindings()): EditorOverlap[] {
   const stock = editorChords().map((c) => ({ ...c, forms: new Set(keystrokes(c.spec)) }));
   const out: EditorOverlap[] = [];
   for (const b of bindings) {

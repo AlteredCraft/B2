@@ -19,11 +19,16 @@
 // a generator would flatten — and the sheet's job is to be *read*.
 //
 // Literal rows (`keys:` instead of `ids:`) are the things that aren't B2 chords at all:
-// the platform's own behavior (Tab, ⏎ on a focused button, first-letter typeahead), and
-// the arrow families whose key → move mapping belongs to a pure module of its own —
-// treenav.ts, sidenav.ts, settingstabs.ts. Copying those keys into the registry would
-// give them two owners, which is the drift the registry exists to end; bindings.ts says
-// the same thing from the other side.
+// the platform's own behavior — Tab, ⏎ on a focused button, first-letter typeahead. The
+// arrow families used to be literal rows too, because their key → move mapping belonged
+// to a pure module of its own; #121 moved the *key* half into the registry (bindings.ts's
+// header says why), so they are ordinary id rows now and the recorder can reach them.
+//
+// Since #121 a row's chords are **chips, not a string**: one per distinct chord, each
+// carrying the command it would rebind, because Settings' Keyboard section is now the
+// surface that edits this table as well as the one that prints it. A row covering three
+// commands ("Focus the files, the note, or discovery") is three chips, and each one knows
+// which of the three it belongs to — which is why `Binding.label` exists.
 //
 // B2 ships on macOS only (crates/b2-desktop), so modifiers are the platform's glyphs —
 // ⌘ command, ⇧ shift, ⌫ delete, ⏎ return — while keys macOS itself spells out in menus
@@ -36,13 +41,27 @@
 // render.ts (`menukeys.ts` supplies the offline mirror for the first paint and the
 // suite). K1's promise is that a keyboard path is findable, and it says nothing about
 // who authored it.
-import { type BindingId, displayChord, displayKeys } from "./bindings.ts";
+import { type BindingId, activeBindings, displayChord, findBinding } from "./bindings.ts";
 import { MENU_CHORDS } from "./menukeys.ts";
 import type { MenuChord } from "./types.ts";
 
-/** One chord and what it does. `keys` is display text, projected from the registry. */
+/** One chord as the sheet paints it. */
+export interface ShortcutKey {
+  /** Display text — "⌘F", "↑", "Esc". */
+  text: string;
+  /** The command this chip would rebind, when exactly one B2 command produced it and it
+   *  is the registry's to move. Absent for the platform's own keys, for the menu bar's,
+   *  and for the rare chord two commands print identically — a chip that can't say *which*
+   *  command it edits must not offer to edit one. */
+  id?: BindingId;
+  /** Why this chord can't be changed (`Binding.fixed`), when that's the reason `id` is
+   *  absent. The recorder shows it in place of itself. */
+  fixed?: string;
+}
+
+/** One row: the chords, and what they do. */
 export interface Shortcut {
-  keys: string;
+  keys: ShortcutKey[];
   action: string;
 }
 
@@ -84,10 +103,10 @@ const OWN_SHEET: readonly SheetGroup[] = [
   {
     title: "The file tree",
     rows: [
-      { keys: "↑ / ↓", action: "Move between rows" },
-      { keys: "→", action: "Expand a folder, or step into it" },
-      { keys: "←", action: "Collapse a folder, or step out to its parent" },
-      { keys: "Home / End", action: "First / last row" },
+      { ids: ["tree.row.prev", "tree.row.next"], action: "Move between rows" },
+      { ids: ["tree.row.in"], action: "Expand a folder, or step into it" },
+      { ids: ["tree.row.out"], action: "Collapse a folder, or step out to its parent" },
+      { ids: ["tree.row.first", "tree.row.last"], action: "First / last row" },
       { keys: "A–Z", action: "Jump to the next row starting with that letter" },
       { keys: "⏎ / Space", action: "Open the note or file; fold the folder" },
       {
@@ -117,9 +136,12 @@ const OWN_SHEET: readonly SheetGroup[] = [
   {
     title: "Discovery (the right column)",
     rows: [
-      { keys: "↑ / ↓", action: "Move between section heads and cards" },
-      { keys: "→ / ←", action: "Unfold / fold a section or a card's details" },
-      { keys: "Home / End", action: "First / last row" },
+      { ids: ["side.row.prev", "side.row.next"], action: "Move between section heads and cards" },
+      {
+        ids: ["side.row.in", "side.row.out"],
+        action: "Unfold / fold a section or a card's details",
+      },
+      { ids: ["side.row.first", "side.row.last"], action: "First / last row" },
       { keys: "⏎ / Space", action: "Open the card's note; fold a section head" },
       { ids: ["menu.open"], action: "Open a card's menu — Open note, Link…" },
     ],
@@ -157,8 +179,11 @@ const OWN_SHEET: readonly SheetGroup[] = [
   {
     title: "Settings (⌘,)",
     rows: [
-      { keys: "↑ / ↓", action: "Move between the sections, with the rail focused" },
-      { keys: "Home / End", action: "First / last section" },
+      {
+        ids: ["settings.tab.prev", "settings.tab.next"],
+        action: "Move between the sections, with the rail focused",
+      },
+      { ids: ["settings.tab.first", "settings.tab.last"], action: "First / last section" },
       {
         ids: ["settings.section.next", "settings.section.prev"],
         action: "Next / previous section, from anywhere in the dialog",
@@ -185,13 +210,60 @@ export function sheet(menu: readonly MenuChord[] = MENU_CHORDS): readonly SheetG
   ];
 }
 
-/** The sheet as render.ts paints it — every row's chords resolved to display text. */
+/**
+ * The chips for a row of the sheet: one per distinct chord the row's commands answer to.
+ *
+ * Distinct *renderings*, so a row covering two commands that share a chord — ⏎ commits
+ * the link dialog and the delete confirm — is one chip rather than "⏎ / ⏎". That chip
+ * names no command, because it can't say which of the two you'd be rebinding; it still
+ * carries a `fixed` reason when every command behind it has one, which is the case
+ * wherever this actually comes up.
+ *
+ * Aliases stay out, as they always have: the row's prose covers them in words, and a chip
+ * per way in would turn "Back / forward" into four keys to read past.
+ */
+export function keyChips(ids: readonly BindingId[]): ShortcutKey[] {
+  const order: string[] = [];
+  const behind = new Map<string, BindingId[]>();
+  const table = activeBindings();
+  for (const id of ids) {
+    const b = findBinding(table, id);
+    if (!b) throw new Error(`no such binding: ${id}`);
+    for (const spec of b.keys) {
+      const text = displayChord(spec);
+      if (!behind.has(text)) {
+        behind.set(text, []);
+        order.push(text);
+      }
+      behind.get(text)?.push(id);
+    }
+  }
+  return order.map((text) => {
+    const owners = behind.get(text) ?? [];
+    const unique = new Set(owners).size === 1 ? owners[0] : null;
+    const fixed = owners.map((id) => findBinding(table, id)?.fixed);
+    const allFixed = fixed.every((f) => f !== undefined);
+    return {
+      text,
+      ...(unique !== null && !allFixed ? { id: unique } : {}),
+      ...(allFixed && fixed[0] ? { fixed: fixed[0] } : {}),
+    };
+  });
+}
+
+/** The sheet as render.ts paints it — every row's chords resolved to chips. */
 export function shortcuts(menu?: readonly MenuChord[]): ShortcutGroup[] {
   return sheet(menu).map((group) => ({
     title: group.title,
     items: group.rows.map((row) => ({
-      keys: "ids" in row ? displayKeys(row.ids) : row.keys,
+      keys: "ids" in row ? keyChips(row.ids) : [{ text: row.keys }],
       action: row.action,
     })),
   }));
+}
+
+/** A row's chords as one string — what the sheet used to be, kept for the checks that
+ *  read it as text (and for any caller that wants the old one-cell rendering). */
+export function keyText(keys: readonly ShortcutKey[]): string {
+  return keys.map((k) => k.text).join(" / ");
 }

@@ -6,12 +6,15 @@
 // arrows walk, and the ARIA tree-pattern moves over it. The order matters twice over —
 // render.ts paints from the same `sortedSubdirs`/`sortedFiles` this flattens with, so
 // these cases are also the guard against the paint and the arrows drifting apart.
+import type { KeyEventLike } from "./bindings.ts";
 import {
   arrowMove,
   buildTree,
   neighborPath,
   rovingPath,
   rowIndex,
+  treeNavFor,
+  type TreeNav,
   typeaheadTarget,
   visibleRows,
   type TreeRow,
@@ -110,70 +113,90 @@ check("a row carries the depth, kind, and fold state the paint needs", () => {
 
 // --- arrowMove: the ARIA tree pattern ------------------------------------------------
 
-function move(rows: readonly TreeRow[], from: string | null, key: string) {
-  return arrowMove(rows, rowIndex(rows, from), key);
+function move(rows: readonly TreeRow[], from: string | null, nav: TreeNav) {
+  return arrowMove(rows, rowIndex(rows, from), nav);
+}
+
+/** A keydown, as the registry's matcher sees it. */
+function press(key: string): KeyEventLike {
+  return { key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
 }
 
 check("up/down step between visible rows and stop at the ends", () => {
   const rows = rowsWith("concepts");
-  equal(move(rows, "archive", "ArrowDown")?.path, "concepts", "down");
-  equal(move(rows, "concepts", "ArrowUp")?.path, "archive", "up");
-  equal(move(rows, "archive", "ArrowUp"), null, "no wrap off the top");
-  equal(move(rows, "readme.md", "ArrowDown"), null, "no wrap off the bottom");
+  equal(move(rows, "archive", "tree.row.next")?.path, "concepts", "down");
+  equal(move(rows, "concepts", "tree.row.prev")?.path, "archive", "up");
+  equal(move(rows, "archive", "tree.row.prev"), null, "no wrap off the top");
+  equal(move(rows, "readme.md", "tree.row.next"), null, "no wrap off the bottom");
 });
 
 check("down never descends into a collapsed folder", () => {
   const rows = rowsWith();
-  equal(move(rows, "concepts", "ArrowDown")?.path, "readme.md", "skips the hidden subtree");
+  equal(move(rows, "concepts", "tree.row.next")?.path, "readme.md", "skips the hidden subtree");
 });
 
 check("Home/End jump to the first and last visible rows", () => {
   const rows = rowsWith("concepts");
-  equal(move(rows, "concepts", "Home")?.path, "archive", "Home");
-  equal(move(rows, "concepts", "End")?.path, "readme.md", "End");
+  equal(move(rows, "concepts", "tree.row.first")?.path, "archive", "Home");
+  equal(move(rows, "concepts", "tree.row.last")?.path, "readme.md", "End");
 });
 
 check("the first arrow press lands even with nothing focused", () => {
   const rows = rowsWith();
-  equal(move(rows, null, "ArrowDown")?.path, "archive", "down → first");
-  equal(move(rows, null, "ArrowUp")?.path, "readme.md", "up → last");
-  equal(move(rows, null, "ArrowRight")?.path, "archive", "right → first");
+  equal(move(rows, null, "tree.row.next")?.path, "archive", "down → first");
+  equal(move(rows, null, "tree.row.prev")?.path, "readme.md", "up → last");
+  equal(move(rows, null, "tree.row.in")?.path, "archive", "right → first");
 });
 
 check("right expands a collapsed folder, then steps into it", () => {
   const closed = rowsWith();
-  const expand = move(closed, "concepts", "ArrowRight");
+  const expand = move(closed, "concepts", "tree.row.in");
   equal(expand?.kind, "expand", "collapsed → expand");
   equal(expand?.path, "concepts", "the folder itself");
   const open = rowsWith("concepts");
-  const into = move(open, "concepts", "ArrowRight");
+  const into = move(open, "concepts", "tree.row.in");
   equal(into?.kind, "focus", "expanded → step in");
   equal(into?.path, "concepts/deep", "its first child");
 });
 
 check("right does nothing on a file, or on a folder with nothing in it", () => {
   const rows = rowsWith("concepts");
-  equal(move(rows, "readme.md", "ArrowRight"), null, "a file has no children");
-  equal(move(rows, "archive", "ArrowRight"), null, "an empty folder stays put");
+  equal(move(rows, "readme.md", "tree.row.in"), null, "a file has no children");
+  equal(move(rows, "archive", "tree.row.in"), null, "an empty folder stays put");
 });
 
 check("left collapses an expanded folder, else steps out to the parent", () => {
   const open = rowsWith("concepts");
-  const collapse = move(open, "concepts", "ArrowLeft");
+  const collapse = move(open, "concepts", "tree.row.out");
   equal(collapse?.kind, "collapse", "expanded → collapse");
   equal(collapse?.path, "concepts", "the folder itself");
-  const out = move(open, "concepts/memory.md", "ArrowLeft");
+  const out = move(open, "concepts/memory.md", "tree.row.out");
   equal(out?.kind, "focus", "a file steps out");
   equal(out?.path, "concepts", "to its folder");
-  equal(move(open, "concepts/deep", "ArrowLeft")?.path, "concepts", "a collapsed folder steps out too");
-  equal(move(open, "readme.md", "ArrowLeft"), null, "at the root there is nowhere out to");
+  equal(move(open, "concepts/deep", "tree.row.out")?.path, "concepts", "a collapsed folder steps out too");
+  equal(move(open, "readme.md", "tree.row.out"), null, "at the root there is nowhere out to");
+});
+
+check("the shipped keys mean what the ARIA tree pattern says", () => {
+  // Since #121 this module no longer decides which key is which move — the registry does
+  // (bindings.ts's header says why), and `treeNavFor` is the lookup. So the mapping is
+  // pinned *here*, where the pattern it implements is documented, rather than being
+  // re-derived from a table in the test the way it used to be read off a switch.
+  equal(treeNavFor(press("ArrowDown")), "tree.row.next", "↓ is the next row");
+  equal(treeNavFor(press("ArrowUp")), "tree.row.prev", "↑ is the previous one");
+  equal(treeNavFor(press("Home")), "tree.row.first", "Home");
+  equal(treeNavFor(press("End")), "tree.row.last", "End");
+  equal(treeNavFor(press("ArrowRight")), "tree.row.in", "→ steps in");
+  equal(treeNavFor(press("ArrowLeft")), "tree.row.out", "← steps out");
 });
 
 check("a key the tree doesn't own is left alone", () => {
-  const rows = rowsWith();
-  equal(arrowMove(rows, 0, "Enter"), null, "Enter belongs to the button");
-  equal(arrowMove(rows, 0, "n"), null, "letters fall through to typeahead");
-  equal(arrowMove([], -1, "ArrowDown"), null, "an empty tree has no moves");
+  // The other half of what the old `default:` case did, and the half that matters: a pane
+  // handler that swallowed keys it has no move for would eat ⏎ off the row's button and
+  // every letter typeahead needs.
+  equal(treeNavFor(press("Enter")), null, "Enter belongs to the button");
+  equal(treeNavFor(press("n")), null, "letters fall through to typeahead");
+  equal(arrowMove([], -1, "tree.row.next"), null, "and an empty tree has no moves at all");
 });
 
 // --- typeahead ------------------------------------------------------------------------

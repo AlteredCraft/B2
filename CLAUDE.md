@@ -274,7 +274,19 @@ if/when one lands — `index-engine.md` §5.)*
   CodeMirror's own ~100 stock bindings so an upgrade can't quietly take one, and `ui/src/menukeys.ts`
   checks them against the **macOS menu bar's** — declared in `crates/b2-desktop/src/menu.rs` rather than
   inherited from Tauri's default, since AppKit dispatches a menu accelerator before the webview sees the
-  key at all, which made it the one clash nothing could detect (GH #119). The four obligations a new surface owes are in
+  key at all, which made it the one clash nothing could detect (GH #119). Those four checkers are also
+  what makes the keyboard **the user's** (GH #121): every chord in the sheet is a button that re-records
+  it, `ui/src/keymap.ts` lays the rebindings over the shipped table (`activeBindings()`) and judges a
+  candidate chord by asking all four about the table it *would* produce — refusing a same-scope clash or
+  a menu-bar chord, merely warning about a shadow or a CodeMirror overlap — and `ui/src/recorder.ts`
+  reads the one thing no table can know: a chord that produces **no keydown** was taken upstream by
+  macOS or another app, which is why GH #122's Carbon hotkey table was closed rather than built. That
+  is also why the arrow families moved *into* the registry: `treenav.ts` / `sidenav.ts` /
+  `settingstabs.ts` still own **command → move**, but the registry now owns **key → command**, so the
+  arrows are rebindable and visible to the checkers like everything else. The layout persists in
+  `localStorage` beside the theme and the pane widths — a viewing choice, never vault state — and the
+  loader re-judges what it reads, so a hand-edited store can't install a keyboard you can't use to fix
+  itself. The four obligations a new surface owes are in
   [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)

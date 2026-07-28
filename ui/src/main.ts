@@ -39,17 +39,38 @@ import {
   buildTree,
   neighborPath,
   rowIndex,
+  treeNavFor,
   typeaheadTarget,
   visibleRows,
   type TreeRow,
 } from "./treenav";
-import { sideArrowMove, sideRowIndex, sideRows } from "./sidenav";
-import { isSettingsTab, tabMove, tabStep, type SettingsTabId } from "./settingstabs";
+import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
+import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
-import { canonicalKey, chordFor, displayKeys, isBound } from "./bindings";
+import {
+  activeBindings,
+  canonicalKey,
+  chordFor,
+  DEFAULT_BINDINGS,
+  displayKeys,
+  findBinding,
+  isBound,
+  setActiveBindings,
+  type BindingId,
+} from "./bindings";
+import {
+  applyOverrides,
+  chordProblems,
+  loadOverrides,
+  type Overrides,
+  refused,
+  saveOverrides,
+  withOverride,
+} from "./keymap";
+import { capture, PROBE_AFTER_MS, silenceHint } from "./recorder";
 import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
 import { menuDrift } from "./menukeys";
 import { markdownForPaste } from "./paste";
@@ -772,6 +793,7 @@ function currentOverlay(): OverlayKind {
 function dismissOverlays(): void {
   state.contextMenu = null;
   state.settingsOpen = false;
+  clearRecorder(); // the chord recorder lives inside Settings and goes with it
   state.anomaliesOpen = false;
   state.moveTarget = null;
   state.deleteTarget = null;
@@ -1684,7 +1706,10 @@ async function openSettings(tab?: SettingsTabId): Promise<void> {
 
 function closeSettings(): void {
   state.settingsOpen = false;
-  render();
+  // The recorder lives inside this dialog, so it cannot outlive it — a listener still
+  // swallowing every keystroke behind a closed Settings is the one failure a recorder
+  // must never have.
+  stopRecording();
 }
 
 /**
@@ -1815,6 +1840,151 @@ function setTheme(theme: ThemePref): void {
   }
   applyTheme();
   render();
+}
+
+// --- the customizable keyboard (GH #121) ------------------------------------------
+//
+// The same localStorage idiom as the appearance preference above, for the same reason: a
+// keyboard layout is a viewing choice, never vault state, so it never touches the host,
+// the index, or a byte of Markdown. keymap.ts owns the algebra and the judgement; this is
+// the wiring — install a table, run a recorder, persist the result.
+
+/** Lay the stored rebindings over the shipped table and make that the live registry.
+ *  Every `isBound` in the handler below, the sheet in Settings, and the conflict checkers
+ *  all read `activeBindings()`, so this one call moves the whole keyboard at once. */
+function installKeymap(): void {
+  setActiveBindings(applyOverrides(DEFAULT_BINDINGS, state.keyOverrides));
+}
+
+/** Read the saved keyboard and install it. Runs before `buildShell`, which projects a
+ *  chord into the find bar's tooltip, and long before anything can dispatch one.
+ *
+ *  Returns what it had to drop rather than reporting it: a dropped entry is worth saying
+ *  out loud — it is a preference the user thought they had — but `flash` repaints, and at
+ *  this point in boot there is no shell to repaint. keymap.ts's `adoptOverrides` is what
+ *  guarantees whatever survives still leaves the keyboard conflict-free; this can only
+ *  return a non-empty list for a hand-edited store, or one written against an older table. */
+function loadKeymap(): string[] {
+  const { overrides, dropped } = loadOverrides();
+  state.keyOverrides = overrides;
+  installKeymap();
+  return dropped;
+}
+
+/** Adopt a set of rebindings: persist, install, repaint. The one write path, so the
+ *  stored keyboard and the live one can't come apart. */
+function setOverrides(next: Overrides): void {
+  state.keyOverrides = next;
+  saveOverrides(next);
+  installKeymap();
+  render();
+}
+
+// The recorder. `state.recorder` is the whole of its state; these five actions are the
+// whole of its behavior.
+
+/** Milliseconds the current recorder has been open with nothing having arrived — the
+ *  probe's input (recorder.ts). Module-local because nothing renders from it directly;
+ *  the tick writes its *reading* into `state.recorder.hint` and repaints from there. */
+let recorderOpenedAt = 0;
+let recorderTimer: number | null = null;
+
+function startRecording(id: BindingId): void {
+  const b = findBinding(activeBindings(), id);
+  if (!b || b.fixed !== undefined) return; // a chip for a fixed chord isn't a button at all
+  state.recorder = { id, candidate: null, problems: [], hint: null };
+  recorderOpenedAt = Date.now();
+  if (recorderTimer !== null) clearTimeout(recorderTimer);
+  // The probe: silence is the observation, so something has to come back and read it.
+  recorderTimer = window.setTimeout(() => {
+    recorderTimer = null;
+    if (!state.recorder || state.recorder.candidate !== null) return;
+    state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: false });
+    render();
+  }, PROBE_AFTER_MS);
+  render();
+  // Take the keyboard off whatever had it — a tree row, or CodeMirror, which would
+  // otherwise type the chord into the buffer behind the dialog. The strip carries an id,
+  // so `paintModal` hands focus back to it across every repaint the recorder causes.
+  document.getElementById("keys-recorder")?.focus();
+}
+
+/** Tear the recorder down without painting — for the callers that are mid-teardown of
+ *  something larger and will paint themselves (`dismissOverlays`). */
+function clearRecorder(): void {
+  if (recorderTimer !== null) {
+    clearTimeout(recorderTimer);
+    recorderTimer = null;
+  }
+  state.recorder = null;
+}
+
+function stopRecording(): void {
+  clearRecorder();
+  render();
+}
+
+/** A keydown while the recorder is open. Returns true when it consumed the event.
+ *
+ *  Esc cancels and ⏎ accepts — the dialog reflex, and the reason neither can be recorded
+ *  here. Both are `fixed` in the registry anyway (`Binding.fixed`), so nothing is lost:
+ *  what a text field and a dialog do with ⏎ and Esc was never B2's to hand out. Every
+ *  other keystroke is a candidate, replacing whatever was captured before it, so trying
+ *  three chords is three presses rather than three round trips through the buttons. */
+function recorderKeydown(e: KeyboardEvent): boolean {
+  const rec = state.recorder;
+  if (!rec) return false;
+  // Swallow the browser's own meaning for the keystroke — the point of the surface is that
+  // nothing *happens* while a chord is being pressed at it. This is not what keeps the
+  // chord out of the note buffer, though: CodeMirror's handler sits on a descendant of
+  // `document` and so runs first. `startRecording` takes the keyboard off the editor for
+  // that, and this branch is why it has to.
+  e.preventDefault();
+  if (canonicalKey(e.key) === "Escape") {
+    stopRecording();
+    return true;
+  }
+  if (canonicalKey(e.key) === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+    if (rec.candidate !== null && !refused(rec.problems)) commitRecording();
+    return true;
+  }
+  const got = capture(e);
+  if (got.kind === "modifier") return true; // still reaching for the chord
+  if (got.kind === "unbindable") {
+    rec.candidate = null;
+    rec.problems = [];
+    rec.hint = got.message;
+    render();
+    return true;
+  }
+  rec.candidate = got.spec;
+  rec.problems = chordProblems(rec.id, got.spec, DEFAULT_BINDINGS, state.keyOverrides);
+  rec.hint = null;
+  render();
+  return true;
+}
+
+/** Save the captured chord. A refusal never reaches here — the button is disabled and
+ *  ⏎ declines — so this is the commit, not the check. */
+function commitRecording(): void {
+  const rec = state.recorder;
+  if (!rec || rec.candidate === null || refused(rec.problems)) return;
+  const next = withOverride(state.keyOverrides, rec.id, [rec.candidate]);
+  clearRecorder(); // the strip goes; `setOverrides` does the one repaint
+  setOverrides(next);
+}
+
+/** Put one command back on its shipped chord — a delete from the override set, since
+ *  there is no stored copy of a default to restore from. */
+function resetChord(id: BindingId): void {
+  clearRecorder();
+  setOverrides(withOverride(state.keyOverrides, id, []));
+}
+
+/** Put the whole keyboard back. */
+function resetAllChords(): void {
+  clearRecorder();
+  setOverrides({});
 }
 
 // --- install reminder (the "semantic search is off" banner) -----------------------
@@ -3217,6 +3387,31 @@ function wireEvents(): void {
         if (isThemePref(choice)) setTheme(choice);
         return;
       }
+      // Settings → Keyboard: a chord chip opens the recorder on that command; the strip's
+      // own buttons commit, back out, or restore a default. Checked before Done/backdrop
+      // so a click inside the strip is never read as "close the dialog".
+      const chip = target.closest<HTMLElement>("[data-rebind]");
+      if (chip) {
+        const id = chip.dataset.rebind ?? "";
+        if (findBinding(activeBindings(), id)) startRecording(id as BindingId);
+        return;
+      }
+      if (target.closest("#keys-save")) {
+        commitRecording();
+        return;
+      }
+      if (target.closest("#keys-cancel")) {
+        stopRecording();
+        return;
+      }
+      if (target.closest("#keys-reset-one")) {
+        if (state.recorder) resetChord(state.recorder.id);
+        return;
+      }
+      if (target.closest("#keys-reset-all")) {
+        resetAllChords();
+        return;
+      }
       if (
         target.closest("[data-settings-close]") ||
         target.classList.contains("modal-backdrop")
@@ -3486,7 +3681,8 @@ function wireEvents(): void {
     const path = row.dataset.treeRow ?? "";
     const rows = treeRows();
 
-    const move = arrowMove(rows, rowIndex(rows, path), e.key);
+    const nav = treeNavFor(e);
+    const move = nav ? arrowMove(rows, rowIndex(rows, path), nav) : null;
     if (move) {
       e.preventDefault();
       if (move.kind === "focus") {
@@ -3527,7 +3723,8 @@ function wireEvents(): void {
     const key = row.dataset.sideRow ?? "";
     const rows = sideRows(state);
 
-    const move = sideArrowMove(rows, sideRowIndex(rows, key), e.key);
+    const nav = sideNavFor(e);
+    const move = nav ? sideArrowMove(rows, sideRowIndex(rows, key), nav) : null;
     if (move) {
       e.preventDefault();
       if (move.kind === "focus") {
@@ -3638,6 +3835,11 @@ function wireEvents(): void {
   // each branch saying when its command applies at all — an overlay owns the keyboard,
   // the tree has no focused row, ⌘⌫ must not hijack delete-to-line-start while editing.
   document.addEventListener("keydown", (e) => {
+    // The chord recorder is above everything, including the registry itself: while it is
+    // open the user is *pressing chords at it*, not issuing them, so a keystroke that
+    // reached a command would be a keystroke the recorder failed to record. It is the
+    // only branch here that consumes an event without asking bindings.ts anything.
+    if (recorderKeydown(e)) return;
     // The tree's inline create input owns its keys first: Enter commits, Escape
     // cancels, and nothing else typed there leaks into the global chords below.
     if (state.treeCreate && (e.target as HTMLElement).id === "tree-create-input") {
@@ -3680,13 +3882,11 @@ function wireEvents(): void {
       const onRail =
         document.activeElement instanceof HTMLElement &&
         document.activeElement.closest("[data-settings-tab]") !== null;
-      if (onRail && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-        const next = tabMove(state.settingsTab, e.key);
-        if (next) {
-          e.preventDefault();
-          selectSettingsTab(next, true);
-          return;
-        }
+      const nav = onRail ? tabNavFor(e) : null;
+      if (nav) {
+        e.preventDefault();
+        selectSettingsTab(tabMove(state.settingsTab, nav), true);
+        return;
       }
     }
     // An open overlay owns Tab (K1): without a trap, Tab walks the page *behind* the
@@ -3994,8 +4194,17 @@ function wireEvents(): void {
 
   // Losing window focus is a flush point: the buffer lands on disk before the user
   // looks at (or edits in) anything else.
+  //
+  // It is also the recorder's one *positive* signal (recorder.ts): Spotlight, the app
+  // switcher and Hide all take the key window, so a window that lost focus while a chord
+  // was being pressed at us is evidence that something outside B2 answered — not an
+  // inference drawn from nothing happening.
   window.addEventListener("blur", () => {
     if (state.editing) void saveNow();
+    if (state.recorder && state.recorder.candidate === null) {
+      state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: true });
+      render();
+    }
   });
 
   // --- tree drag-and-drop ---------------------------------------------------------
@@ -4127,6 +4336,7 @@ async function loadMenuChords(): Promise<void> {
 
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
+  const lostChords = loadKeymap(); // the user's chords, before anything paints or dispatches one
   loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
   buildShell();
   initPanes(el("layout")); // restore the saved column widths, likewise before the paint
@@ -4148,6 +4358,11 @@ async function boot(): Promise<void> {
     // No vault (or another startup failure): the note pane shows the actionable state.
     state.vaultRoot = null;
     flash(errText(e));
+  }
+  if (lostChords.length > 0) {
+    // Said here rather than at the read, which happens before there is a shell to paint
+    // into — and after the vault load, so a startup failure's own notice isn't clobbered.
+    flash(`${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`);
   }
   render();
   // Auto-index on launch (#25): if the startup vault is unindexed or only partly embedded,
