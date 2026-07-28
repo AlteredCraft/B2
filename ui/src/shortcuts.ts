@@ -29,7 +29,16 @@
 // ⌘ command, ⇧ shift, ⌫ delete, ⏎ return — while keys macOS itself spells out in menus
 // stay spelled out (Esc, Tab, Space, Home/End). That's the split the app's existing
 // tooltips already use ("Close (Esc)"); `displayChord` in bindings.ts now applies it.
-import { type BindingId, displayKeys } from "./bindings.ts";
+//
+// One group has no ids and no hand-written keys either: the menu bar's (#119). Those
+// chords aren't B2's — they're the app menu's, and AppKit takes them before the webview
+// sees a key — so the sheet lists them from the *host's* declaration, passed in by
+// render.ts (`menukeys.ts` supplies the offline mirror for the first paint and the
+// suite). K1's promise is that a keyboard path is findable, and it says nothing about
+// who authored it.
+import { type BindingId, displayChord, displayKeys } from "./bindings.ts";
+import { MENU_CHORDS } from "./menukeys.ts";
+import type { MenuChord } from "./types.ts";
 
 /** One chord and what it does. `keys` is display text, projected from the registry. */
 export interface Shortcut {
@@ -53,7 +62,9 @@ export interface SheetGroup {
   readonly rows: readonly SheetRow[];
 }
 
-export const SHEET: readonly SheetGroup[] = [
+/** The groups B2 authors — everything except the menu bar's, which is the host's and is
+ *  appended by `sheet()`. */
+const OWN_SHEET: readonly SheetGroup[] = [
   {
     title: "Getting around",
     rows: [
@@ -157,11 +168,30 @@ export const SHEET: readonly SheetGroup[] = [
   },
 ];
 
+/** The whole sheet, in order.
+ *
+ *  `menu` is the app menu bar's chords, defaulting to the mirror in `menukeys.ts`;
+ *  render.ts passes the **host's own** list once it has arrived, so what the reader sees
+ *  is the menu the app installed rather than the UI's copy of it. Its rows are literal
+ *  because there are no ids to name: an item's `label` is what the menu itself shows,
+ *  which is exactly what the sheet wants to print. */
+export function sheet(menu: readonly MenuChord[] = MENU_CHORDS): readonly SheetGroup[] {
+  return [
+    ...OWN_SHEET,
+    {
+      title: "The menu bar",
+      rows: menu.map((c) => ({ keys: displayChord(c.keys), action: c.label })),
+    },
+  ];
+}
+
 /** The sheet as render.ts paints it — every row's chords resolved to display text. */
-export const SHORTCUTS: ShortcutGroup[] = SHEET.map((group) => ({
-  title: group.title,
-  items: group.rows.map((row) => ({
-    keys: "ids" in row ? displayKeys(row.ids) : row.keys,
-    action: row.action,
-  })),
-}));
+export function shortcuts(menu?: readonly MenuChord[]): ShortcutGroup[] {
+  return sheet(menu).map((group) => ({
+    title: group.title,
+    items: group.rows.map((row) => ({
+      keys: "ids" in row ? displayKeys(row.ids) : row.keys,
+      action: row.action,
+    })),
+  }));
+}

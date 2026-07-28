@@ -26,6 +26,14 @@
 //     (`sideArrowMove`), settingstabs.ts (`tabMove`). Copying their keys in would recreate
 //     exactly the two-sources-of-truth problem this module exists to end, so the sheet
 //     carries them as literal rows instead and shortcuts.ts says why.
+//   - Not here either: the app menu bar's chords — ⌘Q ⌘W ⌘M ⌘H ⌥⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A
+//     ⌃⌘F. Those aren't key → action mappings this file could own at all: the host
+//     declares the menu (crates/b2-desktop/src/menu.rs) and AppKit dispatches its
+//     accelerators before the key window's responder chain, so the webview never gets a
+//     keydown for them. What they are to *this* table is a list of keystrokes a new
+//     binding may not be spelled with, and menukeys.ts is where that gate lives — a
+//     separate check because `conflicts()` asks a same-scope question and these are taken
+//     from every scope at once (#119).
 //
 // The chord syntax is CodeMirror's (`Mod-Shift-v`) on purpose: the editor's own bindings
 // come out of this same table and are handed to `keymap.of` verbatim, so there is one

@@ -5,8 +5,8 @@
 // keyboard registry, one old worry is gone and a better one has replaced it. Gone: a row
 // spelling a chord the wiring doesn't answer to, because rows no longer spell chords —
 // they name commands, and `displayKeys` renders whatever bindings.ts says. Merely
-// importing this module proves every id in it resolves, since SHORTCUTS is built at load
-// and the lookup throws on a miss.
+// calling `shortcuts()` proves every id in it resolves, since building a row resolves its
+// ids and the lookup throws on a miss.
 //
 // The new worry is the other direction: a chord that exists and is documented *nowhere*.
 // That's the K1 failure that matters (docs/design/invariants.md, GH #78) — an action
@@ -18,7 +18,7 @@
 // meaning two different things, an entry spelled "Cmd+N" among a page of ⌘N. Those are
 // the drifts that make a reference stop reading as authoritative.
 import { BINDINGS, allKeys } from "./bindings.ts";
-import { SHEET, SHORTCUTS } from "./shortcuts.ts";
+import { sheet, shortcuts } from "./shortcuts.ts";
 
 let passed = 0;
 
@@ -32,15 +32,15 @@ function check(name: string, fn: () => void): void {
 }
 
 check("every group has a title and at least one row", () => {
-  assert(SHORTCUTS.length > 0, "the sheet is not empty");
-  for (const g of SHORTCUTS) {
+  assert(shortcuts().length > 0, "the sheet is not empty");
+  for (const g of shortcuts()) {
     assert(g.title.trim() !== "", "a group with no title");
     assert(g.items.length > 0, `an empty group: ${g.title}`);
   }
 });
 
 check("every row is a full pair — a chord and what it does", () => {
-  for (const g of SHORTCUTS) {
+  for (const g of shortcuts()) {
     for (const s of g.items) {
       assert(s.keys.trim() !== "", `a row with no chord under ${g.title}`);
       assert(s.action.trim() !== "", `a chord with no action: ${s.keys}`);
@@ -52,7 +52,7 @@ check("no chord is listed twice within one group", () => {
   // Across groups is fine and deliberate — ⇧F10 opens a menu on a tree row *and* on a
   // discovery card, Esc closes an overlay and closes Settings. Two meanings in one group
   // is the contradiction: the reader has no way to tell which one applies.
-  for (const g of SHORTCUTS) {
+  for (const g of shortcuts()) {
     const seen = new Set<string>();
     for (const s of g.items) {
       assert(!seen.has(s.keys), `${s.keys} appears twice under ${g.title}`);
@@ -69,7 +69,7 @@ check("modifiers are written as macOS glyphs, never spelled out", () => {
   // Esc / Tab / Space / Home / End out in its own menus, and so does B2's existing
   // chrome ("Close (Esc)"), so those stay words — shortcuts.ts says why.
   const spelled = /\b(cmd|command|ctrl|control|shift|alt|option|enter|return|backspace)\b/i;
-  for (const g of SHORTCUTS) {
+  for (const g of shortcuts()) {
     for (const s of g.items) {
       assert(!spelled.test(s.keys), `${JSON.stringify(s.keys)} spells out a modifier (${g.title})`);
       assert(!s.keys.includes("+"), `${JSON.stringify(s.keys)} joins with "+" instead of adjacency`);
@@ -86,7 +86,7 @@ check("every chord B2 binds is documented somewhere in the sheet", () => {
   // have to be found. Anything else — including a chord that only applies inside a
   // modal, or only while the find bar is open — has to earn a row.
   const documented = new Set<string>();
-  for (const group of SHEET) {
+  for (const group of sheet()) {
     for (const row of group.rows) {
       if ("ids" in row) for (const id of row.ids) documented.add(id);
     }
@@ -98,11 +98,11 @@ check("every chord B2 binds is documented somewhere in the sheet", () => {
 });
 
 check("the sheet documents no command that isn't bound", () => {
-  // The mirror image, and the cheap half: SHORTCUTS is built at import, and resolving a
-  // row's ids throws on an unknown one, so a stale row can't survive to be rendered.
+  // The mirror image, and the cheap half: every check above builds the sheet, and
+  // resolving a row's ids throws on an unknown one, so a stale row can't survive a paint.
   // Asserted anyway so the failure names the sheet rather than a module-load stack.
   const ids = new Set(BINDINGS.map((b) => b.id));
-  for (const group of SHEET) {
+  for (const group of sheet()) {
     for (const row of group.rows) {
       if (!("ids" in row)) continue;
       for (const id of row.ids) assert(ids.has(id), `${id} is documented but not bound`);

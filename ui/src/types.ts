@@ -19,6 +19,21 @@ export interface VaultInfo {
 }
 
 /**
+ * `menu_chords` — one item of the app's **menu bar** that carries a chord
+ * (b2-desktop `menu.rs`, #119). Not a `b2-core` view type: the menu is the host's own
+ * surface, and this is the only shape it exports. `keys` is spelled in the keyboard
+ * registry's chord syntax (`Mod-Shift-z`), so `bindings.ts` can parse it with the same
+ * parser it uses for B2's own chords; `label` is the text the menu itself shows, and the
+ * keyboard reference prints it verbatim. See `menukeys.ts` for the mirror this is
+ * checked against.
+ */
+export interface MenuChord {
+  id: string;
+  label: string;
+  keys: string;
+}
+
+/**
  * `list_models` / `set_model` — one embedding model the settings picker offers
  * (b2-embed `ModelChoice`). `current` is the model B2 is configured to use now;
  * `installed` is whether it's been downloaded (`b2 init`) yet.

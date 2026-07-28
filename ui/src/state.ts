@@ -4,6 +4,7 @@
 
 import type {
   EmbedStat,
+  MenuChord,
   ModelChoice,
   NeighborView,
   NoteSummary,
@@ -249,6 +250,13 @@ export interface AppState {
   modelsDir: string | null;
   /** Compute device the embedder runs on ("Metal"/"CPU") — loaded with Settings, else null. */
   embedDevice: string | null;
+  /**
+   * The app menu bar's chords, as the **host** declares them (b2-desktop `menu.rs`, #119)
+   * — the keyboard reference's last group. Null until the boot fetch lands, and the sheet
+   * falls back to `menukeys.ts`'s mirror for that window. Fetched once: a menu is
+   * compiled-in data, not something that changes under the app.
+   */
+  menuChords: MenuChord[] | null;
   /** A slow op is in flight. */
   loading: boolean;
   /**
@@ -313,6 +321,7 @@ export const state: AppState = {
   embedReminderDismissed: false,
   modelsDir: null,
   embedDevice: null,
+  menuChords: null,
   loading: false,
   reindexing: false,
   reindexProgress: null,

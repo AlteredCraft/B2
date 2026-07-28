@@ -20,6 +20,10 @@
 //!     `project` — the model-free half of a reindex (index-engine.md) — opens the fake,
 //!     so the first tree paint never waits on a model load.
 //!     `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev mode).
+//!
+//! And one it hands off: the **menu bar** is declared in [`menu`] rather than inherited
+//! from `Menu::default()`, so its chords are B2's own data and the UI can list them
+//! ([#119](https://github.com/AlteredCraft/B2/issues/119)).
 
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -27,6 +31,7 @@
 mod commands;
 mod error;
 mod logging;
+mod menu;
 mod stats;
 mod watch;
 
@@ -282,6 +287,11 @@ fn main() {
     let _guard = logging::init_logging();
     let state = AppState::new(resolve_root());
     tauri::Builder::default()
+        // The menu bar, declared (#119). Without this call Tauri installs
+        // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate
+        // — and AppKit dispatches them before the webview sees a key, so the keyboard
+        // registry can't observe them either. `menu::MENU` is that list, made data.
+        .menu(menu::build)
         // The dialog plugin backs the native folder picker for `choose_vault`. It is
         // driven host-side only; the webview gets no dialog permission (capabilities/
         // default.json), so it can never open a dialog itself.
@@ -343,6 +353,7 @@ fn main() {
             commands::models_dir,
             commands::embed_device,
             commands::embed_stats,
+            commands::menu_chords,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the B2 desktop app");

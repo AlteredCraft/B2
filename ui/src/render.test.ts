@@ -283,4 +283,22 @@ check("the panel distinguishes 'no pass yet' from 'the pass found nothing'", () 
   assert(clean.includes("found none"), "a pass that ran and found nothing still says so");
 });
 
+// The Keyboard panel is the K1 promise's *findable* half, and #119 extended it to chords
+// B2 doesn't own — the app menu's, which the host declares and hands over at boot. This is
+// the one line of wiring that carries them into the paint (`shortcuts(state.menuChords)`),
+// and dropping it is invisible: the panel would keep rendering menukeys.ts's mirror and
+// look right until the two came apart.
+check("the Keyboard panel lists the menu bar the host declared, not the mirror", () => {
+  const html = modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "keyboard",
+      menuChords: [{ id: "app.panic", label: "Panic", keys: "Mod-Shift-p" }],
+    }),
+  );
+  assert(html.includes("The menu bar"), "the group is in the sheet");
+  assert(html.includes("<kbd>⇧⌘P</kbd>"), "with the host's chord");
+  assert(!html.includes("Quit B2"), "and none of the mirror's rows");
+});
+
 console.log(`render: ${passed} checks passed`);

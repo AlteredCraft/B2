@@ -136,11 +136,13 @@ Every new surface owes all four. They are cheap while you're building it and exp
    action lives in a menu, beside the menu item, which is where a keyboard user learns the shortcut
    that lets them skip the menu next time.
 
-   Two things the registry will tell you before a user does. `conflicts()` fails the suite if your
+   Three things the registry will tell you before a user does. `conflicts()` fails the suite if your
    chord already means something else in the same scope, so pick the scope honestly — it's what
-   separates "⏎ commits *this* dialog" from a clash. And `editorkeys.test.ts` compares B2's chords
+   separates "⏎ commits *this* dialog" from a clash. `editorkeys.test.ts` compares B2's chords
    against CodeMirror's ~100 stock bindings, so if your chord needs to work while the note is being
-   edited, that check is what proves the editor isn't already using it.
+   edited, that check is what proves the editor isn't already using it. And `menukeys.test.ts`
+   compares them against the **menu bar's** (below) — the one clash no scope and no ordering can
+   win, because the keystroke never reaches the webview.
 
 ### Where the pieces live
 
@@ -161,6 +163,20 @@ Every new surface owes all four. They are cheap while you're building it and exp
 - **`ui/src/shortcuts.ts`** — the one chord table, rendered as Settings' **Keyboard** section (`?`
   opens the dialog there). Modifiers as macOS glyphs (⌘ ⇧ ⌫ ⏎); keys macOS spells out in its own
   menus stay words (Esc, Tab, Space, Home/End).
+- **`src/menu.rs` + `ui/src/menukeys.ts`** — the **menu bar**, and the app's third keyboard
+  ([#119](https://github.com/AlteredCraft/B2/issues/119)). Set no menu and Tauri installs
+  `Menu::default()`, whose dozen accelerators (⌘Q ⌘W ⌘M ⌘H ⌥⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⌃⌘F) are live in
+  the window and enumerable by nobody — and AppKit dispatches a menu key equivalent inside
+  `NSApplication.sendEvent`, *before* the key window's responder chain, so they never reach the
+  webview's `keydown` and the registry cannot observe them either. So `menu.rs` declares the menu as
+  a table (the items stay `PredefinedMenuItem`s: the Edit menu is load-bearing — it is what routes
+  cut/copy/paste into the webview), the `menu_chords` command exports it, and `menukeys.ts` mirrors
+  it for the two jobs a runtime fetch can't do — the suite's gate, and the sheet's first paint. The
+  mirror is checked against the host at every boot (`menuDrift`), the way `WRITE_CONFLICT_MESSAGE`
+  and `VAULT_CHANGED_EVENT` are pinned across the same seam: **change the two together.** Note what
+  the gate is *not*: `conflicts()` asks a same-scope question, and scope buys nothing here — a menu
+  accelerator is taken before the webview is consulted, so `menuOverlaps` compares across every
+  scope.
 - **`ui/src/settingstabs.ts`** — the Settings dialog's rail: the section list and its ARIA `tabs`
   moves (↑↓ with wrap, Home/End; ⌃Tab cycles from anywhere in the dialog). Its own module for
   treenav.ts's reason — the paint and the arrows must agree on order, so the order is defined once

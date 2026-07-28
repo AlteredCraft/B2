@@ -16,6 +16,7 @@ import type {
   EmbedStat,
   ExplainView,
   LinkReport,
+  MenuChord,
   ModelChoice,
   MoveReport,
   NeighborView,
@@ -250,6 +251,15 @@ export const api = {
 
   /** Compute device the embedder runs on for this build — "Metal" or "CPU" (Settings badge). */
   embedDevice: (): Promise<string> => invoke("embed_device"),
+
+  /**
+   * Every chord the app's **menu bar** takes (#119) — the host declares the menu
+   * (b2-desktop `menu.rs`), so this is the authority on chords the webview never sees:
+   * AppKit dispatches a menu key equivalent before the key window's responder chain.
+   * The keyboard reference lists them from here, and `menukeys.ts` holds the mirror this
+   * is checked against at boot.
+   */
+  menuChords: (): Promise<MenuChord[]> => invoke("menu_chords"),
 
   /**
    * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once
