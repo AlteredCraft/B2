@@ -51,6 +51,7 @@ import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { canonicalKey, chordFor, displayKeys, isBound } from "./bindings";
 import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
+import { menuDrift } from "./menukeys";
 import { markdownForPaste } from "./paste";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
@@ -4087,6 +4088,33 @@ function wireEvents(): void {
 
 // --- boot -----------------------------------------------------------------------
 
+/**
+ * The app menu bar's chords, from the host that declares them (#119) — the last group of
+ * the keyboard reference, and the one set of chords the webview never sees a keydown for.
+ *
+ * It doubles as the mirror's only check. `menukeys.ts` carries an offline copy — the
+ * suite's collision gate reads it, and the sheet paints from it until this resolves — and
+ * a copy free to fall behind the menu is precisely what #119 set out to end. A difference
+ * goes to the console, not to the user: it means someone edited `menu.rs` without editing
+ * the mirror, which is a developer's bug, and the sheet has already switched to the host's
+ * own list by the time anyone can open Settings to read it. Nothing here blocks the paint,
+ * and a failure costs only the switch from mirror to host.
+ */
+async function loadMenuChords(): Promise<void> {
+  try {
+    const chords = await api.menuChords();
+    state.menuChords = chords;
+    const drift = menuDrift(chords);
+    if (drift.length > 0) {
+      console.error(
+        `[b2] ui/src/menukeys.ts no longer matches the host's menu:\n  ${drift.join("\n  ")}`,
+      );
+    }
+  } catch (e) {
+    console.error(`[b2] could not read the menu bar's chords: ${errText(e)}`);
+  }
+}
+
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
   loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
@@ -4097,6 +4125,7 @@ async function boot(): Promise<void> {
   // host only pulses when the *watched* vault's Markdown changes, and re-points the watch
   // on a vault switch, so this single subscription always tracks the active vault.
   void api.onVaultChanged(() => void onVaultChanged());
+  void loadMenuChords(); // the keyboard reference's last group — never blocks the paint
   try {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;

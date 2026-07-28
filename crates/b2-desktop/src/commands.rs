@@ -456,6 +456,19 @@ pub fn embed_stats() -> Vec<EmbedStat> {
         .collect()
 }
 
+/// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI
+/// folds these into its keyboard registry as reserved chords: the reference sheet lists
+/// them, and the collision check can finally see the one set of chords it was blind to
+/// — AppKit dispatches a menu key equivalent before the webview receives the key at all,
+/// so no amount of watching `keydown` would have found them.
+///
+/// Static data, so infallible and vault-free — the shape of [`embed_device`], not of a
+/// façade call.
+#[tauri::command]
+pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
+    crate::menu::chords()
+}
+
 /// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
 /// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
 struct ReindexGuard<'a>(&'a AppState);

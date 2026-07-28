@@ -22,7 +22,7 @@ import { anomalyRows, type AnomalyPath, type AnomalyRow } from "./anomalies.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
-import { SHORTCUTS } from "./shortcuts.ts";
+import { shortcuts } from "./shortcuts.ts";
 import { SETTINGS_TABS, type SettingsTabId } from "./settingstabs.ts";
 import {
   buildTree,
@@ -1134,7 +1134,7 @@ function settingsPanelHtml(state: AppState): string {
     case "embedding":
       return embeddingPanelHtml(state);
     case "keyboard":
-      return keyboardPanelHtml();
+      return keyboardPanelHtml(state);
   }
 }
 
@@ -1228,15 +1228,18 @@ function embeddingPanelHtml(state: AppState): string {
 // Keyboard — the discoverable half of invariant K1, and now its home rather than a sheet
 // stacked over this dialog: one surface for the table, reached by `?` from anywhere or by
 // walking the rail. The table itself is `shortcuts.ts` (GH #78).
-function keyboardPanelHtml(): string {
+function keyboardPanelHtml(state: AppState): string {
   return `<div class="settings-subhead">Keyboard shortcuts</div>
       <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement.</p>
-      ${shortcutsGridHtml()}`;
+      ${shortcutsGridHtml(state)}`;
 }
 
-/** Every chord B2 answers to, grouped, from the one table in shortcuts.ts. */
-function shortcutsGridHtml(): string {
-  const groups = SHORTCUTS.map(
+/** Every chord the app answers to, grouped, from the one table in shortcuts.ts — plus
+ *  the menu bar's, which are the host's declaration (`state.menuChords`, #119) rather
+ *  than B2 bindings. `null` until the boot fetch lands, and the sheet falls back to
+ *  menukeys.ts's mirror for that window. */
+function shortcutsGridHtml(state: AppState): string {
+  const groups = shortcuts(state.menuChords ?? undefined).map(
     (g) => `<section class="keys-group">
         <h4>${escapeHtml(g.title)}</h4>
         <dl class="keys-list">${g.items

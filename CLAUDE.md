@@ -247,7 +247,8 @@ if/when one lands — `index-engine.md` §5.)*
 - **`b2-desktop`** — the Tauri host: the *second* dumb adapter, the GUI sibling of `b2-cli`. Each
   `#[tauri::command]` is deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view
   types as the IPC contract; it also owns host-only infrastructure (the async cancellable reindex task,
-  the fs-watch `vault-changed` pulse, the OS folder dialog). Has its own `CLAUDE.md` with the
+  the fs-watch `vault-changed` pulse, the OS folder dialog, and the **declared menu bar** — `menu.rs`,
+  GH #119). Has its own `CLAUDE.md` with the
   thin-adapter rules — read it before touching this crate.
 - **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
   toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Rendering a note is a
@@ -269,8 +270,11 @@ if/when one lands — `index-engine.md` §5.)*
   (`ui/src/shortcuts.ts`) that `?` jumps straight to. Chords themselves are declared once in
   `ui/src/bindings.ts` — the keyboard registry — and the dispatcher, the editor's keymap and that
   sheet all derive from it, so none of the three can drift; `conflicts()` fails the suite on two
-  commands sharing a keystroke in one scope, and `ui/src/editorkeys.ts` checks B2's chords against
-  CodeMirror's own ~100 stock bindings so an upgrade can't quietly take one. The four obligations a new surface owes are in
+  commands sharing a keystroke in one scope, `ui/src/editorkeys.ts` checks B2's chords against
+  CodeMirror's own ~100 stock bindings so an upgrade can't quietly take one, and `ui/src/menukeys.ts`
+  checks them against the **macOS menu bar's** — declared in `crates/b2-desktop/src/menu.rs` rather than
+  inherited from Tauri's default, since AppKit dispatches a menu accelerator before the webview sees the
+  key at all, which made it the one clash nothing could detect (GH #119). The four obligations a new surface owes are in
   [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
