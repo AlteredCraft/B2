@@ -354,6 +354,7 @@ check("the recorder shows what it is rebinding, and refuses to save a refused ch
           candidate,
           problems: chordProblems("edit.toggle", candidate),
           hint: null,
+          blurred: false,
         },
       }),
     );
@@ -378,6 +379,7 @@ check("the recorder says out loud when nothing has reached B2", () => {
         candidate: null,
         problems: [],
         hint: silenceHint({ elapsedMs: PROBE_AFTER_MS, blurred: false }),
+        blurred: false,
       },
     }),
   );

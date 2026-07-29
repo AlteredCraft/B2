@@ -92,6 +92,18 @@ export interface RecorderState {
   problems: ChordProblem[];
   /** The probe's reading of silence, or why a pressed key can't hold a chord. */
   hint: string | null;
+  /**
+   * The window lost focus while this recording was waiting — the probe's one *positive*
+   * signal (recorder.ts).
+   *
+   * Remembered rather than passed at the moment it happens, because two things read
+   * silence: the blur itself, and a timer set when the recorder opened. Held as a
+   * parameter, the later of the two would answer the question without knowing what the
+   * earlier one saw — which is exactly how the strong "something outside B2 answered"
+   * reading got overwritten by the weaker guess (GH #125). As state, every reader reaches
+   * the same conclusion whatever order they run in.
+   */
+  blurred: boolean;
 }
 
 export interface AppState {

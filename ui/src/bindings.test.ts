@@ -438,13 +438,41 @@ check("isBindableKey admits what parseChord can hold, and refuses what it can't"
   // The recorder asks this before spelling a chord, so the answer has to agree with the
   // parser exactly — a key that passes here and throws there is a crash in the one place
   // the user is deliberately pressing strange keys.
-  for (const key of ["a", "?", "1", "Enter", "ArrowUp", "F12", "Space"]) {
+  //
+  // `-` is in the list on purpose. It is the chord syntax's own separator, so a naive
+  // `split("-")` pops an empty last segment and throws on the bare hyphen and on every
+  // ⌘-chord over it — while `isBindableKey` says yes, because it is an ordinary key. The
+  // hole was invisible until a recorder existed to walk into it (GH #125), and the sample
+  // set that missed it looked exactly as convincing as this one.
+  for (const key of ["a", "?", "1", "-", "Enter", "ArrowUp", "F12", "Space"]) {
     assert(isBindableKey(key), `${key} should be bindable`);
     parseChord(key); // the agreement, asserted rather than assumed
   }
   for (const key of ["Meta", "Shift", "Dead", "Unidentified", "AudioVolumeUp"]) {
     assert(!isBindableKey(key), `${key} should not be bindable`);
   }
+});
+
+check("the separator is also a key, and chords over it parse", () => {
+  // The rule is CodeMirror's own (`normalizeKeyName` splits on `/-(?!$)/`), and matching
+  // it character for character is the point: `chordFor` hands specs straight to
+  // `keymap.of`, so a spec CodeMirror parses and B2 throws on would break the agreement
+  // this module's header calls load-bearing — and break it at the moment a user records
+  // an unremarkable key.
+  assertEq(parseChord("-").key, "-", "the bare hyphen");
+  const modHyphen = parseChord("Mod--");
+  assertEq([modHyphen.key, modHyphen.mod], ["-", true], "⌘ plus the hyphen");
+  assertEq(parseChord("Mod-Shift--").key, "-", "and it survives a stack of modifiers");
+  assertEq(displayChord("Mod--"), "⌘-", "printing it says the same thing");
+  assert(chordMatches(parseChord("Mod--"), press("-", { metaKey: true })), "and it fires");
+  // A trailing separator with no key after it is still nothing, and still refused.
+  let threw = false;
+  try {
+    parseChord("Mod-");
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Mod- names no key");
 });
 
 check("shiftDistinguishes separates a real ⇧ from one already in the character", () => {

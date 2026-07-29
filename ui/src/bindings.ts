@@ -436,7 +436,13 @@ export function isBindableKey(key: string): boolean {
  *  fires, which is invisible at runtime and obvious here — so this fails the suite the
  *  moment the table is imported rather than shipping a dead key. */
 export function parseChord(spec: string): Chord {
-  const parts = spec.split("-");
+  // `-` is both the separator and a key you can press, so the split has to refuse to cut
+  // at a *trailing* one: "Mod--" is ⌘ plus the hyphen key, and "-" is the bare hyphen.
+  // This is character-for-character CodeMirror's own rule (`normalizeKeyName` splits on
+  // `/-(?!$)/`), and that is the point rather than a coincidence — a spec CodeMirror
+  // parses and B2 throws on would break the one agreement this module's header calls
+  // load-bearing, and it would break it exactly where a user records an ordinary key.
+  const parts = spec.split(/-(?!$)/);
   const raw = parts.pop();
   if (raw === undefined || raw === "") throw new Error(`chord has no key: ${spec}`);
   const chord: Chord = {

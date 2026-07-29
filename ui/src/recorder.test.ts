@@ -67,6 +67,12 @@ check("a recorded chord answers to the keystroke that produced it", () => {
     press(" ", { altKey: true }),
     press("ArrowUp"),
     press(",", { metaKey: true }),
+    // The separator, as a key. `capture` joins the chord with `-`, so this is the one
+    // character whose spec reads ambiguously — "Mod--" — and the round trip is what says
+    // the two ends agree about it (GH #125).
+    press("-"),
+    press("-", { metaKey: true }),
+    press("-", { metaKey: true, shiftKey: true }),
   ];
   for (const e of events) {
     const got = capture(e);
@@ -85,6 +91,11 @@ check("a ⇧ already inside the character is not written down twice", () => {
   // The counterpart: a key whose identity ⇧ genuinely changes keeps the modifier.
   assertEq(spec(press("F10", { shiftKey: true })), "Shift-F10", "⇧F10 is a chord of its own");
   assertEq(spec(press("A", { shiftKey: true })), "Shift-a", "and so is ⇧A");
+});
+
+check("the hyphen records as itself, separator or not", () => {
+  assertEq(spec(press("-")), "-", "bare");
+  assertEq(spec(press("-", { metaKey: true })), "Mod--", "and with ⌘ in front of it");
 });
 
 check("the space bar records as a name, not a literal space", () => {
@@ -122,6 +133,18 @@ check("sustained silence is read as something upstream having taken the chord", 
   const hint = silenceHint({ elapsedMs: PROBE_AFTER_MS, blurred: false });
   assert(hint !== null, "the probe speaks");
   assert(hint?.includes("If you did press something") ?? false, "conditionally — it can't know");
+});
+
+check("a lost window outranks the timer however late the timer runs", () => {
+  // The precedence that GH #125's review caught being lost in the wiring: a blur and a
+  // probe tick both read silence, and for a while the tick could fire *after* the blur and
+  // talk the strong reading back down to a guess. Held here as the property — blurred wins
+  // at any elapsed time — and made unlosable in the wiring by remembering the blur on the
+  // recorder rather than passing it at the moment it happens (`RecorderState.blurred`).
+  for (const elapsedMs of [0, PROBE_AFTER_MS, PROBE_AFTER_MS * 100]) {
+    const hint = silenceHint({ elapsedMs, blurred: true });
+    assert(hint?.includes("lost focus") ?? false, `blurred wins at ${elapsedMs}ms`);
+  }
 });
 
 check("a lost window is stated as fact, and outranks the timer", () => {

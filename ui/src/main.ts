@@ -21,7 +21,14 @@ import {
   StateField,
   type Extension,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap, tooltips } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  type KeyBinding,
+  keymap,
+  tooltips,
+} from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
@@ -1851,9 +1858,14 @@ function setTheme(theme: ThemePref): void {
 
 /** Lay the stored rebindings over the shipped table and make that the live registry.
  *  Every `isBound` in the handler below, the sheet in Settings, and the conflict checkers
- *  all read `activeBindings()`, so this one call moves the whole keyboard at once. */
+ *  all read `activeBindings()`, so this one call moves the whole keyboard at once —
+ *  except for the one keyboard that is not B2's to read from a table. CodeMirror holds
+ *  its **own** copy of the chords it was mounted with, so the registry moving under it
+ *  changes nothing until it is told; the compartment is how it's told. Null before the
+ *  first edit, which is the common case at boot and needs no handling of its own. */
 function installKeymap(): void {
   setActiveBindings(applyOverrides(DEFAULT_BINDINGS, state.keyOverrides));
+  editorView?.dispatch({ effects: keysCompartment.reconfigure(editorKeymap()) });
 }
 
 /** Read the saved keyboard and install it. Runs before `buildShell`, which projects a
@@ -1892,14 +1904,15 @@ let recorderTimer: number | null = null;
 function startRecording(id: BindingId): void {
   const b = findBinding(activeBindings(), id);
   if (!b || b.fixed !== undefined) return; // a chip for a fixed chord isn't a button at all
-  state.recorder = { id, candidate: null, problems: [], hint: null };
+  state.recorder = { id, candidate: null, problems: [], hint: null, blurred: false };
   recorderOpenedAt = Date.now();
-  if (recorderTimer !== null) clearTimeout(recorderTimer);
+  cancelProbe();
   // The probe: silence is the observation, so something has to come back and read it.
   recorderTimer = window.setTimeout(() => {
     recorderTimer = null;
     if (!state.recorder || state.recorder.candidate !== null) return;
-    state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: false });
+    const { blurred } = state.recorder; // what the session has observed, not what this tick assumes
+    state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred });
     render();
   }, PROBE_AFTER_MS);
   render();
@@ -1909,13 +1922,25 @@ function startRecording(id: BindingId): void {
   document.getElementById("keys-recorder")?.focus();
 }
 
-/** Tear the recorder down without painting — for the callers that are mid-teardown of
- *  something larger and will paint themselves (`dismissOverlays`). */
-function clearRecorder(): void {
+/** Stop the pending read of silence.
+ *
+ *  Called wherever something has already answered the question the timer was going to ask
+ *  — the recorder closing, a chord arriving, or the window blurring. That last one is the
+ *  subtle case (GH #125): a blur sets the *strong* hint, and a timer left running would
+ *  fire moments later, still see no candidate, and overwrite it with the weaker "nothing
+ *  has reached B2 yet" — downgrading the one positive observation the recorder ever makes
+ *  into a guess. */
+function cancelProbe(): void {
   if (recorderTimer !== null) {
     clearTimeout(recorderTimer);
     recorderTimer = null;
   }
+}
+
+/** Tear the recorder down without painting — for the callers that are mid-teardown of
+ *  something larger and will paint themselves (`dismissOverlays`). */
+function clearRecorder(): void {
+  cancelProbe();
   state.recorder = null;
 }
 
@@ -1957,6 +1982,7 @@ function recorderKeydown(e: KeyboardEvent): boolean {
     render();
     return true;
   }
+  cancelProbe(); // a chord arrived, so there is no silence left to read
   rec.candidate = got.spec;
   rec.problems = chordProblems(rec.id, got.spec, DEFAULT_BINDINGS, state.keyOverrides);
   rec.hint = null;
@@ -2438,10 +2464,46 @@ function runFormat(view: EditorView, fmt: InlineFormat): boolean {
   );
   return true;
 }
-const formatKeymap = FORMATS.map((f) => ({
-  key: chordFor(`format.${f.id}`),
-  run: (view: EditorView) => runFormat(view, f),
-}));
+/**
+ * B2's own chords inside the editor, read from the **live** registry each time.
+ *
+ * A function, not a const, and that distinction is the whole of GH #125's first review
+ * note: built once at module load, this array froze the shipped chords *before* boot had
+ * even read the user's rebindings, so a rebound ⌘B would move in the sheet and in every
+ * conflict check while CodeMirror went on answering to ⌘B forever. The compartment below
+ * is what carries a change into a *mounted* editor; this is what makes a fresh mount
+ * correct in the first place.
+ */
+function b2EditorKeymap(): KeyBinding[] {
+  return [
+    ...FORMATS.map((f) => ({
+      key: chordFor(`format.${f.id}`),
+      run: (view: EditorView) => runFormat(view, f),
+    })),
+    { key: chordFor("editor.table"), run: runInsertTable },
+    {
+      key: chordFor("editor.paste-plain"),
+      run: (view: EditorView) => {
+        void pastePlain(view);
+        return true;
+      },
+    },
+  ];
+}
+
+// The editor's keymap lives in a Compartment for `lpCompartment`'s reason — a change has
+// to reach a *mounted* editor without remounting it. Settings is reachable while editing
+// (⌘, is an unguarded toggle), so rebinding ⌘B is something you can do with the buffer
+// open behind the dialog, and without this the new chord would only take effect the next
+// time you entered edit mode.
+//
+// B2's chords and the stock ones stay in **one** `keymap.of` array, B2's first: that
+// ordering is what makes ⌘I italic rather than `selectParentSyntax`, and
+// editorkeys.test.ts pins the overlap set on that reasoning. Splitting them into two
+// facet inputs would leave the same outcome resting on extension order instead, which is
+// a quieter thing to depend on.
+const keysCompartment = new Compartment();
+const editorKeymap = (): Extension => keymap.of([...b2EditorKeymap(), ...STOCK_EDITOR_KEYMAP]);
 
 // ⌘T — drop a fresh 3-column table (header + two rows) at the cursor, caret in the
 // first cell. Block insert, not an inline toggle, so it's its own binding over the pure
@@ -2559,20 +2621,10 @@ function mountEditor(body: string): void {
       // Formatting chords first so a future format key can shadow a default binding.
       // Every `key` here comes out of the registry, which is why its syntax is
       // CodeMirror's: one spelling of a chord serves the editor and the sheet alike.
-      keymap.of([
-        ...formatKeymap,
-        { key: chordFor("editor.table"), run: runInsertTable },
-        {
-          key: chordFor("editor.paste-plain"),
-          run: (view: EditorView) => {
-            void pastePlain(view);
-            return true;
-          },
-        },
-        // CodeMirror's own, declared in editorkeys.ts so the set that runs here is the
-        // set editorkeys.test.ts checks B2's chords against.
-        ...STOCK_EDITOR_KEYMAP,
-      ]),
+      // In a compartment so a rebinding reaches this editor while it is still mounted
+      // (`editorKeymap`); the stock bindings ride along because they share the array whose
+      // order decides who wins.
+      keysCompartment.of(editorKeymap()),
       EditorView.lineWrapping,
       // Web-page formatting survives the clipboard (see `richPaste` above); an
       // unformatted paste still takes CodeMirror's own path.
@@ -4202,6 +4254,8 @@ function wireEvents(): void {
   window.addEventListener("blur", () => {
     if (state.editing) void saveNow();
     if (state.recorder && state.recorder.candidate === null) {
+      cancelProbe(); // the blur has answered; there is no silence left to read
+      state.recorder.blurred = true;
       state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: true });
       render();
     }
