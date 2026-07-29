@@ -159,7 +159,7 @@ export function chordProblems(
     }
   }
   // Advisory: the editor's own keyboard. Which side wins is install order and differs row
-  // by row (editorkeys.ts), so this names the collision rather than predicting it.
+  // by row (editorkeys.ts), so this names the overlap rather than predicting it.
   for (const o of editorOverlaps(candidate)) {
     if (o.id !== id) continue;
     out.push({
