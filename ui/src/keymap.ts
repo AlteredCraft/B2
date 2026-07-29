@@ -80,11 +80,39 @@ export function customized(
   return base.filter((b) => overrides[b.id] !== undefined);
 }
 
-/** `overrides` with `id` bound to `chords`, or — for an empty list — reset to its default.
+/** Is this list simply what `id` already ships with?
+ *
+ *  The store has two ways in — the recorder and a hand-edited file — and this is the rule
+ *  they have to agree on. `adoptOverrides` has always refused to *read* a restatement back
+ *  (a "changed" badge over an unmoved chord is a lie, and "Reset all (1)" would offer to
+ *  undo nothing); `withOverride` now refuses to *write* one, which is where it was getting
+ *  in. Order counts: `keys[0]` is what the sheet leads with and what CodeMirror is handed
+ *  (`chordFor`), so the same chords in another order really is a change.
+ *
+ *  Module-private: the two writers above are the only callers, and a rule the store
+ *  enforces for itself is not a question its callers should be asking separately. */
+function restatesDefault(
+  base: readonly Binding[],
+  id: string,
+  chords: readonly string[],
+): boolean {
+  const b = findBinding(base, id);
+  return (
+    b !== undefined && chords.length === b.keys.length && chords.every((c, i) => c === b.keys[i])
+  );
+}
+
+/** `overrides` with `id` bound to `chords`, or — for an empty list, or one that restates
+ *  what the command ships with — reset to its default.
  *  Returns a new object; nothing here mutates its argument. */
-export function withOverride(overrides: Overrides, id: string, chords: readonly string[]): Overrides {
+export function withOverride(
+  overrides: Overrides,
+  id: string,
+  chords: readonly string[],
+  base: readonly Binding[] = DEFAULT_BINDINGS,
+): Overrides {
   const next: Record<string, readonly string[]> = { ...overrides };
-  if (chords.length === 0) delete next[id];
+  if (chords.length === 0 || restatesDefault(base, id, chords)) delete next[id];
   else next[id] = chords;
   return next;
 }
@@ -124,7 +152,7 @@ export function chordProblems(
   } catch {
     return [{ tier: "refuse", message: "B2 can't build a shortcut out of that key." }];
   }
-  const candidate = applyOverrides(base, withOverride(overrides, id, [spec]));
+  const candidate = applyOverrides(base, withOverride(overrides, id, [spec], base));
   const shown = displayChord(spec);
   const labelOf = (other: string): string => findBinding(candidate, other)?.label ?? other;
 
@@ -226,8 +254,9 @@ export function adoptOverrides(
       continue;
     }
     // Restating the default is not an override — dropping it here is what keeps "changed"
-    // an honest badge and "Reset all" a real no-op when there is nothing to reset.
-    if (chords.length === b.keys.length && chords.every((c, i) => c === b.keys[i])) continue;
+    // an honest badge and "Reset all" a real no-op when there is nothing to reset. Not a
+    // loss, so not `dropped`; `withOverride` holds the same line on the recorder's side.
+    if (restatesDefault(base, id, chords)) continue;
     wanted.push([id, chords]);
   }
 
@@ -235,7 +264,7 @@ export function adoptOverrides(
   for (const [id, chords] of wanted) {
     const problems = chords.flatMap((spec) => chordProblems(id, spec, base, overrides, menu));
     if (refused(problems)) dropped.push(id);
-    else overrides = withOverride(overrides, id, chords);
+    else overrides = withOverride(overrides, id, chords, base);
   }
   return { overrides, dropped };
 }

@@ -73,6 +73,23 @@ check("an empty override is a reset, not a command with no chord", () => {
   assertEq(keysOf(applyOverrides(DEFAULT_BINDINGS, o), "find.open"), ["Mod-f"], "and ⌘F is back");
 });
 
+check("recording a command's own chord back onto it is a reset, not an override", () => {
+  // The writer's half of the rule the reader has always held (the check two below this
+  // one). Recording ⌘2 onto the command that already answers to ⌘2 used to leave a real
+  // entry behind: a permanent "changed" dot beside an unmoved chord, a "Reset all (1)"
+  // with nothing to reset, and a stored line that vanished on the next launch when
+  // `adoptOverrides` refused to read it back. Whichever way in, what a command ships with
+  // is not a rebinding of it.
+  const o = withOverride({}, "find.open", ["Mod-f"]);
+  assertEq(o, {}, "no entry is written");
+  const back = withOverride({ "find.open": ["Mod-Alt-f"] }, "find.open", ["Mod-f"]);
+  assertEq(back, {}, "and recording the default over a rebinding puts it back");
+  // Order is part of the identity: the same chords in another order *is* a change, since
+  // `keys[0]` is what the sheet leads with and what CodeMirror is handed (`chordFor`).
+  const swapped = withOverride({}, "graph.activate", ["Space", "Enter"]);
+  assertEq(swapped, { "graph.activate": ["Space", "Enter"] }, "a reordering is a change");
+});
+
 check("withOverride does not mutate what it is given", () => {
   // The recorder builds a *candidate* table from the live overrides on every keystroke, so
   // an in-place update would rewrite the user's keyboard while they were still trying
