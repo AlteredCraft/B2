@@ -12,7 +12,16 @@
 // Invariant K1 (docs/design/invariants.md, GH #78): the tree is fully navigable from
 // the keyboard, following the ARIA `tree` pattern (up/down between visible rows,
 // right/left to expand/collapse or step in/out, Home/End, first-letter typeahead).
+//
+// **Which key means which move is not this module's business** (#121). `arrowMove` used
+// to switch on `e.key`, which made this file the owner of "ArrowDown means next row" —
+// fine for a fixed keyboard, and wrong once a user can rebind, since it put the arrows
+// beyond the reach of both the recorder and the conflict checker. It switches on a
+// registry command id now (`tree.row.next`), so bindings.ts owns key → command and this
+// module owns command → move. The rule the registry states is unchanged; only the seam
+// between the two halves moved.
 
+import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 import type { NodeKind } from "./move";
 import type { NoteSummary, ResourceSummary } from "./types";
 
@@ -212,34 +221,53 @@ export function parentRowPath(rows: readonly TreeRow[], index: number): string |
   return null;
 }
 
+/** The navigation commands the tree answers to — registry ids, in the order the
+ *  dispatcher tries them. `satisfies` ties them to the table: deleting or misspelling a
+ *  row in bindings.ts is a compile error here rather than an arrow that stops working. */
+export const TREE_NAV = [
+  "tree.row.prev",
+  "tree.row.next",
+  "tree.row.first",
+  "tree.row.last",
+  "tree.row.in",
+  "tree.row.out",
+] as const satisfies readonly BindingId[];
+
+export type TreeNav = (typeof TREE_NAV)[number];
+
+/** Which tree move — if any — this keystroke is, per the live registry. */
+export function treeNavFor(e: KeyEventLike): TreeNav | null {
+  return boundOf(e, TREE_NAV);
+}
+
 /**
- * The ARIA tree-pattern move for one key, or null when the key means nothing here
- * (so the caller leaves the event alone rather than swallowing it):
+ * The ARIA tree-pattern move for one navigation command, or null when there is nowhere
+ * to go (so the caller leaves the event alone rather than swallowing it):
  *
- *   ArrowDown/Up  next / previous **visible** row (never into a collapsed folder)
- *   Home/End      first / last visible row
- *   ArrowRight    a collapsed folder expands; an expanded one steps to its first child
- *   ArrowLeft     an expanded folder collapses; anything else steps out to its parent
+ *   next / prev    next / previous **visible** row (never into a collapsed folder)
+ *   first / last   first / last visible row
+ *   in             a collapsed folder expands; an expanded one steps to its first child
+ *   out            an expanded folder collapses; anything else steps out to its parent
  *
- * `from` is -1 when nothing is focused yet, which Down/Home resolve to the first row
- * and Up/End to the last — so the first arrow press always lands.
+ * `from` is -1 when nothing is focused yet, which next/first resolve to the first row
+ * and prev/last to the last — so the first arrow press always lands.
  */
-export function arrowMove(rows: readonly TreeRow[], from: number, key: string): TreeMove | null {
+export function arrowMove(rows: readonly TreeRow[], from: number, nav: TreeNav): TreeMove | null {
   if (rows.length === 0) return null;
   const last = rows.length - 1;
   const at = (i: number): TreeMove => ({ kind: "focus", path: rows[i].path });
-  switch (key) {
-    case "Home":
+  switch (nav) {
+    case "tree.row.first":
       return at(0);
-    case "End":
+    case "tree.row.last":
       return at(last);
-    case "ArrowDown":
+    case "tree.row.next":
       if (from < 0) return at(0);
       return from < last ? at(from + 1) : null;
-    case "ArrowUp":
+    case "tree.row.prev":
       if (from < 0) return at(last);
       return from > 0 ? at(from - 1) : null;
-    case "ArrowRight": {
+    case "tree.row.in": {
       if (from < 0) return at(0);
       const row = rows[from];
       if (row.nodeKind !== "folder") return null;
@@ -247,15 +275,13 @@ export function arrowMove(rows: readonly TreeRow[], from: number, key: string): 
       // Expanded: the next row *is* the first child (visibleRows emits it inline).
       return from < last && rows[from + 1].depth > row.depth ? at(from + 1) : null;
     }
-    case "ArrowLeft": {
+    case "tree.row.out": {
       if (from < 0) return at(0);
       const row = rows[from];
       if (row.nodeKind === "folder" && row.expanded) return { kind: "collapse", path: row.path };
       const parent = parentRowPath(rows, from);
       return parent === null ? null : { kind: "focus", path: parent };
     }
-    default:
-      return null;
   }
 }
 

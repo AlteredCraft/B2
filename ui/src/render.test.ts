@@ -12,6 +12,8 @@
 import { JSDOM } from "jsdom";
 import { buildScene } from "./graph.ts";
 import { modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
+import { chordProblems } from "./keymap.ts";
+import { PROBE_AFTER_MS, silenceHint } from "./recorder.ts";
 import { state, type AppState } from "./state.ts";
 import type {
   NeighborView,
@@ -36,6 +38,12 @@ function assert(cond: boolean, msg: string): void {
 }
 function equal(actual: string, expected: string, msg: string): void {
   assert(actual === expected, `${msg} — expected ${expected}, got ${actual}`);
+}
+function assertEq(actual: unknown, expected: unknown, msg: string): void {
+  const [a, b] = [JSON.stringify(actual), JSON.stringify(expected)];
+  if (a !== b) throw new Error(`assertion failed: ${msg}
+  actual:   ${a}
+  expected: ${b}`);
 }
 function check(name: string, fn: () => void): void {
   fn();
@@ -299,6 +307,84 @@ check("the Keyboard panel lists the menu bar the host declared, not the mirror",
   assert(html.includes("The menu bar"), "the group is in the sheet");
   assert(html.includes("<kbd>⇧⌘P</kbd>"), "with the host's chord");
   assert(!html.includes("Quit B2"), "and none of the mirror's rows");
+});
+
+// The Keyboard panel is also where chords are *edited* since #121, and the affordance is
+// the contract: a chip painted as a `<button>` says "B2 can move this", a `<kbd>` says it
+// can't. Getting that split wrong is a panel that offers to rebind ⏎-in-a-text-field, or
+// one that quietly makes a movable chord unreachable from the only surface that moves it.
+check("a movable chord paints as a button, and everything else as plain text", () => {
+  const html = modalHtml(app({ settingsOpen: true, settingsTab: "keyboard" }));
+  assert(html.includes('data-rebind="find.open"'), "⌘F is B2's, and B2 can move it");
+  const ids = [...html.matchAll(/id="(keys-chip-[^"]+)"/g)].map((m) => m[1]);
+  assert(ids.length > 20, "the sheet is mostly chips");
+  // Every chip carries an id so focus survives the repaint its own click causes — and the
+  // ids are *unique*, which is not free: ⇧F10 opens a menu on a tree row and on a
+  // discovery card, so `menu.open` appears in two rows. Two controls answering to one id
+  // is a repaint that hands the keyboard to the wrong one.
+  assertEq(new Set(ids).size, ids.length, "no two chips share an id");
+  assertEq(ids.filter((id) => id.endsWith("-menu.open")).length, 2, "and ⇧F10 really is in two rows");
+  // `graph.activate` is fixed: a graph node stands in for a button, and ⏎/Space are what a
+  // button answers to. It still appears — K1 is about being findable — as text.
+  assert(!html.includes('data-rebind="graph.activate"'), "⏎ on a graph node is not B2's to hand out");
+  // The platform's own keys have no command behind them at all.
+  assert(html.includes("Jump to the next row starting with that letter"), "typeahead has a row");
+  assert(!html.includes('data-rebind="A–Z"'), "and nothing to rebind");
+});
+
+check("a rebound chord is marked, and offers to be put back", () => {
+  const html = modalHtml(
+    app({ settingsOpen: true, settingsTab: "keyboard", keyOverrides: { "find.open": ["Mod-Alt-f"] } }),
+  );
+  assert(html.includes("kbd-changed"), "the chip says it has moved");
+  assert(html.includes("Reset all (1)"), "and the count is the number of moved commands");
+  assert(!modalHtml(app({ settingsOpen: true, settingsTab: "keyboard" })).includes("Reset all"), "no reset with nothing to reset");
+});
+
+check("the recorder shows what it is rebinding, and refuses to save a refused chord", () => {
+  // The two tiers reach the paint differently on purpose: a refusal disables the button,
+  // an advisory is said and the button stays live — the human is the gate (keymap.ts).
+  const open = (candidate: string) =>
+    modalHtml(
+      app({
+        settingsOpen: true,
+        settingsTab: "keyboard",
+        recorder: {
+          id: "edit.toggle",
+          candidate,
+          problems: chordProblems("edit.toggle", candidate),
+          hint: null,
+          blurred: false,
+        },
+      }),
+    );
+  const clash = open("Mod-w");
+  assert(clash.includes("Enter or leave edit mode"), "the recorder names its command");
+  assert(clash.includes("Close Window"), "and names what took the chord");
+  assert(clash.includes('id="keys-save" disabled'), "a refused chord cannot be saved");
+  const fine = open("Mod-Alt-Shift-e");
+  assert(!fine.includes('id="keys-save" disabled'), "a free chord can");
+  assert(fine.includes("kbd-recording"), "and the chip being edited is marked in the table");
+});
+
+check("the recorder says out loud when nothing has reached B2", () => {
+  // The probe's whole output is this one line, and a panel that dropped it would turn a
+  // real observation — macOS took that chord — into a recorder that looks broken.
+  const html = modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "keyboard",
+      recorder: {
+        id: "edit.toggle",
+        candidate: null,
+        problems: [],
+        hint: silenceHint({ elapsedMs: PROBE_AFTER_MS, blurred: false }),
+        blurred: false,
+      },
+    }),
+  );
+  assert(html.includes("Press a chord"), "still waiting");
+  assert(html.includes("claimed it first"), "and saying why that might be");
 });
 
 console.log(`render: ${passed} checks passed`);

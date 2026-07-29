@@ -19,7 +19,14 @@
 // — and the two moves read differently enough that one function pretending to serve both
 // would need a predicate per branch. Two small tested walks beat one parameterized one;
 // the duplication is ~20 lines and the semantics are stated in each.
+//
+// As in treenav.ts, **which key means which move is the registry's** since #121:
+// `sideArrowMove` switches on a binding id (`side.row.next`), not on `e.key`, so the
+// pane's arrows are rebindable and visible to the conflict checker. The pane has a scope
+// of its own (`side`) rather than sharing the tree's — they are siblings, so ↑ can mean
+// "previous row" in both, and rebinding one leaves the other alone.
 
+import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 import type { SideSection } from "./state";
 import type { NeighborView, NoteView, SearchResult, SimilarView, UnresolvedLink } from "./types";
 
@@ -179,39 +186,57 @@ export function parentSideKey(rows: readonly SideRow[], index: number): string |
   return null;
 }
 
+/** The navigation commands the discovery pane answers to — registry ids, in the order the
+ *  dispatcher tries them (treenav.ts's `TREE_NAV` is the sibling of this). */
+export const SIDE_NAV = [
+  "side.row.prev",
+  "side.row.next",
+  "side.row.first",
+  "side.row.last",
+  "side.row.in",
+  "side.row.out",
+] as const satisfies readonly BindingId[];
+
+export type SideNav = (typeof SIDE_NAV)[number];
+
+/** Which discovery move — if any — this keystroke is, per the live registry. */
+export function sideNavFor(e: KeyEventLike): SideNav | null {
+  return boundOf(e, SIDE_NAV);
+}
+
 /**
- * The ARIA tree-pattern move for one key, or null when the key means nothing here (so the
- * caller leaves the event alone rather than swallowing it):
+ * The ARIA tree-pattern move for one navigation command, or null when there is nowhere to
+ * go (so the caller leaves the event alone rather than swallowing it):
  *
- *   ArrowDown/Up  next / previous **visible** row (never into a collapsed section)
- *   Home/End      first / last row
- *   ArrowRight    folded → unfold; an open section steps to its first card; an open card
- *                 stays put (its body is content, not rows)
- *   ArrowLeft     open → fold; anything else steps out to its section head
+ *   next / prev    next / previous **visible** row (never into a collapsed section)
+ *   first / last   first / last row
+ *   in             folded → unfold; an open section steps to its first card; an open card
+ *                  stays put (its body is content, not rows)
+ *   out            open → fold; anything else steps out to its section head
  *
- * `from` is -1 when nothing is focused yet, which Down/Home resolve to the first row and
- * Up/End to the last — so the first arrow press always lands.
+ * `from` is -1 when nothing is focused yet, which next/first resolve to the first row and
+ * prev/last to the last — so the first arrow press always lands.
  */
 export function sideArrowMove(
   rows: readonly SideRow[],
   from: number,
-  key: string,
+  nav: SideNav,
 ): SideMove | null {
   if (rows.length === 0) return null;
   const last = rows.length - 1;
   const at = (i: number): SideMove => ({ kind: "focus", key: rows[i].key });
-  switch (key) {
-    case "Home":
+  switch (nav) {
+    case "side.row.first":
       return at(0);
-    case "End":
+    case "side.row.last":
       return at(last);
-    case "ArrowDown":
+    case "side.row.next":
       if (from < 0) return at(0);
       return from < last ? at(from + 1) : null;
-    case "ArrowUp":
+    case "side.row.prev":
       if (from < 0) return at(last);
       return from > 0 ? at(from - 1) : null;
-    case "ArrowRight": {
+    case "side.row.in": {
       if (from < 0) return at(0);
       const row = rows[from];
       if (row.fold === null) return null;
@@ -222,7 +247,7 @@ export function sideArrowMove(
         ? at(from + 1)
         : null;
     }
-    case "ArrowLeft": {
+    case "side.row.out": {
       if (from < 0) return at(0);
       const row = rows[from];
       if (row.fold !== null && row.expanded)
@@ -230,7 +255,5 @@ export function sideArrowMove(
       const parent = parentSideKey(rows, from);
       return parent === null ? null : { kind: "focus", key: parent };
     }
-    default:
-      return null;
   }
 }

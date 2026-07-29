@@ -29,7 +29,7 @@
 // menu's in the note editor, in the find bar, in a modal, everywhere. So `menuOverlaps`
 // compares keystrokes across *every* scope, and that difference is the whole point of it
 // being its own function rather than more rows in BINDINGS.
-import { type Binding, BINDINGS, allKeys, keystrokes } from "./bindings.ts";
+import { type Binding, activeBindings, allKeys, keystrokes } from "./bindings.ts";
 import type { MenuChord } from "./types.ts";
 
 /** The menu bar as `crates/b2-desktop/src/menu.rs` declares it — every item that carries
@@ -66,9 +66,11 @@ export interface MenuOverlap {
 }
 
 /** Every B2 binding whose keystroke the menu bar claims — in any scope, for the reason
- *  in the module header. Empty for BINDINGS, and kept that way by menukeys.test.ts. */
+ *  in the module header. Empty for the shipped defaults and kept that way by
+ *  menukeys.test.ts — and asked of a *candidate* table by keymap.ts, which is how the
+ *  recorder refuses ⌘W outright rather than leaving a user to wonder why the window closed. */
 export function menuOverlaps(
-  bindings: readonly Binding[] = BINDINGS,
+  bindings: readonly Binding[] = activeBindings(),
   menu: readonly MenuChord[] = MENU_CHORDS,
 ): MenuOverlap[] {
   const reserved = menu.map((c) => ({ item: c.id, forms: new Set(keystrokes(c.keys)) }));

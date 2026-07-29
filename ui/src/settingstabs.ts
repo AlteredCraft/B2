@@ -18,6 +18,12 @@
 // Tab stop, not one per section), ↑↓ between tabs with wrap, Home/End to the ends. The
 // moves live here rather than in main.ts's keydown for treenav.ts's reason — the paint and
 // the arrows must agree on order, so the order is defined once and both sides read it.
+//
+// The *keys* those moves answer to are the registry's since #121 (`tabMove` switches on a
+// binding id, not on `e.key`), for the reason treenav.ts's header gives: an arrow nobody
+// can rebind and no checker can see is the one part of the keyboard that gets left behind.
+
+import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 
 /** The id of a Settings section — the tab, its panel, and `state.settingsTab`. */
 export type SettingsTabId = "general" | "embedding" | "keyboard";
@@ -63,22 +69,37 @@ export function tabStep(current: SettingsTabId, delta: 1 | -1): SettingsTabId {
   return SETTINGS_TABS[(from + delta + n) % n].id;
 }
 
+/** The navigation commands the rail answers to — registry ids, in the order the
+ *  dispatcher tries them. Distinct from `settings.section.next`/`prev` (⌃Tab), which
+ *  cycle from *anywhere* in the dialog; these apply only with the keyboard on a tab. */
+export const TAB_NAV = [
+  "settings.tab.prev",
+  "settings.tab.next",
+  "settings.tab.first",
+  "settings.tab.last",
+] as const satisfies readonly BindingId[];
+
+export type TabNav = (typeof TAB_NAV)[number];
+
+/** Which rail move — if any — this keystroke is, per the live registry. */
+export function tabNavFor(e: KeyEventLike): TabNav | null {
+  return boundOf(e, TAB_NAV);
+}
+
 /**
- * The rail's arrow keys: ↑↓ step (wrapping), Home/End jump to the ends. Null for any
- * other key, so the caller knows to leave the event alone — a rail that swallowed keys
- * it has no move for would eat Tab, ⏎, and the global chords along with them.
+ * The rail's walk: prev/next step (wrapping), first/last jump to the ends. The caller
+ * asks `tabNavFor` first and leaves the event alone when that returns null — a rail that
+ * swallowed keys it has no move for would eat Tab, ⏎, and the global chords along with them.
  */
-export function tabMove(current: SettingsTabId, key: string): SettingsTabId | null {
-  switch (key) {
-    case "ArrowDown":
+export function tabMove(current: SettingsTabId, nav: TabNav): SettingsTabId {
+  switch (nav) {
+    case "settings.tab.next":
       return tabStep(current, 1);
-    case "ArrowUp":
+    case "settings.tab.prev":
       return tabStep(current, -1);
-    case "Home":
+    case "settings.tab.first":
       return SETTINGS_TABS[0].id;
-    case "End":
+    case "settings.tab.last":
       return SETTINGS_TABS[SETTINGS_TABS.length - 1].id;
-    default:
-      return null;
   }
 }

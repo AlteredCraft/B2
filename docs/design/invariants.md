@@ -188,6 +188,14 @@ tomorrow's model* — made mechanical.
   app is B2's to document, whoever authored it**: the macOS menu bar's accelerators are declared rather
   than inherited from Tauri's default (`b2-desktop/src/menu.rs`), so the reference sheet can list them
   and the conflict gate can see them — a chord nothing enumerates cannot be found, and the app cannot
-  warn about landing on it. The `b2` CLI satisfies this by
+  warn about landing on it. **The chords are the user's, not B2's**: every chord B2 itself dispatches
+  can be re-recorded from Settings → Keyboard and is stored as a UI preference (`localStorage`, like
+  the theme — never vault state, never the index). The exception is narrow and stated per row
+  (`Binding.fixed`): what a text field does with ⏎ and Esc, what a dialog's default button does, what a
+  `<button>` does with ⏎/Space. Those are the platform's reflexes, and handing them out would be
+  offering to break what every other app on the machine does. A rebinding is judged before it is
+  accepted — refused if another command already answers to that keystroke in the same scope, or if the
+  menu bar takes it first; advised, and allowed, when an inner surface or the editor also binds it.
+  The `b2` CLI satisfies this by
   nature; K1 governs the GUI adapter. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md),
-  GH #78, #119)
+  GH #78, #119, #121)

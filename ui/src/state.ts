@@ -23,6 +23,8 @@ import type { IndexAnomalies } from "./anomalies";
 // erase): render.test.ts / sanitize.test.ts reach this module through render.ts under
 // node's type-stripping, which resolves by real filename. render.ts says the same.
 import { DEFAULT_SETTINGS_TAB, type SettingsTabId } from "./settingstabs.ts";
+import type { BindingId } from "./bindings";
+import type { ChordProblem, Overrides } from "./keymap";
 
 /** Side-pane discovery sections that can be collapsed (foldable headers). */
 export type SideSection = "similar" | "connections";
@@ -71,6 +73,38 @@ export type ContextMenuState =
  * vault state, so it never round-trips to the Rust host.
  */
 export type ThemePref = "system" | "light" | "dark";
+
+/**
+ * The chord recorder in Settings → Keyboard, while it is open (#121).
+ *
+ * `candidate` is null until a chord arrives, and that gap is a state worth modelling
+ * rather than a loading spinner: a chord that never arrives is the recorder's one real
+ * observation about the world outside B2 (recorder.ts's header), and `hint` is where that
+ * reading goes. Once a chord *has* arrived, `problems` is what the four checkers make of
+ * it — a refusal disables Save, an advisory is said and saved anyway.
+ */
+export interface RecorderState {
+  /** The command being rebound. */
+  id: BindingId;
+  /** The chord captured so far, in the registry's syntax, or null while waiting. */
+  candidate: string | null;
+  /** What binding `candidate` to `id` would mean (keymap.ts `chordProblems`). */
+  problems: ChordProblem[];
+  /** The probe's reading of silence, or why a pressed key can't hold a chord. */
+  hint: string | null;
+  /**
+   * The window lost focus while this recording was waiting — the probe's one *positive*
+   * signal (recorder.ts).
+   *
+   * Remembered rather than passed at the moment it happens, because two things read
+   * silence: the blur itself, and a timer set when the recorder opened. Held as a
+   * parameter, the later of the two would answer the question without knowing what the
+   * earlier one saw — which is exactly how the strong "something outside B2 answered"
+   * reading got overwritten by the weaker guess (GH #125). As state, every reader reaches
+   * the same conclusion whatever order they run in.
+   */
+  blurred: boolean;
+}
 
 export interface AppState {
   /** Vault root, or null when none is configured (the app shows an actionable state). */
@@ -233,6 +267,18 @@ export interface AppState {
   anomaliesOpen: boolean;
   /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
   theme: ThemePref;
+  /**
+   * The user's keyboard rebindings (#121): command id → the chords that now fire it.
+   * Mirrors `localStorage` — a viewing choice like the theme, never vault state — and is
+   * what `applyOverrides` lays over the shipped table to build the live registry.
+   *
+   * Held in state rather than module-locally (the way panes.ts holds column widths)
+   * because the Keyboard section renders from it: which rows are marked changed, and
+   * whether "Reset all" has anything to do.
+   */
+  keyOverrides: Overrides;
+  /** The chord recorder, while Settings → Keyboard has one open. Null the rest of the time. */
+  recorder: RecorderState | null;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
   models: ModelChoice[];
   /** Per-model cumulative embedding time — loaded alongside `models`, shown in Settings. */
@@ -315,6 +361,8 @@ export const state: AppState = {
   anomalies: null,
   anomaliesOpen: false,
   theme: "system",
+  keyOverrides: {},
+  recorder: null,
   models: [],
   embedStats: [],
   provisioning: false,
