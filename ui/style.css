@@ -1987,23 +1987,45 @@ body.is-loading {
   break-inside: avoid;
 }
 .keys-group h4 {
-  margin: 10px 0 6px;
+  /* A group heading is the only thing separating two tables of chords, so it needs more
+     air above it than the rows have between them — otherwise the eye reads one long list
+     with occasional labels in it. */
+  margin: 22px 0 9px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
+/* The first group opens the panel and has nothing above it to separate from — the same
+   exception `.settings-panel > .settings-subhead:first-child` makes. (Only the first
+   *group*, not the first in each column: the grid is CSS multi-column, so which group
+   tops the second column is a layout outcome no selector can name.) */
+.keys-group:first-child h4 {
+  margin-top: 0;
+}
 /* Chord column fixed, description flowing — the chords line up down the page, which is
-   what makes the sheet scannable rather than a wall of pairs. */
+   what makes the sheet scannable rather than a wall of pairs.
+   The row gap has a floor the reading rhythm alone wouldn't set: every chip is a focus
+   ring (2px outline, 2px offset) waiting to happen, so a gap under ~8px lets the ring of
+   one row touch the chip of the next, and the mark that says "the keyboard is here" reads
+   as a box around two rows. Wrapped descriptions ("Delete the focused row (a folder
+   confirms first)") make the same argument for the prose. */
 .keys-list {
   display: grid;
   grid-template-columns: minmax(72px, max-content) 1fr;
   align-items: baseline;
-  gap: 3px 12px;
+  gap: 9px 14px;
   margin: 0;
 }
+/* Flex rather than inline chips, for the row gap's reason on the other axis: chips used to
+   be separated by the single space `keyChips` joins them with, which at 12px is about 4px
+   — less than the 4px a focus ring already claims, so a ringed chip sat against its
+   neighbour. A real gap is also the only one that survives wrapping. */
 .keys-list dt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
   margin: 0;
 }
 .keys-list dd {
@@ -2020,7 +2042,7 @@ body.is-loading {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 1px 6px;
+  padding: 2px 7px;
   white-space: nowrap;
 }
 /* A chord B2 owns and the user may move is a button; everything else stays a <kbd>. The
@@ -2029,21 +2051,40 @@ body.is-loading {
 .kbd-edit {
   cursor: pointer;
   text-align: center;
+  position: relative; /* the "changed" badge below hangs off this corner */
 }
 .kbd-edit:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
-.kbd-edit:focus-visible {
+/* Plain `:focus`, for `.stab`'s reason one section up and `.tree-row`'s at the top of the
+   file: ⇥ inside an overlay never reaches the browser. The Tab trap (K1, main.ts's
+   `overlay.focus.step` branch) swallows the key and moves focus with `.focus()`, and
+   WebKit grants `:focus-visible` to a script-focused element only by inheriting it from
+   the one that had it — so the ring drops out partway along a Tab walk and stays out
+   until some later keystroke re-arms the heuristic. This section is forty Tab stops of
+   nothing but these chips, which makes it the surface where a missing ring is worst.
+   Safe on the mouse for the usual reason: WebKit never focuses a button on click. */
+.kbd-edit:focus {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
-/* Changed from the default: a dot rather than a colour, so the chord itself stays legible
-   and the mark reads the same in both themes. */
+/* Changed from the default: still a dot rather than a colour, so the chord stays legible
+   and the mark reads the same in both themes — but on the chip's *corner*, not after its
+   text. Inline it sat exactly where a chord's last glyph goes, so "⌘4 •" read as a chord
+   with a dot in it — the one thing a keyboard reference can't be ambiguous about. A badge
+   hung off the corner is the editor-tab idiom for "modified", and can't be misread as a
+   key. The `title` is what says it in words (render.ts), for the reader and the screen
+   reader both. */
 .kbd-changed::after {
-  content: "•";
-  margin-left: 4px;
-  color: var(--accent);
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 .kbd-recording {
   border-color: var(--accent);
@@ -2336,11 +2377,19 @@ button.move-dest:hover {
    container: a region you can't focus is a region you can't scroll without the mouse,
    and the Keyboard section is a page of table with no controls of its own. Hence a ring
    it can actually show — inset, so it reads as "this region has the keyboard" rather
-   than as a control. */
+   than as a control.
+
+   Being the scroll container makes it the *clip* container too: `overflow-y: auto`
+   computes `overflow-x` to `auto` as well, and anything drawn outside the padding box is
+   cut. A focus ring is drawn outside — 2px of outline at 2px of offset — and the panel's
+   own controls start at x=0, which is how the leftmost chord chip came to be ringed on
+   three sides. The left padding is that 4px plus daylight, so the ring reads as a ring
+   rather than as something pressed against the rail. */
 .settings-panel {
   min-width: 0;
   overflow-y: auto;
   padding-right: 4px;
+  padding-left: 6px;
 }
 .settings-panel:focus {
   outline: none;
