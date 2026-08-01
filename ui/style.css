@@ -246,6 +246,18 @@ body {
   margin-left: auto;
 }
 
+/* The vault and its indexing state, grouped: the progress meter is *about* a vault, so
+   it sits with that vault's name rather than at the far end of the bar. A tighter gap
+   than `.topbar-right`'s so the pair reads as one unit and not as two more bar items;
+   `min-width: 0` is what lets the path below ellipsize instead of shoving the meter
+   out of the bar on a deep vault path. */
+.vault-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .vault-root {
   color: var(--muted);
   font-size: 12px;
@@ -2479,12 +2491,30 @@ button.move-dest:hover {
   border-radius: 4px;
   padding: 0 4px;
 }
-.settings-provision {
+/* `.settings-action` is the same row shape under a second name (Settings → Index's
+   Reindex): both are "a button, and the one line you should know before pressing it". */
+.settings-provision,
+.settings-action {
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 0 0 14px;
   font-size: 12px;
+}
+/* The index's coverage line — the numbers the Reindex button is answering, so it reads at
+   body weight rather than as another muted aside. */
+.settings-coverage {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+/* Plain `:focus`, for `.segmented .seg`'s reason: any repaint while Settings is open
+   (a toast timer, a watcher pulse, streamed progress from a run started elsewhere) swaps
+   `#modal-root`, and `paintModal` puts the keyboard back on this button by id — which
+   WebKit grants no `:focus-visible` to, leaving it focused but ringless. */
+#reindex:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .settings-provision .spinner {
   flex: none;

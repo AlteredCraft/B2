@@ -277,8 +277,11 @@ if/when one lands — `index-engine.md` §5.)*
   key, graph-node scene id, or a control's stable `id` for the other two; `captureModalFocus` by `id`
   for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
   and the Settings dialog (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
-  `ui/src/settingstabs.ts` — General / Embedding / **Keyboard**, the last being the whole chord table
-  (`ui/src/shortcuts.ts`) that `?` jumps straight to. Chords themselves are declared once in
+  `ui/src/settingstabs.ts` — General / Index / Embedding / **Keyboard**, the last being the whole chord
+  table (`ui/src/shortcuts.ts`) that `?` jumps straight to, and *Index* being where the manual Reindex
+  lives now that indexing is automatic (auto-index on open + the fs-watch pulse): the top bar keeps only
+  the live progress meter, beside the vault name it is in reference to, since a run must stay watchable
+  and cancellable with the dialog shut. Chords themselves are declared once in
   `ui/src/bindings.ts` — the keyboard registry — and the dispatcher, the editor's keymap and that
   sheet all derive from it, so none of the three can drift; `conflicts()` fails the suite on two
   commands sharing a keystroke in one scope, `ui/src/editorkeys.ts` checks B2's chords against

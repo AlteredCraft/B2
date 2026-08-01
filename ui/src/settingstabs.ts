@@ -1,17 +1,19 @@
 // The Settings dialog's tab model — pure data + pure navigation, no DOM, so node runs its
 // test straight off the source (`npm test`), like shortcuts.ts / treenav.ts / sidenav.ts.
 //
-// Settings outgrew a single scrolling column: it now carries Appearance, the embedding
-// model (picker, compute device, in-app download, the per-model time ledger, where the
-// files live) and the whole keyboard reference. Those are three different questions a
-// human comes here with, and stacking them in one column means the answer to any of them
-// is somewhere in a scroll. Tabs make each one a place you can *go*.
+// Settings outgrew a single scrolling column: it now carries Appearance, the vault index
+// (and the manual Reindex), the embedding model (picker, compute device, in-app download,
+// the per-model time ledger, where the files live) and the whole keyboard reference. Those
+// are four different questions a human comes here with, and stacking them in one column
+// means the answer to any of them is somewhere in a scroll. Tabs make each one a place you
+// can *go*.
 //
-// Why the split is 3 and not 2: Appearance and the model share nothing — not a concept,
+// Why the split is 4 and not fewer: Appearance and the model share nothing — not a concept,
 // not a failure mode, not a moment you'd open the dialog. And the keyboard reference is a
 // *reference*, read start to finish, which is the one thing a settings column must never
 // make you scroll past. The rail is where expansion lands (vault prefs, editor prefs,
 // diagnostics): a new tab is a row here plus a panel in render.ts, and nothing else moves.
+// Index is the worked example — it arrived as one button that used to live in the top bar.
 //
 // Invariant K1 (docs/design/invariants.md, GH #78) governs the rail like every other
 // surface, so it follows the ARIA `tabs` pattern: a **roving `tabindex`** (the rail is one
@@ -26,7 +28,7 @@
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 
 /** The id of a Settings section — the tab, its panel, and `state.settingsTab`. */
-export type SettingsTabId = "general" | "embedding" | "keyboard";
+export type SettingsTabId = "general" | "index" | "embedding" | "keyboard";
 
 export interface SettingsTab {
   id: SettingsTabId;
@@ -40,6 +42,11 @@ export interface SettingsTab {
  *  all follow from this list. */
 export const SETTINGS_TABS: SettingsTab[] = [
   { id: "general", label: "General", hint: "Appearance and app-wide preferences" },
+  {
+    id: "index",
+    label: "Index",
+    hint: "The vault index — its coverage, and rebuilding it by hand",
+  },
   {
     id: "embedding",
     label: "Embedding",

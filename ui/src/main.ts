@@ -98,6 +98,8 @@ import {
   escapeHtml,
   modalHtml,
   notePaneHtml,
+  reindexDisabled,
+  reindexLabel,
   sidePaneHtml,
   treePaneHtml,
 } from "./render";
@@ -164,12 +166,22 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
  * a spinner the moment you press it — the floor is the overlay's first stop rather than
  * nothing, the way `capturePaneFocus`'s is the pane itself. Dropping the keyboard on
  * `<body>` behind a backdrop is the one outcome an overlay may never produce.
+ *
+ * "Didn't survive" means *can't take the keyboard*, not merely "is gone": Settings →
+ * Index's Reindex button is still there after you press it and **disabled**, which
+ * `.focus()` silently declines — the same `<body>` outcome, arrived at through an element
+ * that exists. Hence the membership test against `overlayFocusables()` (whose selector
+ * already excludes `[disabled]`) rather than a null check.
  */
 function captureModalFocus(root: HTMLElement): (() => void) | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id) return null;
   const id = active.id;
-  return () => (document.getElementById(id) ?? overlayFocusables()[0])?.focus();
+  return () => {
+    const stops = overlayFocusables();
+    const back = document.getElementById(id);
+    (back && stops.includes(back) ? back : stops[0])?.focus();
+  };
 }
 
 // The overlay layer's memo, and the reason it is worth having beyond the focus contract
@@ -329,13 +341,23 @@ async function paintCodeHighlights(): Promise<void> {
   if (findOpen && !state.editing) applyReadingFind();
 }
 
-// Paint just the reindex affordance — the Reindex button's disabled state and the
-// progress bar/label/Cancel. Called on every full render AND on each streamed progress
-// batch, so progress updates never rebuild the panes (which would fight scrolling and
-// churn on a large vault). The progress element lives in the persistent shell.
+// Paint just the reindex affordance — the progress bar/label/Cancel, and the Reindex
+// button's state *if it is on screen*. Called on every full render AND on each streamed
+// progress batch, so progress updates never rebuild the panes (which would fight scrolling
+// and churn on a large vault). The progress element lives in the persistent shell.
+//
+// The button does not: it is Settings → Index's now (render.ts `indexPanelHtml`), so it
+// exists only while that dialog is open on that section — hence the null-tolerant lookup
+// rather than `el`. `settingsPanelHtml` paints it in the right state to begin with; this
+// keeps it there through the runs that *don't* full-render, which is every auto-index
+// (`autoIndexOnOpen`, `trailingEmbed`) — those repaint the affordance alone, and a stale
+// "Reindex" you can click into a no-op is the failure that reads as a broken button.
 function paintReindex(): void {
-  (el("reindex") as HTMLButtonElement).disabled =
-    state.loading || state.reindexing || state.vaultRoot === null;
+  const btn = document.getElementById("reindex") as HTMLButtonElement | null;
+  if (btn) {
+    btn.disabled = reindexDisabled(state);
+    btn.textContent = reindexLabel(state);
+  }
 
   const wrap = document.getElementById("reindex-progress");
   if (!wrap) return;
@@ -3264,22 +3286,31 @@ function buildShell(): void {
                title="Search the vault — ⇧⌘F (⌘F finds inside the open note)" />
       </form>
       <div class="topbar-right">
-        <div id="reindex-progress" class="reindex-progress" hidden aria-live="polite">
-          <div class="reindex-track"><div id="reindex-fill" class="reindex-fill"></div></div>
-          <span id="reindex-label" class="reindex-label"></span>
-          <button id="cancel-reindex" class="btn ghost small">Cancel</button>
-        </div>
         <!-- The ⚠ anomaly badge (GH #88): hidden until a projection pass surfaces a
              duplicate b2id or an identity restamp, and gone again the pass after the
              human resolves it. Lives in the shell, not a pane's innerHTML, so it keeps
              its identity across repaints — which is what lets the review panel hand
              focus back to it on close (crates/b2-desktop/CLAUDE.md, K1). -->
         <button id="anomaly-badge" class="btn ghost anomaly-badge" hidden></button>
-        <span id="vault-root" class="vault-root" title="Active vault"></span>
+        <!-- The vault and its indexing state, as one group: a progress meter is *about*
+             a vault, so it reads beside the name of the one being indexed rather than
+             floating at the far end of the bar. Hidden between runs, so this is just the
+             path almost all of the time. The Reindex button that used to stand here has
+             moved into Settings → Index — indexing is automatic now, and permanent chrome
+             for an exception trains the eye to skip the bar (render.ts, indexPanelHtml).
+             What stays is the half you can't put behind a modal: the live meter, and the
+             Cancel that belongs with it. -->
+        <div class="vault-status">
+          <span id="vault-root" class="vault-root" title="Active vault"></span>
+          <div id="reindex-progress" class="reindex-progress" hidden aria-live="polite">
+            <div class="reindex-track"><div id="reindex-fill" class="reindex-fill"></div></div>
+            <span id="reindex-label" class="reindex-label"></span>
+            <button id="cancel-reindex" class="btn ghost small">Cancel</button>
+          </div>
+        </div>
         <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
           ${icon("folder", { size: 15 })}
         </button>
-        <button id="reindex" class="btn ghost" title="Re-project the vault into the index">Reindex</button>
         <button id="open-settings" class="btn ghost icon-btn" title="Settings (⌘,)" aria-label="Settings">
           ${icon("gear", { size: 16 })}
         </button>
@@ -3432,6 +3463,15 @@ function wireEvents(): void {
       }
       if (target.closest("#settings-provision")) {
         void provisionModel();
+        return;
+      }
+      // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
+      // in here because this branch returns unconditionally — a click inside the dialog
+      // never reaches the shell's handlers below. The dialog deliberately stays open: the
+      // run's meter and its Cancel are in the top bar, one Esc away, and closing a dialog
+      // out from under the button you just pressed hides the result of pressing it.
+      if (target.closest("#reindex")) {
+        trackIndexing(doReindex());
         return;
       }
       const themeBtn = target.closest<HTMLElement>("[data-theme-choice]");
@@ -3668,10 +3708,9 @@ function wireEvents(): void {
       void switchVault();
       return;
     }
-    if (target.closest("#reindex")) {
-      trackIndexing(doReindex());
-      return;
-    }
+    // (Reindex itself is Settings → Index's button — wired in the `state.settingsOpen`
+    // branch above, which is the only place it can be clicked. Cancel stays here: its
+    // meter is shell chrome, live whether or not the dialog is up.)
     if (target.closest("#cancel-reindex")) {
       void cancelReindex();
       return;
