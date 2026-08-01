@@ -23,7 +23,11 @@ import {
   sceneIcon,
   type IconName,
 } from "./icons.ts";
-import { BOOTSTRAP_ICONS_VERSION, ICON_BODIES } from "./icons.gen.ts";
+import {
+  BOOTSTRAP_ICONS_LICENSE,
+  BOOTSTRAP_ICONS_VERSION,
+  ICON_BODIES,
+} from "./icons.gen.ts";
 
 let passed = 0;
 
@@ -63,6 +67,34 @@ check("every icon carries drawable markup and nothing else", () => {
 
 check("the upstream release is recorded", () => {
   assert(/^\d+\.\d+\.\d+$/.test(BOOTSTRAP_ICONS_VERSION), "a semver string is pinned");
+});
+
+check("the icon data carries its license, not a pointer to one", () => {
+  // The MIT License requires the copyright notice *and the permission notice* to travel with
+  // any copy of the software, and icons.gen.ts is a copy of a portion of it. The header used
+  // to cite ui/node_modules/bootstrap-icons/LICENSE — which is neither committed nor shipped,
+  // so anyone receiving the file received the icons without their terms.
+  //
+  // `gen-icons.ts --check` can't cover this on its own: it compares the file to what the
+  // generator emits, so a generator edited to drop the notice would pass. This asserts the
+  // obligation itself. It reads the exported *string* rather than the `/*!` comment beside
+  // it for the same reason that string exists — a comment is invisible from here, and this
+  // suite has no filesystem.
+  assert(
+    BOOTSTRAP_ICONS_LICENSE.includes("Copyright (c) 2019-2024 The Bootstrap Authors"),
+    "the copyright notice",
+  );
+  assert(
+    BOOTSTRAP_ICONS_LICENSE.includes(
+      "The above copyright notice and this permission notice shall be included in all",
+    ),
+    "the permission notice",
+  );
+  assert(BOOTSTRAP_ICONS_LICENSE.includes("Permission is hereby granted"), "the grant itself");
+  assert(
+    BOOTSTRAP_ICONS_LICENSE.includes('THE SOFTWARE IS PROVIDED "AS IS"'),
+    "the warranty disclaimer",
+  );
 });
 
 // --- what a thing looks like ---------------------------------------------------------
@@ -148,6 +180,25 @@ check("the base class is always there, and an extra one joins it", () => {
     true,
     "the caller's class joins rather than replaces",
   );
+});
+
+check("a class cannot break out of its attribute", () => {
+  // Every caller passes a literal today, and a class is chrome vocabulary that has no
+  // business carrying vault data tomorrow — which is the argument *for* pinning this at the
+  // emitter rather than against it. A string interpolated into an attribute is escaped here,
+  // so no future call site is the one that has to remember (E5).
+  const hostile = `x" onload="alert(1)`;
+  const html = icon("gear", { class: hostile });
+  assert(!html.includes(`onload="`), "no attribute was smuggled in");
+  assert(html.includes("&quot;"), "the quote is escaped in place");
+  // Count attributes on the *opening tag* only — the vendored body has `d="…"` of its own,
+  // which is why the naive count over the whole string proves nothing.
+  // class, width, height, viewBox, fill, aria-hidden — and nothing a class value added.
+  const openTag = html.slice(0, html.indexOf(">") + 1);
+  equal(openTag.match(/ [\w-]+="/g)?.length, 6, "the six attributes icon() writes, and no seventh");
+
+  const scene = sceneIcon("gear", 0, 0, 16, hostile);
+  assert(!scene.includes(`onload="`), "sceneIcon escapes its class too");
 });
 
 check("sceneIcon centers on a point and leaves the fill to CSS", () => {

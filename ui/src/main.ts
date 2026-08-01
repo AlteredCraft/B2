@@ -382,6 +382,10 @@ function paintReindex(): void {
 // which is the same thing as the anomaly being resolved on disk, since nothing here is
 // stored (index-engine.md §8, S2) — and it lives in the persistent shell rather than a
 // pane's innerHTML, so it holds its identity (and the keyboard) across every repaint.
+/** The badge's only markup, built once. Hoisted so the assignment below is a *constant*
+ *  string rather than a template with a hole in it — see `paintAnomalyBadge`. */
+const ANOMALY_BADGE_ICON = icon("exclamation-triangle", { size: 12 });
+
 function paintAnomalyBadge(): void {
   const badge = document.getElementById("anomaly-badge") as HTMLButtonElement | null;
   if (!badge) return;
@@ -389,10 +393,14 @@ function paintAnomalyBadge(): void {
   // Never hide it out from under the open panel: closing that panel restores focus to
   // whatever opened it, and focus cannot land on a hidden button.
   badge.hidden = n === 0 && !state.anomaliesOpen;
-  // `innerHTML` rather than `textContent` since the ⚠ became an icon — safe because both
-  // halves are B2's own: the icon is registry markup, and `n` is a count (a number, not
-  // vault data), so nothing here is interpolated from a note.
-  badge.innerHTML = `${icon("exclamation-triangle", { size: 12 })}<span>${n}</span>`;
+  // The ⚠ is an icon now, so the badge takes markup where it used to take `textContent`.
+  // The split keeps that from being a step down: `innerHTML` receives a constant, and the
+  // one value that *varies* is appended as a **text node**, which no parser ever sees. That
+  // is stronger than escaping the count would be — `n` is a number today, and this stays
+  // correct if it ever isn't. The count is an anonymous flex item; `.anomaly-badge`'s `gap`
+  // spaces it from the icon.
+  badge.innerHTML = ANOMALY_BADGE_ICON;
+  badge.append(String(n));
   const what = n === 1 ? "1 index anomaly" : `${n} index anomalies`;
   badge.title = `${what} from the last index pass — review (${REVIEW_CHORD})`;
   badge.setAttribute("aria-label", `Review ${what}`);

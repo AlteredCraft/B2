@@ -19,6 +19,7 @@
 // question "what does a PDF look like in B2" has exactly one answer, and changing it is a
 // one-line edit here rather than a grep across three panes and a graph.
 
+import { escapeHtml } from "./escape.ts";
 import { ICON_BODIES } from "./icons.gen.ts";
 
 /** Every vendored icon. A typo is a type error; adding one is a name in the generator's
@@ -45,10 +46,18 @@ export interface IconOptions {
  * `fill="currentColor"` is what makes one icon work on both themes and in every state: the
  * glyph is whatever color its container's text is, so hover, `is-active` and the dangling
  * graph node all tint it by setting `color`/`fill` on the parent and nothing else.
+ *
+ * The class is escaped even though every caller passes a literal today, and a class is
+ * chrome vocabulary that has no business carrying vault data tomorrow. That is the argument
+ * *for* escaping here rather than against it: this is a markup emitter, and the seam is
+ * where this codebase makes rules structural instead of remembered — the same reason
+ * `sanitize.ts` is wired into `marked`'s postprocess hook rather than called by each caller
+ * (E5, crates/b2-desktop/CLAUDE.md). A string interpolated into an attribute is escaped
+ * here, so no future call site has to be the one that remembers.
  */
 export function icon(name: IconName, opts: IconOptions = {}): string {
   const size = opts.size ?? 14;
-  const cls = opts.class ? `icon ${opts.class}` : "icon";
+  const cls = opts.class ? `icon ${escapeHtml(opts.class)}` : "icon";
   return (
     `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 16 16"` +
     ` fill="currentColor" aria-hidden="true">${ICON_BODIES[name]}</svg>`
@@ -67,7 +76,7 @@ export function icon(name: IconName, opts: IconOptions = {}): string {
 export function sceneIcon(name: IconName, cx: number, cy: number, size: number, cls: string): string {
   const half = size / 2;
   return (
-    `<svg class="${cls}" x="${cx - half}" y="${cy - half}" width="${size}" height="${size}"` +
+    `<svg class="${escapeHtml(cls)}" x="${cx - half}" y="${cy - half}" width="${size}" height="${size}"` +
     ` viewBox="0 0 16 16" aria-hidden="true">${ICON_BODIES[name]}</svg>`
   );
 }
