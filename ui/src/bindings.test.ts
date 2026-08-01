@@ -194,10 +194,18 @@ check("an inner scope shadows the outer one, and that is reported, not failed", 
   assertEq(shadows(table), [{ outer: "outer", inner: "inner", form: "Escape" }], "and reported");
 });
 
-check("B2 shadows exactly these five, and each is an ordering the handler relies on", () => {
+check("B2 shadows exactly these six, and each is an ordering the handler relies on", () => {
   // A shadow is a scoped binding taking a keystroke the surface around it would
   // otherwise get, so each one is a claim about branch order in main.ts's handler:
   //
+  //  - ⌘G: the graph toggle is global, and the find bar takes the chord back while it is
+  //    open. That is the macOS reflex rather than a compromise — ⌘G is Find Next in every
+  //    app on the machine, and it means that *only* while there is a search to step
+  //    through. So the find branch sits above the graph's, and the two coexist: with the
+  //    bar shut ⌘G flips the pane to the connection graph, with it open ⌘G walks the
+  //    matches. The surfaces don't overlap either way — `openFind` declines while the
+  //    graph is up (there is no text to find in), so the bar is only ever open over the
+  //    reading view.
   //  - The three Escapes: an inline input's Esc backs *that* input out instead of running
   //    the overlay cascade, so each input's branch has to come before `dismiss`.
   //  - ⌃Tab and ⌃⇧Tab: the overlay's Tab trap is `Any-Tab` and swallows unconditionally,
@@ -205,10 +213,11 @@ check("B2 shadows exactly these five, and each is an ordering the handler relies
   //    it. That ordering is load-bearing and easy to undo by tidying; this is what
   //    notices.
   //
-  // Pinned, so a sixth has to be argued for rather than accumulated.
+  // Pinned, so a seventh has to be argued for rather than accumulated.
   assertEq(
     shadows(DEFAULT_BINDINGS).map((s) => `${s.outer} > ${s.inner} (${s.form})`),
     [
+      "graph.toggle > find.next (⌘g)",
       "dismiss > create.cancel (Escape)",
       "dismiss > rename.cancel (Escape)",
       "dismiss > find.input.close (Escape)",
@@ -275,6 +284,18 @@ check("⇧ separates two commands on one letter", () => {
   assert(isBound(shiftF, "search.focus"), "⇧⌘F searches the vault");
   assert(!isBound(shiftF, "find.open"), "and is not ⌘F");
   assert(!isBound(press("f", { metaKey: true }), "search.focus"), "nor the reverse");
+});
+
+check("⌘G is the graph in the window and the next match in the find bar", () => {
+  // The one keystroke two commands answer to, in scopes that nest — so the pair is a
+  // shadow rather than a conflict, and the check above pins it as deliberate. Here from
+  // the matcher's side: both really do fire on the same press, which is what makes the
+  // branch order in main.ts's handler the thing that decides between them.
+  const g = press("g", { metaKey: true });
+  assert(isBound(g, "graph.toggle"), "⌘G flips the pane to the graph");
+  assert(isBound(g, "find.next"), "and steps the find bar's matches while it is open");
+  assert(!isBound(press("g", { metaKey: true, shiftKey: true }), "graph.toggle"), "⇧⌘G is not it");
+  assert(!isBound(press("g"), "graph.toggle"), "and a bare g types a g");
 });
 
 check("a shifted letter arrives uppercase and still matches", () => {

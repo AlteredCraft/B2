@@ -150,6 +150,10 @@ const OWN_SHEET: readonly SheetGroup[] = [
     title: "The graph and menus",
     rows: [
       {
+        ids: ["graph.toggle"],
+        action: "Show the open note's connection graph, or go back to reading",
+      },
+      {
         ids: ["graph.activate"],
         action: "Open a graph node; a ghost opens the link palette",
       },

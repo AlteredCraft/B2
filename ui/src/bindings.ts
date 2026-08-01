@@ -156,6 +156,16 @@ export const DEFAULT_BINDINGS = [
     scope: "global",
   },
   { id: "edit.toggle", label: "Enter or leave edit mode", keys: ["Mod-e"], scope: "global" },
+  // ⌘G is Find Next everywhere on macOS, and `find.next` below keeps it — but only while
+  // the find bar is open, which is the only time that meaning exists. The rest of the
+  // time the chord is free, so the graph gets it: `shadows()` reports the pair and
+  // bindings.test.ts pins it as deliberate rather than accumulated.
+  {
+    id: "graph.toggle",
+    label: "Show or hide the connection graph",
+    keys: ["Mod-g"],
+    scope: "global",
+  },
   // `Any-` because Escape is the way out and must not be conditional on what else is
   // held down: a user who just pressed ⌘F and hasn't let go of ⌘ yet still gets out.
   {

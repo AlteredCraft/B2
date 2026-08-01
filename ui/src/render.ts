@@ -23,7 +23,13 @@ import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
 import { type ShortcutKey, shortcuts } from "./shortcuts.ts";
-import { DEFAULT_BINDINGS, activeBindings, displayChord, findBinding } from "./bindings.ts";
+import {
+  DEFAULT_BINDINGS,
+  activeBindings,
+  displayChord,
+  displayKeys,
+  findBinding,
+} from "./bindings.ts";
 import { customized, refused } from "./keymap.ts";
 import { SETTINGS_TABS, type SettingsTabId } from "./settingstabs.ts";
 import {
@@ -853,12 +859,19 @@ function unresolvedCardsHtml(state: AppState, roving: string | null): string {
 // dashed hollow = dangling. Everything renders from state the note-open already
 // fetched, so entering the graph costs no IPC.
 
-/** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). */
+/** The graph toggle chip, shared by the reading bar (off) and the graph bar (on).
+ *
+ *  Its chord comes out of the live registry rather than being spelled here: ⌘G is
+ *  rebindable (#121), and a tooltip naming the shipped default would be wrong for exactly
+ *  the user who changed it. */
 function graphToggleHtml(active: boolean): string {
+  const chord = escapeHtml(displayKeys(["graph.toggle"]));
   return `<button id="graph-toggle" class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
       aria-pressed="${active}" aria-label="${active ? "Back to reading" : "Show the connection graph"}"
       title="${
-        active ? "Back to reading — Esc" : "Show the connection graph — nodes are Tab-reachable, ⏎ opens"
+        active
+          ? `Back to reading — ${chord} or Esc`
+          : `Show the connection graph — ${chord}; nodes are Tab-reachable, ⏎ opens`
       }">${icon("diagram-3")}</button>`;
 }
 

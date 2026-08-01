@@ -4011,6 +4011,18 @@ function wireEvents(): void {
         return;
       }
     }
+    // ⌘G — flip the pane between reading and the connection graph, the keyboard sibling
+    // of the graph chip in the note bar. Below the find branch on purpose: while the bar
+    // is open ⌘G is Find Next, the macOS reflex, and the chord only becomes the graph's
+    // once there are no matches to step (bindings.test.ts pins that shadow). Editing is
+    // out for the same reason the chip isn't drawn there — the pane belongs to the live
+    // editor, so `render` won't paint the graph over it and the flip would be invisible.
+    if (isBound(e, "graph.toggle")) {
+      if (currentOverlay() !== null || state.editing) return;
+      e.preventDefault();
+      toggleGraph();
+      return;
+    }
     const newFolder = isBound(e, "tree.new-folder");
     if (newFolder || isBound(e, "tree.new-note")) {
       if (currentOverlay() !== null) return; // an overlay owns the keyboard
