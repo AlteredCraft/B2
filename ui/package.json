@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test --test-reporter=spec \"src/*.test.ts\""
+    "icons": "node --experimental-strip-types scripts/gen-icons.ts",
+    "test": "node --experimental-strip-types scripts/gen-icons.ts --check && node --experimental-strip-types --test --test-reporter=spec \"src/*.test.ts\""
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@types/jsdom": "^28.0.3",
     "@types/turndown": "^5.0.6",
+    "bootstrap-icons": "^1.13.1",
     "jsdom": "^29.1.1",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"

@@ -86,6 +86,11 @@ just app               # desktop app — auto-selects Metal on Apple Silicon (`j
 just compare-device    # CPU-vs-Metal embed A/B on fixtures/test-vault → chunks/s + speedup
 
 # Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
+just icons                              # re-vendor the Bootstrap Icons subset into ui/src/icons.gen.ts
+                                        # after editing the manifest in ui/scripts/gen-icons.ts or
+                                        # bumping the bootstrap-icons devDependency. `just test-ui`
+                                        # runs the same generator in --check mode first, so a stale
+                                        # generated file fails the gate instead of shipping quietly.
 just ui-install                         # install the frontend's npm deps — rarely run by hand: every
                                         # recipe that needs node_modules (app / app-cpu / app-build /
                                         # ui-dev / ui-build, so check-app + coverage-app transitively)
@@ -259,7 +264,13 @@ if/when one lands — `index-engine.md` §5.)*
   syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
   loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
   preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the
-  same read or edited. The GUI is **keyboard-complete** (invariant K1): the file tree *and* the
+  same read or edited. Chrome **iconography** is one family from one registry — `ui/src/icons.ts`
+  maps a *meaning* (`resourceIcon(class)`, `foldChevron(open)`) onto a Bootstrap Icons glyph, and
+  `ui/scripts/gen-icons.ts` vendors the named subset into `icons.gen.ts` rather than importing the
+  package at runtime (the CSP forbids a CDN, and `npm test` runs off the source through node, where a
+  Vite `?raw` import wouldn't resolve). The generator's `--check` mode runs first in `npm test`, so a
+  generated file that drifted from the dependency fails the gate; `just icons` refreshes it. The GUI
+  is **keyboard-complete** (invariant K1): the file tree *and* the
   discovery pane follow the ARIA `tree` pattern over the row order of `ui/src/treenav.ts` /
   `ui/src/sidenav.ts` — the *same* order `render.ts` paints, so the arrows and the eye can't disagree
   — every pane restores focus across its own repaint (`paintTree` by path; `capturePaneFocus` by row

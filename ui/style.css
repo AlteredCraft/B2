@@ -127,6 +127,27 @@ body {
   height: 100vh;
 }
 
+/* --- icons (ui/src/icons.ts) -----------------------------------------------------
+   Every icon in the app is a Bootstrap Icons glyph emitted by `icon()`, which sizes it
+   and hides it from the accessibility tree; this is the whole of its styling. Two rules
+   and both are load-bearing:
+
+   `currentColor` is set on the `<svg>` by the emitter, so an icon has **no color of its
+   own** — it is whatever its container's text is. That is what lets hover, `is-active`,
+   `.fm-flag`'s danger red and a dangling graph node tint their icon by setting `color`
+   on the parent and nothing else, and why no rule below ever names an icon and a color
+   together.
+
+   `vertical-align` is the inline case (a broken-link marker, a connection's direction
+   arrow), where the icon rides in a line of text; in the flex slots that hold the rest
+   of them it is inert, because a flex item's display is blockified anyway — which is also
+   why `.tree-action svg` and `.btn.icon-btn svg` no longer need to say `display: block`. */
+.icon {
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: -0.125em;
+}
+
 /* --- focus (invariant K1) ------------------------------------------------------
    "Focus is always visible" is half of "fully operable from the keyboard": a control
    you can reach but can't see you've reached is not reachable. One ring, everywhere,
@@ -304,8 +325,9 @@ body {
 
 .install-banner-icon {
   flex: 0 0 auto;
-  font-size: 15px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
 }
 
 .install-banner-text {
@@ -667,9 +689,6 @@ body.is-resizing {
   background: var(--surface-2);
   color: var(--accent);
 }
-.tree-action svg {
-  display: block;
-}
 
 .tree-empty {
   color: var(--muted);
@@ -718,15 +737,33 @@ body.is-resizing {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* The fold slot. A chevron (ui/src/icons.ts) when the row folds, empty when it doesn't —
+   held open either way, so a file's icon sits under its folder's *icon* rather than under
+   the folder's chevron. Shared by the tree, the Frontmatter drawer, and the side pane's
+   section and card folds, so every fold affordance in the app is the same shape. */
 .tree-caret {
   flex: 0 0 auto;
-  width: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
   color: var(--muted);
-  /* A letter-sized fold caret: the full ▼/▶ triangles at ~cap-height, not the earlier
-     10px small-triangle glyphs that read as dots. Shared by the tree, the Frontmatter
-     drawer, and the side-pane section/card folds so every fold affordance matches. */
-  font-size: 12px;
-  text-align: center;
+}
+
+/* The "what is this row" slot: a folder (open or closed), a note, or the resource's own
+   type. Quieter than the label — a scannable hint, not the content — but it follows the
+   row into its accented states rather than staying grey while the text moves. */
+.tree-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--muted);
+}
+.tree-file.is-active .tree-icon,
+.tree-dir.is-selected .tree-icon {
+  color: inherit;
 }
 
 .tree-label {
@@ -852,6 +889,9 @@ body.is-resizing {
   flex: 0 0 auto;
 }
 
+/* The note bar's two chips. `.edit-toggle` is a word; `.source-toggle` used to print a
+   literal `</>` and is now an icon, so it takes the graph toggle's inline-flex box below
+   and leaves the type rules here to its lettered sibling. */
 .source-toggle,
 .edit-toggle {
   flex: 0 0 auto;
@@ -912,7 +952,6 @@ body.is-resizing {
    block (in-app save or external hand-edit alike) is noticed without opening. */
 .fm-flag {
   color: var(--danger);
-  font-size: 12px;
 }
 
 /* The non-blocking warning above the peek — informative, never a wall. */
@@ -1643,7 +1682,6 @@ body.is-resizing {
 
 .edge .edge-arrow {
   color: var(--accent);
-  font-weight: 700;
 }
 .edge .edge-origin {
   font-size: 10.5px;
@@ -1666,7 +1704,6 @@ body.is-resizing {
 }
 .edge .edge-broken {
   color: var(--danger);
-  font-weight: 700;
   margin-right: 2px;
 }
 .card.edge.broken .card-path {
@@ -1737,9 +1774,6 @@ body.is-resizing {
 }
 .btn.icon-btn:hover {
   color: var(--accent);
-}
-.btn.icon-btn svg {
-  display: block;
 }
 
 body.is-loading {
@@ -2191,6 +2225,9 @@ body.is-loading {
    duplicate `b2id`s was gone before it could be read. The badge persists until a pass
    comes back clean; the panel is where the detail lives. */
 .anomaly-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   padding: 4px 9px;
@@ -2541,12 +2578,6 @@ button.move-dest:hover {
 
 /* --- resource fallback card (file-type slice 1) -------------------------------- */
 
-.tree-glyph {
-  font-size: 9px;
-  opacity: 0.55;
-  text-align: center;
-}
-
 /* The bar-less pane state: no top bar supplies headroom, so the card brings its own
    (the note pane itself has no top padding — see .note-pane). */
 .resource-card {
@@ -2629,7 +2660,8 @@ button.move-dest:hover {
   flex: 0 0 auto;
 }
 
-.graph-toggle {
+.graph-toggle,
+#source-toggle {
   display: inline-flex;
   align-items: center;
   padding: 3px 6px;
@@ -2793,9 +2825,10 @@ button.move-dest:hover {
   stroke-width: 1.6;
 }
 
+/* A scene node's icon — a nested `<svg>` placed by `sceneIcon()` (ui/src/icons.ts), which
+   deliberately sets no `fill` so this rule (and the dangling override above) is the only
+   thing that colors it. */
 .gglyph {
-  font-size: 13px;
-  text-anchor: middle;
   fill: var(--muted);
   pointer-events: none;
 }
@@ -2939,8 +2972,8 @@ button.move-dest:hover {
   border: 1.4px solid var(--muted);
 }
 .leg-broken {
+  display: inline-flex;
   color: var(--danger);
-  font-size: 10px;
 }
 
 .gnode.is-anchor .gcore {

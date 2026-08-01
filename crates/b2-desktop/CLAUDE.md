@@ -208,6 +208,15 @@ Every new surface owes all four. They are cheap while you're building it and exp
   the gate is *not*: `conflicts()` asks a same-scope question, and scope buys nothing here — a menu
   accelerator is taken before the webview is consulted, so `menuOverlaps` compares across every
   scope.
+- **`ui/src/icons.ts`** — the icon registry, and the reason a fourth obligation didn't need
+  adding above: an icon here is `aria-hidden` with no opt-out, so it is always *beside* an
+  accessible name and never instead of one. It maps a **meaning** (`resourceIcon(class)`,
+  `foldChevron(open)`, `folderIcon(open)`) onto a Bootstrap Icons glyph, so "what does a PDF
+  look like in B2" has one answer rather than one per pane — the failure the two systems it
+  replaced both had, in opposite ways: Unicode text markers (`▶ ▼`, `▣ ▶ ▤ ◇ ≡ ◆`) that named
+  no file type and rendered at the system font's whim, and inline SVG pasted per call site
+  with its own stroke width. `ui/scripts/gen-icons.ts` vendors the named subset into
+  `icons.gen.ts` and, in `--check` mode, is the first thing `npm test` runs.
 - **`ui/src/settingstabs.ts`** — the Settings dialog's rail: the section list and its ARIA `tabs`
   moves (↑↓ with wrap, Home/End; ⌃Tab cycles from anywhere in the dialog). Its own module for
   treenav.ts's reason — the paint and the arrows must agree on order, so the order is defined once
