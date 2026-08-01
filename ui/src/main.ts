@@ -81,6 +81,7 @@ import { capture, PROBE_AFTER_MS, silenceHint } from "./recorder";
 import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
 import { menuDrift } from "./menukeys";
 import { markdownForPaste } from "./paste";
+import { icon } from "./icons";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import { reprojectThenList } from "./reconcile";
@@ -381,6 +382,10 @@ function paintReindex(): void {
 // which is the same thing as the anomaly being resolved on disk, since nothing here is
 // stored (index-engine.md §8, S2) — and it lives in the persistent shell rather than a
 // pane's innerHTML, so it holds its identity (and the keyboard) across every repaint.
+/** The badge's only markup, built once. Hoisted so the assignment below is a *constant*
+ *  string rather than a template with a hole in it — see `paintAnomalyBadge`. */
+const ANOMALY_BADGE_ICON = icon("exclamation-triangle", { size: 12 });
+
 function paintAnomalyBadge(): void {
   const badge = document.getElementById("anomaly-badge") as HTMLButtonElement | null;
   if (!badge) return;
@@ -388,7 +393,14 @@ function paintAnomalyBadge(): void {
   // Never hide it out from under the open panel: closing that panel restores focus to
   // whatever opened it, and focus cannot land on a hidden button.
   badge.hidden = n === 0 && !state.anomaliesOpen;
-  badge.textContent = `⚠ ${n}`;
+  // The ⚠ is an icon now, so the badge takes markup where it used to take `textContent`.
+  // The split keeps that from being a step down: `innerHTML` receives a constant, and the
+  // one value that *varies* is appended as a **text node**, which no parser ever sees. That
+  // is stronger than escaping the count would be — `n` is a number today, and this stays
+  // correct if it ever isn't. The count is an anonymous flex item; `.anomaly-badge`'s `gap`
+  // spaces it from the icon.
+  badge.innerHTML = ANOMALY_BADGE_ICON;
+  badge.append(String(n));
   const what = n === 1 ? "1 index anomaly" : `${n} index anomalies`;
   badge.title = `${what} from the last index pass — review (${REVIEW_CHORD})`;
   badge.setAttribute("aria-label", `Review ${what}`);
@@ -3241,14 +3253,10 @@ function buildShell(): void {
       <div class="brand">B2</div>
       <div class="nav-history">
         <button id="nav-back" class="btn ghost icon-btn" title="Back (⌘[)" aria-label="Back" disabled>
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M10 3.5 5.5 8l4.5 4.5"/>
-          </svg>
+          ${icon("chevron-left", { size: 15 })}
         </button>
         <button id="nav-forward" class="btn ghost icon-btn" title="Forward (⌘])" aria-label="Forward" disabled>
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M6 3.5 10.5 8 6 12.5"/>
-          </svg>
+          ${icon("chevron-right", { size: 15 })}
         </button>
       </div>
       <form id="search-form" class="search" autocomplete="off">
@@ -3269,16 +3277,11 @@ function buildShell(): void {
         <button id="anomaly-badge" class="btn ghost anomaly-badge" hidden></button>
         <span id="vault-root" class="vault-root" title="Active vault"></span>
         <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M1.75 4c0-.55.45-1 1-1h2.9c.32 0 .62.15.8.4L7.7 4.6h5.55c.55 0 1 .45 1 1v6.65c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1V4Z"/>
-          </svg>
+          ${icon("folder", { size: 15 })}
         </button>
         <button id="reindex" class="btn ghost" title="Re-project the vault into the index">Reindex</button>
         <button id="open-settings" class="btn ghost icon-btn" title="Settings (⌘,)" aria-label="Settings">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.076.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
-            <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
-          </svg>
+          ${icon("gear", { size: 16 })}
         </button>
       </div>
     </header>
@@ -3300,22 +3303,20 @@ function buildShell(): void {
       <aside id="side-pane" class="side-pane" tabindex="-1"></aside>
       <div id="find-bar" class="find-bar" role="search" aria-label="Find in note" hidden>
         <div class="find-field">
-          <svg class="find-glass" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3"/>
-          </svg>
+          ${icon("search", { size: 13, class: "find-glass" })}
           <input id="find-input" type="text" placeholder="Find…" autocomplete="off" spellcheck="false" aria-label="Find in note" />
           <span id="find-count" class="find-count" aria-live="polite" hidden></span>
         </div>
         <button id="find-prev" class="btn ghost icon-btn" title="Previous match (⇧Enter)" aria-label="Previous match">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10 8 5.5l4.5 4.5"/></svg>
+          ${icon("chevron-up", { size: 15 })}
         </button>
         <button id="find-next" class="btn ghost icon-btn" title="Next match (Enter)" aria-label="Next match">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
+          ${icon("chevron-down", { size: 15 })}
         </button>
         <button id="find-close" class="btn ghost icon-btn" title="Close (${escapeHtml(
           displayKeys(["dismiss"]),
         )})" aria-label="Close find">
-          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+          ${icon("x-lg", { size: 13 })}
         </button>
       </div>
     </main>

@@ -28,13 +28,22 @@ import { customized, refused } from "./keymap.ts";
 import { SETTINGS_TABS, type SettingsTabId } from "./settingstabs.ts";
 import {
   buildTree,
-  CLASS_GLYPHS,
   rovingPath,
   sortedFiles,
   sortedSubdirs,
   visibleRows,
   type TreeDir,
 } from "./treenav.ts";
+import {
+  directionIcon,
+  foldChevron,
+  folderIcon,
+  icon,
+  NOTE_ICON,
+  resourceIcon,
+  sceneIcon,
+  type IconName,
+} from "./icons.ts";
 import {
   cardKey,
   cardRowKey,
@@ -127,6 +136,26 @@ export function renderMarkdown(md: string): string {
 // with the arrow-key navigation (K1, GH #78), because a tree you can arrow through in
 // a different order than you can see is worse than no arrows at all.
 
+// A row is two fixed slots and then its label: the **fold chevron** (does this row open?)
+// and the **thing icon** (what is this row?). Keeping them apart is what lets a file line
+// its icon up under its folder's icon rather than under the folder's chevron, and it is why
+// a folder shows both — the chevron is the affordance, the folder is the thing, and one
+// glyph doing both jobs makes you learn which job it is doing today (icons.ts).
+
+/** The fold chevron in its slot. Every foldable row in the app calls this one function. */
+function foldCaretHtml(open: boolean): string {
+  return `<span class="tree-caret">${icon(foldChevron(open), { size: 12 })}</span>`;
+}
+
+/** The chevron slot, held open for a row that doesn't fold — so the icons of a folder's
+ *  files align with the folder's own icon rather than stepping left. */
+const NO_CARET = `<span class="tree-caret"></span>`;
+
+/** The "what is this" slot: a folder, a note, or a resource's type (icons.ts). */
+function rowIconHtml(name: IconName): string {
+  return `<span class="tree-icon">${icon(name)}</span>`;
+}
+
 /** The inline name input for a pending create (new note / new folder), rendered at
  *  the top of its target folder's children. The typed value lives only in the DOM —
  *  main.ts commits on Enter/blur, cancels on Escape, and carries it across an
@@ -137,8 +166,10 @@ export function renderMarkdown(md: string): string {
  *  role, and it does so exactly while a screen-reader user is naming a note. The role
  *  is not inherited by the focusable input inside, which keeps its own `aria-label`. */
 function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
+  const folder = kind === "folder";
   return `<div class="tree-row tree-create" role="none" style="${pad}">
-      <span class="tree-caret">${kind === "folder" ? "▶" : ""}</span>
+      ${folder ? foldCaretHtml(false) : NO_CARET}
+      ${rowIconHtml(folder ? folderIcon(false) : NOTE_ICON)}
       <input id="tree-create-input" class="tree-create-input" type="text"
         placeholder="${kind === "note" ? "New note…" : "New folder…"}"
         aria-label="${kind === "note" ? "New note name" : "New folder name"}"
@@ -148,12 +179,13 @@ function treeCreateRowHtml(kind: "note" | "folder", pad: string): string {
 
 /** The inline rename input, rendered in place of the row being renamed — the
  *  rename sibling of `treeCreateRowHtml` (same commit/cancel wiring in main.ts,
- *  same value-carrying across repaints in paintTree). `glyph` keeps the row's
- *  own marker so the input reads as "this row, editable". `role="none"` for the same
+ *  same value-carrying across repaints in paintTree). It keeps the row's own two
+ *  slots so the input reads as "this row, editable". `role="none"` for the same
  *  reason as the create row above: a text field is not a `treeitem`. */
-function treeRenameRowHtml(prefill: string, glyph: string, pad: string): string {
+function treeRenameRowHtml(prefill: string, caret: string, name: IconName, pad: string): string {
   return `<div class="tree-row tree-create" role="none" style="${pad}">
-      <span class="tree-caret">${glyph}</span>
+      ${caret}
+      ${rowIconHtml(name)}
       <input id="tree-rename-input" class="tree-create-input" type="text"
         value="${escapeHtml(prefill)}"
         aria-label="Rename" autocomplete="off" spellcheck="false" />
@@ -176,8 +208,8 @@ function treeChildrenHtml(
   depth: number,
   roving: string | null,
 ): string {
-  // Indent by depth; a folder's own chevron occupies the same slot a file's icon does,
-  // so files sit one notch deeper than the folder header above them.
+  // Indent by depth. Every row spends the same two slots — chevron, then icon — so a
+  // folder's files line up under the folder's icon, with only the folder's chevron filled.
   const pad = (d: number) => `padding-left:${8 + d * 14}px`;
   // ARIA levels are 1-based; the DOM is flat (rows are siblings, not nested lists),
   // so `aria-level` is what tells a screen reader how deep a row sits.
@@ -197,13 +229,19 @@ function treeChildrenHtml(
       const selected = state.selectedDir === sub.path ? " is-selected" : "";
       const header =
         state.treeRename?.path === sub.path
-          ? treeRenameRowHtml(renamePrefill(sub.path, "folder"), open ? "▼" : "▶", pad(depth))
+          ? treeRenameRowHtml(
+              renamePrefill(sub.path, "folder"),
+              foldCaretHtml(open),
+              folderIcon(open),
+              pad(depth),
+            )
           : `<button class="tree-row tree-dir${selected}" role="treeitem"${level}${tab(
               sub.path,
             )} data-tree-row="${escapeHtml(sub.path)}" data-dir="${escapeHtml(
               sub.path,
             )}" style="${pad(depth)}" aria-expanded="${open}" draggable="true">
-          <span class="tree-caret">${open ? "▼" : "▶"}</span>
+          ${foldCaretHtml(open)}
+          ${rowIconHtml(folderIcon(open))}
           <span class="tree-label">${escapeHtml(sub.name)}</span>
         </button>`;
       const body = open ? treeChildrenHtml(sub, state, depth + 1, roving) : "";
@@ -216,7 +254,8 @@ function treeChildrenHtml(
       if (state.treeRename?.path === file.path) {
         return treeRenameRowHtml(
           renamePrefill(file.path, file.kind),
-          file.kind === "resource" ? file.glyph : "",
+          NO_CARET,
+          file.icon,
           pad(depth),
         );
       }
@@ -229,7 +268,8 @@ function treeChildrenHtml(
         )}" data-open-resource="${escapeHtml(
           file.path,
         )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
-            <span class="tree-caret tree-glyph">${file.glyph}</span>
+            ${NO_CARET}
+            ${rowIconHtml(file.icon)}
             <span class="tree-label">${escapeHtml(file.label)}</span>
           </button>`;
       }
@@ -241,7 +281,8 @@ function treeChildrenHtml(
       )}" data-open="${escapeHtml(
         file.path,
       )}" style="${pad(depth)}" title="${escapeHtml(file.path)}" draggable="true">
-          <span class="tree-caret"></span>
+          ${NO_CARET}
+          ${rowIconHtml(file.icon)}
           <span class="tree-label">${escapeHtml(file.label)}</span>
         </button>`;
     })
@@ -256,17 +297,10 @@ function treeActionsHtml(state: AppState): string {
   const ctx = state.selectedDir ? `in ${state.selectedDir}/` : "in the vault root";
   return `<span class="tree-actions">
       <button class="tree-action" data-new-note title="New note ${escapeHtml(ctx)} (⌘N)" aria-label="New note">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M9.25 1.75h-5c-.55 0-1 .45-1 1v10.5c0 .55.45 1 1 1h7.5c.55 0 1-.45 1-1V5.25L9.25 1.75Z"/>
-          <path d="M9.25 1.75v3.5h3.5"/>
-          <path d="M8 7.5v3.6M6.2 9.3h3.6"/>
-        </svg>
+        ${icon("file-earmark-plus")}
       </button>
       <button class="tree-action" data-new-folder title="New folder ${escapeHtml(ctx)} (⇧⌘N)" aria-label="New folder">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M1.75 4c0-.55.45-1 1-1h2.9c.32 0 .62.15.8.4L7.7 4.6h5.55c.55 0 1 .45 1 1v6.65c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1V4Z"/>
-          <path d="M8 6.8v3.4M6.3 8.5h3.4"/>
-        </svg>
+        ${icon("folder-plus")}
       </button>
     </span>`;
 }
@@ -334,7 +368,10 @@ function noteBarHtml(state: AppState, note: NoteView): string {
   const yaml = fm.replace(/\s+$/, ""); // display trim only — the edit buffer seeds verbatim
   const unreadable = note.frontmatter !== null && !note.frontmatter_readable;
   const flag = unreadable
-    ? ` <span class="fm-flag" title="B2 can't read this frontmatter as YAML">⚠︎</span>`
+    ? ` <span class="fm-flag" role="img" aria-label="Unreadable frontmatter" title="B2 can't read this frontmatter as YAML">${icon(
+        "exclamation-triangle",
+        { size: 12 },
+      )}</span>`
     : "";
   let body = "";
   if (open && editing) {
@@ -383,14 +420,20 @@ function noteBarHtml(state: AppState, note: NoteView): string {
         <button id="fm-toggle" class="frontmatter-toggle" data-toggle-frontmatter aria-expanded="${open}"${
           editing ? " disabled" : ""
         }>
-          <span class="tree-caret">${open ? "▼" : "▶"}</span>
+          ${foldCaretHtml(open)}
           <span class="frontmatter-label">Frontmatter</span>${flag}
         </button>
         <div class="note-bar-actions">
           ${graphToggleHtml(false)}
-          <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" title="${
+          <!-- An icon, not the angle-bracket-slash text this used to print: it sits shoulder
+               to shoulder with the graph toggle, which has always been an SVG, so a text
+               glyph beside it never quite lined up. An icon carries no accessible name,
+               hence the aria-label the visible characters used to supply (K1, "reachable"). -->
+          <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" aria-label="${
             source ? "Show rendered Markdown" : "Show Markdown source"
-          }">&lt;/&gt;</button>
+          }" title="${
+            source ? "Show rendered Markdown" : "Show Markdown source"
+          }">${icon("code-slash")}</button>
           <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
             state.loading || editing ? " disabled" : ""
           } title="${
@@ -557,7 +600,7 @@ export function embedBannerHtml(state: AppState): string {
   });
   if (!show) return "";
   return `<div class="install-banner" role="status">
-      <span class="install-banner-icon" aria-hidden="true">✨</span>
+      <span class="install-banner-icon" aria-hidden="true">${icon("stars")}</span>
       <p class="install-banner-text">
         <strong>Semantic search is off.</strong>
         Your notes are indexed for keyword search, but the embedding model isn't installed —
@@ -635,7 +678,7 @@ function sideFoldHead(
   )} data-side-row="${escapeHtml(
     key,
   )}" data-fold-section="${section}" aria-expanded="${!collapsed}">
-      <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
+      ${foldCaretHtml(!collapsed)}
       <span class="side-title">${label}</span>
       ${count ? `<span class="side-count">${count}</span>` : ""}
     </button>`;
@@ -653,7 +696,7 @@ function cardFold(key: string, collapsed: boolean): string {
   return `<button class="card-fold" tabindex="-1" aria-hidden="true" data-fold-card="${escapeHtml(
     key,
   )}">
-      <span class="tree-caret">${collapsed ? "▶" : "▼"}</span>
+      ${foldCaretHtml(!collapsed)}
     </button>`;
 }
 
@@ -729,7 +772,7 @@ function connectionsSectionHtml(state: AppState, roving: string | null): string 
     );
   const items = state.connections
     .map((c, i) => {
-      const arrow = c.direction === "outbound" ? "→" : "←";
+      const arrow = icon(directionIcon(c.direction), { size: 12 });
       const key = cardKey("connections", c.path);
       const rowKey = cardRowKey("connections", i, c.path);
       const folded = state.collapsedCards.has(key);
@@ -788,7 +831,10 @@ function unresolvedCardsHtml(state: AppState, roving: string | null): string {
       )}" title="This link points to nothing — no note or file named “${escapeHtml(
         u.target,
       )}”. A note is a single .md file, so a folder can’t be linked.">
-          <div class="card-title"><span class="edge-broken" aria-label="Broken link">⚠</span> ${escapeHtml(
+          <div class="card-title"><span class="edge-broken" role="img" aria-label="Broken link">${icon(
+            "exclamation-triangle",
+            { size: 12 },
+          )}</span> ${escapeHtml(
             u.relation,
           )} <span class="edge-origin">${escapeHtml(u.origin)}</span></div>
           <div class="card-path">[[${escapeHtml(u.target)}]] · unresolved</div>
@@ -807,21 +853,13 @@ function unresolvedCardsHtml(state: AppState, roving: string | null): string {
 // dashed hollow = dangling. Everything renders from state the note-open already
 // fetched, so entering the graph costs no IPC.
 
-/** The small node-and-edges glyph on the graph toggle (both bars). */
-const GRAPH_ICON = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path d="M8 5.4 4 10.6M8 5.4l4 5.2" stroke="currentColor" stroke-width="1.4" fill="none"/>
-    <circle cx="8" cy="3.4" r="2.1" fill="currentColor"/>
-    <circle cx="3.4" cy="12.4" r="2.1" fill="currentColor"/>
-    <circle cx="12.6" cy="12.4" r="2.1" fill="currentColor"/>
-  </svg>`;
-
 /** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). */
 function graphToggleHtml(active: boolean): string {
   return `<button id="graph-toggle" class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
       aria-pressed="${active}" aria-label="${active ? "Back to reading" : "Show the connection graph"}"
       title="${
         active ? "Back to reading — Esc" : "Show the connection graph — nodes are Tab-reachable, ⏎ opens"
-      }">${GRAPH_ICON}</button>`;
+      }">${icon("diagram-3")}</button>`;
 }
 
 /** Fixed-point SVG coordinate — keeps the markup compact and diff-stable. */
@@ -860,11 +898,11 @@ function nodeShapeHtml(n: GraphNode): string {
     case "resource": {
       const s = NODE_R.resource - 2;
       return `<rect class="gshape" x="${px(n.x - s)}" y="${px(n.y - s)}" width="${2 * s}" height="${2 * s}" rx="9"/>
-        <text class="gglyph" x="${x}" y="${px(n.y + 5)}">${CLASS_GLYPHS[n.sub ?? ""] ?? CLASS_GLYPHS.binary}</text>`;
+        ${sceneIcon(resourceIcon(n.sub), n.x, n.y, 16, "gglyph")}`;
     }
     case "dangling":
       return `<circle class="gshape" cx="${x}" cy="${y}" r="${NODE_R.dangling}"/>
-        <text class="gglyph" x="${x}" y="${px(n.y + 5)}">⚠</text>`;
+        ${sceneIcon("exclamation-triangle", n.x, n.y, 16, "gglyph")}`;
     default:
       return `<circle class="gshape" cx="${x}" cy="${y}" r="${NODE_R[n.kind]}"/>`;
   }
@@ -995,7 +1033,9 @@ function graphLegendHtml(): string {
   return `<div class="graph-legend" aria-hidden="true">${dots}
       <span class="leg"><span class="leg-dash"></span>ghost (unlinked)</span>
       <span class="leg"><span class="leg-square"></span>file</span>
-      <span class="leg"><span class="leg-broken">⚠</span>broken</span>
+      <span class="leg"><span class="leg-broken">${icon("exclamation-triangle", {
+        size: 11,
+      })}</span>broken</span>
     </div>`;
 }
 

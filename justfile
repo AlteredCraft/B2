@@ -67,6 +67,15 @@ ui-build: ui-install
 ui-dev: ui-install
     npm --prefix ui run dev
 
+# Re-vendor the Bootstrap Icons subset into ui/src/icons.gen.ts (the names live in
+# ui/scripts/gen-icons.ts). Run it after adding an icon to that manifest, or after bumping
+# the bootstrap-icons devDependency — `just test-ui` runs the same generator in --check mode
+# first, so a stale generated file fails the gate rather than shipping quietly.
+[group('dev')]
+[doc('Regenerate ui/src/icons.gen.ts from the bootstrap-icons package.')]
+icons: ui-install
+    npm --prefix ui run icons
+
 # Embed on the Metal GPU by default on Apple Silicon (GH #40); CPU everywhere else. The `metal`
 # feature is a compile-time switch, so this selects it for the dev build — the runtime still
 # falls back to CPU if the GPU can't initialize. `just app-cpu` forces CPU.

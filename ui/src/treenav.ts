@@ -22,6 +22,7 @@
 // between the two halves moved.
 
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
+import { type IconName, NOTE_ICON, resourceIcon } from "./icons.ts";
 import type { NodeKind } from "./move";
 import type { NoteSummary, ResourceSummary } from "./types";
 
@@ -30,8 +31,9 @@ export interface TreeFile {
   kind: "note" | "resource";
   path: string;
   label: string;
-  /** The resource class glyph slot ("" for notes). */
-  glyph: string;
+  /** The row's icon, as a registry *name* — resolved to markup by render.ts, so this
+   *  module stays DOM-free and node can run its test off the source. */
+  icon: IconName;
 }
 
 export interface TreeDir {
@@ -41,16 +43,6 @@ export interface TreeDir {
   dirs: Map<string, TreeDir>;
   files: TreeFile[];
 }
-
-/** A small, unobtrusive per-class marker so a resource reads as "not a note". */
-export const CLASS_GLYPHS: Record<string, string> = {
-  image: "▣",
-  media: "▶",
-  pdf: "▤",
-  html: "◇",
-  text: "≡",
-  binary: "◆",
-};
 
 /** A note's display label: its title, else the filename without the `.md`. */
 export function fileLabel(note: NoteSummary): string {
@@ -89,14 +81,14 @@ export function buildTree(
     descend(parts.slice(0, -1).join("/")).files.push(file);
   };
   for (const note of notes) {
-    insert({ kind: "note", path: note.path, label: fileLabel(note), glyph: "" });
+    insert({ kind: "note", path: note.path, label: fileLabel(note), icon: NOTE_ICON });
   }
   for (const r of resources) {
     insert({
       kind: "resource",
       path: r.path,
       label: r.path.split("/").pop() ?? r.path,
-      glyph: CLASS_GLYPHS[r.class] ?? CLASS_GLYPHS.binary,
+      icon: resourceIcon(r.class),
     });
   }
   for (const dir of dirs) {
