@@ -188,14 +188,26 @@ export const DEFAULT_BINDINGS = [
   { id: "find.next", label: "Next match", keys: ["Mod-g"], scope: "find" },
   { id: "find.prev", label: "Previous match", keys: ["Mod-Shift-g"], scope: "find" },
 
-  // The editor. The first four are handed to CodeMirror's own keymap (ahead of its
-  // defaults, so they win); ⌘S is the document handler's, and reaches it only because
-  // CodeMirror leaves Mod-s unbound — editorkeys.test.ts is what keeps that true.
+  // The editor. All but ⌘S are handed to CodeMirror's own keymap (ahead of its defaults,
+  // so they win); ⌘S is the document handler's, and reaches it only because CodeMirror
+  // leaves Mod-s unbound — editorkeys.test.ts is what keeps that true.
   { id: "format.bold", label: "Bold", keys: ["Mod-b"], scope: "editor" },
   { id: "format.italic", label: "Italic", keys: ["Mod-i"], scope: "editor" },
   { id: "editor.table", label: "Insert a table", keys: ["Mod-t"], scope: "editor" },
   { id: "editor.paste-plain", label: "Paste as plain text", keys: ["Mod-Shift-v"], scope: "editor" },
   { id: "editor.save", label: "Save now", keys: ["Mod-s"], scope: "editor" },
+  // Tab, the one chord here that is also the *platform's*. It is claimed only with the
+  // caret in a list item (list.ts declines otherwise), so Tab still walks the focus ring
+  // everywhere else in the buffer. The overlay layer's own `Any-Tab` trap is a sibling
+  // scope rather than a clash: a dialog holds the keyboard while it's up, so CodeMirror
+  // never sees the key it would take — which is exactly what the trap is for.
+  { id: "editor.list.indent", label: "Nest a list item", keys: ["Tab"], scope: "editor" },
+  {
+    id: "editor.list.outdent",
+    label: "Lift a list item out",
+    keys: ["Shift-Tab"],
+    scope: "editor",
+  },
 
   // The frontmatter drawer — a separate surface from the body editor, hence its own
   // scope: ⌘S means "save this drawer" here and "flush the note" there.

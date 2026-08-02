@@ -12,7 +12,7 @@
 // that binds Mod-e would break ⌘E in the one path a user hits constantly — no error, no
 // failing test, just a chord that stopped working. So the assumption is a list now, and
 // the list is asserted.
-import { DEFAULT_BINDINGS, chordFor, parseChord } from "./bindings.ts";
+import { DEFAULT_BINDINGS, chordFor, keystrokes, parseChord } from "./bindings.ts";
 import {
   STOCK_EDITOR_KEYMAP,
   STOCK_KEYMAPS,
@@ -137,14 +137,37 @@ check("B2 and the editor never meet on a ⌃ keystroke — the emacs bindings ar
 });
 
 check("the editor's own B2 chords are the ones installed ahead of the stock keymap", () => {
-  // ⌘B / ⌘I / ⌘T / ⇧⌘V go into the editor's keymap; ⌘S is the document handler's. All
-  // five are scope `editor`, which is what makes the overlap check consider them at all
-  // — a chord filed under the wrong scope would be compared against the wrong keyboard.
+  // ⌘B / ⌘I / ⌘T / ⇧⌘V and Tab / ⇧Tab go into the editor's keymap; ⌘S is the document
+  // handler's. All are scope `editor`, which is what makes the overlap check consider
+  // them at all — a chord filed under the wrong scope would be compared against the
+  // wrong keyboard.
   const editorIds = DEFAULT_BINDINGS.filter((b) => b.scope === "editor").map((b) => b.id);
   assertEq(
     editorIds,
-    ["format.bold", "format.italic", "editor.table", "editor.paste-plain", "editor.save"],
+    [
+      "format.bold",
+      "format.italic",
+      "editor.table",
+      "editor.paste-plain",
+      "editor.save",
+      "editor.list.indent",
+      "editor.list.outdent",
+    ],
     "the editor's chords",
+  );
+});
+
+check("Tab reaches the editor's list commands — nothing in the editor binds it first", () => {
+  // The assumption `editor.list.indent` rests on, and the reason `markdownKeymap` is in
+  // STOCK_KEYMAPS now: `markdown()` installs it at Prec.high, *above* B2's own chords,
+  // so a release that gave it a Tab binding would take the key without a word. The stock
+  // list is also where `indentWithTab` would show up if it were ever added to
+  // `defaultKeymap` — that one would silently turn Tab back into plain indentation.
+  const onTab = editorChords().filter((c) => keystrokes(c.spec).some((f) => f.endsWith("Tab")));
+  assertEq(
+    onTab.map((c) => `${c.spec} — ${c.source} ${c.command}`),
+    [],
+    "stock chords over Tab",
   );
 });
 
@@ -155,7 +178,14 @@ check("chords handed to CodeMirror are ones CodeMirror can parse", () => {
   // a chord nothing presses. Nothing installed in the editor uses it today; this is what
   // notices if that changes, since the failure is otherwise a chord that silently
   // stops working.
-  const installed = ["format.bold", "format.italic", "editor.table", "editor.paste-plain"];
+  const installed = [
+    "format.bold",
+    "format.italic",
+    "editor.table",
+    "editor.paste-plain",
+    "editor.list.indent",
+    "editor.list.outdent",
+  ];
   for (const id of installed) {
     const spec = chordFor(id);
     parseChord(spec); // our side

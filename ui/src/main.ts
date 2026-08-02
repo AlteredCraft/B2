@@ -57,6 +57,7 @@ import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
+import { indentList, outdentList, type ListEdit } from "./list";
 import {
   activeBindings,
   canonicalKey,
@@ -2498,6 +2499,44 @@ function runFormat(view: EditorView, fmt: InlineFormat): boolean {
   );
   return true;
 }
+
+/**
+ * Tab / ⇧Tab — nest or lift out the list item(s) the selection covers. The engine is
+ * list.ts; this is the CodeMirror half, the `runFormat` pattern one construct up.
+ *
+ * Declining matters twice over. A `null` from the engine means the caret is not in a
+ * list, and returning false there is what leaves Tab walking the focus ring through the
+ * rest of the app — the reason this isn't `indentWithTab`, which claims the key outright
+ * and takes the keyboard's way out of the buffer with it. And a caret inside code
+ * declines before the engine is asked at all: a `- item` line in a fence is text, not
+ * structure, and `inCodeContext` is the same read the rich paste makes to keep its hands
+ * off code.
+ *
+ * One range rather than `changeByRange`: an indent moves every offset after it, so a
+ * second cursor's edit would be computed against a document the first has already
+ * shifted. Multi-cursor nesting is a gesture nobody makes; ⌘B's is one they do.
+ */
+function runListShift(
+  view: EditorView,
+  shift: (doc: string, from: number, to: number) => ListEdit | null,
+): boolean {
+  if (inCodeContext(view.state)) return false;
+  const { from, to } = view.state.selection.main;
+  const r = shift(view.state.doc.toString(), from, to);
+  if (!r) return false;
+  // Claimed but inert — the first item of a list has nothing to nest under. Swallowing
+  // the key is the point (list.ts's header): a gesture that sometimes ejects you from
+  // the buffer is worse than one that sometimes does nothing.
+  if (r.changes.length > 0) {
+    view.dispatch({
+      changes: r.changes,
+      selection: EditorSelection.range(r.selFrom, r.selTo),
+      scrollIntoView: true,
+    });
+  }
+  return true;
+}
+
 /**
  * B2's own chords inside the editor, read from the **live** registry each time.
  *
@@ -2515,6 +2554,14 @@ function b2EditorKeymap(): KeyBinding[] {
       run: (view: EditorView) => runFormat(view, f),
     })),
     { key: chordFor("editor.table"), run: runInsertTable },
+    {
+      key: chordFor("editor.list.indent"),
+      run: (view: EditorView) => runListShift(view, indentList),
+    },
+    {
+      key: chordFor("editor.list.outdent"),
+      run: (view: EditorView) => runListShift(view, outdentList),
+    },
     {
       key: chordFor("editor.paste-plain"),
       run: (view: EditorView) => {
