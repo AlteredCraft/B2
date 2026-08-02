@@ -2687,9 +2687,9 @@ function mountEditor(body: string): void {
         <div class="note-bar-actions">
           <button id="edit-source" class="source-toggle${
             state.sourceOpen ? " is-active" : ""
-          }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
-            state.sourceOpen ? "Show live preview" : "Show Markdown source"
-          }">&lt;/&gt;</button>
+          }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${escapeHtml(
+            editorSourceTitle(),
+          )}">&lt;/&gt;</button>
           <button id="edit-done" class="btn small primary" title="Save and return to reading — ⌘E (⌘S flushes anytime)">Done</button>
         </div>
       </div>
@@ -2753,6 +2753,16 @@ function mountEditor(body: string): void {
   if (findOpen) setFindQuery(findInput().value);
 }
 
+/** The editor chip's tooltip. Its chord comes out of the live registry rather than being
+ *  spelled here, for `graphToggleHtml`'s reason (render.ts): ⇧⌘E is rebindable (#121), so
+ *  a tooltip naming the shipped default would be wrong for the user who moved it. Off
+ *  "live preview" rather than the reading bar's "rendered Markdown" — one sticky flag,
+ *  two surfaces, and each names what *it* shows when the flag is off. */
+function editorSourceTitle(): string {
+  const what = state.sourceOpen ? "Show live preview" : "Show Markdown source";
+  return `${what} — ${displayKeys(["source.toggle"])}`;
+}
+
 // Repaint just the editor's conflict bar and the `</>` source-toggle button — never a
 // pane rebuild (the same targeted-repaint pattern as paintReindex).
 function paintEditor(): void {
@@ -2762,7 +2772,7 @@ function paintEditor(): void {
   if (src) {
     src.classList.toggle("is-active", state.sourceOpen);
     src.setAttribute("aria-pressed", String(state.sourceOpen));
-    src.title = state.sourceOpen ? "Show live preview" : "Show Markdown source";
+    src.title = editorSourceTitle();
   }
 }
 
@@ -4287,6 +4297,20 @@ function wireEvents(): void {
         e.preventDefault();
         enterEdit();
       }
+      return;
+    }
+    // ⇧⌘E flips the note between rendered and raw Markdown — the `</>` chip's chord, and
+    // the keyboard's route to the escape hatch. Live while editing for the same reason ⌘E
+    // is: CodeMirror leaves the chord unbound (editorkeys.test.ts is what keeps that
+    // true), so the event reaches this handler, and `toggleSource` reconfigures the live
+    // preview in place rather than rebuilding the pane. Refused with the graph up, the
+    // mirror of ⌘G being refused while editing — the pane belongs to the scene, so the
+    // flip would land somewhere nobody can see it. A resource card has no source to show.
+    if (isBound(e, "source.toggle")) {
+      if (currentOverlay() !== null || state.graphOpen) return;
+      if (!state.current || state.currentResource) return;
+      e.preventDefault();
+      toggleSource();
       return;
     }
     if (isBound(e, "dismiss")) {

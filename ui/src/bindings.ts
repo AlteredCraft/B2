@@ -156,6 +156,16 @@ export const DEFAULT_BINDINGS = [
     scope: "global",
   },
   { id: "edit.toggle", label: "Enter or leave edit mode", keys: ["Mod-e"], scope: "global" },
+  // The `</>` chip's chord, and ⌘E's shift-sibling on purpose: ⌘E changes whether you're
+  // editing, ⇧⌘E changes what you're looking at — and both work in either mode, because
+  // the source flip is one sticky flag serving the reading view and the editor alike.
+  // ⇧ as "the same idea, one step over" is the pattern ⌘N/⇧⌘N and ⌘F/⇧⌘F already set.
+  {
+    id: "source.toggle",
+    label: "Show the Markdown source",
+    keys: ["Mod-Shift-e"],
+    scope: "global",
+  },
   // ⌘G is Find Next everywhere on macOS, and `find.next` below keeps it — but only while
   // the find bar is open, which is the only time that meaning exists. The rest of the
   // time the chord is free, so the graph gets it: `shadows()` reports the pair and

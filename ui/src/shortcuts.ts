@@ -122,6 +122,10 @@ const OWN_SHEET: readonly SheetGroup[] = [
     title: "Reading and editing",
     rows: [
       { ids: ["edit.toggle"], action: "Enter or leave edit mode" },
+      {
+        ids: ["source.toggle"],
+        action: "Show the Markdown source, or go back to the rendered note",
+      },
       { ids: ["editor.save"], action: "Save now (editing autosaves anyway)" },
       { ids: ["format.bold", "format.italic"], action: "Bold / italic" },
       {
