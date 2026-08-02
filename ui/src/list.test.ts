@@ -72,6 +72,58 @@ check("Tab in a list is claimed even when nothing can move", () => {
   assertEq(top, { doc: "- a\n- b", from: 6, to: 6 }, "a top-level item has nothing to leave");
 });
 
+// --- the rest of the item: continuations and blanks ----------------------------------
+
+check("a continuation line acts on the item it belongs to", () => {
+  // The item is more than its marker line, and a caret mid-item must not hand Tab back
+  // to the focus ring — the same ejection the marker-line case closes.
+  const r = run(indentList, "- a\n- b\n  more |about b");
+  assertEq(r?.doc, "- a\n  - b\n    more about b", "b moved, its text with it");
+  const back = run(outdentList, "- a\n  - b\n    more |about b");
+  assertEq(back?.doc, "- a\n- b\n  more about b", "⇧Tab, the same owner");
+});
+
+check("a lazy continuation at column 0 still names its item", () => {
+  // Adjacent text is the item's paragraph (CommonMark's lazy continuation), so it moves
+  // with the item — and picks up a proper indent on the way.
+  assertEq(run(indentList, "- a\n- b\nlazy |line")?.doc, "- a\n  - b\n  lazy line", "b took its lazy line along");
+});
+
+check("a paragraph after a blank is not a continuation", () => {
+  // Past a blank, a column-0 line is a new paragraph; claiming Tab there would grab a
+  // list the caret has visibly left.
+  assertEq(run(indentList, "- a\n\npara|graph"), null, "a new paragraph");
+});
+
+check("a block starter after an item is a new block, not the item's text", () => {
+  // A heading or a rule at column 0 interrupts a paragraph, so adjacency doesn't make
+  // it a lazy continuation the way plain text is.
+  assertEq(run(indentList, "- a\n- b\n# h|"), null, "a heading");
+  assertEq(run(indentList, "- a\n- b\n---|"), null, "a rule");
+});
+
+check("the blank line inside a loose list swallows the key", () => {
+  // Interior to the list — items directly above and below — the caret is between
+  // bullets, not below the list, and ejecting from there would break the contract.
+  const r = run(indentList, "- a\n|\n- b");
+  assertEq(r, { doc: "- a\n\n- b", from: 4, to: 4 }, "claimed but inert");
+});
+
+check("blank space around a list is document space", () => {
+  // A trailing blank, either blank of a two-blank gap, or the line above the list: the
+  // caret is beside the list, not in it, and Tab moves on.
+  assertEq(run(indentList, "- a\n|"), null, "a trailing blank");
+  assertEq(run(indentList, "- a\n|\n\n- b"), null, "the first blank of a two-blank gap");
+  assertEq(run(indentList, "|\n- a"), null, "above the list");
+});
+
+check("a blockquoted list is beyond this engine's reach", () => {
+  // The scanner reads only top-level lists; `> - a` is a bullet behind a container
+  // prefix it doesn't parse. The null is deliberate — main.ts's `inListItem` (the
+  // syntax tree's read) is what keeps Tab claimed-but-inert there instead of ejecting.
+  assertEq(run(indentList, "> - a\n> - |b"), null, "the adapter's tree check owns this case");
+});
+
 // --- nesting -------------------------------------------------------------------------
 
 check("Tab nests an item under the one above it", () => {

@@ -2504,13 +2504,14 @@ function runFormat(view: EditorView, fmt: InlineFormat): boolean {
  * Tab / ⇧Tab — nest or lift out the list item(s) the selection covers. The engine is
  * list.ts; this is the CodeMirror half, the `runFormat` pattern one construct up.
  *
- * Declining matters twice over. A `null` from the engine means the caret is not in a
- * list, and returning false there is what leaves Tab walking the focus ring through the
- * rest of the app — the reason this isn't `indentWithTab`, which claims the key outright
- * and takes the keyboard's way out of the buffer with it. And a caret inside code
- * declines before the engine is asked at all: a `- item` line in a fence is text, not
- * structure, and `inCodeContext` is the same read the rich paste makes to keep its hands
- * off code.
+ * Declining matters twice over. A `null` from the engine usually means the caret is not
+ * in a list, and returning false there is what leaves Tab walking the focus ring through
+ * the rest of the app — the reason this isn't `indentWithTab`, which claims the key
+ * outright and takes the keyboard's way out of the buffer with it. The one exception is
+ * a list the engine can't see — `inListItem` below gives the syntax tree the last word,
+ * so the no-ejection contract holds there too. And a caret inside code declines before
+ * the engine is asked at all: a `- item` line in a fence is text, not structure, and
+ * `inCodeContext` is the same read the rich paste makes to keep its hands off code.
  *
  * One range rather than `changeByRange`: an indent moves every offset after it, so a
  * second cursor's edit would be computed against a document the first has already
@@ -2523,7 +2524,7 @@ function runListShift(
   if (inCodeContext(view.state)) return false;
   const { from, to } = view.state.selection.main;
   const r = shift(view.state.doc.toString(), from, to);
-  if (!r) return false;
+  if (!r) return inListItem(view.state);
   // Claimed but inert — the first item of a list has nothing to nest under. Swallowing
   // the key is the point (list.ts's header): a gesture that sometimes ejects you from
   // the buffer is worse than one that sometimes does nothing.
@@ -2535,6 +2536,20 @@ function runListShift(
     });
   }
   return true;
+}
+
+/** Is the cursor inside a list item the *scanner* can't see? list.ts reads only lists at
+ *  the top level of the note — `> - a` is a bullet behind a container prefix it doesn't
+ *  parse — so on its null the tree gets the last word before the key is handed back to
+ *  the focus ring. Claimed-but-inert there: the caret is visibly on a list item, and
+ *  ejecting from it would break the gesture's contract even where the edit itself isn't
+ *  built yet (list.ts's header). */
+function inListItem(state: EditorState): boolean {
+  const at = syntaxTree(state).resolveInner(state.selection.main.from, -1);
+  for (let n: typeof at | null = at; n; n = n.parent) {
+    if (n.name === "ListItem") return true;
+  }
+  return false;
 }
 
 /**
