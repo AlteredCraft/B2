@@ -328,6 +328,7 @@ fn main() {
             commands::list_resources,
             commands::explain_resource,
             commands::open_resource,
+            commands::open_external,
             commands::clipboard_text,
             commands::write_note,
             commands::write_frontmatter,

@@ -103,6 +103,16 @@ export const api = {
   openResource: (path: string): Promise<void> => invoke("open_resource", { path }),
 
   /**
+   * *Open a web link in the system default browser* — `openResource`'s sibling for the
+   * links **inside** a note. The same OS handoff, and host-side for the same reason: the
+   * webview holds no opener permission, and following the link in place would replace
+   * the whole app with a web page. The host re-checks the URL's scheme against its own
+   * allow-list (http / https / mailto), so `ui/src/links.ts` decides what gets *routed*
+   * here and the host decides what actually opens.
+   */
+  openExternal: (url: string): Promise<void> => invoke("open_external", { url }),
+
+  /**
    * The clipboard's plain-text flavor, for the editor's ⌘⇧V (paste as plain text).
    * Host-side of necessity: WebKit runs no editing command for a raw ⌘⇧V and gates a
    * programmatic `navigator.clipboard` read behind a native confirmation.

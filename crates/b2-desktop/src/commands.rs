@@ -165,6 +165,55 @@ pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), Cmd
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
+/// The three URL schemes B2 will hand to the OS, lowercase, each including the
+/// punctuation that ends it. The frontend's `externalUrl` (`ui/src/links.ts`) holds the
+/// same list because it is what *routes* a click here; this one is what **refuses**, and
+/// it is the authority — change them together, the way `WRITE_CONFLICT_MESSAGE` and
+/// `VAULT_CHANGED_EVENT` are changed on both sides of the seam.
+const OPENABLE_SCHEMES: [&str; 3] = ["http://", "https://", "mailto:"];
+
+/// Is this a link the host will open in the user's browser or mail app?
+///
+/// A note is **untrusted input** (invariant E5): its links are authored by whoever wrote
+/// the file, and `open` on macOS launches whatever app has registered the scheme — so an
+/// unfiltered handoff turns a `.md` into "run the thing this URL names". The allow-list
+/// is therefore the whole of the security posture here, and it is deliberately three
+/// schemes wide: the web, and email.
+///
+/// Byte-wise rather than `&url[..n]`, so a URL beginning mid-UTF-8 can't panic the slice;
+/// control characters are refused outright (a `\n` in an href is smuggling, never a URL).
+fn is_openable_link(url: &str) -> bool {
+    if url.chars().any(|c| c.is_ascii_control()) {
+        return false;
+    }
+    let bytes = url.as_bytes();
+    OPENABLE_SCHEMES.iter().any(|scheme| {
+        // `>` not `>=`: a bare "https://" names nothing to open.
+        bytes.len() > scheme.len() && bytes[..scheme.len()].eq_ignore_ascii_case(scheme.as_bytes())
+    })
+}
+
+/// *Open a web link in the system default browser* — [`open_resource`]'s sibling for the
+/// links **inside** a note, and the same OS handoff rather than in-webview navigation.
+///
+/// Following a `https://…` in place would replace the whole app with a web page in a
+/// window that has no back button, no address bar and no way home; the webview holds no
+/// opener permission, so the frontend routes the click here instead
+/// (`ui/src/links.ts` + the click delegation in `main.ts`). Vault-free — nothing here
+/// touches the index — so it takes no `State`, like `clipboard_text`.
+///
+/// The frontend has already decided this href is a web link; this re-checks, because the
+/// frontend's copy of the rule is *routing* and the note that authored the href is not
+/// trusted (the `open_resource` posture: the caller passes, the host validates).
+#[tauri::command(async)]
+pub fn open_external(url: String) -> Result<(), CmdError> {
+    if !is_openable_link(&url) {
+        return Err(CmdError::UnsupportedLink(url));
+    }
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| CmdError::OpenFailed(e.to_string()))
+}
+
 /// The clipboard's plain-text flavor — what the editor's ⌘⇧V pastes (paste as plain
 /// text, the escape hatch from the rich paste in `ui/src/paste.ts`). Host infrastructure
 /// like the folder dialog and [`open_resource`], and host-side *necessarily*: WebKit runs
@@ -1243,6 +1292,47 @@ mod tests {
         assert_eq!(report.skipped[0].path, "bad.md");
         // The tree lists the good notes; the bad file is absent, not fatal.
         assert_eq!(list_notes_impl(&state).unwrap().len(), 2);
+    }
+
+    /// `open_external`'s allow-list — the whole of its security posture, so it is pinned
+    /// on both sides. The refusals matter more than the acceptances: each one is a scheme
+    /// that would otherwise let a `.md` name a program for the OS to launch.
+    #[test]
+    fn only_web_links_are_openable() {
+        for ok in [
+            "https://example.com/a?b=1#c",
+            "http://example.com",
+            "HTTPS://Example.COM", // a scheme is case-insensitive
+            "mailto:someone@example.com?subject=hi",
+        ] {
+            assert!(is_openable_link(ok), "{ok} is a web link");
+        }
+        for refused in [
+            "file:///etc/passwd",          // the local disk, via the note's choice of path
+            "javascript:alert(1)",         // the sanitizer drops it; this is the second layer
+            "x-b2-evil://run",             // any app that registered a custom scheme
+            "vscode://file/etc/passwd",    // ditto, with a real-world registrant
+            " https://example.com",        // a leading space is not a scheme
+            "https://",                    // a scheme naming nothing
+            "https://ok.example\nmailto:", // a control char is smuggling, never a URL
+            "",
+        ] {
+            assert!(!is_openable_link(refused), "{refused:?} is refused");
+        }
+    }
+
+    /// The refusal reaches the webview as a generic sentence, with the note-authored URL
+    /// left server-side — the same "detail is logged, never sent" rule every other arm of
+    /// `user_message` follows.
+    #[test]
+    fn a_refused_link_says_so_without_echoing_the_url() {
+        let err = CmdError::UnsupportedLink("x-b2-evil://run?secret=hunter2".into());
+        let msg = user_message(&err);
+        assert!(msg.contains("http"), "the message says what B2 does open");
+        assert!(
+            !msg.contains("x-b2-evil") && !msg.contains("hunter2"),
+            "the note's URL stays out of the message"
+        );
     }
 
     #[test]

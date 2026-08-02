@@ -34,6 +34,13 @@ pub enum CmdError {
     /// logged in full server-side, generic to the webview like everything else.
     #[error("open in system default failed: {0}")]
     OpenFailed(String),
+    /// A note asked B2 to open a link that isn't a web address (`open_external`). Not a
+    /// failure so much as a refusal: a note is untrusted content (E5), and handing an
+    /// arbitrary scheme to the OS launches whatever app claims it — so the host opens
+    /// `http`/`https`/`mailto` and nothing else. The offending URL rides along for the
+    /// server-side log only; it is note content, so it stays out of the message.
+    #[error("refused to open a non-web link: {0}")]
+    UnsupportedLink(String),
     /// The OS refused the clipboard read behind ⌘⇧V (`clipboard_text`). Same shape as
     /// [`CmdError::OpenFailed`]: the plugin's detail, logged in full server-side, generic
     /// to the webview.
@@ -121,6 +128,10 @@ pub fn user_message(err: &CmdError) -> String {
             "Couldn't open the file in its default app. Try opening it from your file manager."
                 .to_string()
         }
+        CmdError::UnsupportedLink(_) => {
+            "B2 only opens web links — http, https, and mailto — outside the app. This link is none of those, so it wasn't opened."
+                .to_string()
+        }
         CmdError::ClipboardFailed(_) => {
             "Couldn't read the clipboard. Copy the text again, then paste.".to_string()
         }
@@ -140,6 +151,7 @@ pub fn user_message(err: &CmdError) -> String {
             CmdError::VaultRequired
             | CmdError::ReindexInFlight
             | CmdError::OpenFailed(_)
+            | CmdError::UnsupportedLink(_)
             | CmdError::ClipboardFailed(_) => err.to_string(),
         };
         format!("{msg}\n(debug: {detail})")
@@ -162,6 +174,7 @@ fn log_internal(err: &CmdError) {
         CmdError::VaultRequired
         | CmdError::ReindexInFlight
         | CmdError::OpenFailed(_)
+        | CmdError::UnsupportedLink(_)
         | CmdError::ClipboardFailed(_) => err.to_string(),
     };
     eprintln!("[b2] command failed: {detail}");

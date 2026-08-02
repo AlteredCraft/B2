@@ -25,10 +25,12 @@ tauri = { version = "2", features = [] }
 # `choose_vault` command calls it in Rust); the webview is granted no dialog
 # permission, so it can't open a dialog itself (least-privilege, capabilities/default.json).
 tauri-plugin-dialog = "2"
-# "Open in system default" on the resource fallback card (file-type slice 1, spec §6):
-# an OS handoff, never in-webview execution. Same least-privilege posture as the
-# dialog — the host-side `open_resource` command calls it in Rust after validating
-# the path against the inventory; the webview is granted no opener permission.
+# "Open in system default" on the resource fallback card (file-type slice 1, spec §6),
+# and the same handoff for a web link inside a note (`open_external`): an OS handoff,
+# never in-webview execution — a link followed in the webview would replace the whole
+# app. Same least-privilege posture as the dialog: the host-side commands call this in
+# Rust after validating what they were handed (a path against the inventory, a URL
+# against the scheme allow-list); the webview is granted no opener permission.
 tauri-plugin-opener = "2"
 # Plain-text clipboard read for the editor's ⌘⇧V (paste as plain text, ui/src/paste.ts).
 # Host-side for the same least-privilege reason as the two above — and because it has to

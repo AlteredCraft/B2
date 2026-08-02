@@ -156,7 +156,12 @@ tomorrow's model* — made mechanical.
   UI chrome, and the **single** Markdown→HTML render seam (`renderMarkdown`) sanitizes its output before
   it reaches the DOM, so no note can inject executable markup at any call site (reading view, table
   widget, any future one). The webview CSP (`default-src 'self'`, no inline scripts) is a second,
-  independent layer — defense-in-depth, never the sole guard.
+  independent layer — defense-in-depth, never the sole guard. The same posture governs a note's
+  **links**: the webview *is* the application, so following one in place would replace B2 with a web
+  page in a window with no way back — a note's link therefore never navigates the webview. A web link
+  (`http`, `https`, `mailto`) is an **OS handoff** performed host-side, behind a scheme allow-list,
+  exactly as *Open in system default* is for a resource; every other scheme is refused rather than
+  handed to an OS that would launch whatever app claims it.
   ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
 
 ## C — Concurrency: many readers, one builder

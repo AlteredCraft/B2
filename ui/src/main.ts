@@ -53,6 +53,7 @@ import {
 } from "./treenav";
 import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
+import { externalUrl } from "./links";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -3494,6 +3495,30 @@ function wireEvents(): void {
         return;
       }
       closeContextMenu();
+      return;
+    }
+
+    // A web link in a note belongs to the **system**, not to this window. The webview
+    // *is* the application, so letting a `https://…` navigate replaces B2 with a web page
+    // in a window with no address bar and no way back — the app is gone until it's
+    // relaunched. So the click is cancelled and the URL handed to the host, which opens
+    // it in the user's browser (`open_external`, the sibling of the resource card's
+    // *Open in system default*). links.ts owns which hrefs qualify.
+    //
+    // High in the delegation because an anchor means the same thing wherever it is
+    // painted — a note's reading view, live preview's rendered table widget, a backlink
+    // snippet — and no branch below handles one. Below the context menu, though: while a
+    // menu is up the next click only dismisses it. Wikilinks never reach here (they are
+    // `href="#"`, which links.ts declines) and are followed further down.
+    //
+    // Keyboard-complete for free (K1): ⏎ on a focused anchor dispatches a click, so this
+    // is the one activation path for both, and the sheet's "Follow the focused link"
+    // row already covers it.
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    const url = anchor && externalUrl(anchor.getAttribute("href"));
+    if (url) {
+      e.preventDefault();
+      api.openExternal(url).catch((err) => flash(errText(err)));
       return;
     }
 
