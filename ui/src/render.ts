@@ -373,6 +373,13 @@ function noteBarHtml(state: AppState, note: NoteView): string {
   const fm = note.frontmatter ?? "";
   const yaml = fm.replace(/\s+$/, ""); // display trim only — the edit buffer seeds verbatim
   const unreadable = note.frontmatter !== null && !note.frontmatter_readable;
+  // What the `</>` chip says it will do next, plus its chord out of the *live* registry —
+  // `graphToggleHtml`'s rule (⇧⌘E is rebindable, so a tooltip naming the shipped default
+  // would be wrong for the user who moved it). The editor's own copy of this chip
+  // (`editorSourceTitle`, main.ts) says "live preview" where this says "rendered
+  // Markdown": one sticky flag, two surfaces, each naming what *it* shows when it's off.
+  const sourceLabel = source ? "Show rendered Markdown" : "Show Markdown source";
+  const sourceChord = escapeHtml(displayKeys(["source.toggle"]));
   const flag = unreadable
     ? ` <span class="fm-flag" role="img" aria-label="Unreadable frontmatter" title="B2 can't read this frontmatter as YAML">${icon(
         "exclamation-triangle",
@@ -435,11 +442,9 @@ function noteBarHtml(state: AppState, note: NoteView): string {
                to shoulder with the graph toggle, which has always been an SVG, so a text
                glyph beside it never quite lined up. An icon carries no accessible name,
                hence the aria-label the visible characters used to supply (K1, "reachable"). -->
-          <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source aria-pressed="${source}" aria-label="${
-            source ? "Show rendered Markdown" : "Show Markdown source"
-          }" title="${
-            source ? "Show rendered Markdown" : "Show Markdown source"
-          }">${icon("code-slash")}</button>
+          <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source
+            aria-pressed="${source}" aria-label="${sourceLabel}"
+            title="${sourceLabel} — ${sourceChord}">${icon("code-slash")}</button>
           <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
             state.loading || editing ? " disabled" : ""
           } title="${

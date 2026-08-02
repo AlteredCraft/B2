@@ -286,6 +286,18 @@ outward under a policy that looks locked down), CSP says nothing about DOM clobb
 re-finds its controls by, and a future relaxation would silently re-open everything. Two independent
 layers, and neither one is allowed to be the argument for skipping the other.
 
+**A note's links never navigate the webview.** The window holds the whole application, so a click that
+follows `https://…` in place replaces B2 with a web page — no address bar, no back button, nothing to
+press. That is a *reachability* failure before it is a security one, and the fix is the same OS handoff
+the resource card already makes: `ui/src/links.ts` decides which hrefs are the system's (`http`, `https`,
+`mailto` — GFM autolinks a bare email into the third), main.ts's click delegation cancels the click, and
+`open_external` hands the URL to the user's browser. The host re-checks the scheme against its own copy of
+that list — the frontend's is *routing*, the host's is the **refusal**, and the refusal is what matters:
+`open` launches whatever app has registered a scheme, so an unfiltered handoff would let a `.md` name a
+program to run. Two layers again, and the schemes are spelled on both sides of the seam, so change them
+together (`only_web_links_are_openable` in `src/commands.rs`, `links.test.ts` in the UI). ⏎ on a focused
+anchor dispatches a click, so the keyboard and the mouse share the one activation path (K1).
+
 **What a new surface owes:** anything that reaches `innerHTML` gets its content from `renderMarkdown` (note
 bodies) or from `escapeHtml` (every value B2 interpolates into chrome — titles, paths, snippets). There is
 no third option; a raw string built from vault data and assigned to `innerHTML` is the bug this invariant

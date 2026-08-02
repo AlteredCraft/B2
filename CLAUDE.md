@@ -261,7 +261,11 @@ if/when one lands — `index-engine.md` §5.)*
   **trust boundary** (invariant E5, GH #77): a `.md` can come from anyone, so the one Markdown→HTML
   path (`renderMarkdown`) sanitizes its output — DOMPurify in `ui/src/sanitize.ts`, wired as `marked`'s
   `postprocess` hook so every call site is covered by construction — and every value B2 itself
-  interpolates goes through `escapeHtml`. The webview CSP is the second layer, not the guard. Fenced code is
+  interpolates goes through `escapeHtml`. The webview CSP is the second layer, not the guard. A note's
+  **links** are the same boundary from the other side: the webview *is* the app, so a link is never
+  followed in place — `ui/src/links.ts` routes a web link (`http`/`https`/`mailto`) to the host's
+  `open_external`, an OS handoff behind a scheme allow-list the host re-checks, and every other scheme
+  is refused rather than handed to whatever app registered it. Fenced code is
   syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
   loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
   preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the

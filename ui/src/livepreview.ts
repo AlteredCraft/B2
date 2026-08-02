@@ -38,6 +38,7 @@ import type { SyntaxNodeRef } from "@lezer/common";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
 // Extension-qualified, unlike the app-only modules: node's test runner resolves
 // specifiers literally, and this file is in the suite now (livepreview.test.ts).
+import { externalUrl } from "./links.ts";
 import { renderMarkdown } from "./render.ts";
 
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
@@ -200,8 +201,12 @@ class TableWidget extends WidgetType {
     wrap.className = "lp-table";
     wrap.innerHTML = renderMarkdown(this.md);
     wrap.addEventListener("mousedown", (e) => {
-      // Let a wikilink click fall through to the app's follow handler.
-      if ((e.target as HTMLElement | null)?.closest?.("[data-target]")) return;
+      // Let a link click fall through to the app's own handlers rather than yanking the
+      // caret out from under it: a wikilink to the follow path, a web link to the OS
+      // handoff (links.ts owns which hrefs those are — both are one click delegation in
+      // main.ts, and both are a *navigation*, not an edit of the table).
+      const el = (e.target as HTMLElement | null)?.closest?.("[data-target], a[href]") ?? null;
+      if (el?.matches("[data-target]") || externalUrl(el?.getAttribute("href"))) return;
       e.preventDefault();
       view.dispatch({ selection: { anchor: this.from } });
       view.focus();

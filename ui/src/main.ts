@@ -53,6 +53,7 @@ import {
 } from "./treenav";
 import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
+import { externalUrl, isInPageAnchor } from "./links";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -2687,9 +2688,9 @@ function mountEditor(body: string): void {
         <div class="note-bar-actions">
           <button id="edit-source" class="source-toggle${
             state.sourceOpen ? " is-active" : ""
-          }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${
-            state.sourceOpen ? "Show live preview" : "Show Markdown source"
-          }">&lt;/&gt;</button>
+          }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${escapeHtml(
+            editorSourceTitle(),
+          )}">&lt;/&gt;</button>
           <button id="edit-done" class="btn small primary" title="Save and return to reading — ⌘E (⌘S flushes anytime)">Done</button>
         </div>
       </div>
@@ -2753,6 +2754,16 @@ function mountEditor(body: string): void {
   if (findOpen) setFindQuery(findInput().value);
 }
 
+/** The editor chip's tooltip. Its chord comes out of the live registry rather than being
+ *  spelled here, for `graphToggleHtml`'s reason (render.ts): ⇧⌘E is rebindable (#121), so
+ *  a tooltip naming the shipped default would be wrong for the user who moved it. Off
+ *  "live preview" rather than the reading bar's "rendered Markdown" — one sticky flag,
+ *  two surfaces, and each names what *it* shows when the flag is off. */
+function editorSourceTitle(): string {
+  const what = state.sourceOpen ? "Show live preview" : "Show Markdown source";
+  return `${what} — ${displayKeys(["source.toggle"])}`;
+}
+
 // Repaint just the editor's conflict bar and the `</>` source-toggle button — never a
 // pane rebuild (the same targeted-repaint pattern as paintReindex).
 function paintEditor(): void {
@@ -2762,7 +2773,7 @@ function paintEditor(): void {
   if (src) {
     src.classList.toggle("is-active", state.sourceOpen);
     src.setAttribute("aria-pressed", String(state.sourceOpen));
-    src.title = state.sourceOpen ? "Show live preview" : "Show Markdown source";
+    src.title = editorSourceTitle();
   }
 }
 
@@ -3485,6 +3496,48 @@ function wireEvents(): void {
       }
       closeContextMenu();
       return;
+    }
+
+    // A web link in a note belongs to the **system**, not to this window. The webview
+    // *is* the application, so letting a `https://…` navigate replaces B2 with a web page
+    // in a window with no address bar and no way back — the app is gone until it's
+    // relaunched. So the click is cancelled and the URL handed to the host, which opens
+    // it in the user's browser (`open_external`, the sibling of the resource card's
+    // *Open in system default*). links.ts owns which hrefs qualify.
+    //
+    // High in the delegation because an anchor means the same thing wherever it is
+    // painted — a note's reading view, live preview's rendered table widget, a backlink
+    // snippet — and no branch below handles one. Below the context menu, though: while a
+    // menu is up the next click only dismisses it. Wikilinks never reach here (they are
+    // `href="#"`, which links.ts declines) and are followed further down.
+    //
+    // Keyboard-complete for free (K1): ⏎ on a focused anchor dispatches a click, so this
+    // is the one activation path for both, and the sheet's "Follow the focused link"
+    // row already covers it.
+    //
+    // The `else` is the other half of the same promise, and it is not "do nothing":
+    // `renderMarkdown`'s allow-list is *wider* than `externalUrl`'s, so a note can put an
+    // `ftp:`/`tel:`/`xmpp:` href — or an ordinary relative path — into the document, and
+    // any of those left alone is a webview navigation, which is the failure this whole
+    // branch exists to prevent. So a link B2 won't follow is **cancelled and said so**,
+    // not silently ignored. It falls *through* rather than returning, because the one
+    // href that must keep its click is B2's own: a wikilink is `href="#"`, an in-page
+    // anchor, and the follow handler below is what acts on it. Leaving fragments alone
+    // also keeps a note's own `[to the top](#heading)` scrolling, which is the single
+    // navigation that doesn't unload the app.
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    if (anchor) {
+      const href = anchor.getAttribute("href");
+      const url = externalUrl(href);
+      if (url) {
+        e.preventDefault();
+        api.openExternal(url).catch((err) => flash(errText(err)));
+        return;
+      }
+      if (!isInPageAnchor(href)) {
+        e.preventDefault();
+        flash("B2 doesn't follow this link — web links open in your browser, [[wikilinks]] open notes.");
+      }
     }
 
     // The tree-head create icons — contextual on the selection's folder.
@@ -4287,6 +4340,20 @@ function wireEvents(): void {
         e.preventDefault();
         enterEdit();
       }
+      return;
+    }
+    // ⇧⌘E flips the note between rendered and raw Markdown — the `</>` chip's chord, and
+    // the keyboard's route to the escape hatch. Live while editing for the same reason ⌘E
+    // is: CodeMirror leaves the chord unbound (editorkeys.test.ts is what keeps that
+    // true), so the event reaches this handler, and `toggleSource` reconfigures the live
+    // preview in place rather than rebuilding the pane. Refused with the graph up, the
+    // mirror of ⌘G being refused while editing — the pane belongs to the scene, so the
+    // flip would land somewhere nobody can see it. A resource card has no source to show.
+    if (isBound(e, "source.toggle")) {
+      if (currentOverlay() !== null || state.graphOpen) return;
+      if (!state.current || state.currentResource) return;
+      e.preventDefault();
+      toggleSource();
       return;
     }
     if (isBound(e, "dismiss")) {
