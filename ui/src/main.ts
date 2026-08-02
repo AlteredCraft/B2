@@ -53,7 +53,7 @@ import {
 } from "./treenav";
 import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
-import { externalUrl } from "./links";
+import { externalUrl, isInPageAnchor } from "./links";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
@@ -3514,12 +3514,30 @@ function wireEvents(): void {
     // Keyboard-complete for free (K1): ⏎ on a focused anchor dispatches a click, so this
     // is the one activation path for both, and the sheet's "Follow the focused link"
     // row already covers it.
+    //
+    // The `else` is the other half of the same promise, and it is not "do nothing":
+    // `renderMarkdown`'s allow-list is *wider* than `externalUrl`'s, so a note can put an
+    // `ftp:`/`tel:`/`xmpp:` href — or an ordinary relative path — into the document, and
+    // any of those left alone is a webview navigation, which is the failure this whole
+    // branch exists to prevent. So a link B2 won't follow is **cancelled and said so**,
+    // not silently ignored. It falls *through* rather than returning, because the one
+    // href that must keep its click is B2's own: a wikilink is `href="#"`, an in-page
+    // anchor, and the follow handler below is what acts on it. Leaving fragments alone
+    // also keeps a note's own `[to the top](#heading)` scrolling, which is the single
+    // navigation that doesn't unload the app.
     const anchor = target.closest<HTMLAnchorElement>("a[href]");
-    const url = anchor && externalUrl(anchor.getAttribute("href"));
-    if (url) {
-      e.preventDefault();
-      api.openExternal(url).catch((err) => flash(errText(err)));
-      return;
+    if (anchor) {
+      const href = anchor.getAttribute("href");
+      const url = externalUrl(href);
+      if (url) {
+        e.preventDefault();
+        api.openExternal(url).catch((err) => flash(errText(err)));
+        return;
+      }
+      if (!isInPageAnchor(href)) {
+        e.preventDefault();
+        flash("B2 doesn't follow this link — web links open in your browser, [[wikilinks]] open notes.");
+      }
     }
 
     // The tree-head create icons — contextual on the selection's folder.

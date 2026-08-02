@@ -45,3 +45,22 @@ export function externalUrl(href: string | null | undefined): string | null {
   );
   return openable ? href : null;
 }
+
+/**
+ * Does this href address a place *inside the document already on screen*?
+ *
+ * The one navigation a note's link may perform in place, because it scrolls rather than
+ * leaves: nothing is unloaded, so the app survives it. Everything else an anchor can be —
+ * a relative path into the vault, or one of the schemes the sanitizer permits but B2 does
+ * not open (`ftp:`, `tel:`, `sms:`, `xmpp:`, `matrix:`, `cid:`) — has to be **cancelled**
+ * by the click handler rather than merely not-opened, or the webview follows it and the
+ * app is gone. `renderMarkdown`'s allow-list and `externalUrl`'s are not the same list,
+ * and this is the seam between them; `sanitize.ts` deliberately keeps the wider one, so
+ * that a `tel:` a human wrote stays visible and copyable instead of being silently eaten.
+ *
+ * B2's own wikilink anchors are `href="#"`, so they land here and keep their click — the
+ * follow handler further down the delegation is what acts on them.
+ */
+export function isInPageAnchor(href: string | null | undefined): boolean {
+  return typeof href === "string" && href.startsWith("#");
+}
