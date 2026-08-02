@@ -167,6 +167,21 @@ check("the lazy 1. 1. 1. style is left as the author wrote it", () => {
   assertEq(run(indentList, "1. a\n1. b\n1. |c")?.doc, "1. a\n1. b\n   1. c", "a and b untouched");
 });
 
+check("a change of ordered delimiter is a new list, and numbering stops at it", () => {
+  // `1.` then `1)` is two lists in CommonMark, not one list of two. Reading them as one
+  // run had the renumbering walk straight over the boundary and rewrite `1) x` to `2) x`
+  // — an edit to a list the author never touched, three lines from the caret.
+  const r = run(indentList, "1. a\n1) x\n2) y\n3) |z");
+  assertEq(r?.doc, "1. a\n1) x\n2) y\n   1) z", "the `)` list keeps its own count");
+});
+
+check("a second list's deliberate start number survives the list above it", () => {
+  // The other half of the same boundary, and the one a run-level fix alone misses: `5)`
+  // *is* the head of its list, so "was this item the head of its run?" has to ask about
+  // the list too, or the 5 the author chose restarts at 1.
+  assertEq(run(indentList, "1. a\n5) x\n6) |y")?.doc, "1. a\n5) x\n   1) y", "x keeps its 5");
+});
+
 check("a bullet run is not renumbered into an ordered one", () => {
   assertEq(run(indentList, "- a\n- b\n- |c")?.doc, "- a\n- b\n  - c", "bullets stay bullets");
 });

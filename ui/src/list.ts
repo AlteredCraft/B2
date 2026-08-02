@@ -60,6 +60,10 @@ interface Marker {
   indentLen: number;
   /** Column the item's content starts at — where a child of this item must sit. */
   content: number;
+  /** The bullet character, or the ordered delimiter — the marker's *identity*. Changing
+   *  either starts a new list in CommonMark (`1.` then `2)` is two lists, not one list of
+   *  two), which is what bounds a run of shared numbering. */
+  kind: string;
   /** The ordered number and the characters spelling it; absent on a bullet. */
   num?: number;
   numLen?: number;
@@ -116,6 +120,8 @@ function scan(doc: string): Ln[] {
         indent,
         indentLen: lead.length,
         content: gapped - afterMarker > 4 ? afterMarker + 1 : gapped,
+        // The alternation matched one branch or the other, so one of these is a string.
+        kind: bullet ?? delim ?? "",
       };
       if (digits !== undefined) {
         item.num = Number(digits);
@@ -239,28 +245,42 @@ function parentOf(
   return -1;
 }
 
-/** The consecutive siblings of `i`, `i` included, in document order.
+/** The two sibling walks, narrowed to the same *list*.
  *
- *  A change of marker kind ends the run, because in CommonMark it ends the *list* — a
- *  bullet after a number is a new list, not a fourth item, so its numbering is its own. */
+ *  A neighbour at my level is not necessarily in my list: CommonMark starts a new one at
+ *  every change of marker — `1.` then `2)`, or `-` then `*` — so numbering must stop at
+ *  that boundary even though the indentation doesn't.
+ *
+ *  Deliberately **not** what the nesting target uses. "Which item am I nested under?" is
+ *  a question about columns, and `* b` landing under `- a` is the shape the author asked
+ *  for by pressing Tab; "which items share my numbering?" is a question about the list,
+ *  and the two answers part company exactly here. */
+function prevInRun(lines: readonly Ln[], level: Level, block: [number, number], i: number): number {
+  const j = prevSibling(lines, level, block, i);
+  return j >= 0 && lines[j].item?.kind === lines[i].item?.kind ? j : -1;
+}
+
+function nextInRun(lines: readonly Ln[], level: Level, block: [number, number], i: number): number {
+  const j = nextSibling(lines, level, block, i);
+  return j >= 0 && lines[j].item?.kind === lines[i].item?.kind ? j : -1;
+}
+
+/** The consecutive items of `i`'s own list at `i`'s level, `i` included, in document
+ *  order — the run a numbering sequence runs over. */
 function groupOf(
   lines: readonly Ln[],
   level: Level,
   block: [number, number],
   i: number,
 ): number[] {
-  const ordered = (j: number): boolean => lines[j].item?.num !== undefined;
-  const kind = ordered(i);
   const out = [i];
-  for (let j = prevSibling(lines, level, block, i); j >= 0; ) {
-    if (ordered(j) !== kind) break;
+  for (let j = prevInRun(lines, level, block, i); j >= 0; ) {
     out.unshift(j);
-    j = prevSibling(lines, level, block, j);
+    j = prevInRun(lines, level, block, j);
   }
-  for (let j = nextSibling(lines, level, block, i); j >= 0; ) {
-    if (ordered(j) !== kind) break;
+  for (let j = nextInRun(lines, level, block, i); j >= 0; ) {
     out.push(j);
-    j = nextSibling(lines, level, block, j);
+    j = nextInRun(lines, level, block, j);
   }
   return out;
 }
@@ -426,8 +446,11 @@ function renumber(
   const settled = !group.some(moved);
   if (settled && group.length > 1 && nums.every((n) => n === nums[0])) return;
 
+  // `prevInRun`, not `prevSibling`: "was this the head of its list?" has to ask about the
+  // list. A `5)` item under a `1.` one *is* a head — its own — and reading the neighbour
+  // above as a sibling would restart it at 1 and lose the number the author chose.
   const lead = group[0];
-  const wasFirst = prevSibling(lines, before, block, lead) < 0;
+  const wasFirst = prevInRun(lines, before, block, lead) < 0;
   const start = wasFirst ? (nums[0] ?? 1) : 1;
   group.forEach((i, k) => {
     const want = start + k;
