@@ -15,8 +15,15 @@
 // means by Tab. Inside a list it is claimed even when nothing can move (the first item of
 // a list has nothing to nest under, a top-level item has nothing to lift out of): a
 // gesture that sometimes ejects you from the buffer is worse than one that sometimes does
-// nothing. K1's promise is unaffected either way — ⌘E leaves edit mode and ⌘1/⌘2/⌘3 move
-// between panes, so the keyboard is never stuck in the editor.
+// nothing. And "inside a list" means the whole item, not just its marker line: a caret on
+// a continuation line acts on the item the line belongs to (`owningItem`), and one on the
+// blank interior to a loose list is claimed and swallowed — both are places the caret is
+// visibly in the list, and ejecting from either would break the contract above. The one
+// list this module cannot see is a *contained* one — `> - a` is a bullet behind a
+// blockquote prefix the scanner doesn't parse — so it returns null there and main.ts's
+// `inListItem` (the syntax tree's read) keeps the key claimed. K1's promise is unaffected
+// either way — ⌘E leaves edit mode and ⌘1/⌘2/⌘3 move between panes, so the keyboard is
+// never stuck in the editor.
 //
 // What it edits, and what it leaves alone. Leading whitespace, and the digits of an
 // ordered marker. Nothing else: the bullet character is the author's (`-` vs `*` starts a
@@ -50,6 +57,11 @@ const ITEM = /^([ \t]*)(?:([-*+])|(\d{1,9})([.)]))(?:([ \t]+)|$)/;
 /** `* * *`, `---`, `___` — a thematic break, which the item pattern would otherwise read
  *  as a bullet whose content is more bullets. */
 const RULE = /^[ \t]*(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+
+/** A heading, a fence, a quote — block starters that *interrupt* a paragraph in
+ *  CommonMark. Adjacency makes plain text a lazy continuation of the item above it; one
+ *  of these at column 0 is a new block instead, and never the item's to take along. */
+const INTERRUPTER = /^(?:#{1,6}(?:[ \t]|$)|```|~~~|>)/;
 
 const LEADING_WS = /^[ \t]*/;
 
@@ -150,6 +162,12 @@ function lineIndexAt(lines: readonly Ln[], pos: number): number {
  *  lets the same code answer "who is my sibling?" before and after the move. */
 type Level = (i: number) => number;
 
+/** Is this line list material — an item, or an indented continuation? `blockOf`'s read,
+ *  shared so the blank-line rule in `listEdit` asks the same question. */
+function listish(lines: readonly Ln[], j: number): boolean {
+  return lines[j].item !== undefined || (!lines[j].blank && lines[j].indent > 0);
+}
+
 /** The run of lines the list around `i` occupies: items, their indented continuations,
  *  and the single blank lines between them. Two blank lines, or an unindented paragraph,
  *  end it.
@@ -158,29 +176,45 @@ type Level = (i: number) => number;
  *  sibling search that ran to the top of the document would happily adopt an unrelated
  *  list three paragraphs up. */
 function blockOf(lines: readonly Ln[], i: number): [number, number] {
-  const listish = (j: number): boolean =>
-    lines[j].item !== undefined || (!lines[j].blank && lines[j].indent > 0);
   let start = i;
   for (let j = i - 1; j >= 0; ) {
-    if (listish(j)) {
+    if (listish(lines, j)) {
       start = j;
       j--;
-    } else if (lines[j].blank && j > 0 && listish(j - 1)) {
+    } else if (lines[j].blank && j > 0 && listish(lines, j - 1)) {
       start = j - 1;
       j -= 2;
     } else break;
   }
   let end = i;
   for (let j = i + 1; j < lines.length; ) {
-    if (listish(j)) {
+    if (listish(lines, j)) {
       end = j;
       j++;
-    } else if (lines[j].blank && j + 1 < lines.length && listish(j + 1)) {
+    } else if (lines[j].blank && j + 1 < lines.length && listish(lines, j + 1)) {
       end = j + 1;
       j += 2;
     } else break;
   }
   return [start, end];
+}
+
+/** The item a non-item, non-blank line belongs to — the nearest item above it in the
+ *  block, the way `parentOf` reads past a paragraph. What keeps the walk honest is the
+ *  blank rule: lazy continuation reaches a column-0 line only through adjacent text, so
+ *  past a blank such a line is a new paragraph and names no item. An indented line keeps
+ *  its owner across a blank (a loose item's own content), and a column-0 block starter —
+ *  a rule, a heading, a fence, a quote — interrupts a paragraph and is never a
+ *  continuation at all. */
+function owningItem(lines: readonly Ln[], i: number): number {
+  const line = lines[i];
+  if (line.indent === 0 && (RULE.test(line.text) || INTERRUPTER.test(line.text))) return -1;
+  const [start] = blockOf(lines, i);
+  for (let j = i - 1; j >= start; j--) {
+    if (lines[j].item) return j;
+    if (lines[j].blank && line.indent === 0) return -1;
+  }
+  return -1;
 }
 
 /** The item directly above `i` at the same level, or -1 when `i` is the first of its run.
@@ -301,9 +335,28 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
 
   let head = -1;
   for (let i = first; i <= last && head < 0; i++) if (lines[i].item) head = i;
-  if (head < 0) return null;
 
   const inert: ListEdit = { changes: [], selFrom: from, selTo: to };
+  if (head < 0) {
+    // The selection names no marker line, but the caret can still be *in* the list — on
+    // an item's continuation line, or on the blank interior to a loose one — and Tab
+    // must not eject from either (the header's contract). A continuation acts on the
+    // item it belongs to; the blank is claimed and swallowed; anything else is not this
+    // command's key.
+    if (lines[first].blank) {
+      // Interior means list material directly on both sides — the single blank of a
+      // loose list — with a real item above it in the block (indented code has
+      // continuations but no items). A blank above, below, or two deep in a gap is
+      // document space, and Tab moves on.
+      if (first === 0 || !listish(lines, first - 1)) return null;
+      if (first + 1 >= lines.length || !listish(lines, first + 1)) return null;
+      const [start] = blockOf(lines, first);
+      for (let j = first - 1; j >= start; j--) if (lines[j].item) return inert;
+      return null;
+    }
+    head = owningItem(lines, first);
+    if (head < 0) return null;
+  }
   const item = lines[head].item;
   if (!item) return null;
 
