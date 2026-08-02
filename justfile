@@ -145,7 +145,7 @@ test:
 
 # Defined here so the npm half of the repo is reachable from `just` like the cargo half.
 [group('gates')]
-[doc("The frontend's pure-logic suite (node's own test runner over ui/src/*.test.ts).")]
+[doc("The frontend's pure-logic suite (node's own test runner over ui/src/**/*.test.ts).")]
 test-ui: ui-install
     npm --prefix ui test
 

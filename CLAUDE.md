@@ -102,8 +102,9 @@ B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structu
 just check-app                          # clippy -D warnings for b2-desktop (builds ui/dist first) —
                                         # the desktop half of `just check`, split out because it's heavier
 just test-ui                            # the frontend's pure-logic suite — node's own test runner over
-                                        # src/*.test.ts (globbed, so a new file is never silently
-                                        # skipped), stripping the TS types and running off the source.
+                                        # src/**/*.test.ts (globbed, so a new file is never silently
+                                        # skipped — recursively, so that holds for a nested one too),
+                                        # stripping the TS types and running off the source.
                                         # (Raw: `cd ui && npm test`, which needs `just ui-install`
                                         # first — the recipe handles that.) Most cases are dependency-free,
                                         # but paste.test.ts exercises the real turndown conversion
