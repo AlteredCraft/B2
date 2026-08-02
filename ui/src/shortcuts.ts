@@ -124,6 +124,10 @@ const OWN_SHEET: readonly SheetGroup[] = [
       { ids: ["edit.toggle"], action: "Enter or leave edit mode" },
       { ids: ["editor.save"], action: "Save now (editing autosaves anyway)" },
       { ids: ["format.bold", "format.italic"], action: "Bold / italic" },
+      {
+        ids: ["editor.list.indent", "editor.list.outdent"],
+        action: "Nest / lift out the list item under the cursor (elsewhere, Tab moves on)",
+      },
       { ids: ["editor.table"], action: "Insert a table" },
       { ids: ["editor.paste-plain"], action: "Paste as plain text" },
       { keys: "[[", action: "Wikilink completion — ↑↓ then ⏎" },

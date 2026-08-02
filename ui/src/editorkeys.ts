@@ -24,6 +24,7 @@
 // and left edit mode. The alias is gone (see `Chord.mod`); this is the check that noticed.
 import { completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
+import { markdownKeymap } from "@codemirror/lang-markdown";
 import type { KeyBinding } from "@codemirror/view";
 import { type Binding, type Scope, activeBindings, allKeys, keystrokes } from "./bindings.ts";
 
@@ -42,6 +43,13 @@ export const STOCK_KEYMAPS: readonly StockKeymap[] = [
   // It declines unless the completion menu is actually open, which is what keeps ⏎ a
   // newline the rest of the time.
   { source: "completionKeymap", keymap: completionKeymap },
+  // Installed by `markdown()` itself (its `addKeymap` default), at Prec.high — so above
+  // B2's own chords. It was missing here, which is the gap this module exists to close:
+  // ⏎ continuing a list marker and ⌫ eating one are bindings the editor really runs, and
+  // nothing checked them. It matters more now that B2 binds Tab (`editor.list.indent`) —
+  // "CodeMirror leaves Tab alone" is only an assertion if every keymap the editor
+  // installs is in this list.
+  { source: "markdownKeymap", keymap: markdownKeymap },
 ];
 
 /** What main.ts spreads into the editor's keymap after B2's own chords. `completionKeymap`
