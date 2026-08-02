@@ -387,4 +387,71 @@ check("the recorder says out loud when nothing has reached B2", () => {
   assert(html.includes("claimed it first"), "and saying why that might be");
 });
 
+// Settings → Index is where the manual Reindex went when it left the top bar. Its `id` is
+// what main.ts's click delegation *and* `captureModalFocus` both go looking for, so a
+// panel that painted a nameless button would be a button that does nothing and drops the
+// keyboard on `<body>` — this file's subject exactly.
+check("the Index panel's Reindex button carries the id both halves restore by", () => {
+  const html = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v" }));
+  assert(tagWith(html, ">Reindex<").includes('id="reindex"'), "the button is identified");
+});
+
+// The button is refused while a run is live (`doReindex` single-in-flights anyway), and
+// says so rather than sitting there looking pressable — the panel shows no meter, so the
+// label is the only feedback it has. Both halves come from the exported predicates main.ts
+// repaints with, which is what keeps the two paints of this button in step.
+check("Reindex is disabled and renamed while a run is live", () => {
+  const idle = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v" }));
+  assert(!tagWith(idle, ">Reindex<").includes("disabled"), "pressable with no run going");
+  const busy = modalHtml(
+    app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", reindexing: true }),
+  );
+  assert(tagWith(busy, ">Indexing…<").includes("disabled"), "refused mid-run, and says so");
+  assert(busy.includes("top bar"), "and points at where the meter and Cancel actually are");
+  const novault = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: null }));
+  assert(tagWith(novault, ">Reindex<").includes("disabled"), "nothing to reindex with no vault");
+});
+
+// The #26 honesty, in the one place a human comes to ask "is my index finished?": indexed
+// and embedded are two different states, and a projected-but-unembedded vault must never
+// read as done — that is the whole reason the button is still reachable at all.
+check("the Index panel counts indexed and embedded separately", () => {
+  const partial = modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "index",
+      vaultRoot: "/v",
+      notesTotal: 10,
+      notesEmbedded: 4,
+    }),
+  );
+  assert(partial.includes("4/10 embedded"), "a partial embed reports the gap");
+  const done = modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "index",
+      vaultRoot: "/v",
+      notesTotal: 10,
+      notesEmbedded: 10,
+    }),
+  );
+  assert(done.includes("all embedded"), "a finished index says so plainly");
+  assert(!done.includes("10/10"), "and doesn't make you read a fraction to find out");
+  const keyword = modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "index",
+      vaultRoot: "/v",
+      semantic: false,
+      notesTotal: 10,
+      notesEmbedded: 0,
+    }),
+  );
+  assert(keyword.includes("isn’t installed"), "no model names the reason none are embedded");
+  const fresh = modalHtml(
+    app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", notesTotal: 0 }),
+  );
+  assert(fresh.includes("Nothing indexed yet"), "an unindexed vault is not a complete one");
+});
+
 console.log(`render: ${passed} checks passed`);

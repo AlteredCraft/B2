@@ -1169,8 +1169,8 @@ function embedStatsHtml(state: AppState): string {
 
 // --- Settings (⌘,) --------------------------------------------------------------
 //
-// A tabbed dialog over a rail (settingstabs.ts) — General, Embedding, Keyboard — rather
-// than the one scrolling column it grew out of. Reuses the link modal's `.modal-*`/
+// A tabbed dialog over a rail (settingstabs.ts) — General, Index, Embedding, Keyboard —
+// rather than the one scrolling column it grew out of. Reuses the link modal's `.modal-*`/
 // `.field` chrome; `.modal-settings` is the wider, fixed-height box, so switching
 // sections never resizes the dialog under the cursor.
 //
@@ -1186,6 +1186,8 @@ function settingsPanelHtml(state: AppState): string {
   switch (state.settingsTab) {
     case "general":
       return generalPanelHtml(state);
+    case "index":
+      return indexPanelHtml(state);
     case "embedding":
       return embeddingPanelHtml(state);
     case "keyboard":
@@ -1218,6 +1220,66 @@ function generalPanelHtml(state: AppState): string {
         <span class="field-label">Theme</span>
         <div class="segmented" role="group" aria-label="Appearance">${themeButtons}</div>
       </div>`;
+}
+
+// Index — the vault's projection into SQLite (index-engine.md §1), and the one button that
+// rebuilds it by hand.
+//
+// Why the button is *here* and not in the top bar it shipped in: indexing is automatic now.
+// The vault is brought up to date the moment it opens (#25, `autoIndexOnOpen`), the fs-watch
+// pulse re-projects every external save, and a cancelled run heals off the DB-derived
+// pending set on the next pass. A manual Reindex is therefore the exception — the thing you
+// reach for after a model swap or a bulk edit outside B2 — and permanent top-bar chrome for
+// an exception trains the eye to ignore the bar. It belongs where you go *looking* for it,
+// next to the coverage numbers that say whether you need it.
+//
+// The *progress* meter stays in the top bar beside the vault it is indexing (main.ts
+// `buildShell`): a run is watchable — and cancellable — with this dialog shut, which is the
+// whole point of the app staying usable while it runs. Hence the "it's in the top bar" line
+// below rather than a second meter in here: two meters for one run is two things to keep in
+// step, and the one behind a modal is the one nobody is watching.
+function indexPanelHtml(state: AppState): string {
+  const disabled = reindexDisabled(state);
+  // The same honesty as the search caveat (#26): "indexed" and "embedded" are two different
+  // states, and a projected-but-unembedded vault must never read as finished.
+  const coverage = ((): string => {
+    if (state.vaultRoot === null) return "No vault is open.";
+    if (state.notesTotal === 0)
+      return "Nothing indexed yet — B2 indexes a vault when you open it.";
+    const n = state.notesTotal;
+    if (!state.semantic)
+      return `${n} note${n === 1 ? "" : "s"} indexed for keyword search. The embedding model isn’t installed, so none are embedded.`;
+    return state.notesEmbedded >= n
+      ? `${n} note${n === 1 ? "" : "s"} indexed, all embedded.`
+      : `${n} note${n === 1 ? "" : "s"} indexed · ${state.notesEmbedded}/${n} embedded.`;
+  })();
+  // While a run is live: say where its meter and its Cancel are, since this panel shows
+  // neither. Without the pointer, a disabled button is the only feedback in here.
+  const running = state.reindexing
+    ? `<span class="muted">Progress and Cancel are in the top bar.</span>`
+    : `<span class="muted">Rarely needed — B2 indexes on open and as you save.</span>`;
+  return `<div class="settings-subhead">Vault index</div>
+      <p class="settings-detail muted">The index is a disposable projection of your Markdown — delete it and a reindex rebuilds it identically.</p>
+      <p class="settings-coverage">${escapeHtml(coverage)}</p>
+      <div class="settings-action">
+        <button class="btn small" id="reindex"${disabled ? " disabled" : ""}
+          title="Re-project the vault into the index">${escapeHtml(reindexLabel(state))}</button>
+        ${running}
+      </div>
+      <p class="settings-note">Reindex re-projects every note (notes, keyword index, and the
+        typed graph), then embeds whatever is missing vectors. Reach for it after changing the
+        embedding model, or after editing the vault with B2 closed.</p>`;
+}
+
+/** Whether the Reindex button is refused, and what it reads — pure, so the panel's paint
+ *  and main.ts's targeted repaint (`paintReindex`, which runs on every streamed progress
+ *  batch without a full render) can't drift apart on either. */
+export function reindexDisabled(state: AppState): boolean {
+  return state.loading || state.reindexing || state.vaultRoot === null;
+}
+
+export function reindexLabel(state: AppState): string {
+  return state.reindexing ? "Indexing…" : "Reindex";
 }
 
 // Embedding — everything about the model: which one, where its files are, what device it

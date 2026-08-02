@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "icons": "node --experimental-strip-types scripts/gen-icons.ts",
-    "test": "node --experimental-strip-types scripts/gen-icons.ts --check && node --experimental-strip-types --test --test-reporter=spec \"src/*.test.ts\""
+    "test": "node --experimental-strip-types scripts/gen-icons.ts --check && node --experimental-strip-types --test --test-reporter=spec \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
