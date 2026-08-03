@@ -494,6 +494,21 @@ impl Vault {
         })
     }
 
+    /// The vault's **projection context** — the `(conn, root, idgen, cfg)` bundle every
+    /// write-side op threads, built once here rather than spelled out per call site
+    /// ([#134](https://github.com/AlteredCraft/B2/issues/134)). Handing this to an op
+    /// (rather than [`embed_ctx`](Self::embed_ctx)) is what *makes* it model-free: it
+    /// carries no embedder, so `rm`/`create_note`/`write` cannot embed even by mistake.
+    fn ctx(&self) -> ingest::ProjectionCtx<'_> {
+        ingest::ProjectionCtx::new(&self.conn, &self.root, &self.idgen, &self.chunk_config)
+    }
+
+    /// [`ctx`](Self::ctx) plus the injected embedder — for the ops that re-embed what
+    /// they touch (`reindex`, `add`, `link`, `mv`).
+    fn embed_ctx(&self) -> ingest::EmbedCtx<'_> {
+        ingest::EmbedCtx::new(self.ctx(), self.embedder.as_ref())
+    }
+
     /// Override the vault's chunking policy (default: [`ChunkConfig::default()`]).
     /// Every subsequent op that chunks — `project`/`reindex`/`write`/`add`/`link`/
     /// `mv` — cuts with this config, so the index stays self-consistent. The
@@ -530,15 +545,7 @@ impl Vault {
         on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
     ) -> Result<ReindexReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "reindex", force).entered();
-        let ingested = ingest::ingest_vault_with_progress(
-            &self.conn,
-            &self.root,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-            force,
-            on_progress,
-        )?;
+        let ingested = ingest::ingest_vault_with_progress(self.embed_ctx(), force, on_progress)?;
         Ok(ReindexReport {
             indexed: ingested.notes.len(),
             embedded: ingested.notes.iter().filter(|i| i.embedded).count(),
@@ -567,13 +574,7 @@ impl Vault {
     /// pass it runs.)*
     pub fn project(&self, force: bool) -> Result<ProjectReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "project", force).entered();
-        let outcome = ingest::project_vault(
-            &self.conn,
-            &self.root,
-            &self.idgen,
-            &self.chunk_config,
-            force,
-        )?;
+        let outcome = ingest::project_vault(self.ctx(), force)?;
         Ok(ProjectReport {
             indexed: outcome.notes.len(),
             stamped: outcome.notes.iter().filter(|n| n.stamped).count(),
@@ -822,13 +823,7 @@ impl Vault {
         fs::write(&abs, parsed.as_str())?;
 
         // Re-project model-free; stamps a missing b2id through the ordinary path.
-        ingest::project_file(
-            &self.conn,
-            &self.root,
-            &path,
-            &self.idgen,
-            &self.chunk_config,
-        )?;
+        ingest::project_file(self.ctx(), &path)?;
 
         // Hash the FINAL on-disk bytes (a stamp re-wrote the file after our splice).
         let final_raw = fs::read_to_string(&abs)?;
@@ -896,13 +891,7 @@ impl Vault {
         }
 
         fs::write(&abs, parsed.as_str())?;
-        ingest::project_file(
-            &self.conn,
-            &self.root,
-            &path,
-            &self.idgen,
-            &self.chunk_config,
-        )?;
+        ingest::project_file(self.ctx(), &path)?;
 
         let final_raw = fs::read_to_string(&abs)?;
         Ok(WriteReport {
@@ -999,15 +988,7 @@ impl Vault {
         if db::resource_detail(&self.conn, path)?.is_none() {
             return Err(Error::ResourceNotFound(path.to_string()));
         }
-        mv::move_resource(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-            &self.root,
-            path,
-            to,
-        )
+        mv::move_resource(self.embed_ctx(), path, to)
     }
 
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at
@@ -1222,14 +1203,7 @@ impl Vault {
         // 2. Re-project the source note so the edge re-materializes from the Markdown
         //    as origin='frontmatter' — a projection of the line just written, not an
         //    index write (data-model.md §3).
-        ingest::ingest_file(
-            &self.conn,
-            &self.root,
-            &src_path,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-        )?;
+        ingest::ingest_file(self.embed_ctx(), &src_path)?;
 
         Ok(LinkReport {
             src_path,
@@ -1254,15 +1228,7 @@ impl Vault {
     /// as for `mv`/`reindex`/`link`.
     pub fn move_dir(&self, from: &str, to: &str) -> Result<DirMoveReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mv_dir", from, to).entered();
-        mv::move_dir(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-            &self.root,
-            from,
-            to,
-        )
+        mv::move_dir(self.embed_ctx(), from, to)
     }
 
     /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a
@@ -1280,16 +1246,7 @@ impl Vault {
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mv", from = note_ref, to).entered();
         let (b2id, old_rel) = self.resolve_ref_to_path(note_ref)?;
-        mv::move_note(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-            &self.root,
-            &b2id,
-            &old_rel,
-            to,
-        )
+        mv::move_note(self.embed_ctx(), &b2id, &old_rel, to)
     }
 
     /// Delete the note `note_ref` (path **or** `b2id`): the file leaves the disk,
@@ -1303,14 +1260,7 @@ impl Vault {
     pub fn delete_note(&self, note_ref: &str) -> Result<DeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm", note = note_ref).entered();
         let (b2id, rel) = self.resolve_ref_to_path(note_ref)?;
-        rm::delete_note(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            &self.root,
-            &b2id,
-            &rel,
-        )
+        rm::delete_note(self.ctx(), &b2id, &rel)
     }
 
     /// [`delete_note`](Self::delete_note)'s resource sibling — same posture (file
@@ -1318,13 +1268,7 @@ impl Vault {
     /// Errors with [`Error::ResourceNotFound`] for a path not in the inventory.
     pub fn delete_resource(&self, path: &str) -> Result<ResourceDeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm_resource", path).entered();
-        rm::delete_resource(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            &self.root,
-            path,
-        )
+        rm::delete_resource(self.ctx(), path)
     }
 
     /// Delete the whole folder `dir` (vault-relative) and everything inside it —
@@ -1334,7 +1278,7 @@ impl Vault {
     /// [`Error::DirNotFound`] for a missing (or invalid) folder.
     pub fn delete_dir(&self, dir: &str) -> Result<DirDeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm_dir", dir).entered();
-        rm::delete_dir(&self.conn, &self.idgen, &self.chunk_config, &self.root, dir)
+        rm::delete_dir(self.ctx(), dir)
     }
 
     /// Create a new note (`b2 add`): write `path` (a vault-relative path; `.md`
@@ -1355,17 +1299,7 @@ impl Vault {
     ) -> Result<AddReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "add", path).entered();
         let created = self.today()?;
-        add::add_note(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            self.embedder.as_ref(),
-            &self.root,
-            path,
-            title,
-            content,
-            &created,
-        )
+        add::add_note(self.embed_ctx(), path, title, content, &created)
     }
 
     /// Create a new, empty note **model-free** — the desktop's New-note action
@@ -1382,16 +1316,7 @@ impl Vault {
     pub fn create_note(&self, path: &str) -> Result<AddReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "create", path).entered();
         let created = self.today()?;
-        add::create_note(
-            &self.conn,
-            &self.idgen,
-            &self.chunk_config,
-            &self.root,
-            path,
-            None,
-            None,
-            &created,
-        )
+        add::create_note(self.ctx(), path, None, None, &created)
     }
 
     /// Create the folder `dir` (vault-relative; missing parents included, an

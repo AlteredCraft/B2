@@ -40,6 +40,67 @@ use std::path::Path;
 /// sooner — another reason not to over-size it.
 const EMBED_BATCH: usize = 16;
 
+/// Everything a **projection** needs: the index connection, the vault root, the id
+/// source (for stamping a missing `b2id`), and the vault's chunking policy. The four
+/// travel together through every write-side op — `mv`, `add`, `rm`, `link`, the save
+/// path — so they are one parameter rather than four in three orders
+/// ([#134](https://github.com/AlteredCraft/B2/issues/134)).
+///
+/// It carries a **posture**, and that is the point: an op that takes a `ProjectionCtx`
+/// holds no embedder and therefore *cannot* embed. The model-free rule the module docs
+/// state for `rm`/`create_note`/`write` is now the type system's to keep.
+///
+/// A short-lived, `Copy`, borrow-only view struct passed into a call and never stored
+/// — the sanctioned exception to "prefer owned fields" (CLAUDE.md, Rust data modeling;
+/// the `NoteRow` precedent). Built by `Vault::ctx`; the integration tests build their
+/// own with [`ProjectionCtx::new`]. No `Debug`: two of its four fields are trait
+/// objects, which have none to derive.
+#[derive(Clone, Copy)]
+pub struct ProjectionCtx<'a> {
+    pub(crate) conn: &'a Connection,
+    pub(crate) root: &'a Path,
+    pub(crate) idgen: &'a dyn IdGen,
+    pub(crate) cfg: &'a ChunkConfig,
+}
+
+impl<'a> ProjectionCtx<'a> {
+    /// Bundle the four projection inputs. `cfg` is the vault's *one* chunking policy
+    /// (never re-defaulted per call), so every path that chunks a given vault cuts
+    /// identically and `incremental ≡ full rebuild` holds by construction.
+    pub fn new(
+        conn: &'a Connection,
+        root: &'a Path,
+        idgen: &'a dyn IdGen,
+        cfg: &'a ChunkConfig,
+    ) -> Self {
+        Self {
+            conn,
+            root,
+            idgen,
+            cfg,
+        }
+    }
+}
+
+/// A [`ProjectionCtx`] plus the embedder — the **embedding** posture, and the other
+/// half of #134's split. The ops that re-embed what they touch (`reindex`, `add`,
+/// `link`, `mv`) take this; the model-free ones take the projection context alone, so
+/// the two postures are distinguishable at a glance and unmixable by the compiler.
+///
+/// Same view-struct rules as [`ProjectionCtx`] (`Copy`, borrow-only, never stored).
+#[derive(Clone, Copy)]
+pub struct EmbedCtx<'a> {
+    pub(crate) proj: ProjectionCtx<'a>,
+    pub(crate) embedder: &'a dyn Embedder,
+}
+
+impl<'a> EmbedCtx<'a> {
+    /// Add an embedder to a projection context.
+    pub fn new(proj: ProjectionCtx<'a>, embedder: &'a dyn Embedder) -> Self {
+        Self { proj, embedder }
+    }
+}
+
 /// A file's mtime as Unix seconds — the projection's shared stat reading
 /// (notes, resources, and a moved resource's repoint all record the same
 /// shape). `None` when the platform clock can't supply one.
@@ -208,21 +269,21 @@ pub struct ReindexProgress {
 /// (it embeds inline and has ensured the space exists), so a note left mid-embed is
 /// also healed by [`would_reembed`]'s vector-state check, exactly as before.
 ///
-/// `cfg` is the chunking policy (spec §3 D5) — threaded from the caller (ultimately
-/// the `Vault`, which defaults it) so *every* path that chunks a given vault cuts
-/// identically and `incremental ≡ full rebuild` holds by construction. The retrieval
-/// eval injects non-default configs here to A/B chunker levers in one process
-/// (the eval harness, crates/b2-embed/evals/).
+/// `ctx.cfg` is the chunking policy (spec §3 D5) — threaded from the caller
+/// (ultimately the `Vault`, which defaults it) so *every* path that chunks a given
+/// vault cuts identically and `incremental ≡ full rebuild` holds by construction. The
+/// retrieval eval injects non-default configs here to A/B chunker levers in one
+/// process (the eval harness, crates/b2-embed/evals/).
 fn project_note_and_chunks(
-    conn: &Connection,
-    vault_root: &Path,
+    ctx: ProjectionCtx,
     rel_path: &str,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
     force: bool,
     consult_vectors: bool,
 ) -> Result<ProjectedNote> {
-    let abs = vault_root.join(rel_path);
+    let ProjectionCtx {
+        conn, root, cfg, ..
+    } = ctx;
+    let abs = root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
     let mut parsed = note::parse(&raw);
 
@@ -238,7 +299,7 @@ fn project_note_and_chunks(
             restamped_from = db::resolve_path_to_b2id(conn, rel_path)?;
             // The one always-allowed write: stamp it into the file. The id lives in the
             // frontmatter, so identity travels with the note — nothing else to record.
-            let id = idgen.new_id();
+            let id = ctx.idgen.new_id();
             parsed.stamp_b2id(&id);
             fs::write(&abs, parsed.as_str())?;
             stamped = true;
@@ -558,28 +619,23 @@ fn derive_edge_id(src_id: &str, target_key: &str, edge_type: &str, occurrence: i
     h.finalize().to_hex()[..32].to_string()
 }
 
-/// Ingest a single note at `vault_root/rel_path` against an already-built index
-/// (the incremental path). Projects note + chunks + edges. `cfg` is the vault's
-/// chunking policy — the same one every other path uses, so a single-note
-/// re-projection cuts identically to a full rebuild.
-pub fn ingest_file(
-    conn: &Connection,
-    vault_root: &Path,
-    rel_path: &str,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    embedder: &dyn Embedder,
-) -> Result<Ingested> {
+/// Ingest a single note at `ctx.root/rel_path` against an already-built index
+/// (the incremental path). Projects note + chunks + edges. The context's chunking
+/// policy is the same one every other path uses, so a single-note re-projection cuts
+/// identically to a full rebuild.
+pub fn ingest_file(ctx: EmbedCtx, rel_path: &str) -> Result<Ingested> {
+    let EmbedCtx { proj, embedder } = ctx;
+    let conn = proj.conn;
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
     // Refuse an identity steal up front (GH #81): a file claiming a `b2id` whose
     // incumbent still exists and still claims it is a copy — erroring here beats
     // silently shadowing the incumbent out of the index.
-    guard_single_note_collision(conn, vault_root, rel_path)?;
+    guard_single_note_collision(conn, proj.root, rel_path)?;
     // Incremental (force=false): a frontmatter-only edit (e.g. a committed relation)
     // leaves the body unchanged, so this re-projects the note + edges without
     // needlessly re-embedding it. Vector state IS consulted (`consult_vectors`):
     // this path embeds inline, so a note left mid-embed re-chunks + re-embeds here.
-    let p = project_note_and_chunks(conn, vault_root, rel_path, idgen, cfg, false, true)?;
+    let p = project_note_and_chunks(proj, rel_path, false, true)?;
     let embedded = !p.pending.is_empty();
     // A single-note re-projection is never cancelled — always run to completion.
     embed_pending(conn, embedder, &p.b2id, &p.pending, |_| {
@@ -624,25 +680,19 @@ pub struct IngestOutcome {
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
 /// incrementally (unchanged notes reuse their vectors) and with no progress
 /// reporting. Dotfolders (e.g. `.b2/`) are skipped. Never cancelled, so it returns
-/// the note list directly. A convenience wrapper (what the test suite drives), so
-/// it chunks with the **default** [`ChunkConfig`]; callers with a non-default
-/// policy use [`ingest_vault_with_progress`].
+/// the note list directly. A convenience wrapper (what the test suite drives): it
+/// builds the [`EmbedCtx`] itself around the **default** [`ChunkConfig`], which is
+/// why it still takes loose arguments; callers with a non-default policy build their
+/// own context and use [`ingest_vault_with_progress`].
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
     idgen: &dyn IdGen,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
-    Ok(ingest_vault_with_progress(
-        conn,
-        vault_root,
-        idgen,
-        &ChunkConfig::default(),
-        embedder,
-        false,
-        &mut |_| ControlFlow::Continue(()),
-    )?
-    .notes)
+    let cfg = ChunkConfig::default();
+    let ctx = EmbedCtx::new(ProjectionCtx::new(conn, vault_root, idgen, &cfg), embedder);
+    Ok(ingest_vault_with_progress(ctx, false, &mut |_| ControlFlow::Continue(()))?.notes)
 }
 
 /// One note's projection outcome: its `b2id` and whether a missing `b2id` was
@@ -653,7 +703,7 @@ pub struct Projected {
     pub stamped: bool,
 }
 
-/// Re-project a single note at `vault_root/rel_path` **model-free** — the
+/// Re-project a single note at `ctx.root/rel_path` **model-free** — the
 /// single-note sibling of [`project_vault`], and the pass `Vault::write` runs after
 /// its body splice: note + chunks (+FTS) + edges, stamping
 /// a missing `b2id`, never touching the embedding space. A changed body re-chunks
@@ -661,15 +711,9 @@ pub struct Projected {
 /// **any** later embed pass to fill — so the save path needs no embedder and no
 /// coordination with one. Contrast [`ingest_file`], which embeds inline (the
 /// `add`/`link`/`mv` path — those ops already require the model).
-pub fn project_file(
-    conn: &Connection,
-    vault_root: &Path,
-    rel_path: &str,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-) -> Result<Projected> {
-    let p = project_note_and_chunks(conn, vault_root, rel_path, idgen, cfg, false, false)?;
-    project_edges(conn, &p.b2id, &p.body, &p.relations)?;
+pub fn project_file(ctx: ProjectionCtx, rel_path: &str) -> Result<Projected> {
+    let p = project_note_and_chunks(ctx, rel_path, false, false)?;
+    project_edges(ctx.conn, &p.b2id, &p.body, &p.relations)?;
     Ok(Projected {
         b2id: p.b2id,
         stamped: p.stamped,
@@ -843,7 +887,7 @@ fn guard_single_note_collision(conn: &Connection, vault_root: &Path, rel_path: &
 }
 
 /// The **projection pass** (index-engine.md): project every `.md`
-/// file under `vault_root` — Phase 1 (note + chunks + FTS, stamping missing
+/// file under `ctx.root` — Phase 1 (note + chunks + FTS, stamping missing
 /// `b2id`s) then Phase 2 (the typed edges) — with **no embedder and no embedding
 /// space**: it never creates the vector tables, so it needs neither the model nor
 /// its `dim`, and a projected-but-unembedded index is already complete for keyword
@@ -856,16 +900,11 @@ fn guard_single_note_collision(conn: &Connection, vault_root: &Path, rel_path: &
 /// *Naming note:* the index invariant's "index = projection of Markdown" means the
 /// **full** index — this pass plus [`embed_vault`] together. The pass is named for
 /// the row-projection it performs ([`project_note_and_chunks`] / [`project_edges`]).
-pub fn project_vault(
-    conn: &Connection,
-    vault_root: &Path,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    force: bool,
-) -> Result<ProjectOutcome> {
+pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> {
+    let ProjectionCtx { conn, root, .. } = ctx;
     let mut rel_paths = Vec::new();
     let mut resource_files = Vec::new();
-    collect_vault_files(vault_root, vault_root, &mut rel_paths, &mut resource_files)?;
+    collect_vault_files(root, root, &mut rel_paths, &mut resource_files)?;
     rel_paths.sort();
     resource_files.sort_by(|a, b| a.0.cmp(&b.0)); // paths are unique — a total order
 
@@ -874,8 +913,7 @@ pub fn project_vault(
     // where it can't — so the winner never depends on walk order (today's
     // `ON CONFLICT(b2id)` last-wins would hand the identity to whichever file the
     // walk visited last). Shadowed claimants are left un-projected and surfaced.
-    let (collisions, shadowed) =
-        resolve_collisions(conn, scan_b2id_claims(vault_root, &rel_paths))?;
+    let (collisions, shadowed) = resolve_collisions(conn, scan_b2id_claims(root, &rel_paths))?;
 
     // Phase 1: project every note + its chunks (this fills the link resolver for
     // every note, so phase 2 never depends on file order). The returned pending
@@ -888,7 +926,7 @@ pub fn project_vault(
         if shadowed.contains(rel.as_str()) {
             continue; // identity contested (GH #81) — surfaced in `collisions`, no row
         }
-        match project_note_and_chunks(conn, vault_root, rel, idgen, cfg, force, false) {
+        match project_note_and_chunks(ctx, rel, force, false) {
             Ok(p) => {
                 if let Some(old_b2id) = &p.restamped_from {
                     restamped.push(RestampedNote {
@@ -930,7 +968,7 @@ pub fn project_vault(
     // Resource inventory — between the phases so the rows exist before phase 2
     // resolves links (a `![[img.png]]` edge resolves against `resources`, spec §3).
     let (resources_indexed, resources_pruned, mut resource_skips) =
-        project_resources(conn, vault_root, &resource_files)?;
+        project_resources(conn, root, &resource_files)?;
     skipped.append(&mut resource_skips);
 
     // Phase 2: edges (resolve links against the now-complete resolver). Only the notes
@@ -1065,11 +1103,7 @@ pub fn embed_vault(
 /// chunks in place rather than regenerating their rowids — observably identical
 /// (notes, chunk text, FTS, text→vector, edges), only internal rowids differ (§7.1).
 pub fn ingest_vault_with_progress(
-    conn: &Connection,
-    vault_root: &Path,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    embedder: &dyn Embedder,
+    ctx: EmbedCtx,
     force: bool,
     on_progress: &mut dyn FnMut(ReindexProgress) -> ControlFlow<()>,
 ) -> Result<IngestOutcome> {
@@ -1081,8 +1115,8 @@ pub fn ingest_vault_with_progress(
         resources_pruned,
         collisions,
         restamped,
-    } = project_vault(conn, vault_root, idgen, cfg, force)?;
-    let embed = embed_vault(conn, embedder, on_progress)?;
+    } = project_vault(ctx.proj, force)?;
+    let embed = embed_vault(ctx.proj.conn, ctx.embedder, on_progress)?;
 
     // Merge the two outcomes into the per-note report shape `reindex` has always
     // returned: a note "embedded this run" iff the embed pass fully filled it.

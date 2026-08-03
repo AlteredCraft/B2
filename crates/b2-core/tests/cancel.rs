@@ -10,7 +10,7 @@ mod common;
 use b2_core::chunk::ChunkConfig;
 use b2_core::embed::FakeEmbedder;
 use b2_core::id::UlidGen;
-use b2_core::ingest::ingest_vault_with_progress;
+use b2_core::ingest::{ingest_vault_with_progress, EmbedCtx, ProjectionCtx};
 use b2_core::open;
 use b2_core::vault::Vault;
 use common::{count, golden_vault_copy};
@@ -26,16 +26,9 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
 
     // Break at the very first embed batch. The golden vault's notes are small (one
     // batch each), so this embeds the first note only.
-    let outcome = ingest_vault_with_progress(
-        &conn,
-        &vault,
-        &UlidGen,
-        &ChunkConfig::default(),
-        &embedder,
-        false,
-        &mut |_| ControlFlow::Break(()),
-    )
-    .unwrap();
+    let cfg = ChunkConfig::default();
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    let outcome = ingest_vault_with_progress(ctx, false, &mut |_| ControlFlow::Break(())).unwrap();
     assert!(outcome.cancelled, "the run reports itself cancelled");
 
     // §5.1 — keyword + graph are COMPLETE at the cancel point: every note has chunks,
@@ -61,16 +54,8 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
 
     // §5.2 — resume: an ordinary (uncancelled) reindex embeds exactly the remainder and
     // finishes. No corruption, no double-work.
-    let resumed = ingest_vault_with_progress(
-        &conn,
-        &vault,
-        &UlidGen,
-        &ChunkConfig::default(),
-        &embedder,
-        false,
-        &mut |_| ControlFlow::Continue(()),
-    )
-    .unwrap();
+    let resumed =
+        ingest_vault_with_progress(ctx, false, &mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!resumed.cancelled);
     assert_eq!(
         count(&conn, "embeddings"),

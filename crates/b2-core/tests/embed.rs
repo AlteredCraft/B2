@@ -54,7 +54,7 @@ fn embed_batch_matches_embed_per_element() {
 
 #[test]
 fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
-    use b2_core::ingest::{ingest_vault_with_progress, ReindexProgress};
+    use b2_core::ingest::{ingest_vault_with_progress, EmbedCtx, ProjectionCtx, ReindexProgress};
 
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
@@ -62,18 +62,13 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
     let mut events: Vec<ReindexProgress> = Vec::new();
-    ingest_vault_with_progress(
-        &conn,
-        &vault,
-        &UlidGen,
-        &b2_core::chunk::ChunkConfig::default(),
-        &FakeEmbedder::new(64),
-        false,
-        &mut |p| {
-            events.push(p);
-            ControlFlow::Continue(())
-        },
-    )
+    let cfg = b2_core::chunk::ChunkConfig::default();
+    let embedder = FakeEmbedder::new(64);
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    ingest_vault_with_progress(ctx, false, &mut |p| {
+        events.push(p);
+        ControlFlow::Continue(())
+    })
     .unwrap();
 
     // Batched embed still populates a vector for every chunk.

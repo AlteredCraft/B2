@@ -10,7 +10,9 @@ use b2_core::chunk::ChunkConfig;
 use b2_core::db;
 use b2_core::embed::FakeEmbedder;
 use b2_core::id::UlidGen;
-use b2_core::ingest::{embed_vault, ingest_file, ingest_vault, project_file, project_vault};
+use b2_core::ingest::{
+    embed_vault, ingest_file, ingest_vault, project_file, project_vault, EmbedCtx, ProjectionCtx,
+};
 use b2_core::open;
 use b2_core::vault::Vault;
 use common::{count, golden_vault_copy};
@@ -27,8 +29,9 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
 
     // Projection alone: no embedder anywhere near the call. If it issued any query
     // against `embeddings` (which does not exist yet), this would error.
+    let cfg = ChunkConfig::default();
     let outcome =
-        project_vault(&conn, &vault_dir, &UlidGen, &ChunkConfig::default(), false).unwrap();
+        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
     assert_eq!(outcome.notes.len(), 2);
 
     // The keyword + graph index is complete…
@@ -54,8 +57,9 @@ fn embed_fills_exactly_the_missing_vectors() {
     golden_vault_copy(&vault_dir);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     let embedder = FakeEmbedder::new(64);
+    let cfg = ChunkConfig::default();
 
-    project_vault(&conn, &vault_dir, &UlidGen, &ChunkConfig::default(), false).unwrap();
+    project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
 
     // First embed: every chunk lacks a vector → both notes embed, space is full.
     let first = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
@@ -193,9 +197,10 @@ fn project_skips_unreadable_file_and_indexes_the_rest() {
     // with `InvalidData` on it — the exact shape a large primary vault trips over.
     fs::write(vault_dir.join("bad.md"), [b'#', b' ', 0xff, b'\n']).unwrap();
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    let cfg = ChunkConfig::default();
 
     let outcome =
-        project_vault(&conn, &vault_dir, &UlidGen, &ChunkConfig::default(), false).unwrap();
+        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
 
     // Both readable notes projected; the bad one is skipped, not fatal.
     assert_eq!(outcome.notes.len(), 2, "both readable notes still index");
@@ -407,29 +412,16 @@ fn single_note_ingest_never_prunes() {
     fs::remove_file(vault_dir.join("bar.md")).unwrap();
 
     // Neither single-note path evicts the now-ghost row…
-    project_file(
-        &conn,
-        &vault_dir,
-        "foo.md",
-        &UlidGen,
-        &ChunkConfig::default(),
-    )
-    .unwrap();
+    let cfg = ChunkConfig::default();
+    let proj = ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg);
+    project_file(proj, "foo.md").unwrap();
     assert_eq!(count(&conn, "notes"), 2, "project_file prunes nothing");
-    ingest_file(
-        &conn,
-        &vault_dir,
-        "foo.md",
-        &UlidGen,
-        &ChunkConfig::default(),
-        &embedder,
-    )
-    .unwrap();
+    ingest_file(EmbedCtx::new(proj, &embedder), "foo.md").unwrap();
     assert_eq!(count(&conn, "notes"), 2, "ingest_file prunes nothing");
 
     // …only the whole-vault pass reconciles the deletion.
     let outcome =
-        project_vault(&conn, &vault_dir, &UlidGen, &ChunkConfig::default(), false).unwrap();
+        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
     assert_eq!(outcome.notes_pruned, 1);
     assert_eq!(count(&conn, "notes"), 1);
 }

@@ -16,13 +16,9 @@
 //! The `created` date is passed in (the façade's determinism boundary, like the
 //! move/link timestamps), keeping `b2-core` wall-clock-free.
 
-use crate::chunk::ChunkConfig;
-use crate::embed::Embedder;
 use crate::error::{Error, Result};
-use crate::id::IdGen;
-use crate::ingest;
+use crate::ingest::{self, EmbedCtx, ProjectionCtx};
 use crate::note::yaml_quote;
-use rusqlite::Connection;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -47,23 +43,18 @@ pub struct AddReport {
 /// Projection **embeds** the new note's chunks, so the caller must open the vault
 /// with the same embedder the index was built with (the CLI loads the real model
 /// for `add`, as for `reindex`/`link`/`mv`).
-#[allow(clippy::too_many_arguments)]
 pub fn add_note(
-    conn: &Connection,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    embedder: &dyn Embedder,
-    vault_root: &Path,
+    ctx: EmbedCtx,
     path_input: &str,
     title: Option<&str>,
     content: Option<&str>,
     created: &str,
 ) -> Result<AddReport> {
-    let rel = write_new_note(vault_root, path_input, title, content, created)?;
+    let rel = write_new_note(ctx.proj.root, path_input, title, content, created)?;
 
     // 2. Project from that Markdown: stamp the `b2id`, chunk + embed the body, and
     //    derive any edges its content authors.
-    let ingested = ingest::ingest_file(conn, vault_root, &rel, idgen, cfg, embedder)?;
+    let ingested = ingest::ingest_file(ctx, &rel)?;
     Ok(AddReport {
         b2id: ingested.b2id,
         path: rel,
@@ -77,19 +68,18 @@ pub fn add_note(
 /// missing-vector set for any later embed/reindex to fill
 /// (index-engine.md) — and a body-less note has nothing to
 /// embed anyway. Same validation and refusals as [`add_note`].
-#[allow(clippy::too_many_arguments)]
+///
+/// Taking a [`ProjectionCtx`] rather than an [`EmbedCtx`] is what makes that posture
+/// the type system's to keep: this function holds no embedder and so cannot embed.
 pub fn create_note(
-    conn: &Connection,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    vault_root: &Path,
+    ctx: ProjectionCtx,
     path_input: &str,
     title: Option<&str>,
     content: Option<&str>,
     created: &str,
 ) -> Result<AddReport> {
-    let rel = write_new_note(vault_root, path_input, title, content, created)?;
-    let projected = ingest::project_file(conn, vault_root, &rel, idgen, cfg)?;
+    let rel = write_new_note(ctx.root, path_input, title, content, created)?;
+    let projected = ingest::project_file(ctx, &rel)?;
     Ok(AddReport {
         b2id: projected.b2id,
         path: rel,

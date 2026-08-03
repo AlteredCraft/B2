@@ -15,12 +15,9 @@
 //! rebuild derives. Bodies are untouched, so re-projection re-chunks nothing and
 //! the ops are **model-free** (the `create_note`/`write` posture, not `mv`'s).
 
-use crate::chunk::ChunkConfig;
 use crate::db;
 use crate::error::{Error, Result};
-use crate::id::IdGen;
-use crate::ingest;
-use rusqlite::Connection;
+use crate::ingest::{self, ProjectionCtx};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
@@ -76,15 +73,9 @@ fn remove_file_if_present(abs: &Path) -> Result<()> {
 /// re-chunks and no vector is touched): their edges re-derive against the
 /// pruned tables, re-dangling the links that pointed at the deleted target with
 /// the raw-path-keyed edge ids a full rebuild would derive.
-fn reproject_dangled(
-    conn: &Connection,
-    vault_root: &Path,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    dangled: &BTreeSet<String>,
-) -> Result<()> {
+fn reproject_dangled(ctx: ProjectionCtx, dangled: &BTreeSet<String>) -> Result<()> {
     for src in dangled {
-        ingest::project_file(conn, vault_root, src, idgen, cfg)?;
+        ingest::project_file(ctx, src)?;
     }
     Ok(())
 }
@@ -93,14 +84,8 @@ fn reproject_dangled(
 /// off the index (chunks/FTS/vectors/centroid/aliases/outbound edges cascade
 /// with the `notes` row, as in whole-vault pruning), then re-project the inbound
 /// linkers so their edges re-dangle. The caller (the façade) resolved the ref.
-pub fn delete_note(
-    conn: &Connection,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    vault_root: &Path,
-    b2id: &str,
-    rel: &str,
-) -> Result<DeleteReport> {
+pub fn delete_note(ctx: ProjectionCtx, b2id: &str, rel: &str) -> Result<DeleteReport> {
+    let (conn, root) = (ctx.conn, ctx.root);
     // The graph names the bounded inbound set before the rows go. A self-link's
     // source is the note itself — it dies with the file, so it is not re-projected.
     let dangled: BTreeSet<String> = db::inbound_edge_targets(conn, b2id)?
@@ -109,9 +94,9 @@ pub fn delete_note(
         .filter(|p| p != rel)
         .collect();
 
-    remove_file_if_present(&vault_root.join(rel))?;
+    remove_file_if_present(&root.join(rel))?;
     conn.execute("DELETE FROM notes WHERE b2id = ?1", [b2id])?;
-    reproject_dangled(conn, vault_root, idgen, cfg, &dangled)?;
+    reproject_dangled(ctx, &dangled)?;
 
     Ok(DeleteReport {
         b2id: b2id.to_string(),
@@ -124,22 +109,17 @@ pub fn delete_note(
 /// off disk, inventory row off the index (inbound edges' `dst_resource_path` is
 /// `ON DELETE SET NULL`), then re-project the inbound linkers so their edges
 /// re-key to the raw-path (dangling) ids a rebuild derives.
-pub fn delete_resource(
-    conn: &Connection,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    vault_root: &Path,
-    rel: &str,
-) -> Result<ResourceDeleteReport> {
+pub fn delete_resource(ctx: ProjectionCtx, rel: &str) -> Result<ResourceDeleteReport> {
+    let (conn, root) = (ctx.conn, ctx.root);
     db::resource_detail(conn, rel)?.ok_or_else(|| Error::ResourceNotFound(rel.to_string()))?;
     let dangled: BTreeSet<String> = db::inbound_resource_edge_targets(conn, rel)?
         .into_iter()
         .map(|e| e.src_path)
         .collect();
 
-    remove_file_if_present(&vault_root.join(rel))?;
+    remove_file_if_present(&root.join(rel))?;
     conn.execute("DELETE FROM resources WHERE path = ?1", [rel])?;
-    reproject_dangled(conn, vault_root, idgen, cfg, &dangled)?;
+    reproject_dangled(ctx, &dangled)?;
 
     Ok(ResourceDeleteReport {
         path: rel.to_string(),
@@ -152,19 +132,14 @@ pub fn delete_resource(
 /// then every contained note's and resource's rows, then re-projection of the
 /// surviving linkers *outside* the folder. Errors with [`Error::DirNotFound`]
 /// for a missing (or invalid) source folder.
-pub fn delete_dir(
-    conn: &Connection,
-    idgen: &dyn IdGen,
-    cfg: &ChunkConfig,
-    vault_root: &Path,
-    dir_input: &str,
-) -> Result<DirDeleteReport> {
+pub fn delete_dir(ctx: ProjectionCtx, dir_input: &str) -> Result<DirDeleteReport> {
+    let (conn, root) = (ctx.conn, ctx.root);
     // The UI only sends tree-derived paths, so an invalid input (empty, absolute,
     // escaping, a dotfolder) is refused as "no such folder" rather than growing a
     // delete-specific destination error.
     let dir = crate::pathspec::normalize_rel_dir(dir_input)
         .map_err(|_| Error::DirNotFound(dir_input.trim().to_string()))?;
-    let abs = vault_root.join(&dir);
+    let abs = root.join(&dir);
     if !abs.is_dir() {
         return Err(Error::DirNotFound(dir));
     }
@@ -198,7 +173,7 @@ pub fn delete_dir(
     for path in &resources {
         conn.execute("DELETE FROM resources WHERE path = ?1", [path])?;
     }
-    reproject_dangled(conn, vault_root, idgen, cfg, &dangled)?;
+    reproject_dangled(ctx, &dangled)?;
 
     Ok(DirDeleteReport {
         dir,
