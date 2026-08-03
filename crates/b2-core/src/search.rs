@@ -138,17 +138,34 @@ pub fn hybrid_search(
 }
 
 /// The shared tail of [`keyword_only_search`] and [`hybrid_search`]: resolve the
-/// fused `(chunk_id, score)` ranking to [`Hit`]s, best first, keeping the top
-/// `limit` whose chunk still resolves to a note. Per-hit resolution is fine here —
-/// the set is bounded by `limit` (contrast [`graph_filtered_search`], which walks
-/// the full ranked space and needs the bulk map).
+/// fused `(chunk_id, score)` ranking to [`Hit`]s, best first, keeping the first
+/// `limit` **that still resolve** to a note.
+///
+/// The walk is one pass over the whole ranking, stopping at `limit` — an
+/// unresolved chunk is *skipped over*, never charged against the budget (GH
+/// #137). A chunk can only fail to resolve when its row vanished between the
+/// FTS/vector scan and this loop, i.e. a concurrent reindex replaced that note's
+/// chunks mid-query — the posture C1 promises (readers are never refused while a
+/// writer rebuilds; index-engine.md §3). Taking the top `limit` *first* would let
+/// a dead chunk hold a slot a live, lower-ranked candidate could fill, so search
+/// would quietly under-fill during that window. Steady state is unchanged: every
+/// top-`limit` chunk resolves, so the same hits come back in the same order.
+///
+/// Per-hit resolution stays fine here — the loop still stops at `limit` (contrast
+/// [`graph_filtered_search`], which walks the full ranked space by design and so
+/// needs the bulk map).
 fn resolve_hits(
     conn: &rusqlite::Connection,
     fused: Vec<(i64, f64)>,
     limit: usize,
 ) -> Result<Vec<Hit>> {
     let mut hits = Vec::new();
-    for (chunk_id, score) in fused.into_iter().take(limit) {
+    for (chunk_id, score) in fused {
+        // Tested *before* the push, not after, so `limit == 0` is honored rather
+        // than looping the whole ranking looking for a length it can never hit.
+        if hits.len() == limit {
+            break;
+        }
         if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
             hits.push(Hit {
                 chunk_id,
@@ -183,6 +200,11 @@ pub fn graph_filtered_search(
 
     let mut hits = Vec::new();
     for (chunk_id, distance) in db::vector_search_all(conn, &embedder.embed_query(query)?)? {
+        // Before the push, as in `resolve_hits`, so `limit == 0` stops the scan
+        // instead of running it to exhaustion.
+        if hits.len() == limit {
+            break;
+        }
         let Some(note_b2id) = chunk_note.get(&chunk_id) else {
             continue;
         };
@@ -192,9 +214,6 @@ pub fn graph_filtered_search(
                 note_b2id: note_b2id.clone(),
                 score: -(distance as f64), // closer = higher
             });
-            if hits.len() == limit {
-                break;
-            }
         }
     }
     Ok(hits)
