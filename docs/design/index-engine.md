@@ -318,6 +318,21 @@ whether the precision is *worth* it, not the reranker's cost — that is fixed a
 measure RRF precision@k / MRR on a representative set first and ship the reranker only on a measured gap;
 this is the deferral §5 is built to allow. Tracked in [#28](https://github.com/AlteredCraft/B2/issues/28).
 
+**…and check the instrument can see the change you are gating.** The labelled eval corpus is *no bigger
+than the candidate pool retrieval reaches* — 26 chunks against `vault::candidate_pool(10) = 150` per
+signal — so neither half of the hybrid is truncated there: BM25 returns every matching chunk, the vector
+scan every stored vector, and widening the pool cannot add a candidate. Relevance scores on that corpus
+are therefore **invariant under candidate width**: a change to `vault::hit_pool` or `search::pool_size`
+prints "no change" while genuinely reordering a real vault. Score *relevance* on the labelled corpus, but
+measure a width change with the rank-stability probe over a vault big enough for the pool to bind
+(`--example stability`, `fixtures/test-vault`); the eval prints its own blindness when the corpus fits
+inside the pool ([#141](https://github.com/AlteredCraft/B2/issues/141)).
+
+The blindness is to *candidates*, not to fusion. `RRF_K` re-weights the **same** two lists
+(`Σ 1/(k+rank+1)`), so it reorders results on a corpus of any size — measured on this one: k = 60 → 10
+moves note ranks across the query set. A k change is gated on the labelled eval like any other quality
+change; only candidate width needs the larger vault.
+
 Query expansion (qmd's third model, the fine-tuned 1.7B) is **optional and lowest priority** — it's the
 heaviest model for the smallest, most variable win. Treat it as a later, off-by-default flag.
 

@@ -88,8 +88,20 @@ pub fn fts5_query(raw: &str) -> String {
 }
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
-fn pool_size(limit: usize) -> usize {
-    (limit * 5).max(30)
+///
+/// `pub(crate)` for one caller: [`vault::candidate_pool`](crate::vault::candidate_pool)
+/// composes it with the façade's own headroom to state the *total* per-signal
+/// candidate depth a search reaches — the number a measurement has to know to say
+/// whether a corpus is big enough for fusion width to be observable (GH #141).
+///
+/// Saturating, like [`vault::hit_pool`](crate::vault)'s own widening: `limit` is
+/// user input (`b2 search --limit`, the desktop's page size) and the two widenings
+/// compose, so a caller can reach a product that overflows `usize` — which debug
+/// builds panic on and release builds *wrap*, turning an absurd ask into a silently
+/// tiny pool. Saturation degrades honestly instead: an unreachable pool is just
+/// every candidate there is.
+pub(crate) fn pool_size(limit: usize) -> usize {
+    limit.saturating_mul(5).max(30)
 }
 
 /// Keyword-only search: BM25 over `chunks_fts` → top `limit`, resolved to notes —

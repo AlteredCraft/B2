@@ -217,8 +217,11 @@ coverage-all:
 coverage-app: ui-build
     cargo llvm-cov -p b2-desktop
 
-# --- model: the real embedder. Never part of `cargo test` or CI — non-deterministic, needs a
-# provisioned model, and appends to a gitignored results log. Run these on demand.
+# --- model: the eval harness. Never part of `cargo test` or CI — the scored runs are
+# non-deterministic, need a provisioned model, and append to a gitignored results log. Run
+# these on demand. `stability` is the exception that proves the group: it measures retrieval
+# *sensitivity* rather than model quality, so it is deterministic and needs no model — but it
+# is the other half of the same harness, and you reach for it from the same place (GH #141).
 
 [group('model')]
 [doc('Download + verify bge-base-en-v1.5 into the shared XDG cache (needed for the real embedder).')]
@@ -236,6 +239,25 @@ eval:
 [doc('`just eval` plus the in-process chunker A/B (ChunkConfig sweep) — the GH #44 gate.')]
 eval-sweep:
     cargo run -p b2-embed --example eval -- --sweep
+
+# What `just eval` structurally cannot see (GH #141): its 26-chunk corpus is smaller than the
+# 150-candidate pool retrieval reaches, so neither signal is truncated and a candidate-width
+# change prints bit-identical scores. This probe asks the same queries at widening pools on a
+# vault big enough for the pool to bind, and diffs the shipped top-10 against a blessed
+# snapshot. Deterministic (fake embedder), so it needs no `just init`. Takes the example's
+# flags: `just stability --verbose` (show the diverging rankings), `--model` (real bge
+# magnitude), `--vault <path>` (any vault; `crates/b2-embed/evals/corpus` reproduces the gap).
+[group('model')]
+[doc('Rank-stability probe on fixtures/test-vault: pool sensitivity + drift vs the blessed baseline (GH #141).')]
+stability *args:
+    cargo run -p b2-embed --example stability -- {{args}}
+
+# Only after a ranking change is the intended one — the snapshot is unlabelled, so it records
+# what the ranking IS, never that it got better.
+[group('model')]
+[doc('Accept the current ranking as the committed rank-stability baseline.')]
+stability-bless:
+    cargo run -p b2-embed --example stability -- --bless
 
 # Compare its retrieval quality against `just eval` (CPU) — a device switch is a model swap
 # (the recorded model id gains an `@metal` tag), so the vault re-embeds.

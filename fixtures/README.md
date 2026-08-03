@@ -26,6 +26,14 @@ retrieval-quality experiments** that need volume, *not* the deterministic suite:
   a few typed frontmatter `b2_relations:`. Good for eyeballing `b2 search` / `b2 similar`. It is
   **not** the hand-labelled retrieval eval set (the eval harness under `crates/b2-embed/evals/`) — a scale
   fixture, not a graded benchmark.
+- **Rank stability** (GH #141) — `just stability` measures how much the top of the ranking moves when
+  the retrieval pool widens under it, and diffs the shipped top-10 against the committed snapshot in
+  `crates/b2-embed/evals/stability-baseline.json`. This is the job the *scale* is load-bearing for: the
+  labelled corpus (26 chunks) is no bigger than the 150-candidate pool retrieval reaches, so candidate width
+  cannot move anything there, while ~780 chunks make the pool bind. The probe runs the fake embedder on
+  a throwaway copy, so the numbers are deterministic and the fixture is never touched — but they are
+  only as stable as this vault: **editing `test-vault/` invalidates the blessed baseline**, so re-bless
+  (`just stability-bless`) in the same commit that changes the fixture.
 
 The prose is templated (sentences recombined from the pools), not human-authored — realistic
 enough to cluster and embed like real notes, not meant to be read. Every note carries a `b2id`,
