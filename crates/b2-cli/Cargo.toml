@@ -13,6 +13,9 @@ path = "src/main.rs"
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
 clap = { version = "4.6.1", features = ["derive", "env"] }
+# The `Serialize` bound on `print_json` — the one shared `--json` printer. Trait only;
+# the view types it prints derive their impls in b2-core, so no `derive` feature here.
+serde = "1.0.228"
 serde_json = "1.0.150"
 thiserror = "2.0.18"
 # Foreground `reindex` Ctrl-C → cooperative cancel (GH #16): a SIGINT handler flips a
