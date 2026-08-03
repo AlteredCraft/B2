@@ -1014,8 +1014,16 @@ impl Vault {
     /// A never-indexed vault still yields no hits, no error (its FTS index is
     /// empty). `vault_info`-style callers should consult the `semantic` flag to
     /// present keyword-only results honestly.
+    ///
+    /// A `limit` of 0 short-circuits here, ahead of [`retrieve`](Self::retrieve) —
+    /// so it costs no query embedding, and no [`Error::ModelMismatch`] either: that
+    /// guard exists to stop *wrong results* being returned, and there are no
+    /// results to be wrong about. [`search_chunks`](Self::search_chunks) matches.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let _op = tracing::debug_span!(target: "b2::vault", "search", query, limit).entered();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let hits = self.retrieve(query, hit_pool(limit))?;
         let mut out: Vec<SearchResult> = Vec::new();
         for hit in hits {
@@ -1055,6 +1063,9 @@ impl Vault {
     pub fn search_chunks(&self, query: &str, limit: usize) -> Result<Vec<ChunkSearchResult>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let mut out = Vec::new();
         for hit in self.retrieve(query, hit_pool(limit))? {
             if out.len() == limit {

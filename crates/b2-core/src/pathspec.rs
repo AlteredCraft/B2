@@ -14,10 +14,16 @@
 /// dot-prefixed name is not vault material, whatever its extension — the ingest
 /// walk applies this *before* the note/resource routing decision, so a
 /// `.scratch.md` is skipped exactly as `.DS_Store` is (data-model.md §1).
+///
+/// Asked of the name's **bytes**, not of a decoded `&str`: a filename is bytes the
+/// OS accepted, and `to_str` answers `None` for one UTF-8 rejects — which would
+/// make `.draft-\xFF.md` *not hidden* and route it to the note collector, where the
+/// lossy path then fails to reopen and surfaces as a bogus "file no longer exists"
+/// skip on every pass. A leading `.` is ASCII and `OsStr`'s encoding is
+/// ASCII-compatible, so the byte test is exact for every name on every platform.
 pub(crate) fn is_hidden(path: &std::path::Path) -> bool {
     path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with('.'))
+        .is_some_and(|n| n.as_encoded_bytes().starts_with(b"."))
 }
 
 /// Normalize + validate `input` into a vault-relative path (any file kind).

@@ -126,7 +126,9 @@ shape (§5).
 
 ## 1. The note
 
-A note is one `.md` file **whose name is not dot-prefixed**: YAML frontmatter, then a Markdown body.
+A note is one `.md` file **whose vault-relative path has no dot-prefixed segment**: YAML frontmatter,
+then a Markdown body. (Any segment — an ancestor folder counts, so `notes/.templates/daily.md` is no
+more a note than `.scratch.md` is.)
 
 ```markdown
 ---

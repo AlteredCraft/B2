@@ -369,6 +369,35 @@ fn a_zero_limit_returns_no_hits() {
     );
 }
 
+/// …and it gets there without *doing* anything. The observable proof is the
+/// model-mismatch guard: a vault indexed at one dimension and reopened at another
+/// fails every real search fast (`Error::ModelMismatch`, so incomparable vectors
+/// never rank), because retrieval embeds the query. A zero-limit search returns
+/// cleanly instead — it never reached retrieval, which is also what spares the real
+/// model a forward pass for an empty answer.
+#[test]
+fn a_zero_limit_search_does_no_retrieval_work() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    let vault = b2_core::Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(64))).unwrap();
+    vault.reindex().unwrap();
+    drop(vault);
+
+    let swapped =
+        b2_core::Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
+    assert!(
+        matches!(
+            swapped.search("forgetting", 5).unwrap_err(),
+            b2_core::Error::ModelMismatch { .. }
+        ),
+        "the fixture must be a genuinely mismatched vault"
+    );
+
+    assert!(swapped.search("forgetting", 0).unwrap().is_empty());
+    assert!(swapped.search_chunks("forgetting", 0).unwrap().is_empty());
+}
+
 #[test]
 fn graph_filter_with_zero_hops_is_just_the_anchor() {
     let tmp = tempfile::TempDir::new().unwrap();

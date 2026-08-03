@@ -102,6 +102,9 @@ pub fn keyword_only_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<Hit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
     tracing::debug!(
@@ -114,12 +117,20 @@ pub fn keyword_only_search(
 }
 
 /// Hybrid search: BM25 ⊕ vector(query) → RRF → top `limit`, resolved to notes.
+///
+/// A `limit` of 0 returns before the query is embedded: with the real model that
+/// call is the expensive part of a search, and asking for no results should cost
+/// none. The same guard opens [`keyword_only_search`] and
+/// [`graph_filtered_search`], so no retrieval path does work for an empty answer.
 pub fn hybrid_search(
     conn: &rusqlite::Connection,
     embedder: &dyn Embedder,
     query: &str,
     limit: usize,
 ) -> Result<Vec<Hit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
     let vector: Vec<i64> = db::vector_search(conn, &embedder.embed_query(query)?, pool)?
@@ -161,8 +172,9 @@ fn resolve_hits(
 ) -> Result<Vec<Hit>> {
     let mut hits = Vec::new();
     for (chunk_id, score) in fused {
-        // Tested *before* the push, not after, so `limit == 0` is honored rather
-        // than looping the whole ranking looking for a length it can never hit.
+        // Tested *before* the push, not after: an after-the-push test can never
+        // fire at a limit the loop starts below (`limit == 0`), which would turn
+        // "give me nothing" into "give me the whole ranking".
         if hits.len() == limit {
             break;
         }
@@ -195,13 +207,16 @@ pub fn graph_filtered_search(
     hops: usize,
     limit: usize,
 ) -> Result<Vec<Hit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let reachable = graph::reachable_within(conn, anchor, hops)?;
     let chunk_note = db::chunk_note_map(conn)?;
 
     let mut hits = Vec::new();
     for (chunk_id, distance) in db::vector_search_all(conn, &embedder.embed_query(query)?)? {
-        // Before the push, as in `resolve_hits`, so `limit == 0` stops the scan
-        // instead of running it to exhaustion.
+        // Before the push, not after: an after-the-push test can never fire at a
+        // limit the loop starts below, which is what the entry guard above covers.
         if hits.len() == limit {
             break;
         }
