@@ -4,14 +4,17 @@
 //! so each authoring op maps the reason onto its own [`crate::Error`] variant and
 //! its own user-facing phrasing, without the two coupling through a shared error.
 //!
-//! Also home to the one **vault-membership rule** ([`is_hidden`]) both walks and
-//! the validators share: a dot-prefixed name is never vault material.
+//! Also home to the shared **hidden-path predicate** ([`is_hidden`]): the one
+//! definition of what a dot-prefixed name is, which each walk applies per its
+//! own routing rule.
 
-/// Whether this walked entry's *name* is dot-prefixed — the vault-membership
-/// rule the ingest walk and the folder walk both route on (`.b2/`, `.git/`,
-/// `.DS_Store` are never vault material), and the same rule
-/// [`normalize_rel_dir`] enforces on user input. One predicate so the walks
-/// can't drift from each other or from the validator.
+/// Whether this walked entry's *name* is dot-prefixed — the hidden-path
+/// predicate shared by the folder walk (skips dot *directories*), the ingest
+/// walk (skips dot directories and dot *resources*; the **note route
+/// deliberately keeps its historical behavior** and still indexes a
+/// dot-prefixed `.md` — see `collect_vault_files`), and the user-input
+/// validator [`normalize_rel_dir`]. One predicate so those sites can't drift
+/// on what "hidden" *means*, even where they apply it differently.
 pub(crate) fn is_hidden(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
