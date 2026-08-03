@@ -262,7 +262,7 @@ fn rewrite_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<(Vec
     let none = BTreeMap::new();
     let mut rewrote = Vec::new();
     let mut links_rewritten = 0usize;
-    let touched: BTreeSet<&String> = wiki.keys().chain(md.keys()).collect();
+    let touched: BTreeSet<&str> = wiki.keys().chain(md.keys()).map(String::as_str).collect();
     for src_path in touched {
         let abs = vault_root.join(src_path);
         let raw = fs::read_to_string(&abs)?;
@@ -270,7 +270,7 @@ fn rewrite_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<(Vec
         let (pass2, n2) = rewrite_md_targets(&pass1, md.get(src_path).unwrap_or(&none));
         if n1 + n2 > 0 {
             fs::write(&abs, pass2)?;
-            rewrote.push(src_path.clone());
+            rewrote.push(src_path.to_string());
             links_rewritten += n1 + n2;
         }
     }
