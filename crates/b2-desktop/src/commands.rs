@@ -583,9 +583,11 @@ fn embed_impl(
 
 fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
-    // Model-free read: open the fake vault only to count embedding coverage (#26). The
-    // real model is never loaded here — `semantic` stays "is a model installed", while
-    // `notes_embedded/total` is the precise fraction the UI flags keyword-only from.
+    // Model-free read, on both halves — this sits on the first-paint path (#133). The
+    // vault opens with the fake purely to count embedding coverage (#26), and
+    // `semantic` is a file *probe* (`semantic_available`), not a model load: it stays
+    // "is a model installed", while `notes_embedded/total` is the precise fraction the
+    // UI flags keyword-only from.
     let vault = open_read(state)?;
     let status = vault.embed_status()?;
     Ok(VaultInfo {

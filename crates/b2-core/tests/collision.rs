@@ -9,7 +9,7 @@ mod common;
 use b2_core::chunk::ChunkConfig;
 use b2_core::embed::FakeEmbedder;
 use b2_core::id::UlidGen;
-use b2_core::ingest::ingest_file;
+use b2_core::ingest::{ingest_file, EmbedCtx, ProjectionCtx};
 use b2_core::note::parse;
 use b2_core::open;
 use b2_core::vault::{CollisionPrecedence, Vault};
@@ -282,15 +282,8 @@ fn single_note_ingest_refuses_an_identity_steal_but_allows_a_move() {
         root.join("concepts/stolen.md"),
     )
     .unwrap();
-    let err = ingest_file(
-        &conn,
-        &root,
-        "concepts/stolen.md",
-        &UlidGen,
-        &cfg,
-        &embedder,
-    )
-    .unwrap_err();
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &root, &UlidGen, &cfg), &embedder);
+    let err = ingest_file(ctx, "concepts/stolen.md").unwrap_err();
     assert!(
         matches!(&err, Error::B2idCollision { b2id, holder, .. }
             if b2id == MEMORY_ID && holder == "concepts/memory.md"),
@@ -305,7 +298,6 @@ fn single_note_ingest_refuses_an_identity_steal_but_allows_a_move() {
         root.join("concepts/moved.md"),
     )
     .unwrap();
-    let ingested =
-        ingest_file(&conn, &root, "concepts/moved.md", &UlidGen, &cfg, &embedder).unwrap();
+    let ingested = ingest_file(ctx, "concepts/moved.md").unwrap();
     assert_eq!(ingested.b2id, MEMORY_ID);
 }

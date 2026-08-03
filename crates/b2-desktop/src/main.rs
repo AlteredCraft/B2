@@ -215,14 +215,23 @@ pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
 /// false under `B2_EMBEDDER=fake`, or if the model isn't provisioned yet. Used by
 /// `vault_info` to tell the UI whether semantic ranking is live, so the app can be
 /// honest (never overstate the fake), exactly as `b2 search` is.
+///
+/// A **probe, never a load** ([#133](https://github.com/AlteredCraft/B2/issues/133)):
+/// `is_model_provisioned` is the repo's one "installed" check
+/// ([`b2_embed::LocalEmbedder::load`]'s own fail-fast precondition — `files_present`),
+/// so this answers the question `load` would, without parsing `config.json`, building
+/// the tokenizer, or mmapping the weights. That matters because `vault_info` calls it
+/// on **every** first paint and vault switch — the path the `project`/`embed` split
+/// exists to keep model-free. What the probe trades away: a *present-but-corrupt*
+/// model reads as `semantic: true` here and fails at the first `search`/`reindex`
+/// instead. That failure is already fail-fast and actionable ("model load failed"),
+/// and the flag's own contract is "is a model installed", which is exactly what a
+/// file check answers.
 pub fn semantic_available() -> bool {
     if use_fake_embedder() {
         return false;
     }
-    match EmbedConfig::load() {
-        Ok(config) => LocalEmbedder::load(&config).is_ok(),
-        Err(_) => false,
-    }
+    EmbedConfig::load().is_ok_and(|c| c.is_model_provisioned(&c.model))
 }
 
 /// Resolve the vault root once at startup. Precedence, most-explicit first:

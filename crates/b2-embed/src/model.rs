@@ -269,6 +269,43 @@ mod tests {
     }
 
     #[test]
+    fn files_present_is_loads_own_precondition() {
+        // What the desktop's `semantic` probe rests on (GH #133): the cheap file check
+        // and `load`'s fail-fast ask the same question, so answering with the former
+        // never overstates the model — and where they *do* part company (a corrupt
+        // model), the failure is `load`'s, which is fail-fast and actionable.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = EmbedConfig {
+            model: "acme/not-a-real-model".to_string(),
+            source: crate::Source::Local(tmp.path().to_path_buf()),
+            cache_dir: tmp.path().to_path_buf(),
+            query_prefix: String::new(),
+        };
+
+        // Empty cache: the probe says "not installed" and `load` refuses for exactly
+        // that reason — the two agree, which is what lets the probe stand in.
+        assert!(!config.is_model_provisioned(&config.model));
+        assert!(matches!(
+            LocalEmbedder::load(&config),
+            Err(EmbedError::NotProvisioned { .. })
+        ));
+
+        // Present-but-corrupt: the probe reports installed (it is a *file* check), and
+        // the refusal moves to `load` — no longer `NotProvisioned`, so the file gate
+        // demonstrably passed and only the deeper parse failed.
+        let dir = config.model_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in REQUIRED_FILES {
+            std::fs::write(dir.join(f), b"not a model").unwrap();
+        }
+        assert!(config.is_model_provisioned(&config.model));
+        assert!(matches!(
+            LocalEmbedder::load(&config),
+            Err(EmbedError::Load(_))
+        ));
+    }
+
+    #[test]
     fn select_device_falls_back_to_cpu_without_the_metal_feature() {
         // The default (no-feature) test build has `metal_is_available() == false`, so selection
         // resolves to CPU and the tag is "cpu" — this keeps the whole test suite on the CPU path.

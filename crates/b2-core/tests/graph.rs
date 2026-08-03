@@ -6,7 +6,7 @@ mod common;
 use b2_core::embed::FakeEmbedder;
 use b2_core::graph::{neighbors, unresolved_outbound, Direction};
 use b2_core::id::UlidGen;
-use b2_core::ingest::{ingest_file, ingest_vault};
+use b2_core::ingest::{ingest_file, ingest_vault, EmbedCtx, ProjectionCtx};
 use b2_core::open;
 use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
 use rusqlite::Connection;
@@ -164,15 +164,10 @@ fn one_note_reindex_equals_full() {
     let after_full = edge_snapshot(&conn);
 
     // Re-project a single note against the already-complete index.
-    ingest_file(
-        &conn,
-        &vault,
-        "notes/spaced-repetition.md",
-        &UlidGen,
-        &b2_core::chunk::ChunkConfig::default(),
-        &FakeEmbedder::default(),
-    )
-    .unwrap();
+    let cfg = b2_core::chunk::ChunkConfig::default();
+    let embedder = FakeEmbedder::default();
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    ingest_file(ctx, "notes/spaced-repetition.md").unwrap();
     let after_incremental = edge_snapshot(&conn);
 
     assert_eq!(
