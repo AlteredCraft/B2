@@ -99,6 +99,33 @@ mod tests {
         assert!(normalize_rel_dir("../up").is_err());
     }
 
+    /// A filename is bytes, not text. `to_str` answers `None` for a name UTF-8
+    /// rejects, which made `.draft-\xFF.md` read as *not* hidden and routed it into
+    /// the note collector — where the lossy path names no file, so every pass
+    /// reported a bogus "file no longer exists" skip for something that should have
+    /// been invisible.
+    ///
+    /// Asserted on the predicate rather than through a real file on purpose:
+    /// `read_dir` can hand us any bytes the mounted filesystem holds, but APFS
+    /// refuses to *create* such a name (EILSEQ), so a fixture that writes one cannot
+    /// run on the platform B2 ships on. The predicate has to be total over its input
+    /// regardless of which filesystem produced it, and that is exactly what this
+    /// checks.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_dot_prefixed_name_is_hidden() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+
+        let undecodable = |bytes: &[u8]| is_hidden(Path::new(OsStr::from_bytes(bytes)));
+        assert!(undecodable(b"/vault/.draft-\xFF.md"));
+        assert!(undecodable(b"/vault/.\xFF"));
+        // …and the same bytes without the leading dot stay ordinary vault material,
+        // so the fix widens what counts as hidden by exactly the leading dot.
+        assert!(!undecodable(b"/vault/draft-\xFF.md"));
+    }
+
     /// GH #136: b2 indexes no dot-prefixed member, so no authoring destination may
     /// name one — folder, resource, or note alike. An interior dot (`a.b.md`) is
     /// not hidden; only a *leading* one is.

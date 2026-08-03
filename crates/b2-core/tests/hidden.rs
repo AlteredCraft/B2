@@ -127,34 +127,10 @@ fn dry_run_agrees_the_hidden_files_are_not_notes() {
     assert_eq!(plan.would_stamp, report.stamped);
 }
 
-/// A filename is bytes, not text: a leading dot must be read off the bytes, or a
-/// name the OS accepts but UTF-8 rejects (`.draft-\xFF.md`) slips past the predicate
-/// and routes to `notes`. Unix-only — this is where such a name can exist.
-#[cfg(unix)]
-#[test]
-fn a_non_utf8_dot_prefixed_name_is_still_hidden() {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    let vault = vault_with_hidden_markdown(&root);
-    fs::write(
-        root.join(OsStr::from_bytes(b".draft-\xFF.md")),
-        "# Undecodable\ncapybaras again.\n",
-    )
-    .unwrap();
-
-    let report = vault.reindex().unwrap();
-    assert_eq!(report.indexed, 1, "only the managed note is a note");
-    assert!(
-        report.skipped.is_empty(),
-        "a hidden file is skipped by the walk, never routed and then reported \
-         unreadable: {:?}",
-        report.skipped
-    );
-    assert_eq!(vault.list_notes().unwrap().len(), 1);
-}
+// The byte-wise half of the same rule — a name UTF-8 rejects, which must still read
+// as hidden — is a unit test on the predicate in `src/pathspec.rs`, not a case here:
+// APFS refuses to *create* such a name (EILSEQ), so there is no file to walk on the
+// platform B2 ships on. See that test for why the predicate must answer anyway.
 
 /// The migration path a pre-#136 vault takes, and the one a rename opens: a `.md`
 /// that *was* indexed under a managed name and is then hidden drops out of the
