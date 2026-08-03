@@ -1,9 +1,9 @@
 {
-  "_note": "Blessed ranking snapshot for the rank-stability probe (crates/b2-embed/examples/stability.rs, GH #141): the top-10 notes and chunks each probe in stability.json returns from fixtures/test-vault under the deterministic fake embedder. Committed so a later run can show *movement* — any change to fusion width, chunking or resolution shows up here as drift rather than being inferred. It scores nothing: the corpus is unlabelled, so drift means different, never worse. Regenerate with `just stability-bless` once a ranking change is the intended one.",
+  "_note": "Blessed ranking snapshot for the rank-stability probe (crates/b2-embed/examples/stability.rs, GH #141): the top-10 notes and chunks each probe in stability.json returns from fixtures/test-vault under the deterministic fake embedder. Committed so a later run can show *movement* — any ranking change (candidate width, the RRF constant, chunking, resolution) shows up here as drift rather than being inferred. It scores nothing: the corpus is unlabelled, so drift means different, never worse. Regenerate with `just stability-bless` once a ranking change is the intended one.",
   "vault": "fixtures/test-vault",
   "embedder": "fake",
   "k": 10,
-  "blessed_at": "196dc3b",
+  "blessed_at": "62bbac9",
   "probes": [
     {
       "query": "how do i choose an approximate nearest neighbour index",

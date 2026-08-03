@@ -3,13 +3,17 @@
 //! The scored eval (`--example eval`) runs on the hand-labelled corpus in
 //! `evals/corpus/`: 20 notes / 26 chunks. Retrieval pulls
 //! `vault::candidate_pool(10) = 150` candidates from *each* signal, so on a corpus
-//! that small both halves of the hybrid return the entire index, the two ranked
-//! lists RRF fuses are identical for any pool at least that wide, and every number
-//! the eval prints is **invariant under pool/fusion width**. A change to
-//! `vault::hit_pool`, `search::pool_size` or `search::RRF_K` therefore reads as "no
-//! change" there while genuinely reordering a real vault — the worked example is
-//! GH #140, whose 3× pool widening moved 5 of 7 probe top-10s on
-//! `fixtures/test-vault` and printed bit-identical eval numbers.
+//! that small neither half of the hybrid is truncated — BM25 returns every matching
+//! chunk, the vector scan every stored vector — both lists are already complete, and
+//! widening the pool cannot add a candidate. Every number the eval prints is
+//! therefore **invariant under candidate width**: a change to `vault::hit_pool` or
+//! `search::pool_size` reads as "no change" there while genuinely reordering a real
+//! vault — the worked example is GH #140, whose 3× pool widening moved 5 of 7 probe
+//! top-10s on `fixtures/test-vault` and printed bit-identical eval numbers.
+//!
+//! Width is the whole of the gap. `search::RRF_K` re-weights the *same* two lists,
+//! so it reorders a 26-chunk corpus as readily as a large one and the scored eval
+//! already sees it; this probe is for the candidates that eval was never handed.
 //!
 //! This probe measures the property that corpus cannot see. It runs on a vault big
 //! enough for the pool to **bind** (`fixtures/test-vault`, ~200 notes / ~790
@@ -21,12 +25,12 @@
 //!    pool-invariant retriever would answer a shallow ask with an exact prefix of
 //!    the deep one; RRF over a widened pool does not, because a candidate ranked in
 //!    *both* lists can outscore one ranked top of a single list (`2/121 > 1/61` at
-//!    k = 60). How often the prefix breaks is how much fusion width is worth on
+//!    k = 60). How often the prefix breaks is how much candidate width is worth on
 //!    this vault. No baseline, no config edit, no rebuild — one run answers it.
 //! 2. **Baseline drift** — the shipped top-K against the committed
-//!    `evals/stability-baseline.json`, so *any* future ranking change (fusion
-//!    width, chunker, FTS sanitizer, resolution) is visible as movement rather than
-//!    inferred. `--bless` accepts the current ranking as the new baseline.
+//!    `evals/stability-baseline.json`, so *any* future ranking change (candidate
+//!    width, the RRF constant, chunker, FTS sanitizer, resolution) is visible as
+//!    movement rather than inferred. `--bless` accepts the current ranking.
 //!
 //! The corpus here is **unlabelled**: this scores no relevance and never says
 //! *better*, only *different, and by how much*. Relevance is the scored eval's job;
@@ -128,7 +132,12 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // A bare `--` is dropped, not parsed. `just stability --verbose` forwards the
+    // flag straight through (measured on just 1.58), but the habit of typing
+    // `just stability -- --verbose` is common and just forwards *that* separator
+    // into the recipe verbatim — the example would otherwise reject its own
+    // documented invocation on a literal `--`.
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--").collect();
     let bless = has_flag(&args, "--bless");
     let real_model = has_flag(&args, "--model");
     let verbose = has_flag(&args, "--verbose");
@@ -298,6 +307,8 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
 
     let mut moved_chunks = vec![0usize; steps.len()];
     let mut moved_notes = vec![0usize; steps.len()];
+    let mut measured_chunks = vec![0usize; steps.len()];
+    let mut measured_notes = vec![0usize; steps.len()];
     for (i, probe) in probes.iter().enumerate() {
         let per_depth = &answers[i];
         let mut chunk_cells = Vec::new();
@@ -306,10 +317,12 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
             let (lo, hi) = (&per_depth[s], &per_depth[s + 1]);
             let c = prefix_cell(&lo.chunks, &hi.chunks);
             let n = prefix_cell(&lo.notes, &hi.notes);
-            if !c.stable {
+            measured_chunks[s] += usize::from(c.measured);
+            measured_notes[s] += usize::from(n.measured);
+            if c.moved {
                 moved_chunks[s] += 1;
             }
-            if !n.stable {
+            if n.moved {
                 moved_notes[s] += 1;
             }
             chunk_cells.push(c.label);
@@ -327,31 +340,60 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
     }
 
     println!();
+    // Denominators are the probes that actually produced something to compare, not
+    // the probe count: a probe that returned nothing measured nothing, and folding
+    // it in either direction would misreport (see [`prefix_cell`]).
     for (s, step) in steps.iter().enumerate() {
         println!(
             "  {step:>9} candidates/signal: {}/{} probes changed their top-{PREFIX} chunks, {}/{} their top-{PREFIX} notes",
-            moved_chunks[s],
-            probes.len(),
-            moved_notes[s],
-            probes.len(),
+            moved_chunks[s], measured_chunks[s], moved_notes[s], measured_notes[s],
         );
     }
-    if moved_chunks.iter().all(|&m| m == 0) && moved_notes.iter().all(|&m| m == 0) {
+    let unmeasured = measured_chunks
+        .iter()
+        .chain(&measured_notes)
+        .any(|&m| m < probes.len());
+    if unmeasured {
         println!(
-            "  every probe is pool-invariant here — either the vault is smaller than the pool\n\
-             \x20 (the #141 blindness) or fusion width genuinely costs nothing on this corpus."
+            "  some probes returned nothing to compare (n/a above) and are outside those counts —\n\
+             \x20 a query that matches no chunk measures no pool."
+        );
+    }
+    if measured_chunks
+        .iter()
+        .chain(&measured_notes)
+        .all(|&m| m == 0)
+    {
+        println!("  nothing was measured: no probe returned results on this vault.");
+    } else if moved_chunks.iter().all(|&m| m == 0) && moved_notes.iter().all(|&m| m == 0) {
+        println!(
+            "  every measured probe is pool-invariant here — either the vault is no bigger than the\n\
+             \x20 pool (the #141 blindness) or candidate width genuinely costs nothing on this corpus."
         );
     }
 }
 
 /// One depth-pair cell: how much of the shallow answer the deeper ask preserved.
+///
+/// Three outcomes, not two. A comparison with **no overlapping prefix** — a probe
+/// that matched nothing, so both asks returned empty — is `measured = false`: it is
+/// neither stable nor moved, and counting it as "stable" would let a report that
+/// measured nothing announce that everything is pool-invariant.
 struct Cell {
     label: String,
-    stable: bool,
+    moved: bool,
+    measured: bool,
 }
 
 fn prefix_cell(shallow: &[String], deep: &[String]) -> Cell {
     let span = PREFIX.min(shallow.len()).min(deep.len());
+    if span == 0 {
+        return Cell {
+            label: "n/a".to_string(),
+            moved: false,
+            measured: false,
+        };
+    }
     let same = (0..span).filter(|&i| shallow[i] == deep[i]).count();
     Cell {
         label: if same == span {
@@ -359,7 +401,8 @@ fn prefix_cell(shallow: &[String], deep: &[String]) -> Cell {
         } else {
             format!("{same}/{span}")
         },
-        stable: same == span,
+        moved: same != span,
+        measured: true,
     }
 }
 
@@ -369,7 +412,7 @@ fn prefix_cell(shallow: &[String], deep: &[String]) -> Cell {
 fn print_divergence(per_depth: &[Answer]) {
     for w in 0..DEPTHS.len() - 1 {
         let (lo, hi) = (&per_depth[w], &per_depth[w + 1]);
-        if prefix_cell(&lo.chunks, &hi.chunks).stable {
+        if !prefix_cell(&lo.chunks, &hi.chunks).moved {
             continue;
         }
         println!(
@@ -527,7 +570,8 @@ fn write_baseline(
             "Blessed ranking snapshot for the rank-stability probe (crates/b2-embed/examples/stability.rs, \
              GH #141): the top-{BASELINE_K} notes and chunks each probe in stability.json returns from \
              {DEFAULT_VAULT} under the deterministic fake embedder. Committed so a later run can show \
-             *movement* — any change to fusion width, chunking or resolution shows up here as drift rather \
+             *movement* — any ranking change (candidate width, the RRF constant, chunking, resolution) shows up here \
+             as drift rather \
              than being inferred. It scores nothing: the corpus is unlabelled, so drift means different, \
              never worse. Regenerate with `just stability-bless` once a ranking change is the intended one."
         ),

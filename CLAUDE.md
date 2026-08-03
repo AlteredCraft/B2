@@ -29,10 +29,11 @@ shipped build history lives in git. Model quality (the `Embedder` seam) is measu
 eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + discovery evals
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar`), the chunker-sweep gate, and the results log.
 That corpus scores *relevance* and is deliberately small, which makes it blind to one class of change:
-retrieval reaches `vault::candidate_pool(10) = 150` candidates per signal, so on 26 chunks both signals
-return everything and a pool/fusion-width change prints bit-identical numbers (GH #141). The harness's
-other half measures that — `just stability`, a model-free rank probe on `fixtures/test-vault` — and
-`just eval` now says out loud when its corpus is smaller than the pool.
+retrieval reaches `vault::candidate_pool(10) = 150` candidates per signal, so on 26 chunks neither signal
+is truncated and a **candidate-width** change (`hit_pool`, `pool_size`) prints bit-identical numbers
+(GH #141). The harness's other half measures that — `just stability`, a model-free rank probe on
+`fixtures/test-vault` — and `just eval` says out loud when its corpus fits inside the pool. The blindness
+is to candidates, not to fusion: `RRF_K` re-weights the same lists and *does* move scores on 26 chunks.
 
 ## Commands
 
@@ -80,7 +81,7 @@ cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (ne
 cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
 # Rank stability — the harness's model-free half (GH #141). The eval's 26-chunk corpus is smaller
-# than the 150-candidate pool retrieval reaches, so it CANNOT see a pool/fusion-width change; this
+# than the 150-candidate pool retrieval reaches, so it CANNOT see a candidate-width change; this
 # probe can. It asks the same queries at widening pools on fixtures/test-vault (~200 notes / ~780
 # chunks) and diffs the shipped top-10 against a committed snapshot. Fake embedder, so it is
 # deterministic, needs no `just init`, and its baseline is reproducible on any machine — the cost is

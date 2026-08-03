@@ -83,13 +83,15 @@ fn hit_pool(limit: usize) -> usize {
 /// [`hit_pool`] hits, and each signal (BM25's `LIMIT`, the vector scan's top-n)
 /// widens that again before the two lists are fused by RRF.
 ///
-/// Public because a *measurement* needs it. A corpus holding fewer chunks than
-/// this returns its entire index from **both** signals, so the two ranked lists
-/// handed to `rrf_fuse` are identical for any pool at least that wide and every
-/// score is invariant under pool/fusion width — a change to `hit_pool`,
-/// `pool_size` or [`search::RRF_K`] reads as "no change" while moving real-vault
-/// results. The eval harness prints that blindness instead of letting a reader
-/// trust a number that could not have moved (GH #141).
+/// Public because a *measurement* needs it. Once a corpus has no more chunks than
+/// this, **neither** candidate list is truncated — BM25 returns every matching
+/// chunk, the vector scan every stored vector — so both lists are already complete
+/// and widening the pool further cannot change what `rrf_fuse` is handed. Scores on
+/// such a corpus are invariant under *candidate width*: a change to `hit_pool` or
+/// `pool_size` reads as "no change" there while moving real-vault results. (Only
+/// width. [`search::RRF_K`] re-weights the *same* lists, so it reorders even a tiny
+/// corpus and the eval sees it.) The eval harness prints that blindness instead of
+/// letting a reader trust a number that could not have moved (GH #141).
 pub fn candidate_pool(limit: usize) -> usize {
     search::pool_size(hit_pool(limit))
 }

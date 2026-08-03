@@ -14,7 +14,7 @@ use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
 use b2_core::{open, search::Hit};
-use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
+use common::{count, golden_vault_copy, index_conn, ingest_golden, MEMORY_ID, SRS_ID};
 use std::fs;
 
 fn note_set(hits: &[Hit]) -> std::collections::BTreeSet<String> {
@@ -44,27 +44,33 @@ fn candidate_pool_states_the_per_signal_depth_a_search_reaches() {
     assert!(b2_core::vault::candidate_pool(30) > b2_core::vault::candidate_pool(10));
 }
 
-/// The blindness #141 names, stated as a property: on a corpus **smaller than the
-/// pool**, both signals return the whole index, so the fused ranking cannot depend
-/// on how wide the pool was — a shallow ask returns a prefix of a deep one, exactly.
-/// This is why the 26-chunk eval corpus cannot see a fusion-width change, and why
-/// the rank-stability probe (`b2-embed/examples/stability.rs`) runs on a vault big
-/// enough for the pool to bind.
+/// The blindness #141 names, stated as a property: once a corpus has **no more
+/// chunks than the pool**, neither candidate list is truncated, so widening the pool
+/// cannot add a candidate and the fused ranking cannot depend on how wide it was — a
+/// shallow ask returns a prefix of a deep one, exactly. This is why the 26-chunk eval
+/// corpus cannot see a candidate-width change, and why the rank-stability probe
+/// (`b2-embed/examples/stability.rs`) runs on a vault big enough for the pool to bind.
+///
+/// Scoped to *width*: `RRF_K` re-weights the same lists, so it reorders even here.
 #[test]
-fn a_corpus_smaller_than_the_pool_ranks_the_same_at_any_depth() {
+fn a_corpus_no_bigger_than_the_pool_ranks_the_same_at_any_depth() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("vault");
     golden_vault_copy(&vault_dir);
     let vault = b2_core::Vault::open(&vault_dir).unwrap();
     vault.reindex().unwrap();
 
+    // The premise is about the *corpus*, not the result count, so it is counted on
+    // the chunk rows themselves — 2 results would sit inside any pool regardless.
+    let chunks = count(&index_conn(&vault_dir), "chunks");
+    assert!(
+        chunks <= b2_core::vault::candidate_pool(2) as i64,
+        "the premise: the whole corpus ({chunks} chunks) fits inside even the narrowest pool"
+    );
+
     let shallow = vault.search_chunks("memory", 2).unwrap();
     let deep = vault.search_chunks("memory", 10).unwrap();
     assert_eq!(shallow.len(), 2, "the fixture must have room to truncate");
-    assert!(
-        deep.len() < b2_core::vault::candidate_pool(2),
-        "the premise: the whole corpus fits inside even the narrowest pool"
-    );
     assert_eq!(
         shallow.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
         deep.iter()
@@ -73,6 +79,26 @@ fn a_corpus_smaller_than_the_pool_ranks_the_same_at_any_depth() {
             .collect::<Vec<_>>(),
         "a narrower pool must not reorder what a wider one already saw"
     );
+}
+
+/// `limit` is user input (`b2 search --limit`), and the two widenings compose, so
+/// the pool arithmetic must not overflow: before this was saturating, a large
+/// `--limit` panicked a debug build outright and would have *wrapped* a release one
+/// into a tiny pool — silently wrong results from an absurd-but-harmless ask.
+#[test]
+fn an_absurd_limit_saturates_the_pool_instead_of_overflowing_it() {
+    assert_eq!(b2_core::vault::candidate_pool(usize::MAX), usize::MAX);
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    // The whole corpus, once, rather than a panic or a truncated-by-wraparound page.
+    let hits = vault.search("memory", usize::MAX).unwrap();
+    assert!(!hits.is_empty());
+    assert!(hits.len() as i64 <= count(&index_conn(&vault_dir), "notes"));
 }
 
 #[test]
