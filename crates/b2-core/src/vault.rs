@@ -195,7 +195,8 @@ pub struct PlannedRestamp {
 /// notably no `b2id` stamped to the vault (B2's one write, data-model.md §1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexPlan {
-    /// Notes a real reindex would project into the index (every `.md` file).
+    /// Notes a real reindex would project into the index (every `.md` file the
+    /// walk collects — dot-prefixed names are not notes, GH #136).
     pub would_index: usize,
     /// …of which this many would be (re)embedded (the rest reuse their vectors).
     pub would_embed: usize,

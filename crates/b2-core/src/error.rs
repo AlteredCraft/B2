@@ -42,7 +42,9 @@ pub enum Error {
     ModelMismatch { indexed: String, active: String },
 
     /// `b2 mv` was given a destination that isn't a valid vault-relative Markdown
-    /// path — empty, absolute, escaping the vault via `..`, or the source itself.
+    /// path — empty, absolute, escaping the vault via `..`, dot-prefixed (b2
+    /// indexes no hidden member, so it would move the file out of the vault's
+    /// managed subtree — GH #136), or the source itself.
     #[error("invalid move destination: {0}")]
     MoveDestination(String),
 
@@ -58,9 +60,10 @@ pub enum Error {
     DirNotFound(String),
 
     /// `b2 add` was given a destination that isn't a valid vault-relative Markdown
-    /// path — empty, absolute, or escaping the vault via `..`. The `mv` parallel of
-    /// [`Error::MoveDestination`], distinct so the CLI can phrase it for note
-    /// creation rather than a move.
+    /// path — empty, absolute, escaping the vault via `..`, or dot-prefixed (a
+    /// `.scratch.md` would never be indexed, so b2 refuses to author one — GH
+    /// #136). The `mv` parallel of [`Error::MoveDestination`], distinct so the CLI
+    /// can phrase it for note creation rather than a move.
     #[error("invalid new-note path: {0}")]
     AddDestination(String),
 
@@ -84,7 +87,7 @@ pub enum Error {
 
     /// `create_dir` was given a path that isn't a valid vault-relative folder —
     /// empty, absolute, escaping via `..`, or dot-prefixed (b2 never manages
-    /// dotfolders). The folder sibling of [`Error::AddDestination`].
+    /// hidden paths). The folder sibling of [`Error::AddDestination`].
     #[error("invalid folder path: {0}")]
     DirDestination(String),
 

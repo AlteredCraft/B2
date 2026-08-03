@@ -64,7 +64,7 @@ the human asked to *create*), move is one `rename` (`move_dir`), delete is `remo
 (`delete_dir`), and each resolves its target against the *disk*, never the index, so empty folders are
 first-class throughout (`b2 mv`, `b2 rm -r`, the desktop tree). Folders are **never projected into the
 index** — they carry nothing to chunk, embed, or link — so the file tree's structure listing
-(`Vault::list_dirs`) is a **live fs walk** (dot-folders skipped, the ingest walk's routing rule): the tree
+(`Vault::list_dirs`) is a **live fs walk** (dot-folders skipped, the ingest walk's hidden rule — §1): the tree
 is one-to-one with the vault's managed (non-dot) directory tree *by construction*, in both directions —
 a Finder `mkdir` appears on the next pulse, and a folder emptied by a move stays visible until the human
 removes it. The "no durable
@@ -126,7 +126,7 @@ shape (§5).
 
 ## 1. The note
 
-A note is one `.md` file: YAML frontmatter, then a Markdown body.
+A note is one `.md` file **whose name is not dot-prefixed**: YAML frontmatter, then a Markdown body.
 
 ```markdown
 ---
@@ -154,6 +154,31 @@ edge; the surrounding prose is just prose, never B2 structure. The `b2_relations
 edge (`origin=frontmatter`) — one B2 wrote on **`b2 link`**, or a human/importer authored directly.
 Verb and explanation live only in the frontmatter home; the body home carries plain, clickable links —
 exactly the body-vs-metadata line §0 draws.
+
+### Hidden means hidden — a dot-prefixed name is not vault material
+
+A dot-prefixed name is outside the vault's managed subtree **whatever it is**: a folder (`.git/`,
+`.obsidian/`, B2's own `.b2/`), a resource (`.DS_Store`, `.gitignore`), or a Markdown file
+(`.scratch.md`, `.templates.md`). The convention is the filesystem's, not B2's — a leading dot is how
+every tool in the neighborhood says "infrastructure, not content" — so B2 reads it the same way
+everywhere ([#136](https://github.com/AlteredCraft/B2/issues/136)):
+
+- **The walk skips it before it routes it.** `pathspec::is_hidden` is applied *above* the
+  note/resource dispatch in `collect_vault_files`, so "hidden" cannot come to mean one thing for a PDF
+  and another for a Markdown draft. A dot-prefixed `.md` is never a note: no `b2id` stamped into it, no
+  chunks, no embeddings, no graph presence, and it appears in no listing, search, or file tree.
+- **The file itself is untouched.** Skipping is not deleting (W4) — a `.scratch.md` stays exactly where
+  and as it is, simply outside the projection. That is the whole point: the vault directory is where you
+  keep a scratch draft *out of* B2's way without leaving the folder you work in.
+- **B2 will not author one either.** Every authoring destination (`b2 add`, `b2 mv` for a note, a
+  resource, or a folder, `create_dir`) refuses a dot-prefixed path segment. Creating a member the walk
+  would never see is a silent fs/index desync, so it is refused with a reason rather than accepted and
+  then quietly ignored.
+
+*Migration note:* a vault that already indexed a dot-prefixed `.md` has those rows ghost-pruned on the
+next reindex, and inbound links at them re-dangle (surfaced per G5). The `b2id:` line B2 stamped stays
+in the file — B2 never unwrites one — so the identity is intact if the note is renamed back into the
+managed subtree.
 
 ### Frontmatter schema
 

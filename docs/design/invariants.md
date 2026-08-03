@@ -28,8 +28,12 @@ tomorrow's model* — made mechanical.
 - **S2 — The index is a pure projection: `index = projection of (the vault directory)`.** Drop
   `b2.sqlite`, reindex, get an identical index. **Markdown is the vault's sole authored subset** —
   the only format whose bytes B2 may write; resources contribute derived rows only, and folders are
-  never projected at all (read live off disk). ([data-model.md](data-model.md) §10,
-  [index-engine.md](index-engine.md) §3)
+  never projected at all (read live off disk). The projected *domain* is the vault's **managed
+  subtree**: a dot-prefixed name is not vault material of any kind — folder, resource, or `.md` alike
+  — so it is skipped by every walk before routing, and refused as an authoring destination (B2 never
+  creates a member it would then never see). The files stay on disk untouched; they are simply outside
+  the projection. ([data-model.md](data-model.md) §1 "Hidden means hidden", §10,
+  [index-engine.md](index-engine.md) §3, [GH #136](https://github.com/AlteredCraft/B2/issues/136))
 - **S3 — `full-reindex ≡ incremental-update`.** Re-deriving one changed note converges on exactly the
   state a from-scratch rebuild would produce — including reconciling path ownership and pruning rows
   for deleted files on a whole-vault pass. ([index-engine.md](index-engine.md) §8)

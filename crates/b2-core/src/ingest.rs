@@ -1221,10 +1221,14 @@ pub fn plan_reindex(
 /// Walk the vault once, routing every file: `.md` (case-insensitive) → `notes`,
 /// everything else → `resources` with its class, per
 /// [`ResourceClass::of_path`] — the `index = projection of (the vault directory)`
-/// walk (data-model.md §10). Dot-prefixed
-/// **directories** are skipped as always (`.b2/`, `.git/`); dot-prefixed **files**
-/// are skipped from the resource inventory (`.DS_Store`, `.gitignore` are not
-/// vault material) while the note route keeps its historical behavior.
+/// walk (data-model.md §10).
+///
+/// **Hidden means hidden** (GH #136): a dot-prefixed entry is not vault material,
+/// so [`is_hidden`](crate::pathspec::is_hidden) is applied *above* the
+/// note/resource dispatch and the recursion alike — one rule, one place. A
+/// `.DS_Store` and a `.scratch.md` are equally invisible: no `b2id` stamp, no
+/// chunks, no embeddings, no graph presence. The files stay on disk untouched
+/// (W4); they are simply outside the projection (data-model.md §1).
 fn collect_vault_files(
     root: &Path,
     dir: &Path,
@@ -1234,10 +1238,11 @@ fn collect_vault_files(
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        if crate::pathspec::is_hidden(&path) {
+            continue;
+        }
         if path.is_dir() {
-            if !crate::pathspec::is_hidden(&path) {
-                collect_vault_files(root, &path, notes, resources)?;
-            }
+            collect_vault_files(root, &path, notes, resources)?;
             continue;
         }
         // `path` was produced by walking `root`, so `strip_prefix` cannot fail;
@@ -1248,11 +1253,7 @@ fn collect_vault_files(
         let rel = rel.to_string_lossy().replace('\\', "/");
         match ResourceClass::of_path(&rel) {
             None => notes.push(rel),
-            Some(class) => {
-                if !crate::pathspec::is_hidden(&path) {
-                    resources.push((rel, class));
-                }
-            }
+            Some(class) => resources.push((rel, class)),
         }
     }
     Ok(())

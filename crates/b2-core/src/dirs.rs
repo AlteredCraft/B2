@@ -20,9 +20,9 @@ pub struct DirCreateReport {
 
 /// Every folder under `vault_root` (empty ones included), vault-relative with `/`
 /// separators and no trailing slash, sorted. Dot-prefixed directories (`.b2/`,
-/// `.git/`, `.obsidian/`) are skipped — the same routing rule as the ingest walk
-/// (`collect_vault_files`), so the tree and the index agree on what a vault
-/// member is. That mirroring is deliberate and includes symlink behavior:
+/// `.git/`, `.obsidian/`) are skipped — the same hidden rule the ingest walk
+/// applies (`collect_vault_files`, GH #136), so the tree and the index agree on
+/// what a vault member is. That mirroring is deliberate and includes symlink behavior:
 /// `is_dir()` follows directory symlinks exactly as the ingest walk does, so a
 /// symlinked folder whose notes get indexed also shows in the tree — diverging
 /// here would desync structure from content. A vault-wide symlink policy, if one
