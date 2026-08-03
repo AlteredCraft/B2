@@ -87,25 +87,24 @@ pub fn move_note(
     // there. Group by file into a target→replacement map, preserving each link's
     // own `.md`-or-not convention (Obsidian omits `.md`; a stored `.md` is kept).
     let new_rel_no_md = new_rel.strip_suffix(".md").unwrap_or(&new_rel).to_string();
-    let mut by_file: BTreeMap<String, (String, BTreeMap<String, String>)> = BTreeMap::new();
-    for (src_id, src_path, dst_raw) in db::inbound_edge_targets(conn, b2id)? {
-        let replacement = if dst_raw.ends_with(".md") {
+    let mut by_file: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for e in db::inbound_edge_targets(conn, b2id)? {
+        let replacement = if e.dst_raw.ends_with(".md") {
             new_rel.clone()
         } else {
             new_rel_no_md.clone()
         };
         by_file
-            .entry(src_path)
-            .or_insert_with(|| (src_id, BTreeMap::new()))
-            .1
-            .insert(dst_raw, replacement);
+            .entry(e.src_path)
+            .or_default()
+            .insert(e.dst_raw, replacement);
     }
 
     // 1. Markdown first: rewrite inbound link text in place. A self-link (the moved
     //    note links to itself) is rewritten here at its old path, before the move.
     let mut rewrote = Vec::new();
     let mut links_rewritten = 0usize;
-    for (src_path, (_src_id, targets)) in &by_file {
+    for (src_path, targets) in &by_file {
         let abs = vault_root.join(src_path);
         let raw = fs::read_to_string(&abs)?;
         let (new_raw, n) = rewrite_links(&raw, targets);
@@ -200,14 +199,15 @@ pub fn move_resource(
     // (re-relativized against its note's directory), a vault-root target stays
     // vault-root; a `#fragment` suffix survives untouched.
     let mut by_file: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for (_src_id, src_path, dst_raw) in db::inbound_resource_edge_targets(conn, old_rel)? {
-        let src_dir = src_path
+    for e in db::inbound_resource_edge_targets(conn, old_rel)? {
+        let src_dir = e
+            .src_path
             .rsplit_once('/')
             .map(|(dir, _)| dir.to_string())
             .unwrap_or_default();
-        let (base, fragment) = match dst_raw.split_once('#') {
+        let (base, fragment) = match e.dst_raw.split_once('#') {
             Some((b, f)) => (b, Some(f)),
-            None => (dst_raw.as_str(), None),
+            None => (e.dst_raw.as_str(), None),
         };
         let new_base = if base.trim() == old_rel {
             new_rel.clone() // authored vault-root — keep it vault-root
@@ -219,9 +219,9 @@ pub fn move_resource(
             None => new_base,
         };
         by_file
-            .entry(src_path)
+            .entry(e.src_path)
             .or_default()
-            .insert(dst_raw, replacement);
+            .insert(e.dst_raw, replacement);
     }
 
     // 1. Markdown first: rewrite inbound link text in place, both syntaxes.
@@ -289,13 +289,12 @@ fn repoint_resource_row(
     new_rel: &str,
     new_abs: &Path,
 ) -> Result<()> {
-    let (_, size, _, content_hash) = db::resource_detail(conn, old_rel)?
+    let detail = db::resource_detail(conn, old_rel)?
         .ok_or_else(|| Error::ResourceNotFound(old_rel.to_string()))?;
     let mtime = fs::metadata(new_abs)
         .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
+        .as_ref()
+        .and_then(ingest::unix_mtime);
     let class = crate::resource::ResourceClass::of_path(new_rel)
         .map(|c| c.as_str().to_string())
         .unwrap_or_else(|| "binary".to_string());
@@ -304,9 +303,9 @@ fn repoint_resource_row(
         &db::ResourceRow {
             path: new_rel,
             class: &class,
-            size,
+            size: detail.size,
             mtime,
-            content_hash: &content_hash,
+            content_hash: &detail.content_hash,
         },
     )?;
     conn.execute("DELETE FROM resources WHERE path = ?1", [old_rel])?;
@@ -415,35 +414,35 @@ pub fn move_dir(
             .strip_suffix(".md")
             .unwrap_or(&new_path)
             .to_string();
-        for (_src_id, src_path, dst_raw) in db::inbound_edge_targets(conn, b2id)? {
-            let replacement = if dst_raw.ends_with(".md") {
+        for e in db::inbound_edge_targets(conn, b2id)? {
+            let replacement = if e.dst_raw.ends_with(".md") {
                 new_path.clone()
             } else {
                 new_path_no_md.clone()
             };
-            if replacement != dst_raw {
+            if replacement != e.dst_raw {
                 wiki_by_file
-                    .entry(src_path)
+                    .entry(e.src_path)
                     .or_default()
-                    .insert(dst_raw, replacement);
+                    .insert(e.dst_raw, replacement);
             }
         }
     }
     for old_path in &moved_resources {
         let new_path = remap_prefix(old_path, &from, &to);
-        for (_src_id, src_path, dst_raw) in db::inbound_resource_edge_targets(conn, old_path)? {
+        for e in db::inbound_resource_edge_targets(conn, old_path)? {
             // The source's directory *after* the move — sources inside the moved
             // set remap; outside sources keep their dir.
             let src_dir_after = {
-                let src_after = remap_prefix(&src_path, &from, &to);
+                let src_after = remap_prefix(&e.src_path, &from, &to);
                 src_after
                     .rsplit_once('/')
                     .map(|(dir, _)| dir.to_string())
                     .unwrap_or_default()
             };
-            let (base, fragment) = match dst_raw.split_once('#') {
+            let (base, fragment) = match e.dst_raw.split_once('#') {
                 Some((b, f)) => (b, Some(f)),
-                None => (dst_raw.as_str(), None),
+                None => (e.dst_raw.as_str(), None),
             };
             let new_base = if base.trim() == old_path.as_str() {
                 new_path.clone() // authored vault-root — keep it vault-root
@@ -454,15 +453,15 @@ pub fn move_dir(
                 Some(f) => format!("{new_base}#{f}"),
                 None => new_base,
             };
-            if replacement != dst_raw {
+            if replacement != e.dst_raw {
                 wiki_by_file
-                    .entry(src_path.clone())
+                    .entry(e.src_path.clone())
                     .or_default()
-                    .insert(dst_raw.clone(), replacement.clone());
+                    .insert(e.dst_raw.clone(), replacement.clone());
                 md_by_file
-                    .entry(src_path)
+                    .entry(e.src_path)
                     .or_default()
-                    .insert(dst_raw, replacement);
+                    .insert(e.dst_raw, replacement);
             }
         }
     }

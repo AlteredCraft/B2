@@ -198,10 +198,7 @@ impl EmbedConfig {
     /// choices are installed vs. still need `b2 init`. Uses the config's own `cache_dir`
     /// so a custom cache is honored, not just the default.
     pub fn is_model_provisioned(&self, model: &str) -> bool {
-        let dir = self.cache_dir.join(sanitize(model));
-        crate::model::REQUIRED_FILES
-            .iter()
-            .all(|f| dir.join(f).is_file())
+        crate::model::files_present(&self.cache_dir.join(sanitize(model)))
     }
 
     /// The full registry annotated against this config — the data the settings picker

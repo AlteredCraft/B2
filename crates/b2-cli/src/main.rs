@@ -174,8 +174,8 @@ impl Cli {
     /// The vault root for **read-only** commands (`search`, `neighbors`, `explain`,
     /// `similar`): the `-C`/`$B2_VAULT_PATH` value if given, else the current directory.
     /// A pure read can't pollute anything, so the cwd convenience is safe here.
-    fn vault_or_cwd(&self) -> PathBuf {
-        self.vault.clone().unwrap_or_else(|| PathBuf::from("."))
+    fn vault_or_cwd(&self) -> &Path {
+        self.vault.as_deref().unwrap_or_else(|| Path::new("."))
     }
 
     /// The vault root for commands that **write** to the vault (`reindex`, `add`, `mv`,
@@ -249,672 +249,750 @@ fn init_logging() {
         .with_env_filter(filter);
     // A CLI run is short-lived and single-threaded at the log site, so a plain
     // `Mutex<File>` writer suffices — no async appender needed.
-    match log_file.map(|p| {
-        std::fs::OpenOptions::new()
+    match log_file {
+        Some(p) => match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(std::path::Path::new(&p))
-            .map_err(|e| (p, e))
-    }) {
-        Some(Ok(file)) => builder.with_writer(std::sync::Mutex::new(file)).init(),
-        Some(Err((path, e))) => {
-            eprintln!(
-                "warning: cannot open B2_LOG_FILE '{}' ({e}); logging to stderr",
-                path.to_string_lossy()
-            );
-            builder.with_writer(std::io::stderr).init();
-        }
+        {
+            Ok(file) => builder.with_writer(std::sync::Mutex::new(file)).init(),
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot open B2_LOG_FILE '{}' ({e}); logging to stderr",
+                    p.to_string_lossy()
+                );
+                builder.with_writer(std::io::stderr).init();
+            }
+        },
         None => builder.with_writer(std::io::stderr).init(),
     }
 }
 
+/// The thin router: each subcommand's whole behavior lives in its `cmd_*` fn below;
+/// this match only destructures the parsed args and forwards them.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
-        Command::Init => {
-            // Global, per-machine setup — no vault involved.
-            let config = EmbedConfig::load()?;
-            let report = provision(&config, |line| eprintln!("{line}"))?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else if report.already_present {
-                println!("Model '{}' is already installed.", report.model);
-            } else {
-                println!(
-                    "Installed '{}' ({} dims). Run `b2 reindex` to embed your vault.",
-                    report.model, report.dim
-                );
-            }
-        }
+        Command::Init => cmd_init(cli.json),
         Command::Reindex {
             vault,
             force,
             dry_run,
             cancel,
-        } => {
-            // Reindex writes an index → require an explicit vault (positional wins),
-            // never a silent cwd fallback. See `Cli::require_vault`.
-            let root = cli.require_vault(vault.as_deref())?;
-            if *cancel {
-                // Signals another process and returns; it never opens the vault (no
-                // model load, no index read) — the run being cancelled owns all of that.
-                return cancel_reindex(root, cli.json);
-            }
-            if *dry_run {
-                // A dry-run neither embeds nor stamps → no model needed (open with
-                // the fake, like `neighbors`); it's a pure read, so there's no slow
-                // embed phase to show progress for.
-                let (vault, _semantic) = open_vault(root, false)?;
-                let plan = vault.plan_reindex(*force)?;
-                if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&plan)?);
-                } else {
-                    println!(
-                        "Dry run: would index {} note(s) — {} to embed, {} to stamp. No changes made.",
-                        plan.would_index, plan.would_embed, plan.would_stamp
-                    );
-                    // The GH #81 previews: which notes have no identity yet, which
-                    // stamps would *change* an identity, and which files contest one.
-                    if !plan.stamp_paths.is_empty() {
-                        println!("Notes without a b2id (a real run stamps these):");
-                        for p in &plan.stamp_paths {
-                            println!("  - {p}");
-                        }
-                    }
-                    if !plan.would_restamp.is_empty() {
-                        println!(
-                            "Would restamp identity (the b2id line was removed or blanked; links to the old id will dangle):"
-                        );
-                        for r in &plan.would_restamp {
-                            println!("  - {} (was {})", r.path, r.old_b2id);
-                        }
-                    }
-                    for c in &plan.collisions {
-                        println!(
-                            "Duplicate b2id {}: a real run keeps {} and leaves {} un-indexed until resolved.",
-                            c.b2id,
-                            c.kept_path,
-                            c.shadowed_paths.join(", ")
-                        );
-                    }
-                }
-                return Ok(());
-            }
-            // Single-in-flight: take an advisory lock *before* the (slow) model load so
-            // a second `b2 reindex` — e.g. a foreground run racing one you backgrounded
-            // with `b2 reindex &` — refuses cleanly instead of two processes writing the
-            // same index. Advisory, not a PID file: the OS frees it the instant the holder
-            // exits (crash, kill, or Ctrl-C included), so nothing stale is ever left behind.
-            // `lock` is held until this arm ends; dropping it releases the lock.
-            let lock = open_reindex_lock(root)?;
-            match lock.try_lock() {
-                Ok(()) => {}
-                Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::ReindexRunning),
-                Err(std::fs::TryLockError::Error(e)) => return Err(CliError::Io(e)),
-            }
-            // Now that the lock is ours, stamp who holds it: the address `b2 reindex
-            // --cancel` signals, and what `b2 status` prints so a manual `kill` stays
-            // available (GH #55). Best-effort — a failed write costs the cancel
-            // affordance, not the reindex.
-            let _ = record_reindex_pid(&lock);
-            // Reindex embeds every changed chunk → it needs the real model.
-            let (vault, _semantic) = open_vault(root, true)?;
-            // Wire Ctrl-C to the cooperative-cancel flag now that the model is loaded and
-            // real embedding is next. (During the model load the default SIGINT still
-            // applies — nothing is written yet, so a hard stop there is safe.) Best-effort:
-            // if the handler can't be installed, Ctrl-C keeps its default (terminate), which
-            // still leaves a consistent index since edges + FTS land before any vectors.
-            let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
-            // Embedding a large vault on CPU is slow; show a live progress line so it
-            // never looks frozen. Only on an interactive stderr (never in --json, and
-            // never when piped/captured) so machine output and tests stay clean.
-            let report = if cli.json || !std::io::stderr().is_terminal() {
-                vault.reindex_with_progress(*force, &mut |_| cancel_flow())?
-            } else {
-                // Name the vault being indexed up front, then a live line that counts
-                // the notes actually (re)embedded — not every note, most of which an
-                // incremental run reuses untouched — with the current file + its chunks.
-                let shown = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-                eprintln!("Indexing {}", shown.display());
-                let mut progressed = false;
-                let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
-                    progressed = true;
-                    // \x1b[K clears any tail of a previous, longer line (paths vary in
-                    // length); safe here because this branch only runs on a real terminal.
-                    eprint!(
-                        "\r  embedding {}/{} · {} ({} chunk{})\x1b[K",
-                        p.notes_embedded,
-                        p.notes_to_embed,
-                        p.note_path,
-                        p.note_chunks,
-                        if p.note_chunks == 1 { "" } else { "s" },
-                    );
-                    let _ = std::io::stderr().flush();
-                    // Stop after this batch if Ctrl-C was pressed,
-                    // else carry on. The batch is already written above, so a cancel here
-                    // never tears a write.
-                    cancel_flow()
-                };
-                let report = vault.reindex_with_progress(*force, &mut on_progress)?;
-                if progressed {
-                    eprintln!(); // close the progress line
-                }
-                report
-            };
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!(
-                    "Indexed {} notes ({} embedded, {} stamped{}) and {} resources{}",
-                    report.indexed,
-                    report.embedded,
-                    report.stamped,
-                    if report.notes_pruned > 0 {
-                        format!(", {} pruned", report.notes_pruned)
-                    } else {
-                        String::new()
-                    },
-                    report.resources_indexed,
-                    if report.resources_pruned > 0 {
-                        format!(" ({} pruned)", report.resources_pruned)
-                    } else {
-                        String::new()
-                    }
-                );
-                // One unreadable file no longer aborts the reindex — it is skipped and
-                // named here (to stderr, so it never pollutes the machine-readable stdout
-                // line above) with a short, file-level reason.
-                if !report.skipped.is_empty() {
-                    eprintln!("Skipped {} unreadable file(s):", report.skipped.len());
-                    for s in &report.skipped {
-                        eprintln!("  - {} ({})", s.path, s.reason);
-                    }
-                }
-                // The GH #81 anomaly notices (stderr, like `skipped`): surfaced every
-                // run until resolved, never auto-fixed — the human decides which file
-                // keeps a contested identity.
-                for c in &report.collisions {
-                    let why = match c.precedence {
-                        b2_core::vault::CollisionPrecedence::Incumbent => {
-                            "it already held the identity"
-                        }
-                        b2_core::vault::CollisionPrecedence::TieBreak => {
-                            "first in path order — b2 could not tell which file is the original"
-                        }
-                    };
-                    eprintln!(
-                        "Duplicate b2id {}: kept {} ({}); not indexed: {}.",
-                        c.b2id,
-                        c.kept_path,
-                        why,
-                        c.shadowed_paths.join(", ")
-                    );
-                    eprintln!(
-                        "  To resolve: delete the copy, or remove its `b2id:` line to give it a fresh identity."
-                    );
-                }
-                if !report.restamped.is_empty() {
-                    eprintln!(
-                        "Restamped identity on {} note(s) — the b2id line was removed or blanked outside b2, so links to the old identity now dangle:",
-                        report.restamped.len()
-                    );
-                    for r in &report.restamped {
-                        eprintln!("  - {} (was {}, now {})", r.path, r.old_b2id, r.new_b2id);
-                    }
-                }
-                // The counts above already report the partial work truthfully; add the
-                // one line that tells the user it was interrupted and is safe to resume.
-                if report.cancelled {
-                    eprintln!(
-                        "Cancelled — the index is consistent but only partly embedded. Re-run `b2 reindex` to finish the rest."
-                    );
-                }
-            }
-        }
-        Command::Status => {
-            // Read-only coverage report: how much of the vault is embedded (semantic
-            // ranking live vs. keyword-only) and whether a background reindex is in
-            // flight — the companion to backgrounding a slow reindex with `b2 reindex &`.
-            // A pure model-free DB read (#26): open with the fake.
-            let root = cli.vault_or_cwd();
-            let (vault, _semantic) = open_vault(&root, false)?;
-            let status = vault.embed_status()?;
-            let holder = reindex_holder(&root);
-            if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "embedded": status.embedded,
-                        "total": status.total,
-                        "reindex_running": holder.is_some(),
-                        // The running process's id — `null` when nothing is running (and
-                        // on the sliver of a moment before a fresh holder stamps it).
-                        "reindex_pid": holder.as_ref().and_then(|h| h.pid),
-                    }))?
-                );
-            } else {
-                if status.total == 0 {
-                    println!("No notes indexed yet. Run `b2 reindex` to build the index.");
-                } else if status.embedded == 0 {
-                    println!(
-                        "Embedded 0/{} notes — keyword-only. Run `b2 reindex` for semantic ranking.",
-                        status.total
-                    );
-                } else if status.embedded < status.total {
-                    println!(
-                        "Embedded {}/{} notes — semantic ranking partial ({} still keyword-only).",
-                        status.embedded,
-                        status.total,
-                        status.total - status.embedded
-                    );
-                } else {
-                    println!(
-                        "Embedded {}/{} notes — semantic ranking fully live.",
-                        status.embedded, status.total
-                    );
-                }
-                // Name the process, not just the fact: `--cancel` is the supported stop,
-                // and the pid keeps a plain `kill -INT` as the documented fallback.
-                match holder.as_ref().map(|h| h.pid) {
-                    Some(Some(pid)) => println!(
-                        "A reindex is currently running (pid {pid}). Stop it with `b2 reindex --cancel` (or `kill -INT {pid}`)."
-                    ),
-                    Some(None) => println!(
-                        "A reindex is currently running. Stop it with `b2 reindex --cancel`."
-                    ),
-                    None => {}
-                }
-            }
-        }
+        } => cmd_reindex(cli, vault.as_deref(), *force, *dry_run, *cancel),
+        Command::Status => cmd_status(cli),
         Command::Add {
             path,
             title,
             content,
-        } => {
-            // Add writes a new note (and embeds its body) → require an explicit vault
-            // (no silent cwd), and it needs the real model like `reindex`/`mv`/`link`.
-            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
-            let report = vault.add_note(path, title.as_deref(), content.as_deref())?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("Created {} (b2id {}).", report.path, report.b2id);
-            }
-        }
-        Command::Write { note } => {
-            // A body splice + re-projection: **model-free** (like the desktop's save and
-            // `rm`), still an explicit vault like every write. Refuse an interactive
-            // terminal up front so the command never silently hangs waiting for
-            // hand-typed input — the new body is always *piped* (an agent, `cat file |`, …).
-            let stdin = std::io::stdin();
-            if stdin.is_terminal() {
-                return Err(CliError::StdinRequired);
-            }
-            let (vault, _semantic) = open_vault(cli.require_vault(None)?, false)?;
-            let mut body = String::new();
-            stdin.lock().read_to_string(&mut body)?;
-            // Stateless one-shot: read the current on-disk revision and chain the write on
-            // it. A CLI holds no long-lived buffer, so there's no external-edit window to
-            // guard here — the content-hash guard exists for the desktop's in-memory
-            // buffer; for a one-shot, the contract is simply "the body becomes exactly
-            // this" (`Vault::write` still keeps the frontmatter bytes untouched).
-            let current = vault.read(note)?;
-            let report = vault.write(note, &body, &current.revision)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("Wrote {} ({} bytes).", report.path, body.len());
-            }
-        }
-        Command::Neighbors { note } => {
-            // Neighbors is a pure graph query — it never embeds, so don't require
-            // the model (no needless `b2 init` just to explore the graph).
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
-            let neighbors = vault.neighbors(note)?;
-            // Dangling outbound links (a `[[folder]]` or a typo) that resolve to no
-            // note or resource — surfaced, not dropped (GH #12). `--json` keeps its
-            // resolved-neighbors array contract; the full structured picture,
-            // including these, is `b2 explain --json`.
-            let unresolved = vault.unresolved_links(note)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&neighbors)?);
-            } else if neighbors.is_empty() && unresolved.is_empty() {
-                println!("No neighbors.");
-            } else {
-                for n in &neighbors {
-                    let arrow = if n.direction == "outbound" {
-                        "→"
-                    } else {
-                        "←"
-                    };
-                    let name = n.title.as_deref().unwrap_or(&n.path);
-                    let explanation = n
-                        .explanation
-                        .as_deref()
-                        .map(|e| format!(" — {e}"))
-                        .unwrap_or_default();
-                    println!("{arrow} {}  {name} ({}){explanation}", n.label, n.path);
-                }
-                for u in &unresolved {
-                    println!(
-                        "⚠ {}  [[{}]] — unresolved (no matching note or file)",
-                        u.relation, u.target
-                    );
-                }
-            }
-        }
-        Command::Explain { note } => {
-            // Explain is a pure graph read (edges + their explanations), no embed —
-            // like `neighbors`, it opens with the fake and needs no `b2 init`.
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
-            // Kind dispatch by the argument's own shape (core's one rule, §9b #8):
-            // a resource arg gets the fallback card's view — metadata + backlinks.
-            if doc_kind(note) == DocKind::Resource {
-                let view = vault.explain_resource(note)?;
-                if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&view)?);
-                } else {
-                    println!("{} ({}, {} bytes)", view.path, view.class, view.size);
-                    if view.backlinks.is_empty() {
-                        println!("No backlinks yet.");
-                    } else {
-                        println!("Backlinks:");
-                        for b in &view.backlinks {
-                            let name = b.title.as_deref().unwrap_or(&b.path);
-                            let mut line = format!("  ← {name} ({})  {}", b.path, b.r#type);
-                            if b.embed {
-                                line.push_str(" (embed)");
-                            }
-                            if let Some(c) = &b.caption {
-                                line.push_str(&format!(" — \"{c}\""));
-                            }
-                            println!("{line}");
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            let view = vault.explain(note)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&view)?);
-            } else {
-                let name = view.title.as_deref().unwrap_or(&view.path);
-                println!("{name} ({})  [b2id {}]", view.path, view.b2id);
-                if view.connections.is_empty()
-                    && view.resources.is_empty()
-                    && view.unresolved.is_empty()
-                {
-                    // Zero connections at all — nothing links to it and it links to
-                    // nothing (an orphan; the kernel only surfaces, never archives).
-                    println!("No connections yet.");
-                } else if !view.connections.is_empty() {
-                    println!("Connections:");
-                    for c in &view.connections {
-                        let arrow = if c.direction == "outbound" {
-                            "→"
-                        } else {
-                            "←"
-                        };
-                        let target = c.title.as_deref().unwrap_or(&c.path);
-                        println!(
-                            "  {arrow} {}  {target} ({})  [{}]",
-                            c.label, c.path, c.origin
-                        );
-                        if let Some(why) = &c.explanation {
-                            println!("      why: {why}");
-                        }
-                    }
-                    // If nothing points *at* the note, it's an orphan — surfaced, not
-                    // acted on (invariants.md; files are only touched when asked).
-                    if !view.connections.iter().any(|c| c.direction == "inbound") {
-                        println!("No inbound links — this note is an orphan.");
-                    }
-                }
-                // Outbound links at resources (images, PDFs, …) — the third target
-                // kind an edge can have, shown from the note's side (GH #22).
-                if !view.resources.is_empty() {
-                    println!("Resource links:");
-                    for r in &view.resources {
-                        let mut line = format!(
-                            "  → {}  {} ({})  [{}]",
-                            r.relation, r.path, r.class, r.origin
-                        );
-                        if r.embed {
-                            line.push_str(" (embed)");
-                        }
-                        if let Some(c) = &r.caption {
-                            line.push_str(&format!(" — \"{c}\""));
-                        }
-                        println!("{line}");
-                        if let Some(why) = &r.explanation {
-                            println!("      why: {why}");
-                        }
-                    }
-                }
-                // Dangling outbound links (a `[[folder]]` or a typo): a note is one
-                // `.md` file, so these resolve to nothing — shown as broken rather
-                // than silently dropped (GH #12).
-                if !view.unresolved.is_empty() {
-                    println!("Unresolved links:");
-                    for u in &view.unresolved {
-                        println!(
-                            "  ⚠ {}  [[{}]]  (no matching note or file)  [{}]",
-                            u.relation, u.target, u.origin
-                        );
-                        if let Some(why) = &u.explanation {
-                            println!("      why: {why}");
-                        }
-                    }
-                }
-            }
-        }
-        Command::Mv { from, to } => {
-            // A move rewrites files (and re-embeds them on re-projection) → require an
-            // explicit vault (no silent cwd), and it needs the real model the index was
-            // built with, like `reindex`/`add`/`link`.
-            let root = cli.require_vault(None)?;
-            let (vault, _semantic) = open_vault(root, true)?;
-            // Kind dispatch (§9b #8): an existing directory moves as a folder
-            // (every file under it, one rename); otherwise the two file arms
-            // differ only in the report type (a resource has no b2id to carry).
-            // The human "Moved" line is preformatted per arm, the rewrite tally
-            // is shared.
-            let (moved_line, links_rewritten, rewrote_files, json) =
-                if root.join(from.trim_end_matches('/')).is_dir() {
-                    let report = vault.move_dir(from, to)?;
-                    let json = serde_json::to_string_pretty(&report)?;
-                    (
-                        format!(
-                            "Moved {}/ → {}/ ({} note(s), {} file(s))",
-                            report.from, report.to, report.moved_notes, report.moved_resources
-                        ),
-                        report.links_rewritten,
-                        report.rewrote.len(),
-                        json,
-                    )
-                } else if doc_kind(from) == DocKind::Resource {
-                    let report = vault.move_resource(from, to)?;
-                    let json = serde_json::to_string_pretty(&report)?;
-                    (
-                        format!("Moved {} → {}", report.from, report.to),
-                        report.links_rewritten,
-                        report.rewrote.len(),
-                        json,
-                    )
-                } else {
-                    let report = vault.move_note(from, to)?;
-                    let json = serde_json::to_string_pretty(&report)?;
-                    (
-                        format!("Moved {} → {}", report.from, report.to),
-                        report.links_rewritten,
-                        report.rewrote.len(),
-                        json,
-                    )
-                };
-            if cli.json {
-                println!("{json}");
-            } else {
-                println!("{moved_line}");
-                if links_rewritten > 0 {
-                    println!(
-                        "Rewrote {links_rewritten} inbound link(s) across {rewrote_files} file(s)."
-                    );
-                } else {
-                    println!("No inbound links to rewrite.");
-                }
-            }
-        }
-        Command::Rm { target, recursive } => {
-            // A delete removes files and index rows but never rewrites a body
-            // (inbound links dangle, they aren't repaired) → **model-free**, like
-            // the desktop's delete; still an explicit vault, like every write.
-            let root = cli.require_vault(None)?;
-            let (vault, _semantic) = open_vault(root, false)?;
-            // Kind dispatch (§9b #8), mirroring `mv`: an existing directory deletes
-            // as a folder — gated on --recursive, the CLI's stand-in for the
-            // desktop's confirm dialog — else the extension picks the file arm.
-            let (deleted_line, dangled, json) = if root.join(target.trim_end_matches('/')).is_dir()
-            {
-                if !*recursive {
-                    return Err(CliError::RecursiveRequired(target.clone()));
-                }
-                let report = vault.delete_dir(target)?;
-                let json = serde_json::to_string_pretty(&report)?;
-                (
-                    format!(
-                        "Deleted {}/ ({} note(s), {} file(s))",
-                        report.dir, report.deleted_notes, report.deleted_resources
-                    ),
-                    report.dangled,
-                    json,
-                )
-            } else if doc_kind(target) == DocKind::Resource {
-                let report = vault.delete_resource(target)?;
-                let json = serde_json::to_string_pretty(&report)?;
-                (format!("Deleted {}", report.path), report.dangled, json)
-            } else {
-                let report = vault.delete_note(target)?;
-                let json = serde_json::to_string_pretty(&report)?;
-                (format!("Deleted {}", report.path), report.dangled, json)
-            };
-            if cli.json {
-                println!("{json}");
-            } else {
-                println!("{deleted_line}");
-                if dangled.is_empty() {
-                    println!("No inbound links affected.");
-                } else {
-                    println!(
-                        "Links in {} file(s) now unresolved: {}",
-                        dangled.len(),
-                        dangled.join(", ")
-                    );
-                }
-            }
-        }
-        Command::Search { query, limit } => {
-            // Search embeds the query for the vector half → it needs the real model.
-            let (vault, semantic) = open_vault(&cli.vault_or_cwd(), true)?;
-            let results = vault.search(query, *limit)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&results)?);
-            } else {
-                if results.is_empty() {
-                    println!("No results.");
-                } else {
-                    for r in &results {
-                        let name = r.title.as_deref().unwrap_or(&r.path);
-                        println!("{:.4}  {name} ({})", r.score, r.path);
-                        if !r.snippet.is_empty() {
-                            println!("    {}", r.snippet);
-                        }
-                    }
-                }
-                // Honesty (never overstate): with the fake embedder the vector half
-                // isn't semantic. Under the real model it is, so no caveat. Kept on
-                // stderr so stdout stays pure results.
-                if !semantic {
-                    eprintln!(
-                        "note: keyword (BM25) ranking is live; semantic ranking is off (fake embedder)."
-                    );
-                }
-            }
-        }
-        Command::Similar { note, limit } => {
-            // Candidate generation reads the *stored* vectors (no query embedding), so
-            // like `neighbors` it needs no live model — a prior `reindex` supplies them.
-            // Open with the fake; it's a pure, instant local read.
-            let (vault, _semantic) = open_vault(&cli.vault_or_cwd(), false)?;
-            let results = vault.similar(note, *limit)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&results)?);
-            } else if results.is_empty() {
-                println!(
-                    "No similar notes. (If you haven't yet, run `b2 init` then `b2 reindex` so similarity is semantic.)"
-                );
-            } else {
-                for r in results.iter() {
-                    let name = r.title.as_deref().unwrap_or(&r.path);
-                    println!("{:.4}  {name} ({})", r.score, r.path);
-                    if !r.evidence.is_empty() {
-                        println!("    {}", r.evidence);
-                    }
-                }
-                // Nudge toward the commit step, on stderr so stdout stays pure results.
-                eprintln!("Commit one with:  b2 link {note} <note> --type <verb>");
-            }
-        }
+        } => cmd_add(cli, path, title.as_deref(), content.as_deref()),
+        Command::Write { note } => cmd_write(cli, note),
+        Command::Neighbors { note } => cmd_neighbors(cli, note),
+        Command::Explain { note } => cmd_explain(cli, note),
+        Command::Mv { from, to } => cmd_mv(cli, from, to),
+        Command::Rm { target, recursive } => cmd_rm(cli, target, *recursive),
+        Command::Search { query, limit } => cmd_search(cli, query, *limit),
+        Command::Similar { note, limit } => cmd_similar(cli, note, *limit),
         Command::Link {
             src,
             dst,
             edge_type,
             explanation,
-        } => {
-            // Link writes the source note's frontmatter and re-projects it → require an
-            // explicit vault (no silent cwd), opening with the same real model the index
-            // was built with (like `add`/`mv`); a frontmatter-only edit won't re-embed.
-            let (vault, _semantic) = open_vault(cli.require_vault(None)?, true)?;
-            let report = vault.link(src, dst, edge_type, explanation.as_deref())?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else if report.created {
-                println!(
-                    "Linked {} —{}→ {}. Wrote the relation into the source note's frontmatter.",
-                    report.src_path, report.relation, report.dst_path
-                );
+        } => cmd_link(cli, src, dst, edge_type, explanation.as_deref()),
+    }
+}
+
+/// Print `value` as pretty JSON on stdout — the one `--json` output path, shared by
+/// every subcommand.
+fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<(), CliError> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn cmd_init(json: bool) -> Result<(), CliError> {
+    // Global, per-machine setup — no vault involved.
+    let config = EmbedConfig::load()?;
+    let report = provision(&config, |line| eprintln!("{line}"))?;
+    if json {
+        print_json(&report)?;
+    } else if report.already_present {
+        println!("Model '{}' is already installed.", report.model);
+    } else {
+        println!(
+            "Installed '{}' ({} dims). Run `b2 reindex` to embed your vault.",
+            report.model, report.dim
+        );
+    }
+    Ok(())
+}
+
+fn cmd_reindex(
+    cli: &Cli,
+    vault: Option<&Path>,
+    force: bool,
+    dry_run: bool,
+    cancel: bool,
+) -> Result<(), CliError> {
+    // Reindex writes an index → require an explicit vault (positional wins),
+    // never a silent cwd fallback. See `Cli::require_vault`.
+    let root = cli.require_vault(vault)?;
+    if cancel {
+        // Signals another process and returns; it never opens the vault (no
+        // model load, no index read) — the run being cancelled owns all of that.
+        return cancel_reindex(root, cli.json);
+    }
+    if dry_run {
+        // A dry-run neither embeds nor stamps → no model needed (open with
+        // the fake, like `neighbors`); it's a pure read, so there's no slow
+        // embed phase to show progress for.
+        let vault = open_vault(root, false)?;
+        let plan = vault.plan_reindex(force)?;
+        if cli.json {
+            print_json(&plan)?;
+        } else {
+            print_reindex_plan(&plan);
+        }
+        return Ok(());
+    }
+    // Single-in-flight: take an advisory lock *before* the (slow) model load so
+    // a second `b2 reindex` — e.g. a foreground run racing one you backgrounded
+    // with `b2 reindex &` — refuses cleanly instead of two processes writing the
+    // same index. Advisory, not a PID file: the OS frees it the instant the holder
+    // exits (crash, kill, or Ctrl-C included), so nothing stale is ever left behind.
+    // `lock` is held until this command fn ends; dropping it releases the lock.
+    let lock = open_reindex_lock(root)?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::ReindexRunning),
+        Err(std::fs::TryLockError::Error(e)) => return Err(CliError::Io(e)),
+    }
+    // Now that the lock is ours, stamp who holds it: the address `b2 reindex
+    // --cancel` signals, and what `b2 status` prints so a manual `kill` stays
+    // available (GH #55). Best-effort — a failed write costs the cancel
+    // affordance, not the reindex.
+    let _ = record_reindex_pid(&lock);
+    // Reindex embeds every changed chunk → it needs the real model.
+    let vault = open_vault(root, true)?;
+    // Wire Ctrl-C to the cooperative-cancel flag now that the model is loaded and
+    // real embedding is next. (During the model load the default SIGINT still
+    // applies — nothing is written yet, so a hard stop there is safe.) Best-effort:
+    // if the handler can't be installed, Ctrl-C keeps its default (terminate), which
+    // still leaves a consistent index since edges + FTS land before any vectors.
+    let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
+    // Embedding a large vault on CPU is slow; show a live progress line so it
+    // never looks frozen. Only on an interactive stderr (never in --json, and
+    // never when piped/captured) so machine output and tests stay clean.
+    let report = if cli.json || !std::io::stderr().is_terminal() {
+        vault.reindex_with_progress(force, &mut |_| cancel_flow())?
+    } else {
+        // Name the vault being indexed up front, then a live line that counts
+        // the notes actually (re)embedded — not every note, most of which an
+        // incremental run reuses untouched — with the current file + its chunks.
+        let shown = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        eprintln!("Indexing {}", shown.display());
+        let mut progressed = false;
+        let mut on_progress = |p: b2_core::ingest::ReindexProgress| {
+            progressed = true;
+            // \x1b[K clears any tail of a previous, longer line (paths vary in
+            // length); safe here because this branch only runs on a real terminal.
+            eprint!(
+                "\r  embedding {}/{} · {} ({} chunk{})\x1b[K",
+                p.notes_embedded,
+                p.notes_to_embed,
+                p.note_path,
+                p.note_chunks,
+                if p.note_chunks == 1 { "" } else { "s" },
+            );
+            let _ = std::io::stderr().flush();
+            // Stop after this batch if Ctrl-C was pressed,
+            // else carry on. The batch is already written above, so a cancel here
+            // never tears a write.
+            cancel_flow()
+        };
+        let report = vault.reindex_with_progress(force, &mut on_progress)?;
+        if progressed {
+            eprintln!(); // close the progress line
+        }
+        report
+    };
+    if cli.json {
+        print_json(&report)?;
+    } else {
+        print_reindex_report(&report);
+    }
+    Ok(())
+}
+
+/// The human-readable `reindex --dry-run` preview (the `--json` sibling prints the
+/// plan itself).
+fn print_reindex_plan(plan: &b2_core::vault::ReindexPlan) {
+    println!(
+        "Dry run: would index {} note(s) — {} to embed, {} to stamp. No changes made.",
+        plan.would_index, plan.would_embed, plan.would_stamp
+    );
+    // The GH #81 previews: which notes have no identity yet, which
+    // stamps would *change* an identity, and which files contest one.
+    if !plan.stamp_paths.is_empty() {
+        println!("Notes without a b2id (a real run stamps these):");
+        for p in &plan.stamp_paths {
+            println!("  - {p}");
+        }
+    }
+    if !plan.would_restamp.is_empty() {
+        println!(
+            "Would restamp identity (the b2id line was removed or blanked; links to the old id will dangle):"
+        );
+        for r in &plan.would_restamp {
+            println!("  - {} (was {})", r.path, r.old_b2id);
+        }
+    }
+    for c in &plan.collisions {
+        println!(
+            "Duplicate b2id {}: a real run keeps {} and leaves {} un-indexed until resolved.",
+            c.b2id,
+            c.kept_path,
+            c.shadowed_paths.join(", ")
+        );
+    }
+}
+
+/// The human-readable reindex summary: the one stdout line, then the stderr
+/// notices — skipped files, the GH #81 anomalies, and the cancelled line.
+fn print_reindex_report(report: &b2_core::vault::ReindexReport) {
+    println!(
+        "Indexed {} notes ({} embedded, {} stamped{}) and {} resources{}",
+        report.indexed,
+        report.embedded,
+        report.stamped,
+        if report.notes_pruned > 0 {
+            format!(", {} pruned", report.notes_pruned)
+        } else {
+            String::new()
+        },
+        report.resources_indexed,
+        if report.resources_pruned > 0 {
+            format!(" ({} pruned)", report.resources_pruned)
+        } else {
+            String::new()
+        }
+    );
+    // One unreadable file no longer aborts the reindex — it is skipped and
+    // named here (to stderr, so it never pollutes the machine-readable stdout
+    // line above) with a short, file-level reason.
+    if !report.skipped.is_empty() {
+        eprintln!("Skipped {} unreadable file(s):", report.skipped.len());
+        for s in &report.skipped {
+            eprintln!("  - {} ({})", s.path, s.reason);
+        }
+    }
+    // The GH #81 anomaly notices (stderr, like `skipped`): surfaced every
+    // run until resolved, never auto-fixed — the human decides which file
+    // keeps a contested identity.
+    for c in &report.collisions {
+        let why = match c.precedence {
+            b2_core::vault::CollisionPrecedence::Incumbent => "it already held the identity",
+            b2_core::vault::CollisionPrecedence::TieBreak => {
+                "first in path order — b2 could not tell which file is the original"
+            }
+        };
+        eprintln!(
+            "Duplicate b2id {}: kept {} ({}); not indexed: {}.",
+            c.b2id,
+            c.kept_path,
+            why,
+            c.shadowed_paths.join(", ")
+        );
+        eprintln!(
+            "  To resolve: delete the copy, or remove its `b2id:` line to give it a fresh identity."
+        );
+    }
+    if !report.restamped.is_empty() {
+        eprintln!(
+            "Restamped identity on {} note(s) — the b2id line was removed or blanked outside b2, so links to the old identity now dangle:",
+            report.restamped.len()
+        );
+        for r in &report.restamped {
+            eprintln!("  - {} (was {}, now {})", r.path, r.old_b2id, r.new_b2id);
+        }
+    }
+    // The counts above already report the partial work truthfully; add the
+    // one line that tells the user it was interrupted and is safe to resume.
+    if report.cancelled {
+        eprintln!(
+            "Cancelled — the index is consistent but only partly embedded. Re-run `b2 reindex` to finish the rest."
+        );
+    }
+}
+
+fn cmd_status(cli: &Cli) -> Result<(), CliError> {
+    // Read-only coverage report: how much of the vault is embedded (semantic
+    // ranking live vs. keyword-only) and whether a background reindex is in
+    // flight — the companion to backgrounding a slow reindex with `b2 reindex &`.
+    // A pure model-free DB read (#26): open with the fake.
+    let root = cli.vault_or_cwd();
+    let vault = open_vault(root, false)?;
+    let status = vault.embed_status()?;
+    let holder = reindex_holder(root);
+    if cli.json {
+        print_json(&serde_json::json!({
+            "embedded": status.embedded,
+            "total": status.total,
+            "reindex_running": holder.is_some(),
+            // The running process's id — `null` when nothing is running (and
+            // on the sliver of a moment before a fresh holder stamps it).
+            "reindex_pid": holder.as_ref().and_then(|h| h.pid),
+        }))?;
+    } else {
+        if status.total == 0 {
+            println!("No notes indexed yet. Run `b2 reindex` to build the index.");
+        } else if status.embedded == 0 {
+            println!(
+                "Embedded 0/{} notes — keyword-only. Run `b2 reindex` for semantic ranking.",
+                status.total
+            );
+        } else if status.embedded < status.total {
+            println!(
+                "Embedded {}/{} notes — semantic ranking partial ({} still keyword-only).",
+                status.embedded,
+                status.total,
+                status.total - status.embedded
+            );
+        } else {
+            println!(
+                "Embedded {}/{} notes — semantic ranking fully live.",
+                status.embedded, status.total
+            );
+        }
+        // Name the process, not just the fact: `--cancel` is the supported stop,
+        // and the pid keeps a plain `kill -INT` as the documented fallback.
+        match holder.as_ref().map(|h| h.pid) {
+            Some(Some(pid)) => println!(
+                "A reindex is currently running (pid {pid}). Stop it with `b2 reindex --cancel` (or `kill -INT {pid}`)."
+            ),
+            Some(None) => {
+                println!("A reindex is currently running. Stop it with `b2 reindex --cancel`.")
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+fn cmd_add(
+    cli: &Cli,
+    path: &str,
+    title: Option<&str>,
+    content: Option<&str>,
+) -> Result<(), CliError> {
+    // Add writes a new note (and embeds its body) → require an explicit vault
+    // (no silent cwd), and it needs the real model like `reindex`/`mv`/`link`.
+    let vault = open_vault(cli.require_vault(None)?, true)?;
+    let report = vault.add_note(path, title, content)?;
+    if cli.json {
+        print_json(&report)?;
+    } else {
+        println!("Created {} (b2id {}).", report.path, report.b2id);
+    }
+    Ok(())
+}
+
+fn cmd_write(cli: &Cli, note: &str) -> Result<(), CliError> {
+    // A body splice + re-projection: **model-free** (like the desktop's save and
+    // `rm`), still an explicit vault like every write. Refuse an interactive
+    // terminal up front so the command never silently hangs waiting for
+    // hand-typed input — the new body is always *piped* (an agent, `cat file |`, …).
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Err(CliError::StdinRequired);
+    }
+    let vault = open_vault(cli.require_vault(None)?, false)?;
+    let mut body = String::new();
+    stdin.lock().read_to_string(&mut body)?;
+    // Stateless one-shot: read the current on-disk revision and chain the write on
+    // it. A CLI holds no long-lived buffer, so there's no external-edit window to
+    // guard here — the content-hash guard exists for the desktop's in-memory
+    // buffer; for a one-shot, the contract is simply "the body becomes exactly
+    // this" (`Vault::write` still keeps the frontmatter bytes untouched).
+    let current = vault.read(note)?;
+    let report = vault.write(note, &body, &current.revision)?;
+    if cli.json {
+        print_json(&report)?;
+    } else {
+        println!("Wrote {} ({} bytes).", report.path, body.len());
+    }
+    Ok(())
+}
+
+fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
+    // Neighbors is a pure graph query — it never embeds, so don't require
+    // the model (no needless `b2 init` just to explore the graph).
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    let neighbors = vault.neighbors(note)?;
+    // Dangling outbound links (a `[[folder]]` or a typo) that resolve to no
+    // note or resource — surfaced, not dropped (GH #12). `--json` keeps its
+    // resolved-neighbors array contract; the full structured picture,
+    // including these, is `b2 explain --json`.
+    let unresolved = vault.unresolved_links(note)?;
+    if cli.json {
+        print_json(&neighbors)?;
+    } else if neighbors.is_empty() && unresolved.is_empty() {
+        println!("No neighbors.");
+    } else {
+        for n in &neighbors {
+            let arrow = arrow(&n.direction);
+            let name = display_name(n.title.as_deref(), &n.path);
+            let explanation = n
+                .explanation
+                .as_deref()
+                .map(|e| format!(" — {e}"))
+                .unwrap_or_default();
+            println!("{arrow} {}  {name} ({}){explanation}", n.label, n.path);
+        }
+        for u in &unresolved {
+            println!(
+                "⚠ {}  [[{}]] — unresolved (no matching note or file)",
+                u.relation, u.target
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cmd_explain(cli: &Cli, note: &str) -> Result<(), CliError> {
+    // Explain is a pure graph read (edges + their explanations), no embed —
+    // like `neighbors`, it opens with the fake and needs no `b2 init`.
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    // Kind dispatch by the argument's own shape (core's one rule, §9b #8):
+    // a resource arg gets the fallback card's view — metadata + backlinks.
+    if doc_kind(note) == DocKind::Resource {
+        let view = vault.explain_resource(note)?;
+        if cli.json {
+            print_json(&view)?;
+        } else {
+            println!("{} ({}, {} bytes)", view.path, view.class, view.size);
+            if view.backlinks.is_empty() {
+                println!("No backlinks yet.");
             } else {
+                println!("Backlinks:");
+                for b in &view.backlinks {
+                    let name = display_name(b.title.as_deref(), &b.path);
+                    let mut line = format!("  ← {name} ({})  {}", b.path, b.r#type);
+                    decorate(&mut line, b.embed, b.caption.as_deref());
+                    println!("{line}");
+                }
+            }
+        }
+        return Ok(());
+    }
+    let view = vault.explain(note)?;
+    if cli.json {
+        print_json(&view)?;
+    } else {
+        let name = display_name(view.title.as_deref(), &view.path);
+        println!("{name} ({})  [b2id {}]", view.path, view.b2id);
+        if view.connections.is_empty() && view.resources.is_empty() && view.unresolved.is_empty() {
+            // Zero connections at all — nothing links to it and it links to
+            // nothing (an orphan; the kernel only surfaces, never archives).
+            println!("No connections yet.");
+        } else if !view.connections.is_empty() {
+            println!("Connections:");
+            for c in &view.connections {
+                let arrow = arrow(&c.direction);
+                let target = display_name(c.title.as_deref(), &c.path);
                 println!(
-                    "Already linked {} —{}→ {}. Nothing changed.",
-                    report.src_path, report.relation, report.dst_path
+                    "  {arrow} {}  {target} ({})  [{}]",
+                    c.label, c.path, c.origin
                 );
+                if let Some(why) = &c.explanation {
+                    println!("      why: {why}");
+                }
+            }
+            // If nothing points *at* the note, it's an orphan — surfaced, not
+            // acted on (invariants.md; files are only touched when asked).
+            if !view.connections.iter().any(|c| c.direction == "inbound") {
+                println!("No inbound links — this note is an orphan.");
+            }
+        }
+        // Outbound links at resources (images, PDFs, …) — the third target
+        // kind an edge can have, shown from the note's side (GH #22).
+        if !view.resources.is_empty() {
+            println!("Resource links:");
+            for r in &view.resources {
+                let mut line = format!(
+                    "  → {}  {} ({})  [{}]",
+                    r.relation, r.path, r.class, r.origin
+                );
+                decorate(&mut line, r.embed, r.caption.as_deref());
+                println!("{line}");
+                if let Some(why) = &r.explanation {
+                    println!("      why: {why}");
+                }
+            }
+        }
+        // Dangling outbound links (a `[[folder]]` or a typo): a note is one
+        // `.md` file, so these resolve to nothing — shown as broken rather
+        // than silently dropped (GH #12).
+        if !view.unresolved.is_empty() {
+            println!("Unresolved links:");
+            for u in &view.unresolved {
+                println!(
+                    "  ⚠ {}  [[{}]]  (no matching note or file)  [{}]",
+                    u.relation, u.target, u.origin
+                );
+                if let Some(why) = &u.explanation {
+                    println!("      why: {why}");
+                }
             }
         }
     }
     Ok(())
 }
 
-/// Open a vault with the appropriate embedder. Returns the vault and whether its
-/// embedder is semantic (real model) — the caller uses that only for honest output.
+fn cmd_mv(cli: &Cli, from: &str, to: &str) -> Result<(), CliError> {
+    // A move rewrites files (and re-embeds them on re-projection) → require an
+    // explicit vault (no silent cwd), and it needs the real model the index was
+    // built with, like `reindex`/`add`/`link`.
+    let root = cli.require_vault(None)?;
+    let vault = open_vault(root, true)?;
+    // Kind dispatch (§9b #8): an existing directory moves as a folder
+    // (every file under it, one rename); otherwise the two file arms
+    // differ only in the report type (a resource has no b2id to carry).
+    // The human "Moved" line differs per arm, the rewrite tally is shared.
+    if is_dir_arg(root, from) {
+        let report = vault.move_dir(from, to)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!(
+                "Moved {}/ → {}/ ({} note(s), {} file(s))",
+                report.from, report.to, report.moved_notes, report.moved_resources
+            );
+            print_rewrite_tally(report.links_rewritten, report.rewrote.len());
+        }
+    } else if doc_kind(from) == DocKind::Resource {
+        let report = vault.move_resource(from, to)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!("Moved {} → {}", report.from, report.to);
+            print_rewrite_tally(report.links_rewritten, report.rewrote.len());
+        }
+    } else {
+        let report = vault.move_note(from, to)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!("Moved {} → {}", report.from, report.to);
+            print_rewrite_tally(report.links_rewritten, report.rewrote.len());
+        }
+    }
+    Ok(())
+}
+
+fn cmd_rm(cli: &Cli, target: &str, recursive: bool) -> Result<(), CliError> {
+    // A delete removes files and index rows but never rewrites a body
+    // (inbound links dangle, they aren't repaired) → **model-free**, like
+    // the desktop's delete; still an explicit vault, like every write.
+    let root = cli.require_vault(None)?;
+    let vault = open_vault(root, false)?;
+    // Kind dispatch (§9b #8), mirroring `mv`: an existing directory deletes
+    // as a folder — gated on --recursive, the CLI's stand-in for the
+    // desktop's confirm dialog — else the extension picks the file arm.
+    if is_dir_arg(root, target) {
+        if !recursive {
+            return Err(CliError::RecursiveRequired(target.to_string()));
+        }
+        let report = vault.delete_dir(target)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!(
+                "Deleted {}/ ({} note(s), {} file(s))",
+                report.dir, report.deleted_notes, report.deleted_resources
+            );
+            print_dangled(&report.dangled);
+        }
+    } else if doc_kind(target) == DocKind::Resource {
+        let report = vault.delete_resource(target)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!("Deleted {}", report.path);
+            print_dangled(&report.dangled);
+        }
+    } else {
+        let report = vault.delete_note(target)?;
+        if cli.json {
+            print_json(&report)?;
+        } else {
+            println!("Deleted {}", report.path);
+            print_dangled(&report.dangled);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
+    // Search embeds the query for the vector half → it needs the real model.
+    let vault = open_vault(cli.vault_or_cwd(), true)?;
+    let results = vault.search(query, limit)?;
+    if cli.json {
+        print_json(&results)?;
+    } else {
+        if results.is_empty() {
+            println!("No results.");
+        } else {
+            for r in &results {
+                let name = display_name(r.title.as_deref(), &r.path);
+                println!("{:.4}  {name} ({})", r.score, r.path);
+                if !r.snippet.is_empty() {
+                    println!("    {}", r.snippet);
+                }
+            }
+        }
+        // Honesty (never overstate): with the fake embedder the vector half
+        // isn't semantic. Under the real model it is, so no caveat. Kept on
+        // stderr so stdout stays pure results.
+        if use_fake_embedder() {
+            eprintln!(
+                "note: keyword (BM25) ranking is live; semantic ranking is off (fake embedder)."
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
+    // Candidate generation reads the *stored* vectors (no query embedding), so
+    // like `neighbors` it needs no live model — a prior `reindex` supplies them.
+    // Open with the fake; it's a pure, instant local read.
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    let results = vault.similar(note, limit)?;
+    if cli.json {
+        print_json(&results)?;
+    } else if results.is_empty() {
+        println!(
+            "No similar notes. (If you haven't yet, run `b2 init` then `b2 reindex` so similarity is semantic.)"
+        );
+    } else {
+        for r in &results {
+            let name = display_name(r.title.as_deref(), &r.path);
+            println!("{:.4}  {name} ({})", r.score, r.path);
+            if !r.evidence.is_empty() {
+                println!("    {}", r.evidence);
+            }
+        }
+        // Nudge toward the commit step, on stderr so stdout stays pure results.
+        eprintln!("Commit one with:  b2 link {note} <note> --type <verb>");
+    }
+    Ok(())
+}
+
+fn cmd_link(
+    cli: &Cli,
+    src: &str,
+    dst: &str,
+    edge_type: &str,
+    explanation: Option<&str>,
+) -> Result<(), CliError> {
+    // Link writes the source note's frontmatter and re-projects it → require an
+    // explicit vault (no silent cwd), opening with the same real model the index
+    // was built with (like `add`/`mv`); a frontmatter-only edit won't re-embed.
+    let vault = open_vault(cli.require_vault(None)?, true)?;
+    let report = vault.link(src, dst, edge_type, explanation)?;
+    if cli.json {
+        print_json(&report)?;
+    } else if report.created {
+        println!(
+            "Linked {} —{}→ {}. Wrote the relation into the source note's frontmatter.",
+            report.src_path, report.relation, report.dst_path
+        );
+    } else {
+        println!(
+            "Already linked {} —{}→ {}. Nothing changed.",
+            report.src_path, report.relation, report.dst_path
+        );
+    }
+    Ok(())
+}
+
+/// Open a vault with the appropriate embedder.
 ///
 /// `needs_semantic` commands (`reindex`, `search`) load the real [`LocalEmbedder`]
 /// from the shared cache and **fail fast** with "run `b2 init`" if it's absent.
 /// Pure-graph commands pass `false` and use the fake — no model required just to
 /// explore the graph. `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev
 /// mode, and what the test suite runs under).
-fn open_vault(root: &Path, needs_semantic: bool) -> Result<(Vault, bool), CliError> {
+fn open_vault(root: &Path, needs_semantic: bool) -> Result<Vault, CliError> {
     if needs_semantic && !use_fake_embedder() {
         let config = EmbedConfig::load()?;
         let embedder = LocalEmbedder::load(&config)?;
-        Ok((
-            Vault::open_with_embedder(root, Box::new(embedder) as Box<dyn Embedder>)?,
-            true,
-        ))
+        Ok(Vault::open_with_embedder(
+            root,
+            Box::new(embedder) as Box<dyn Embedder>,
+        )?)
     } else {
-        Ok((Vault::open(root)?, false))
+        Ok(Vault::open(root)?)
     }
 }
 
 fn use_fake_embedder() -> bool {
-    matches!(std::env::var("B2_EMBEDDER").ok().as_deref(), Some("fake"))
+    std::env::var_os("B2_EMBEDDER").is_some_and(|v| v == "fake")
+}
+
+/// The presentation rule for naming a note: its title when it has one, else its
+/// vault-relative path.
+fn display_name<'a>(title: Option<&'a str>, path: &'a str) -> &'a str {
+    title.unwrap_or(path)
+}
+
+/// The direction glyph: `→` for an outbound edge (this note → other), `←` inbound.
+fn arrow(direction: &str) -> &'static str {
+    if direction == "outbound" {
+        "→"
+    } else {
+        "←"
+    }
+}
+
+/// Append a resource line's decorations: the `(embed)` marker and the quoted caption.
+fn decorate(line: &mut String, embed: bool, caption: Option<&str>) {
+    use std::fmt::Write as _;
+    if embed {
+        line.push_str(" (embed)");
+    }
+    if let Some(c) = caption {
+        let _ = write!(line, " — \"{c}\"");
+    }
+}
+
+/// Whether a `mv`/`rm` argument names an existing directory under `root` — the
+/// kind-dispatch test that routes to the folder arm (a trailing `/` is tolerated).
+fn is_dir_arg(root: &Path, arg: &str) -> bool {
+    root.join(arg.trim_end_matches('/')).is_dir()
+}
+
+/// The `mv` tally, shared by its three arms: how many inbound link targets were
+/// rewritten across how many files — or that nothing linked to the moved item.
+fn print_rewrite_tally(links_rewritten: usize, rewrote_files: usize) {
+    if links_rewritten > 0 {
+        println!("Rewrote {links_rewritten} inbound link(s) across {rewrote_files} file(s).");
+    } else {
+        println!("No inbound links to rewrite.");
+    }
+}
+
+/// The `rm` tally, shared by its three arms: which surviving files' links now
+/// dangle — or that none were affected.
+fn print_dangled(dangled: &[String]) {
+    if dangled.is_empty() {
+        println!("No inbound links affected.");
+    } else {
+        println!(
+            "Links in {} file(s) now unresolved: {}",
+            dangled.len(),
+            dangled.join(", ")
+        );
+    }
 }
 
 /// Path to the single-in-flight advisory lock for `reindex`, under the disposable
@@ -1010,13 +1088,10 @@ fn cancel_reindex(root: &Path, json: bool) -> Result<(), CliError> {
         // `signalled`, not `cancelled`: the request landed; the run stops at its next
         // batch boundary and reports the partial work itself (honest tense, like the
         // dry-run's `would_*` keys).
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "signalled": true,
-                "pid": pid,
-            }))?
-        );
+        print_json(&serde_json::json!({
+            "signalled": true,
+            "pid": pid,
+        }))?;
     } else {
         println!(
             "Cancelling the reindex on this vault (pid {pid}). It stops after the current batch, leaving a consistent index — re-run `b2 reindex` to finish."
@@ -1155,18 +1230,10 @@ fn user_message(err: &CliError) -> String {
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };
     if std::env::var_os("B2_DEBUG").is_some() {
-        let detail = match err {
-            CliError::Core(e) => e.to_string(),
-            CliError::Embed(e) => e.to_string(),
-            CliError::Serde(e) => e.to_string(),
-            CliError::Io(e) => e.to_string(),
-            CliError::VaultRequired => err.to_string(),
-            CliError::ReindexRunning => err.to_string(),
-            CliError::NoReindexRunning => err.to_string(),
-            CliError::ReindexPidUnknown => err.to_string(),
-            CliError::RecursiveRequired(_) => err.to_string(),
-            CliError::StdinRequired => err.to_string(),
-        };
+        // Every wrapper variant is `#[error(transparent)]` and every local variant
+        // carries its own `#[error("…")]` line, so the enum's own `Display` *is* the
+        // per-variant detail — no match needed.
+        let detail = err.to_string();
         format!("{msg}\n(debug: {detail})")
     } else {
         msg

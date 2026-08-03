@@ -39,61 +39,51 @@ pub struct Neighbor {
 /// (others → this note), each labeled for display. Every edge is authored and active
 /// (there is no suggestion lifecycle), so this is the note's full typed graph.
 pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
-    let mut out = Vec::new();
-
-    let mut stmt = conn.prepare(
+    let mut out = collect_neighbors(
+        conn,
         "SELECT dst_id, type, explanation, origin FROM edges
          WHERE src_id = ?1 AND dst_id IS NOT NULL
          ORDER BY type, dst_id",
+        b2id,
+        Direction::Outbound,
     )?;
-    let rows = stmt.query_map([b2id], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, Option<String>>(2)?,
-            r.get::<_, String>(3)?,
-        ))
-    })?;
-    for row in rows {
-        let (other, edge_type, explanation, origin) = row?;
-        let label = edge_type.clone();
-        out.push(Neighbor {
-            other,
-            edge_type,
-            direction: Direction::Outbound,
-            label,
-            explanation,
-            origin,
-        });
-    }
-
-    let mut stmt = conn.prepare(
+    out.extend(collect_neighbors(
+        conn,
         "SELECT src_id, type, explanation, origin FROM edges
          WHERE dst_id = ?1
          ORDER BY type, src_id",
-    )?;
-    let rows = stmt.query_map([b2id], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, Option<String>>(2)?,
-            r.get::<_, String>(3)?,
-        ))
-    })?;
-    for row in rows {
-        let (other, edge_type, explanation, origin) = row?;
-        let label = relation::inverse_label(&edge_type).to_string();
-        out.push(Neighbor {
-            other,
-            edge_type,
-            direction: Direction::Inbound,
-            label,
-            explanation,
-            origin,
-        });
-    }
-
+        b2id,
+        Direction::Inbound,
+    )?);
     Ok(out)
+}
+
+/// One direction's half of [`neighbors`]: run a query yielding
+/// `(other, type, explanation, origin)` rows and label each for `direction` —
+/// the verb itself outbound, its inverse inbound (data-model.md §2).
+fn collect_neighbors(
+    conn: &Connection,
+    sql: &str,
+    b2id: &str,
+    direction: Direction,
+) -> Result<Vec<Neighbor>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([b2id], |r| {
+        let edge_type: String = r.get(1)?;
+        let label = match direction {
+            Direction::Outbound => edge_type.clone(),
+            Direction::Inbound => relation::inverse_label(&edge_type).to_string(),
+        };
+        Ok(Neighbor {
+            other: r.get(0)?,
+            edge_type,
+            direction,
+            label,
+            explanation: r.get(2)?,
+            origin: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// One outbound link that resolved to **nothing** — neither a note nor a resource

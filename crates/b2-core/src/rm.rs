@@ -105,7 +105,7 @@ pub fn delete_note(
     // source is the note itself — it dies with the file, so it is not re-projected.
     let dangled: BTreeSet<String> = db::inbound_edge_targets(conn, b2id)?
         .into_iter()
-        .map(|(_src_id, src_path, _raw)| src_path)
+        .map(|e| e.src_path)
         .filter(|p| p != rel)
         .collect();
 
@@ -134,7 +134,7 @@ pub fn delete_resource(
     db::resource_detail(conn, rel)?.ok_or_else(|| Error::ResourceNotFound(rel.to_string()))?;
     let dangled: BTreeSet<String> = db::inbound_resource_edge_targets(conn, rel)?
         .into_iter()
-        .map(|(_src_id, src_path, _raw)| src_path)
+        .map(|e| e.src_path)
         .collect();
 
     remove_file_if_present(&vault_root.join(rel))?;
@@ -177,16 +177,16 @@ pub fn delete_dir(
     let prefix = format!("{dir}/");
     let mut dangled: BTreeSet<String> = BTreeSet::new();
     for (b2id, _path) in &notes {
-        for (_src_id, src_path, _raw) in db::inbound_edge_targets(conn, b2id)? {
-            if !src_path.starts_with(&prefix) {
-                dangled.insert(src_path);
+        for e in db::inbound_edge_targets(conn, b2id)? {
+            if !e.src_path.starts_with(&prefix) {
+                dangled.insert(e.src_path);
             }
         }
     }
     for path in &resources {
-        for (_src_id, src_path, _raw) in db::inbound_resource_edge_targets(conn, path)? {
-            if !src_path.starts_with(&prefix) {
-                dangled.insert(src_path);
+        for e in db::inbound_resource_edge_targets(conn, path)? {
+            if !e.src_path.starts_with(&prefix) {
+                dangled.insert(e.src_path);
             }
         }
     }

@@ -686,17 +686,15 @@ impl Vault {
     fn resource_links_of(&self, b2id: &str) -> Result<Vec<ResourceLinkView>> {
         Ok(db::outbound_resource_edges(&self.conn, b2id)?
             .into_iter()
-            .map(
-                |(path, class, relation, origin, caption, embed, explanation)| ResourceLinkView {
-                    path,
-                    class,
-                    relation,
-                    origin,
-                    caption,
-                    embed,
-                    explanation,
-                },
-            )
+            .map(|e| ResourceLinkView {
+                path: e.path,
+                class: e.class,
+                relation: e.r#type,
+                origin: e.origin,
+                caption: e.caption,
+                embed: e.embed,
+                explanation: e.explanation,
+            })
             .collect())
     }
 
@@ -768,9 +766,7 @@ impl Vault {
     /// unknown ref.
     pub fn read(&self, note_ref: &str) -> Result<NoteView> {
         let _op = tracing::debug_span!(target: "b2::vault", "read", note = note_ref).entered();
-        let b2id = self.resolve_ref(note_ref)?;
-        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
-            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let (b2id, path) = self.resolve_ref_to_path(note_ref)?;
         let raw = fs::read_to_string(self.root.join(&path))?;
         let revision = revision_of(&raw);
         let parsed = note::parse(&raw);
@@ -811,9 +807,7 @@ impl Vault {
     /// only an external write trips the guard ("last save wins — by construction").
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write", note = note_ref).entered();
-        let b2id = self.resolve_ref(note_ref)?;
-        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
-            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let (_, path) = self.resolve_ref_to_path(note_ref)?;
         let abs = self.root.join(&path);
         let raw = fs::read_to_string(&abs)?;
 
@@ -875,9 +869,7 @@ impl Vault {
     ) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write_frontmatter", note = note_ref)
             .entered();
-        let b2id = self.resolve_ref(note_ref)?;
-        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
-            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let (b2id, path) = self.resolve_ref_to_path(note_ref)?;
         let abs = self.root.join(&path);
         let raw = fs::read_to_string(&abs)?;
 
@@ -943,11 +935,11 @@ impl Vault {
         let _op = tracing::debug_span!(target: "b2::vault", "list_resources").entered();
         Ok(db::list_resources(&self.conn)?
             .into_iter()
-            .map(|(path, class, size, mtime)| ResourceSummary {
-                path,
-                class,
-                size,
-                mtime,
+            .map(|r| ResourceSummary {
+                path: r.path,
+                class: r.class,
+                size: r.size,
+                mtime: r.mtime,
             })
             .collect())
     }
@@ -972,27 +964,25 @@ impl Vault {
     /// [`Error::ResourceNotFound`] when it is not inventoried.
     pub fn explain_resource(&self, path: &str) -> Result<ResourceExplainView> {
         let _op = tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
-        let (class, size, mtime, content_hash) = db::resource_detail(&self.conn, path)?
+        let detail = db::resource_detail(&self.conn, path)?
             .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
         let backlinks = db::inbound_resource_edges(&self.conn, path)?
             .into_iter()
-            .map(
-                |(b2id, note_path, title, r#type, caption, embed)| ResourceBacklink {
-                    b2id,
-                    path: note_path,
-                    title,
-                    r#type,
-                    caption,
-                    embed,
-                },
-            )
+            .map(|b| ResourceBacklink {
+                b2id: b.src_b2id,
+                path: b.note_path,
+                title: b.note_title,
+                r#type: b.r#type,
+                caption: b.caption,
+                embed: b.embed,
+            })
             .collect();
         Ok(ResourceExplainView {
             path: path.to_string(),
-            class,
-            size,
-            mtime,
-            content_hash,
+            class: detail.class,
+            size: detail.size,
+            mtime: detail.mtime,
+            content_hash: detail.content_hash,
             backlinks,
         })
     }
@@ -1196,12 +1186,8 @@ impl Vault {
         if !relation::is_core(edge_type) {
             return Err(Error::InvalidRelation(edge_type.to_string()));
         }
-        let src_id = self.resolve_ref(src_ref)?;
-        let dst_id = self.resolve_ref(dst_ref)?;
-        let src_path = db::resolve_b2id_to_path(&self.conn, &src_id)?
-            .ok_or_else(|| Error::NoteNotFound(src_ref.to_string()))?;
-        let dst_full = db::resolve_b2id_to_path(&self.conn, &dst_id)?
-            .ok_or_else(|| Error::NoteNotFound(dst_ref.to_string()))?;
+        let (src_id, src_path) = self.resolve_ref_to_path(src_ref)?;
+        let (dst_id, dst_full) = self.resolve_ref_to_path(dst_ref)?;
         // The link path drops the `.md` Obsidian omits (matches how `[[links]]` are written).
         let dst_path = dst_full
             .strip_suffix(".md")
@@ -1293,9 +1279,7 @@ impl Vault {
     /// `reindex`/`link`.
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mv", from = note_ref, to).entered();
-        let b2id = self.resolve_ref(note_ref)?;
-        let old_rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
-            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let (b2id, old_rel) = self.resolve_ref_to_path(note_ref)?;
         mv::move_note(
             &self.conn,
             &self.idgen,
@@ -1318,9 +1302,7 @@ impl Vault {
     /// inbound re-projection touches no vectors and needs no model.
     pub fn delete_note(&self, note_ref: &str) -> Result<DeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm", note = note_ref).entered();
-        let b2id = self.resolve_ref(note_ref)?;
-        let rel = db::resolve_b2id_to_path(&self.conn, &b2id)?
-            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        let (b2id, rel) = self.resolve_ref_to_path(note_ref)?;
         rm::delete_note(
             &self.conn,
             &self.idgen,
@@ -1444,6 +1426,18 @@ impl Vault {
         }
         db::resolve_link_target(&self.conn, note_ref)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))
+    }
+
+    /// [`resolve_ref`](Self::resolve_ref) plus the note's vault-relative path —
+    /// the opening dance of every note-addressed op that touches the file
+    /// (`read`/`write`/`link`/`move_note`/`delete_note`). The
+    /// [`Error::NoteNotFound`] carries the caller's original `note_ref`, so the
+    /// error reads as the user typed it.
+    fn resolve_ref_to_path(&self, note_ref: &str) -> Result<(String, String)> {
+        let b2id = self.resolve_ref(note_ref)?;
+        let path = db::resolve_b2id_to_path(&self.conn, &b2id)?
+            .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))?;
+        Ok((b2id, path))
     }
 }
 

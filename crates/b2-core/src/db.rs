@@ -363,18 +363,19 @@ fn schema_is_current(conn: &Connection) -> Result<bool> {
     Ok(stamped_version(conn)? == Some(SCHEMA_VERSION))
 }
 
+/// The value stored in `meta` under `key`, or `None` when unset. Callers must
+/// know `meta` exists — every caller reads it past a check that implies it
+/// (a table-presence check, or the embed pass having ensured the space).
+fn meta_value(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        .optional()?)
+}
+
 /// The `schema_version` recorded in `meta`, or `None` on an index that has never been
 /// stamped — or whose stamp was lost, which [`apply_schema`] treats the same way.
-/// Callers must know `meta` exists; its one caller reads it only past that check.
 fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
-    Ok(conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .and_then(|s| s.parse().ok()))
+    Ok(meta_value(conn, "schema_version")?.and_then(|s| s.parse().ok()))
 }
 
 /// Create the schema and stamp `schema_version`, dropping whatever was there first. The
@@ -669,16 +670,37 @@ pub fn resource_stat(conn: &Connection, path: &str) -> Result<Option<(i64, Optio
         .optional()?)
 }
 
-/// One `list_resources` row: `(path, class, size, mtime)`.
-pub type ResourceListing = (String, String, i64, Option<i64>);
-/// One `resource_detail` row: `(class, size, mtime, content_hash)`.
-pub type ResourceDetail = (String, i64, Option<i64>, String);
+/// One `list_resources` row — a resource's identity + stat for the file tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceListing {
+    pub path: String,
+    pub class: String,
+    pub size: i64,
+    pub mtime: Option<i64>,
+}
+
+/// One resource's full inventory row (`resource_detail`) — the fallback card's
+/// metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceDetail {
+    pub class: String,
+    pub size: i64,
+    pub mtime: Option<i64>,
+    pub content_hash: String,
+}
 
 /// Every inventoried resource — [`ResourceListing`] rows, path-ordered — the
 /// file tree's resource half (`Vault::list_resources`, research §9b #10).
 pub fn list_resources(conn: &Connection) -> Result<Vec<ResourceListing>> {
     let mut stmt = conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ResourceListing {
+            path: r.get(0)?,
+            class: r.get(1)?,
+            size: r.get(2)?,
+            mtime: r.get(3)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -689,19 +711,34 @@ pub fn resource_detail(conn: &Connection, path: &str) -> Result<Option<ResourceD
         .query_row(
             "SELECT class, size, mtime, content_hash FROM resources WHERE path = ?1",
             [path],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| {
+                Ok(ResourceDetail {
+                    class: r.get(0)?,
+                    size: r.get(1)?,
+                    mtime: r.get(2)?,
+                    content_hash: r.get(3)?,
+                })
+            },
         )
         .optional()?)
+}
+
+/// One edge pointing *at* a resource, resolved with its source note's display
+/// fields — a row of the fallback card's backlinks panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceBacklinkRow {
+    pub src_b2id: String,
+    pub note_path: String,
+    pub note_title: Option<String>,
+    pub r#type: String,
+    pub caption: Option<String>,
+    pub embed: bool,
 }
 
 /// Every active edge pointing *at* the resource: the source note's identity plus
 /// the edge's `type`/`caption`/`embed` — the fallback card's backlinks panel,
 /// straight off the materialized graph. Ordered for deterministic display.
-#[allow(clippy::type_complexity)]
-pub fn inbound_resource_edges(
-    conn: &Connection,
-    path: &str,
-) -> Result<Vec<(String, String, Option<String>, String, Option<String>, bool)>> {
+pub fn inbound_resource_edges(conn: &Connection, path: &str) -> Result<Vec<ResourceBacklinkRow>> {
     let mut stmt = conn.prepare(
         "SELECT e.src_id, n.path, n.title, e.type, e.caption, e.embed
          FROM edges e JOIN notes n ON n.b2id = e.src_id
@@ -709,38 +746,36 @@ pub fn inbound_resource_edges(
          ORDER BY n.path, e.occurrence_index",
     )?;
     let rows = stmt.query_map([path], |r| {
-        Ok((
-            r.get(0)?,
-            r.get(1)?,
-            r.get(2)?,
-            r.get(3)?,
-            r.get(4)?,
-            r.get::<_, i64>(5)? != 0,
-        ))
+        Ok(ResourceBacklinkRow {
+            src_b2id: r.get(0)?,
+            note_path: r.get(1)?,
+            note_title: r.get(2)?,
+            r#type: r.get(3)?,
+            caption: r.get(4)?,
+            embed: r.get::<_, i64>(5)? != 0,
+        })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// One edge a note points *at a resource*, joined with the inventory's `class`
+/// (the display glyph) — a row of `explain`'s file-links panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceEdgeRow {
+    pub path: String,
+    pub class: String,
+    pub r#type: String,
+    pub origin: String,
+    pub caption: Option<String>,
+    pub embed: bool,
+    pub explanation: Option<String>,
 }
 
 /// Every active edge a note points *at a resource* — the outbound complement of
 /// [`inbound_resource_edges`], so `explain` can present all three target kinds a
 /// note authors (note / resource / dangling — GH #22) instead of silently hiding
-/// its file links. Joins the inventory for the resource's `class` (the display
-/// glyph). Ordered for deterministic display.
-#[allow(clippy::type_complexity)]
-pub fn outbound_resource_edges(
-    conn: &Connection,
-    b2id: &str,
-) -> Result<
-    Vec<(
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        bool,
-        Option<String>,
-    )>,
-> {
+/// its file links. Ordered for deterministic display.
+pub fn outbound_resource_edges(conn: &Connection, b2id: &str) -> Result<Vec<ResourceEdgeRow>> {
     let mut stmt = conn.prepare(
         "SELECT e.dst_resource_path, r.class, e.type, e.origin, e.caption, e.embed, e.explanation
          FROM edges e JOIN resources r ON r.path = e.dst_resource_path
@@ -748,34 +783,35 @@ pub fn outbound_resource_edges(
          ORDER BY e.dst_resource_path, e.type, e.occurrence_index",
     )?;
     let rows = stmt.query_map([b2id], |r| {
-        Ok((
-            r.get(0)?,
-            r.get(1)?,
-            r.get(2)?,
-            r.get(3)?,
-            r.get(4)?,
-            r.get::<_, i64>(5)? != 0,
-            r.get(6)?,
-        ))
+        Ok(ResourceEdgeRow {
+            path: r.get(0)?,
+            class: r.get(1)?,
+            r#type: r.get(2)?,
+            origin: r.get(3)?,
+            caption: r.get(4)?,
+            embed: r.get::<_, i64>(5)? != 0,
+            explanation: r.get(6)?,
+        })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The bounded inbound set a **resource move** must rewrite — for each active
-/// edge at the resource, its source file and the exact authored link text
-/// (`dst_path_raw`). The resource sibling of [`inbound_edge_targets`]; ordered
-/// for deterministic rewriting.
-pub fn inbound_resource_edge_targets(
-    conn: &Connection,
-    path: &str,
-) -> Result<Vec<(String, String, String)>> {
+/// The bounded inbound set a **resource move** must rewrite — [`InboundEdge`]
+/// rows. The resource sibling of [`inbound_edge_targets`]; ordered for
+/// deterministic rewriting.
+pub fn inbound_resource_edge_targets(conn: &Connection, path: &str) -> Result<Vec<InboundEdge>> {
     let mut stmt = conn.prepare(
-        "SELECT e.src_id, n.path, e.dst_path_raw
+        "SELECT n.path, e.dst_path_raw
          FROM edges e JOIN notes n ON n.b2id = e.src_id
          WHERE e.dst_resource_path = ?1
          ORDER BY n.path, e.dst_path_raw",
     )?;
-    let rows = stmt.query_map([path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let rows = stmt.query_map([path], |r| {
+        Ok(InboundEdge {
+            src_path: r.get(0)?,
+            dst_raw: r.get(1)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -905,21 +941,8 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
 /// under the write lock. Identity first: a recorded model that differs settles it
 /// without the `sqlite_master` lookup.
 fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Result<bool> {
-    let cur_model: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'embed_model_id'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let cur_dim: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key = 'embed_dim'", [], |r| {
-            r.get(0)
-        })
-        .optional()?;
-
-    let unchanged = cur_model.as_deref() == Some(model_id)
-        && cur_dim.as_deref() == Some(dim.to_string().as_str());
+    let unchanged = meta_value(conn, "embed_model_id")?.as_deref() == Some(model_id)
+        && meta_value(conn, "embed_dim")?.as_deref() == Some(dim.to_string().as_str());
     Ok(unchanged && embedding_space_exists(conn)?)
 }
 
@@ -928,18 +951,8 @@ fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Res
 /// the only place a model swap is detectable, so a read compares it to the active
 /// embedder and fails fast on a mismatch (index-engine.md §8).
 pub fn recorded_embedder(conn: &Connection) -> Result<Option<(String, usize)>> {
-    let model: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'embed_model_id'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let dim: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key = 'embed_dim'", [], |r| {
-            r.get(0)
-        })
-        .optional()?;
+    let model = meta_value(conn, "embed_model_id")?;
+    let dim = meta_value(conn, "embed_dim")?;
     match (model, dim) {
         (Some(m), Some(d)) => Ok(Some((m, d.parse().unwrap_or(0)))),
         _ => Ok(None),
@@ -985,12 +998,7 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
 pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare("SELECT id, note_b2id FROM chunks")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-    let mut map = HashMap::new();
-    for row in rows {
-        let (id, note) = row?;
-        map.insert(id, note);
-    }
-    Ok(map)
+    Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
 }
 
 /// A chunk's text (None if the chunk id is unknown) — the search-hit → snippet
@@ -1074,15 +1082,25 @@ pub fn embed_progress(conn: &Connection) -> Result<(usize, usize)> {
     Ok((embedded as usize, total as usize))
 }
 
-/// Every chunk still lacking a stored vector, as `(note_b2id, path, chunk_id, text)`
-/// in `(path, seq)` order — the **DB-derived pending set** the embed pass fills
+/// One chunk still lacking a stored vector — a row of the DB-derived pending set
+/// ([`chunks_missing_vectors`]) the embed pass fills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingChunk {
+    pub note_b2id: String,
+    pub note_path: String,
+    pub chunk_id: i64,
+    pub text: String,
+}
+
+/// Every chunk still lacking a stored vector, in `(path, seq)` order — the
+/// **DB-derived pending set** the embed pass fills
 /// (index-engine.md). Deriving it here is what decouples projection
 /// from embedding: nothing is handed between the two passes in memory, so any stop
 /// point (a cancelled embed, a crash between the passes) heals on the next embed.
 /// The ordering reproduces the fused reindex's per-note batching + progress.
 /// Generalizes [`note_fully_embedded`]; like it, requires the embedding space to
 /// exist — callers ensure it first.
-pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<(String, String, i64, String)>> {
+pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<PendingChunk>> {
     let mut stmt = conn.prepare(
         "SELECT c.note_b2id, n.path, c.id, c.text
          FROM chunks c
@@ -1091,7 +1109,14 @@ pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<(String, String, 
          WHERE v.chunk_id IS NULL
          ORDER BY n.path, c.seq",
     )?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    let rows = stmt.query_map([], |r| {
+        Ok(PendingChunk {
+            note_b2id: r.get(0)?,
+            note_path: r.get(1)?,
+            chunk_id: r.get(2)?,
+            text: r.get(3)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1346,22 +1371,31 @@ pub fn resolve_b2id_to_path(conn: &Connection, b2id: &str) -> Result<Option<Stri
         .optional()?)
 }
 
-/// Every active authored edge pointing *at* `dst_b2id`: the source note's `b2id`,
-/// its vault-relative `path`, and the exact `dst_path_raw` text the inbound link
-/// was written with. This is the bounded set a move must rewrite — the
+/// One inbound edge a move/delete must act on: the source note's vault-relative
+/// path and the exact authored link text (`dst_path_raw`) written there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundEdge {
+    pub src_path: String,
+    pub dst_raw: String,
+}
+
+/// Every active authored edge pointing *at* `dst_b2id`, as [`InboundEdge`] rows.
+/// This is the bounded set a move must rewrite — the
 /// materialized graph names the files to touch, so a move never scans the vault
 /// (index-engine.md §8). Ordered for deterministic rewriting.
-pub fn inbound_edge_targets(
-    conn: &Connection,
-    dst_b2id: &str,
-) -> Result<Vec<(String, String, String)>> {
+pub fn inbound_edge_targets(conn: &Connection, dst_b2id: &str) -> Result<Vec<InboundEdge>> {
     let mut stmt = conn.prepare(
-        "SELECT e.src_id, n.path, e.dst_path_raw
+        "SELECT n.path, e.dst_path_raw
          FROM edges e JOIN notes n ON n.b2id = e.src_id
          WHERE e.dst_id = ?1
          ORDER BY n.path, e.dst_path_raw",
     )?;
-    let rows = stmt.query_map([dst_b2id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let rows = stmt.query_map([dst_b2id], |r| {
+        Ok(InboundEdge {
+            src_path: r.get(0)?,
+            dst_raw: r.get(1)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 

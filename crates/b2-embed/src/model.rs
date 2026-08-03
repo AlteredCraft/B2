@@ -14,8 +14,15 @@ use tokenizers::{
 };
 
 /// The three files a BERT sentence model needs. Presence of all three in the flat
-/// model dir *is* the "installed" check (fail-fast surface).
+/// model dir *is* the "installed" check (fail-fast surface) — [`files_present`].
 pub const REQUIRED_FILES: [&str; 3] = ["config.json", "tokenizer.json", "model.safetensors"];
+
+/// Whether every [`REQUIRED_FILES`] entry sits in `dir` — **the** "installed"
+/// check, shared by [`LocalEmbedder::load`]'s fail-fast, the provision fast path,
+/// and the settings picker's installed flag, so the three can never drift.
+pub fn files_present(dir: &std::path::Path) -> bool {
+    REQUIRED_FILES.iter().all(|f| dir.join(f).is_file())
+}
 
 /// BERT's positional limit; longer chunks are truncated so position embeddings are
 /// never indexed out of range. Capped again by the model's own config.
@@ -38,13 +45,11 @@ impl LocalEmbedder {
     /// never downloads.
     pub fn load(config: &EmbedConfig) -> Result<Self> {
         let dir = config.model_dir();
-        for f in REQUIRED_FILES {
-            if !dir.join(f).is_file() {
-                return Err(EmbedError::NotProvisioned {
-                    model: config.model.clone(),
-                    dir: dir.display().to_string(),
-                });
-            }
+        if !files_present(&dir) {
+            return Err(EmbedError::NotProvisioned {
+                model: config.model.clone(),
+                dir: dir.display().to_string(),
+            });
         }
 
         let bert_config: Config =
@@ -169,21 +174,24 @@ impl Embedder for LocalEmbedder {
     }
 
     fn embed(&self, text: &str) -> b2_core::Result<Vec<f32>> {
-        self.embed_inner(text)
-            .map_err(|e| b2_core::Error::Embed(e.to_string()))
+        self.embed_inner(text).map_err(embed_err)
     }
 
     fn embed_query(&self, text: &str) -> b2_core::Result<Vec<f32>> {
         // Asymmetric: queries carry the retrieval instruction, documents don't.
         let prefixed = format!("{}{}", self.query_prefix, text);
-        self.embed_inner(&prefixed)
-            .map_err(|e| b2_core::Error::Embed(e.to_string()))
+        self.embed_inner(&prefixed).map_err(embed_err)
     }
 
     fn embed_batch(&self, texts: &[&str]) -> b2_core::Result<Vec<Vec<f32>>> {
-        self.embed_batch_inner(texts)
-            .map_err(|e| b2_core::Error::Embed(e.to_string()))
+        self.embed_batch_inner(texts).map_err(embed_err)
     }
+}
+
+/// A candle error crossing the [`Embedder`] seam, as the core's error type. A free
+/// fn rather than a `From` impl — both types are foreign here (orphan rule).
+fn embed_err(e: candle_core::Error) -> b2_core::Error {
+    b2_core::Error::Embed(e.to_string())
 }
 
 fn l2_normalize(v: &[f32]) -> Vec<f32> {

@@ -107,8 +107,8 @@ impl AppState {
             .is_ok()
     }
 
-    /// Release the reindex slot (always, even on error — see the RAII guard in
-    /// `commands.rs`). Idempotent.
+    /// Release the reindex slot (always, even on error — see [`ReindexGuard`]).
+    /// Idempotent.
     pub fn finish_reindex(&self) {
         self.reindex_running.store(false, Ordering::SeqCst);
     }
@@ -152,13 +152,27 @@ impl AppState {
     }
 
     /// The critical sections here are a single clone or store — neither can panic —
-    /// so the lock can never be poisoned; recover the inner value rather than unwrap
-    /// (the no-panic rule) if a poison ever somehow occurs.
+    /// so the lock can never be poisoned; see [`lock_recover`].
     fn lock_root(&self) -> std::sync::MutexGuard<'_, Option<PathBuf>> {
-        self.root
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock_recover(&self.root)
     }
+}
+
+/// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
+/// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
+pub(crate) struct ReindexGuard<'a>(pub(crate) &'a AppState);
+impl Drop for ReindexGuard<'_> {
+    fn drop(&mut self) {
+        self.0.finish_reindex();
+    }
+}
+
+/// Lock a mutex, recovering the inner value rather than unwrapping if the lock is ever
+/// poisoned (the no-panic rule). Every mutex in this host guards a critical section of
+/// a single clone/store/drop — none can panic, so poisoning is effectively impossible,
+/// but the rule holds regardless if a poison ever somehow occurs.
+pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Whether the deterministic fake embedder is forced (`B2_EMBEDDER=fake`) — the CLI's
@@ -183,6 +197,18 @@ pub fn open_vault(state: &AppState, needs_semantic: bool) -> Result<(Vault, bool
     } else {
         Ok((Vault::open(&root)?, false))
     }
+}
+
+/// Read-path open: a fresh vault over the fake embedder (no model load), for commands
+/// that never embed. [`open_vault`] with the semantic flag discarded.
+pub fn open_read(state: &AppState) -> Result<Vault, CmdError> {
+    Ok(open_vault(state, false)?.0)
+}
+
+/// Wants-the-real-model open: a fresh vault over the real embedder (fail-fast "run
+/// `b2 init`" if absent), for commands that embed. [`open_vault`] with the flag discarded.
+pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
+    Ok(open_vault(state, true)?.0)
 }
 
 /// Whether the real (semantic) embedder is available right now — mirrors the CLI:
