@@ -4,7 +4,7 @@
 //! loadable model is a no-op.
 
 use crate::config::{EmbedConfig, Source};
-use crate::model::{LocalEmbedder, REQUIRED_FILES};
+use crate::model::{files_present, LocalEmbedder, REQUIRED_FILES};
 use crate::{EmbedError, Result};
 use b2_core::embed::Embedder;
 use hf_hub::api::sync::ApiBuilder;
@@ -29,7 +29,7 @@ pub fn provision(config: &EmbedConfig, mut log: impl FnMut(&str)) -> Result<Prov
     let model_dir = config.model_dir();
 
     // Idempotent fast path: present + loadable ⇒ done.
-    if REQUIRED_FILES.iter().all(|f| model_dir.join(f).is_file()) {
+    if files_present(&model_dir) {
         if let Ok(e) = LocalEmbedder::load(config) {
             log(&format!("Model '{}' already installed.", config.model));
             return Ok(ProvisionReport {

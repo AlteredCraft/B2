@@ -102,24 +102,15 @@ pub fn keyword_only_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<Hit>> {
-    let bm25 = keyword_search(conn, query, pool_size(limit))?;
+    let pool = pool_size(limit);
+    let bm25 = keyword_search(conn, query, pool)?;
     tracing::debug!(
         target: "b2::search",
         bm25_hits = bm25.len(),
-        pool = pool_size(limit),
+        pool,
         "keyword-only retrieval (no embedding space yet)"
     );
-    let mut hits = Vec::new();
-    for (chunk_id, score) in rrf_fuse(&[bm25], RRF_K).into_iter().take(limit) {
-        if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
-            hits.push(Hit {
-                chunk_id,
-                note_b2id,
-                score,
-            });
-        }
-    }
-    Ok(hits)
+    resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), limit)
 }
 
 /// Hybrid search: BM25 ⊕ vector(query) → RRF → top `limit`, resolved to notes.
@@ -143,8 +134,21 @@ pub fn hybrid_search(
         "hybrid retrieval fusing BM25 ⊕ vector via RRF"
     );
 
+    resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), limit)
+}
+
+/// The shared tail of [`keyword_only_search`] and [`hybrid_search`]: resolve the
+/// fused `(chunk_id, score)` ranking to [`Hit`]s, best first, keeping the top
+/// `limit` whose chunk still resolves to a note. Per-hit resolution is fine here —
+/// the set is bounded by `limit` (contrast [`graph_filtered_search`], which walks
+/// the full ranked space and needs the bulk map).
+fn resolve_hits(
+    conn: &rusqlite::Connection,
+    fused: Vec<(i64, f64)>,
+    limit: usize,
+) -> Result<Vec<Hit>> {
     let mut hits = Vec::new();
-    for (chunk_id, score) in rrf_fuse(&[bm25, vector], RRF_K).into_iter().take(limit) {
+    for (chunk_id, score) in fused.into_iter().take(limit) {
         if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
             hits.push(Hit {
                 chunk_id,

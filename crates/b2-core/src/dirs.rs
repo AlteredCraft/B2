@@ -41,11 +41,7 @@ fn collect_dirs(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         if !path.is_dir() {
             continue;
         }
-        let is_dotdir = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with('.'));
-        if is_dotdir {
+        if crate::pathspec::is_hidden(&path) {
             continue;
         }
         // `path` was produced by walking `root`, so `strip_prefix` cannot fail;

@@ -40,6 +40,15 @@ use std::path::Path;
 /// sooner — another reason not to over-size it.
 const EMBED_BATCH: usize = 16;
 
+/// A file's mtime as Unix seconds — the projection's shared stat reading
+/// (notes, resources, and a moved resource's repoint all record the same
+/// shape). `None` when the platform clock can't supply one.
+pub(crate) fn unix_mtime(meta: &fs::Metadata) -> Option<i64> {
+    let modified = meta.modified().ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(since_epoch.as_secs() as i64)
+}
+
 /// Outcome of ingesting one file.
 #[derive(Debug, Clone)]
 pub struct Ingested {
@@ -239,11 +248,7 @@ fn project_note_and_chunks(
 
     let body = parsed.body().to_string();
     let body_hash = blake3::hash(body.as_bytes()).to_hex().to_string();
-    let mtime = fs::metadata(&abs)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
+    let mtime = fs::metadata(&abs).ok().as_ref().and_then(unix_mtime);
 
     // Decide the re-chunk BEFORE the upsert overwrites `body_hash`. The inline path
     // also reads vector state (its caller ensured the space, hence
@@ -985,10 +990,12 @@ pub fn embed_vault(
     // One entry per pending note: `(b2id, path, that note's (chunk_id, text) pairs)`.
     type PendingNote = (String, String, Vec<(i64, String)>);
     let mut by_note: Vec<PendingNote> = Vec::new();
-    for (note_b2id, path, chunk_id, text) in db::chunks_missing_vectors(conn)? {
+    for c in db::chunks_missing_vectors(conn)? {
         match by_note.last_mut() {
-            Some((last, _, pending)) if *last == note_b2id => pending.push((chunk_id, text)),
-            _ => by_note.push((note_b2id, path, vec![(chunk_id, text)])),
+            Some((last, _, pending)) if *last == c.note_b2id => {
+                pending.push((c.chunk_id, c.text));
+            }
+            _ => by_note.push((c.note_b2id, c.note_path, vec![(c.chunk_id, c.text)])),
         }
     }
 
@@ -1194,11 +1201,7 @@ fn collect_vault_files(
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            let is_dotdir = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'));
-            if !is_dotdir {
+            if !crate::pathspec::is_hidden(&path) {
                 collect_vault_files(root, &path, notes, resources)?;
             }
             continue;
@@ -1212,11 +1215,7 @@ fn collect_vault_files(
         match ResourceClass::of_path(&rel) {
             None => notes.push(rel),
             Some(class) => {
-                let is_dotfile = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with('.'));
-                if !is_dotfile {
+                if !crate::pathspec::is_hidden(&path) {
                     resources.push((rel, class));
                 }
             }
@@ -1260,11 +1259,7 @@ fn project_resources(
             }
         };
         let size = meta.len() as i64;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
+        let mtime = unix_mtime(&meta);
         if db::resource_stat(conn, rel)? == Some((size, mtime)) {
             indexed += 1; // unchanged — inventoried without touching the bytes
             continue;

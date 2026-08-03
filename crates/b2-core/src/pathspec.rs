@@ -3,6 +3,20 @@
 //! have in common. Kept error-type-free (returns `Err(reason)` as a plain string)
 //! so each authoring op maps the reason onto its own [`crate::Error`] variant and
 //! its own user-facing phrasing, without the two coupling through a shared error.
+//!
+//! Also home to the one **vault-membership rule** ([`is_hidden`]) both walks and
+//! the validators share: a dot-prefixed name is never vault material.
+
+/// Whether this walked entry's *name* is dot-prefixed — the vault-membership
+/// rule the ingest walk and the folder walk both route on (`.b2/`, `.git/`,
+/// `.DS_Store` are never vault material), and the same rule
+/// [`normalize_rel_dir`] enforces on user input. One predicate so the walks
+/// can't drift from each other or from the validator.
+pub(crate) fn is_hidden(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with('.'))
+}
 
 /// Normalize + validate `input` into a vault-relative path (any file kind).
 /// Trims, and switches backslashes to `/` (so the index stays in its one

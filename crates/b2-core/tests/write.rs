@@ -135,7 +135,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     // an embed pass then fills exactly (§7 invariant 5 — convergence).
     let missing = db::chunks_missing_vectors(&conn).unwrap();
     assert!(!missing.is_empty(), "saved chunks await embedding");
-    assert!(missing.iter().all(|(_, path, _, _)| path == SRS_PATH));
+    assert!(missing.iter().all(|c| c.note_path == SRS_PATH));
     let embed = vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
     assert_eq!(embed.embedded, 1, "the embed pass fills the saved note");
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
