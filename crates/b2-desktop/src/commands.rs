@@ -17,7 +17,7 @@
 
 use crate::error::CmdError;
 use crate::watch::VaultWatcher;
-use crate::{open_vault, AppState};
+use crate::{open_read, open_semantic, open_vault, AppState, ReindexGuard};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
@@ -118,7 +118,7 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdErr
 /// per-kind composition the locked design prefers over a union type (research §9b #10).
 #[tauri::command(async)]
 pub fn list_resources(state: State<'_, AppState>) -> Result<Vec<ResourceSummary>, CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     Ok(vault.list_resources()?)
 }
 
@@ -147,7 +147,7 @@ pub fn explain_resource(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<ResourceExplainView, CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     Ok(vault.explain_resource(&path)?)
 }
 
@@ -158,7 +158,7 @@ pub fn explain_resource(
 /// and hands the absolute path to the OS.
 #[tauri::command(async)]
 pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     vault.explain_resource(&path)?; // inventory check: unknown paths refuse, never open
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
     tauri_plugin_opener::open_path(root.join(&path), None::<&str>)
@@ -340,7 +340,7 @@ pub fn similar(
     note: String,
     limit: usize,
 ) -> Result<Vec<SimilarView>, CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     Ok(vault.similar(&note, limit)?)
 }
 
@@ -351,19 +351,19 @@ pub fn search(
     limit: usize,
 ) -> Result<Vec<SearchResult>, CmdError> {
     // Semantic: the query is embedded, so this opens the real model (fail-fast if absent).
-    let (vault, _) = open_vault(state.inner(), true)?;
+    let vault = open_semantic(state.inner())?;
     Ok(vault.search(&query, limit)?)
 }
 
 #[tauri::command(async)]
 pub fn neighbors(state: State<'_, AppState>, note: String) -> Result<Vec<NeighborView>, CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     Ok(vault.neighbors(&note)?)
 }
 
 #[tauri::command(async)]
 pub fn explain(state: State<'_, AppState>, note: String) -> Result<ExplainView, CmdError> {
-    let (vault, _) = open_vault(state.inner(), false)?;
+    let vault = open_read(state.inner())?;
     Ok(vault.explain(&note)?)
 }
 
@@ -376,7 +376,7 @@ pub fn link(
     explanation: Option<String>,
 ) -> Result<LinkReport, CmdError> {
     // Re-projects the source note → opens the same real model the index was built with.
-    let (vault, _) = open_vault(state.inner(), true)?;
+    let vault = open_semantic(state.inner())?;
     Ok(vault.link(&src, &dst, &relation, explanation.as_deref())?)
 }
 
@@ -489,6 +489,17 @@ pub struct EmbedStat {
     pub runs: u64,
 }
 
+impl From<(String, crate::stats::ModelStat)> for EmbedStat {
+    fn from((model, s): (String, crate::stats::ModelStat)) -> Self {
+        Self {
+            model,
+            total_ms: s.total_ms,
+            chunks: s.chunks,
+            runs: s.runs,
+        }
+    }
+}
+
 /// The per-model embedding-time ledger (`stats.rs`) — what the Settings pane renders so a
 /// model swap can be judged on real speed. Infallible: no data / an unreadable ledger is
 /// an empty list, never an error (the totals are diagnostic, never load-bearing).
@@ -496,12 +507,7 @@ pub struct EmbedStat {
 pub fn embed_stats() -> Vec<EmbedStat> {
     crate::stats::read_all()
         .into_iter()
-        .map(|(model, s)| EmbedStat {
-            model,
-            total_ms: s.total_ms,
-            chunks: s.chunks,
-            runs: s.runs,
-        })
+        .map(EmbedStat::from)
         .collect()
 }
 
@@ -518,19 +524,10 @@ pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
 }
 
-/// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
-/// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
-struct ReindexGuard<'a>(&'a AppState);
-impl Drop for ReindexGuard<'_> {
-    fn drop(&mut self) {
-        self.0.finish_reindex();
-    }
-}
-
 /// The testable core of `project`: one façade call over the fake vault (projection
 /// is model-free by construction — it never touches the embedding space).
 fn project_impl(state: &AppState) -> Result<ProjectReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.project(false)?)
 }
 
@@ -589,7 +586,7 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     // Model-free read: open the fake vault only to count embedding coverage (#26). The
     // real model is never loaded here — `semantic` stays "is a model installed", while
     // `notes_embedded/total` is the precise fraction the UI flags keyword-only from.
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     let status = vault.embed_status()?;
     Ok(VaultInfo {
         root: root.display().to_string(),
@@ -613,22 +610,22 @@ fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdEr
 }
 
 fn read_note_impl(state: &AppState, note: &str) -> Result<NoteView, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.read(note)?)
 }
 
 fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.list_notes()?)
 }
 
 fn list_dirs_impl(state: &AppState) -> Result<Vec<String>, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.list_dirs()?)
 }
 
 fn create_dir_impl(state: &AppState, dir: &str) -> Result<DirCreateReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.create_dir(dir)?)
 }
 
@@ -638,7 +635,7 @@ fn write_note_impl(
     body: &str,
     base_revision: &str,
 ) -> Result<WriteReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.write(note, body, base_revision)?)
 }
 
@@ -648,17 +645,17 @@ fn write_frontmatter_impl(
     frontmatter: &str,
     base_revision: &str,
 ) -> Result<WriteReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.write_frontmatter(note, frontmatter, base_revision)?)
 }
 
 fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.create_note(path)?)
 }
 
 fn move_note_impl(state: &AppState, note: &str, to: &str) -> Result<MoveReport, CmdError> {
-    let (vault, _) = open_vault(state, true)?;
+    let vault = open_semantic(state)?;
     Ok(vault.move_note(note, to)?)
 }
 
@@ -667,27 +664,27 @@ fn move_resource_impl(
     path: &str,
     to: &str,
 ) -> Result<ResourceMoveReport, CmdError> {
-    let (vault, _) = open_vault(state, true)?;
+    let vault = open_semantic(state)?;
     Ok(vault.move_resource(path, to)?)
 }
 
 fn move_dir_impl(state: &AppState, from: &str, to: &str) -> Result<DirMoveReport, CmdError> {
-    let (vault, _) = open_vault(state, true)?;
+    let vault = open_semantic(state)?;
     Ok(vault.move_dir(from, to)?)
 }
 
 fn delete_note_impl(state: &AppState, note: &str) -> Result<DeleteReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.delete_note(note)?)
 }
 
 fn delete_resource_impl(state: &AppState, path: &str) -> Result<ResourceDeleteReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.delete_resource(path)?)
 }
 
 fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdError> {
-    let (vault, _) = open_vault(state, false)?;
+    let vault = open_read(state)?;
     Ok(vault.delete_dir(dir)?)
 }
 

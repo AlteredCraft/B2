@@ -64,6 +64,14 @@ fn read_from(path: &Path) -> StatsFile {
         .unwrap_or_default()
 }
 
+/// Serialize the ledger and rewrite it at `path` — the shared write tail of
+/// [`record_to`] and [`reset_in`]. Creating the parent dir stays the caller's job:
+/// only [`record_to`] may create the file (a no-op reset must not).
+fn write_ledger(path: &Path, file: &StatsFile) -> std::io::Result<()> {
+    let text = serde_json::to_string_pretty(file).map_err(std::io::Error::other)?;
+    std::fs::write(path, text)
+}
+
 /// Add one embed run's `(elapsed_ms, chunks)` to `model`'s running total. Best-effort:
 /// a missing data dir or a write failure is logged to stderr and swallowed — recording a
 /// measurement must never fail the embed the user actually asked for.
@@ -89,8 +97,7 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
+    write_ledger(path, &file)
 }
 
 /// Forget `model`'s accumulated total, so its bucket restarts from zero on the next
@@ -119,8 +126,7 @@ fn reset_in(path: &Path, model: &str) -> std::io::Result<()> {
     if file.models.remove(model).is_none() {
         return Ok(()); // nothing recorded for this model — leave the file untouched
     }
-    let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
+    write_ledger(path, &file)
 }
 
 #[cfg(test)]

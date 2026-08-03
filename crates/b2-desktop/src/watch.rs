@@ -68,14 +68,10 @@ impl VaultWatcher {
         }
     }
 
-    /// Recover the inner value rather than panic if the lock is ever poisoned — the
-    /// critical section is a single store/drop that can't panic, so poisoning is
-    /// effectively impossible, but the no-`unwrap` rule holds regardless (main.rs mirrors
-    /// this on its root mutex).
+    /// The critical section here is a single store/drop that can't panic, so the lock
+    /// can never be poisoned; see [`lock_recover`](crate::lock_recover).
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<RecommendedWatcher>> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::lock_recover(&self.0)
     }
 }
 

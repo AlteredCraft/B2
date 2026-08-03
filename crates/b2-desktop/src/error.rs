@@ -142,18 +142,17 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::ReindexInFlight => {
             "A reindex is already in progress. Please wait for it to finish.".to_string()
         }
-        _ => "Something went wrong. Please check the vault and try again.".to_string(),
+        // Everything else in the two composed crates is an internal (sqlite/io/serde/…)
+        // the webview must never see. Spelled out rather than `_` so adding a CmdError
+        // variant fails to compile here instead of silently degrading to the catch-all.
+        CmdError::Core(_) | CmdError::Embed(_) => {
+            "Something went wrong. Please check the vault and try again.".to_string()
+        }
     };
     if std::env::var_os("B2_DEBUG").is_some() {
-        let detail = match err {
-            CmdError::Core(e) => e.to_string(),
-            CmdError::Embed(e) => e.to_string(),
-            CmdError::VaultRequired
-            | CmdError::ReindexInFlight
-            | CmdError::OpenFailed(_)
-            | CmdError::UnsupportedLink(_)
-            | CmdError::ClipboardFailed(_) => err.to_string(),
-        };
+        // `Core`/`Embed` are `#[error(transparent)]`, so `err` displays as its source —
+        // one `to_string` covers every variant.
+        let detail = err.to_string();
         format!("{msg}\n(debug: {detail})")
     } else {
         msg
@@ -168,15 +167,9 @@ pub fn user_message(err: &CmdError) -> String {
 /// every command error crosses to the webview — [`CmdError`]'s `Serialize` impl — so
 /// logging stays uniform and out of the dumb command handlers.
 fn log_internal(err: &CmdError) {
-    let detail = match err {
-        CmdError::Core(e) => e.to_string(),
-        CmdError::Embed(e) => e.to_string(),
-        CmdError::VaultRequired
-        | CmdError::ReindexInFlight
-        | CmdError::OpenFailed(_)
-        | CmdError::UnsupportedLink(_)
-        | CmdError::ClipboardFailed(_) => err.to_string(),
-    };
+    // `Core`/`Embed` are `#[error(transparent)]`, so `err` displays as its source —
+    // one `to_string` covers every variant.
+    let detail = err.to_string();
     eprintln!("[b2] command failed: {detail}");
 }
 
