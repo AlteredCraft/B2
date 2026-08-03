@@ -26,6 +26,14 @@
 //!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
 //!    does not exercise.
 //!
+//! What this corpus **cannot** score is *fusion width*. 26 chunks is smaller than
+//! the `candidate_pool(K)` candidates each signal retrieves, so both halves return
+//! the whole corpus and every number above is invariant under the pool, `RRF_K`, or
+//! candidate depth — a change to any of them prints bit-identical scores here while
+//! reordering a real vault (GH #141). A run that is blind that way says so; the
+//! property itself is measured by the rank-stability probe (`--example stability`),
+//! which runs on a vault big enough for the pool to bind.
+//!
 //! `--sweep` re-chunks + re-embeds the same vault under variant [`ChunkConfig`]s
 //! (`Vault::set_chunk_config` → `project(force)` → `embed`) and reports the same
 //! scores per config — the in-process chunker A/B the #44 gate runs on.
@@ -36,7 +44,7 @@
 
 use b2_core::chunk::ChunkConfig;
 use b2_core::embed::Embedder;
-use b2_core::vault::Vault;
+use b2_core::vault::{candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use serde::Deserialize;
 use std::ops::ControlFlow;
@@ -198,7 +206,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let (chunks, embed_secs) = timed_embed(&vault)?;
     let hybrid = score_pass(&vault, &set.queries)?;
     let similar = score_similar(&vault, &sim_set)?;
-    eprintln!("[eval] embedded {chunks} chunks in {embed_secs:.1}s\n");
+    eprintln!(
+        "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K})\n",
+        candidate_pool(K)
+    );
+    warn_if_pool_blind(chunks);
 
     print_default_report(&set.queries, &bm25, &hybrid, &sim_set, &similar);
 
@@ -422,6 +434,32 @@ fn timed_embed(vault: &Vault) -> Result<(usize, f64), Box<dyn std::error::Error>
     Ok((chunks, t0.elapsed().as_secs_f64()))
 }
 
+/// State the one thing this corpus **cannot** measure, on every run that can't.
+///
+/// Retrieval pulls [`candidate_pool`] candidates from each signal before fusing. A
+/// corpus smaller than that returns its entire index from both halves — BM25 has
+/// fewer matches than its `LIMIT`, the vector scan tops out at the stored vectors —
+/// so the two ranked lists RRF fuses are *identical* for any pool at least this
+/// wide, and every score above is invariant under pool/fusion width. A change to
+/// `vault::hit_pool`, `search::pool_size` or `RRF_K` then prints bit-identical
+/// numbers here while genuinely reordering a real vault (GH #141; the worked
+/// example is GH #140/#142).
+///
+/// A warning, not a gate: this eval is out-of-CI and human-read, and the point is
+/// that a reader must not take an unmoved number as evidence of no change. The
+/// property itself is measured by the rank-stability probe (`--example stability`),
+/// which runs on a vault big enough for the pool to bind.
+fn warn_if_pool_blind(chunks: usize) {
+    let pool = candidate_pool(K);
+    if chunks < pool {
+        eprintln!(
+            "[warn] {chunks} chunks < {pool}-candidate pool — both signals return the whole corpus,\n\
+             \x20      so pool/fusion-width changes (hit_pool, pool_size, RRF_K) cannot move any number\n\
+             \x20      in this run (GH #141). `just stability` measures that property on a large vault.\n"
+        );
+    }
+}
+
 fn print_default_report(
     queries: &[Labelled],
     bm25: &Pass,
@@ -523,6 +561,11 @@ fn result_row(
         },
         "notes": notes,
         "chunks": chunks,
+        // The caveat travels with the numbers: a row whose corpus was smaller than
+        // the retrieval pool could not have been affected by pool/fusion width, so
+        // comparing it across such a change proves nothing (GH #141).
+        "pool": candidate_pool(K),
+        "pool_blind": chunks < candidate_pool(K),
         "embed_secs": embed_secs,
         "note": {
             "bm25": bm25.map(|p| agg(&p.note)),

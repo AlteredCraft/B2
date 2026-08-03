@@ -1,0 +1,15 @@
+{
+  "description": "Probe set for the rank-stability probe (crates/b2-embed/examples/stability.rs, GH #141). Deliberately UNLABELLED: these queries have no correct answer, because the property being measured is not relevance but movement — how much the top of the ranking shifts when the retrieval pool widens under it, and how much it has shifted since the committed baseline. Relevance is the scored eval's job (queries.json, over the hand-labelled corpus). Pick a probe for RECALL, not precision: it should match many chunks across fixtures/test-vault's topics, since a query only a handful of chunks match is answered from inside every pool and can never move. One phrase per topic keeps the set spread across the fixture's ten clusters. Adding or editing a probe invalidates its baseline row — re-run with --bless once the new set is the one you mean.",
+  "probes": [
+    "how do i choose an approximate nearest neighbour index",
+    "keeping replicas agreeing when the network splits",
+    "who owns this value and when does it get dropped",
+    "turning a whole sentence into one embedding vector",
+    "why is my query not using the index",
+    "improving tired soil before planting anything",
+    "what to carry for a long day on the trail",
+    "linking notes so they are still findable later",
+    "why does the shot taste sour instead of sweet",
+    "protecting focus time from meetings and interruptions"
+  ]
+}

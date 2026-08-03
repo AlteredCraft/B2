@@ -88,7 +88,12 @@ pub fn fts5_query(raw: &str) -> String {
 }
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
-fn pool_size(limit: usize) -> usize {
+///
+/// `pub(crate)` for one caller: [`vault::candidate_pool`](crate::vault::candidate_pool)
+/// composes it with the façade's own headroom to state the *total* per-signal
+/// candidate depth a search reaches — the number a measurement has to know to say
+/// whether a corpus is big enough for fusion width to be observable (GH #141).
+pub(crate) fn pool_size(limit: usize) -> usize {
     (limit * 5).max(30)
 }
 

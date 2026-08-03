@@ -1,0 +1,279 @@
+{
+  "_note": "Blessed ranking snapshot for the rank-stability probe (crates/b2-embed/examples/stability.rs, GH #141): the top-10 notes and chunks each probe in stability.json returns from fixtures/test-vault under the deterministic fake embedder. Committed so a later run can show *movement* — any change to fusion width, chunking or resolution shows up here as drift rather than being inferred. It scores nothing: the corpus is unlabelled, so drift means different, never worse. Regenerate with `just stability-bless` once a ranking change is the intended one.",
+  "vault": "fixtures/test-vault",
+  "embedder": "fake",
+  "k": 10,
+  "blessed_at": "196dc3b",
+  "probes": [
+    {
+      "query": "how do i choose an approximate nearest neighbour index",
+      "notes": [
+        "vector-search/110-recall-vs-latency.md",
+        "vector-search/190-dense-vs-sparse.md",
+        "productivity/046-saying-no.md",
+        "vector-search/010-hybrid-retrieval.md",
+        "vector-search/060-cosine-similarity.md",
+        "distributed-systems/191-retries-and-jitter.md",
+        "vector-search/180-reranking-candidates.md",
+        "productivity/116-energy-management.md",
+        "vector-search/130-dense-vs-sparse.md",
+        "vector-search/030-approximate-nearest-neighbors.md"
+      ],
+      "chunks": [
+        "vector-search/110-recall-vs-latency.md#Recall vs Latency## Recall vs Latency Notes on recall vs latency w",
+        "vector-search/190-dense-vs-sparse.md#Dense vs Sparse > HNSW Graphs#embeddings can be asymmetric when the query carr",
+        "productivity/046-saying-no.md#Saying No > Managing Interruptions#makes the next one easier. A weekly review is wh",
+        "vector-search/110-recall-vs-latency.md#Recall vs Latency > The Embedding Space#reciprocal rank fusion. An exact brute-force sca",
+        "vector-search/010-hybrid-retrieval.md#Hybrid Retrieval > Chunking Strategy#query but trivially correct and cache-friendly a",
+        "vector-search/060-cosine-similarity.md#Cosine Similarity > Chunking Strategy#memory at the cost of some precision. An exact b",
+        "distributed-systems/191-retries-and-jitter.md#Retries and Jitter > Quorum Reads#Consensus protocols like Raft keep a replicated ",
+        "vector-search/180-reranking-candidates.md#Reranking Candidates > Recall vs Latency#Normalizing to unit length lets you rank by cosi",
+        "vector-search/010-hybrid-retrieval.md#Hybrid Retrieval > Reranking Candidates#cache-friendly at small scale. Product quantizat",
+        "productivity/116-energy-management.md#Energy Management > Shipping Small#deliberately. If a task takes under two minutes,"
+      ]
+    },
+    {
+      "query": "keeping replicas agreeing when the network splits",
+      "notes": [
+        "transformers/074-self-attention.md",
+        "transformers/174-positional-encoding.md",
+        "pkm/123-linking-your-thinking.md",
+        "distributed-systems/011-leader-election.md",
+        "transformers/094-fine-tuning-vs-prompting.md",
+        "transformers/084-the-bert-encoder.md",
+        "pkm/173-local-first-vaults.md",
+        "distributed-systems/001-consensus-under-partition.md",
+        "transformers/164-the-bert-encoder.md",
+        "pkm/073-spaced-repetition.md"
+      ],
+      "chunks": [
+        "transformers/074-self-attention.md#Self-Attention > The Feed-Forward Block#layer. Distillation trains a small student to mi",
+        "transformers/174-positional-encoding.md#Positional Encoding > CLS Pooling#into a model that is otherwise permutation-invar",
+        "pkm/123-linking-your-thinking.md#Linking Your Thinking > The Zettelkasten#capture surface that you refactor into permanent",
+        "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network ",
+        "transformers/174-positional-encoding.md#Positional Encoding > Positional Encoding#at each position. The forward pass cost is domin",
+        "transformers/094-fine-tuning-vs-prompting.md#Fine-Tuning vs Prompting > CLS Pooling#prompting steers it without weight updates. A su",
+        "transformers/084-the-bert-encoder.md#The BERT Encoder## The BERT Encoder Notes on the bert encoder wit",
+        "pkm/173-local-first-vaults.md#Local-First Vaults > Spaced Repetition#one idea, which makes it reusable and easy to li",
+        "distributed-systems/001-consensus-under-partition.md#Consensus Under Partition > Quorum Reads#aim for at-least-once plus idempotency instead. ",
+        "transformers/164-the-bert-encoder.md#The BERT Encoder > Fine-Tuning vs Prompting#bounded. The forward pass cost is dominated by m"
+      ]
+    },
+    {
+      "query": "who owns this value and when does it get dropped",
+      "notes": [
+        "productivity/166-energy-management.md",
+        "productivity/186-default-to-action.md",
+        "productivity/156-timeboxing.md",
+        "productivity/196-deep-work.md",
+        "productivity/016-deep-work.md",
+        "rust/122-send-and-sync.md",
+        "productivity/146-timeboxing.md",
+        "hiking/169-trail-navigation.md",
+        "productivity/046-saying-no.md",
+        "rust/112-slices-over-vecs.md"
+      ],
+      "chunks": [
+        "productivity/166-energy-management.md#Energy Management > Deep Work#from it. Protect a block of uninterrupted time b",
+        "productivity/186-default-to-action.md#Default to Action > Single-Tasking#inputs get processed into next actions. A clear ",
+        "productivity/156-timeboxing.md#Timeboxing > Energy Management#is the ability to focus without distraction on a",
+        "productivity/156-timeboxing.md#Timeboxing## Timeboxing Notes on timeboxing within the broa",
+        "productivity/196-deep-work.md#Deep Work > Energy Management#reversible step and learn from it. A weekly revi",
+        "productivity/196-deep-work.md#Deep Work## Deep Work Notes on deep work within the broade",
+        "productivity/016-deep-work.md#Deep Work## Deep Work Notes on deep work within the broade",
+        "rust/122-send-and-sync.md#Send and Sync## Send and Sync Notes on send and sync within th",
+        "productivity/146-timeboxing.md#Timeboxing > Managing Interruptions#task easy to avoid. Momentum compounds; the firs",
+        "hiking/169-trail-navigation.md#Trail Navigation > Ultralight Packing#out everything you carried in and staying on the"
+      ]
+    },
+    {
+      "query": "turning a whole sentence into one embedding vector",
+      "notes": [
+        "transformers/074-self-attention.md",
+        "transformers/104-self-attention.md",
+        "vector-search/080-hnsw-graphs.md",
+        "vector-search/040-dense-vs-sparse.md",
+        "transformers/094-fine-tuning-vs-prompting.md",
+        "transformers/084-the-bert-encoder.md",
+        "vector-search/110-recall-vs-latency.md",
+        "vector-search/120-the-embedding-space.md",
+        "vector-search/100-dense-vs-sparse.md",
+        "rust/192-iterators-and-laziness.md"
+      ],
+      "chunks": [
+        "transformers/074-self-attention.md#Self-Attention > The BERT Encoder#GPU. Fine-tuning adapts a pretrained model to a ",
+        "transformers/104-self-attention.md#Self-Attention > Distillation#BERT is an encoder stack trained with masked-lan",
+        "vector-search/080-hnsw-graphs.md#HNSW Graphs > HNSW Graphs#noise, too large and you blur the signal. Cosine",
+        "vector-search/040-dense-vs-sparse.md#Dense vs Sparse > Hybrid Retrieval#rescan. Cosine similarity ranks candidates by th",
+        "transformers/094-fine-tuning-vs-prompting.md#Fine-Tuning vs Prompting > Distillation#permutation-invariant. A subword tokenizer split",
+        "transformers/084-the-bert-encoder.md#The BERT Encoder## The BERT Encoder Notes on the bert encoder wit",
+        "vector-search/110-recall-vs-latency.md#Recall vs Latency## Recall vs Latency Notes on recall vs latency w",
+        "vector-search/120-the-embedding-space.md#The Embedding Space > Dense vs Sparse#usually beats a bigger index. Dense retrieval ma",
+        "vector-search/100-dense-vs-sparse.md#Dense vs Sparse > Recall vs Latency#neighbors sit close together. Product quantizati",
+        "rust/192-iterators-and-laziness.md#Iterators and Laziness > Trait Objects#and &[T] in signatures; return owned types and l"
+      ]
+    },
+    {
+      "query": "why is my query not using the index",
+      "notes": [
+        "databases/125-acid-transactions.md",
+        "vector-search/020-the-embedding-space.md",
+        "databases/115-vacuuming.md",
+        "vector-search/200-recall-vs-latency.md",
+        "databases/035-schema-migrations.md",
+        "vector-search/040-dense-vs-sparse.md",
+        "vector-search/050-approximate-nearest-neighbors.md",
+        "vector-search/030-approximate-nearest-neighbors.md",
+        "vector-search/170-the-embedding-space.md",
+        "vector-search/150-recall-vs-latency.md"
+      ],
+      "chunks": [
+        "databases/125-acid-transactions.md#ACID Transactions > B-Tree Indexes#should be forward-only and idempotent so environ",
+        "vector-search/020-the-embedding-space.md#The Embedding Space > Quantized Vectors#quiet lever: too small and you embed noise, too ",
+        "databases/115-vacuuming.md#Vacuuming > Schema Migrations#without touching the row. SQLite is an embedded ",
+        "vector-search/200-recall-vs-latency.md#Recall vs Latency > Cosine Similarity#rescouring the top candidates with a cross-encod",
+        "databases/035-schema-migrations.md#Schema Migrations > Schema Migrations#keyword matching. ACID transactions give you ato",
+        "vector-search/040-dense-vs-sparse.md#Dense vs Sparse > Dense vs Sparse#walking a navigable small-world graph. Dense ret",
+        "vector-search/050-approximate-nearest-neighbors.md#Approximate Nearest Neighbors > Recall vs Latency#exact brute-force scan is O(n) per query but tri",
+        "vector-search/030-approximate-nearest-neighbors.md#Approximate Nearest Neighbors## Approximate Nearest Neighbors Notes on approxi",
+        "vector-search/170-the-embedding-space.md#The Embedding Space > Quantized Vectors#trades a little recall for a large latency win b",
+        "vector-search/020-the-embedding-space.md#The Embedding Space## The Embedding Space Notes on the embedding spa"
+      ]
+    },
+    {
+      "query": "improving tired soil before planting anything",
+      "notes": [
+        "gardening/157-composting-basics.md",
+        "gardening/057-drip-irrigation.md",
+        "gardening/167-soil-ph.md",
+        "gardening/027-mulching.md",
+        "coffee/168-brew-ratio.md",
+        "gardening/017-attracting-pollinators.md",
+        "gardening/097-companion-planting.md",
+        "gardening/127-soil-ph.md",
+        "productivity/056-shipping-small.md",
+        "hiking/089-switchbacks.md"
+      ],
+      "chunks": [
+        "gardening/157-composting-basics.md#Composting Basics > Raised Beds#than heavy native clay. Companion planting pairs",
+        "gardening/057-drip-irrigation.md#Drip Irrigation > Soil pH#deter each other's pests or share nutrients. Rai",
+        "gardening/167-soil-ph.md#Soil pH## Soil pH Notes on soil ph within the broader th",
+        "gardening/027-mulching.md#Mulching > Composting Basics#soil-borne pests and diseases. Raised beds warm ",
+        "coffee/168-brew-ratio.md#Brew Ratio > The Pour-Over#bitter and hollow. Freshly ground beans lose aro",
+        "gardening/017-attracting-pollinators.md#Attracting Pollinators## Attracting Pollinators Notes on attracting pol",
+        "gardening/097-companion-planting.md#Companion Planting## Companion Planting Notes on companion planting",
+        "gardening/127-soil-ph.md#Soil pH > Pruning Fruit Trees#plant can actually take up from the ground. Comp",
+        "productivity/056-shipping-small.md#Shipping Small > Default to Action#the next one easier. Deep work is the ability to",
+        "hiking/089-switchbacks.md#Switchbacks > Water Treatment#lets you shed and add insulation as effort and w"
+      ]
+    },
+    {
+      "query": "what to carry for a long day on the trail",
+      "notes": [
+        "hiking/199-blister-prevention.md",
+        "hiking/189-reading-the-weather.md",
+        "hiking/049-water-treatment.md",
+        "hiking/139-blister-prevention.md",
+        "hiking/019-reading-the-weather.md",
+        "hiking/169-trail-navigation.md",
+        "transformers/134-tokenization.md",
+        "hiking/009-elevation-gain.md",
+        "hiking/079-trail-etiquette.md",
+        "hiking/109-water-treatment.md"
+      ],
+      "chunks": [
+        "hiking/199-blister-prevention.md#Blister Prevention > Leave No Trace#is map, compass, and attention; a dead phone sho",
+        "hiking/189-reading-the-weather.md#Reading the Weather > Leave No Trace#afternoon weather turns. Navigation is map, comp",
+        "hiking/049-water-treatment.md#Water Treatment > Elevation Gain#effort and weather change. Navigation is map, co",
+        "hiking/139-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention",
+        "hiking/019-reading-the-weather.md#Reading the Weather > Switchbacks#early prevents a trip-ending wound. Good boots a",
+        "hiking/169-trail-navigation.md#Trail Navigation > Ultralight Packing#out everything you carried in and staying on the",
+        "transformers/134-tokenization.md#Tokenization > The Feed-Forward Block#be chunked. A subword tokenizer splits rare word",
+        "hiking/009-elevation-gain.md#Elevation Gain## Elevation Gain Notes on elevation gain within ",
+        "hiking/079-trail-etiquette.md#Trail Etiquette > Leave No Trace#gain, not mileage, is what usually decides how h",
+        "hiking/109-water-treatment.md#Water Treatment > Water Treatment#a trip-ending wound. Treating backcountry water "
+      ]
+    },
+    {
+      "query": "linking notes so they are still findable later",
+      "notes": [
+        "pkm/123-linking-your-thinking.md",
+        "pkm/193-the-map-of-content.md",
+        "pkm/163-surfacing-connections.md",
+        "databases/115-vacuuming.md",
+        "pkm/063-the-map-of-content.md",
+        "coffee/188-brew-ratio.md",
+        "databases/145-the-write-ahead-log.md",
+        "hiking/199-blister-prevention.md",
+        "pkm/183-linking-your-thinking.md",
+        "pkm/043-spaced-repetition.md"
+      ],
+      "chunks": [
+        "pkm/123-linking-your-thinking.md#Linking Your Thinking## Linking Your Thinking Notes on linking your th",
+        "pkm/193-the-map-of-content.md#The Map of Content > Evergreen Notes#data as plain files you own, with the software l",
+        "pkm/193-the-map-of-content.md#The Map of Content > Daily Notes#Surfacing semantically similar notes lets you di",
+        "pkm/123-linking-your-thinking.md#Linking Your Thinking > The Zettelkasten#capture surface that you refactor into permanent",
+        "pkm/163-surfacing-connections.md#Surfacing Connections > The Zettelkasten#the software layered on top. Progressive summari",
+        "databases/115-vacuuming.md#Vacuuming > The Write-Ahead Log#source of truth. Migrations should be forward-on",
+        "pkm/063-the-map-of-content.md#The Map of Content > Evergreen Notes#notes are a low-friction capture surface that yo",
+        "pkm/163-surfacing-connections.md#Surfacing Connections## Surfacing Connections Notes on surfacing conne",
+        "pkm/193-the-map-of-content.md#The Map of Content## The Map of Content Notes on the map of content",
+        "coffee/188-brew-ratio.md#Brew Ratio > Water Temperature#extracts without scorching. Under-extraction tas"
+      ]
+    },
+    {
+      "query": "why does the shot taste sour instead of sweet",
+      "notes": [
+        "coffee/198-the-pour-over.md",
+        "distributed-systems/011-leader-election.md",
+        "coffee/038-single-origin-beans.md",
+        "coffee/028-the-pour-over.md",
+        "pkm/043-spaced-repetition.md",
+        "distributed-systems/131-the-two-generals.md",
+        "rust/072-send-and-sync.md",
+        "coffee/068-the-bloom.md",
+        "coffee/078-water-temperature.md",
+        "coffee/058-brew-ratio.md"
+      ],
+      "chunks": [
+        "coffee/198-the-pour-over.md#The Pour-Over > Freshness and Degassing#extracts without scorching. A pour-over drips ho",
+        "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network ",
+        "coffee/038-single-origin-beans.md#Single-Origin Beans > Extraction Yield#tastes sour and thin; over-extraction tastes bit",
+        "coffee/028-the-pour-over.md#The Pour-Over > The Espresso Shot#water through a bed of grounds in a paper filter",
+        "pkm/043-spaced-repetition.md#Spaced Repetition## Spaced Repetition Notes on spaced repetition w",
+        "distributed-systems/131-the-two-generals.md#The Two Generals > Vector Clocks#delivery is usually a fiction; aim for at-least-",
+        "rust/072-send-and-sync.md#Send and Sync > Interior Mutability#Prefer keys or indices over Rc<RefCell<T>> when ",
+        "coffee/068-the-bloom.md#The Bloom## The Bloom Notes on the bloom within the broade",
+        "coffee/078-water-temperature.md#Water Temperature > The Bloom#time and tasting the result. A brew ratio around",
+        "coffee/058-brew-ratio.md#Brew Ratio## Brew Ratio Notes on brew ratio within the broa"
+      ]
+    },
+    {
+      "query": "protecting focus time from meetings and interruptions",
+      "notes": [
+        "productivity/156-timeboxing.md",
+        "productivity/016-deep-work.md",
+        "vector-search/140-reranking-candidates.md",
+        "productivity/026-single-tasking.md",
+        "hiking/019-reading-the-weather.md",
+        "productivity/006-deep-work.md",
+        "productivity/166-energy-management.md",
+        "productivity/076-the-weekly-review.md",
+        "rust/132-interior-mutability.md",
+        "hiking/129-blister-prevention.md"
+      ],
+      "chunks": [
+        "productivity/156-timeboxing.md#Timeboxing## Timeboxing Notes on timeboxing within the broa",
+        "productivity/016-deep-work.md#Deep Work > The Two-Minute Rule#See [[hiking/049-water-treatment]]. Shipping som",
+        "vector-search/140-reranking-candidates.md#Reranking Candidates## Reranking Candidates Notes on reranking candid",
+        "productivity/026-single-tasking.md#Single-Tasking > Single-Tasking#fill the day. A weekly review is where scattered",
+        "hiking/019-reading-the-weather.md#Reading the Weather > Switchbacks#early prevents a trip-ending wound. Good boots a",
+        "productivity/026-single-tasking.md#Single-Tasking > Managing Interruptions#uninterrupted time before the meetings colonize ",
+        "productivity/156-timeboxing.md#Timeboxing > Saying No#never. Every yes is a no to something else, so g",
+        "productivity/006-deep-work.md#Deep Work > Default to Action#avoid. Shipping something small today beats ship",
+        "productivity/166-energy-management.md#Energy Management > Deep Work#from it. Protect a block of uninterrupted time b",
+        "productivity/076-the-weekly-review.md#The Weekly Review > Shipping Small#work is the ability to focus without distraction"
+      ]
+    }
+  ]
+}

@@ -78,6 +78,22 @@ fn hit_pool(limit: usize) -> usize {
     limit.saturating_mul(3)
 }
 
+/// How many candidates **each retrieval signal** pulls for a `limit`-sized
+/// [`Vault::search`] / [`Vault::search_chunks`] call: those two ask retrieval for
+/// [`hit_pool`] hits, and each signal (BM25's `LIMIT`, the vector scan's top-n)
+/// widens that again before the two lists are fused by RRF.
+///
+/// Public because a *measurement* needs it. A corpus holding fewer chunks than
+/// this returns its entire index from **both** signals, so the two ranked lists
+/// handed to `rrf_fuse` are identical for any pool at least that wide and every
+/// score is invariant under pool/fusion width — a change to `hit_pool`,
+/// `pool_size` or [`search::RRF_K`] reads as "no change" while moving real-vault
+/// results. The eval harness prints that blindness instead of letting a reader
+/// trust a number that could not have moved (GH #141).
+pub fn candidate_pool(limit: usize) -> usize {
+    search::pool_size(hit_pool(limit))
+}
+
 /// An open vault: the Markdown at `root`, projected into the disposable index at
 /// `root/.b2/b2.sqlite` (a pure projection — no durable state outside the Markdown).
 pub struct Vault {
