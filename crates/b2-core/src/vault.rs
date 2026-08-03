@@ -67,6 +67,17 @@ const EMBED_DIM: usize = 64;
 /// Longest snippet (in chars) shown for a search hit, so a result stays one line.
 const SNIPPET_CHARS: usize = 160;
 
+/// How wide a hit pool [`Vault::search`] and [`Vault::search_chunks`] retrieve for
+/// a `limit`-sized result set. Both walk the pool and stop at `limit`, so the
+/// headroom is what lets a hit they *drop* be backfilled from the next candidate
+/// rather than cost a result slot (GH #137). Two reasons a hit is dropped: note
+/// dedup, when several top chunks share one note (`search` only), and a lookup
+/// that misses because the row vanished mid-query — the concurrent-reindex window
+/// C1 explicitly allows (index-engine.md §3).
+fn hit_pool(limit: usize) -> usize {
+    limit.saturating_mul(3)
+}
+
 /// An open vault: the Markdown at `root`, projected into the disposable index at
 /// `root/.b2/b2.sqlite` (a pure projection — no durable state outside the Markdown).
 pub struct Vault {
@@ -195,7 +206,8 @@ pub struct PlannedRestamp {
 /// notably no `b2id` stamped to the vault (B2's one write, data-model.md §1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexPlan {
-    /// Notes a real reindex would project into the index (every `.md` file).
+    /// Notes a real reindex would project into the index (every `.md` file the
+    /// walk collects — dot-prefixed names are not notes, GH #136).
     pub would_index: usize,
     /// …of which this many would be (re)embedded (the rest reuse their vectors).
     pub would_embed: usize,
@@ -1002,18 +1014,32 @@ impl Vault {
     /// A never-indexed vault still yields no hits, no error (its FTS index is
     /// empty). `vault_info`-style callers should consult the `semantic` flag to
     /// present keyword-only results honestly.
+    ///
+    /// A `limit` of 0 short-circuits here, ahead of [`retrieve`](Self::retrieve) —
+    /// so it costs no query embedding, and no [`Error::ModelMismatch`] either: that
+    /// guard exists to stop *wrong results* being returned, and there are no
+    /// results to be wrong about. [`search_chunks`](Self::search_chunks) matches.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let _op = tracing::debug_span!(target: "b2::vault", "search", query, limit).entered();
-        // Pull a wider chunk pool than `limit` so dedup can still fill `limit`
-        // distinct notes when several top chunks share a note.
-        let pool = limit.saturating_mul(3).max(limit);
-        let hits = self.retrieve(query, pool)?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let hits = self.retrieve(query, hit_pool(limit))?;
         let mut out: Vec<SearchResult> = Vec::new();
         for hit in hits {
+            if out.len() == limit {
+                break;
+            }
             if out.iter().any(|r| r.b2id == hit.note_b2id) {
                 continue; // note already represented by a higher-scoring chunk
             }
-            let path = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)?.unwrap_or_default();
+            // The note row can only be missing on a torn read (its chunk resolved a
+            // moment ago); drop the hit rather than emit a result with an empty
+            // path, exactly as `search_chunks` does — the pool has the headroom to
+            // backfill it (GH #137).
+            let Some(path) = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)? else {
+                continue;
+            };
             let title = db::note_title(&self.conn, &hit.note_b2id)?;
             let snippet = db::chunk_text(&self.conn, hit.chunk_id)?
                 .map(|t| query_snippet(&t, query))
@@ -1025,9 +1051,6 @@ impl Vault {
                 score: hit.score,
                 snippet,
             });
-            if out.len() == limit {
-                break;
-            }
         }
         Ok(out)
     }
@@ -1040,11 +1063,19 @@ impl Vault {
     pub fn search_chunks(&self, query: &str, limit: usize) -> Result<Vec<ChunkSearchResult>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let mut out = Vec::new();
-        for hit in self.retrieve(query, limit)? {
+        for hit in self.retrieve(query, hit_pool(limit))? {
+            if out.len() == limit {
+                break;
+            }
             // Both lookups can miss only on an inconsistent index (a hit whose row
             // vanished mid-call); drop such a hit rather than emit a half-resolved
             // one — a rank slot with an empty path would read as a real result.
+            // The pool is wider than `limit`, so a dropped hit is backfilled from
+            // the next candidate instead of costing a slot (GH #137).
             let Some(path) = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)? else {
                 continue;
             };

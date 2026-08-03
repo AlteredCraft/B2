@@ -255,6 +255,149 @@ fn search_chunks_exposes_passage_level_hits() {
     assert!(srs.text.contains("forgetting"));
 }
 
+/// GH #137: a ranked chunk that no longer resolves is **skipped over**, not charged
+/// against `limit`. The torn read is legitimate, not theoretical — C1 promises
+/// readers are never refused while a writer rebuilds (index-engine.md §3), so a
+/// `b2 search` racing a `b2 reindex &` can see a chunk id whose row is already gone.
+/// Charging it a result slot would silently under-fill the answer.
+///
+/// The fixture stages exactly that window: an FTS row with no `chunks` row behind
+/// it (`chunks_fts` is an external-content table, so the two *can* disagree — which
+/// is precisely what a mid-flight `replace_chunks` produces). Its short, term-dense
+/// text ranks it first under BM25, and the test asserts that placement rather than
+/// assuming it, so a tokenizer or ranking change fails loudly instead of quietly
+/// making the case untested.
+#[test]
+fn a_ranked_chunk_that_no_longer_resolves_costs_no_hit_slot() {
+    const DEAD_CHUNK: i64 = 999_999;
+
+    // A purpose-built vault rather than the golden one: this needs several *keyword*
+    // matches so a `limit` of 2 has something below it to backfill from, and the
+    // BM25-only path is what makes the ranking depend on nothing but the text.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    for (n, id) in [1, 2, 3, 4].iter().zip(['A', 'B', 'C', 'D']) {
+        fs::write(
+            vault.join(format!("n{n}.md")),
+            format!(
+                "---\nb2id: 01JDEAD000000000000000000{id}\ntype: note\ntitle: N{n}\n---\n\
+                 A note about the capybara, and more capybara prose to rank on.\n"
+            ),
+        )
+        .unwrap();
+    }
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+
+    let healthy = search::keyword_only_search(&conn, "capybara", 2).unwrap();
+    assert_eq!(healthy.len(), 2, "the fixture must have room to under-fill");
+
+    conn.execute(
+        "INSERT INTO chunks_fts(rowid, text) VALUES (?1, 'capybara')",
+        rusqlite::params![DEAD_CHUNK],
+    )
+    .unwrap();
+
+    let ranked = search::keyword_search(&conn, "capybara", 10).unwrap();
+    assert!(
+        ranked.iter().take(2).any(|&id| id == DEAD_CHUNK),
+        "the dead chunk must land inside the limit window for this to test anything"
+    );
+
+    // The same live chunks come back, in the same order, still `limit`-many. Their
+    // RRF *scores* do shift down a notch — the dead chunk really did occupy rank 0
+    // of the BM25 list, which is the whole point — so identity is what's compared.
+    let after = search::keyword_only_search(&conn, "capybara", 2).unwrap();
+    assert_eq!(
+        after.iter().map(|h| h.chunk_id).collect::<Vec<_>>(),
+        healthy.iter().map(|h| h.chunk_id).collect::<Vec<_>>(),
+        "the dead chunk is stepped over; the live hits below it still fill `limit`"
+    );
+}
+
+/// The façade's chunk view retrieves a pool wider than `limit` for the same reason
+/// (GH #137): it drops a hit whose path/detail lookup misses, and that drop must
+/// come out of the headroom rather than out of the caller's result count.
+#[test]
+fn search_chunks_still_fills_limit_when_a_ranked_chunk_is_dead() {
+    const DEAD_CHUNK: i64 = 999_999;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    let healthy = vault.search_chunks("memory", 2).unwrap();
+    assert_eq!(healthy.len(), 2);
+
+    let conn = open(&vault_dir.join(".b2/b2.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO chunks_fts(rowid, text) VALUES (?1, 'memory')",
+        rusqlite::params![DEAD_CHUNK],
+    )
+    .unwrap();
+
+    let after = vault.search_chunks("memory", 2).unwrap();
+    assert_eq!(after.len(), 2, "a dead top hit must not cost a result slot");
+    assert_eq!(
+        after.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+        healthy.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+    );
+}
+
+/// `limit == 0` asks for nothing and must get nothing — the loops stop *before*
+/// pushing, so a zero budget can never be stepped past into "return everything".
+#[test]
+fn a_zero_limit_returns_no_hits() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    assert!(search::keyword_only_search(&conn, "memory", 0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        search::hybrid_search(&conn, &FakeEmbedder::new(64), "memory", 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_ID, 1, 0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// …and it gets there without *doing* anything. The observable proof is the
+/// model-mismatch guard: a vault indexed at one dimension and reopened at another
+/// fails every real search fast (`Error::ModelMismatch`, so incomparable vectors
+/// never rank), because retrieval embeds the query. A zero-limit search returns
+/// cleanly instead — it never reached retrieval, which is also what spares the real
+/// model a forward pass for an empty answer.
+#[test]
+fn a_zero_limit_search_does_no_retrieval_work() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    let vault = b2_core::Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(64))).unwrap();
+    vault.reindex().unwrap();
+    drop(vault);
+
+    let swapped =
+        b2_core::Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
+    assert!(
+        matches!(
+            swapped.search("forgetting", 5).unwrap_err(),
+            b2_core::Error::ModelMismatch { .. }
+        ),
+        "the fixture must be a genuinely mismatched vault"
+    );
+
+    assert!(swapped.search("forgetting", 0).unwrap().is_empty());
+    assert!(swapped.search_chunks("forgetting", 0).unwrap().is_empty());
+}
+
 #[test]
 fn graph_filter_with_zero_hops_is_just_the_anchor() {
     let tmp = tempfile::TempDir::new().unwrap();
