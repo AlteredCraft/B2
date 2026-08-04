@@ -5,7 +5,7 @@
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
 //! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
 //! `explain` / `search` / `search_chunks` / `similar` / `link` / `add` / `create` /
-//! `mv` / `rm`. Add
+//! `import` / `mv` / `rm`. Add
 //! operations when a command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
@@ -27,6 +27,7 @@ use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
+use crate::import;
 use crate::mv;
 use crate::rm;
 use crate::{ingest, note, relation, search};
@@ -39,6 +40,9 @@ use std::path::{Path, PathBuf};
 /// Re-exported for the same reason: [`create_dir`](Vault::create_dir)'s report is
 /// part of the façade contract.
 pub use crate::dirs::DirCreateReport;
+/// Re-exported for the same reason: [`import_file`](Vault::import_file)'s and
+/// [`import_path`](Vault::import_path)'s report is part of the façade contract.
+pub use crate::import::ImportReport;
 /// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
 /// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
@@ -1415,6 +1419,39 @@ impl Vault {
         let _op = tracing::debug_span!(target: "b2::vault", "create", path).entered();
         let created = self.today()?;
         add::create_note(self.ctx(), path, None, None, &created)
+    }
+
+    /// Import a file the human already has into the vault folder `dir` (`""` for the
+    /// root) under `file_name`, from its **bytes** — the desktop's drag-a-file-onto-
+    /// the-tree gesture, where the OS hands the webview content rather than a path.
+    /// A `.md` lands as a note (projected, its `b2id` stamped if it carried none);
+    /// anything else lands as a resource (one inventory row), exactly as the vault
+    /// walk would have classified it.
+    ///
+    /// The bytes are written **verbatim** — B2 authors nothing here, unlike
+    /// [`add_note`](Self::add_note), which mints a document
+    /// ([`crate::import`]). **Model-free** (the `create_note` posture): the file is
+    /// projected with no embedder touched and its chunks fill on the next embed pass.
+    ///
+    /// Errors with [`Error::ImportDestination`] for a name that isn't a file name or
+    /// a folder/name pair that isn't a valid vault-relative path, and
+    /// [`Error::ImportTargetExists`] rather than clobber an existing file. An
+    /// arriving note that claims a `b2id` this vault already holds is refused
+    /// ([`Error::B2idCollision`]) instead of being allowed to steal it, and the
+    /// placed file is removed again — an import either lands and indexes, or leaves
+    /// nothing behind.
+    pub fn import_file(&self, dir: &str, file_name: &str, bytes: &[u8]) -> Result<ImportReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "import", dir, file_name).entered();
+        import::import_bytes(self.ctx(), dir, file_name, bytes)
+    }
+
+    /// [`import_file`](Self::import_file) from a **path** instead of bytes — the same
+    /// op for the same gesture's keyboard half (an OS file picker, which yields
+    /// paths), keeping the file's own name. Same refusals, plus
+    /// [`Error::ImportDestination`] for a source that is a folder or has no file name.
+    pub fn import_path(&self, dir: &str, source: &Path) -> Result<ImportReport> {
+        let _op = tracing::debug_span!(target: "b2::vault", "import_path", dir).entered();
+        import::import_path(self.ctx(), dir, source)
     }
 
     /// Create the folder `dir` (vault-relative; missing parents included, an

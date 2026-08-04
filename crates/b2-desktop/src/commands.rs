@@ -22,11 +22,13 @@ use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::vault::{
     DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport, ExplainView,
-    LinkReport, MoveReport, NeighborView, NoteSummary, NoteView, ProjectReport,
+    ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView, ProjectReport,
     ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary, SearchResult,
     SimilarView, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::Serialize;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -274,6 +276,63 @@ pub fn write_frontmatter(
 #[tauri::command(async)]
 pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
     create_note_impl(state.inner(), &path)
+}
+
+/// Import a file from **outside** the vault into the folder `dir` (`""` for the root)
+/// — the file tree's drop target (a drag from Finder) and its Import files… action.
+/// `data` is the file's bytes, base64-encoded: a file dropped on a webview arrives as
+/// *content*, not a path (the OS hands WebKit the bytes), and Tauri's JSON IPC carries
+/// no byte array cheaply. Decoding it is **transport**, not logic — the façade op takes
+/// the bytes and does the placing, the projecting, and every refusal.
+///
+/// **Model-free** (the `create_note`/`write_note` posture): `Vault::import_file` writes
+/// the file and projects it without touching vectors, so importing works with no model
+/// provisioned and runs outside the single-in-flight embed slot. An imported note's
+/// chunks join the DB-derived pending set for the next embed pass.
+#[tauri::command(async)]
+pub fn import_file(
+    state: State<'_, AppState>,
+    dir: String,
+    name: String,
+    data: String,
+) -> Result<ImportReport, CmdError> {
+    import_file_impl(state.inner(), &dir, &name, &data)
+}
+
+/// [`import_file`] from a path instead of bytes — what the Import files… picker's
+/// selections come back as. Same façade op, same posture; the bytes never round-trip
+/// through the webview.
+#[tauri::command(async)]
+pub fn import_path(
+    state: State<'_, AppState>,
+    dir: String,
+    source: String,
+) -> Result<ImportReport, CmdError> {
+    import_path_impl(state.inner(), &dir, &source)
+}
+
+/// The keyboard half of the drop gesture (K1): open a **native multi-select file
+/// picker** and return what was chosen, as absolute paths for [`import_path`] to place.
+/// An empty list means the user cancelled.
+///
+/// Host-owned for `choose_vault`'s reason — a picker is an OS concern with nothing to
+/// push behind the façade, and running it in Rust is what keeps the webview
+/// dialog-permission-free. It deliberately imports *nothing*: the choosing is the OS's
+/// job, the placing is the façade's, and this command only carries the answer between
+/// them. `(async)` is required, as there: `blocking_pick_files` waits on the main
+/// thread to show the panel.
+#[tauri::command(async)]
+pub fn pick_import_files(app: tauri::AppHandle) -> Result<Vec<String>, CmdError> {
+    let Some(picked) = app.dialog().file().blocking_pick_files() else {
+        return Ok(Vec::new()); // user cancelled
+    };
+    Ok(picked
+        .into_iter()
+        // On desktop a file pick is always a real filesystem path (`Url` is a mobile
+        // content URI); anything else is dropped rather than surfaced as an error.
+        .filter_map(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Move/rename a note — the tree's Rename / Move… / drag-drop action. Opens the
@@ -656,6 +715,24 @@ fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError>
     Ok(vault.create_note(path)?)
 }
 
+fn import_file_impl(
+    state: &AppState,
+    dir: &str,
+    name: &str,
+    data: &str,
+) -> Result<ImportReport, CmdError> {
+    let bytes = BASE64
+        .decode(data)
+        .map_err(|e| CmdError::ImportPayload(e.to_string()))?;
+    let vault = open_read(state)?;
+    Ok(vault.import_file(dir, name, &bytes)?)
+}
+
+fn import_path_impl(state: &AppState, dir: &str, source: &str) -> Result<ImportReport, CmdError> {
+    let vault = open_read(state)?;
+    Ok(vault.import_path(dir, Path::new(source))?)
+}
+
 fn move_note_impl(state: &AppState, note: &str, to: &str) -> Result<MoveReport, CmdError> {
     let vault = open_semantic(state)?;
     Ok(vault.move_note(note, to)?)
@@ -1032,6 +1109,96 @@ mod tests {
         let note = read_note_impl(&state, "inbox/idea").unwrap();
         assert_eq!(note.body, "");
         assert_eq!(note.b2id, report.b2id);
+    }
+
+    /// The drop path end to end at this layer: base64 in → the façade places and
+    /// projects → the tree lists it. The payload is deliberately **not** UTF-8, since
+    /// the transport exists to carry a PNG as faithfully as a `.md`.
+    #[test]
+    fn import_file_decodes_the_drop_payload_and_projects() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let bytes: &[u8] = &[0x89, b'P', b'N', b'G', 0xFF, 0x00];
+        let report =
+            import_file_impl(&state, "resources", "dropped.png", &BASE64.encode(bytes)).unwrap();
+
+        assert_eq!(report.path, "resources/dropped.png");
+        assert_eq!(report.b2id, None); // a resource has no identity to stamp
+        assert_eq!(fs::read(root.join("resources/dropped.png")).unwrap(), bytes);
+        let listed = open_read(&state).unwrap().list_resources().unwrap();
+        assert!(listed.iter().any(|r| r.path == "resources/dropped.png"));
+    }
+
+    /// A payload the frontend's encoder mangled is the transport's own failure, so it
+    /// never reaches the façade and never leaks the decoder's detail to the webview.
+    #[test]
+    fn import_file_refuses_a_payload_that_is_not_base64() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let err = import_file_impl(&state, "resources", "x.png", "not base64!!").unwrap_err();
+        assert!(matches!(err, CmdError::ImportPayload(_)));
+        assert!(!user_message(&err).contains("base64"), "no internals leak");
+        assert!(
+            !root.join("resources/x.png").exists(),
+            "nothing was written"
+        );
+    }
+
+    /// The picker path: a chosen absolute path is copied in, source left alone.
+    #[test]
+    fn import_path_copies_the_picked_file_in() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root.clone()));
+
+        let pdf: &[u8] = b"%PDF-1.7";
+        let source = tmp.path().join("paper.pdf");
+        fs::write(&source, pdf).unwrap();
+
+        let report = import_path_impl(&state, "resources", &source.to_string_lossy()).unwrap();
+
+        assert_eq!(report.path, "resources/paper.pdf");
+        assert_eq!(fs::read(root.join("resources/paper.pdf")).unwrap(), pdf);
+        assert!(source.is_file(), "the picked file is copied, never moved");
+    }
+
+    /// The import refusals speak of a *file*, not a note: what arrived may be a PDF.
+    #[test]
+    fn import_refusals_stay_generic_and_actionable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        let state = AppState::new(Some(root));
+
+        let err =
+            import_file_impl(&state, "concepts", "memory.md", &BASE64.encode("x")).unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::ImportTargetExists(_))
+        ));
+        assert_eq!(
+            user_message(&err),
+            "A file already exists at 'concepts/memory.md'. Rename it, or drop this one into a different folder."
+        );
+
+        // A "name" that is really a path can't redirect the import out of the folder.
+        let err =
+            import_file_impl(&state, "notes", "../escaped.png", &BASE64.encode("x")).unwrap_err();
+        assert!(matches!(
+            err,
+            CmdError::Core(b2_core::Error::ImportDestination(_))
+        ));
+        assert_eq!(
+            user_message(&err),
+            "That file can't be imported under its own name. Rename it and try again."
+        );
     }
 
     #[test]

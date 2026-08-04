@@ -620,6 +620,14 @@ mechanically). It is keyed by its vault-relative path, recorded only in the disp
 - **`b2 mv` on a resource** works like a note move minus the identity step: rewrite the inbound `[[path]]` /
   `![alt](path)` text, move the file, re-project. "Rename keeps every backlink resolving" holds *when B2
   does the move*.
+- **Placing one is not authoring one.** "B2 cannot write a resource" is about its *content*: B2 never edits
+  the bytes, and there is no format-specific writer. Putting a file **into** the vault on explicit command
+  — the desktop's drag-from-Finder-onto-the-tree import (`Vault::import_file`), the same act as moving or
+  deleting it (W3) — is file management, and the copy is byte-honest: B2 places exactly the bytes it was
+  handed and then projects them, routing on the extension exactly as the walk does. A dropped `.md` is
+  therefore a *note* arriving, frontmatter and all, and gets the only write a note ever gets unbidden: a
+  `b2id` stamp if it has none. A dropped note that carries a `b2id` this vault already holds is **refused**
+  rather than projected — that is the §8 identity-collision case arriving one file at a time.
 - **An out-of-band move degrades one notch further than a note's.** A Finder-moved note re-binds by its
   stamped `b2id`; a Finder-moved resource cannot. Mitigation: the index stores a **blake3 content hash**
   per resource, so a dangling link whose old target vanished and whose hash reappears at **exactly one**

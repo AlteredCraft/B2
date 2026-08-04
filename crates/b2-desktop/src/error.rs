@@ -46,6 +46,12 @@ pub enum CmdError {
     /// to the webview.
     #[error("clipboard read failed: {0}")]
     ClipboardFailed(String),
+    /// `import_file` was handed a payload that isn't base64 — the drop transport's own
+    /// failure, before the façade ever sees bytes. Not something the user did: it means
+    /// the frontend's encoder produced something the host can't read, so the message
+    /// stays generic and the decoder's detail goes to the server log.
+    #[error("import payload was not valid base64: {0}")]
+    ImportPayload(String),
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -95,6 +101,18 @@ pub fn user_message(err: &CmdError) -> String {
         ),
         CmdError::Core(b2_core::Error::AddDestination(_)) => {
             "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
+                .to_string()
+        }
+        // The import family says "file", never "note": what arrived may be a PDF.
+        CmdError::Core(b2_core::Error::ImportTargetExists(p)) => format!(
+            "A file already exists at '{p}'. Rename it, or drop this one into a different folder."
+        ),
+        CmdError::Core(b2_core::Error::ImportDestination(_)) => {
+            "That file can't be imported under its own name. Rename it and try again."
+                .to_string()
+        }
+        CmdError::ImportPayload(_) => {
+            "That file couldn't be read for import. Try again, or copy it into the vault folder in Finder."
                 .to_string()
         }
         CmdError::Core(b2_core::Error::DirTargetExists(p)) => format!(

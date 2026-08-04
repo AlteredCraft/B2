@@ -367,6 +367,7 @@ version = "0.1.0"
 dependencies = [
  "b2-core",
  "b2-embed",
+ "base64 0.22.1",
  "dirs",
  "notify",
  "serde",

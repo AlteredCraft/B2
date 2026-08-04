@@ -85,6 +85,20 @@ pub enum Error {
     #[error("note already exists: {0}")]
     AddTargetExists(String),
 
+    /// An import ([`crate::import`]) was handed a destination it can't place a file
+    /// at — a name carrying path separators, or a folder/name pair that normalizes
+    /// to an empty, absolute, escaping, or dot-prefixed path. The import sibling of
+    /// [`Error::AddDestination`], distinct so the adapters can phrase it for a file
+    /// arriving from outside rather than a note being authored.
+    #[error("invalid import destination: {0}")]
+    ImportDestination(String),
+
+    /// An import would overwrite an existing vault file — refused, exactly as
+    /// [`Error::AddTargetExists`] is, and separate for the same reason: the thing
+    /// arriving may be a PDF, so the message must not call it a note.
+    #[error("file already exists: {0}")]
+    ImportTargetExists(String),
+
     /// `create_dir` was given a path that isn't a valid vault-relative folder —
     /// empty, absolute, escaping via `..`, or dot-prefixed (b2 never manages
     /// hidden paths). The folder sibling of [`Error::AddDestination`].

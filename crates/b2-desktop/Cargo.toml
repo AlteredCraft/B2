@@ -40,6 +40,11 @@ tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
+# Transport only, for `import_file`: a file dropped on the tree reaches the webview as
+# *content* (the OS hands WebKit bytes, never a path — ui/src/main.ts), and Tauri's JSON
+# IPC has no cheap byte array, so the drop payload crosses as base64 and is decoded here.
+# Already in the lock via tauri's own tree, so it costs no extra build.
+base64 = "0.22"
 # Platform data dir for the "last opened vault" state file, so the app reopens the
 # vault that was open when it was last closed. Same crate/convention b2-embed uses for
 # its XDG model cache (`dirs::data_dir()/b2/…`), so both live under one vendor dir.

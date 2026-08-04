@@ -32,6 +32,7 @@ import {
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
+import { bytesToBase64, importSummary, planImport } from "./importfiles";
 import {
   baseName,
   canMoveInto,
@@ -1178,8 +1179,8 @@ function toggleCard(key: string): void {
 // viewport edge (a menu that opens off-screen is unusable).
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 76;
-const TREE_MENU_H = 100; // the context line + two items
-const TREE_NODE_MENU_H = 204; // + Rename / Move… / Delete and their separator
+const TREE_MENU_H = 132; // the context line + three items
+const TREE_NODE_MENU_H = 236; // + Rename / Move… / Delete and their separator
 
 function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
@@ -1290,6 +1291,146 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
     state.treeCreate = create;
     flash(errText(e));
   }
+}
+
+// --- tree import: files from outside the vault ------------------------------------
+//
+// Two gestures, one outcome: drag files from Finder onto a folder row (the pointer
+// path, wired in wireEvents) or pick them in an OS dialog from the tree's right-click
+// menu (the keyboard path — K1: a drag is pointer-only, so it can't be the only way
+// in). Both place the files through `Vault::import_file`/`import_path`, which copies
+// the bytes verbatim and projects them: a `.md` lands as a note (b2id stamped), any
+// other file as a resource, and the tree shows it with no reindex.
+//
+// The two differ only in what they can hand the host. A drop yields **bytes** — WebKit
+// gives the page content, never a path — so the file rides the IPC as base64 and is
+// size-capped (importfiles.ts explains both). The picker yields **paths**, so the host
+// reads the file itself and neither limit applies.
+
+/** An import is running — further gestures are ignored (no queueing, like moves). */
+let importInFlight = false;
+
+/** One dropped entry: the plan's metadata plus the handle to read it with. */
+interface DroppedFile {
+  name: string;
+  size: number;
+  isDirectory: boolean;
+  file: File | null;
+}
+
+/**
+ * Read a drop's entries **synchronously** — the DataTransfer is neutered the moment
+ * the handler returns, so nothing here may be deferred past the first `await`.
+ * `items` is used rather than `files` for the one thing `files` can't say: whether an
+ * entry is a *folder* (`webkitGetAsEntry`), which the plan refuses by name instead of
+ * failing later on a read of nothing.
+ */
+function droppedFiles(dt: DataTransfer | null): DroppedFile[] {
+  if (!dt) return [];
+  const out: DroppedFile[] = [];
+  for (const item of Array.from(dt.items)) {
+    if (item.kind !== "file") continue;
+    const entry = item.webkitGetAsEntry?.() ?? null;
+    if (entry?.isDirectory) {
+      out.push({ name: entry.name, size: 0, isDirectory: true, file: null });
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file) out.push({ name: file.name, size: file.size, isDirectory: false, file });
+  }
+  // Belt and braces: if `items` told us nothing, fall back to the file list rather
+  // than let the drop silently do nothing.
+  if (out.length === 0) {
+    for (const file of Array.from(dt.files)) {
+      out.push({ name: file.name, size: file.size, isDirectory: false, file });
+    }
+  }
+  return out;
+}
+
+/** Shared refusal gate: an import writes, so it queues behind the same runs a move does. */
+function canImportNow(): boolean {
+  if (importInFlight || state.vaultRoot === null) return false;
+  if (state.reindexing) {
+    flash("Indexing is running — try the import again when it finishes.");
+    return false;
+  }
+  return true;
+}
+
+/** The drop half: send each accepted file's bytes, then report once. */
+async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<void> {
+  if (!canImportNow()) return;
+  const plan = planImport(dropped);
+  const refused = [...plan.refused];
+  const imported: string[] = [];
+  importInFlight = true;
+  try {
+    // Sequential on purpose: one file's refusal (a name already taken, a note
+    // carrying a b2id this vault holds) must not cancel the rest of the drop, and
+    // the reports read in the order the user dropped them.
+    for (const entry of plan.accepted) {
+      if (!entry.file) continue;
+      try {
+        const bytes = new Uint8Array(await entry.file.arrayBuffer());
+        const report = await api.importFile(dir, entry.name, bytesToBase64(bytes));
+        imported.push(report.path);
+      } catch (e) {
+        refused.push(`${entry.name}: ${errText(e)}`);
+      }
+    }
+    // Inside the gate, like `executeMove`'s: the refresh is part of the import, and two
+    // of them interleaving would re-list and toast out of order.
+    await finishImport(dir, imported, refused);
+  } finally {
+    importInFlight = false;
+  }
+}
+
+/** The keyboard half: an OS picker, then the same import by path. */
+async function pickAndImport(dir: string): Promise<void> {
+  if (!canImportNow()) return;
+  let picked: string[];
+  try {
+    picked = await api.pickImportFiles();
+  } catch (e) {
+    flash(errText(e));
+    return;
+  }
+  if (picked.length === 0) return; // cancelled — say nothing
+  const refused: string[] = [];
+  const imported: string[] = [];
+  importInFlight = true;
+  try {
+    for (const source of picked) {
+      try {
+        imported.push((await api.importPath(dir, source)).path);
+      } catch (e) {
+        refused.push(`${baseName(source)}: ${errText(e)}`);
+      }
+    }
+    await finishImport(dir, imported, refused); // inside the gate, as above
+  } finally {
+    importInFlight = false;
+  }
+}
+
+/**
+ * What both gestures do once the files are placed: reveal the destination, re-list the
+ * tree (the host already projected each file, so this is what makes it visible), and
+ * say what happened in one toast. The trailing embed is scheduled for the same reason
+ * a save schedules one — an imported note's chunks are projected but unembedded, and
+ * that is the pass that fills them.
+ */
+async function finishImport(dir: string, imported: string[], refused: string[]): Promise<void> {
+  if (imported.length > 0) {
+    for (const d of dirChain(dir)) state.expandedDirs.add(d);
+    state.selectedDir = dir;
+    await loadNotes();
+    void refreshEmbedStatus(state.vaultRoot); // the N/M denominator grew (#26)
+    scheduleTrailingEmbed();
+  }
+  flash(importSummary(dir, imported, refused));
 }
 
 // --- tree move / rename (context menu, Move… modal, drag-and-drop) -----------------
@@ -3479,6 +3620,12 @@ function wireEvents(): void {
           startTreeCreate("folder", menu.dir);
           return;
         }
+        if (target.closest("[data-ctx-import]")) {
+          const dir = menu.dir;
+          closeContextMenu(); // the picker is modal to the OS — let the menu go first
+          void pickAndImport(dir);
+          return;
+        }
         closeContextMenu();
         return;
       }
@@ -4444,10 +4591,24 @@ function wireEvents(): void {
 
   // --- tree drag-and-drop ---------------------------------------------------------
   //
-  // Depends on `dragDropEnabled: false` in tauri.conf.json's window config: with
+  // Two drags land here, and they are told apart by `treeDrag` being set: a **tree
+  // row** being moved within the vault, and a **file from outside** (Finder) being
+  // imported. One set of listeners serves both because both aim at the same targets.
+  //
+  // Both depend on `dragDropEnabled: false` in tauri.conf.json's window config: with
   // Tauri's native drag-drop interception on (the default), wry consumes drag
   // events for its own file-drop channel and the DOM never sees dragover/drop on
-  // macOS — dragstart fires, but no drop zone ever activates.
+  // macOS — dragstart fires, but no drop zone ever activates. Turning it on to get
+  // the OS drop's *paths* would therefore cost the in-app move, so the import takes
+  // the bytes route instead (importDroppedFiles).
+  //
+  // The flip side of that setting is why the external drag must be handled at all:
+  // with wry not intercepting, an unhandled file drop is WebKit's to act on, and
+  // WebKit's default is to **navigate to the dropped file** — which replaces the whole
+  // app with a rendering of that file, with no address bar and no way back (the same
+  // reason a note's web links are handed to the OS, links.ts). So every file drag is
+  // preventDefaulted, whether or not it lands somewhere B2 can use, and the OS cursor
+  // carries the difference: copy over a tree target, no-drop everywhere else.
   //
   // Any tree row drags; folder rows and the pane background (= vault root) accept
   // drops — a drop on a *file* row lands in that file's folder, mirroring the
@@ -4499,8 +4660,48 @@ function wireEvents(): void {
     }
   });
 
+  /** Is this drag carrying files from outside the app (as opposed to text, or a row)? */
+  const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
+
+  /**
+   * Would WebKit *navigate* if this drag were dropped unhandled? Files, and also a
+   * dragged **link** — from a browser, a mail client, or a note's own anchor. Both
+   * end the same way (the window holds the whole app, so a navigation is the app
+   * gone), so both are cancelled; only files go anywhere afterwards.
+   */
+  const navigatesWebview = (e: DragEvent) =>
+    carriesFiles(e) || (e.dataTransfer?.types.includes("text/uri-list") ?? false);
+
+  /** Where an external file drag may land: a tree target, or nowhere. */
+  const importTargetOf = (e: DragEvent) =>
+    !carriesFiles(e) || state.vaultRoot === null
+      ? null
+      : dropTargetOf(e.target as HTMLElement);
+
+  // dragenter as well as dragover: some engines want the *first* event over an
+  // element cancelled before they will treat it as a drop zone at all.
+  document.addEventListener("dragenter", (e) => {
+    if (!treeDrag && navigatesWebview(e)) e.preventDefault();
+  });
+
   document.addEventListener("dragover", (e) => {
-    if (!treeDrag) return;
+    if (!treeDrag) {
+      if (!navigatesWebview(e)) return; // plain text: the editor's business, not ours
+      // Unconditional: cancelling dragover is what stops WebKit navigating the whole
+      // app to the file, and that has to hold over the editor and every other pane —
+      // not just over the tree.
+      e.preventDefault();
+      const drop = importTargetOf(e);
+      if (drop?.el !== dropHighlight) clearDropHighlight();
+      // "none" everywhere but the tree, so the OS cursor says where this can land —
+      // and so a drop outside it is refused by AppKit before anything sees it.
+      if (e.dataTransfer) e.dataTransfer.dropEffect = drop ? "copy" : "none";
+      if (drop && drop.el !== dropHighlight) {
+        dropHighlight = drop.el;
+        drop.el.classList.add("is-drop-target");
+      }
+      return;
+    }
     const drop = dropTargetOf(e.target as HTMLElement);
     const valid = drop !== null && canMoveInto(treeDrag.path, treeDrag.nodeKind, drop.dir);
     if (drop?.el !== dropHighlight) clearDropHighlight();
@@ -4517,11 +4718,26 @@ function wireEvents(): void {
     const drag = treeDrag;
     treeDrag = null;
     clearDropHighlight();
-    if (!drag) return;
+    if (!drag) {
+      if (!navigatesWebview(e)) return;
+      e.preventDefault(); // belt and braces — a drop must never navigate the webview
+      const drop = importTargetOf(e);
+      if (drop === null) return; // a link, or a pane that imports nothing
+      // Read the transfer *now*: it is neutered the moment this handler returns.
+      void importDroppedFiles(drop.dir, droppedFiles(e.dataTransfer));
+      return;
+    }
     const drop = dropTargetOf(e.target as HTMLElement);
     if (drop === null || !canMoveInto(drag.path, drag.nodeKind, drop.dir)) return;
     e.preventDefault();
     void executeMove(drag, moveDestination(drag.path, drop.dir));
+  });
+
+  // An external drag that leaves the window fires no dragend (the drag isn't ours),
+  // so the highlight would stick until the next drag. dragleave for the document's
+  // edge — `relatedTarget` is null exactly when the pointer left the window.
+  document.addEventListener("dragleave", (e) => {
+    if (!treeDrag && e.relatedTarget === null) clearDropHighlight();
   });
 
   document.addEventListener("dragend", () => {
