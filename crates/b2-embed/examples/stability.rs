@@ -215,9 +215,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // between the two widths leaves the note half stable by construction while the
     // passage half still measures something, which is a partly-blind run and worth
     // saying so.
-    if chunks < note_candidate_pool(BASELINE_K) {
+    //
+    // Inclusive, like the eval's own blindness check: a pool exactly the size of the
+    // corpus truncates nothing either — BM25 has no more matches than its `LIMIT`,
+    // the vector scan tops out at the stored vectors — so equality is as blind as
+    // anything under it.
+    if chunks <= note_candidate_pool(BASELINE_K) {
         eprintln!(
-            "[warn] {chunks} chunks < the {}-candidate pool the note view reaches (the passage view\n\
+            "[warn] {chunks} chunks ≤ the {}-candidate pool the note view reaches (the passage view\n\
              \x20      reaches {}) — this vault is too small for pool width to bind, so probes below are\n\
              \x20      stable by construction, not by ranking quality (GH #141). That is the eval corpus'\n\
              \x20      situation; use a larger vault to measure.",
