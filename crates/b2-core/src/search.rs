@@ -89,12 +89,16 @@ pub fn fts5_query(raw: &str) -> String {
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
 ///
-/// `pub(crate)` for one caller: [`vault::candidate_pool`](crate::vault::candidate_pool)
-/// composes it with the façade's own headroom to state the *total* per-signal
-/// candidate depth a search reaches — the number a measurement has to know to say
-/// whether a corpus is big enough for fusion width to be observable (GH #141).
+/// `pub(crate)` for two callers:
+/// [`vault::note_candidate_pool`](crate::vault::note_candidate_pool) and
+/// [`vault::chunk_candidate_pool`](crate::vault::chunk_candidate_pool) compose it
+/// with each view's own headroom to state the *total* per-signal candidate depth
+/// that view reaches — the number a measurement has to know to say whether a corpus
+/// is big enough for fusion width to be observable (GH #141). It is this 5×
+/// multiplication that makes a hit of façade headroom cost five candidates, and so
+/// makes the two views' headroom a **ranking** choice, not a plumbing one (GH #142).
 ///
-/// Saturating, like [`vault::hit_pool`](crate::vault)'s own widening: `limit` is
+/// Saturating, like the façade's own widenings: `limit` is
 /// user input (`b2 search --limit`, the desktop's page size) and the two widenings
 /// compose, so a caller can reach a product that overflows `usize` — which debug
 /// builds panic on and release builds *wrap*, turning an absurd ask into a silently

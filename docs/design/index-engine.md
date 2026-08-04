@@ -279,6 +279,19 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
   [#38](https://github.com/AlteredCraft/B2/issues/38).
 - **Discovery is two-stage:** an O(notes) coarse scan over centroids shortlists candidates, then an
   exact max-sim rescore over only the shortlist's chunk vectors.
+- **Candidate width is per view, and it is a quality knob, not plumbing.** Retrieval widens twice: each
+  façade read asks for a hit pool over its `limit`, and each signal (`search::pool_size`) pulls 5× *that*
+  before RRF fuses the two lists. The two reads need headroom for different reasons, so they get
+  different pools ([#142](https://github.com/AlteredCraft/B2/issues/142)). Note-level `Vault::search`
+  keeps **3×**: dedup collapses every chunk that shares a note onto that note's best one, so a pool of
+  exactly `limit` would under-fill `limit` distinct notes on an ordinary query. Passage-level
+  `Vault::search_chunks` has no dedup and keeps a **small constant** (`limit + 2`) — enough to backfill
+  the one hit it can drop, a lookup that missed on the C1 torn read (§3), and no more. Giving it the 3×
+  too is not a free tidy-up: the 5× multiplies every hit of headroom into candidates (150 per signal
+  against 60, at a 10-result ask), and RRF over a wider candidate set returns *different* answers — at
+  k = 60 a chunk ranked ~60th in **both** lists outscores one ranked first in a single list
+  (`2/121 > 1/61`). Width therefore moves only on measured relevance; the labelled corpus cannot measure
+  it yet, so the conservative setting holds — see §5.
 - **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
   chunks. Brute-force cosine over ~100k × 768-dim float32 vectors is on the order of **single-digit to
   low-tens of milliseconds** — well within an interactive budget. We're nowhere near the regime
@@ -319,14 +332,21 @@ measure RRF precision@k / MRR on a representative set first and ship the reranke
 this is the deferral §5 is built to allow. Tracked in [#28](https://github.com/AlteredCraft/B2/issues/28).
 
 **…and check the instrument can see the change you are gating.** The labelled eval corpus is *no bigger
-than the candidate pool retrieval reaches* — 26 chunks against `vault::candidate_pool(10) = 150` per
-signal — so neither half of the hybrid is truncated there: BM25 returns every matching chunk, the vector
-scan every stored vector, and widening the pool cannot add a candidate. Relevance scores on that corpus
-are therefore **invariant under candidate width**: a change to `vault::hit_pool` or `search::pool_size`
-prints "no change" while genuinely reordering a real vault. Score *relevance* on the labelled corpus, but
-measure a width change with the rank-stability probe over a vault big enough for the pool to bind
-(`--example stability`, `fixtures/test-vault`); the eval prints its own blindness when the corpus fits
-inside the pool ([#141](https://github.com/AlteredCraft/B2/issues/141)).
+than the candidate pool retrieval reaches* — 26 chunks against `vault::chunk_candidate_pool(10) = 60` per
+signal, and 150 for the note view — so neither half of the hybrid is truncated there: BM25 returns every
+matching chunk, the vector scan every stored vector, and widening the pool cannot add a candidate.
+Relevance scores on that corpus are therefore **invariant under candidate width**: a change to either
+façade hit pool or to `search::pool_size` prints "no change" while genuinely reordering a real vault.
+Score *relevance* on the labelled corpus, but measure a width change with the rank-stability probe over a
+vault big enough for the pool to bind (`--example stability`, `fixtures/test-vault`); the eval prints its
+own blindness when the corpus fits inside the narrower of the two pools
+([#141](https://github.com/AlteredCraft/B2/issues/141)).
+
+That gate has already ruled once. [#140](https://github.com/AlteredCraft/B2/pull/140) widened the passage
+view to 3× as plumbing; the eval printed bit-identical numbers, the probe found 10 of 10 top-4 passage
+lists changed, and with no labelled evidence that the wider set ranked *better*,
+[#142](https://github.com/AlteredCraft/B2/issues/142) returned it to the constant (§4). The instrument
+that can say "different" is not the one that can say "better" — shipping a width change needs both.
 
 The blindness is to *candidates*, not to fusion. `RRF_K` re-weights the **same** two lists
 (`Σ 1/(k+rank+1)`), so it reorders results on a corpus of any size — measured on this one: k = 60 → 10

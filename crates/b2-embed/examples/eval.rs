@@ -27,9 +27,11 @@
 //!    does not exercise.
 //!
 //! What this corpus **cannot** score is *candidate width*. 26 chunks is no more
-//! than the `candidate_pool(K)` candidates each signal retrieves, so neither list
-//! is truncated, widening the pool cannot add a candidate, and every number above
-//! is invariant under `vault::hit_pool` / `search::pool_size` — a change to either
+//! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
+//! passage view, `note_candidate_pool(K)` for the note view, the narrower of the two
+//! being what has to bind — so neither list is truncated, widening the pool cannot
+//! add a candidate, and every number above is invariant under either view's headroom
+//! or `search::pool_size` — a change to any of them
 //! prints bit-identical scores here while reordering a real vault (GH #141). A run
 //! that is blind that way says so; the property is measured by the rank-stability
 //! probe (`--example stability`) on a vault big enough for the pool to bind. Note
@@ -46,7 +48,7 @@
 
 use b2_core::chunk::ChunkConfig;
 use b2_core::embed::Embedder;
-use b2_core::vault::{candidate_pool, Vault};
+use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use serde::Deserialize;
 use std::ops::ControlFlow;
@@ -209,8 +211,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let hybrid = score_pass(&vault, &set.queries)?;
     let similar = score_similar(&vault, &sim_set)?;
     eprintln!(
-        "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K})\n",
-        candidate_pool(K)
+        "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
+         {} for the passage view)\n",
+        note_candidate_pool(K),
+        chunk_candidate_pool(K)
     );
     warn_if_pool_blind(chunks);
 
@@ -438,14 +442,18 @@ fn timed_embed(vault: &Vault) -> Result<(usize, f64), Box<dyn std::error::Error>
 
 /// State the one thing this corpus **cannot** measure, on every run that can't.
 ///
-/// Retrieval pulls [`candidate_pool`] candidates from each signal before fusing. A
-/// corpus with no more chunks than that truncates *neither* list — BM25 has fewer
-/// matches than its `LIMIT`, the vector scan tops out at the stored vectors — so
-/// both lists are already complete, widening the pool cannot add a candidate, and
-/// every score above is invariant under **candidate width**. A change to
-/// `vault::hit_pool` or `search::pool_size` then prints bit-identical numbers here
-/// while genuinely reordering a real vault (GH #141; the worked example is GH
-/// #140/#142).
+/// Retrieval pulls [`note_candidate_pool`] candidates from each signal before
+/// fusing, or [`chunk_candidate_pool`] for the passage view. A corpus with no more
+/// chunks than that truncates *neither* list — BM25 has fewer matches than its
+/// `LIMIT`, the vector scan tops out at the stored vectors — so both lists are
+/// already complete, widening the pool cannot add a candidate, and every score above
+/// is invariant under **candidate width**. A change to either view's headroom or to
+/// `search::pool_size` then prints bit-identical numbers here while genuinely
+/// reordering a real vault (GH #141; the worked example is GH #140/#142).
+///
+/// Judged on the **narrower** of the two pools, which since #142 is the passage
+/// view's: blindness is a claim about every number the run prints, and a corpus that
+/// fits inside the narrower pool fits inside the wider one too.
 ///
 /// Scoped deliberately to width. `RRF_K` re-weights the *same* two lists
 /// (`Σ 1/(k+rank+1)`), so it reorders results on any corpus — measured on this one:
@@ -457,11 +465,11 @@ fn timed_embed(vault: &Vault) -> Result<(usize, f64), Box<dyn std::error::Error>
 /// property itself is measured by the rank-stability probe (`--example stability`),
 /// which runs on a vault big enough for the pool to bind.
 fn warn_if_pool_blind(chunks: usize) {
-    let pool = candidate_pool(K);
+    let pool = chunk_candidate_pool(K).min(note_candidate_pool(K));
     if chunks <= pool {
         eprintln!(
             "[warn] {chunks} chunks ≤ {pool}-candidate pool — neither signal is truncated here, so a\n\
-             \x20      candidate-width change (hit_pool, pool_size) cannot move any number in this run\n\
+             \x20      candidate-width change (either hit pool, pool_size) cannot move any number in this run\n\
              \x20      (GH #141). `just stability` measures that property on a large vault. (RRF_K is\n\
              \x20      not in that set — it re-weights the same lists, and this corpus does see it.)\n"
         );
@@ -573,9 +581,13 @@ fn result_row(
         // retrieval pool had both candidate lists complete, so no candidate-width
         // change could have affected it and comparing it across one proves nothing
         // (GH #141). Equality is blind too — a pool exactly the size of the corpus
-        // truncates nothing either.
-        "pool": candidate_pool(K),
-        "pool_blind": chunks <= candidate_pool(K),
+        // truncates nothing either. Both depths are recorded because since #142 the
+        // two views differ; the flat `pool` key of earlier rows is deliberately
+        // *not* reused, so a reader of a mixed file sees a missing field rather than
+        // one number silently meaning something narrower than it used to.
+        "pool_note": note_candidate_pool(K),
+        "pool_chunk": chunk_candidate_pool(K),
+        "pool_blind": chunks <= chunk_candidate_pool(K).min(note_candidate_pool(K)),
         "embed_secs": embed_secs,
         "note": {
             "bm25": bm25.map(|p| agg(&p.note)),
