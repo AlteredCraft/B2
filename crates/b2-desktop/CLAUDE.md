@@ -303,6 +303,39 @@ bodies) or from `escapeHtml` (every value B2 interpolates into chrome — titles
 no third option; a raw string built from vault data and assigned to `innerHTML` is the bug this invariant
 exists to prevent.
 
+## Drag and drop: one setting, two gestures, and a navigation the window can't survive
+
+`tauri.conf.json` sets **`dragDropEnabled: false`** on the window, and both drag gestures depend on it —
+in opposite directions, which is why the setting is worth its own section.
+
+With Tauri's native drag-drop interception **on** (the default), wry consumes drag events for its own
+file-drop channel and the DOM never sees `dragover`/`drop` on macOS: `dragstart` fires, but no drop zone
+ever activates. So the in-app gesture — dragging a **tree row** to move it — requires the setting to be
+off. That is the whole reason it is off.
+
+Turning it off hands every *external* drag to WebKit, whose default for a dropped file is to **navigate
+to it**. In a browser that's a tab; here the webview *is* the application, so the app is replaced by a
+rendering of the file with no address bar and no way back (the same failure a note's `https://` link
+would cause — hence `links.ts`). An unhandled file drop is therefore not a missing feature but a
+window-destroying bug, and `ui/src/main.ts` cancels `dragover`/`drop` for **every** file drag, wherever
+it lands, before deciding whether it can do anything with it.
+
+What it does with one is **import** it (`Vault::import_file`): dropped on a folder row — or a file row,
+which means that file's folder, mirroring the right-click rule — the bytes are placed in that folder and
+projected. A `.md` arrives as a note, anything else as a resource. The cursor carries the difference:
+copy over a tree target, no-drop elsewhere.
+
+Two consequences fall out of the setting, both of which look like odd choices until you know why:
+
+- **The drop sends bytes, not a path.** WebKit hands the page *content*; only Tauri's own drag-drop
+  channel carries paths, and that channel is the thing we turned off. So the payload crosses the IPC as
+  base64 (`ui/src/importfiles.ts` encodes, `import_file` decodes) and is size-capped frontend-side,
+  because the whole file has to fit in memory to make the trip.
+- **The keyboard half is a different command.** A drag is pointer-only, so K1 obliges an equal path:
+  *Import files…* in the tree's context menu (⇧F10 reaches it) opens an OS picker, and a picker yields
+  **paths** — hence `import_path`, the same façade op from the other end, with no byte transport and no
+  cap. Two commands for one gesture is not duplication; it is the two shapes the OS offers.
+
 ## Transport
 
 **Tauri IPC only** — the frontend `invoke`s these commands. This crate runs **no HTTP server**. An

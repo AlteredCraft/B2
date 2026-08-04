@@ -15,6 +15,7 @@ import type {
   EmbedReport,
   EmbedStat,
   ExplainView,
+  ImportReport,
   LinkReport,
   MenuChord,
   ModelChoice,
@@ -167,6 +168,31 @@ export const api = {
    * touched.
    */
   createDir: (dir: string): Promise<DirCreateReport> => invoke("create_dir", { dir }),
+
+  /**
+   * Import a file from outside the vault into the folder `dir` (`""` for the root),
+   * from its **bytes** — the file tree's drop target. `data` is base64 (see
+   * `importfiles.ts`): a file dropped on the webview arrives as content, not a path,
+   * and Tauri's JSON IPC carries no byte array cheaply. Model-free like `createNote`:
+   * the file is projected immediately and any vectors fill on the next embed pass.
+   */
+  importFile: (dir: string, name: string, data: string): Promise<ImportReport> =>
+    invoke("import_file", { dir, name, data }),
+
+  /**
+   * `importFile` from a path instead of bytes — what the Import files… picker's
+   * selections come back as. Same op, and the bytes never cross the IPC.
+   */
+  importPath: (dir: string, source: string): Promise<ImportReport> =>
+    invoke("import_path", { dir, source }),
+
+  /**
+   * Open the native multi-select file picker behind Import files… — the keyboard path
+   * to the drop gesture (K1). Resolves to the chosen absolute paths for `importPath`
+   * to place, or an empty list if the user cancelled. Host-side like `chooseVault`:
+   * the webview holds no dialog permission.
+   */
+  pickImportFiles: (): Promise<string[]> => invoke("pick_import_files"),
 
   /**
    * Move/rename a note (path or b2id) to a new vault-relative path — inbound

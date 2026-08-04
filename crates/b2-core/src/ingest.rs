@@ -858,7 +858,13 @@ fn resolve_collisions(
 /// **not** guard: it re-projects a file the human just edited in-app (the save
 /// path), where refusing after the bytes hit disk would strand the index stale —
 /// the whole-vault pass owns reconciling (and surfacing) that state instead.
-fn guard_single_note_collision(conn: &Connection, vault_root: &Path, rel_path: &str) -> Result<()> {
+/// [`crate::import`] *does* guard, and rolls its own write back on a refusal: the
+/// file it just placed is an arriving copy, which is precisely this case.
+pub(crate) fn guard_single_note_collision(
+    conn: &Connection,
+    vault_root: &Path,
+    rel_path: &str,
+) -> Result<()> {
     // A read failure here is deferred to the ingest's own read, which classifies it.
     let Ok(raw) = fs::read_to_string(vault_root.join(rel_path)) else {
         return Ok(());
@@ -1282,46 +1288,55 @@ fn project_resources(
         // The walk saw the file, so it exists: it is never pruned this pass, even
         // if reading it fails below.
         seen.insert(rel.clone());
-        let abs = vault_root.join(rel);
-        let meta = match fs::metadata(&abs) {
-            Ok(m) => m,
-            Err(e) => {
-                skipped.push(SkippedNote {
-                    path: rel.clone(),
-                    reason: skip_reason(&e),
-                });
-                continue;
-            }
-        };
-        let size = meta.len() as i64;
-        let mtime = unix_mtime(&meta);
-        if db::resource_stat(conn, rel)? == Some((size, mtime)) {
-            indexed += 1; // unchanged — inventoried without touching the bytes
-            continue;
+        match project_resource_file(conn, vault_root, rel, *class) {
+            Ok(()) => indexed += 1,
+            // Only a *filesystem* failure on this one file is recoverable — anything
+            // else (SQLite, …) is systemic and aborts the pass, as everywhere else.
+            Err(Error::Io(e)) => skipped.push(SkippedNote {
+                path: rel.clone(),
+                reason: skip_reason(&e),
+            }),
+            Err(e) => return Err(e),
         }
-        let bytes = match fs::read(&abs) {
-            Ok(b) => b,
-            Err(e) => {
-                skipped.push(SkippedNote {
-                    path: rel.clone(),
-                    reason: skip_reason(&e),
-                });
-                continue;
-            }
-        };
-        let content_hash = blake3::hash(&bytes).to_hex().to_string();
-        db::upsert_resource(
-            conn,
-            &db::ResourceRow {
-                path: rel,
-                class: class.as_str(),
-                size,
-                mtime,
-                content_hash: &content_hash,
-            },
-        )?;
-        indexed += 1;
     }
     let pruned = db::prune_resources_except(conn, &seen)?;
     Ok((indexed, pruned, skipped))
+}
+
+/// Inventory **one** resource: short-circuit on an unchanged `(size, mtime)`,
+/// otherwise read the bytes once to blake3 them and upsert the row. The per-file
+/// kernel [`project_resources`] loops over — so there is one definition of what a
+/// resource's row *is* — and the resource arm of an import ([`crate::import`]),
+/// where exactly one file arrived and walking the whole vault to notice it would be
+/// wasteful. Model-free and chunk-free; hashing is the only byte-read.
+///
+/// I/O failures travel as [`Error::Io`] and each caller decides what they mean: the
+/// walk classifies one into a skip (a real vault holds the odd unreadable file), the
+/// import treats it as the failure it is (it just wrote that file).
+pub(crate) fn project_resource_file(
+    conn: &Connection,
+    vault_root: &Path,
+    rel: &str,
+    class: ResourceClass,
+) -> Result<()> {
+    let abs = vault_root.join(rel);
+    let meta = fs::metadata(&abs)?;
+    let size = meta.len() as i64;
+    let mtime = unix_mtime(&meta);
+    if db::resource_stat(conn, rel)? == Some((size, mtime)) {
+        return Ok(()); // unchanged — inventoried without touching the bytes
+    }
+    let bytes = fs::read(&abs)?;
+    let content_hash = blake3::hash(&bytes).to_hex().to_string();
+    db::upsert_resource(
+        conn,
+        &db::ResourceRow {
+            path: rel,
+            class: class.as_str(),
+            size,
+            mtime,
+            content_hash: &content_hash,
+        },
+    )?;
+    Ok(())
 }

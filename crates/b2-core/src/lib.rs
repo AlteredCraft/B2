@@ -15,6 +15,7 @@ pub mod embed;
 mod error;
 pub mod graph;
 pub mod id;
+pub mod import;
 pub mod ingest;
 pub mod link;
 pub mod mv;

@@ -229,7 +229,11 @@ appending a frontmatter `b2_relations:` entry, the move-repair of inbound link p
 editor's saves through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded
 by a content-hash revision; B2 never authors body content itself), and the frontmatter drawer's saves
 through `Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes,
-body untouched, refusing only a changed/removed `b2id` — GH #79).
+body untouched, refusing only a changed/removed `b2id` — GH #79). **Import** (`Vault::import_file` /
+`import_path`, the desktop's drag-a-file-from-Finder-onto-the-tree gesture) is the same posture applied
+to a *new* file: the bytes are the human's, copied verbatim and then projected — B2 authors nothing, so a
+dropped `.md` keeps its own frontmatter and a dropped PDF its bytes, and the only thing added is the
+`b2id` stamp every note gets on first sight.
 
 **Many processes hold one index open at once** (invariant C1, index-engine.md §3 "Opening the index
 concurrently"): `b2 reindex &` racing a `b2 status`, the desktop app launching against a vault a CLI
@@ -337,8 +341,8 @@ module is called directly only by the integration tests. Surface: lifecycle + in
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
 `explain_resource` / `search` / `similar`), writes (`add_note` / `create_note` / `create_dir` /
-`move_note` / `move_resource` / `move_dir` / `link` / `write` / `delete_note` / `delete_resource` /
-`delete_dir`).
+`import_file` / `import_path` / `move_note` / `move_resource` / `move_dir` / `link` / `write` /
+`delete_note` / `delete_resource` / `delete_dir`).
 **Add operations when a command needs them; do not
 pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
 adapters wire the real model.

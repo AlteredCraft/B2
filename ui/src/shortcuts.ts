@@ -115,7 +115,10 @@ const OWN_SHEET: readonly SheetGroup[] = [
       },
       { ids: ["tree.rename"], action: "Rename the focused row" },
       { ids: ["delete.focused"], action: "Delete the focused row (a folder confirms first)" },
-      { ids: ["menu.open"], action: "Open the row's menu — Rename, Move…, Delete" },
+      {
+        ids: ["menu.open"],
+        action: "Open the row's menu — Rename, Move…, Delete, Import files…",
+      },
     ],
   },
   {

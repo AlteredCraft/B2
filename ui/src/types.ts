@@ -234,6 +234,16 @@ export interface AddReport {
 }
 
 /**
+ * `Vault::import_file` / `Vault::import_path` — where an imported file landed, and
+ * the `b2id` its projection stamped. `null` for a resource: a non-`.md` file is a
+ * path-keyed peer with no identity to stamp (data-model.md §10).
+ */
+export interface ImportReport {
+  path: string;
+  b2id: string | null;
+}
+
+/**
  * `Vault::create_dir` — the created folder's normalized vault-relative path. A
  * folder is user-authored structure (a real `mkdir` on disk), so there is no
  * b2id and no index row to report.

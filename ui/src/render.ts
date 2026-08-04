@@ -1544,9 +1544,15 @@ export function contextMenuHtml(state: AppState): string {
         ${contextItemHtml("data-ctx-delete", "Delete", "⌘⌫", true)}
         <div class="context-sep" role="separator"></div>`
       : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
+    // Import files… is the drop gesture's keyboard half (K1): dragging a file in from
+    // Finder is a pointer-only action, so the same import runs from here — via ⇧F10,
+    // the keyboard's right-click — with an OS picker instead of a drag. It targets the
+    // folder context like the create pair, so it reads as the third way to put
+    // something in this folder.
     items = `${node}
         ${contextItemHtml("data-ctx-new-note", "New note", "⌘N")}
-        ${contextItemHtml("data-ctx-new-folder", "New folder", "⇧⌘N")}`;
+        ${contextItemHtml("data-ctx-new-folder", "New folder", "⇧⌘N")}
+        ${contextItemHtml("data-ctx-import", "Import files…")}`;
   } else {
     items = `${contextItemHtml("data-ctx-open", "Open note", "⏎")}
         ${contextItemHtml("data-ctx-link", "Link…")}`;
