@@ -29,11 +29,15 @@ shipped build history lives in git. Model quality (the `Embedder` seam) is measu
 eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + discovery evals
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar`), the chunker-sweep gate, and the results log.
 That corpus scores *relevance* and is deliberately small, which makes it blind to one class of change:
-retrieval reaches `vault::candidate_pool(10) = 150` candidates per signal, so on 26 chunks neither signal
-is truncated and a **candidate-width** change (`hit_pool`, `pool_size`) prints bit-identical numbers
+retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per signal (150 for the note
+view, `note_candidate_pool`), so on 26 chunks neither signal is truncated and a **candidate-width** change
+(either hit pool, `pool_size`) prints bit-identical numbers
 (GH #141). The harness's other half measures that — `just stability`, a model-free rank probe on
 `fixtures/test-vault` — and `just eval` says out loud when its corpus fits inside the pool. The blindness
 is to candidates, not to fusion: `RRF_K` re-weights the same lists and *does* move scores on 26 chunks.
+The two halves rule together, and have: GH #140 widened the passage view to the note view's 3× as
+plumbing, the eval saw nothing, the probe saw 10 of 10 probes' top-4 passages change — and GH #142 put the
+width back, because a probe can say *different* but only a labelled corpus can say *better*.
 
 ## Commands
 

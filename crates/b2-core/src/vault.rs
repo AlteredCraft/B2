@@ -67,33 +67,77 @@ const EMBED_DIM: usize = 64;
 /// Longest snippet (in chars) shown for a search hit, so a result stays one line.
 const SNIPPET_CHARS: usize = 160;
 
-/// How wide a hit pool [`Vault::search`] and [`Vault::search_chunks`] retrieve for
-/// a `limit`-sized result set. Both walk the pool and stop at `limit`, so the
-/// headroom is what lets a hit they *drop* be backfilled from the next candidate
-/// rather than cost a result slot (GH #137). Two reasons a hit is dropped: note
-/// dedup, when several top chunks share one note (`search` only), and a lookup
-/// that misses because the row vanished mid-query — the concurrent-reindex window
-/// C1 explicitly allows (index-engine.md §3).
-fn hit_pool(limit: usize) -> usize {
+/// How much headroom [`Vault::search_chunks`] keeps over `limit`
+/// (see [`chunk_hit_pool`]). Deliberately a small constant: façade headroom is not
+/// free, it is *multiplied* — every hit of it buys [`search::pool_size`] five more
+/// candidates from each signal, and candidate width changes answers, not just work
+/// (GH #142).
+const TORN_READ_HEADROOM: usize = 2;
+
+/// How wide a hit pool [`Vault::search`] retrieves for a `limit`-sized result set:
+/// **3×**, and load-bearing. Its results are note-level, so the walk collapses every
+/// chunk that shares a note onto that note's best one; several top chunks routinely
+/// *do* share a note, so a pool of exactly `limit` would under-fill `limit` distinct
+/// notes on an ordinary query. The same headroom absorbs the other reason a hit is
+/// dropped — a `resolve_b2id_to_path` that misses because the row vanished
+/// mid-query, the concurrent-reindex window C1 explicitly allows (index-engine.md
+/// §3). Dedup is the binding reason and it scales with `limit`, so the widening does
+/// too; contrast [`chunk_hit_pool`], whose reason does not.
+fn note_hit_pool(limit: usize) -> usize {
     limit.saturating_mul(3)
 }
 
+/// How wide a hit pool [`Vault::search_chunks`] retrieves: `limit` plus a fixed
+/// [`TORN_READ_HEADROOM`]. There is no dedup here — this is deliberately the
+/// un-deduped passage view — so the *only* hit it drops is one whose
+/// `resolve_b2id_to_path`/`chunk_detail` lookup missed on a torn read. That window
+/// is rare and bounded, not proportional to the ask, so a constant covers it and
+/// `limit`'s own multiple would buy nothing more: GH #137 asked for backfill, not
+/// for width.
+///
+/// **The GH #142 ruling.** This pool briefly shared `search`'s 3×, which made the
+/// passage view retrieve `3 × 5 × limit` candidates per signal — 150 for a
+/// 10-result ask against 60 here. RRF does not merely append the extra candidates:
+/// scoring `Σ 1/(k + rank + 1)` at k = 60, a chunk ranked ~60th in *both* lists
+/// outscores one ranked first in a single list (`2/121 > 1/61`), so a wider pool
+/// returns different answers — 10 of 10 probes changed their top-4 passages across
+/// exactly that step on `fixtures/test-vault` (`just stability`). Wider may well be
+/// *better*; nothing has measured it, because the labelled corpus is 26 chunks —
+/// smaller than either pool, so it scores both identically (GH #141). Width is a
+/// retrieval-quality knob and stays at the conservative setting until an eval can
+/// price a change to it.
+fn chunk_hit_pool(limit: usize) -> usize {
+    limit.saturating_add(TORN_READ_HEADROOM)
+}
+
 /// How many candidates **each retrieval signal** pulls for a `limit`-sized
-/// [`Vault::search`] / [`Vault::search_chunks`] call: those two ask retrieval for
-/// [`hit_pool`] hits, and each signal (BM25's `LIMIT`, the vector scan's top-n)
-/// widens that again before the two lists are fused by RRF.
+/// [`Vault::search`] call: the façade asks retrieval for [`note_hit_pool`] hits, and
+/// each signal (BM25's `LIMIT`, the vector scan's top-n) widens that again before
+/// the two lists are fused by RRF. [`chunk_candidate_pool`] is the passage view's
+/// depth; since GH #142 the two differ, so a measurement has to name which it means.
 ///
 /// Public because a *measurement* needs it. Once a corpus has no more chunks than
 /// this, **neither** candidate list is truncated — BM25 returns every matching
 /// chunk, the vector scan every stored vector — so both lists are already complete
 /// and widening the pool further cannot change what `rrf_fuse` is handed. Scores on
-/// such a corpus are invariant under *candidate width*: a change to `hit_pool` or
+/// such a corpus are invariant under *candidate width*: a change to a hit pool or to
 /// `pool_size` reads as "no change" there while moving real-vault results. (Only
 /// width. [`search::RRF_K`] re-weights the *same* lists, so it reorders even a tiny
 /// corpus and the eval sees it.) The eval harness prints that blindness instead of
 /// letting a reader trust a number that could not have moved (GH #141).
-pub fn candidate_pool(limit: usize) -> usize {
-    search::pool_size(hit_pool(limit))
+pub fn note_candidate_pool(limit: usize) -> usize {
+    search::pool_size(note_hit_pool(limit))
+}
+
+/// [`note_candidate_pool`] for the passage view: the per-signal depth a
+/// [`Vault::search_chunks`] call reaches, over [`chunk_hit_pool`].
+///
+/// Always the narrower of the two, which makes it the threshold a *blindness* claim
+/// has to clear: a corpus no bigger than this truncates neither signal in **either**
+/// view, so every number a run prints — note ranks and passage ranks alike — is
+/// invariant under candidate width (GH #141).
+pub fn chunk_candidate_pool(limit: usize) -> usize {
+    search::pool_size(chunk_hit_pool(limit))
 }
 
 /// An open vault: the Markdown at `root`, projected into the disposable index at
@@ -1042,7 +1086,7 @@ impl Vault {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let hits = self.retrieve(query, hit_pool(limit))?;
+        let hits = self.retrieve(query, note_hit_pool(limit))?;
         let mut out: Vec<SearchResult> = Vec::new();
         for hit in hits {
             if out.len() == limit {
@@ -1078,6 +1122,10 @@ impl Vault {
     /// note dedup** — one note may appear several times when several of its
     /// passages rank. Same retrieval, same fallback, same model-mismatch fail-fast
     /// (see [`ChunkSearchResult`] for who consumes this and why).
+    ///
+    /// Retrieves a **narrower** pool than [`search`](Self::search): having no dedup,
+    /// it needs headroom for one thing only — see [`chunk_hit_pool`] for why that is
+    /// a small constant rather than `search`'s 3× (GH #142).
     pub fn search_chunks(&self, query: &str, limit: usize) -> Result<Vec<ChunkSearchResult>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
@@ -1085,15 +1133,16 @@ impl Vault {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for hit in self.retrieve(query, hit_pool(limit))? {
+        for hit in self.retrieve(query, chunk_hit_pool(limit))? {
             if out.len() == limit {
                 break;
             }
             // Both lookups can miss only on an inconsistent index (a hit whose row
             // vanished mid-call); drop such a hit rather than emit a half-resolved
             // one — a rank slot with an empty path would read as a real result.
-            // The pool is wider than `limit`, so a dropped hit is backfilled from
-            // the next candidate instead of costing a slot (GH #137).
+            // The pool carries `TORN_READ_HEADROOM` over `limit`, so a dropped hit
+            // is backfilled from the next candidate instead of costing a slot
+            // (GH #137).
             let Some(path) = db::resolve_b2id_to_path(&self.conn, &hit.note_b2id)? else {
                 continue;
             };

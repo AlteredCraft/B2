@@ -1,15 +1,17 @@
 //! Rank-stability probe — the **large-corpus** half of the eval harness (GH #141).
 //!
 //! The scored eval (`--example eval`) runs on the hand-labelled corpus in
-//! `evals/corpus/`: 20 notes / 26 chunks. Retrieval pulls
-//! `vault::candidate_pool(10) = 150` candidates from *each* signal, so on a corpus
-//! that small neither half of the hybrid is truncated — BM25 returns every matching
-//! chunk, the vector scan every stored vector — both lists are already complete, and
-//! widening the pool cannot add a candidate. Every number the eval prints is
-//! therefore **invariant under candidate width**: a change to `vault::hit_pool` or
-//! `search::pool_size` reads as "no change" there while genuinely reordering a real
-//! vault — the worked example is GH #140, whose 3× pool widening moved 5 of 7 probe
-//! top-10s on `fixtures/test-vault` and printed bit-identical eval numbers.
+//! `evals/corpus/`: 20 notes / 26 chunks. Retrieval pulls at least
+//! `vault::chunk_candidate_pool(10) = 60` candidates from *each* signal, so on a
+//! corpus that small neither half of the hybrid is truncated — BM25 returns every
+//! matching chunk, the vector scan every stored vector — both lists are already
+//! complete, and widening the pool cannot add a candidate. Every number the eval
+//! prints is therefore **invariant under candidate width**: a change to either
+//! façade hit pool or to `search::pool_size` reads as "no change" there while
+//! genuinely reordering a real vault — the worked example is GH #140, whose 3× pool
+//! widening moved 5 of 7 probe top-10s on `fixtures/test-vault` and printed
+//! bit-identical eval numbers. That widening is the one this probe then priced, and
+//! GH #142 reverted on the strength of it.
 //!
 //! Width is the whole of the gap. `search::RRF_K` re-weights the *same* two lists,
 //! so it reorders a 26-chunk corpus as readily as a large one and the scored eval
@@ -20,7 +22,9 @@
 //! chunks) and reports two things:
 //!
 //! 1. **Pool sensitivity** — retrieval width is a function of the ask
-//!    (`search_chunks(q, n)` reaches `candidate_pool(n)` candidates per signal), so
+//!    (`search_chunks(q, n)` reaches `chunk_candidate_pool(n)` candidates per signal,
+//!    `search(q, n)` reaches `note_candidate_pool(n)` — the two differ since #142,
+//!    and the table names each column's own widths), so
 //!    asking the *same query* at several depths asks it at several pool widths. A
 //!    pool-invariant retriever would answer a shallow ask with an exact prefix of
 //!    the deep one; RRF over a widened pool does not, because a candidate ranked in
@@ -64,7 +68,7 @@
 //! improvement. Exit status is 0 for any completed measurement.
 
 use b2_core::embed::Embedder;
-use b2_core::vault::{candidate_pool, ChunkSearchResult, Vault};
+use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, ChunkSearchResult, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -74,11 +78,17 @@ use std::time::Instant;
 
 /// The vault the committed baseline is defined over, relative to the repo root.
 const DEFAULT_VAULT: &str = "fixtures/test-vault";
-/// The depths each probe is asked at. Each one widens the pool it retrieves from:
-/// `candidate_pool(4) = 60`, `candidate_pool(10) = 150`, `candidate_pool(30) = 450`.
-/// The first pair is the ruling #142 has to make — `search_chunks`' shipped 3×
-/// headroom (pool 150 for a 10-result ask) against the conservative `limit + 2`
-/// reading of #137 (pool 60).
+/// The depths each probe is asked at. Each one widens the pool it retrieves from —
+/// by view, since #142: the note view reaches `note_candidate_pool` = 60 / 150 / 450
+/// and the passage view `chunk_candidate_pool` = 30 / 60 / 160. The table prints
+/// each column's own widths rather than one shared pair.
+///
+/// The first pair is what settled #142: at a 10-result ask, `search_chunks`' shipped
+/// 3× headroom retrieved 150 candidates per signal and the conservative `limit + 2`
+/// reading of #137 retrieves 60 — the same step this probe measures between depths 4
+/// and 10 under the note view's 3×. It moved 10 of 10 probes' top-4 passages, which
+/// is why the width went back to the narrow setting: real movement, unpriced by any
+/// relevance eval.
 const DEPTHS: [usize; 3] = [4, 10, 30];
 /// How deep a prefix the depths are compared over — capped by the shallowest ask.
 const PREFIX: usize = DEPTHS[0];
@@ -201,12 +211,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         report.indexed,
         t0.elapsed().as_secs_f64(),
     );
-    if chunks < candidate_pool(BASELINE_K) {
+    // Checked against the *widest* pool a probe reaches (the note view's): a vault
+    // between the two widths leaves the note half stable by construction while the
+    // passage half still measures something, which is a partly-blind run and worth
+    // saying so.
+    //
+    // Inclusive, like the eval's own blindness check: a pool exactly the size of the
+    // corpus truncates nothing either — BM25 has no more matches than its `LIMIT`,
+    // the vector scan tops out at the stored vectors — so equality is as blind as
+    // anything under it.
+    if chunks <= note_candidate_pool(BASELINE_K) {
         eprintln!(
-            "[warn] {chunks} chunks < {}-candidate pool — this vault is too small for pool width to\n\
-             \x20      bind, so every probe below is stable by construction, not by ranking quality\n\
-             \x20      (GH #141). That is the eval corpus' situation; use a larger vault to measure.",
-            candidate_pool(BASELINE_K)
+            "[warn] {chunks} chunks ≤ the {}-candidate pool the note view reaches (the passage view\n\
+             \x20      reaches {}) — this vault is too small for pool width to bind, so probes below are\n\
+             \x20      stable by construction, not by ranking quality (GH #141). That is the eval corpus'\n\
+             \x20      situation; use a larger vault to measure.",
+            note_candidate_pool(BASELINE_K),
+            chunk_candidate_pool(BASELINE_K)
         );
     }
     eprintln!();
@@ -284,6 +305,16 @@ fn chunk_key(hit: &ChunkSearchResult) -> String {
     )
 }
 
+/// One label per adjacent depth pair: the per-signal candidate widths that pair
+/// spans, for the view whose pool function is passed. A `fn` pointer rather than a
+/// generic — two call sites, one line each, and no reason for a type parameter.
+fn width_steps(pool: fn(usize) -> usize) -> Vec<String> {
+    DEPTHS
+        .windows(2)
+        .map(|w| format!("{}→{}", pool(w[0]), pool(w[1])))
+        .collect()
+}
+
 /// Section 1: does the answer to a probe survive the pool widening under it?
 fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: bool) {
     println!("{}", "=".repeat(96));
@@ -292,23 +323,23 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
         "  a cell is how many of the top-{PREFIX} results the two asks agree on, position by position;"
     );
     println!("  `=` means the shallow answer is an exact prefix of the deep one (pool-invariant).");
-    let steps: Vec<String> = DEPTHS
-        .windows(2)
-        .map(|w| format!("{}→{}", candidate_pool(w[0]), candidate_pool(w[1])))
-        .collect();
+    // Each view states its *own* widths: the two headroom rules differ (GH #142), so
+    // one shared pair of numbers would mislabel a column.
+    let chunk_steps = width_steps(chunk_candidate_pool);
+    let note_steps = width_steps(note_candidate_pool);
     println!();
-    let chunk_head = format!("chunks ({})", steps.join(" | "));
-    let note_head = format!("notes ({})", steps.join(" | "));
+    let chunk_head = format!("chunks ({})", chunk_steps.join(" | "));
+    let note_head = format!("notes ({})", note_steps.join(" | "));
     println!(
         "{:<PROBE_COL$}  {chunk_head:<CELL_COL$}  {note_head}",
         "probe"
     );
     println!("{}", "-".repeat(96));
 
-    let mut moved_chunks = vec![0usize; steps.len()];
-    let mut moved_notes = vec![0usize; steps.len()];
-    let mut measured_chunks = vec![0usize; steps.len()];
-    let mut measured_notes = vec![0usize; steps.len()];
+    let mut moved_chunks = vec![0usize; chunk_steps.len()];
+    let mut moved_notes = vec![0usize; note_steps.len()];
+    let mut measured_chunks = vec![0usize; chunk_steps.len()];
+    let mut measured_notes = vec![0usize; note_steps.len()];
     for (i, probe) in probes.iter().enumerate() {
         let per_depth = &answers[i];
         let mut chunk_cells = Vec::new();
@@ -343,10 +374,20 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
     // Denominators are the probes that actually produced something to compare, not
     // the probe count: a probe that returned nothing measured nothing, and folding
     // it in either direction would misreport (see [`prefix_cell`]).
-    for (s, step) in steps.iter().enumerate() {
+    // Keyed by the *ask*, since the two views no longer span the same widths across
+    // one depth pair — each view's own candidates/signal step is named beside it.
+    for s in 0..DEPTHS.len() - 1 {
         println!(
-            "  {step:>9} candidates/signal: {}/{} probes changed their top-{PREFIX} chunks, {}/{} their top-{PREFIX} notes",
-            moved_chunks[s], measured_chunks[s], moved_notes[s], measured_notes[s],
+            "  ask {:>2}→{:<2}: {}/{} probes changed their top-{PREFIX} chunks ({} candidates/signal), \
+             {}/{} their top-{PREFIX} notes ({})",
+            DEPTHS[s],
+            DEPTHS[s + 1],
+            moved_chunks[s],
+            measured_chunks[s],
+            chunk_steps[s],
+            moved_notes[s],
+            measured_notes[s],
+            note_steps[s],
         );
     }
     let unmeasured = measured_chunks
@@ -415,10 +456,11 @@ fn print_divergence(per_depth: &[Answer]) {
         if !prefix_cell(&lo.chunks, &hi.chunks).moved {
             continue;
         }
+        // The chunk lists, so the passage view's own widths label them.
         println!(
             "      pool {} vs {}:",
-            candidate_pool(DEPTHS[w]),
-            candidate_pool(DEPTHS[w + 1])
+            chunk_candidate_pool(DEPTHS[w]),
+            chunk_candidate_pool(DEPTHS[w + 1])
         );
         for rank in 0..PREFIX {
             let a = lo.chunks.get(rank).map(String::as_str).unwrap_or("—");

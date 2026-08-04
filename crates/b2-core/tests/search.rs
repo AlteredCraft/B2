@@ -27,21 +27,53 @@ fn rrf_uses_k_60() {
 }
 
 /// The candidate depth a search actually reaches is the **composition** of two
-/// widenings — the façade's `hit_pool` headroom and each signal's `pool_size` —
-/// and `vault::candidate_pool` is the one place that states it, so a measurement
-/// can ask "is this corpus bigger than the pool?" without re-deriving the product
-/// (GH #141).
+/// widenings — the façade's per-view headroom and each signal's `pool_size` — and
+/// `vault::{note,chunk}_candidate_pool` are the one place that states it, so a
+/// measurement can ask "is this corpus bigger than the pool?" without re-deriving
+/// the product (GH #141).
 #[test]
 fn candidate_pool_states_the_per_signal_depth_a_search_reaches() {
-    // A `limit` of 10 (what the eval scores at) reaches 150 candidates per signal,
-    // not 50: the façade asks retrieval for 3 × 10 hits, each signal pulls 5 × that.
-    assert_eq!(b2_core::vault::candidate_pool(10), 150);
+    // A `limit` of 10 (what the eval scores at) reaches 150 candidates per signal
+    // for the note view, not 50: it asks retrieval for 3 × 10 hits — dedup headroom
+    // — and each signal pulls 5 × that.
+    assert_eq!(b2_core::vault::note_candidate_pool(10), 150);
     // The floor still binds at tiny limits — one result still scans 30.
-    assert_eq!(b2_core::vault::candidate_pool(1), 30);
+    assert_eq!(b2_core::vault::note_candidate_pool(1), 30);
     // Monotone in `limit`: asking for more never narrows the pool. That is what
     // makes "corpus smaller than the pool ⇒ pool-invariant" safe to conclude from
     // a single K, as the eval's blindness warning does.
-    assert!(b2_core::vault::candidate_pool(30) > b2_core::vault::candidate_pool(10));
+    assert!(b2_core::vault::note_candidate_pool(30) > b2_core::vault::note_candidate_pool(10));
+    assert!(b2_core::vault::chunk_candidate_pool(30) > b2_core::vault::chunk_candidate_pool(10));
+}
+
+/// The GH #142 ruling, pinned: the passage view's headroom exists for a torn read,
+/// which is a bounded event, so it is a **constant** — while the note view's exists
+/// for dedup, which scales with the ask, so it is a multiple. The two therefore
+/// diverge as `limit` grows, and the passage view is always the narrower.
+///
+/// This is a ranking commitment, not an arithmetic one: `pool_size`'s 5× turns each
+/// hit of headroom into five candidates per signal, and RRF over a wider candidate
+/// set returns different results (`2/121 > 1/61` at k = 60). Sharing `search`'s 3×
+/// here — as GH #140 briefly did — silently widened passage retrieval from 60 to 150
+/// candidates, a retrieval-quality change no eval had priced (GH #141, #142).
+#[test]
+fn the_passage_view_retrieves_a_narrower_pool_than_the_note_view() {
+    // The 10-result ask both adapters and the eval use.
+    assert_eq!(b2_core::vault::chunk_candidate_pool(10), 60);
+    assert_eq!(b2_core::vault::note_candidate_pool(10), 150);
+
+    // Constant vs multiple: the gap widens with the ask, and never closes or flips.
+    for limit in [1usize, 2, 5, 10, 50, 500] {
+        assert!(
+            b2_core::vault::chunk_candidate_pool(limit)
+                <= b2_core::vault::note_candidate_pool(limit),
+            "the passage view must never out-reach the note view (limit {limit})"
+        );
+    }
+    assert!(
+        b2_core::vault::note_candidate_pool(500) - b2_core::vault::chunk_candidate_pool(500)
+            > b2_core::vault::note_candidate_pool(10) - b2_core::vault::chunk_candidate_pool(10)
+    );
 }
 
 /// The blindness #141 names, stated as a property: once a corpus has **no more
@@ -64,7 +96,7 @@ fn a_corpus_no_bigger_than_the_pool_ranks_the_same_at_any_depth() {
     // the chunk rows themselves — 2 results would sit inside any pool regardless.
     let chunks = count(&index_conn(&vault_dir), "chunks");
     assert!(
-        chunks <= b2_core::vault::candidate_pool(2) as i64,
+        chunks <= b2_core::vault::chunk_candidate_pool(2) as i64,
         "the premise: the whole corpus ({chunks} chunks) fits inside even the narrowest pool"
     );
 
@@ -87,7 +119,10 @@ fn a_corpus_no_bigger_than_the_pool_ranks_the_same_at_any_depth() {
 /// into a tiny pool — silently wrong results from an absurd-but-harmless ask.
 #[test]
 fn an_absurd_limit_saturates_the_pool_instead_of_overflowing_it() {
-    assert_eq!(b2_core::vault::candidate_pool(usize::MAX), usize::MAX);
+    // Both views saturate: the note view's `× 3` and the passage view's `+ 2` are
+    // each one overflow away from wrapping a `usize::MAX` ask into a tiny pool.
+    assert_eq!(b2_core::vault::note_candidate_pool(usize::MAX), usize::MAX);
+    assert_eq!(b2_core::vault::chunk_candidate_pool(usize::MAX), usize::MAX);
 
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("vault");
@@ -98,6 +133,10 @@ fn an_absurd_limit_saturates_the_pool_instead_of_overflowing_it() {
     // The whole corpus, once, rather than a panic or a truncated-by-wraparound page.
     let hits = vault.search("memory", usize::MAX).unwrap();
     assert!(!hits.is_empty());
+    assert!(!vault
+        .search_chunks("memory", usize::MAX)
+        .unwrap()
+        .is_empty());
     assert!(hits.len() as i64 <= count(&index_conn(&vault_dir), "notes"));
 }
 
