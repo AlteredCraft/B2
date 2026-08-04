@@ -87,7 +87,7 @@ import { markdownForPaste } from "./paste";
 import { icon } from "./icons";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
-import { reprojectThenList } from "./reconcile";
+import { reconcileIndex } from "./reconcile";
 import {
   anomalyCount,
   anomalyKey,
@@ -3414,13 +3414,34 @@ async function reconcileExternalChange(): Promise<void> {
   // The tree first — re-derive, then re-list, so an external add / remove / rename shows
   // up immediately: the tree lists are index-first, and a Finder-dropped file has no index
   // row until the (model-free, idempotent) projection runs (#65 item 4; reconcile.ts has
-  // the full argument). Safe in every mode: `render()` rebuilds the tree and side panes
-  // but skips the note pane while editing (the carve-out), so a live editor is never
-  // touched — and projection reads disk, never the live buffer.
-  await reprojectThenList({
+  // the full argument), and the vectors that re-derivation cleared are healed behind it.
+  // Safe in every mode: `render()` rebuilds the tree and side panes but skips the note
+  // pane while editing (the carve-out), so a live editor is never touched — and
+  // projection reads disk, never the live buffer.
+  await reconcileIndex({
     reindexing: state.reindexing,
     project: api.project,
     list: loadNotes,
+    // …and then the vectors that projection just cleared. Re-chunking a changed note
+    // drops its chunk rows (its `embeddings` cascade) and its centroid, and the
+    // projection pass is model-free, so an externally edited note comes back with
+    // nothing for `similar` to rank from or be ranked against — an empty discovery
+    // pane until someone reindexes by hand (the reported bug). The heal is the save
+    // path's own trailing embed, which debounces, coalesces with that path's timer,
+    // and refreshes discovery when it lands.
+    //
+    // The gate is the model-free N/M coverage read (#26) — cheap, and it keeps that
+    // fraction honest after an external add/remove, which a pulse also left stale. It
+    // is deliberately conservative rather than exact: the count needs a note to have
+    // ≥1 chunk, so a note with an *empty* body (the tree's freshly-created one, until
+    // you type) reads as forever-pending and schedules a no-op embed on each pulse.
+    // That errs the safe way — it can over-fire, never miss, because any chunk
+    // lacking a vector drops its note out of the count.
+    vectorsPending: async () => {
+      await refreshEmbedStatus(state.vaultRoot);
+      return state.notesTotal > 0 && state.notesEmbedded < state.notesTotal;
+    },
+    healVectors: scheduleTrailingEmbed,
     // The GH #81 anomalies, on the very pulse the anomaly landed (a Finder duplicate
     // collides HERE, not on the next manual reindex): the badge takes the detail and a
     // one-line ping toasts. Clean passes stay silent *and* clear the badge — a resolved
