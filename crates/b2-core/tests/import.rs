@@ -218,6 +218,23 @@ fn import_path_copies_the_picked_file_keeping_its_name() {
 }
 
 #[test]
+fn import_path_refuses_an_occupied_destination_rather_than_truncating_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
+
+    let source = tmp.path().join("memory.md");
+    fs::write(&source, "a different note entirely\n").unwrap();
+    let before = fs::read_to_string(root.join(MEMORY_PATH)).unwrap();
+
+    let err = vault.import_path("concepts", &source).unwrap_err();
+
+    assert!(matches!(err, Error::ImportTargetExists(_)), "{err:?}");
+    // The destination is reserved by a create-new open, so the occupied case never
+    // reaches a write — where a plain `fs::copy` would have truncated the incumbent.
+    assert_eq!(fs::read_to_string(root.join(MEMORY_PATH)).unwrap(), before);
+}
+
+#[test]
 fn import_path_refuses_a_folder() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());

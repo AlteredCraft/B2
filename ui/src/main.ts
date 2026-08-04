@@ -1379,10 +1379,12 @@ async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<
         refused.push(`${entry.name}: ${errText(e)}`);
       }
     }
+    // Inside the gate, like `executeMove`'s: the refresh is part of the import, and two
+    // of them interleaving would re-list and toast out of order.
+    await finishImport(dir, imported, refused);
   } finally {
     importInFlight = false;
   }
-  await finishImport(dir, imported, refused);
 }
 
 /** The keyboard half: an OS picker, then the same import by path. */
@@ -1407,10 +1409,10 @@ async function pickAndImport(dir: string): Promise<void> {
         refused.push(`${baseName(source)}: ${errText(e)}`);
       }
     }
+    await finishImport(dir, imported, refused); // inside the gate, as above
   } finally {
     importInFlight = false;
   }
-  await finishImport(dir, imported, refused);
 }
 
 /**

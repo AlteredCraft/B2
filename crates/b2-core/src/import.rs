@@ -32,6 +32,7 @@ use crate::ingest::{self, ProjectionCtx};
 use crate::resource::ResourceClass;
 use serde::Serialize;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// What an import did: where the file landed, and — for a note — the `b2id` the
@@ -57,8 +58,8 @@ pub fn import_bytes(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<ImportReport> {
-    let (rel, abs) = place(ctx.root, dir, file_name)?;
-    fs::write(&abs, bytes)?;
+    let (rel, abs) = destination_paths(ctx.root, dir, file_name)?;
+    place(&rel, &abs, |file| file.write_all(bytes))?;
     project_placed(ctx, rel, &abs)
 }
 
@@ -84,8 +85,13 @@ pub fn import_path(ctx: ProjectionCtx, dir: &str, source: &Path) -> Result<Impor
             source.display()
         )));
     };
-    let (rel, abs) = place(ctx.root, dir, file_name)?;
-    fs::copy(source, &abs)?;
+    let (rel, abs) = destination_paths(ctx.root, dir, file_name)?;
+    // Streamed rather than `fs::copy`, so the destination is reserved by the same
+    // create-new open every import goes through — `fs::copy` would truncate whatever
+    // is there.
+    place(&rel, &abs, |file| {
+        io::copy(&mut fs::File::open(source)?, file).map(|_| ())
+    })?;
     project_placed(ctx, rel, &abs)
 }
 
@@ -112,21 +118,49 @@ fn destination(dir: &str, file_name: &str) -> Result<String> {
     crate::pathspec::normalize_rel(&joined).map_err(Error::ImportDestination)
 }
 
-/// Validate the destination, refuse an occupied one, and make sure its folder exists
-/// (mirroring `add`'s parent creation — an import into a folder the tree shows always
-/// finds it there, but a nested `dir` typed by a future caller shouldn't fail on it).
-/// Returns the vault-relative path and its absolute twin. Writes nothing itself: the
-/// caller supplies the bytes, so each arm keeps its own one-line write.
-fn place(vault_root: &Path, dir: &str, file_name: &str) -> Result<(String, PathBuf)> {
+/// The validated destination as both halves the rest of the op needs: the
+/// vault-relative path (what the index and the report speak in) and its absolute twin
+/// (what the filesystem does).
+fn destination_paths(vault_root: &Path, dir: &str, file_name: &str) -> Result<(String, PathBuf)> {
     let rel = destination(dir, file_name)?;
     let abs = vault_root.join(&rel);
-    if abs.exists() {
-        return Err(Error::ImportTargetExists(rel));
-    }
+    Ok((rel, abs))
+}
+
+/// Reserve the destination and fill it — or leave nothing behind.
+///
+/// **`create_new` is the refusal**, not a check before one: the "does it exist" and the
+/// "claim it" are a single syscall, so a file appearing in between — another window on
+/// the same vault, a sync client, the CLI (C1: many processes, one vault) — cannot be
+/// overwritten by an import. That is also why `import_path` streams instead of calling
+/// `fs::copy`, which would happily truncate an occupied destination. An
+/// [`io::ErrorKind::AlreadyExists`] *is* [`Error::ImportTargetExists`], so the race and
+/// the ordinary "that name is taken" reach the user as one message.
+///
+/// A `fill` that fails partway (a full disk mid-write) takes the reserved file with it:
+/// the human asked for an import, and half a file is not one. Missing parent folders are
+/// created first, mirroring `add`'s parent creation.
+///
+/// "Byte-honest" is about the file's *content*, and this is where that scope shows: the
+/// destination is a file B2 created, so it carries ordinary new-file permissions rather
+/// than the source's mode. A vault member is a document, not an executable.
+fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<()>) -> Result<()> {
     if let Some(parent) = abs.parent() {
         fs::create_dir_all(parent)?;
     }
-    Ok((rel, abs))
+    let mut file = match fs::File::create_new(abs) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(Error::ImportTargetExists(rel.to_string()))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if let Err(e) = fill(&mut file) {
+        drop(file); // close before unlinking, so every platform agrees what happens
+        let _ = fs::remove_file(abs);
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 /// Project the just-placed file from disk, routing on its extension exactly as the
@@ -138,10 +172,16 @@ fn place(vault_root: &Path, dir: &str, file_name: &str) -> Result<(String, PathB
 /// `b2id`, and projecting it would silently transfer that identity — and every inbound
 /// edge — to the copy.
 ///
-/// **On any refusal the placed file is removed again.** That is B2 undoing its own
+/// **On a refusal the placed file is removed again.** That is B2 undoing its own
 /// half-finished write, not deleting vault material (W4): the file becomes vault
 /// material only if this returns `Ok`. Leaving it behind would strand bytes the tree
 /// can't show and the next pass could only re-refuse.
+///
+/// The removal is best-effort, and deliberately doesn't mask the error the caller needs:
+/// if the unlink *also* fails, the projection's error is still what's returned — it is
+/// the actionable one — and the leftover file is simply an unindexed file in the vault,
+/// which is the state a Finder copy produces and which the whole-vault pass already
+/// knows how to resolve (a colliding note surfaces there incumbent-wins, GH #81).
 fn project_placed(ctx: ProjectionCtx, rel: String, abs: &Path) -> Result<ImportReport> {
     match project_from_disk(ctx, &rel) {
         Ok(b2id) => Ok(ImportReport { path: rel, b2id }),
@@ -159,8 +199,13 @@ fn project_from_disk(ctx: ProjectionCtx, rel: &str) -> Result<Option<String>> {
             ingest::guard_single_note_collision(ctx.conn, ctx.root, rel)?;
             Ok(Some(ingest::project_file(ctx, rel)?.b2id))
         }
+        // `force`: the walk may skip a file whose `(size, mtime)` is unchanged, but an
+        // import never may. The row it would be trusting can describe a file that was
+        // deleted out of band and not yet pruned, and this one was written moments ago —
+        // so a same-size replacement inside the same second would keep a `content_hash`
+        // for bytes that no longer exist. Hash what was actually placed.
         Some(class) => {
-            ingest::project_resource_file(ctx.conn, ctx.root, rel, class)?;
+            ingest::project_resource_file(ctx.conn, ctx.root, rel, class, true)?;
             Ok(None)
         }
     }

@@ -1288,7 +1288,7 @@ fn project_resources(
         // The walk saw the file, so it exists: it is never pruned this pass, even
         // if reading it fails below.
         seen.insert(rel.clone());
-        match project_resource_file(conn, vault_root, rel, *class) {
+        match project_resource_file(conn, vault_root, rel, *class, false) {
             Ok(()) => indexed += 1,
             // Only a *filesystem* failure on this one file is recoverable — anything
             // else (SQLite, …) is systemic and aborts the pass, as everywhere else.
@@ -1310,6 +1310,14 @@ fn project_resources(
 /// where exactly one file arrived and walking the whole vault to notice it would be
 /// wasteful. Model-free and chunk-free; hashing is the only byte-read.
 ///
+/// `force` skips that short-circuit, and the two callers differ on it because they know
+/// different things. The **walk** meets files it has seen before, so an unchanged
+/// `(size, mtime)` means "the row already describes this" — the optimization that keeps
+/// a reindex from re-reading every PDF. An **import** just created the file, so any row
+/// at that path is about a *different* file (deleted out of band, not yet pruned), and
+/// trusting a matching stat would keep a `content_hash` for bytes that are gone. Same
+/// shape as [`project_note_and_chunks`]'s `force`, and for the same reason.
+///
 /// I/O failures travel as [`Error::Io`] and each caller decides what they mean: the
 /// walk classifies one into a skip (a real vault holds the odd unreadable file), the
 /// import treats it as the failure it is (it just wrote that file).
@@ -1318,12 +1326,13 @@ pub(crate) fn project_resource_file(
     vault_root: &Path,
     rel: &str,
     class: ResourceClass,
+    force: bool,
 ) -> Result<()> {
     let abs = vault_root.join(rel);
     let meta = fs::metadata(&abs)?;
     let size = meta.len() as i64;
     let mtime = unix_mtime(&meta);
-    if db::resource_stat(conn, rel)? == Some((size, mtime)) {
+    if !force && db::resource_stat(conn, rel)? == Some((size, mtime)) {
         return Ok(()); // unchanged — inventoried without touching the bytes
     }
     let bytes = fs::read(&abs)?;
@@ -1339,4 +1348,62 @@ pub(crate) fn project_resource_file(
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `(size, mtime)` shortcut is the **walk's**, and an import must not inherit
+    /// it. A row can outlive the file it describes (deleted out of band, not yet
+    /// pruned), so a same-size replacement landing inside the same second would keep a
+    /// `content_hash` for bytes that are gone — and that hash is load-bearing: it is
+    /// what the out-of-band move repair matches a dangling link against
+    /// (data-model.md §10).
+    ///
+    /// The stat equality is **constructed**, not raced for: `set_modified` pins the
+    /// replacement's mtime to the original's, so the case under test is the one that
+    /// runs, on every machine, every time. Racing it would be a test that usually
+    /// exercises nothing and occasionally fails.
+    #[test]
+    fn the_unchanged_stat_shortcut_is_the_walks_alone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let conn = crate::db::open(&root.join("b2.sqlite")).unwrap();
+        let rel = "clip.txt";
+        let abs = root.join(rel);
+        let hash = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT content_hash FROM resources WHERE path = ?1",
+                [rel],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        fs::write(&abs, b"AAAA").unwrap();
+        project_resource_file(&conn, root, rel, ResourceClass::Text, false).unwrap();
+        let first = hash(&conn);
+        let stamped = fs::metadata(&abs).unwrap().modified().unwrap();
+
+        // Different bytes, same length, same mtime — the one state a stat cannot tell
+        // apart from "nothing happened".
+        fs::write(&abs, b"BBBB").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&abs)
+            .unwrap()
+            .set_modified(stamped)
+            .unwrap();
+
+        project_resource_file(&conn, root, rel, ResourceClass::Text, false).unwrap();
+        assert_eq!(hash(&conn), first, "the walk trusts an unchanged stat");
+
+        project_resource_file(&conn, root, rel, ResourceClass::Text, true).unwrap();
+        assert_ne!(
+            hash(&conn),
+            first,
+            "an import hashes what it actually placed"
+        );
+    }
 }
