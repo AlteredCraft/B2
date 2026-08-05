@@ -32,6 +32,7 @@ import {
 import { api, errText, isWriteConflict } from "./api";
 import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
+import { systemPath } from "./copypath";
 import { bytesToBase64, importSummary, planImport } from "./importfiles";
 import {
   baseName,
@@ -1180,7 +1181,10 @@ function toggleCard(key: string): void {
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 76;
 const TREE_MENU_H = 132; // the context line + three items
-const TREE_NODE_MENU_H = 236; // + Rename / Move… / Delete and their separator
+// + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
+// Only the clamp reads these, so an approximation is fine — but it must not *under*-read,
+// or a menu opened near the bottom edge loses its last item off-screen.
+const TREE_NODE_MENU_H = 300;
 
 function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
   const x = Math.min(clientX, window.innerWidth - CTX_MENU_W - 8);
@@ -1966,13 +1970,20 @@ async function openFromAnomaly(path: string): Promise<void> {
   await openNote(path);
 }
 
-/** Hand over a shadowed copy's path. It has no index row — so it is not in the file
- *  tree and `read_note` cannot resolve it (that *is* the anomaly) — and B2 will not
- *  edit or delete it on its own (W4), so the useful thing is the path itself, ready to
- *  paste into Finder or another editor. The failure branch is not decoration: WebKit
- *  can refuse a programmatic clipboard write, and a silent no-op would leave the one
- *  actionable affordance on this row looking like it worked. */
-async function copyAnomalyPath(path: string): Promise<void> {
+/**
+ * Hand a path over to the clipboard and say so.
+ *
+ * Shared by the anomaly panel and the file tree's two copy items. The anomaly case is
+ * the one that argues for the mechanism: a shadowed copy has no index row — so it is
+ * not in the file tree and `read_note` cannot resolve it (that *is* the anomaly) — and
+ * B2 will not edit or delete it on its own (W4), so the path itself, ready to paste
+ * into Finder or another editor, is the only actionable thing on the row.
+ *
+ * The failure branch is not decoration: WebKit can refuse a programmatic clipboard
+ * write, and a silent no-op would leave a copy action looking like it worked. Falling
+ * back to the status line at least puts the path somewhere it can be read off.
+ */
+async function copyPath(path: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(path);
     flash(`Copied ${path}`);
@@ -3629,6 +3640,25 @@ function wireEvents(): void {
           openMoveModal(menu.node);
           return;
         }
+        // The two copy actions. Both close the menu first — the copy is instant and
+        // its confirmation is the status line, so leaving the menu up over it would
+        // be the only thing hiding the answer.
+        if (menu.node && target.closest("[data-ctx-copy-vault-path]")) {
+          const p = menu.node.path;
+          closeContextMenu();
+          void copyPath(p);
+          return;
+        }
+        if (menu.node && target.closest("[data-ctx-copy-system-path]")) {
+          const p = menu.node.path;
+          const root = state.vaultRoot;
+          closeContextMenu();
+          // Both entry points refuse to open this menu without a vault, so `root` is
+          // set here — but the absolute path is the root's to give, and inventing one
+          // for a vault-less window is not this handler's call.
+          if (root !== null) void copyPath(systemPath(root, p));
+          return;
+        }
         if (menu.node && target.closest("[data-ctx-delete]")) {
           requestDelete(menu.node); // clears the menu itself
           return;
@@ -3812,7 +3842,7 @@ function wireEvents(): void {
       }
       const copy = target.closest<HTMLElement>("[data-anomaly-copy]");
       if (copy) {
-        void copyAnomalyPath(copy.dataset.anomalyCopy ?? "");
+        void copyPath(copy.dataset.anomalyCopy ?? "");
         return;
       }
       if (

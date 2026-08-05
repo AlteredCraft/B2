@@ -117,7 +117,7 @@ const OWN_SHEET: readonly SheetGroup[] = [
       { ids: ["delete.focused"], action: "Delete the focused row (a folder confirms first)" },
       {
         ids: ["menu.open"],
-        action: "Open the row's menu — Rename, Move…, Delete, Import files…",
+        action: "Open the row's menu — Rename, Move…, Copy vault / system path, Delete, Import files…",
       },
     ],
   },

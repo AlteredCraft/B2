@@ -1537,10 +1537,19 @@ export function contextMenuHtml(state: AppState): string {
     // Over a concrete row the menu targets that node (Rename / Move… — renaming
     // acts on the file path, never a frontmatter title); the create pair keeps
     // targeting the folder context either way.
+    //
+    // The two copy items are the row's *read* actions, sitting between the ones
+    // that change the file and the one that destroys it (Delete stays last, where
+    // a destructive item belongs). They copy the two paths that name this row —
+    // vault-relative and absolute (copypath.ts says why both) — and they are the
+    // only way to get either: the context line above shows the vault path but is
+    // muted text, and the system path is nowhere in the UI at all.
     const node = m.node
       ? `<div class="context-label">${escapeHtml(m.node.path)}</div>
         ${contextItemHtml("data-ctx-rename", "Rename", "F2")}
         ${contextItemHtml("data-ctx-move", "Move…")}
+        ${contextItemHtml("data-ctx-copy-vault-path", "Copy vault path")}
+        ${contextItemHtml("data-ctx-copy-system-path", "Copy system path")}
         ${contextItemHtml("data-ctx-delete", "Delete", "⌘⌫", true)}
         <div class="context-sep" role="separator"></div>`
       : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
