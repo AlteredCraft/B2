@@ -173,6 +173,21 @@ struct SimilarPass {
     /// Cosines of everything else surfaced — non-expected candidates of positive
     /// anchors, and every candidate of a negative anchor.
     junk: Vec<f64>,
+    /// Every anchor's surfaced list in rank order. The flat piles above judge the
+    /// absolute floor; the *relative* drop-off cutoff is judged within one
+    /// anchor's list (how far did #2 fall from #1?), and naming the pair behind a
+    /// pile value needs the anchor too — so the order is recorded, not just the
+    /// distribution.
+    detail: Vec<AnchorDetail>,
+}
+
+/// One anchor's surfaced candidates, in rank order, for the results log.
+struct AnchorDetail {
+    anchor: String,
+    /// True for a negative anchor (empty `expected`).
+    negative: bool,
+    /// (candidate path, cosine, human-labelled related) per surfaced candidate.
+    candidates: Vec<(String, f64, bool)>,
 }
 
 fn main() {
@@ -414,28 +429,36 @@ fn score_similar(
     let mut pass = SimilarPass::default();
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
-        if label.expected.is_empty() {
+        let negative = label.expected.is_empty();
+        if negative {
             pass.neg_n += 1;
             if candidates.is_empty() {
                 pass.neg_clean += 1;
             }
             pass.neg_cards += candidates.len();
-            pass.junk
-                .extend(candidates.iter().map(|c| cosine_of(c.score)));
-            continue;
+        } else {
+            let rank = candidates
+                .iter()
+                .position(|c| label.expected.iter().any(|e| paths_match(&c.path, e)))
+                .map(|p| p + 1);
+            pass.rank.add(rank);
         }
-        let rank = candidates
-            .iter()
-            .position(|c| label.expected.iter().any(|e| paths_match(&c.path, e)))
-            .map(|p| p + 1);
-        pass.rank.add(rank);
+        let mut ordered = Vec::with_capacity(candidates.len());
         for c in &candidates {
-            if label.expected.iter().any(|e| paths_match(&c.path, e)) {
-                pass.related.push(cosine_of(c.score));
+            let related = !negative && label.expected.iter().any(|e| paths_match(&c.path, e));
+            let cos = cosine_of(c.score);
+            if related {
+                pass.related.push(cos);
             } else {
-                pass.junk.push(cosine_of(c.score));
+                pass.junk.push(cos);
             }
+            ordered.push((c.path.clone(), cos, related));
         }
+        pass.detail.push(AnchorDetail {
+            anchor: label.anchor.clone(),
+            negative,
+            candidates: ordered,
+        });
     }
     Ok(pass)
 }
@@ -736,6 +759,20 @@ fn result_row(
             "related": s.related.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
             "junk": s.junk.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
         })),
+        // The same scores with their per-anchor rank order kept: the relative
+        // drop-off cutoff is judged within one anchor's list, and tracing a pile
+        // value back to its pair needs the anchor. The piles above are this,
+        // flattened — kept anyway, because the flat distributions are what a
+        // quick jq/pandas histogram wants.
+        "similar_detail": similar.map(|s| s.detail.iter().map(|d| serde_json::json!({
+            "anchor": d.anchor,
+            "negative": d.negative,
+            "candidates": d.candidates.iter().map(|(path, cos, related)| serde_json::json!({
+                "path": path,
+                "cos": (cos * 1e4).round() / 1e4,
+                "related": related,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>()),
         "queries": queries.iter().enumerate().map(|(i, q)| serde_json::json!({
             "q": q.query,
             "bm25": bm25.map(|p| p.scores[i].note),
