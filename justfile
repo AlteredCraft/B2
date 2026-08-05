@@ -240,7 +240,7 @@ eval:
 eval-sweep:
     cargo run -p b2-embed --example eval -- --sweep
 
-# What `just eval` structurally cannot see (GH #141): its 26-chunk corpus is smaller than the
+# What `just eval` structurally cannot see (GH #141): its 29-chunk corpus is smaller than the
 # 150-candidate pool retrieval reaches, so neither signal is truncated and a candidate-width
 # change prints bit-identical scores. This probe asks the same queries at widening pools on a
 # vault big enough for the pool to bind, and diffs the shipped top-10 against a blessed

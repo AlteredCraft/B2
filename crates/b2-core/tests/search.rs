@@ -79,7 +79,7 @@ fn the_passage_view_retrieves_a_narrower_pool_than_the_note_view() {
 /// The blindness #141 names, stated as a property: once a corpus has **no more
 /// chunks than the pool**, neither candidate list is truncated, so widening the pool
 /// cannot add a candidate and the fused ranking cannot depend on how wide it was — a
-/// shallow ask returns a prefix of a deep one, exactly. This is why the 26-chunk eval
+/// shallow ask returns a prefix of a deep one, exactly. This is why the 29-chunk eval
 /// corpus cannot see a candidate-width change, and why the rank-stability probe
 /// (`b2-embed/examples/stability.rs`) runs on a vault big enough for the pool to bind.
 ///
