@@ -53,6 +53,27 @@ check("a vault at the filesystem root still joins to one slash", () => {
   assertEq(systemPath("/", "a.md"), "/a.md", "the root's own trailing slash is the separator");
 });
 
+check("a backslash in the root is a filename character, not a separator", () => {
+  // The case that argues against making this function platform-aware. B2 ships on macOS
+  // only (ci.yml's header: a Linux runner "would red-build on portability breaks nobody
+  // ships against"), and there the only bytes a path component may not contain are `/`
+  // and NUL — so `back\slash` is a folder someone can make in Finder today. Sniffing the
+  // root for a `\` to guess a Windows separator would read this vault as Windows-formatted
+  // and rewrite every `/` in the index key, turning a working path into one that resolves
+  // nowhere. The mixed-separator problem the sniff would solve does not exist on the
+  // platform B2 runs on; the vault it would break does.
+  assertEq(
+    systemPath("/Users/me/back\\slash", "projects/idea.md"),
+    "/Users/me/back\\slash/projects/idea.md",
+    "the root is copied through and the separator stays /",
+  );
+  assertEq(
+    systemPath("/Users/me/vault", "odd\\name.md"),
+    "/Users/me/vault/odd\\name.md",
+    "and a backslash in the vault path is equally none of our business",
+  );
+});
+
 check("spaces and non-ASCII survive verbatim", () => {
   // Nothing here escapes or encodes: the destination is a clipboard, not a URL, and a
   // percent-encoded path pastes into Finder as a file that doesn't exist.

@@ -18,6 +18,12 @@
  * slash on the root is tolerated (a hand-typed `B2_VAULT_PATH=~/notes/` reaches the
  * UI verbatim) so the join can't produce a doubled `//`. An empty `path` — the
  * folder-context menu, which offers no copy action today — is the root itself.
+ *
+ * `/` is the separator, hard-coded, and `\` is left alone as the ordinary filename
+ * character it is here: B2 ships on macOS only (ci.yml's header), where the sole
+ * bytes a path component may not contain are `/` and NUL. Sniffing the root for a
+ * backslash to guess a Windows separator would therefore mangle a legitimate vault
+ * — see copypath.test.ts, which pins that case.
  */
 export function systemPath(vaultRoot: string, path: string): string {
   const root = vaultRoot.replace(/\/+$/, "");
