@@ -478,11 +478,13 @@ fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
     }
     let mut sorted = pile.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some((
-        sorted[0],
-        sorted[sorted.len() / 2],
-        sorted[sorted.len() - 1],
-    ))
+    let mid = sorted.len() / 2;
+    let median = if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    };
+    Some((sorted[0], median, sorted[sorted.len() - 1]))
 }
 
 /// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding
