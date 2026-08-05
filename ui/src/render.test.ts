@@ -11,7 +11,7 @@
 
 import { JSDOM } from "jsdom";
 import { buildScene } from "./graph.ts";
-import { modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
+import { contextMenuHtml, modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
 import { chordProblems } from "./keymap.ts";
 import { PROBE_AFTER_MS, silenceHint } from "./recorder.ts";
 import { state, type AppState } from "./state.ts";
@@ -452,6 +452,51 @@ check("the Index panel counts indexed and embedded separately", () => {
     app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", notesTotal: 0 }),
   );
   assert(fresh.includes("Nothing indexed yet"), "an unindexed vault is not a complete one");
+});
+
+// --- the tree's context menu ---------------------------------------------------------
+//
+// Not focus identity like the rest of this file, but the same argument one step out: the
+// context menu is the *only* home of Rename / Move… / the two copy paths, and ⇧F10 is how
+// a keyboard reaches them (K1). main.ts's click delegation finds each item by its
+// `data-ctx-*` attribute and its focus trap collects them by `.context-item`, so an item
+// that painted without either is an action reachable by neither mouse nor keyboard.
+
+check("a tree row's menu offers both of the row's paths, as reachable items", () => {
+  const html = contextMenuHtml(
+    app({
+      contextMenu: {
+        kind: "tree",
+        x: 10,
+        y: 20,
+        dir: "projects",
+        node: { path: "projects/idea.md", nodeKind: "note", label: "idea.md" },
+      },
+    }),
+  );
+  for (const attr of ["data-ctx-copy-vault-path", "data-ctx-copy-system-path"]) {
+    const tag = tagWith(html, attr);
+    assert(tag.includes("context-item"), `${attr} is a menu item the trap collects`);
+    assert(tag.includes('role="menuitem"'), `${attr} announces itself as one`);
+  }
+  assert(html.includes("Copy vault path"), "the vault-relative path is named as such");
+  assert(html.includes("Copy system path"), "and the absolute one as such");
+  // Delete stays last in the node group: the copy items went above it, not below.
+  assert(
+    html.indexOf("data-ctx-copy-system-path") < html.indexOf("data-ctx-delete"),
+    "the destructive item is still the group's last",
+  );
+});
+
+check("the folder-context menu offers no path to copy", () => {
+  // With no row under the cursor the menu targets a *folder* for the create pair — there
+  // is no node whose path a copy item could mean, and the vault root is already in the
+  // top bar.
+  const html = contextMenuHtml(
+    app({ contextMenu: { kind: "tree", x: 10, y: 20, dir: "projects", node: null } }),
+  );
+  assert(!html.includes("data-ctx-copy"), "no copy item without a node");
+  assert(html.includes("data-ctx-new-note"), "but the create pair is still there");
 });
 
 console.log(`render: ${passed} checks passed`);
