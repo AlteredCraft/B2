@@ -106,7 +106,7 @@ fn note_hit_pool(limit: usize) -> usize {
 /// outscores one ranked first in a single list (`2/121 > 1/61`), so a wider pool
 /// returns different answers — 10 of 10 probes changed their top-4 passages across
 /// exactly that step on `fixtures/test-vault` (`just stability`). Wider may well be
-/// *better*; nothing has measured it, because the labelled corpus is 26 chunks —
+/// *better*; nothing has measured it, because the labelled corpus is 29 chunks —
 /// smaller than either pool, so it scores both identically (GH #141). Width is a
 /// retrieval-quality knob and stays at the conservative setting until an eval can
 /// price a change to it.

@@ -24,9 +24,17 @@
 //!    (index-engine.md, GH #44).
 //! 4. **Discovery** — `evals/similar.json` anchors score `Vault::similar` (the
 //!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
-//!    does not exercise.
+//!    does not exercise. Positive anchors score **rank** (did a labelled
+//!    cluster-mate surface, and how high). **Negative anchors** — deliberate loner
+//!    notes whose labelled answer is "nothing relates" — score **suppression**:
+//!    does discovery return zero candidates, or serve strangers? And every
+//!    surfaced candidate's score lands in one of two **cosine piles** — labelled
+//!    related vs. everything else surfaced — the measured distributions the
+//!    quality floor is calibrated from (index-engine.md §3's ruling, PR #145).
+//!    Until that floor lands in `discover::candidates` the suppression metric is
+//!    red by design: it is the failing target the floor is built against.
 //!
-//! What this corpus **cannot** score is *candidate width*. 26 chunks is no more
+//! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
 //! passage view, `note_candidate_pool(K)` for the note view, the narrower of the two
 //! being what has to bind — so neither list is truncated, widening the pool cannot
@@ -86,6 +94,9 @@ struct SimilarSet {
 #[derive(Deserialize)]
 struct SimilarLabel {
     anchor: String,
+    /// Corpus notes a human says belong next to `anchor`. **Empty = a negative
+    /// anchor**: the labelled answer is "nothing relates", so the right result is
+    /// zero candidates and everything surfaced is junk by label (similar.json).
     expected: Vec<String>,
 }
 
@@ -139,6 +150,29 @@ struct Pass {
     scores: Vec<QueryScore>,
     note: Agg,
     chunk: Agg,
+}
+
+/// A full pass over the discovery labels: rank aggregates over the positive
+/// anchors, the suppression tally over the negative ones, and every surfaced
+/// candidate's cosine sorted into the two calibration piles the quality floor
+/// is read from (index-engine.md §3's ruling, PR #145).
+#[derive(Default)]
+struct SimilarPass {
+    /// Rank of the first `expected` hit per positive anchor — the pre-existing
+    /// hit@1 / hit@3 / MRR discovery metrics, unchanged.
+    rank: Agg,
+    /// Negative anchors asked.
+    neg_n: usize,
+    /// Negative anchors that (correctly) surfaced zero candidates.
+    neg_clean: usize,
+    /// Candidates surfaced across all negative anchors — cards whose labelled
+    /// answer was "nothing".
+    neg_cards: usize,
+    /// Cosines of surfaced candidates a human labelled genuinely related.
+    related: Vec<f64>,
+    /// Cosines of everything else surfaced — non-expected candidates of positive
+    /// anchors, and every candidate of a negative anchor.
+    junk: Vec<f64>,
 }
 
 fn main() {
@@ -218,7 +252,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     );
     warn_if_pool_blind(chunks);
 
-    print_default_report(&set.queries, &bm25, &hybrid, &sim_set, &similar);
+    print_default_report(&set.queries, &bm25, &hybrid, &similar);
 
     let git = git_short_sha();
     append_result(
@@ -260,7 +294,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         println!("\n{}", "=".repeat(78));
         println!("chunker sweep (same model, same corpus; default row above for reference)");
         println!(
-            "{:<22} {:>7} {:>8}   note h@1/MRR   chunk h@1/MRR   similar h@3",
+            "{:<22} {:>7} {:>8}   note h@1/MRR   chunk h@1/MRR   similar h@3   neg clean",
             "config", "chunks", "embed_s"
         );
         for (label, cfg) in variants {
@@ -270,7 +304,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             let pass = score_pass(&vault, &set.queries)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
-                "{:<22} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2}",
+                "{:<22} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
                 label,
                 chunks,
                 embed_secs,
@@ -278,7 +312,9 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                 pass.note.mrr(),
                 pass.chunk.hit1(),
                 pass.chunk.mrr(),
-                sim.hit3(),
+                sim.rank.hit3(),
+                sim.neg_clean,
+                sim.neg_n,
             );
             append_result(
                 &results_path,
@@ -303,7 +339,12 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     eprintln!("\n[eval] appended run to {}", results_path.display());
 
     // The soft floor, on the DEFAULT config's hybrid pass — so this can double as
-    // a manual quality gate. Not a CI test.
+    // a manual quality gate. Not a CI test. The discovery suppression metric is
+    // deliberately NOT part of this gate yet: it is red by design until the
+    // quality floor lands in `discover::candidates` (index-engine.md §3, PR #145),
+    // and gating on it now would exit non-zero on every run, burying the
+    // FLOOR_HIT1 signal the chunker sweep reads. When the floor ships, fold
+    // `similar.neg_clean == similar.neg_n` in here.
     if hybrid.note.hit1() < FLOOR_HIT1 {
         eprintln!(
             "\n[warn] hybrid hit@1 {:.2} is below the {FLOOR_HIT1} reference floor — inspect the misses above.",
@@ -359,19 +400,66 @@ fn score_pass(vault: &Vault, queries: &[Labelled]) -> Result<Pass, Box<dyn std::
     })
 }
 
-/// Score the discovery labels: for each anchor, the 1-based rank of the first
-/// `expected` note among its top `SIM_K` `similar` candidates.
-fn score_similar(vault: &Vault, set: &SimilarSet) -> Result<Agg, Box<dyn std::error::Error>> {
-    let mut agg = Agg::default();
+/// Score the discovery labels. Positive anchors (non-empty `expected`): the
+/// 1-based rank of the first `expected` note among the top `SIM_K` `similar`
+/// candidates. Negative anchors (empty `expected`): a clean result is zero
+/// candidates; anything surfaced is a stranger served where the labelled answer
+/// is "nothing". Every surfaced candidate's score also lands in a cosine pile —
+/// `related` if a human labelled it, `junk` otherwise — the distributions the
+/// quality floor's cutoff is read from.
+fn score_similar(
+    vault: &Vault,
+    set: &SimilarSet,
+) -> Result<SimilarPass, Box<dyn std::error::Error>> {
+    let mut pass = SimilarPass::default();
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
+        if label.expected.is_empty() {
+            pass.neg_n += 1;
+            if candidates.is_empty() {
+                pass.neg_clean += 1;
+            }
+            pass.neg_cards += candidates.len();
+            pass.junk
+                .extend(candidates.iter().map(|c| cosine_of(c.score)));
+            continue;
+        }
         let rank = candidates
             .iter()
             .position(|c| label.expected.iter().any(|e| paths_match(&c.path, e)))
             .map(|p| p + 1);
-        agg.add(rank);
+        pass.rank.add(rank);
+        for c in &candidates {
+            if label.expected.iter().any(|e| paths_match(&c.path, e)) {
+                pass.related.push(cosine_of(c.score));
+            } else {
+                pass.junk.push(cosine_of(c.score));
+            }
+        }
     }
-    Ok(agg)
+    Ok(pass)
+}
+
+/// A `similar` score is negated L2 distance between L2-normalized vectors
+/// (the real embedder normalizes every row), so it converts exactly:
+/// `cos = 1 − d²/2`. Cosine is the unit the floor ruling is stated in and the
+/// unit that survives a model swap comparison, so the piles are recorded in it.
+fn cosine_of(score: f64) -> f64 {
+    1.0 - (score * score) / 2.0
+}
+
+/// (min, median, max) of a pile, or None while it's empty.
+fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
+    if pile.is_empty() {
+        return None;
+    }
+    let mut sorted = pile.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some((
+        sorted[0],
+        sorted[sorted.len() / 2],
+        sorted[sorted.len() - 1],
+    ))
 }
 
 /// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding
@@ -476,13 +564,7 @@ fn warn_if_pool_blind(chunks: usize) {
     }
 }
 
-fn print_default_report(
-    queries: &[Labelled],
-    bm25: &Pass,
-    hybrid: &Pass,
-    sim_set: &SimilarSet,
-    similar: &Agg,
-) {
+fn print_default_report(queries: &[Labelled], bm25: &Pass, hybrid: &Pass, similar: &SimilarPass) {
     println!(
         "{:>5} {:>6} {:>6}  {:<40}  top hybrid hit",
         "bm25", "hybrid", "chunk", "query"
@@ -532,13 +614,55 @@ fn print_default_report(
             hybrid.chunk.mrr()
         );
     }
-    println!("similar (n={}, K={SIM_K}):", sim_set.anchors.len());
+    println!(
+        "similar (n={} positive + {} negative, K={SIM_K}):",
+        similar.rank.n, similar.neg_n
+    );
     println!(
         "  discovery  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}",
-        similar.hit1(),
-        similar.hit3(),
-        similar.mrr()
+        similar.rank.hit1(),
+        similar.rank.hit3(),
+        similar.rank.mrr()
     );
+    if similar.neg_n > 0 {
+        // Suppression: a clean negative anchor surfaced zero candidates. Red by
+        // design until the quality floor lands (index-engine.md §3, PR #145).
+        println!(
+            "  negatives  {}/{} anchors clean — {} cards surfaced where the label says \"nothing\"",
+            similar.neg_clean, similar.neg_n, similar.neg_cards
+        );
+    }
+    // The two calibration piles. If they separate, the gap IS the floor, read
+    // off measured data; if they overlap, no simple floor can hold and the
+    // escalation path (a discovery-side pair-scorer) is justified by data.
+    if let (Some((r_min, r_med, r_max)), Some((j_min, j_med, j_max))) =
+        (pile_stats(&similar.related), pile_stats(&similar.junk))
+    {
+        println!(
+            "  piles(cos) related n={:<3} min/med/max {:.3}/{:.3}/{:.3}",
+            similar.related.len(),
+            r_min,
+            r_med,
+            r_max
+        );
+        println!(
+            "             junk    n={:<3} min/med/max {:.3}/{:.3}/{:.3}",
+            similar.junk.len(),
+            j_min,
+            j_med,
+            j_max
+        );
+        let gap = r_min - j_max;
+        println!(
+            "             related-min − junk-max = {:+.3} ({})",
+            gap,
+            if gap > 0.0 {
+                "piles separate — the gap is the floor"
+            } else {
+                "piles overlap — a simple floor cuts both"
+            }
+        );
+    }
 }
 
 /// One appendable JSONL row for a scored configuration.
@@ -555,7 +679,7 @@ fn result_row(
     queries: &[Labelled],
     bm25: Option<&Pass>,
     hybrid: &Pass,
-    similar: Option<&Agg>,
+    similar: Option<&SimilarPass>,
 ) -> serde_json::Value {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -597,7 +721,21 @@ fn result_row(
             "bm25": bm25.map(|p| agg(&p.chunk)),
             "hybrid": agg(&hybrid.chunk),
         },
-        "similar": similar.map(agg),
+        // "similar" keeps its pre-negative shape (the positive anchors' rank agg)
+        // so rows stay comparable across the change; the negative-anchor tally and
+        // the calibration piles are NEW keys, absent from older rows rather than
+        // redefining an existing one — the same convention as pool_note/pool_chunk.
+        "similar": similar.map(|s| agg(&s.rank)),
+        "similar_negatives": similar.map(|s| serde_json::json!({
+            "n": s.neg_n, "clean": s.neg_clean, "cards": s.neg_cards,
+        })),
+        // Cosine, 4 decimals: enough to place a floor, short enough to keep rows
+        // readable. Related = human-labelled matches; junk = everything else
+        // surfaced (see score_similar).
+        "similar_piles": similar.map(|s| serde_json::json!({
+            "related": s.related.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
+            "junk": s.junk.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
+        })),
         "queries": queries.iter().enumerate().map(|(i, q)| serde_json::json!({
             "q": q.query,
             "bm25": bm25.map(|p| p.scores[i].note),

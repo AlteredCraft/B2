@@ -1,7 +1,7 @@
 //! Rank-stability probe — the **large-corpus** half of the eval harness (GH #141).
 //!
 //! The scored eval (`--example eval`) runs on the hand-labelled corpus in
-//! `evals/corpus/`: 20 notes / 26 chunks. Retrieval pulls at least
+//! `evals/corpus/`: 23 notes / 29 chunks. Retrieval pulls at least
 //! `vault::chunk_candidate_pool(10) = 60` candidates from *each* signal, so on a
 //! corpus that small neither half of the hybrid is truncated — BM25 returns every
 //! matching chunk, the vector scan every stored vector — both lists are already
@@ -14,7 +14,7 @@
 //! GH #142 reverted on the strength of it.
 //!
 //! Width is the whole of the gap. `search::RRF_K` re-weights the *same* two lists,
-//! so it reorders a 26-chunk corpus as readily as a large one and the scored eval
+//! so it reorders a 29-chunk corpus as readily as a large one and the scored eval
 //! already sees it; this probe is for the candidates that eval was never handed.
 //!
 //! This probe measures the property that corpus cannot see. It runs on a vault big

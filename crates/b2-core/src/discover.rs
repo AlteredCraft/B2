@@ -7,8 +7,15 @@
 //! A candidate is a note **semantically near the anchor but not already connected**:
 //! the *complement* of the graph, not the intersection. (The intersection —
 //! semantic-nearest chunks *within* k hops — is [`crate::search::graph_filtered_search`],
-//! a scoped-traversal primitive, the wrong tool here.) Generation is deliberately
-//! **permissive**: it over-produces, and the human decides which are worth a link.
+//! a scoped-traversal primitive, the wrong tool here.) *Generation* is deliberately
+//! **recall-oriented**: it over-produces, and the human decides which are worth a
+//! link. *Surfacing* is not (index-engine.md §3, ruled 2026-08-05): **`limit` is a
+//! cap, not a promise** — zero candidates is a legitimate, honest answer when
+//! nothing in the vault genuinely relates. The projection of that ruling — a
+//! model-relative quality floor, calibrated from the eval's negative anchors and
+//! score piles (PR #145) — has not landed yet, so today this module still fills
+//! to `limit` whenever the anchor has vectors; the eval's suppression metric is
+//! red by design until it does.
 //!
 //! Mechanics are **two-stage** (#38; index-engine.md):
 //!
@@ -72,7 +79,9 @@ pub struct CandidateNote {
 }
 
 /// Generate up to `limit` connection-discovery candidates for `anchor`, best score
-/// first (ties broken by `note_b2id` for determinism).
+/// first (ties broken by `note_b2id` for determinism). `limit` is a cap, not a
+/// promise (index-engine.md §3) — though until the quality floor lands, the only
+/// under-fill in practice is a vault with fewer unlinked notes than `limit`.
 ///
 /// Returns empty when the vault has no embedding space yet, when the anchor has no
 /// stored vectors (unknown, empty, or not-yet-embedded note), or when `limit` is 0 —

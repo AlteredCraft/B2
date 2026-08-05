@@ -260,6 +260,37 @@ for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. 
 traversable graph is the value-add, not the search. The standing cost of carrying it is the
 `b2id`-under-`[[path]]` write-amplification budgeted in §8.
 
+### Discovery surfacing is quality-gated — `limit` is a cap, not a promise
+
+**(Ruled 2026-08-05; the findings of [PR #145](https://github.com/AlteredCraft/B2/pull/145).)**
+Candidate *generation* stays recall-oriented: the two-stage scan (§4) over-produces, nothing
+auto-links, and the human commits every edge — W4 untouched, because filtering what is *surfaced*
+is not authoring. But the surfaced list owes the human candidates worth judging, not fullness:
+**zero candidates is a legitimate — and honest — answer** when nothing in the vault genuinely
+relates. `limit` bounds the list; it never obliges discovery to fill it (on a real vault ten notes
+are always *nearest*, even when nearest means nearest-of-nothing — that list is a cost, not a
+feature). What enforces the stance is a **quality floor** in `discover::candidates`, and its
+shape is constrained on two sides:
+
+- **Model-relative, never a bare constant.** The vectors are L2-normalized, so the engine's score
+  maps exactly to cosine (`cos = 1 − d²/2`) and a floor is well-defined — but bge-family models
+  compress cosines into a narrow high band another model won't share, and the fake embedder's
+  hash-derived vectors are no band at all. The number keys alongside `meta.embed_model_id` (M2's
+  identity, device tag included), with the fake regime handled explicitly.
+- **Eval-calibrated, never intuition.** The labelled corpus carries **negative anchors** — loner
+  notes whose labelled answer is "nothing relates" — scoring *suppression* (does discovery say
+  so?), and the eval records every surfaced score into two **cosine piles**: human-labelled
+  related vs. everything else surfaced. If the piles separate, the gap *is* the floor, read off
+  measured data (an absolute cosine floor and a relative drop-off from the top candidate are both
+  judged against the piles); a later model swap re-derives the number by re-running the eval. If
+  the piles overlap too heavily for any floor to hold, the escalation is a **discovery-side
+  pair-scorer** — a second model seam, sibling of §5's reranker but a *new* issue, not an
+  extension of #28 (that seam needs query text and `similar` has none) — which still only filters
+  what is surfaced, never authors a link.
+
+Until the floor lands, `discover::candidates` truncates to `limit` with no floor and the eval's
+suppression metric is red by design — the failing target the floor is built against.
+
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
 battle-tested at personal-vault scale.
@@ -321,7 +352,9 @@ is the tell: it needs *query text*, so it reorders **query search** (`b2 search`
 query** — it is passage↔passage KNN, "near ∖ connected" (§3) — so this reranker
 does **not** apply to it; the discovery-side ranking levers are the qmd chunker upgrade
 ([#19](https://github.com/AlteredCraft/B2/issues/19)) and distance-weighting
-([#20](https://github.com/AlteredCraft/B2/issues/20)), not this.
+([#20](https://github.com/AlteredCraft/B2/issues/20)), not this — and the discovery-side
+*precision* lever is §3's quality floor: #20 reorders candidates, it cannot make a bad list
+shorter.
 
 **Gate the decision on the eval, not intuition** (the eval harness under `crates/b2-embed/evals/`). RRF
 is a strong baseline; the reranker buys **top-k precision**, whose value *grows with vault size* (semantic
@@ -332,7 +365,7 @@ measure RRF precision@k / MRR on a representative set first and ship the reranke
 this is the deferral §5 is built to allow. Tracked in [#28](https://github.com/AlteredCraft/B2/issues/28).
 
 **…and check the instrument can see the change you are gating.** The labelled eval corpus is *no bigger
-than the candidate pool retrieval reaches* — 26 chunks against `vault::chunk_candidate_pool(10) = 60` per
+than the candidate pool retrieval reaches* — 29 chunks against `vault::chunk_candidate_pool(10) = 60` per
 signal, and 150 for the note view — so neither half of the hybrid is truncated there: BM25 returns every
 matching chunk, the vector scan every stored vector, and widening the pool cannot add a candidate.
 Relevance scores on that corpus are therefore **invariant under candidate width**: a change to either
