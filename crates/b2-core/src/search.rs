@@ -34,7 +34,22 @@ pub struct Hit {
 
 /// Reciprocal Rank Fusion of ranked id lists: `score(id) = Σ 1/(k + rank + 1)`
 /// over the lists it appears in (rank 0-based). Returns ids with fused scores,
-/// best first; ties broken by id for determinism.
+/// best first.
+///
+/// **Exact ties are structural here**, not freak events: integer ranks put every
+/// fused score on a discrete lattice of reachable sums, so two candidates with
+/// mirrored ranks — (1, 3) against (3, 1) — collide bit-identically. The eval
+/// corpus hit one on its second run (docs/evals/runlog.md, 2026-08-10). Breaking
+/// such a tie is a *policy choice about which signal to trust in a photo finish*:
+/// the old key (ascending id — projection walk order) answered it with the
+/// filesystem, which is deterministic and semantically arbitrary. The key now is
+/// the candidate's rank in the **last** list — callers put the signal they trust
+/// on ties last, which for [`hybrid_search`] is the dense/vector list: on the tie
+/// the runlog decomposed, the semantic half named the labelled answer and BM25
+/// named the wrong one (GH #156). A candidate absent from that list ranks below
+/// any candidate present in it; id remains as the final key, so the sort stays
+/// fully deterministic (single-list callers are unaffected — one list cannot
+/// produce equal sums).
 pub fn rrf_fuse(ranked_lists: &[Vec<i64>], k: usize) -> Vec<(i64, f64)> {
     let mut scores: HashMap<i64, f64> = HashMap::new();
     for list in ranked_lists {
@@ -42,10 +57,17 @@ pub fn rrf_fuse(ranked_lists: &[Vec<i64>], k: usize) -> Vec<(i64, f64)> {
             *scores.entry(id).or_insert(0.0) += 1.0 / (k as f64 + rank as f64 + 1.0);
         }
     }
+    let tiebreak: HashMap<i64, usize> = ranked_lists
+        .last()
+        .map(|list| list.iter().enumerate().map(|(r, &id)| (id, r)).collect())
+        .unwrap_or_default();
+    // Absent-from-the-tie-break-list sorts below present-at-any-rank.
+    let rank_of = |id: i64| tiebreak.get(&id).copied().unwrap_or(usize::MAX);
     let mut out: Vec<(i64, f64)> = scores.into_iter().collect();
     out.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then(rank_of(a.0).cmp(&rank_of(b.0)))
             .then(a.0.cmp(&b.0))
     });
     out
@@ -164,9 +186,44 @@ pub fn hybrid_search(
     resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), limit)
 }
 
-/// The shared tail of [`keyword_only_search`] and [`hybrid_search`]: resolve the
-/// fused `(chunk_id, score)` ranking to [`Hit`]s, best first, keeping the first
-/// `limit` **that still resolve** to a note.
+/// Vector-only search: the dense half of [`hybrid_search`] alone — embed the
+/// query, exact-scan the stored vectors, resolve the top `limit` to notes.
+///
+/// **An ablation instrument, not a product surface** (GH #158): the eval harness
+/// scores it beside bm25-only and hybrid on every run, so fusion has a measured
+/// single-signal baseline to answer to — the runlog's finding that RRF can demote
+/// a chunk the dense signal ranked first is only a standing measurement if this
+/// path stays callable. Scores are negated L2 distance (closer = higher), the
+/// same convention as [`graph_filtered_search`] and **not** commensurable with
+/// RRF scores. A vault with no embedding space yields no hits — there are no
+/// vectors to scan, and pretending otherwise would rank on nothing.
+pub fn vector_only_search(
+    conn: &rusqlite::Connection,
+    embedder: &dyn Embedder,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Hit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let pool = pool_size(limit);
+    let ranked: Vec<(i64, f64)> = db::vector_search(conn, &embedder.embed_query(query)?, pool)?
+        .into_iter()
+        .map(|(id, distance)| (id, -(distance as f64)))
+        .collect();
+    tracing::debug!(
+        target: "b2::search",
+        vector_hits = ranked.len(),
+        pool,
+        "vector-only retrieval (ablation instrument)"
+    );
+    resolve_hits(conn, ranked, limit)
+}
+
+/// The shared tail of [`keyword_only_search`], [`hybrid_search`], and
+/// [`vector_only_search`]: resolve the ranked `(chunk_id, score)` list to
+/// [`Hit`]s, best first, keeping the first `limit` **that still resolve** to a
+/// note.
 ///
 /// The walk is one pass over the whole ranking, stopping at `limit` — an
 /// unresolved chunk is *skipped over*, never charged against the budget (GH

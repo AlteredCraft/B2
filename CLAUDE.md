@@ -30,6 +30,10 @@ eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + di
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar` ranks plus the discovery negatives —
 loner anchors whose labelled answer is "nothing relates" — and the related/junk score piles that
 calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log.
+The harness's **decision history is `docs/evals/runlog.md`** — the append-only lab notebook, every
+claim traced to a `results.jsonl` row; its Orientation section carries the process rules (corpus
+edits need a runlog entry + the two-direction token audit; a paired per-query win/loss list is the
+primary A/B readout). Read it before touching the corpus, the labels, or the metrics.
 That corpus scores *relevance* and is deliberately small, which makes it blind to one class of change:
 retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per signal (150 for the note
 view, `note_candidate_pool`), so on 29 chunks neither signal is truncated and a **candidate-width** change

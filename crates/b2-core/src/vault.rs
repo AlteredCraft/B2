@@ -1091,6 +1091,47 @@ impl Vault {
             return Ok(Vec::new());
         }
         let hits = self.retrieve(query, note_hit_pool(limit))?;
+        self.resolve_note_hits(hits, query, limit)
+    }
+
+    /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
+    /// deduped, best first. **The eval harness's ablation instrument** (GH #158),
+    /// not an adapter surface: scoring it beside bm25-only and hybrid is what
+    /// gives fusion a measured single-signal baseline, and the runlog's finding
+    /// that RRF can demote a dense rank-1 hit is a standing measurement only
+    /// because this stays callable. Same model-mismatch fail-fast as `search`; a
+    /// projected-but-unembedded vault returns no hits (there is nothing to scan
+    /// — where `search` would honestly *fall back* to keywords, an ablation that
+    /// quietly did the same would be measuring the wrong signal).
+    pub fn search_vector_only(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "search_vector_only", query, limit).entered();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if !db::embedding_space_exists(&self.conn)? {
+            return Ok(Vec::new());
+        }
+        self.ensure_query_space_matches()?;
+        let hits = search::vector_only_search(
+            &self.conn,
+            self.embedder.as_ref(),
+            query,
+            note_hit_pool(limit),
+        )?;
+        self.resolve_note_hits(hits, query, limit)
+    }
+
+    /// The note-resolution tail shared by [`search`](Self::search) and
+    /// [`search_vector_only`](Self::search_vector_only): dedup chunk hits to their
+    /// best-scoring note, resolve each to path + title + query-windowed snippet,
+    /// stop at `limit`.
+    fn resolve_note_hits(
+        &self,
+        hits: Vec<search::Hit>,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         let mut out: Vec<SearchResult> = Vec::new();
         for hit in hits {
             if out.len() == limit {
@@ -1171,22 +1212,27 @@ impl Vault {
     /// fix is a `reindex`), BM25-only on a projected-but-unembedded vault.
     fn retrieve(&self, query: &str, pool: usize) -> Result<Vec<search::Hit>> {
         if db::embedding_space_exists(&self.conn)? {
-            if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
-                if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
-                    return Err(Error::ModelMismatch {
-                        indexed: format!("{indexed_model} (dim {indexed_dim})"),
-                        active: format!(
-                            "{} (dim {})",
-                            self.embedder.model_id(),
-                            self.embedder.dim()
-                        ),
-                    });
-                }
-            }
+            self.ensure_query_space_matches()?;
             search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)
         } else {
             search::keyword_only_search(&self.conn, query, pool)
         }
+    }
+
+    /// The model-identity guard shared by every query-embedding read: the stored
+    /// vectors must have been produced by the active embedder, or the query vector
+    /// is incomparable with them and results would be silently wrong. The fix is a
+    /// `reindex`.
+    fn ensure_query_space_matches(&self) -> Result<()> {
+        if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
+            if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
+                return Err(Error::ModelMismatch {
+                    indexed: format!("{indexed_model} (dim {indexed_dim})"),
+                    active: format!("{} (dim {})", self.embedder.model_id(), self.embedder.dim()),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The vault's semantic-embedding coverage as an [`EmbedStatus`] — the honest

@@ -323,6 +323,23 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
   k = 60 a chunk ranked ~60th in **both** lists outscores one ranked first in a single list
   (`2/121 > 1/61`). Width therefore moves only on measured relevance; the labelled corpus cannot measure
   it yet, so the conservative setting holds — see §5.
+- **A fused-score tie is broken by the dense signal, and that is a policy, not a detail.** RRF over
+  integer ranks lands every fused score on a discrete lattice, so bit-identical ties between mirrored
+  rank pairs — (1, 3) vs (3, 1) — are structural, and the eval corpus produced one
+  ([#156](https://github.com/AlteredCraft/B2/issues/156), the runlog's worked case: the semantic half
+  named the labelled answer, BM25 named the wrong one). The secondary sort key in `rrf_fuse` is
+  therefore the candidate's rank in the **vector list** (absent ranks below present), with id last
+  purely for determinism — a photo finish is decided on the signal measured to be right there, never
+  on projection walk order.
+- **The FTS tokenizer is `unicode61` — unstemmed, and that is a *measured-default*, not a verdict.**
+  BM25 matches surface forms only: `pedalling` finds nothing in a note that says "pedals"
+  ([#157](https://github.com/AlteredCraft/B2/issues/157) has the measurements; a `porter unicode61`
+  table over identical text recovers every missed form). Stemming is a real precision/recall trade —
+  a vault holds code, identifiers, and proper nouns, and sparse retrieval earns its keep by being
+  literal exactly where embeddings are weak — so the switch is gated on #157's A/B over the eval
+  corpus's standing recall *and* precision probes, not adopted on the recall wins alone. Until that
+  verdict, unstemmed is the documented choice, and the dense half is what covers morphology
+  (its interaction with fusion is [#158](https://github.com/AlteredCraft/B2/issues/158)).
 - **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
   chunks. Brute-force cosine over ~100k × 768-dim float32 vectors is on the order of **single-digit to
   low-tens of milliseconds** — well within an interactive budget. We're nowhere near the regime

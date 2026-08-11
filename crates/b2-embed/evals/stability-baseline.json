@@ -3,7 +3,7 @@
   "vault": "fixtures/test-vault",
   "embedder": "fake",
   "k": 10,
-  "blessed_at": "4c30bbd",
+  "blessed_at": "0571845",
   "probes": [
     {
       "query": "how do i choose an approximate nearest neighbour index",
@@ -55,8 +55,8 @@
         "vector-search/200-recall-vs-latency.md#Recall vs Latency > Chunking Strategy#reciprocal rank fusion. Cosine similarity ranks ",
         "coffee/168-brew-ratio.md#Brew Ratio > Tasting Notes#Single-origin beans express the character of one",
         "transformers/194-distillation.md#Distillation > Layer Normalization#its context window, so long documents must be ch",
-        "transformers/124-positional-encoding.md#Positional Encoding > The BERT Encoder#weigh every other token when building its repres",
-        "vector-search/010-hybrid-retrieval.md#Hybrid Retrieval > Chunking Strategy#query but trivially correct and cache-friendly a"
+        "vector-search/010-hybrid-retrieval.md#Hybrid Retrieval > Chunking Strategy#query but trivially correct and cache-friendly a",
+        "transformers/124-positional-encoding.md#Positional Encoding > The BERT Encoder#weigh every other token when building its repres"
       ]
     },
     {
@@ -109,8 +109,8 @@
         "transformers/044-distillation.md#Distillation## Distillation Notes on distillation within the ",
         "rust/162-the-newtype-pattern.md#The Newtype Pattern## The Newtype Pattern Notes on the newtype patte",
         "transformers/124-positional-encoding.md#Positional Encoding > Self-Attention#BERT is an encoder stack trained with masked-lan",
-        "transformers/024-layer-normalization.md#Layer Normalization## Layer Normalization Notes on layer normalizati",
-        "vector-search/080-hnsw-graphs.md#HNSW Graphs > HNSW Graphs#noise, too large and you blur the signal. Cosine"
+        "vector-search/080-hnsw-graphs.md#HNSW Graphs > HNSW Graphs#noise, too large and you blur the signal. Cosine",
+        "transformers/024-layer-normalization.md#Layer Normalization## Layer Normalization Notes on layer normalizati"
       ]
     },
     {
@@ -163,8 +163,8 @@
         "gardening/047-overwintering.md#Overwintering## Overwintering Notes on overwintering within th",
         "coffee/168-brew-ratio.md#Brew Ratio > The Pour-Over#bitter and hollow. Freshly ground beans lose aro",
         "gardening/027-mulching.md#Mulching > Composting Basics#soil-borne pests and diseases. Raised beds warm ",
-        "gardening/167-soil-ph.md#Soil pH > Drip Irrigation#holds moisture, suppresses weeds, and feeds the ",
-        "pkm/043-spaced-repetition.md#Spaced Repetition > Surfacing Connections#would want to find again later. Local-first tool"
+        "pkm/043-spaced-repetition.md#Spaced Repetition > Surfacing Connections#would want to find again later. Local-first tool",
+        "gardening/167-soil-ph.md#Soil pH > Drip Irrigation#holds moisture, suppresses weeds, and feeds the "
       ]
     },
     {
@@ -188,10 +188,10 @@
         "hiking/099-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention",
         "databases/115-vacuuming.md#Vacuuming > Schema Migrations#without touching the row. SQLite is an embedded ",
         "hiking/169-trail-navigation.md#Trail Navigation > Blister Prevention#you carried in and staying on the trail. Elevati",
-        "hiking/029-trail-etiquette.md#Trail Etiquette > Water Treatment#usually decides how hard a day feels. Good boots",
         "pkm/083-spaced-repetition.md#Spaced Repetition > Spaced Repetition#you own, with the software layered on top. An at",
-        "hiking/159-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention",
-        "productivity/156-timeboxing.md#Timeboxing > Energy Management#is the ability to focus without distraction on a"
+        "hiking/029-trail-etiquette.md#Trail Etiquette > Water Treatment#usually decides how hard a day feels. Good boots",
+        "productivity/156-timeboxing.md#Timeboxing > Energy Management#is the ability to focus without distraction on a",
+        "hiking/159-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention"
       ]
     },
     {
@@ -218,7 +218,7 @@
         "hiking/199-blister-prevention.md#Blister Prevention > Leave No Trace#is map, compass, and attention; a dead phone sho",
         "pkm/183-linking-your-thinking.md#Linking Your Thinking## Linking Your Thinking Notes on linking your th",
         "productivity/106-managing-interruptions.md#Managing Interruptions > Default to Action#processed into next actions. Protect a block of ",
-        "pkm/143-evergreen-notes.md#Evergreen Notes > Surfacing Connections#link. Spaced repetition schedules review so the "
+        "vector-search/130-dense-vs-sparse.md#Dense vs Sparse## Dense vs Sparse Notes on dense vs sparse withi"
       ]
     },
     {
@@ -239,13 +239,13 @@
         "coffee/198-the-pour-over.md#The Pour-Over > Freshness and Degassing#extracts without scorching. A pour-over drips ho",
         "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network ",
         "coffee/068-the-bloom.md#The Bloom## The Bloom Notes on the bloom within the broade",
-        "coffee/178-the-espresso-shot.md#The Espresso Shot## The Espresso Shot Notes on the espresso shot w",
         "gardening/017-attracting-pollinators.md#Attracting Pollinators > Companion Planting#a dark, crumbly soil amendment. A patch of nativ",
-        "coffee/088-brew-ratio.md#Brew Ratio > The Espresso Shot#tastes sour and thin; over-extraction tastes bit",
+        "coffee/178-the-espresso-shot.md#The Espresso Shot## The Espresso Shot Notes on the espresso shot w",
         "distributed-systems/111-idempotent-writes.md#Idempotent Writes > The CAP Tradeoff#Under a network partition you must choose betwee",
-        "coffee/118-extraction-yield.md#Extraction Yield## Extraction Yield Notes on extraction yield wit",
+        "coffee/088-brew-ratio.md#Brew Ratio > The Espresso Shot#tastes sour and thin; over-extraction tastes bit",
         "vector-search/170-the-embedding-space.md#The Embedding Space## The Embedding Space Notes on the embedding spa",
-        "coffee/028-the-pour-over.md#The Pour-Over > The Espresso Shot#water through a bed of grounds in a paper filter"
+        "coffee/118-extraction-yield.md#Extraction Yield## Extraction Yield Notes on extraction yield wit",
+        "gardening/117-mulching.md#Mulching > Companion Planting#Companion planting pairs species that deter each"
       ]
     },
     {
@@ -267,10 +267,10 @@
         "productivity/016-deep-work.md#Deep Work > The Two-Minute Rule#See [[hiking/049-water-treatment]]. Shipping som",
         "productivity/026-single-tasking.md#Single-Tasking > Managing Interruptions#uninterrupted time before the meetings colonize ",
         "productivity/166-energy-management.md#Energy Management > Deep Work#from it. Protect a block of uninterrupted time b",
-        "productivity/036-managing-interruptions.md#Managing Interruptions## Managing Interruptions Notes on managing inter",
         "rust/182-send-and-sync.md#Send and Sync > Slices over Vecs#Rc<RefCell<T>> when a data structure needs to re",
-        "productivity/046-saying-no.md#Saying No > The Two-Minute Rule#to fill the day. If a task takes under two minut",
+        "productivity/036-managing-interruptions.md#Managing Interruptions## Managing Interruptions Notes on managing inter",
         "vector-search/100-dense-vs-sparse.md#Dense vs Sparse## Dense vs Sparse Notes on dense vs sparse withi",
+        "productivity/046-saying-no.md#Saying No > The Two-Minute Rule#to fill the day. If a task takes under two minut",
         "pkm/063-the-map-of-content.md#The Map of Content > The Map of Content#grows value from the links between notes, not th",
         "productivity/156-timeboxing.md#Timeboxing > Saying No#to fill the day. Deep work is the ability to foc"
       ]

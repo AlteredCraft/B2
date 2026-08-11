@@ -1,5 +1,5 @@
 {
-  "description": "Hand-labelled semantic-retrieval set (the eval harness, crates/b2-embed/evals/). Each query avoids the target note's keywords (synonyms/paraphrase) so it measures semantic lift, not lexical overlap. `relevant` lists the vault-relative path(s) that should rank first. The corpus clusters notes into confusable topic groups (coffee, sleep, plants, security, geology, cycling), so ranking WITHIN a cluster is tested, not just across unrelated topics. An optional `passage` is a short verbatim phrase from the target passage: those queries are additionally scored at CHUNK level (does the ranked chunk's text contain the phrase?), which is what makes chunking changes visible to the eval (index-engine.md, GH #44). Keep passages verbatim, short, and unique within the corpus.",
+  "description": "Hand-labelled semantic-retrieval set (the eval harness, crates/b2-embed/evals/). Each query avoids the target note's keywords (synonyms/paraphrase) so it measures semantic lift, not lexical overlap. `relevant` lists the vault-relative path(s) that should rank first. The corpus clusters notes into confusable topic groups (coffee, sleep, plants, security, geology, cycling), so ranking WITHIN a cluster is tested, not just across unrelated topics. An optional `passage` is a short verbatim phrase from the target passage: those queries are additionally scored at CHUNK level (does the ranked chunk's text contain the phrase?), which is what makes chunking changes visible to the eval (index-engine.md, GH #44). Keep passages verbatim, short, and unique within the corpus — and NOT identical to a heading, since `prepend_heading_path` injects the breadcrumb into chunk text and a heading-matching passage would then match for a reason unrelated to retrieval. The passage-labelled block added for #44 deliberately targets the three places chunking decides the outcome: content buried in a TABLE far from its heading, an UNLABELLED subsection, and a DEEP section a paraphrase alone must reach. The final four queries are the STEMMER-ADVERSARIAL block (GH #157), and they deliberately BREAK the avoid-the-target's-keywords rule: they measure lexical precision under tokenizer changes, not semantic lift. The universe/university pair shares a Porter stem (`univers`), so each query's target and its rival collide lexically under a stemmed tokenizer and not under unicode61 — a tokenizer A/B that improves recall elsewhere must not degrade these. The two git queries are code-literal: their passages are command text inside fenced code, where retrieval being LITERAL is the point.",
   "queries": [
     { "query": "how do leaves turn light into food", "relevant": ["photosynthesis.md"] },
     { "query": "pedalling a bike up a steep hill", "relevant": ["bicycle.md"] },
@@ -27,6 +27,29 @@
     { "query": "protecting sore rubbed heels on a long trail walk", "relevant": ["backpacking-gear.md"], "passage": "moleskin" },
     { "query": "how heavy is a minimalist pack before food and water", "relevant": ["backpacking-gear.md"], "passage": "under 4.5 kg" },
     { "query": "setting aside savings for a surprise car repair", "relevant": ["personal-finance.md"], "passage": "emergency fund" },
-    { "query": "a retirement account whose withdrawals are never taxed", "relevant": ["personal-finance.md"], "passage": "Roth" }
+    { "query": "a retirement account whose withdrawals in retirement are tax-free", "relevant": ["personal-finance.md"], "passage": "untaxed growth and withdrawals" },
+
+    { "query": "how hot are the kernels when they first begin to burst", "relevant": ["coffee-roasting.md"], "passage": "196 °C" },
+    { "query": "the cup tastes raw and vegetal instead of sweet — what went wrong", "relevant": ["coffee-roasting.md"], "passage": "underdeveloped" },
+
+    { "query": "how big must an old-style public value be for today's standard safety", "relevant": ["encryption.md"], "passage": "3072-bit" },
+    { "query": "why would anyone stockpile scrambled traffic they cannot read yet", "relevant": ["encryption.md"], "passage": "harvest-now-decrypt-later" },
+
+    { "query": "how much explosive force does a mid-sized tremor let go", "relevant": ["earthquakes.md"], "passage": "32 kilotons" },
+    { "query": "can an alert reach a phone with a few seconds to spare", "relevant": ["earthquakes.md"], "passage": "outrun the damaging waves" },
+
+    { "query": "how tight should the pedal arm fixing be done up", "relevant": ["bike-maintenance.md"], "passage": "12–14 N·m" },
+    { "query": "how worn is too worn before the links must be renewed", "relevant": ["bike-maintenance.md"], "passage": "0.75 percent" },
+
+    { "query": "what thermostat setting suits overnight rest best", "relevant": ["sleep-hygiene.md"], "passage": "16 to 19 °C" },
+    { "query": "does stepping outside on a grey morning still shift the internal rhythm", "relevant": ["sleep-hygiene.md"], "passage": "10,000 lux" },
+
+    { "query": "which greenery tolerates a corner that never sees direct sun", "relevant": ["houseplant-care.md"], "passage": "Snake plant, ZZ, pothos" },
+    { "query": "almost microscopic pests that speckle foliage and spin threads", "relevant": ["houseplant-care.md"], "passage": "Spider mites" },
+
+    { "query": "how vast is the observable universe", "relevant": ["cosmos.md"] },
+    { "query": "settling into life on a university campus", "relevant": ["campus-life.md"] },
+    { "query": "undo my last commit but keep the changes staged", "relevant": ["git-cheatsheet.md"], "passage": "reset --soft" },
+    { "query": "recover a branch i deleted by accident", "relevant": ["git-cheatsheet.md"], "passage": "git reflog" }
   ]
 }
