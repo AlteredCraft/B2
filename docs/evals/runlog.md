@@ -60,7 +60,7 @@ width, so even a small corpus does see it.)
 
 | File | Role |
 |---|---|
-| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the throwaway vault the eval builds fresh each run — topic clusters (coffee, sleep, plants, security, geology, cycling) plus deliberate loners |
+| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the throwaway vault the eval builds fresh each run — topic clusters (coffee, sleep, plants, security, geology, cycling), deliberate loners, and the stemmer-adversarial block (#157: the universe/university Porter-collision pair + a code-fenced git note) |
 | `evals/queries.json` | retrieval labels: query → relevant note(s); an optional verbatim `passage` turns on chunk-level scoring |
 | `evals/similar.json` | discovery labels: anchor → cluster-mates; **empty `expected` = negative anchor** (a loner whose correct answer is "nothing") |
 | `evals/results.jsonl` | append-only run log (gitignored) — one JSON line per scored config |
@@ -82,17 +82,21 @@ Two lines print *before* any score, and both are gates rather than decoration:
   check needing the real model belongs in the eval harness, never in `cargo test` wearing an
   `#[ignore]`.
 
-Then the per-query table, with three rank columns — `✓1` is a first-place hit, `·3` is rank 3,
+Then the per-query table, with four rank columns — `✓1` is a first-place hit, `·3` is rank 3,
 `✗>10` is a miss beyond K=10:
 
 ```text
- bm25 hybrid  chunk  query                                     top hybrid hit
-   ·2     ✓1         how do leaves turn light into food        photosynthesis.md
- ✗>10     ✓1     ·2  steeping coarse grounds then pushing …    french-press.md
+ bm25    vec hybrid  chunk  query                                     top hybrid hit
+   ·2     ✓1     ✓1         how do leaves turn light into food        photosynthesis.md
+ ✗>10     ✓1     ✓1     ·2  steeping coarse grounds then pushing …    french-press.md
 ```
 
 A query BM25 misses but hybrid nails is the entire point of the AI seam. The aggregate of that is
-the **semantic lift** line.
+the **semantic lift** line. The `vec` column (added 2026-08-10) is the **dense ablation** —
+`Vault::search_vector_only`, the vector signal alone — and the `fusion` line beneath the aggregates
+names every query hybrid ranks *worse* than that ablation would: RRF's consensus bias, counted and
+named on every run instead of rediscovered by decomposing scores by hand
+([#158](https://github.com/AlteredCraft/B2/issues/158)).
 
 **Metric glossary.** `hit@1` = fraction of queries whose labelled answer ranked first. `hit@3` = …
 ranked in the top three. `MRR@10` = mean reciprocal rank — average of `1/rank`, so rank 1 scores
@@ -111,6 +115,27 @@ the honest answer is "nothing relates". The ruling that `limit` is a cap and not
 written in [`index-engine.md §3`](../design/index-engine.md); what is missing is the calibrated
 cutoff. That is [#150](https://github.com/AlteredCraft/B2/issues/150). Until it ships, the metric is
 a failing target the floor is built against — fix the engine, not the eval.
+
+### Process rules
+
+Adopted 2026-08-10, after the review below; each traces to a measured mistake or a named risk.
+
+1. **A paired per-query win/loss list is the primary readout of any A/B; the aggregate is a smoke
+   alarm.** At n≈40, every aggregate point is 1–2 queries — "hit@1 +0.05" and "these two flipped"
+   are the same fact, but only the second can be argued with against the labels. The sweep prints
+   the diff (`Δ vs default`) automatically.
+2. **The corpus is frozen except through this file.** Every corpus edit gets a runlog entry, and
+   every edit runs the **two-direction token audit** before it lands: no existing query's content
+   tokens may newly land in the edited/added note, and no new query's content tokens may split
+   evenly toward a rival (the `insomnia.md` steal, and the `recover`+`mistake` near-miss, are the
+   precedents). The audit is a ten-line script; run it, don't eyeball it.
+3. **The same person authoring notes, queries, and fixes is a ratchet toward measuring what the
+   engine already does.** Mitigations in order of cheapness: rule 2's audit; sourcing future
+   queries from outside the corpus author's head (from note titles alone, or another person);
+   dogfooding on a real vault before trusting any threshold.
+4. **A bit-identical or unmoved metric is a claim to verify, never proof of "no effect"** — compare
+   a continuous quantity (the piles) before believing a discrete one. (Standing rule from the
+   `prepend-heading-path` trace; the sweep diff now prints its own reminder.)
 
 ### Background reading
 
@@ -651,3 +676,114 @@ Working tree at git `33c2f8a`, on `main`, **uncommitted**:
 
 `results.jsonl` is gitignored by design and holds all 12 rows locally. No engine code was modified
 this session — every finding above is an observation, not a change.
+
+---
+
+## 2026-08-10 (evening) — Actioning the review: the engine's first fix, a third column, and the floor that didn't transfer
+
+**Runs:** `just eval` ×3 (baseline replay, post-fix, post-corpus-growth), `just stability` +
+`--bless`, and an out-of-repo distributional probe · branch `claude/eval-review-actions` ·
+`results.jsonl` rows 13–15
+
+The morning's log was reviewed end to end, with five risks named: aggregate deltas too coarse for
+the n, the RRF_K sweep as an overfitting trap, a corpus structurally unable to vote against a
+stemmer, #150 calibrated from piles that cannot transfer, and an author-circularity ratchet — plus
+one broken promise (rows 7–12 recorded against an uncommitted tree) and one missing instrument (no
+vector-only baseline). Everything below actions that review. Issues opened this session:
+[#156](https://github.com/AlteredCraft/B2/issues/156) (tie-break),
+[#157](https://github.com/AlteredCraft/B2/issues/157) (stemmer A/B),
+[#158](https://github.com/AlteredCraft/B2/issues/158) (fusion characterization).
+
+### Traceability restored, then the instrument re-verified
+
+The six expanded notes + queries.json + this file were committed *first and unchanged*
+(`6a4727b`) — the exact state rows 7–12 scored. Then, before measuring anything new, the working
+changes were stashed and the eval re-run at that commit: **every number reproduced exactly** (note
+hit@1 0.92, MRR 0.939, piles gap −0.093). CPU bge is deterministic; the instrument reads true.
+Method rule: separate "is the instrument stable" from "did my change move it" — one stash apart.
+
+### #156 — the tie-break fix moved exactly one query, the right one
+
+`rrf_fuse`'s secondary key is now the candidate's rank in the dense list (absent below present),
+id kept only as the final determinism key. Test-first
+(`rrf_breaks_symmetric_ties_by_the_dense_lists_rank`, `…cross_signal…`), and the per-query diff of
+rows 13→14 shows **exactly one** rank change in 37: *how do leaves turn light into food* ·2 → ✓1 —
+the photosynthesis/houseplant photo finish, now decided on the signal that was right instead of the
+walk order. Note hit@1 0.92 → **0.95**, MRR 0.939 → **0.953**, nothing else reordered. The
+stability probe agreed from the other side: all 10 probes kept identical **note** top-10s; drift
+was chunk-level tie-flips only (8/10 same set reordered, 2/10 one boundary swap) — blessed as the
+new baseline, per the recipe's rule that a bless follows an *intended* ranking change.
+
+### #158 — the vec-only column's first reading: fusion is not currently paying rent here
+
+The eval now scores three signals per query (`bm25 / vec / hybrid`), and the aggregate block gains
+a `fusion` line naming every query hybrid ranks worse than the dense ablation. First measurement
+(n=37, row 14): **vec-only hit@1 0.97 / MRR 0.986** against hybrid's 0.95 / 0.953. The two known
+demotions (`pedalling…` vec ✓1 → hybrid ·9, `erupts…` vec ✓1 → hybrid ·7) are now printed on every
+run — and the column also caught the counter-case the forensic decomposition missed: *i can't fall
+asleep at night* is vec ·2 → hybrid ✓1, fusion **rescuing** a query. 2 demotions vs 1 rescue is
+the honest current score, which is exactly why #158 is characterization, not a verdict — and why
+the RRF_K sweep was deliberately **not** run this session: any K rescuing two named queries on 23
+notes is curve-fitting, and the stemmer (#157) may dissolve the disagreement at the input instead.
+
+### #157 prerequisite — the corpus can now vote no
+
+Three notes landed (row 15): `cosmos.md` + `campus-life.md` — the universe/university pair sharing
+the Porter stem `univers`, so each one's query gains a lexical rival under a stemmed tokenizer and
+not under `unicode61` — and `git-cheatsheet.md`, fenced commands with exact identifiers, two
+code-literal passage queries (`reset --soft`, `reflog`), and the fourth negative anchor. These
+queries deliberately break the avoid-the-target's-keywords rule and queries.json's description says
+so: they measure lexical *precision under tokenizer change*, not semantic lift. Both audit
+directions ran as scripts, not eyeballs; the one flag (query token pair `recover`+`mistake`
+matching `encryption.md`) was fixed by rewording to "by accident". After: **all 4 new queries ✓1
+on all three signals, and zero pre-existing queries moved rank.** New baseline: n=41, hybrid
+hit@1 **0.95** / MRR **0.957**, vec-only **0.98 / 0.988**, chunk n=20 at 0.70 / 0.807, negatives
+0/4 (20 cards), junk pile n=40 with ceiling unchanged at 0.684 (still the watercolor ↔
+stain-removal pair), gap still −0.093. The A/B in #157 now has probes it can regress.
+
+### #150 — the distributional probe: absolute floors do not transfer
+
+228 Paul Graham essays (single author, one topic cloud — the density extreme *opposite* this
+corpus) were indexed with the real model in a scratch vault and swept with `b2 similar --limit 10
+--json`. The eval-calibrated floors are dead on arrival there: **junk-max 0.684 keeps 99% of all
+2,280 surfaced candidates; related-min 0.591 keeps 100%.** Rank-1 medians 0.848, rank-10 medians
+0.806 — the whole distribution lives above this corpus's junk ceiling, on a ~0.04 dynamic range.
+The knee is real but shallow: 46% of anchors put their largest gap right after rank 1 (68% within
+the top 2) at a median magnitude of just 0.0135, and a "within Δ of top-1" rule discriminates at
+Δ≈0.02 and saturates by 0.04. Conclusion, posted to #150: calibrate from **per-anchor structure**
+(gap or z-score), validate the rule against this corpus's *labelled* piles, use PG-scale data as
+the transfer check — and remember a single-author vault may be a corpus where zero suppression is
+genuinely correct, which only labelled negatives can distinguish.
+
+### Housekeeping the gate surfaced
+
+`just ci` failed at its audit stage on pre-existing advisories: **dompurify ≤3.4.12** (an XSS
+advisory in the E5 trust-boundary sanitizer — "moderate" by label, load-bearing by role) and
+nanoid. Both were in-range lockfile bumps; the full gate is green after. The audit stage doing
+exactly what the CLAUDE.md design says it exists for is worth a line in the log it validated.
+
+### Where the numbers stand now
+
+| metric | session start (row 12) | session end (row 15) |
+|---|---|---|
+| corpus | 23 notes / 50 chunks | **26 notes / 53 chunks** |
+| note n | 37 | **41** |
+| note hit@1 / MRR (hybrid) | 0.92 / 0.939 | **0.95 / 0.957** |
+| note hit@1 / MRR (vec-only) | — (no column) | **0.98 / 0.988** |
+| fusion demotions / rescues | — (unmeasured) | 2 / 1, named per run |
+| chunk n · hit@1 / MRR | 18 · 0.67 / 0.786 | **20 · 0.70 / 0.807** |
+| negatives clean | 0/3 | 0/4 (floor still unbuilt — #150) |
+| `related-min − junk-max` | −0.093 | −0.093 |
+| standing engine issues | 0 open | #157, #158 (#156 fixed) |
+
+The two surviving misses (`pedalling…`, `erupts…`) remain the standing regression tests for #157 —
+now with four adversarial queries standing guard on the other side of the same trade.
+
+### Next actions
+
+1. **Run #157's A/B** (schema variant + reindex), judged by the paired win/loss readout, precision
+   probes included. The two standing misses should flip; the four new probes must not.
+2. **#44's wider sweep** — the gate sees chunking now; give it more than two variants.
+3. **#150's rule design** — per-anchor gap/z-score, validated against the labelled piles, PG-scale
+   transfer check after.
+4. Accumulate vec-only rows before touching any fusion weight (#158).
