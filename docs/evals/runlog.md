@@ -994,3 +994,105 @@ proxy and the boundary search, not retrieval-quality levers.
    a keep-default verdict closes #44 with the grid recorded as the evidence.
 5. Chunk count and embed seconds are recorded per row (the issue's throughput axis); on a
    26-note corpus they inform but cannot decide.
+
+### The re-baseline held exactly
+
+**Runs:** `results.jsonl` rows 22–29 · git `8659e2b` · `BAAI/bge-base-en-v1.5` (CPU, dim 768)
+
+Both pre-score gates cleared (bare CPU model id; `batch ≡ single` worst-row cosine 1.000000), and
+the default row (row 22) reproduces row 20 **per-query, bit-for-bit** — every rank on every signal,
+the aggregates, and the piles gap (−0.1127) — across the branch point. The instrument reads true;
+every variant below is judged against it.
+
+### The readout
+
+| config | chunks | embed_s | note h@1/MRR | vec h@1/MRR | chunk h@1/MRR | Δ chunk (win/loss) | piles gap |
+|---|---|---|---|---|---|---|---|
+| default (row 22) | 55 | 10.9 | 0.98 / 0.988 | 0.98 / 0.988 | **0.65 / 0.780** | — | −0.113 |
+| target-250 | 95 | 11.1 | 1.00 / 1.000 | 0.98 / 0.988 | 0.60 / 0.750 | +3 / −4 | −0.093 |
+| target-350 | 67 | 10.6 | 1.00 / 1.000 | 0.95 / 0.976 | 0.75 / 0.838 | +4 / −2 | −0.112 |
+| target-600 | 45 | 11.9 | 1.00 / 1.000 | 0.98 / 0.988 | 0.80 / 0.881 | +6 / −1 | **−0.134** |
+| overlap-0 | 52 | 10.0 | 0.98 / 0.988 | 0.93 / 0.963 | 0.70 / 0.825 | +4 / −0 | −0.093 |
+| overlap-30 | 59 | 12.4 | 1.00 / 1.000 | 0.95 / 0.976 | 0.70 / 0.825 | +5 / −2 | −0.093 |
+| prepend-heading-path | 55 | 11.4 | 0.98 / 0.988 | 0.98 / 0.988 | 0.65 / 0.781 | +1 / −0 | −0.094 |
+| target-250+heading-path | 95 | 11.6 | 1.00 / 1.000 | 0.95 / 0.976 | 0.60 / 0.752 | +3 / −3 | −0.093 |
+
+Three readings before the verdict, each anchored per-query:
+
+- **Note level is at ceiling everywhere and votes for nobody.** Every "1 improved" at note level
+  is the same query — *i can't fall asleep at night*, the mirrored (1,2)/(2,1) RRF photo finish
+  from the #157 entry — flipping ✓1 whenever re-chunking perturbs the tie's inputs. A knife-edge
+  landing on the other side under five different configs is noise by the log's own precedent
+  ("the number was real but fragile"), not a chunker win. Discovery likewise: positives
+  1.00 / 1.00 / 1.000 on all eight rows.
+- **The dense-ablation column caught what the hybrid surface hides** (recovered from the rows'
+  per-query ranks): `overlap-0` degrades the dense note rank of two queries (*how big must an
+  old-style public value be* ·1→·2, *how worn is too worn before the links must be renewed*
+  ·1→·2), `target-350` and `overlap-30` one each — every one masked at the hybrid surface by a
+  BM25 rescue. Overlap exists precisely to keep boundary context in the vector; `overlap-0`'s
+  clean +4/−0 scoreboard is riding fusion's cover for a measured dense regression, and the mask
+  is not a guarantee off this corpus.
+- **The chunk-level wins cluster on the same few passages across radically different knobs.**
+  *kernels first crack* (·2 at default) reaches ✓1 under five of seven variants; *grey morning
+  light* (·3) improves under five; *stockpile scrambled traffic* (·3) under six; *alert with
+  seconds to spare* (·2) under three — including both overlap rows, which move **boundaries
+  only** at the unchanged 450 target. Meanwhile *explosive force of a tremor* (✓1 at default)
+  *loses* under four variants. That is the signature of **boundary luck**: at n=20, where each
+  labelled passage lands relative to a config's cut points moves 3–4 queries per config, in both
+  directions, and the default happens to cut a handful of passages badly while cutting others
+  well. It is not the signature of a size effect — a size effect would not be reproduced by
+  overlap-only changes at the same size.
+
+### What the rule says, and what the grid says back
+
+Read literally, the pre-registered ship conditions pass **two** variants: `target-350` (+4/−2
+chunk, note flat-to-up, discovery flat, zero demotions) and `overlap-0` (+4/−0). `target-600`,
+the aggregate's headline (0.80/0.881), fails the rule on the piles clause — its junk ceiling rises
+and the gap widens −0.113 → −0.134 — and is inadmissible twice over on grounds outside the rule:
+its full-size chunks (~600 real tokens) exceed the embedder's hard 512-token truncation
+(`model.rs` `MAX_TOKENS`, right-truncated), so every big chunk's tail is text FTS can match but
+the vector cannot see — a structural harm this corpus's labels never price in — and the chunk
+metric's granularity bias (fewer, bigger chunks → no sibling competition, easier passage
+containment) pays its scoreboard in exactly its direction. 45 chunks over 26 notes is most of the
+way back to note-granularity retrieval, which defeats the point of chunking (GH #44's own "the
+wins happen *inside* a note").
+
+But the grid as a whole impeaches the comparison the rule wanted to adjudicate. The rule
+anticipated *one variant beating the default*; what the grid shows is **every moderate
+perturbation** — two sizes and two overlaps, in overlapping-but-different query sets — improving
+the same small passage cluster, while the maximal perturbation (`target-250`, 95 chunks) loses
+outright (+3/−4, and 0.60/0.750 — consistent with its pre-porter chunk-MRR dip in row 9, the one
+size signal that replicates across eras). With boundary luck worth ±3–4 queries per config at
+n=20, a net +2 (`target-350`) sits inside the noise floor, and its entire win list is the shared
+boundary-luck cluster — nothing it rescues is unique to it.
+
+### Verdict — keep `ChunkConfig::default()`; the deviation from the rule, reported
+
+**The #44 gate closes with qmd's shipped default unchanged**: `target_tokens: 450`,
+`overlap_frac: 0.15`, `prepend_heading_path: false`.
+
+- The pre-registered rule, applied mechanically, would ship `target-350`. This verdict deviates,
+  and the deviation is in the conservative direction with its reason named: the rule did not
+  anticipate the every-moderate-perturbation-improves pattern, which reads as the default's
+  boundary luck on *this* corpus rather than a property of the config — the same curve-fitting
+  trap the RRF_K sweep was refused for in the #158 entry, in chunker clothing. Shipping a default
+  that re-chunks and re-embeds every vault deserves an effect that clears the measured noise
+  floor; +2 net queries does not.
+- **`prepend_heading_path` stays off, now on two eras of evidence**: rank-neutral pre-porter
+  (rows 8–9, piles-verified as wired), and post-porter a single ·10→·9 move alone (row 28) with
+  the interaction row (`target-250+heading-path` vs `target-250`) equally flat. D3 is not paying
+  for its tokens on this corpus.
+- **`overlap_frac: 0.15` is kept** against both neighbors: `overlap-0`'s zero-loss hybrid
+  scoreboard conceals two measured dense regressions (above), and `overlap-30` buys nothing
+  `overlap-0` doesn't (both 0.70/0.825) at 13% more chunks.
+- **What would reopen this**: the same 350-over-450 direction on a *second* labelled corpus at a
+  different length scale — real-vault dogfood labels, or the PG-essay corpus once #150's work
+  gives it labels. A direction that replicates across corpora is a size effect; one that doesn't
+  was boundary luck. The sweep now costs one command (`just eval-sweep`) and the grid is
+  seven-wide, so re-trying the verdict is cheap by construction.
+- No config shipped, so `just stability` keeps its blessed baseline (rule 4's other branch), and
+  the engine suite is untouched.
+
+**Status:** #44 resolved — the gate ran with real numbers on a corpus it can see (chunk n=20,
+`pool_blind: false` at three of eight rows), and qmd's default held. The eval's remaining open
+thread is #150's per-anchor rule; the negatives stay 0/4 by design until it ships.
