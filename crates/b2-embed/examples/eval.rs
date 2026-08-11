@@ -391,7 +391,50 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
 
     // ---- Optional: the in-process chunker sweep (the #44 A/B). ---------------
     if sweep {
+        // The #44 grid: both directions on each swept knob, plus the one
+        // interaction worth a row. `target_tokens` brackets the 450 default
+        // (250 / 350 / 600); `overlap_frac` brackets 0.15 (0.0 / 0.30);
+        // `target-250+heading-path` exists because a smaller chunk carries less
+        // of its own context, which is exactly when the breadcrumb prefix (D3)
+        // is most plausibly worth its tokens. `chars_per_token` and
+        // `backscan_tokens` stay unswept: they are calibration constants of the
+        // token proxy and the boundary search, not retrieval-quality levers.
         let variants: Vec<(&str, ChunkConfig)> = vec![
+            (
+                "target-250",
+                ChunkConfig {
+                    target_tokens: 250,
+                    ..ChunkConfig::default()
+                },
+            ),
+            (
+                "target-350",
+                ChunkConfig {
+                    target_tokens: 350,
+                    ..ChunkConfig::default()
+                },
+            ),
+            (
+                "target-600",
+                ChunkConfig {
+                    target_tokens: 600,
+                    ..ChunkConfig::default()
+                },
+            ),
+            (
+                "overlap-0",
+                ChunkConfig {
+                    overlap_frac: 0.0,
+                    ..ChunkConfig::default()
+                },
+            ),
+            (
+                "overlap-30",
+                ChunkConfig {
+                    overlap_frac: 0.30,
+                    ..ChunkConfig::default()
+                },
+            ),
             (
                 "prepend-heading-path",
                 ChunkConfig {
@@ -400,9 +443,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                 },
             ),
             (
-                "target-250",
+                "target-250+heading-path",
                 ChunkConfig {
                     target_tokens: 250,
+                    prepend_heading_path: true,
                     ..ChunkConfig::default()
                 },
             ),
@@ -410,7 +454,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         println!("\n{}", "=".repeat(78));
         println!("chunker sweep (same model, same corpus; default row above for reference)");
         println!(
-            "{:<22} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   similar h@3   neg clean",
+            "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   similar h@3   neg clean",
             "config", "chunks", "embed_s"
         );
         for (label, cfg) in variants {
@@ -421,7 +465,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
-                "{:<22} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
+                "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
                 label,
                 chunks,
                 embed_secs,

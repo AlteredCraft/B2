@@ -953,3 +953,44 @@ with it. #158 downgraded from "standing demotions" to pure characterization: the
 keeps accumulating, and any fusion re-weighting still waits for evidence porter left behind. The
 standing-miss list is empty at note level for the first time; the next actions are the ones that
 were already queued — #44's wider sweep, and #150's per-anchor rule design.
+
+---
+
+## 2026-08-11 — #44's wider sweep: the grid, and the decision rule fixed before the readout
+
+**Runs:** `just eval-sweep` · branch `claude/chunker-sweep-44`
+
+### The grid
+
+The `variants` vec grows from two entries to seven — both directions on each swept knob, plus the
+one interaction worth a row:
+
+| variant | what it asks |
+|---|---|
+| `target-250` | the existing data point, re-baselined post-porter |
+| `target-350` | is there a middle ground between 250's note-level lift and its chunk-level tax? |
+| `target-600` | does *bigger* than the default hurt, or is 450 already past the knee? |
+| `overlap-0` | is the 0.15 overlap paying for anything at all? |
+| `overlap-30` | does doubling it buy boundary robustness? |
+| `prepend-heading-path` | the D3 toggle, re-baselined post-porter (rank-neutral pre-porter) |
+| `target-250+heading-path` | smaller chunks carry less of their own context — the one case where the breadcrumb is most plausibly worth its tokens |
+
+`chars_per_token` and `backscan_tokens` stay unswept: they are calibration constants of the token
+proxy and the boundary search, not retrieval-quality levers.
+
+### Decision rule — pre-registered, this section committed before the sweep ran
+
+1. **Re-baseline first.** The default row must reproduce row 20 (hybrid note 0.98 / 0.988, chunk
+   0.65 / 0.780) before any variant is read. Rows 8–10 predate porter (schema v5) and the #156
+   tie-break; nothing compares across that line.
+2. **The paired per-query win/loss list is the readout** (process rule 1), note and chunk level
+   both; any aggregate claim names its queries.
+3. **Ship a retuned `ChunkConfig` only on strict dominance**: net chunk-level wins, zero
+   note-level losses, discovery unharmed (positive ranks and the piles), no new fusion demotions.
+   The default's headroom is almost entirely at chunk level (note 0.98 = 40/41, the one miss a
+   knife-edge RRF tie no chunker knob decides), so "note flat + chunk wins" is the only shippable
+   shape — a trade across levels is a keep-default verdict.
+4. **A shipped config change re-blesses `just stability`** as an intended ranking change;
+   a keep-default verdict closes #44 with the grid recorded as the evidence.
+5. Chunk count and embed seconds are recorded per row (the issue's throughput axis); on a
+   26-note corpus they inform but cannot decide.
