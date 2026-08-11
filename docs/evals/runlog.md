@@ -1093,6 +1093,30 @@ boundary-luck cluster — nothing it rescues is unique to it.
 - No config shipped, so `just stability` keeps its blessed baseline (rule 4's other branch), and
   the engine suite is untouched.
 
+### Correction (same day, from the PR #161 review) — the mechanical pass set is four of seven, not two
+
+CodeRabbit's review of this entry caught a real enumeration error. "The pre-registered ship
+conditions pass **two** variants" above is wrong: rechecked against rows 22–29, the conditions as
+written — net chunk-level wins, zero note-level losses, discovery unharmed, no new fusion
+demotions — are *also* met by `overlap-30` (+5/−2 chunk, note flat-to-up, gap improved to −0.093,
+hybrid all ✓1 so zero demotions) and by `prepend-heading-path` (+1/−0 chunk on the single crock
+·10→·9 move, note ranks bit-identical to default, gap −0.094). The true mechanical pass set is
+**four of seven**: `target-350`, `overlap-0`, `overlap-30`, `prepend-heading-path`. The review's
+wording point is also taken: "strict dominance" was a label that overstated the rule — the four
+named conditions are the rule, and only `overlap-0` exhibits the zero-loss dominance the label
+implied.
+
+The verdict does not change, because the corrected count argues *for* it more strongly than the
+wrong one did. A ship rule passed by four of seven variants — including the D3 toggle that two
+eras of piles-verified evidence show to be rank-inert, qualifying on one ·10→·9 move of the
+corpus's most marginal passage — is a rule whose bar sits below this corpus's noise floor. It is
+not selecting a winner; it is measuring boundary luck, which is the deviation section's argument
+arrived at from the other side. The process lesson, registered for the next retrial rather than
+applied retroactively to this one: **a chunker A/B's decision rule must state, up front, its
+net-win threshold relative to the measured noise floor (±3–4 of 20 passages here) and its
+treatment of dense-ablation regressions** — conditions this run's rule left unstated, which is
+how a rank-inert knob qualified.
+
 **Status:** #44 resolved — the gate ran with real numbers on a corpus it can see (chunk n=20,
 `pool_blind: false` at three of eight rows), and qmd's default held. The eval's remaining open
 thread is #150's per-anchor rule; the negatives stay 0/4 by design until it ships.
