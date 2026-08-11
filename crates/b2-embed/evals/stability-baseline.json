@@ -3,7 +3,7 @@
   "vault": "fixtures/test-vault",
   "embedder": "fake",
   "k": 10,
-  "blessed_at": "0571845",
+  "blessed_at": "fc7c4ae",
   "probes": [
     {
       "query": "how do i choose an approximate nearest neighbour index",
@@ -37,53 +37,53 @@
       "notes": [
         "transformers/074-self-attention.md",
         "transformers/174-positional-encoding.md",
-        "pkm/123-linking-your-thinking.md",
         "distributed-systems/011-leader-election.md",
         "transformers/094-fine-tuning-vs-prompting.md",
         "transformers/084-the-bert-encoder.md",
-        "pkm/173-local-first-vaults.md",
         "distributed-systems/001-consensus-under-partition.md",
         "transformers/164-the-bert-encoder.md",
-        "pkm/073-spaced-repetition.md"
+        "vector-search/200-recall-vs-latency.md",
+        "coffee/168-brew-ratio.md",
+        "transformers/194-distillation.md"
       ],
       "chunks": [
         "transformers/074-self-attention.md#Self-Attention > The Feed-Forward Block#layer. Distillation trains a small student to mi",
         "transformers/174-positional-encoding.md#Positional Encoding > CLS Pooling#into a model that is otherwise permutation-invar",
         "transformers/094-fine-tuning-vs-prompting.md#Fine-Tuning vs Prompting > CLS Pooling#prompting steers it without weight updates. A su",
-        "pkm/173-local-first-vaults.md#Local-First Vaults > Spaced Repetition#one idea, which makes it reusable and easy to li",
         "transformers/164-the-bert-encoder.md#The BERT Encoder > Fine-Tuning vs Prompting#bounded. The forward pass cost is dominated by m",
         "vector-search/200-recall-vs-latency.md#Recall vs Latency > Chunking Strategy#reciprocal rank fusion. Cosine similarity ranks ",
         "coffee/168-brew-ratio.md#Brew Ratio > Tasting Notes#Single-origin beans express the character of one",
         "transformers/194-distillation.md#Distillation > Layer Normalization#its context window, so long documents must be ch",
         "vector-search/010-hybrid-retrieval.md#Hybrid Retrieval > Chunking Strategy#query but trivially correct and cache-friendly a",
-        "transformers/124-positional-encoding.md#Positional Encoding > The BERT Encoder#weigh every other token when building its repres"
+        "transformers/124-positional-encoding.md#Positional Encoding > The BERT Encoder#weigh every other token when building its repres",
+        "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network "
       ]
     },
     {
       "query": "who owns this value and when does it get dropped",
       "notes": [
+        "rust/122-send-and-sync.md",
+        "rust/142-trait-objects.md",
+        "pkm/033-local-first-vaults.md",
+        "rust/082-iterators-and-laziness.md",
         "productivity/166-energy-management.md",
         "productivity/186-default-to-action.md",
-        "productivity/156-timeboxing.md",
+        "pkm/123-linking-your-thinking.md",
+        "rust/112-slices-over-vecs.md",
         "productivity/196-deep-work.md",
-        "productivity/016-deep-work.md",
-        "rust/122-send-and-sync.md",
-        "productivity/146-timeboxing.md",
-        "hiking/169-trail-navigation.md",
-        "productivity/046-saying-no.md",
-        "rust/112-slices-over-vecs.md"
+        "productivity/156-timeboxing.md"
       ],
       "chunks": [
+        "rust/122-send-and-sync.md#Send and Sync## Send and Sync Notes on send and sync within th",
+        "rust/142-trait-objects.md#Trait Objects > Error Enums with thiserror#let, or the question mark. thiserror generates D",
+        "rust/082-iterators-and-laziness.md#Iterators and Laziness > Trait Objects#signatures; return owned types and let the calle",
         "productivity/166-energy-management.md#Energy Management > Deep Work#from it. Protect a block of uninterrupted time b",
         "productivity/186-default-to-action.md#Default to Action > Single-Tasking#inputs get processed into next actions. A clear ",
-        "productivity/156-timeboxing.md#Timeboxing > Energy Management#is the ability to focus without distraction on a",
-        "productivity/046-saying-no.md#Saying No > The Two-Minute Rule#to fill the day. If a task takes under two minut",
+        "pkm/123-linking-your-thinking.md#Linking Your Thinking > Surfacing Connections#tools keep your data as plain files you own, wit",
         "pkm/033-local-first-vaults.md#Local-First Vaults > Daily Notes#are a low-friction capture surface that you refa",
-        "productivity/176-energy-management.md#Energy Management## Energy Management Notes on energy management w",
+        "rust/082-iterators-and-laziness.md#Iterators and Laziness > Send and Sync#keys or indices over Rc<RefCell<T>> when a data ",
         "databases/095-denormalization.md#Denormalization > Vacuuming#a query entirely from the index without touching",
-        "productivity/136-timeboxing.md#Timeboxing > Managing Interruptions#Every yes is a no to something else, so guard yo",
-        "coffee/128-extraction-yield.md#Extraction Yield > Single-Origin Beans#blended house style. Extraction yield is the fra",
-        "productivity/046-saying-no.md#Saying No > Managing Interruptions#makes the next one easier. A weekly review is wh"
+        "rust/012-error-enums-with-thiserror.md#Error Enums with thiserror > Zero-Cost Abstractions#log line. Prefer keys or indices over Rc<RefCell"
       ]
     },
     {
@@ -93,12 +93,12 @@
         "transformers/104-self-attention.md",
         "vector-search/080-hnsw-graphs.md",
         "vector-search/040-dense-vs-sparse.md",
+        "vector-search/120-the-embedding-space.md",
         "transformers/094-fine-tuning-vs-prompting.md",
         "transformers/084-the-bert-encoder.md",
         "vector-search/110-recall-vs-latency.md",
-        "vector-search/120-the-embedding-space.md",
         "vector-search/100-dense-vs-sparse.md",
-        "rust/192-iterators-and-laziness.md"
+        "vector-search/050-approximate-nearest-neighbors.md"
       ],
       "chunks": [
         "transformers/074-self-attention.md#Self-Attention > The BERT Encoder#GPU. Fine-tuning adapts a pretrained model to a ",
@@ -117,54 +117,54 @@
       "query": "why is my query not using the index",
       "notes": [
         "databases/125-acid-transactions.md",
-        "vector-search/020-the-embedding-space.md",
         "databases/115-vacuuming.md",
-        "vector-search/200-recall-vs-latency.md",
         "databases/035-schema-migrations.md",
-        "vector-search/040-dense-vs-sparse.md",
-        "vector-search/050-approximate-nearest-neighbors.md",
-        "vector-search/030-approximate-nearest-neighbors.md",
-        "vector-search/170-the-embedding-space.md",
-        "vector-search/150-recall-vs-latency.md"
+        "databases/155-connection-pooling.md",
+        "databases/045-connection-pooling.md",
+        "vector-search/020-the-embedding-space.md",
+        "databases/005-sqlite-as-a-library.md",
+        "databases/145-the-write-ahead-log.md",
+        "databases/175-query-planning.md",
+        "databases/085-connection-pooling.md"
       ],
       "chunks": [
         "databases/125-acid-transactions.md#ACID Transactions > B-Tree Indexes#should be forward-only and idempotent so environ",
-        "vector-search/020-the-embedding-space.md#The Embedding Space > Quantized Vectors#quiet lever: too small and you embed noise, too ",
-        "vector-search/170-the-embedding-space.md#The Embedding Space > Quantized Vectors#trades a little recall for a large latency win b",
+        "databases/115-vacuuming.md#Vacuuming > Schema Migrations#without touching the row. SQLite is an embedded ",
+        "databases/035-schema-migrations.md#Schema Migrations > Schema Migrations#keyword matching. ACID transactions give you ato",
+        "databases/045-connection-pooling.md#Connection Pooling > Full-Text Search#Denormalization trades storage and write complex",
+        "databases/175-query-planning.md#Query Planning > Full-Text Search#and write complexity for faster reads. Disposabl",
         "productivity/096-timeboxing.md#Timeboxing > The Two-Minute Rule#to fill the day. When the path is unclear, take ",
-        "vector-search/070-cosine-similarity.md#Cosine Similarity > Hybrid Retrieval#vectors so millions fit in memory at the cost of",
+        "databases/055-sqlite-as-a-library.md#SQLite as a Library## SQLite as a Library Notes on sqlite as a libra",
         "distributed-systems/031-the-cap-tradeoff.md#The CAP Tradeoff > Quorum Reads#a fast producer. The two generals problem shows ",
-        "vector-search/190-dense-vs-sparse.md#Dense vs Sparse## Dense vs Sparse Notes on dense vs sparse withi",
-        "productivity/156-timeboxing.md#Timeboxing > Saying No#to fill the day. Deep work is the ability to foc",
-        "vector-search/070-cosine-similarity.md#Cosine Similarity > Cosine Similarity#scale. Dense retrieval maps text into a vector s",
-        "vector-search/160-the-embedding-space.md#The Embedding Space > Approximate Nearest Neighbors#their normalized embeddings. Chunk size is the q"
+        "databases/155-connection-pooling.md#Connection Pooling## Connection Pooling Notes on connection pooling",
+        "productivity/156-timeboxing.md#Timeboxing > Saying No#to fill the day. Deep work is the ability to foc"
       ]
     },
     {
       "query": "improving tired soil before planting anything",
       "notes": [
+        "gardening/167-soil-ph.md",
+        "gardening/127-soil-ph.md",
+        "coffee/168-brew-ratio.md",
+        "gardening/027-mulching.md",
         "gardening/157-composting-basics.md",
         "gardening/057-drip-irrigation.md",
-        "gardening/167-soil-ph.md",
-        "gardening/027-mulching.md",
-        "coffee/168-brew-ratio.md",
-        "gardening/017-attracting-pollinators.md",
-        "gardening/097-companion-planting.md",
-        "gardening/127-soil-ph.md",
+        "gardening/037-drip-irrigation.md",
         "productivity/056-shipping-small.md",
+        "gardening/017-attracting-pollinators.md",
         "hiking/089-switchbacks.md"
       ],
       "chunks": [
-        "gardening/157-composting-basics.md#Composting Basics > Raised Beds#than heavy native clay. Companion planting pairs",
-        "gardening/057-drip-irrigation.md#Drip Irrigation > Soil pH#deter each other's pests or share nutrients. Rai",
         "gardening/167-soil-ph.md#Soil pH## Soil pH Notes on soil ph within the broader th",
         "gardening/127-soil-ph.md#Soil pH > Pruning Fruit Trees#plant can actually take up from the ground. Comp",
-        "gardening/087-drip-irrigation.md#Drip Irrigation > Pruning Fruit Trees#starves soil-borne pests and diseases. Companion",
+        "gardening/157-composting-basics.md#Composting Basics > Raised Beds#than heavy native clay. Companion planting pairs",
+        "gardening/057-drip-irrigation.md#Drip Irrigation > Soil pH#deter each other's pests or share nutrients. Rai",
+        "gardening/037-drip-irrigation.md#Drip Irrigation > Composting Basics#[[gardening/027-mulching]]. Rotating crops betwe",
         "gardening/047-overwintering.md#Overwintering## Overwintering Notes on overwintering within th",
         "coffee/168-brew-ratio.md#Brew Ratio > The Pour-Over#bitter and hollow. Freshly ground beans lose aro",
-        "gardening/027-mulching.md#Mulching > Composting Basics#soil-borne pests and diseases. Raised beds warm ",
+        "gardening/197-raised-beds.md#Raised Beds > Attracting Pollinators#crops between beds each year starves soil-borne ",
         "pkm/043-spaced-repetition.md#Spaced Repetition > Surfacing Connections#would want to find again later. Local-first tool",
-        "gardening/167-soil-ph.md#Soil pH > Drip Irrigation#holds moisture, suppresses weeds, and feeds the "
+        "gardening/187-mulching.md#Mulching > Raised Beds#slowly, wasting little to evaporation. Healthy s"
       ]
     },
     {
@@ -172,14 +172,14 @@
       "notes": [
         "hiking/199-blister-prevention.md",
         "hiking/189-reading-the-weather.md",
-        "hiking/049-water-treatment.md",
         "hiking/139-blister-prevention.md",
-        "hiking/019-reading-the-weather.md",
+        "hiking/049-water-treatment.md",
         "hiking/169-trail-navigation.md",
+        "hiking/019-reading-the-weather.md",
+        "hiking/109-water-treatment.md",
         "transformers/134-tokenization.md",
         "hiking/009-elevation-gain.md",
-        "hiking/079-trail-etiquette.md",
-        "hiking/109-water-treatment.md"
+        "vector-search/020-the-embedding-space.md"
       ],
       "chunks": [
         "hiking/199-blister-prevention.md#Blister Prevention > Leave No Trace#is map, compass, and attention; a dead phone sho",
@@ -187,11 +187,11 @@
         "coffee/088-brew-ratio.md#Brew Ratio > The Pour-Over#water through a compact puck for a concentrated ",
         "hiking/099-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention",
         "databases/115-vacuuming.md#Vacuuming > Schema Migrations#without touching the row. SQLite is an embedded ",
-        "hiking/169-trail-navigation.md#Trail Navigation > Blister Prevention#you carried in and staying on the trail. Elevati",
+        "hiking/059-switchbacks.md#Switchbacks > Water Treatment#turns. Blisters start as hot spots; taping early",
         "pkm/083-spaced-repetition.md#Spaced Repetition > Spaced Repetition#you own, with the software layered on top. An at",
-        "hiking/029-trail-etiquette.md#Trail Etiquette > Water Treatment#usually decides how hard a day feels. Good boots",
+        "hiking/159-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention",
         "productivity/156-timeboxing.md#Timeboxing > Energy Management#is the ability to focus without distraction on a",
-        "hiking/159-blister-prevention.md#Blister Prevention## Blister Prevention Notes on blister prevention"
+        "hiking/109-water-treatment.md#Water Treatment > Trail Navigation#summit before the afternoon weather turns. Switc"
       ]
     },
     {
@@ -203,22 +203,22 @@
         "databases/115-vacuuming.md",
         "pkm/063-the-map-of-content.md",
         "coffee/188-brew-ratio.md",
-        "databases/145-the-write-ahead-log.md",
+        "pkm/033-local-first-vaults.md",
+        "pkm/093-the-zettelkasten.md",
         "hiking/199-blister-prevention.md",
-        "pkm/183-linking-your-thinking.md",
-        "pkm/043-spaced-repetition.md"
+        "pkm/183-linking-your-thinking.md"
       ],
       "chunks": [
         "pkm/123-linking-your-thinking.md#Linking Your Thinking## Linking Your Thinking Notes on linking your th",
         "pkm/193-the-map-of-content.md#The Map of Content > Evergreen Notes#data as plain files you own, with the software l",
-        "pkm/193-the-map-of-content.md#The Map of Content > Daily Notes#Surfacing semantically similar notes lets you di",
         "pkm/163-surfacing-connections.md#Surfacing Connections > The Zettelkasten#the software layered on top. Progressive summari",
+        "pkm/193-the-map-of-content.md#The Map of Content > Daily Notes#Surfacing semantically similar notes lets you di",
+        "pkm/163-surfacing-connections.md#Surfacing Connections## Surfacing Connections Notes on surfacing conne",
         "databases/115-vacuuming.md#Vacuuming > The Write-Ahead Log#source of truth. Migrations should be forward-on",
-        "pkm/123-linking-your-thinking.md#Linking Your Thinking > The Zettelkasten#capture surface that you refactor into permanent",
+        "pkm/033-local-first-vaults.md#Local-First Vaults > Spaced Repetition#that you refactor into permanent notes later. Th",
         "hiking/199-blister-prevention.md#Blister Prevention > Leave No Trace#is map, compass, and attention; a dead phone sho",
-        "pkm/183-linking-your-thinking.md#Linking Your Thinking## Linking Your Thinking Notes on linking your th",
-        "productivity/106-managing-interruptions.md#Managing Interruptions > Default to Action#processed into next actions. Protect a block of ",
-        "vector-search/130-dense-vs-sparse.md#Dense vs Sparse## Dense vs Sparse Notes on dense vs sparse withi"
+        "pkm/183-linking-your-thinking.md#Linking Your Thinking > The Map of Content#layered on top. Progressive summarization highli",
+        "productivity/106-managing-interruptions.md#Managing Interruptions > Default to Action#processed into next actions. Protect a block of "
       ]
     },
     {
@@ -226,8 +226,8 @@
       "notes": [
         "coffee/198-the-pour-over.md",
         "distributed-systems/011-leader-election.md",
-        "coffee/038-single-origin-beans.md",
         "coffee/028-the-pour-over.md",
+        "coffee/038-single-origin-beans.md",
         "pkm/043-spaced-repetition.md",
         "distributed-systems/131-the-two-generals.md",
         "rust/072-send-and-sync.md",
@@ -237,14 +237,14 @@
       ],
       "chunks": [
         "coffee/198-the-pour-over.md#The Pour-Over > Freshness and Degassing#extracts without scorching. A pour-over drips ho",
-        "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network ",
         "coffee/068-the-bloom.md#The Bloom## The Bloom Notes on the bloom within the broade",
         "gardening/017-attracting-pollinators.md#Attracting Pollinators > Companion Planting#a dark, crumbly soil amendment. A patch of nativ",
         "coffee/178-the-espresso-shot.md#The Espresso Shot## The Espresso Shot Notes on the espresso shot w",
         "distributed-systems/111-idempotent-writes.md#Idempotent Writes > The CAP Tradeoff#Under a network partition you must choose betwee",
         "coffee/088-brew-ratio.md#Brew Ratio > The Espresso Shot#tastes sour and thin; over-extraction tastes bit",
+        "distributed-systems/011-leader-election.md#Leader Election > Idempotent Writes#despite crashes and partitions. Under a network ",
         "vector-search/170-the-embedding-space.md#The Embedding Space## The Embedding Space Notes on the embedding spa",
-        "coffee/118-extraction-yield.md#Extraction Yield## Extraction Yield Notes on extraction yield wit",
+        "coffee/028-the-pour-over.md#The Pour-Over > The Espresso Shot#water through a bed of grounds in a paper filter",
         "gardening/117-mulching.md#Mulching > Companion Planting#Companion planting pairs species that deter each"
       ]
     },
@@ -255,10 +255,10 @@
         "productivity/016-deep-work.md",
         "vector-search/140-reranking-candidates.md",
         "productivity/026-single-tasking.md",
-        "hiking/019-reading-the-weather.md",
-        "productivity/006-deep-work.md",
         "productivity/166-energy-management.md",
+        "hiking/019-reading-the-weather.md",
         "productivity/076-the-weekly-review.md",
+        "productivity/056-shipping-small.md",
         "rust/132-interior-mutability.md",
         "hiking/129-blister-prevention.md"
       ],
@@ -272,7 +272,7 @@
         "vector-search/100-dense-vs-sparse.md#Dense vs Sparse## Dense vs Sparse Notes on dense vs sparse withi",
         "productivity/046-saying-no.md#Saying No > The Two-Minute Rule#to fill the day. If a task takes under two minut",
         "pkm/063-the-map-of-content.md#The Map of Content > The Map of Content#grows value from the links between notes, not th",
-        "productivity/156-timeboxing.md#Timeboxing > Saying No#to fill the day. Deep work is the ability to foc"
+        "pkm/193-the-map-of-content.md#The Map of Content > Daily Notes#Surfacing semantically similar notes lets you di"
       ]
     }
   ]

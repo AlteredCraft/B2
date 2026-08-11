@@ -5,8 +5,9 @@
 //! demand:
 //!
 //! ```console
-//! cargo run -p b2-embed --example eval             # score the configured model
-//! cargo run -p b2-embed --example eval -- --sweep  # + chunker A/B (the #44 gate)
+//! cargo run -p b2-embed --example eval               # score the configured model
+//! cargo run -p b2-embed --example eval -- --sweep    # + chunker A/B (the #44 gate)
+//! cargo run -p b2-embed --example eval -- --stemmer  # + FTS tokenizer A/B (the #157 gate)
 //! ```
 //!
 //! One run builds a throwaway vault from the hand-labelled corpus in `evals/` and
@@ -53,11 +54,22 @@
 //! (`Vault::set_chunk_config` → `project(force)` → `embed`) and reports the same
 //! scores per config — the in-process chunker A/B the #44 gate runs on.
 //!
+//! `--stemmer` is the #157 instrument: `Vault::rebuild_fts` swaps `chunks_fts`
+//! between the shipped `porter unicode61` (schema v5 — the A/B's verdict) and the
+//! unstemmed `unicode61` ablation, over the **identical** chunk rows and vectors —
+//! nothing re-chunks or re-embeds, so every rank move is the tokenizer's alone.
+//! BM25-only is scored under both tokenizers while the vault is still unembedded
+//! (the honest lexical ablation), hybrid under both after; the dense ablation is
+//! re-scored across the flip purely as an instrument check (FTS cannot reach it,
+//! so any movement means the harness is broken, not the engine). Discovery is
+//! not re-scored: `similar` never touches FTS.
+//!
 //! Every scored run appends one JSON line to `evals/results.jsonl` (gitignored),
 //! so runs accumulate into a comparable dataset: "tune from numbers" needs the
 //! numbers kept.
 
 use b2_core::chunk::ChunkConfig;
+use b2_core::db::FtsTokenizer;
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
@@ -210,6 +222,7 @@ fn main() {
 /// Returns whether the default-config hybrid pass cleared the reference floor.
 fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let sweep = std::env::args().any(|a| a == "--sweep");
+    let stemmer = std::env::args().any(|a| a == "--stemmer");
     let evals_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("evals");
     let corpus_dir = evals_dir.join("corpus");
     let results_path = evals_dir.join("results.jsonl");
@@ -258,6 +271,19 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         report.indexed
     );
 
+    // The stemmer instrument's lexical arm is scored HERE, while the vault is
+    // still projected-but-unembedded, so `search` is honestly BM25-only under
+    // both tokenizers; the vault is handed back to the shipped default before
+    // anything embeds.
+    let bm25_unstemmed = if stemmer {
+        vault.rebuild_fts(FtsTokenizer::Unicode61)?;
+        let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+        vault.rebuild_fts(FtsTokenizer::PorterUnicode61)?;
+        Some(pass)
+    } else {
+        None
+    };
+
     // ---- Phase 2: embed → vector-only ablation + hybrid + discovery. ---------
     let (chunks, embed_secs) = timed_embed(&vault)?;
     let vector = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
@@ -282,6 +308,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             dim,
             "default",
             &ChunkConfig::default(),
+            FtsTokenizer::PorterUnicode61.sql(),
             report.indexed,
             chunks,
             embed_secs,
@@ -292,6 +319,75 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             Some(&similar),
         ),
     )?;
+
+    // ---- Optional: the FTS tokenizer ablation (the #157 instrument). ---------
+    // One lever, isolated: `rebuild_fts` swaps the tokenizer over the identical
+    // chunk rows and vectors — the shipped `porter unicode61` against the
+    // unstemmed `unicode61` the A/B retired, kept measurable so the verdict can
+    // be re-tried as the corpus grows. Discovery is deliberately not re-scored —
+    // `similar` never touches FTS (centroid shortlist + chunk vectors), so its
+    // numbers cannot move and the ablation row records no `similar` keys. The
+    // dense ablation IS re-scored, as an instrument check: FTS cannot reach it
+    // either, so a moved dense rank means the harness is broken, not the engine.
+    if stemmer {
+        let bm25_unstemmed = bm25_unstemmed
+            .as_ref()
+            .expect("scored while unembedded above");
+        vault.rebuild_fts(FtsTokenizer::Unicode61)?;
+        let vec_unstemmed = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
+        let hybrid_unstemmed = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+
+        println!("\n{}", "=".repeat(78));
+        println!(
+            "stemmer ablation — chunks_fts rebuilt `unicode61` (unstemmed) over identical chunks + vectors (GH #157)"
+        );
+        let dense_moved = (0..set.queries.len())
+            .filter(|&i| vec_unstemmed.scores[i].note != vector.scores[i].note)
+            .count();
+        if dense_moved == 0 {
+            println!("  [check] dense ablation identical across the flip, as it must be");
+        } else {
+            println!(
+                "  [FAULT] {dense_moved} dense rank(s) moved across an FTS-only flip — \
+                 the harness is broken; distrust this run"
+            );
+        }
+        println!("  bm25-only, unstemmed vs shipped porter:");
+        print_rank_moves(&set.queries, &bm25, bm25_unstemmed);
+        println!("  hybrid, unstemmed vs shipped porter:");
+        print_rank_moves(&set.queries, &hybrid, &hybrid_unstemmed);
+        println!(
+            "  unstemmed aggregates: bm25 note {:.2} / {:.3}   hybrid note {:.2} / {:.3}   chunk {:.2} / {:.3}",
+            bm25_unstemmed.note.hit1(),
+            bm25_unstemmed.note.mrr(),
+            hybrid_unstemmed.note.hit1(),
+            hybrid_unstemmed.note.mrr(),
+            hybrid_unstemmed.chunk.hit1(),
+            hybrid_unstemmed.chunk.mrr(),
+        );
+        append_result(
+            &results_path,
+            result_row(
+                &git,
+                &model_id,
+                dim,
+                "unicode61",
+                &ChunkConfig::default(),
+                FtsTokenizer::Unicode61.sql(),
+                report.indexed,
+                chunks,
+                embed_secs,
+                &set.queries,
+                Some(bm25_unstemmed),
+                Some(&vec_unstemmed),
+                &hybrid_unstemmed,
+                None,
+            ),
+        )?;
+        // Hand the vault back untainted, so a `--sweep` in the same run (and the
+        // reference numbers above) stay under the shipped default tokenizer.
+        vault.rebuild_fts(FtsTokenizer::PorterUnicode61)?;
+    }
 
     // ---- Optional: the in-process chunker sweep (the #44 A/B). ---------------
     if sweep {
@@ -351,6 +447,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                     dim,
                     label,
                     &cfg,
+                    FtsTokenizer::PorterUnicode61.sql(),
                     report.indexed,
                     chunks,
                     embed_secs,
@@ -831,6 +928,7 @@ fn result_row(
     dim: usize,
     label: &str,
     cfg: &ChunkConfig,
+    tokenizer: &str,
     notes: usize,
     chunks: usize,
     embed_secs: f64,
@@ -858,6 +956,11 @@ fn result_row(
             "backscan_tokens": cfg.backscan_tokens,
             "prepend_heading_path": cfg.prepend_heading_path,
         },
+        // NEW key (absent from rows before 2026-08-11, which were all scored
+        // under the then-default `unicode61`): the chunks_fts tokenizer this row
+        // was scored under (GH #157). Top-level rather than inside `config`,
+        // which stays the ChunkConfig alone.
+        "tokenizer": tokenizer,
         "notes": notes,
         "chunks": chunks,
         // The caveat travels with the numbers: a row whose corpus fit inside the

@@ -598,6 +598,18 @@ impl Vault {
         self.chunk_config = cfg;
     }
 
+    /// Rebuild the FTS index over the **same stored chunk text** with a different
+    /// tokenizer ([`db::rebuild_fts`]). Like [`set_chunk_config`](Self::set_chunk_config)
+    /// this is the out-of-CI eval harness's lever, not an adapter surface: the
+    /// tokenizer touches only the lexical half, so the GH #157 stemmer A/B can
+    /// flip it back and forth without re-chunking or re-embedding anything. The
+    /// choice is not recorded durably anywhere — the index is disposable, and a
+    /// `reindex` into a fresh `.b2/` restores the shipped default; the shipped
+    /// adapters never call this.
+    pub fn rebuild_fts(&self, tokenizer: db::FtsTokenizer) -> Result<()> {
+        db::rebuild_fts(&self.conn, tokenizer)
+    }
+
     /// Re-project every `.md` note under the vault root into the index (Flow ①):
     /// notes, chunks (+embeddings), and the typed graph. Stamps any missing `b2id`.
     /// **Incremental** — a note whose body is unchanged reuses its vectors rather

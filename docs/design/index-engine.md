@@ -331,15 +331,21 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
   therefore the candidate's rank in the **vector list** (absent ranks below present), with id last
   purely for determinism — a photo finish is decided on the signal measured to be right there, never
   on projection walk order.
-- **The FTS tokenizer is `unicode61` — unstemmed, and that is a *measured-default*, not a verdict.**
-  BM25 matches surface forms only: `pedalling` finds nothing in a note that says "pedals"
-  ([#157](https://github.com/AlteredCraft/B2/issues/157) has the measurements; a `porter unicode61`
-  table over identical text recovers every missed form). Stemming is a real precision/recall trade —
-  a vault holds code, identifiers, and proper nouns, and sparse retrieval earns its keep by being
-  literal exactly where embeddings are weak — so the switch is gated on #157's A/B over the eval
-  corpus's standing recall *and* precision probes, not adopted on the recall wins alone. Until that
-  verdict, unstemmed is the documented choice, and the dense half is what covers morphology
-  (its interaction with fusion is [#158](https://github.com/AlteredCraft/B2/issues/158)).
+- **The FTS tokenizer is `porter unicode61` — stemmed, and that is a *measured verdict*, not a
+  default (schema v5).** Unstemmed BM25 matched surface forms only — `pedalling` found nothing in a
+  note that says "pedals", leaving the lexical half at rank 41–46 on queries the dense half ranked
+  first, which RRF's consensus bias turned into hybrid demotions of correct dense hits. The A/B
+  that settled it ([#157](https://github.com/AlteredCraft/B2/issues/157);
+  docs/evals/runlog.md 2026-08-11): porter improved 7 BM25-only note ranks and 3 hybrid note ranks,
+  worsened none, and dissolved every standing fusion demotion (hybrid rejoined vector-only at 0.98
+  hit@1 / 0.988 MRR on the eval corpus) — while the precision probes built to vote *against*
+  stemming (the `universe`/`university` Porter-collision pair, the code-literal `git-cheatsheet.md`
+  queries) did not move. Stemming remains a real trade — Porter is English-only, and a vault holds
+  code, identifiers, and proper nouns — so the retired arm stays measurable: `Vault::rebuild_fts`
+  swaps `chunks_fts`'s tokenizer over identical chunk rows and vectors (nothing re-chunks or
+  re-embeds), and `just eval-stemmer` scores the unstemmed ablation beside every default run. The
+  fusion interaction is [#158](https://github.com/AlteredCraft/B2/issues/158), where the stemmed
+  input is what emptied the demotions line.
 - **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
   chunks. Brute-force cosine over ~100k × 768-dim float32 vectors is on the order of **single-digit to
   low-tens of milliseconds** — well within an interactive budget. We're nowhere near the regime

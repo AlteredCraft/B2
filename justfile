@@ -240,6 +240,19 @@ eval:
 eval-sweep:
     cargo run -p b2-embed --example eval -- --sweep
 
+# One lever, isolated: `Vault::rebuild_fts` swaps chunks_fts between the shipped
+# `porter unicode61` (schema v5 — the GH #157 verdict) and the unstemmed `unicode61` it
+# retired, over the identical chunk rows and vectors — nothing re-chunks or re-embeds, so
+# every rank move is the tokenizer's alone. BM25-only is scored under both tokenizers (the
+# honest lexical ablation), hybrid under both; the dense column doubles as an instrument
+# check (FTS cannot reach it, so movement there means the harness broke). The paired
+# per-query win/loss list is the readout; the standing precision probes
+# (universe/university, the git code-literal queries) guard the stemmed side of the trade.
+[group('model')]
+[doc('`just eval` plus the FTS tokenizer ablation (shipped porter vs unstemmed unicode61) — the GH #157 instrument.')]
+eval-stemmer:
+    cargo run -p b2-embed --example eval -- --stemmer
+
 # What `just eval` structurally cannot see (GH #141): its 29-chunk corpus is smaller than the
 # 150-candidate pool retrieval reaches, so neither signal is truncated and a candidate-width
 # change prints bit-identical scores. This probe asks the same queries at widening pools on a
