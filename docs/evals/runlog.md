@@ -34,6 +34,7 @@ The design authority for everything scored here is [`docs/design/index-engine.md
 |---|---|---|---|
 | [`just eval`](../../justfile) | BM25-vs-hybrid lift, note & passage ranks, discovery ranks + suppression, cosine piles | real bge | no |
 | `just eval-sweep` | the same scores per `ChunkConfig` variant — the [#44](https://github.com/AlteredCraft/B2/issues/44) A/B | real bge | no |
+| `just eval-stemmer` | the same scores under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` — the [#157](https://github.com/AlteredCraft/B2/issues/157) instrument | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen | fake | yes |
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal`) | real bge | no |
 
@@ -844,3 +845,111 @@ requires, not what its wording happens to add.
 **Status:** review addressed in full (15/15 factual accepted, 1 nitpick declined with reason);
 labels tighter than before (unique passages, no false premises); three standing demotions now
 guard #157/#158. Next actions unchanged from the previous entry.
+
+---
+
+## 2026-08-11 — #157's verdict: porter wins 7–0 / 3–0, and the shipped tokenizer switches (schema v5)
+
+**Runs:** `just eval-stemmer` ×2 (the A/B under the then-shipped `unicode61`, then the confirmatory
+mirror under the new default), `just stability` + `--bless`, and one scratch-vault decomposition ·
+branch `claude/stemmer-ab` · `results.jsonl` rows 18–21
+
+### The instrument, and why it needed no re-embed
+
+The A/B's lever is new but small: `Vault::rebuild_fts(FtsTokenizer)` (`db.rs`) drops `chunks_fts`
+and recreates it with the other tokenizer, repopulated from the untouched `chunks` content table —
+same write-lock discipline as the migration and the vector-table rebuilds. The tokenizer only
+touches the lexical half, so **nothing re-chunks and nothing re-embeds**: the same vault flips
+between arms in milliseconds, and every rank move is the tokenizer's alone. The eval's `--stemmer`
+flag scores BM25-only under both tokenizers *while the vault is still projected-but-unembedded*
+(the honest lexical ablation — no hybrid fallback ambiguity), then hybrid under both after embed.
+Two built-in checks held on every run: the dense ablation re-scored across the flip was
+bit-identical (FTS cannot reach it, so movement there would mean a broken harness, not an engine
+finding), and row 18 reproduced row 17's every aggregate before anything new was measured.
+
+### The readout, per process rule 1 — paired win/loss, aggregate second
+
+BM25-only, porter vs unicode61: **7 note ranks improved, 0 worsened.** Both standing stemmer
+misses flip end to end (`pedalling…` ✗>10 → ✓1, `erupts…` ✗>10 → ✓1), and five more queries whose
+inflection mismatches had been paying quiet rank tax surface with them (`i can't fall asleep at
+night` ·2 → ✓1, `sore rubbed heels` ·2 → ✓1 with its chunk ·6 → ✓1, `kernels… begin to crack`
+·3 → ✓1, `explosive force… tremor` ·2 → ✓1, `leaves… light into food` ·3 → ·2).
+
+Hybrid, porter vs unicode61: **3 note ranks improved, 0 worsened** — precisely the three standing
+fusion demotions, all to ✓1.
+
+| metric | unicode61 (row 18) | porter (row 19) |
+|---|---|---|
+| bm25 note hit@1 / MRR | 0.80 / 0.870 | **0.95 / 0.976** |
+| hybrid note hit@1 / MRR | 0.90 / 0.933 | **0.98 / 0.988** |
+| vec-only (instrument check) | 0.98 / 0.988 | 0.98 / 0.988 — bit-identical |
+| chunk hit@1 / MRR | 0.65 / 0.774 | 0.65 / 0.780 |
+| fusion demotions | 3 | **0** |
+
+**The precision probes did not move.** The corpus was grown last session specifically so it could
+vote *no* — the `universe`/`university` Porter-collision pair and the two code-literal
+`git-cheatsheet.md` queries all sit at ✓1 on all three signals under porter, unchanged. Chunk level
+saw only within-note shuffles (crock ·7→·10, kernels ✓1→·2, against heels ·3→✓1 and thermostat
+·3→✓1 on the lexical side; aggregate flat-to-up). The recall side of the trade was bought for
+nothing the labels can see.
+
+### What it did to #158: the demotions dissolved at the input
+
+Under porter the eval prints, for the first time, **"fusion: no query ranks worse under hybrid than
+under vector alone."** Hybrid rejoined the dense ablation at 0.98 / 0.988. This is the outcome
+#157 flagged as possible — fixing lexical recall dissolved the fusion disagreement — and it means
+the `RRF_K` sweep stays unrun with its overfitting trap unopened: there are no named queries left
+to rescue.
+
+The one remaining hybrid non-✓1 was decomposed rather than assumed (scratch vault, full-precision
+`--json` scores): `i can't fall asleep at night` puts `sleep-hygiene.md` and `insomnia.md` at
+**bit-identical** fused scores (`0.03252247488101534` = 1/61 + 1/62 — the mirrored (1,2)/(2,1)
+photo finish), which the #156 dense tie-break decides toward `sleep-hygiene.md`, the dense rank-1.
+The same policy that fixed the photosynthesis tie here lands against the label — and vec-only
+itself ranks `insomnia.md` ·2, so *no* signal puts the label first. A photo finish on a knife-edge,
+noted rather than re-litigated; the policy stands on its original grounds.
+
+One aggregate moved down and should not be misread: **semantic lift fell +0.10 → +0.02.** Same
+lesson as the corpus-growth entry — lift is a difference between two rising numbers, and stemming
+made the lexical baseline much stronger (BM25 hit@1 0.80 → 0.95). Nothing about the model changed.
+
+### The switch, and what guards it
+
+#157's decision criteria were pre-registered and met (recall rescued, precision probes unmoved,
+verdict documented), so the default switched in the same change: `chunks_fts` is now
+`porter unicode61` in the base DDL, **schema v5** — migration is the standing disposable-index
+posture (version bump → drop → the next `reindex` rebuilds). What guards it:
+
+- `tests/fts_tokenizer.rs` pins the new contract model-free: the shipped default matches
+  inflections out of the box, a `unicode61` rebuild restores literal-only matching (and back —
+  the lever leaves no residue), and ingest stays in sync across a rebuild (the FTS triggers
+  survive the table swap). The engine suite passed untouched — 34 binaries, zero edits.
+- `just stability`: 9/10 probes drifted, all of it lexical-list reordering (the fake-vector dense
+  half cannot see a tokenizer). Blessed per the recipe's intended-change rule; re-run clean.
+- The retired arm stays standing: `--stemmer` now scores the **unstemmed ablation** beside every
+  default run (the A/B's direction simply inverted), so the verdict is re-triable as the corpus
+  grows — the confirmatory run (rows 20–21) prints the exact mirror, 0 improved / 7 worsened
+  BM25-only, 0 / 3 hybrid. Every results row now records a top-level `tokenizer` key (absent =
+  the pre-switch `unicode61`).
+- `index-engine.md`'s tokenizer bullet rewrote from *measured-default* to *measured verdict*, with
+  the trade's residual risk (Porter is English-only; code and proper nouns) named as the reason
+  the ablation instrument stays.
+
+### Where the numbers stand
+
+| metric | session start (row 17) | session end (row 20) |
+|---|---|---|
+| bm25 note hit@1 / MRR | 0.80 / 0.870 | **0.95 / 0.976** |
+| hybrid note hit@1 / MRR | 0.90 / 0.933 | **0.98 / 0.988** |
+| vec-only note hit@1 / MRR | 0.98 / 0.988 | 0.98 / 0.988 |
+| fusion demotions / rescues | 3 / 0 | **0 / 0** |
+| chunk hit@1 / MRR (hybrid) | 0.65 / 0.774 | 0.65 / 0.780 |
+| negatives clean | 0/4 | 0/4 (floor still unbuilt — #150) |
+| `related-min − junk-max` | −0.113 | −0.113 (discovery never touches FTS) |
+| standing note-level misses | 3 (all fusion demotions) | **0** |
+
+**Status:** #157 resolved — the A/B ran under its pre-registered criteria and the switch shipped
+with it. #158 downgraded from "standing demotions" to pure characterization: the vec-only column
+keeps accumulating, and any fusion re-weighting still waits for evidence porter left behind. The
+standing-miss list is empty at note level for the first time; the next actions are the ones that
+were already queued — #44's wider sweep, and #150's per-anchor rule design.
