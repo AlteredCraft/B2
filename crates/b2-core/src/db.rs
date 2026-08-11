@@ -39,7 +39,12 @@ use std::time::Duration;
 /// **4** added the `resources` inventory and widened `edges` with resource targets
 /// (`dst_resource_path`/`embed`/`caption`) — file-type support slice 1
 /// (data-model.md §10).
-pub const SCHEMA_VERSION: i64 = 4;
+/// **5** switched `chunks_fts` to `porter unicode61` — the GH #157 A/B's verdict
+/// (unstemmed BM25 missed every inflection: `pedalling` found nothing in a note
+/// saying "pedals"; porter rescued 7 queries and regressed none, with the
+/// code-literal and universe/university precision probes standing guard —
+/// docs/evals/runlog.md 2026-08-11, index-engine.md §3).
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
@@ -466,7 +471,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
            text,
            content       = 'chunks',
            content_rowid = 'id',
-           tokenize      = 'unicode61'
+           tokenize      = 'porter unicode61'
          );
          CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
@@ -873,6 +878,61 @@ pub fn replace_chunks(conn: &Connection, note_b2id: &str, chunks: &[Chunk]) -> R
         new_ids.push(conn.last_insert_rowid());
     }
     Ok(new_ids)
+}
+
+/// The closed set of tokenizers `chunks_fts` can be rebuilt with — an enum so the
+/// string spliced into [`rebuild_fts`]'s DDL is never caller-supplied text.
+/// `PorterUnicode61` is the shipped default (schema v5, the GH #157 verdict —
+/// index-engine.md §3); `Unicode61` is the unstemmed ablation arm the eval
+/// harness keeps measurable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FtsTokenizer {
+    Unicode61,
+    PorterUnicode61,
+}
+
+impl FtsTokenizer {
+    /// The FTS5 `tokenize =` value this variant names — public so the eval's
+    /// recorded rows spell the tokenizer exactly as the schema does.
+    pub fn sql(self) -> &'static str {
+        match self {
+            FtsTokenizer::Unicode61 => "unicode61",
+            FtsTokenizer::PorterUnicode61 => "porter unicode61",
+        }
+    }
+}
+
+/// Drop and recreate `chunks_fts` with `tokenizer`, repopulated from the untouched
+/// `chunks` content table (FTS5's external-content `'rebuild'` command). The chunk
+/// rows, vectors, and centroids are untouched — the tokenizer only changes how the
+/// lexical half indexes and matches the same text, which is what makes the GH #157
+/// stemmer A/B runnable without re-chunking or re-embedding.
+///
+/// A drop-and-rebuild like the migration and the embed-time vector tables, so it
+/// takes the same write-lock discipline (`BEGIN IMMEDIATE` + retry); the op is
+/// idempotent, so an attempt that follows a lost race lands on the same end state.
+/// The `chunks_ai`/`_ad`/`_au` triggers live on `chunks` and reference this table
+/// by name, so they survive the swap and keep later ingest in sync.
+pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
+    retry_while_locked("chunks_fts rebuild", REBUILD_ATTEMPTS, || {
+        // `new_unchecked` for the same reason as `ensure_embedding_space`: this
+        // takes `&Connection`, and nothing in this crate can already be inside a
+        // transaction on it.
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        tx.execute_batch(&format!(
+            "DROP TABLE IF EXISTS chunks_fts;
+             CREATE VIRTUAL TABLE chunks_fts USING fts5(
+               text,
+               content       = 'chunks',
+               content_rowid = 'id',
+               tokenize      = '{}'
+             );
+             INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild');",
+            tokenizer.sql()
+        ))?;
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
