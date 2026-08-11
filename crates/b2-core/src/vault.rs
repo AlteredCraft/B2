@@ -164,6 +164,12 @@ pub struct Vault {
     // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
     // that overrides it, to A/B chunker levers in-process (the eval harness, crates/b2-embed/evals/).
     chunk_config: ChunkConfig,
+    // The discovery quality floor (GH #150) `similar` surfaces under. `Some(default)`
+    // from open; `None` = surface the raw nearest (the CLI's `--no-floor`, the
+    // eval's calibration pass). Held here — like `chunk_config` — so every `similar`
+    // call in a session judges by one policy. Independent of this setting, `similar`
+    // never floors a fake-embedded space (no semantic geometry to gate on).
+    discovery_floor: Option<discover::DiscoveryFloor>,
 }
 
 /// What `reindex` did: how many notes were projected, how many were actually
@@ -515,6 +521,13 @@ pub struct SimilarView {
     /// A one-line excerpt of the candidate chunk that achieved `score` — the
     /// evidence for *why* it surfaced.
     pub evidence: String,
+    /// How far this candidate stands above the anchor's own candidate population
+    /// (its stage-1 z-score) — the number the discovery floor judged, and the one
+    /// honest input for a displayed *strength* band (GH #150). `None` when no
+    /// floor statistics were computed (floor off, tiny pool, or zero variance);
+    /// serialized only when present so older JSON consumers see no change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<f64>,
 }
 
 /// What [`write`](Vault::write) did: the saved note's vault-relative path and the
@@ -569,6 +582,7 @@ impl Vault {
             embedder,
             idgen: UlidGen,
             chunk_config: ChunkConfig::default(),
+            discovery_floor: Some(discover::DiscoveryFloor::default()),
         })
     }
 
@@ -596,6 +610,17 @@ impl Vault {
     /// config does **not** re-chunk by itself — pair it with `project(force)`.
     pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
         self.chunk_config = cfg;
+    }
+
+    /// Override the discovery quality floor [`similar`](Self::similar) surfaces
+    /// under (default: `Some(DiscoveryFloor::default())`, the calibrated rule).
+    /// `None` disables gating — the adapter's explicit "show me the raw nearest"
+    /// (the CLI's `--no-floor`), and how the eval collects ungated score piles so
+    /// the floor's own calibration data keeps accruing (GH #150). Regardless of
+    /// this setting, a fake-embedded space is never floored — hash vectors have
+    /// no semantic geometry for a z-score to mean anything against.
+    pub fn set_discovery_floor(&mut self, floor: Option<discover::DiscoveryFloor>) {
+        self.discovery_floor = floor;
     }
 
     /// Rebuild the FTS index over the **same stored chunk text** with a different
@@ -1282,8 +1307,16 @@ impl Vault {
             return Err(Error::ResourceUnsupported(note_ref.to_string()));
         }
         let b2id = self.resolve_ref(note_ref)?;
+        // The floor never applies to a fake-embedded space: hash vectors have no
+        // semantic geometry, so its z-scores would be noise and the gate would
+        // suppress arbitrary anchors. Judged by the RECORDED identity — the space
+        // being searched — not the injected embedder.
+        let floor = match db::recorded_embedder(&self.conn)? {
+            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID => None,
+            _ => self.discovery_floor.as_ref(),
+        };
         let mut out = Vec::new();
-        for c in discover::candidates(&self.conn, &b2id, limit)? {
+        for c in discover::candidates(&self.conn, &b2id, limit, floor)? {
             let path = db::resolve_b2id_to_path(&self.conn, &c.note_b2id)?.unwrap_or_default();
             let title = db::note_title(&self.conn, &c.note_b2id)?;
             let evidence = db::chunk_text(&self.conn, c.evidence_chunk_id)?
@@ -1295,6 +1328,7 @@ impl Vault {
                 title,
                 score: c.score,
                 evidence,
+                z: c.z,
             });
         }
         Ok(out)

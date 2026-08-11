@@ -280,16 +280,28 @@ shape is constrained on two sides:
 - **Eval-calibrated, never intuition.** The labelled corpus carries **negative anchors** — loner
   notes whose labelled answer is "nothing relates" — scoring *suppression* (does discovery say
   so?), and the eval records every surfaced score into two **cosine piles**: human-labelled
-  related vs. everything else surfaced. If the piles separate, the gap *is* the floor, read off
-  measured data (an absolute cosine floor and a relative drop-off from the top candidate are both
-  judged against the piles); a later model swap re-derives the number by re-running the eval. If
-  the piles overlap too heavily for any floor to hold, the escalation is a **discovery-side
-  pair-scorer** — a second model seam, sibling of §5's reranker but a *new* issue, not an
-  extension of #28 (that seam needs query text and `similar` has none) — which still only filters
-  what is surfaced, never authors a link.
+  related vs. everything else surfaced. Both cheap variants were judged against that data and
+  **both failed measured** (runlog 2026-08-10/11): an absolute cosine floor does not transfer
+  across vault density (floors read off the labelled piles kept 99–100% of a 228-essay
+  single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
+  needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))
+  is the **per-anchor z-score rule** (`DiscoveryFloor` in `discover.rs`): each candidate is judged
+  against the anchor's *own* stage-1 centroid-distance population — a leader gate suppresses the
+  whole list when even the best candidate stands too little above that distribution (one diffuse
+  cloud has no signal), and a member bar ends the list where candidates rejoin it. Z-scores make
+  the floor model-relative *by construction* — no recorded constant, so a model or device swap
+  re-calibrates nothing — and the same defaults produce honest short lists at both measured
+  density extremes. The floor is inert on pools too small to carry a statistic, never applies to
+  a fake-embedded space (judged by the recorded model id), and is the adapters' explicit choice
+  to disable (`b2 similar --no-floor`).
 
-Until the floor lands, `discover::candidates` truncates to `limit` with no floor and the eval's
-suppression metric is red by design — the failing target the floor is built against.
+What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
+stranger the model scores like a cluster-mate (the eval's watercolor ↔ stain-removal pair, junk by
+label at cosine 0.684, above every genuinely related pair). That residue keeps the last negative
+anchors red in the eval, and it is the standing evidence for the escalation already named here: a
+**discovery-side pair-scorer** — a second model seam, sibling of §5's reranker but a *new* issue,
+not an extension of #28 (that seam needs query text and `similar` has none) — which would still
+only filter what is surfaced, never author a link.
 
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are

@@ -398,8 +398,15 @@ pub fn similar(
     state: State<'_, AppState>,
     note: String,
     limit: usize,
+    no_floor: Option<bool>,
 ) -> Result<Vec<SimilarView>, CmdError> {
-    let vault = open_read(state.inner())?;
+    // `no_floor` is the pane's explicit "show the raw nearest anyway" (GH #150) —
+    // the GUI sibling of `b2 similar --no-floor`. Per-call and per-vault-open, so
+    // it can't leak into any other command's read.
+    let mut vault = open_read(state.inner())?;
+    if no_floor.unwrap_or(false) {
+        vault.set_discovery_floor(None);
+    }
     Ok(vault.similar(&note, limit)?)
 }
 

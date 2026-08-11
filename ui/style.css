@@ -1686,6 +1686,27 @@ body.is-resizing {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  /* The strength band's dots (●●○) read at a smaller optical size than digits;
+     tracking them slightly apart keeps the three positions countable. */
+  letter-spacing: 2px;
+}
+
+/* "Show nearest anyway" — the discovery floor's per-look escape hatch (GH #150).
+   A quiet inline button in the empty state's own voice, not a call to action. */
+.side-raw {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.side-raw:hover {
+  color: var(--text);
+  border-color: var(--muted);
 }
 .card-body {
   /* indent under the title (6px pad + 20px chevron + 4px gap), not under the chevron */

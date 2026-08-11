@@ -22,6 +22,7 @@ import { anomalyRows, type AnomalyPath, type AnomalyRow } from "./anomalies.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
+import { strengthBand } from "./strength.ts";
 import { type ShortcutKey, shortcuts } from "./shortcuts.ts";
 import {
   DEFAULT_BINDINGS,
@@ -711,6 +712,18 @@ function cardFold(key: string, collapsed: boolean): string {
     </button>`;
 }
 
+// The discovery card's strength cell: a banded read of the candidate's z
+// (`strength.ts`), replacing the raw negated-L2 the card used to print (GH #150).
+// No z → no cell: a statistic that wasn't computed isn't claimed (raw mode, tiny
+// pools). The glyph is decorative; the band name is the accessible content.
+function strengthHtml(z: number | undefined): string {
+  const band = strengthBand(z);
+  if (!band) return "";
+  return `<span class="card-score" role="img" aria-label="${escapeHtml(
+    band.label,
+  )}" title="${escapeHtml(band.title)}">${band.glyph}</span>`;
+}
+
 function similarSectionHtml(state: AppState, roving: string | null): string {
   const collapsed = state.collapsedSections.has("similar");
   const head = sideFoldHead(
@@ -727,11 +740,29 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         head +
         `<div class="side-empty" role="status" aria-label="Finding similar notes"><span class="spinner"></span></div>`
       );
-    const hint = state.semantic
-      ? "Nothing similar-but-unlinked, or the vault isn’t embedded yet (Reindex)."
-      : "Semantic similarity is off — run <code>b2 init</code> then Reindex.";
-    return head + `<p class="side-empty">${hint}</p>`;
+    if (!state.semantic)
+      return (
+        head +
+        `<p class="side-empty">Semantic similarity is off — run <code>b2 init</code> then Reindex.</p>`
+      );
+    // The floor's honest empty state (GH #150): zero candidates is an answer, not
+    // a failure — and the escape hatch to the ungated list sits right where the
+    // question arises. Raw-and-still-empty means there was nothing to compare at all.
+    if (state.rawDiscovery)
+      return (
+        head +
+        `<p class="side-empty">Nothing unlinked has stored vectors to compare — Reindex may still be filling them.</p>`
+      );
+    return (
+      head +
+      `<p class="side-empty">No strong candidates — nothing unlinked stands out as related to this note.</p>
+       <button class="side-raw" id="raw-similar" data-raw-similar>Show nearest anyway</button>`
+    );
   }
+  // The raw list announces itself: these cards did NOT clear the quality floor.
+  const rawBanner = state.rawDiscovery
+    ? `<p class="side-empty">Raw nearest — the quality floor is off for this note.</p>`
+    : "";
   const items = state.similar
     .map((c, i) => {
       const key = cardKey("similar", c.path);
@@ -759,14 +790,14 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
             ${cardFold(key, folded)}
             <button class="card-open" tabindex="-1" data-open="${escapeHtml(c.path)}">
               <span class="card-title">${escapeHtml(c.title ?? c.path)}</span>
-              <span class="card-score">${c.score.toFixed(3)}</span>
+              ${strengthHtml(c.z)}
             </button>
           </div>
           ${body}
         </div>`;
     })
     .join("");
-  return head + `<div class="cards" role="none">${items}</div>`;
+  return head + rawBanner + `<div class="cards" role="none">${items}</div>`;
 }
 
 function connectionsSectionHtml(state: AppState, roving: string | null): string {

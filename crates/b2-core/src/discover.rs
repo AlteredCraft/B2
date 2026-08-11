@@ -11,11 +11,19 @@
 //! **recall-oriented**: it over-produces, and the human decides which are worth a
 //! link. *Surfacing* is not (index-engine.md §3, ruled 2026-08-05): **`limit` is a
 //! cap, not a promise** — zero candidates is a legitimate, honest answer when
-//! nothing in the vault genuinely relates. The projection of that ruling — a
-//! model-relative quality floor, calibrated from the eval's negative anchors and
-//! score piles (PR #145) — has not landed yet, so today this module fills to
-//! `limit` from whatever candidates hold stored vectors, however weak; the
-//! eval's suppression metric is red by design until it does.
+//! nothing in the vault genuinely relates. The projection of that ruling is
+//! [`DiscoveryFloor`] (GH #150): a **per-anchor z-score** rule over the stage-1
+//! centroid-distance population, calibrated from the eval's labelled anchors
+//! (docs/evals/runlog.md, 2026-08-11). Z-scores are what make the floor
+//! **model-relative by construction** — the rule compares each candidate against
+//! the anchor's own score distribution, never against an absolute cosine, so it
+//! survives a model or device swap with no recalibration (the measured failure
+//! of absolute floors: eval-calibrated cosines kept 99–100% of a dense
+//! real vault's candidates, runlog 2026-08-10). What it deliberately cannot
+//! catch is a *pair-level* miscalibration — a single stranger the model scores
+//! like a cluster-mate sits above any anchor-local statistic; that residue is
+//! measured (the eval's watercolor ↔ stain-removal pair) and belongs to a
+//! discovery-side pair-scorer if the data ever demands one.
 //!
 //! Mechanics are **two-stage** (#38; index-engine.md):
 //!
@@ -63,6 +71,44 @@ const SHORTLIST_MIN: usize = 200;
 /// over the note's chunks); the exact stage re-ranks whatever survives.
 const SHORTLIST_PER_RESULT: usize = 20;
 
+/// Candidate pools smaller than this leave the floor inert: a z-score over a
+/// handful of distances is statistical noise, and in a vault this small the human
+/// can see everything anyway — serving every candidate is the honest posture for
+/// a starter vault, not a quality failure.
+const FLOOR_MIN_POPULATION: usize = 12;
+
+/// The per-anchor discovery quality floor (index-engine.md §3's ruling, GH #150).
+///
+/// Both thresholds are **z-scores against the anchor's own candidate population**
+/// in stage-1 centroid space: the coarse scan already computes every candidate's
+/// centroid distance, distances over unit centroids are affine in cosine
+/// (`d² = 2 − 2·cos`), so the z is free, and — because it is relative to the
+/// anchor's own distribution — identical in meaning across models, devices, and
+/// vault densities. Calibrated on the eval's labelled anchors (runlog 2026-08-11):
+/// positive anchors put every labelled mate at z ≥ +1.90 while diffuse loners'
+/// best candidates sit ≤ +1.73, and the same member bar trims a 228-note
+/// single-author vault to 1–4 candidates. The default sits mid-window rather
+/// than on either measured edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiscoveryFloor {
+    /// Suppress the *entire* list when the best candidate's z falls below this —
+    /// the whole pool is one diffuse cloud, and "nothing relates" is the honest
+    /// answer. Measured window on the labelled corpus: (1.74, 1.88].
+    pub leader_z: f64,
+    /// Keep only candidates at or above this z — the drop-off back into the
+    /// anchor's noise floor ends the list. Measured window: (1.16, 1.90].
+    pub member_z: f64,
+}
+
+impl Default for DiscoveryFloor {
+    fn default() -> Self {
+        Self {
+            leader_z: 1.85,
+            member_z: 1.85,
+        }
+    }
+}
+
 /// One discovery candidate: a note near the anchor and not already connected, ranked
 /// by `score`. Owned, so the façade can resolve it to a [`SimilarView`](crate::vault::SimilarView)
 /// for `b2 similar` without threading a lifetime through generation.
@@ -76,20 +122,39 @@ pub struct CandidateNote {
     /// The candidate's chunk that achieved `score` — the passage that made this note
     /// similar, surfaced by `b2 similar` as the evidence for *why* it appeared.
     pub evidence_chunk_id: i64,
+    /// The candidate's stage-1 z-score against the anchor's candidate population —
+    /// how far it stands above the anchor's own noise floor, the number the
+    /// [`DiscoveryFloor`] judged. `None` when the floor was off or inert (no
+    /// statistics were computed). An adapter wanting to show *strength* shows a
+    /// band derived from this, never the raw score (GH #150).
+    pub z: Option<f64>,
 }
 
 /// Generate up to `limit` connection-discovery candidates for `anchor`, best score
 /// first (ties broken by `note_b2id` for determinism). `limit` is a cap, not a
-/// promise (index-engine.md §3) — though until the quality floor lands, the list
-/// under-fills only for want of scorable notes: a vault with fewer unlinked notes
-/// than `limit`, or a mid-embed vault whose shortlisted notes still lack stored
-/// chunk vectors (they score nothing and drop out of stage 2).
+/// promise (index-engine.md §3): with a [`DiscoveryFloor`] the list ends where the
+/// anchor's own score distribution says the candidates stop being signal — possibly
+/// at zero — and without one it under-fills only for want of scorable notes (a
+/// vault with fewer unlinked notes than `limit`, or a mid-embed vault whose
+/// shortlisted notes still lack stored chunk vectors).
+///
+/// `floor: None` disables quality gating entirely — the caller's explicit "show me
+/// the raw nearest" (the CLI's `--no-floor`, and the façade's choice for a vector
+/// space with no semantic geometry, i.e. the fake embedder). Even with a floor the
+/// gate stays inert on pools under [`FLOOR_MIN_POPULATION`] or with zero variance —
+/// no meaningful statistic exists there, and serving everything is the honest
+/// posture.
 ///
 /// Returns empty when the vault has no embedding space yet, when the anchor has no
 /// stored vectors (unknown, empty, or not-yet-embedded note), or when `limit` is 0 —
 /// there is nothing to search from. Excludes the anchor itself and its direct
 /// neighbors; everything else near in vector space is a candidate.
-pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<CandidateNote>> {
+pub fn candidates(
+    conn: &Connection,
+    anchor: &str,
+    limit: usize,
+    floor: Option<&DiscoveryFloor>,
+) -> Result<Vec<CandidateNote>> {
     if limit == 0 || !db::embedding_space_exists(conn)? {
         return Ok(Vec::new());
     }
@@ -124,6 +189,43 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.1.cmp(&b.1))
     });
+
+    // The floor, judged on the FULL stage-1 population before any truncation: the
+    // coarse scan just scored every candidate in the vault, which is exactly the
+    // distribution a per-anchor z is meaningful against (a truncated shortlist's
+    // mean/σ would be biased toward the top). z is oriented so nearer = higher
+    // (distance flipped), matching how the calibration was measured. When the
+    // statistics exist, every candidate's z travels to the output; the gate then
+    // ends the list at the member bar — or empties it at the leader gate, the
+    // "this whole pool is one diffuse cloud" verdict.
+    let mut zs: Option<Vec<f64>> = None;
+    if let Some(floor) = floor {
+        if coarse.len() >= FLOOR_MIN_POPULATION {
+            let n = coarse.len() as f64;
+            let mean = coarse.iter().map(|(d, _)| *d as f64).sum::<f64>() / n;
+            let var = coarse
+                .iter()
+                .map(|(d, _)| (*d as f64 - mean).powi(2))
+                .sum::<f64>()
+                / (n - 1.0);
+            let sd = var.sqrt();
+            if sd > 0.0 {
+                let mut z: Vec<f64> = coarse
+                    .iter()
+                    .map(|(d, _)| (mean - *d as f64) / sd)
+                    .collect();
+                // coarse is sorted nearest-first, so z[0] is the leader's.
+                if z[0] < floor.leader_z {
+                    return Ok(Vec::new());
+                }
+                let keep = z.partition_point(|&v| v >= floor.member_z);
+                coarse.truncate(keep);
+                z.truncate(keep);
+                zs = Some(z);
+            }
+        }
+    }
+
     coarse.truncate(
         limit
             .saturating_mul(SHORTLIST_PER_RESULT)
@@ -137,7 +239,7 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
     // earliest (lowest-`seq`) chunk on ties, deterministically. A shortlisted note
     // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
     let mut out: Vec<CandidateNote> = Vec::new();
-    for (_, note_b2id) in coarse {
+    for (i, (_, note_b2id)) in coarse.into_iter().enumerate() {
         let mut best: Option<(f32, i64)> = None;
         for (chunk_id, v) in db::note_chunk_vectors(conn, &note_b2id)? {
             for a in &anchor_vecs {
@@ -152,6 +254,7 @@ pub fn candidates(conn: &Connection, anchor: &str, limit: usize) -> Result<Vec<C
                 note_b2id,
                 score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
                 evidence_chunk_id,
+                z: zs.as_ref().and_then(|z| z.get(i)).copied(),
             });
         }
     }

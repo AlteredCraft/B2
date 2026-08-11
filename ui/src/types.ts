@@ -140,6 +140,10 @@ export interface SimilarView {
   title: string | null;
   score: number;
   evidence: string;
+  /** Stage-1 z-score against the anchor's candidate population — the number the
+   *  discovery floor judged, and the honest input for a strength band (GH #150).
+   *  Absent when no floor statistics were computed (floor off / tiny pool). */
+  z?: number;
 }
 
 /** `Vault::search` — one hybrid-search hit. */

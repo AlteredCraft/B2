@@ -511,6 +511,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     state.unresolved = [];
     state.collapsedCards.clear(); // per-note fold state belongs to the note we just left
     state.contextMenu = null;
+    state.rawDiscovery = false; // the raw-nearest escape hatch is per look, never sticky
     state.loading = false;
     state.discoveringSimilar = true;
     state.discoveringConnections = true;
@@ -1737,7 +1738,7 @@ async function refreshDiscovery(): Promise<void> {
       render();
     });
   const similar = api
-    .similar(n.path)
+    .similar(n.path, 10, state.rawDiscovery)
     .then((cands) => {
       if (!stale()) state.similar = cands;
     })
@@ -3908,6 +3909,16 @@ function wireEvents(): void {
     const foldCard = target.closest<HTMLElement>("[data-fold-card]");
     if (foldCard) {
       toggleCard(foldCard.dataset.foldCard ?? "");
+      return;
+    }
+
+    // "Show nearest anyway" — the floor's per-look escape hatch (GH #150): refetch
+    // this note's similar list ungated. Reset on every note open in `loadNote`.
+    if (target.closest("[data-raw-similar]")) {
+      state.rawDiscovery = true;
+      state.discoveringSimilar = true;
+      render();
+      void refreshDiscovery();
       return;
     }
 
