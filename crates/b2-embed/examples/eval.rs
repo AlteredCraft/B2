@@ -17,7 +17,10 @@
 //!    the floor the model must clear.
 //! 2. **Hybrid retrieval** — after `embed`, the same queries through BM25 ⊕ vector
 //!    → RRF. The delta vs. the baseline is the **semantic lift** — the measured
-//!    value of the one AI seam.
+//!    value of the one AI seam. A **vector-only ablation** rides beside it
+//!    (`Vault::search_vector_only`, GH #158): the dense signal alone, so fusion
+//!    has a measured single-signal baseline to answer to, and every query hybrid
+//!    ranks *worse* than vector-only would is counted and named on the run.
 //! 3. **Passage rank** — queries labelled with a verbatim `passage` are also
 //!    scored at **chunk** level (`Vault::search_chunks`): note-rank is blind to
 //!    sub-note retrieval, which is exactly what chunking levers move
@@ -249,15 +252,16 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // keyword-only (index-engine.md) — the ablation costs nothing
     // extra: it is the same vault, paused between the two passes.
     let report = vault.project(false)?;
-    let bm25 = score_pass(&vault, &set.queries)?;
+    let bm25 = score_pass(&vault, &set.queries, Retrieval::Fused)?;
     eprintln!(
         "[eval] projected {} notes; BM25-only baseline scored\n",
         report.indexed
     );
 
-    // ---- Phase 2: embed → hybrid + passage + discovery. ----------------------
+    // ---- Phase 2: embed → vector-only ablation + hybrid + discovery. ---------
     let (chunks, embed_secs) = timed_embed(&vault)?;
-    let hybrid = score_pass(&vault, &set.queries)?;
+    let vector = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
+    let hybrid = score_pass(&vault, &set.queries, Retrieval::Fused)?;
     let similar = score_similar(&vault, &sim_set)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
@@ -267,7 +271,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     );
     warn_if_pool_blind(chunks);
 
-    print_default_report(&set.queries, &bm25, &hybrid, &similar);
+    print_default_report(&set.queries, &bm25, &vector, &hybrid, &similar);
 
     let git = git_short_sha();
     append_result(
@@ -283,6 +287,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             embed_secs,
             &set.queries,
             Some(&bm25),
+            Some(&vector),
             &hybrid,
             Some(&similar),
         ),
@@ -309,28 +314,35 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         println!("\n{}", "=".repeat(78));
         println!("chunker sweep (same model, same corpus; default row above for reference)");
         println!(
-            "{:<22} {:>7} {:>8}   note h@1/MRR   chunk h@1/MRR   similar h@3   neg clean",
+            "{:<22} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   similar h@3   neg clean",
             "config", "chunks", "embed_s"
         );
         for (label, cfg) in variants {
             vault.set_chunk_config(cfg.clone());
             vault.project(true)?; // force: re-chunk everything, clearing vectors
             let (chunks, embed_secs) = timed_embed(&vault)?;
-            let pass = score_pass(&vault, &set.queries)?;
+            let vec_pass = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
+            let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
-                "{:<22} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
+                "{:<22} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
                 label,
                 chunks,
                 embed_secs,
                 pass.note.hit1(),
                 pass.note.mrr(),
+                vec_pass.note.hit1(),
+                vec_pass.note.mrr(),
                 pass.chunk.hit1(),
                 pass.chunk.mrr(),
                 sim.rank.hit3(),
                 sim.neg_clean,
                 sim.neg_n,
             );
+            // The readout the A/B is actually judged on: at this n every aggregate
+            // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
+            // per-query win/loss list is the data (docs/evals/runlog.md).
+            print_rank_moves(&set.queries, &hybrid, &pass);
             append_result(
                 &results_path,
                 result_row(
@@ -344,6 +356,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                     embed_secs,
                     &set.queries,
                     None,
+                    Some(&vec_pass),
                     &pass,
                     Some(&sim),
                 ),
@@ -370,16 +383,36 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     Ok(true)
 }
 
+/// Which retrieval a pass scores. `Fused` is the shipped path (`Vault::search` —
+/// BM25-only before embed, hybrid after) plus chunk-level scoring for
+/// passage-labelled queries; `VectorOnly` is the dense ablation
+/// (`Vault::search_vector_only`, GH #158), note-level only — its chunk aggregate
+/// stays empty. The ablation column is what lets a run say whether fusion paid
+/// rent: the runlog's finding that RRF demotes dense rank-1 hits was established
+/// by hand-decomposing fused scores once; this makes it a standing measurement.
+#[derive(Clone, Copy, PartialEq)]
+enum Retrieval {
+    Fused,
+    VectorOnly,
+}
+
 /// Score every labelled query against the vault's current state: note rank via
-/// `search`, and — for passage-labelled queries — chunk rank via `search_chunks`
-/// (the first top-K chunk that belongs to a relevant note AND contains the
-/// labelled phrase, case-insensitively).
-fn score_pass(vault: &Vault, queries: &[Labelled]) -> Result<Pass, Box<dyn std::error::Error>> {
+/// the selected retrieval, and — for passage-labelled queries on the fused path —
+/// chunk rank via `search_chunks` (the first top-K chunk that belongs to a
+/// relevant note AND contains the labelled phrase, case-insensitively).
+fn score_pass(
+    vault: &Vault,
+    queries: &[Labelled],
+    retrieval: Retrieval,
+) -> Result<Pass, Box<dyn std::error::Error>> {
     let mut scores = Vec::with_capacity(queries.len());
     let mut note_agg = Agg::default();
     let mut chunk_agg = Agg::default();
     for q in queries {
-        let results = vault.search(&q.query, K)?;
+        let results = match retrieval {
+            Retrieval::Fused => vault.search(&q.query, K)?,
+            Retrieval::VectorOnly => vault.search_vector_only(&q.query, K)?,
+        };
         let note = results
             .iter()
             .position(|r| q.relevant.iter().any(|rel| paths_match(&r.path, rel)))
@@ -390,9 +423,9 @@ fn score_pass(vault: &Vault, queries: &[Labelled]) -> Result<Pass, Box<dyn std::
             .unwrap_or_else(|| "—".to_string());
         note_agg.add(note);
 
-        let chunk = match &q.passage {
-            None => None,
-            Some(passage) => {
+        let chunk = match (&q.passage, retrieval) {
+            (None, _) | (_, Retrieval::VectorOnly) => None,
+            (Some(passage), Retrieval::Fused) => {
                 let needle = passage.to_lowercase();
                 let hits = vault.search_chunks(&q.query, K)?;
                 let rank = hits
@@ -589,16 +622,23 @@ fn warn_if_pool_blind(chunks: usize) {
     }
 }
 
-fn print_default_report(queries: &[Labelled], bm25: &Pass, hybrid: &Pass, similar: &SimilarPass) {
+fn print_default_report(
+    queries: &[Labelled],
+    bm25: &Pass,
+    vector: &Pass,
+    hybrid: &Pass,
+    similar: &SimilarPass,
+) {
     println!(
-        "{:>5} {:>6} {:>6}  {:<40}  top hybrid hit",
-        "bm25", "hybrid", "chunk", "query"
+        "{:>5} {:>6} {:>6} {:>6}  {:<40}  top hybrid hit",
+        "bm25", "vec", "hybrid", "chunk", "query"
     );
-    println!("{}", "-".repeat(96));
+    println!("{}", "-".repeat(102));
     for (i, q) in queries.iter().enumerate() {
         println!(
-            "{:>5} {:>6} {:>6}  {:<40}  {}",
+            "{:>5} {:>6} {:>6} {:>6}  {:<40}  {}",
             rank_str(bm25.scores[i].note),
+            rank_str(vector.scores[i].note),
             rank_str(hybrid.scores[i].note),
             match q.passage {
                 Some(_) => rank_str(hybrid.scores[i].chunk),
@@ -618,12 +658,51 @@ fn print_default_report(queries: &[Labelled], bm25: &Pass, hybrid: &Pass, simila
         bm25.note.mrr()
     );
     println!(
+        "  vec-only   hit@1={:.2}  hit@3={:.2}  MRR@{K}={:.3}",
+        vector.note.hit1(),
+        vector.note.hit3(),
+        vector.note.mrr()
+    );
+    println!(
         "  hybrid     hit@1={:.2}  hit@3={:.2}  MRR@{K}={:.3}   semantic lift: {:+.2} hit@1",
         hybrid.note.hit1(),
         hybrid.note.hit3(),
         hybrid.note.mrr(),
         hybrid.note.hit1() - bm25.note.hit1(),
     );
+    // The standing form of the runlog's fusion finding (GH #158): every query
+    // where fusing the two signals ranked the labelled answer WORSE than the
+    // dense signal alone would have. RRF's consensus bias makes some of this
+    // inevitable; the point is that it is counted and named on every run instead
+    // of rediscovered by hand-decomposing scores.
+    let demoted: Vec<usize> = (0..queries.len())
+        .filter(|&i| {
+            let Some(v) = vector.scores[i].note else {
+                return false;
+            };
+            match hybrid.scores[i].note {
+                Some(h) => h > v,
+                None => true,
+            }
+        })
+        .collect();
+    if demoted.is_empty() {
+        println!("  fusion     no query ranks worse under hybrid than under vector alone");
+    } else {
+        println!(
+            "  fusion     {} quer{} rank worse under hybrid than under vector alone:",
+            demoted.len(),
+            if demoted.len() == 1 { "y" } else { "ies" }
+        );
+        for &i in &demoted {
+            println!(
+                "             vec {} → hybrid {}   {}",
+                rank_str(vector.scores[i].note),
+                rank_str(hybrid.scores[i].note),
+                truncate(&queries[i].query, 48)
+            );
+        }
+    }
     if hybrid.chunk.n > 0 {
         println!("chunk rank (passage-labelled, n={}):", hybrid.chunk.n);
         println!(
@@ -690,6 +769,60 @@ fn print_default_report(queries: &[Labelled], bm25: &Pass, hybrid: &Pass, simila
     }
 }
 
+/// The paired per-query diff between two fused passes — what an A/B is actually
+/// judged on. At this corpus's n, every aggregate delta is worth 1–2 queries, so
+/// "hit@1 +0.05" and "these two queries flipped, this one broke" are the same
+/// fact — but only the second form can be argued with, per-query, against the
+/// labels (docs/evals/runlog.md, the method notes). Prints nothing but a
+/// no-moves line when the variant reproduced the reference ranking exactly —
+/// which, per the same runlog entry, is itself a claim to verify against a
+/// continuous quantity (the piles), never bare proof of "no effect".
+fn print_rank_moves(queries: &[Labelled], reference: &Pass, variant: &Pass) {
+    let improved = |a: Option<usize>, b: Option<usize>| match (a, b) {
+        (None, Some(_)) => true,
+        (Some(x), Some(y)) => y < x,
+        _ => false,
+    };
+    let mut note_up = 0usize;
+    let mut note_down = 0usize;
+    let mut lines = Vec::new();
+    for (i, q) in queries.iter().enumerate() {
+        let (a, b) = (reference.scores[i].note, variant.scores[i].note);
+        if a != b {
+            if improved(a, b) {
+                note_up += 1;
+            } else {
+                note_down += 1;
+            }
+            lines.push(format!(
+                "    Δ note   {:>5} → {:<5}  {}",
+                rank_str(a),
+                rank_str(b),
+                truncate(&q.query, 48)
+            ));
+        }
+        if q.passage.is_some() {
+            let (a, b) = (reference.scores[i].chunk, variant.scores[i].chunk);
+            if a != b {
+                lines.push(format!(
+                    "    Δ chunk  {:>5} → {:<5}  {}",
+                    rank_str(a),
+                    rank_str(b),
+                    truncate(&q.query, 48)
+                ));
+            }
+        }
+    }
+    if lines.is_empty() {
+        println!("    Δ vs default: no per-query rank moved (verify against the piles before reading this as \"no effect\")");
+        return;
+    }
+    println!("    Δ vs default — note ranks: {note_up} improved, {note_down} worsened",);
+    for line in lines {
+        println!("{line}");
+    }
+}
+
 /// One appendable JSONL row for a scored configuration.
 #[allow(clippy::too_many_arguments)]
 fn result_row(
@@ -703,6 +836,7 @@ fn result_row(
     embed_secs: f64,
     queries: &[Labelled],
     bm25: Option<&Pass>,
+    vector: Option<&Pass>,
     hybrid: &Pass,
     similar: Option<&SimilarPass>,
 ) -> serde_json::Value {
@@ -740,6 +874,11 @@ fn result_row(
         "embed_secs": embed_secs,
         "note": {
             "bm25": bm25.map(|p| agg(&p.note)),
+            // NEW key (absent from rows before 2026-08-10): the dense ablation —
+            // `Vault::search_vector_only`, the single-signal baseline fusion is
+            // judged against (GH #158). Same convention as pool_note/pool_chunk:
+            // a new key, never a redefined one.
+            "vector": vector.map(|p| agg(&p.note)),
             "hybrid": agg(&hybrid.note),
         },
         "chunk": {
@@ -778,6 +917,7 @@ fn result_row(
         "queries": queries.iter().enumerate().map(|(i, q)| serde_json::json!({
             "q": q.query,
             "bm25": bm25.map(|p| p.scores[i].note),
+            "vector": vector.map(|p| p.scores[i].note),
             "hybrid": hybrid.scores[i].note,
             "chunk": hybrid.scores[i].chunk,
         })).collect::<Vec<_>>(),

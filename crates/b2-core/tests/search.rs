@@ -157,6 +157,43 @@ fn rrf_ranks_a_doc_present_in_both_lists_above_single_list_winners() {
     }
 }
 
+/// RRF over integer ranks lands on a discrete lattice of reachable sums, so exact
+/// score ties are structural, not freak events — the eval corpus produced one on
+/// its second run (`photosynthesis.md` vs `houseplant-care.md`, bit-identical f64,
+/// docs/evals/runlog.md 2026-08-10). The old secondary key was ascending chunk id
+/// — projection walk order, which is semantically arbitrary. The policy now: a
+/// photo finish is broken by the candidate's rank in the **last** list handed to
+/// `rrf_fuse` — the dense/vector list in hybrid search — because on the tie the
+/// runlog decomposed, the semantic signal named the labelled answer and BM25 named
+/// the wrong one. Id remains only as the final determinism key.
+#[test]
+fn rrf_breaks_symmetric_ties_by_the_dense_lists_rank() {
+    // ids 1 and 2 tie exactly: ranks (bm25 0, vector 1) vs (bm25 1, vector 0) sum
+    // to the same score. The dense list prefers 2, so 2 must win — under the old
+    // id tie-break, 1 won by being the smaller id.
+    let bm25 = vec![1, 2];
+    let vector = vec![2, 1];
+    let fused = search::rrf_fuse(&[bm25, vector], RRF_K);
+    assert_eq!(
+        fused[0].1, fused[1].1,
+        "the fixture must be a genuine exact tie"
+    );
+    assert_eq!(fused[0].0, 2, "the dense list's preference breaks the tie");
+}
+
+#[test]
+fn rrf_breaks_cross_signal_ties_toward_the_dense_list() {
+    // 7 appears only in BM25 (rank 0), 9 only in the vector list (rank 0): equal
+    // single-term sums. The candidate the dense signal saw at all outranks the one
+    // it never surfaced.
+    let fused = search::rrf_fuse(&[vec![7], vec![9]], RRF_K);
+    assert_eq!(
+        fused[0].1, fused[1].1,
+        "the fixture must be a genuine exact tie"
+    );
+    assert_eq!(fused[0].0, 9, "present-in-dense beats absent-from-dense");
+}
+
 #[test]
 fn keyword_search_finds_chunks_by_term() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -218,6 +255,65 @@ fn hybrid_search_combines_signals_and_resolves_to_notes() {
     // every hit resolves to a real note, and SRS (the only keyword match) is present
     assert!(hits.iter().all(|h| !h.note_b2id.is_empty()));
     assert!(note_set(&hits).contains(SRS_ID));
+}
+
+/// The dense half alone (GH #158): the ablation instrument the eval scores beside
+/// bm25-only and hybrid. Plumbing only here (fake vectors are not semantic): it
+/// ranks by vector distance, resolves to notes, and honors `limit` and zero-limit.
+#[test]
+fn vector_only_search_is_the_dense_half_alone() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let hits =
+        search::vector_only_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| !h.note_b2id.is_empty()));
+    // Negated-distance scores, best first — the graph_filtered_search convention.
+    for w in hits.windows(2) {
+        assert!(w[0].score >= w[1].score, "scores must be descending");
+    }
+    assert!(hits.iter().all(|h| h.score <= 0.0));
+
+    assert!(
+        search::vector_only_search(&conn, &FakeEmbedder::new(64), "forgetting", 0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// The façade view dedups to notes exactly as `search` does, and a
+/// projected-but-unembedded vault returns nothing — where `search` honestly falls
+/// back to keywords, an ablation that quietly did the same would measure the
+/// wrong signal.
+#[test]
+fn search_vector_only_dedups_and_refuses_to_impersonate_keywords() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+
+    // Projection only: no embedding space yet. The hybrid view falls back to
+    // BM25; the ablation view must return nothing rather than do the same.
+    vault.project(false).unwrap();
+    assert!(!vault.search("memory", 5).unwrap().is_empty());
+    assert!(vault.search_vector_only("memory", 5).unwrap().is_empty());
+
+    // Embedded: hits flow, one per note.
+    vault
+        .embed(&mut |_| std::ops::ControlFlow::Continue(()))
+        .unwrap();
+    let hits = vault.search_vector_only("memory", 10).unwrap();
+    assert!(!hits.is_empty());
+    let mut seen = std::collections::BTreeSet::new();
+    for h in &hits {
+        assert!(
+            seen.insert(h.b2id.clone()),
+            "note {} appeared twice",
+            h.path
+        );
+        assert!(!h.path.is_empty());
+    }
 }
 
 #[test]
@@ -508,8 +604,20 @@ fn a_zero_limit_search_does_no_retrieval_work() {
         "the fixture must be a genuinely mismatched vault"
     );
 
+    assert!(
+        matches!(
+            swapped.search_vector_only("forgetting", 5).unwrap_err(),
+            b2_core::Error::ModelMismatch { .. }
+        ),
+        "the ablation view shares the model-identity guard"
+    );
+
     assert!(swapped.search("forgetting", 0).unwrap().is_empty());
     assert!(swapped.search_chunks("forgetting", 0).unwrap().is_empty());
+    assert!(swapped
+        .search_vector_only("forgetting", 0)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
