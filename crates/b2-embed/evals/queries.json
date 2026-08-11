@@ -27,7 +27,7 @@
     { "query": "protecting sore rubbed heels on a long trail walk", "relevant": ["backpacking-gear.md"], "passage": "moleskin" },
     { "query": "how heavy is a minimalist pack before food and water", "relevant": ["backpacking-gear.md"], "passage": "under 4.5 kg" },
     { "query": "setting aside savings for a surprise car repair", "relevant": ["personal-finance.md"], "passage": "emergency fund" },
-    { "query": "a retirement account whose withdrawals are never taxed", "relevant": ["personal-finance.md"], "passage": "Roth" },
+    { "query": "a retirement account whose withdrawals in retirement are tax-free", "relevant": ["personal-finance.md"], "passage": "untaxed growth and withdrawals" },
 
     { "query": "how hot are the kernels when they first begin to burst", "relevant": ["coffee-roasting.md"], "passage": "196 °C" },
     { "query": "the cup tastes raw and vegetal instead of sweet — what went wrong", "relevant": ["coffee-roasting.md"], "passage": "underdeveloped" },
@@ -36,7 +36,7 @@
     { "query": "why would anyone stockpile scrambled traffic they cannot read yet", "relevant": ["encryption.md"], "passage": "harvest-now-decrypt-later" },
 
     { "query": "how much explosive force does a mid-sized tremor let go", "relevant": ["earthquakes.md"], "passage": "32 kilotons" },
-    { "query": "can an alert reach a phone before the ground starts moving", "relevant": ["earthquakes.md"], "passage": "outrun the damaging waves" },
+    { "query": "can an alert reach a phone with a few seconds to spare", "relevant": ["earthquakes.md"], "passage": "outrun the damaging waves" },
 
     { "query": "how tight should the pedal arm fixing be done up", "relevant": ["bike-maintenance.md"], "passage": "12–14 N·m" },
     { "query": "how worn is too worn before the links must be renewed", "relevant": ["bike-maintenance.md"], "passage": "0.75 percent" },
@@ -50,6 +50,6 @@
     { "query": "how vast is the observable universe", "relevant": ["cosmos.md"] },
     { "query": "settling into life on a university campus", "relevant": ["campus-life.md"] },
     { "query": "undo my last commit but keep the changes staged", "relevant": ["git-cheatsheet.md"], "passage": "reset --soft" },
-    { "query": "recover a branch i deleted by accident", "relevant": ["git-cheatsheet.md"], "passage": "reflog" }
+    { "query": "recover a branch i deleted by accident", "relevant": ["git-cheatsheet.md"], "passage": "git reflog" }
   ]
 }

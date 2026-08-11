@@ -787,3 +787,60 @@ now with four adversarial queries standing guard on the other side of the same t
 3. **#150's rule design** — per-anchor gap/z-score, validated against the labelled piles, PG-scale
    transfer check after.
 4. Accumulate vec-only rows before touching any fusion weight (#158).
+
+---
+
+## 2026-08-11 — PR #159 review: fifteen factual comments, and what honest prose does to a knife-edge tie
+
+**Runs:** `just eval` ×2 (post-edit, post-cause-fix) · branch `claude/eval-review-actions` ·
+`results.jsonl` rows 16–17
+
+CodeRabbit reviewed the PR with 15 inline comments — all on corpus *content* (torque specs scoped
+to the wrong fastener, S-waves vs surface waves, foreshocks being a retrospective label, hybrid-PQC
+and AEAD overclaims, the reflog recovery guarantee, moisture probes, fluoride filters, universal
+watering tables, sleep restriction being CBT-I with contraindications) — plus two label defects
+(non-unique passages `Roth` and `reflog`; a physically false premise in the early-warning query)
+and one style nitpick. Everything factual was accepted: the corpus should read like notes a
+careful human would keep, and several fixes (reflog conditionality, AEAD scope) also make the
+adversarial git/security material *more* faithful test content. The nitpick — moving the eval to
+`anyhow` — was declined: the example only propagates-and-prints, `Box<dyn Error>` already does
+that, and the repo rule is no new dependencies without concrete need.
+
+### The instrument's verdict on the edits, per the process rules
+
+Both audit directions ran (one real flag: the reworded alert query's first draft used
+`shaking`/`arrives` — the note's own wave vocabulary — and its labelled chunk fell ·1→·4 as
+sibling chunks outranked it; re-reworded to *"…with a few seconds to spare"*, whose distinctive
+tokens all live in the labelled chunk: ·2). The passage-uniqueness scan now runs over all 20
+labels (`Roth` → `untaxed growth and withdrawals`, `reflog` → `git reflog`; the other 18 were
+already unique). Per-query diff vs row 15, every move diagnosed:
+
+| query | vec | hybrid | chunk | cause |
+|---|---|---|---|---|
+| how do leaves turn light into food | ✓1 | ✓1 → **·2** | — | the bit-exact tie dissolved: content edits changed chunk lengths, so BM25 renormalized and `houseplant-care.md` now outscores outright |
+| i can't fall asleep at night | ·2 | ✓1 → **·2** | — | same mechanism; the fusion *rescue* this column caught two days ago is gone |
+| can an alert reach a phone… (reworded) | ✓1 | ✓1 | ✓1 → **·2** | query reword (see above) |
+| protecting sore rubbed heels… | ✓1 | ✓1 | ·2 → **·3** | untouched note; corpus-wide IDF/length renormalization |
+
+Current default row: **hybrid hit@1 0.90 / MRR 0.933** (vec-only 0.98 / 0.988, bm25 0.80), chunk
+0.65 / 0.774, fusion demotions **3, rescues 0**. Discovery improved: the encryption edits moved
+its vectors enough that `phishing.md` — a labelled expected mate — now *surfaces* (related n
+10→11), setting the new related-min 0.571 and widening the recorded overlap to **−0.113**. The
+floor gate (0.75) passes.
+
+### The lesson worth the scoreboard drop
+
+Yesterday's 0.95 was partly sitting on a **bit-exact RRF tie** that the dense tie-break resolved
+the right way. Any honest edit anywhere near the competing notes could dissolve that tie — and
+did. The number was real but *fragile*, and the drop to 0.90 is not a regression of the engine:
+vector-only still ranks every one of these targets ✓1, and what changed is that photosynthesis
+became the **third standing fusion demotion** instead of a photo finish. The durable rescue for
+all three is #157/#158, not corpus surgery — and per process rule 2, no prose was re-sculpted to
+resurrect the tie. The distinction that *is* legitimate, and was applied: qualifiers added for
+factual accuracy had their **lexical footprint minimized at the cause** (`light` → `lighting` /
+`grow lamp`, a shorter CBT-I clause) so a correction earns only the rank impact its meaning
+requires, not what its wording happens to add.
+
+**Status:** review addressed in full (15/15 factual accepted, 1 nitpick declined with reason);
+labels tighter than before (unique passages, no false premises); three standing demotions now
+guard #157/#158. Next actions unchanged from the previous entry.

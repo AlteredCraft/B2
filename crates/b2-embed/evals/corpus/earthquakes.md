@@ -39,10 +39,13 @@ another.
 
 The rupture radiates two kinds of body wave through the interior. The first is
 a compression that travels fastest and arrives as a sharp jolt or a bang; the
-second shears the rock sideways, travels slower, and carries far more of the
-destructive energy. Behind both come surface waves, which are slowest of all,
-decay least with distance, and are responsible for the long rolling motion that
-topples tall buildings far from the source.
+second shears the rock sideways, travels slower, and arrives with far stronger
+sideways motion than the first. Behind both come surface waves, which are
+slowest of all, decay least with distance, and often carry the largest motion a
+seismogram records — the long rolling that topples tall buildings far from the
+source. Which wave does the damage is a property of the building as much as
+the wave: radiated energy, ground amplitude, and a structure's own resonance
+are three different quantities, and conflating them predicts the wrong ruins.
 
 Ground conditions can matter more than distance. Loose sediment in a river
 valley or a filled bay amplifies slow shaking severalfold compared with bedrock
@@ -71,9 +74,10 @@ different things about the same shock.
 
 Nobody can say that a specific fault will break on a specific day, and a
 century of trying has produced no reliable short-term precursor. Radon in well
-water, animal behavior, and small foreshock swarms all look suggestive after the
-fact and fail as predictors before it, because the same signals appear far more
-often with nothing following.
+water, animal behavior, and small earthquake swarms all look suggestive after
+the fact and fail as predictors before it — a swarm gets renamed a foreshock
+sequence only in hindsight, once a larger rupture has followed it — because the
+same signals appear far more often with nothing following.
 
 What does work is the long view. Trenching across a fault exposes layers offset
 by past ruptures, and dating them establishes how often that segment has broken
@@ -95,6 +99,7 @@ thirty kilometers, tens of seconds at a hundred.
 That is enough to matter. Trains brake, elevators stop and open at the nearest
 floor, surgeons lift their hands, valves close on gas mains, and a phone on a
 nightstand a hundred kilometers away buzzes long enough before the roll arrives
-for someone to get under a table. The systems are tuned deliberately toward
-false alarms rather than misses, on the reasoning that an unnecessary alert
+for someone to get under a table. Most deployments tune their thresholds
+toward false alarms rather than misses — a per-system choice that gets
+revisited, not a universal rule — on the reasoning that an unnecessary alert
 costs a few seconds and a missed one costs considerably more.

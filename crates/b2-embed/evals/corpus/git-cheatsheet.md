@@ -27,15 +27,17 @@ git commit --amend
 
 ## Recovering lost work
 
-Every position HEAD has occupied is still in the journal:
+Every position `HEAD` has occupied on this machine is still in its journal:
 
 ```sh
 git reflog
 git checkout -b rescued <sha-from-reflog>
 ```
 
-A branch deleted with `-D` stays reachable this way for as long as the reflog
-keeps its entry — around ninety days by default.
+A branch deleted with `-D` can be found this way only if it was checked out at
+some point — the walk above reads `HEAD`'s journal, and a branch that never
+held `HEAD` needs its tip dug out by other means. Entries expire too: about
+ninety days for reachable history and thirty for unreachable, by default.
 
 ## Housekeeping
 

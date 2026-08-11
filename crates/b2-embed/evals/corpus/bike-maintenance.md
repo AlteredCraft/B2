@@ -74,7 +74,7 @@ bump loses less speed than a rigid one that lifts the whole bicycle over it.
 
 | Fastener or setting | Figure | Consequence of getting it wrong |
 |---|---|---|
-| Crank arm bolt | 12–14 N·m | Loose arms round out the spindle interface |
+| Left crank-arm pinch bolts, Shimano Hollowtech II, tightened alternately (other crank systems: use the maker's figure) | 12–14 N·m | Loose arms round out the spindle interface |
 | Cassette lockring | 40 N·m | Under-tight rings unwind and destroy the freehub |
 | Stem faceplate bolts | 5 N·m | Over-torque crushes carbon bars, under-torque slips |
 | Disc rotor bolts | 6 N·m | Loose rotors wobble, warp, and drag |

@@ -96,11 +96,17 @@ The same reasoning drives the harvest-now-decrypt-later concern that motivates
 post-quantum migration. Traffic captured today under conventional public-key
 agreement stays vulnerable to a machine that does not exist yet, which is why
 deployments have begun running a classical and a lattice-based exchange side by
-side and mixing both results into the session secret — safe if either one holds.
+side and mixing both results into the session secret, so that an attacker must
+break both. That property is not a free consequence of running two exchanges —
+it holds only when the combiner binds both results correctly, which is why the
+hybrid constructions in deployment went through protocol review rather than
+being assembled ad hoc.
 
 ## What it does not do
 
-Concealment is not integrity, not authentication, and not anonymity. Scrambled
+An authenticated mode does guard a message's integrity in transit, but what it
+authenticates is possession of a key, never the human behind it — and nothing
+here is anonymity. Scrambled
 traffic still reveals its endpoints, its timing, and its volume, and those
 patterns alone can identify a site being visited or a command being issued.
 Nor does any of it help once the data is in use: a compromised endpoint sees

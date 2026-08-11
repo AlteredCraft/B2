@@ -88,8 +88,9 @@ already spent months lying awake has usually formed an association between the
 bed and frustrated wakefulness, and no amount of thermostat adjustment breaks a
 learned association. The evidence-backed response is behavioral rather than
 environmental: get out of bed when sleep does not come, use it only when
-genuinely sleepy, and compress time in bed until it is nearly all sleeping,
-then expand it again.
+genuinely sleepy, and — within a structured CBT-I program, as this part is a
+treatment with real contraindications, not general advice — compress time in
+bed until it is nearly all sleeping, then expand it again.
 
 Snoring with witnessed pauses, an irresistible urge to move the legs in the
 evening, or persistent sleepiness despite adequate opportunity are all signals

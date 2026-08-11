@@ -16,7 +16,8 @@ different intervals in July and January. Weight is the right one: lift the pot
 after a thorough soak and again a week later, and the difference is
 unmistakable once felt a few times. A finger pushed a couple of centimetres
 into the soil answers the same question more crudely, and a cheap moisture
-probe answers it worse than either, since most of them read salts rather than
+probe answers it worse than either — the inexpensive ones drift with dissolved
+salts, soil composition, and calibration, so the needle is only loosely about
 water.
 
 Watering thoroughly and infrequently beats little-and-often. A full soak until
@@ -30,7 +31,8 @@ Tap water is fine for the overwhelming majority of species, its chlorine
 harmless at municipal concentrations. The exceptions are worth knowing —
 carnivorous plants, and a handful of prayer plants and their relatives, are
 genuinely sensitive to fluoride and dissolved minerals, and they respond to
-rain or filtered water with a visible reduction in brown tipping.
+rainwater, distilled, or reverse-osmosis water with a visible reduction in
+brown tipping — an ordinary charcoal jug filter does not take fluoride out.
 
 ## Light, honestly measured
 
@@ -47,13 +49,17 @@ window is receiving a small fraction of what one on the sill receives, and the
 difference between the sill and the far wall is larger than the difference
 between any two windows in the house.
 
+The figures below describe one temperate window with no supplemental lighting —
+species, season, glazing, and the room itself all move them, so treat the rows
+as starting points rather than instructions:
+
 | Position | Character of the light | Summer watering | Suitable plants |
 |---|---|---|---|
 | Unobstructed south sill | Direct sun for most of the day | Every 3–5 days | Succulents, cacti, citrus |
 | A metre back from that window | Bright and indirect | Weekly | Monstera, rubber plant, fig |
 | East-facing sill | Gentle direct sun each morning | Weekly | Ferns, calathea, peace lily |
 | Interior of a north-facing room | Low, never direct | Every 10–14 days | Snake plant, ZZ, pothos |
-| Over three metres from any glass | Below the threshold for growth | Not applicable | Nothing survives long term |
+| Over three metres from any glass | Below the threshold for growth, absent a grow lamp | Not applicable | Nothing survives long term unaided |
 
 The bottom row is the one people argue with, and it is the one that is hardest
 to escape. A plant in genuine darkness is not growing slowly; it is spending
@@ -94,9 +100,12 @@ up one size only — a plant swamped in a much larger pot sits in soil that stay
 wet far longer than its roots can use, which is the overwatering failure
 arriving by a different route.
 
-Winter changes the rules for everything above. Growth slows or stops, water use
-falls sharply, and feeding should stop entirely until the days lengthen; the
-most common January mistake is continuing a summer routine into a season where
-the plant cannot use it. Cutting watering by half or more and moving pots
-closer to the glass compensates for both the lower light and the drier heated
-air at once.
+Winter changes the rules for anything resting in natural light. Growth slows
+or stops for most plants, water use falls sharply, and feeding should stop for
+a plant that has gone quiet — though one still growing under a lamp keeps its
+summer appetite, and the rules above keep applying to it. The most common
+January mistake is continuing a summer routine into a season the plant cannot
+use it in. Cutting watering back as the pot stays wet longer, and moving pots
+nearer the glass, compensates for the lower light — it does nothing for dry
+heated air, and glass on a freezing night radiates a chill of its own, so a
+sensitive plant wants close to the light without touching the pane.
