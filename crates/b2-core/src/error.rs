@@ -34,6 +34,14 @@ pub enum Error {
     #[error("embedding failed: {0}")]
     Embed(String),
 
+    /// The chat provider failed outright — connection refused, an HTTP error, a
+    /// malformed stream — on the *answer* call of flow ④ (a condensation
+    /// failure never surfaces: it degrades to the raw question, GH #153).
+    /// The [`Error::Embed`] posture applied to the second seam: kept as a
+    /// message so `b2-core` stays free of the LLM runtime's types.
+    #[error("llm call failed: {0}")]
+    Llm(String),
+
     /// The index's recorded embedding model/dim differs from the active embedder,
     /// so its vectors are incomparable with new query vectors. A read (search)
     /// fails fast with this rather than returning silently wrong results; the fix
