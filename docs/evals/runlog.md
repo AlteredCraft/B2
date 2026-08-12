@@ -1386,3 +1386,49 @@ re-examining bi-encoder calibration has the data without the corpus carrying the
 **Status:** the #150 close-out is now genuinely complete: floor shipped, every negative anchor
 clean under the strict gate, no arguable labels left in the discovery set. Standing open:
 #158's characterization column, and the phishing inversion as the pair-scorer's future evidence.
+
+---
+
+## 2026-08-11 — The encryption edit: fixing a label-content mismatch at the content side
+
+**Runs:** `just eval` · branch `claude/encryption-relation-content` · `results.jsonl` row 35
+
+### The edit, and whose it is
+
+Sam, reviewing the labels: *"not sure I would have labeled the related files to encryption"* —
+the labels said `passwords.md` and `phishing.md` are encryption's mates, but the notes' own text
+never actually expressed the relation. He added one sentence to each: passwords now notes
+credentials should be *encrypted at rest and in transit*; phishing now notes it is how fraudsters
+*overcome encrypted credentials* — tricking the plaintext out of you. This is the mirror of the
+watercolor resolution, and together they complete a principle worth stating: **when a label and
+a note disagree, fix whichever one is lying.** Watercolor's label claimed a separation the notes
+didn't have — the note was replaced. Encryption's labels claimed a relation the notes didn't
+express — the notes now express it. In both cases the corpus ends up telling the truth; in
+neither case was a score the thing being edited toward.
+
+### The audits (process rule 2)
+
+Both directions ran as scripts. One direction-1 flag: the sleep query *"what thermostat setting
+suits overnight **rest**…"* shares `rest` with the new *"encrypted at rest"* — a single common
+token toward a rival carrying none of the query's other terms (the `recover`+`mistake` precedent
+acted on a two-token split). Ruled watch-don't-reword, and the instrument agreed: the thermostat
+query's ranks are unmoved on every signal. No passage label collides with the new sentences;
+direction 2 vacuous.
+
+### The readout (row 35, diff vs row 34)
+
+- **One rank moved in the entire query set**: the crock passage, ·10 → ·9 — the corpus's known
+  most-marginal chunk reacting to the corpus-wide IDF ripple. Nothing else, on any signal.
+- **The phishing inversion nearly closed.** Encryption's unfloored list, before → after:
+  phishing 0.5714 (rank 5, under three strangers) → **0.6018 (rank 4)** — past backpacking-gear,
+  now 0.004 under earthquakes (0.6057) and 0.008 under personal-finance (0.6097). Passwords
+  strengthened 0.6433 → 0.6535. The one documented model error is now a photo finish rather than
+  a gap — from two sentences of honest content.
+- Piles: related-min rose 0.571 → 0.580 (phishing no longer holds the floor of the related
+  pile); gap `related-min − junk-max` −0.043 → **−0.034**. Negatives 4/4 clean, 0 cards,
+  exit 0 — the full gate holds untouched.
+
+**Status:** corpus and labels agree everywhere for the first time — every relation the labels
+claim is now legible in the notes' own text. The pair-scorer's standing evidence has narrowed to
+a 0.004-cosine photo finish; if dogfooding ever reopens that conversation, row 35 is the
+baseline it starts from.
