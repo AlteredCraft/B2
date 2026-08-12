@@ -118,7 +118,7 @@
         <code>body_hash</code> (the incremental signal used next time).</li>
         <li><b>Re-chunk only if the body changed</b> (or <code>--force</code>) — the heuristic below; chunk
         text reaches <code>chunks_fts</code> immediately.</li>
-        <li><b>Embed pass: fill the missing vectors</b> — every chunk without a <code>chunks_vec</code> row,
+        <li><b>Embed pass: fill the missing vectors</b> — every chunk without an <code>embeddings</code> row,
         batched, metered, cancellable.</li>
       </ul>
     </div>
@@ -167,7 +167,7 @@
         <!-- embed (no) -->
         <rect class="node" style="stroke:var(--purple)" x="572" y="330" width="372" height="62" rx="10"/>
         <text class="title" x="758" y="356" text-anchor="middle">re-chunk → embed_batch(16)</text>
-        <text class="sub mono-t" x="758" y="374" text-anchor="middle">replace_chunks · write chunks_vec</text>
+        <text class="sub mono-t" x="758" y="374" text-anchor="middle">replace_chunks · write embeddings</text>
 
         <!-- edges -->
         <rect class="node" style="stroke:var(--t1)" x="340" y="430" width="320" height="56" rx="10"/>
@@ -206,7 +206,7 @@
           <td>the stored hash of the note body, read <em>before</em> the upsert overwrites it — same body ⇒
           <code>chunk_body</code> yields identical chunks, deterministically.</td></tr>
         <tr><td class="mono">fully embedded</td><td class="mono">db::note_fully_embedded</td>
-          <td>every chunk of the note has a row in <code>chunks_vec</code>. Catches the model-swap case,
+          <td>every chunk of the note has a row in <code>embeddings</code>. Catches the model-swap case,
           where the body is unchanged but the vector space was just emptied — so we must still re-embed.</td></tr>
       </table>
     </div>
@@ -228,16 +228,26 @@
 
   <!-- ========================================================= -->
   <section id="chunking">
-    <h2><span class="num">3</span>Chunking — anchored paragraphs</h2>
-    <div class="files">crates/b2-core/src/chunk.rs</div>
-    <p class="sub">Today's chunker is deliberately minimal: a paragraph splitter — maximal runs of non-blank
-    lines, one chunk each. Every chunk records <code>char_start..char_end</code> addressing the exact body
-    slice that produced it, so a chunk stays anchored for later highlight/explain. The <code>chunks</code>
-    schema already carries <code>token_count</code> and <code>heading_path</code> for a future qmd-style
-    ~900-token, overlap-aware chunker — swapping it in is a pure re-projection (drop &amp; rebuild), no schema
-    or invariant change. Chunk text is also the FTS5 source: the <code>chunks_ai/ad/au</code> triggers keep
-    <code>chunks_fts</code> in lockstep, so keyword search sees a chunk the moment it lands — before it is
-    embedded.</p>
+    <h2><span class="num">3</span>Chunking — structure-aware, eval-validated</h2>
+    <div class="files">crates/b2-core/src/chunk.rs — <code>ChunkConfig</code> · GH #44</div>
+    <p class="sub">The chunker is the <b>qmd</b> splitter (named after tobi/qmd): it respects Markdown
+    structure — never cutting mid-table or mid-code-fence — targets a consistent size
+    (<code>target_tokens: 450</code> via a model-free <code>chars/4</code> proxy, 15% overlap between
+    neighbours), and tags each chunk with the <code>heading_path</code> breadcrumb it falls under. 450 sits
+    deliberately under the embedder's hard 512-token truncation (<code>b2-embed/src/model.rs</code>). Every
+    chunk records <code>char_start..char_end</code> addressing the exact body slice that produced it, so a
+    chunk stays anchored for later highlight/explain. Chunk text is also the FTS5 source: the
+    <code>chunks_ai/ad/au</code> triggers keep <code>chunks_fts</code> in lockstep — tokenized
+    <b><code>porter unicode61</code></b> (stemmed; schema v5), a <em>measured verdict</em>, not a default:
+    the stemmer A/B improved 7 BM25-only and 3 hybrid note ranks with every precision probe unmoved
+    (<span class="mono">docs/evals/runlog.md</span>, GH #157). So keyword search sees a chunk the moment it
+    lands — before it is embedded.</p>
+    <div class="ground"><b>Ground truth:</b> the config itself is <em>eval-validated</em> — GH #44's gate ran
+    a seven-variant sweep (<span class="mono">just eval-sweep</span>: target sizes 250/350/600, overlaps
+    0/0.30, the heading-path toggle) against the hand-labelled corpus and kept
+    <span class="mono">ChunkConfig::default()</span> on the paired per-query win/loss readout
+    (<span class="mono">docs/evals/runlog.md</span>, 2026-08-11). The breadcrumb-prepend knob
+    (<span class="mono">prepend_heading_path</span>) exists and measured rank-neutral twice, so it ships off.</div>
   </section>
 
   <!-- ========================================================= -->
@@ -262,7 +272,7 @@
         <div class="kickerlbl" style="color:var(--cyan)">LocalEmbedder — the real model</div>
         <p style="font-size:13px;margin:6px 0 0">A candle-backed BERT sentence embedder
         (<b>BAAI/bge-base-en-v1.5</b>, 768-dim), pure-Rust inference compiled into the binary. CLS-pool +
-        L2-normalize (so <code>sqlite-vec</code>'s L2 distance ranks by cosine); an asymmetric query prefix.
+        L2-normalize (so plain L2 distance, computed in-process, ranks by cosine); an asymmetric query prefix.
         <code>b2 init</code> downloads + verifies it into a shared XDG cache; loading <b>fails fast</b> if the
         files are absent — never a surprise mid-command download.</p>
       </div>
@@ -301,7 +311,7 @@
           <text class="sub mono-t" x="887" y="90" text-anchor="middle">row 0, masked</text>
 
           <rect class="node" style="stroke:var(--t3)" x="992" y="44" width="128" height="60" rx="9"/>
-          <text class="title" x="1056" y="72" text-anchor="middle">chunks_vec</text>
+          <text class="title" x="1056" y="72" text-anchor="middle">embeddings</text>
           <text class="sub mono-t" x="1056" y="90" text-anchor="middle">vec0 · FLOAT[768]</text>
 
           <path class="edge" style="stroke:var(--cyan)" marker-end="url(#ah-cyan)" d="M184,74 L212,74"/>
@@ -325,11 +335,11 @@
   <!-- ========================================================= -->
   <section id="space">
     <h2><span class="num">5</span>The embedding space &amp; the model swap</h2>
-    <p class="sub">The vector column's dimension is a DDL literal, so <code>chunks_vec</code> is created at
+    <p class="sub">The vector tables are the “embedding space exists” signal, so <code>embeddings</code> (with <code>note_centroids</code>) is created at
     <em>embed time</em> at the model's <code>dim</code>, not in the base migration. <code>meta</code> records
     <span class="eq">(embed_model_id, embed_dim)</span> — the only place a model swap is detectable.</p>
     <ul class="tidy" style="font-size:13.5px">
-      <li><b>On a swap</b>, <code>ensure_embedding_space</code> drops and recreates <code>chunks_vec</code>
+      <li><b>On a swap</b>, <code>ensure_embedding_space</code> drops and recreates the vector tables
       empty. Every note is then "not fully embedded", so the incremental heuristic (§2) re-embeds the whole
       vault on that reindex — automatically, no <code>--force</code> needed.</li>
       <li><b>Opening a vault never mutates the vector space.</b> Shaping and any re-embed happen only on
@@ -341,7 +351,7 @@
     </ul>
     <div class="ground"><b>Ground truth:</b>
     <span class="mono">changing_dim_recreates_the_vector_space_and_clears_vectors</span> and
-    <span class="mono">ingest_populates_chunks_vec_and_records_meta</span> (embed.rs) pin the swap discipline
+    <span class="mono">ingest_populates_embeddings_and_records_meta</span> (embed.rs) pin the swap discipline
     and the <code>meta</code> record; the façade's <code>search</code> path pins the fail-fast on mismatch.</div>
   </section>
 
