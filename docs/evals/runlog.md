@@ -1246,3 +1246,74 @@ config-surfaced in both adapters, and ratcheted in the eval. Open residue, both 
 watercolor/stain negatives (2/4 stays red) and encryption's phishing inversion. Either a label
 re-ruling (is watercolor ↔ stain-removal *really* "nothing relates"? — pigment, water, fabric)
 or the pair-scorer resolves them; that call is the next conversation, not this entry's to make.
+
+---
+
+## 2026-08-11 — The watercolor re-ruling: the model out-votes a label, and the gate closes
+
+**Runs:** `just eval` ×2 (identical) · branch `claude/watercolor-label-reruling` ·
+`results.jsonl` rows 32–33
+
+### The ruling, and whose it is
+
+The previous entry ended on the question it could not answer: watercolor ↔ stain-removal — the
+model's strongest pair in the corpus, "nothing relates" by label. Sam ruled it **related, on the
+notes' own content**: `watercolor-painting.md` opens *"Transparent pigment suspended in water"*,
+and a stain **is** semi-transparent pigment suspended in water, in fabric. The two notes share a
+real substrate — pigment, water, absorption, washing — and a human with both in a vault might
+genuinely link them. The model's 0.684 was right; the label was wrong from the day it was
+written.
+
+Worth naming what happened procedurally, because it is the mirror of process rule 3's worry:
+the corpus author's label was *challenged by the instrument* (a measured, structurally-anomalous
+score that survived every per-anchor rule), re-examined by the human against the notes'
+content — not against score convenience — and overturned. That is the direction the ratchet is
+supposed to turn.
+
+### The edit, and what it deliberately is not
+
+`similar.json` only: watercolor and stain-removal become **each other's expected mates**; the
+loner set is now chess + git; the file's description records the re-ruling and keeps the pair as
+the worked example that a bi-encoder can out-vote a label. **No note bytes changed**, so the
+two-direction token audit does not apply (its subject is note-content tokens against queries);
+per process rule 2 the label edit lands with this entry. Nothing else was re-labelled —
+watercolor's second floored card (`houseplant-care`, z +1.91) stays junk by label, and
+encryption's phishing inversion stays exactly as recorded.
+
+### The gate completes: `neg_clean == neg_n`
+
+The `NEG_CLEAN_FLOOR = 2` ratchet existed only because two negatives were unreachable by an
+anchor-local rule; both were the mislabelled pair. With the labels corrected, the remaining
+negatives (chess, git) are precisely what the floor demonstrably cleans, so the exit gate is now
+the full equality the #150 checklist specified: **a run serving one stranger where the label
+says "nothing" exits non-zero.** The red-by-design era is over on every axis.
+
+### The numbers (rows 32–33, identical)
+
+| metric | row 30 (pre-ruling) | row 33 |
+|---|---|---|
+| positive anchors | 6 · hit@1 1.00 | **8** · hit@1 1.00 (both new mates rank ✓1) |
+| negatives clean | 2/4 · 3 cards | **2/2 · 0 cards** — gate `==`, exit 0 |
+| related pile | n=11, max 0.667 | **n=13, max 0.684** |
+| junk pile | n=39, ceiling **0.684** | n=37, ceiling **0.614** |
+| `related-min − junk-max` | −0.113 | **−0.043** |
+
+The last row is the quiet headline: the junk ceiling that made "the piles overlap" true from the
+very first calibration (2026-08-05) was **the mislabelled pair itself**, sitting at 0.684 through
+three corpus revisions. Re-ruled, the overlap collapses to −0.043 — real but narrow, now driven
+by phishing's inversion (related-min 0.571) against stain ↔ sleep-hygiene (junk 0.614). The
+absolute-floor verdict is unchanged — the remaining overlap is genuine, and the shipped rule
+never needed the piles to separate — but the piles finally describe the model's actual
+calibration rather than a labelling error wearing its clothes.
+
+### Where this leaves the escalation
+
+The "pair-scorer or label re-ruling" fork resolved on the label side, so the **pair-scorer stays
+unopened** — the repo's rule is that an escalation opens when the data demands it, and the one
+remaining documented model error (phishing ranked under three strangers: a real relation scored
+too low, which no label change can fix) is evidence, not demand. It stands in the log as the
+standing regression marker; real-vault dogfooding is what would promote it.
+
+**Status:** #150 fully closed out — floor shipped, suppression gated at `==`, labels truthful,
+`just eval` green end to end. The eval harness's tier-1 work is done; what remains open anywhere
+is characterization (#158) and the documented phishing inversion.

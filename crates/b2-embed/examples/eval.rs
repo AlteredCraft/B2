@@ -38,9 +38,9 @@
 //!    The floor ships (GH #150, the per-anchor z rule in `discover::candidates`),
 //!    so ranks + suppression score the **floored** surface while the piles come
 //!    from a second, **unfloored** pass — the calibration data keeps accruing
-//!    ungated. The two diffuse negatives go clean and are ratcheted in the exit
-//!    gate; the high-affinity pair (watercolor ↔ stain-removal) stays red until
-//!    a pair-level scorer exists — an anchor-local statistic cannot see it.
+//!    ungated. Suppression is fully gated: every negative anchor must come back
+//!    clean (the watercolor ↔ stain-removal pair that once blocked this was
+//!    re-ruled related on 2026-08-11 — the model out-voted the label, runlog).
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -88,11 +88,6 @@ const K: usize = 10;
 const SIM_K: usize = 5;
 /// The soft reference floor on the default config's hybrid note hit@1.
 const FLOOR_HIT1: f64 = 0.75;
-/// The discovery-suppression ratchet (GH #150): at least this many negative
-/// anchors must come back clean under the shipped floor. Two is the measured
-/// state the floor was calibrated to (the diffuse pair — chess, git); the other
-/// two negatives await a pair-level scorer and are deliberately not gated.
-const NEG_CLEAN_FLOOR: usize = 2;
 
 #[derive(Deserialize)]
 struct QuerySet {
@@ -525,16 +520,17 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
-    // The suppression ratchet (GH #150): the shipped discovery floor cleans the
-    // two diffuse negative anchors, and a regression that starts serving
-    // strangers there again must exit non-zero. `>=`, not `==`, so an improvement
-    // passes. The full `neg_clean == neg_n` fold-in stays deliberately out: the
-    // watercolor ↔ stain-removal pair is a *pair-level* miscalibration an
-    // anchor-local rule measurably cannot separate (runlog 2026-08-11) — that red
-    // is the standing demand for a discovery-side pair-scorer, not a floor bug.
-    if similar.neg_clean < NEG_CLEAN_FLOOR {
+    // The suppression gate (GH #150, complete): EVERY negative anchor must come
+    // back clean under the shipped discovery floor — a run that serves a single
+    // stranger where the label says "nothing" exits non-zero. This was a `>= 2`
+    // ratchet while watercolor ↔ stain-removal sat mislabelled as loners; the
+    // 2026-08-11 re-ruling (runlog) made them each other's mates — the model
+    // scored them the corpus's strongest pair and the human agreed on the notes'
+    // own content — so the remaining negatives (chess, git) are exactly what the
+    // floor demonstrably cleans, and the gate is the `==` the issue specified.
+    if similar.neg_clean != similar.neg_n {
         eprintln!(
-            "\n[warn] only {}/{} negative anchors clean under the discovery floor (ratchet: {NEG_CLEAN_FLOOR}) — the floor regressed.",
+            "\n[warn] {}/{} negative anchors clean under the discovery floor — the floor regressed.",
             similar.neg_clean, similar.neg_n
         );
         return Ok(false);
