@@ -1317,3 +1317,72 @@ standing regression marker; real-vault dogfooding is what would promote it.
 **Status:** #150 fully closed out — floor shipped, suppression gated at `==`, labels truthful,
 `just eval` green end to end. The eval harness's tier-1 work is done; what remains open anywhere
 is characterization (#158) and the documented phishing inversion.
+
+> **Superseded by the next entry.** On reflection the ruling reversed: positioning the pair as
+> *related* was the wrong fix — an arguable pair doesn't belong in the corpus on either label.
+> The `==` gate and the pile insight survive; the mates labels do not.
+
+---
+
+## 2026-08-11 — The reversal: don't argue the pair, replace it
+
+**Runs:** `just eval` · branch `claude/watercolor-label-reruling` (PR #163, reworked) ·
+`results.jsonl` row 34
+
+### The second ruling, and why it beats the first
+
+Hours after ruling watercolor ↔ stain-removal related, Sam reversed: **we shouldn't position
+these as related — replace one of them with a loner that is clearly unrelated to every other
+note.** The reversal is the better testing posture, and it is worth recording why. The first
+ruling resolved the tension by *agreeing with the model* — which makes the negative set easier
+and quietly converts the corpus's hardest case into a freebie positive. But the labels' own
+standing rule (similar.json's description) already said it: a loner must be orthogonal to the
+other loners **"or the label is arguable."** Watercolor ↔ stain was arguable in both directions
+— that was the whole problem — and an arguable label is corpus debt whichever way you argue it.
+The fix is not to pick a side; it is to remove the argument.
+
+### The edit
+
+- `watercolor-painting.md` **deleted**; `throat-singing.md` added — Tuvan khoomei: overtones,
+  sygyt/kargyraa, tongue-and-jaw technique, steppe herding origin. Vocabulary chosen against
+  the whole corpus: no pigment/water/fabric (stain), no game/moves (chess), no commands (git),
+  nothing near any cluster or distractor.
+- `similar.json`: the mates labels reverted; negatives are **chess / stain-removal / git /
+  throat-singing** — four anchors, none arguable. The description records the replacement and
+  keeps the watercolor story as the precedent: an arguable loner gets replaced, not argued over.
+- The **two-direction token audit ran as a script** (notes changed this time, so it applies):
+  direction 1 — no existing query shares a distinctive content token with the new note (the
+  only overlaps are function words: `into`, `pushing`, `reach`, `style`); direction 2 vacuous
+  (no queries added; zero queries referenced either replaced note, verified). Cross-note check:
+  throat-singing shares only generic tokens with every other note — with stain-removal itself,
+  exactly one (`into`).
+- The `neg_clean == neg_n` gate **stays** — now over the full four-negative set.
+
+### The readout (row 34)
+
+| metric | row 33 (mates labels) | row 34 (replacement) |
+|---|---|---|
+| negatives clean | 2/2 · 0 cards | **4/4 · 0 cards** — exit 0 under `==` |
+| positive anchors | 8 · hit@1 1.00 | 6 · hit@1 1.00 (the original set) |
+| junk-pile ceiling | 0.614 | 0.614 |
+| `related-min − junk-max` | −0.043 | **−0.043** |
+| retrieval, per-query vs row 33 | — | **zero moves at any level** (one unrecorded bm25-only chunk rank behind a +0.003 chunk-MRR ripple; the corpus swap shifts IDF slightly) |
+
+Both predictions from the full-list data held: stain-removal *without* watercolor is a flat,
+diffuse cloud (its old rank-2 tail: 0.614, 0.613, 0.598 …) that the leader gate suppresses, and
+throat-singing surfaces nothing. **The floor now cleans every negative the corpus can honestly
+pose**, and the pile-gap improvement survives the reversal — the 0.684 junk ceiling is gone
+because the pair is gone, not because a label blessed it.
+
+### Where this leaves everything
+
+The suppression metric is green at full strength (4/4 under `==`), the corpus's negative set is
+stronger than it has ever been (four unambiguous loners vs three-and-an-argument), and the
+harness keeps its hardest true finding: **encryption's phishing inversion** remains the one
+documented model error and the standing evidence should a pair-scorer ever be demanded. The
+watercolor ↔ stain affinity itself is preserved in rows 6–33's piles and this log — anyone
+re-examining bi-encoder calibration has the data without the corpus carrying the ambiguity.
+
+**Status:** the #150 close-out is now genuinely complete: floor shipped, every negative anchor
+clean under the strict gate, no arguable labels left in the discovery set. Standing open:
+#158's characterization column, and the phishing inversion as the pair-scorer's future evidence.

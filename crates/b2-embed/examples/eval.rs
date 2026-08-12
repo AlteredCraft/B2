@@ -39,8 +39,9 @@
 //!    so ranks + suppression score the **floored** surface while the piles come
 //!    from a second, **unfloored** pass — the calibration data keeps accruing
 //!    ungated. Suppression is fully gated: every negative anchor must come back
-//!    clean (the watercolor ↔ stain-removal pair that once blocked this was
-//!    re-ruled related on 2026-08-11 — the model out-voted the label, runlog).
+//!    clean. (The watercolor ↔ stain-removal pair that once blocked this was
+//!    resolved 2026-08-11 by replacing watercolor with a cleanly orthogonal
+//!    loner — an arguable negative label is corpus debt, not a target; runlog.)
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -523,11 +524,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // The suppression gate (GH #150, complete): EVERY negative anchor must come
     // back clean under the shipped discovery floor — a run that serves a single
     // stranger where the label says "nothing" exits non-zero. This was a `>= 2`
-    // ratchet while watercolor ↔ stain-removal sat mislabelled as loners; the
-    // 2026-08-11 re-ruling (runlog) made them each other's mates — the model
-    // scored them the corpus's strongest pair and the human agreed on the notes'
-    // own content — so the remaining negatives (chess, git) are exactly what the
-    // floor demonstrably cleans, and the gate is the `==` the issue specified.
+    // ratchet while watercolor ↔ stain-removal — a pair the model scored the
+    // corpus's strongest — sat in the negative set making its own label arguable;
+    // the 2026-08-11 resolution (runlog) replaced watercolor with a cleanly
+    // orthogonal loner (throat-singing) rather than argue, so every negative is
+    // now unambiguous and the gate is the `==` the issue specified.
     if similar.neg_clean != similar.neg_n {
         eprintln!(
             "\n[warn] {}/{} negative anchors clean under the discovery floor — the floor regressed.",
