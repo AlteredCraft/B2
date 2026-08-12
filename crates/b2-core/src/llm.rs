@@ -39,6 +39,7 @@ pub struct ChatTurn {
 }
 
 impl ChatTurn {
+    /// A turn the human typed — the shape adapters append per question asked.
     pub fn user(content: &str) -> Self {
         Self {
             role: Role::User,
@@ -46,6 +47,7 @@ impl ChatTurn {
         }
     }
 
+    /// A prior model answer the adapter carries forward as context.
     pub fn assistant(content: &str) -> Self {
         Self {
             role: Role::Assistant,
@@ -53,6 +55,25 @@ impl ChatTurn {
         }
     }
 }
+
+/// Which flow-④ step a request serves — carried **structurally** so a provider
+/// (or the fake) never infers it from prompt text, and so a grounded request
+/// whose retrieval came back empty is never mistaken for condensation (they
+/// both carry no passages, for different reasons).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestKind {
+    /// Step 0: rewrite the latest turn into a standalone retrieval query.
+    Condense,
+    /// Steps 2–3: answer the question from the numbered passages.
+    Chat,
+}
+
+/// What the grounded prompt instructs the model to say when the passages don't
+/// support an answer. Declared beside the seam because both sides must agree on
+/// it: the flow's system prompt cites it (`chat::GROUNDED_SYSTEM_PROMPT`
+/// contains it verbatim — asserted by the suite), and [`FakeLlm`] obeys it for
+/// a chat request with no passages.
+pub const NO_EVIDENCE_ANSWER: &str = "I don't find that in your notes.";
 
 /// One numbered context passage handed to the model — the retrieval unit of
 /// flow ④, carried structured (not pre-rendered) so a fake can read it and a
@@ -77,6 +98,8 @@ pub struct ContextPassage {
 /// retrieval is what condensation feeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatRequest {
+    /// Which step this request serves (condense vs. grounded chat).
+    pub kind: RequestKind,
     /// The instruction text (prompt assembly is core logic — `chat.rs` authors
     /// it, so it is testable against [`FakeLlm`]).
     pub system: String,
@@ -130,6 +153,8 @@ pub struct Completion {
 /// logging only — chat carries **no** index identity (contrast M2): nothing is
 /// recorded in `meta`, and swapping models never touches the index.
 pub trait LlmProvider {
+    /// The provider's display name for logs and UI badges — never an identity
+    /// anything keys on (no `meta` row; contrast `Embedder::model_id`).
     fn model_id(&self) -> &str;
 
     /// Stream a completion. `on_token` receives tokens as they arrive and
@@ -149,20 +174,19 @@ pub trait LlmProvider {
 pub const FAKE_LLM_MODEL_ID: &str = "fake-llm-v1";
 
 /// Deterministic provider for tests/dev — the [`crate::embed::FakeEmbedder`]
-/// sibling. A **chat** request (passages present) streams a fixed grounded
-/// answer that cites every passage it was handed, one `[n]` marker per token,
-/// so the engine suite can assert the whole flow-④ pipeline — and mid-stream
-/// cancellation at an exact token — model-free (E2). A **condensation**
-/// request (no passages — the structural mark of step 0) echoes the question:
+/// sibling, keyed on [`ChatRequest::kind`]. A **chat** request streams a fixed
+/// grounded answer that cites every passage it was handed, one `[n]` marker
+/// per token, so the engine suite can assert the whole flow-④ pipeline — and
+/// mid-stream cancellation at an exact token — model-free (E2); handed **no**
+/// passages (empty retrieval), it obeys its instructions and answers
+/// [`NO_EVIDENCE_ANSWER`]. A **condensation** request echoes the question:
 /// the latest user turn, verbatim.
-///
-/// The one corner where the two shapes meet: a chat request over *empty*
-/// retrieval also carries no passages, so it echoes too. Harmless for a fake
-/// whose job is deterministic plumbing — there is nothing to cite either way.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FakeLlm;
 
 impl LlmProvider for FakeLlm {
+    /// The fixed display id [`FAKE_LLM_MODEL_ID`] — logging only, like every
+    /// provider's.
     fn model_id(&self) -> &str {
         FAKE_LLM_MODEL_ID
     }
@@ -172,27 +196,33 @@ impl LlmProvider for FakeLlm {
         req: &ChatRequest,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> Result<Completion> {
-        let tokens: Vec<String> = if req.passages.is_empty() {
-            // Condensation: echo the question. One token — cancellation
-            // scripting belongs to the multi-token chat branch.
-            let echo = req
-                .turns
-                .iter()
-                .rev()
-                .find(|t| t.role == Role::User)
-                .map(|t| t.content.clone())
-                .unwrap_or_default();
-            if echo.is_empty() {
-                Vec::new()
-            } else {
-                vec![echo]
+        let tokens: Vec<String> = match req.kind {
+            RequestKind::Condense => {
+                // Echo the question. One token — cancellation scripting
+                // belongs to the multi-token chat branch.
+                let echo = req
+                    .turns
+                    .iter()
+                    .rev()
+                    .find(|t| t.role == Role::User)
+                    .map(|t| t.content.clone())
+                    .unwrap_or_default();
+                if echo.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![echo]
+                }
             }
-        } else {
-            // Chat: a grounded answer citing every passage, marker-per-token.
-            let mut t: Vec<String> = vec!["Grounded".into(), " in".into()];
-            t.extend((1..=req.passages.len()).map(|n| format!(" [{n}]")));
-            t.push(".".into());
-            t
+            // Nothing retrieved, nothing to cite: the grounded prompt's
+            // no-evidence response, as a real model would give it.
+            RequestKind::Chat if req.passages.is_empty() => vec![NO_EVIDENCE_ANSWER.to_string()],
+            RequestKind::Chat => {
+                // A grounded answer citing every passage, marker-per-token.
+                let mut t: Vec<String> = vec!["Grounded".into(), " in".into()];
+                t.extend((1..=req.passages.len()).map(|n| format!(" [{n}]")));
+                t.push(".".into());
+                t
+            }
         };
 
         let mut text = String::new();

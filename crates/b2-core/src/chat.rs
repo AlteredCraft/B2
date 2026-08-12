@@ -12,7 +12,7 @@
 //!
 //! [`FakeLlm`]: crate::llm::FakeLlm
 
-use crate::llm::{ChatRequest, ChatTurn, ContextPassage, LlmProvider};
+use crate::llm::{ChatRequest, ChatTurn, ContextPassage, LlmProvider, RequestKind};
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
@@ -25,7 +25,10 @@ pub const ASK_PASSAGES: usize = 10;
 
 /// The grounded system prompt (flow ④ step 2). Prompt assembly is core logic:
 /// authored here, rendered with the numbered passages by
-/// [`ChatRequest::system_message`], asserted by the engine suite.
+/// [`ChatRequest::system_message`], asserted by the engine suite. The quoted
+/// no-evidence sentence is [`crate::llm::NO_EVIDENCE_ANSWER`] verbatim (the
+/// suite pins the containment), so the instruction and the fake that obeys it
+/// can never drift apart.
 pub const GROUNDED_SYSTEM_PROMPT: &str = "You are B2, answering questions about the user's own \
 notes. Answer ONLY from the numbered passages below. Cite each claim with the supporting \
 passage's [n] marker. If the passages do not support an answer, say \"I don't find that in \
@@ -46,6 +49,7 @@ any pronouns or references. Reply with the query text only — no preamble, no q
 /// input, not answer text), so nothing streams up from this call.
 pub fn condense_query(llm: &dyn LlmProvider, question: &str, history: &[ChatTurn]) -> String {
     let req = ChatRequest {
+        kind: RequestKind::Condense,
         system: CONDENSE_SYSTEM_PROMPT.to_string(),
         turns: turns_with_question(history, question),
         passages: Vec::new(),
@@ -78,6 +82,7 @@ pub fn build_request(
     passages: Vec<ContextPassage>,
 ) -> ChatRequest {
     ChatRequest {
+        kind: RequestKind::Chat,
         system: GROUNDED_SYSTEM_PROMPT.to_string(),
         turns: turns_with_question(history, question),
         passages,

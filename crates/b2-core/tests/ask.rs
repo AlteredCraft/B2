@@ -7,7 +7,10 @@
 mod common;
 
 use b2_core::chat::{self, CONDENSE_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT};
-use b2_core::llm::{ChatRequest, ChatTurn, Completion, ContextPassage, FakeLlm, LlmProvider, Role};
+use b2_core::llm::{
+    ChatRequest, ChatTurn, Completion, ContextPassage, FakeLlm, LlmProvider, RequestKind, Role,
+    NO_EVIDENCE_ANSWER,
+};
 use b2_core::vault::Vault;
 use b2_core::Error;
 use common::{opened_vault, reindexed_vault};
@@ -191,8 +194,8 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
     assert_eq!(counting.calls.get(), 2, "condense, then answer");
 }
 
-/// A provider whose condensation call (structurally: no passages) fails or
-/// comes back cancelled with garbage, while chat behaves like [`FakeLlm`].
+/// A provider whose condensation call fails or comes back cancelled with
+/// garbage, while chat behaves like [`FakeLlm`].
 /// Step 0 must degrade to the raw question — never break chat, never retrieve
 /// on the garbage.
 struct BrokenCondense {
@@ -209,7 +212,7 @@ impl LlmProvider for BrokenCondense {
         req: &ChatRequest,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> b2_core::Result<Completion> {
-        if req.passages.is_empty() {
+        if req.kind == RequestKind::Condense {
             return match self.cancelled_text {
                 None => Err(Error::Llm("condense: connection dropped".into())),
                 Some(text) => Ok(Completion {
@@ -342,10 +345,43 @@ fn a_hallucinated_marker_resolves_to_nothing_and_stays_in_the_text() {
     assert_eq!(view.citations[0].marker, 1);
 }
 
+/// Empty retrieval is not condensation: a grounded request whose passage list
+/// is empty (nothing in the vault matched) gets the honest no-evidence answer,
+/// not an echo of the question — `RequestKind` is what keeps the two apart.
+#[test]
+fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+
+    let mut streamed = String::new();
+    let view = vault
+        .ask(
+            &FakeLlm,
+            "anything at all",
+            &[],
+            &mut stream_all(&mut streamed),
+        )
+        .unwrap();
+
+    assert_eq!(view.answer, NO_EVIDENCE_ANSWER);
+    assert!(
+        view.citations.is_empty(),
+        "nothing retrieved, nothing cited"
+    );
+    assert!(!view.cancelled);
+}
+
 /// A failed *answer* call is a real error (contrast condensation, which
 /// degrades): the adapter needs to say "can't reach the model server", not
-/// render an empty answer as if the vault had nothing to say.
-struct FailingChat;
+/// render an empty answer as if the vault had nothing to say. Whatever variant
+/// the provider returns is normalized to [`Error::Llm`], so adapters have one
+/// variant to match for that message.
+struct FailingChat {
+    err: fn() -> Error,
+}
 
 impl LlmProvider for FailingChat {
     fn model_id(&self) -> &str {
@@ -356,7 +392,7 @@ impl LlmProvider for FailingChat {
         _req: &ChatRequest,
         _on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> b2_core::Result<Completion> {
-        Err(Error::Llm("connection refused".into()))
+        Err((self.err)())
     }
 }
 
@@ -366,11 +402,33 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
     let (vault, _root) = reindexed_vault(tmp.path());
 
     let err = vault
-        .ask(&FailingChat, "forgetting curve", &[], &mut |_| {
-            ControlFlow::Continue(())
-        })
+        .ask(
+            &FailingChat {
+                err: || Error::Llm("connection refused".into()),
+            },
+            "forgetting curve",
+            &[],
+            &mut |_| ControlFlow::Continue(()),
+        )
         .unwrap_err();
     assert!(matches!(err, Error::Llm(_)));
+
+    // A provider leaking a non-Llm variant is normalized at the seam boundary,
+    // so the documented contract holds whatever the implementation returns.
+    let err = vault
+        .ask(
+            &FailingChat {
+                err: || Error::Io(std::io::Error::other("socket closed")),
+            },
+            "forgetting curve",
+            &[],
+            &mut |_| ControlFlow::Continue(()),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Llm(msg) if msg.contains("socket closed")),
+        "normalized, detail preserved: {err:?}"
+    );
 }
 
 /// Chat is a reader with `search`'s posture: a mismatched embedding space
@@ -439,8 +497,13 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
     assert!(msg.contains("[2] notes/spaced-repetition.md"));
     assert!(msg.contains("Review at increasing intervals."));
 
+    // The no-evidence sentence the fake obeys is the one the prompt dictates —
+    // the two are pinned together so neither can drift.
+    assert!(GROUNDED_SYSTEM_PROMPT.contains(NO_EVIDENCE_ANSWER));
+
     // A condensation request renders without a passage block.
     let condense = ChatRequest {
+        kind: RequestKind::Condense,
         system: CONDENSE_SYSTEM_PROMPT.to_string(),
         turns: req.turns.clone(),
         passages: Vec::new(),

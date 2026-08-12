@@ -536,7 +536,9 @@ pub struct AnswerView {
 pub struct Citation {
     /// The marker as it appears in the answer text (1-based passage number).
     pub marker: usize,
+    /// Vault-relative path of the cited note — what an adapter opens on click.
     pub path: String,
+    /// The cited note's durable identity (survives a rename; L1).
     pub b2id: String,
     /// A one-line excerpt of the cited passage (its head, length-bounded).
     pub excerpt: String,
@@ -1341,7 +1343,14 @@ impl Vault {
             "retrieved grounding passages"
         );
         let req = chat::build_request(question, history, passages);
-        let completion = llm.complete(&req, on_token)?;
+        // Normalize: the trait returns the crate-wide `Result`, so a provider
+        // *could* surface `Io`/`Serde`/… — but every failure of this call is a
+        // failed model call, and adapters match `Error::Llm` for the "can't
+        // reach the model server" message (E4). Enforced here, not hoped for.
+        let completion = llm.complete(&req, on_token).map_err(|e| match e {
+            Error::Llm(_) => e,
+            other => Error::Llm(other.to_string()),
+        })?;
         let citations = chat::cited_markers(&completion.text, req.passages.len())
             .into_iter()
             .filter_map(|marker| {
