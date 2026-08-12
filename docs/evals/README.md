@@ -22,10 +22,13 @@ deterministic, and model-free, so model quality can never flake CI
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
-can only say *different*, but it sees what the labelled corpus is structurally blind to: the
-26-note corpus fits inside the candidate pools retrieval reaches, so a **candidate-width** change
-prints bit-identical numbers here while genuinely reordering a real vault. Every run that is
-blind that way says so (`pool_blind` in the row, a `[warn]` on stdout). The worked example is
+can only say *different*, but it sees what the labelled corpus is structurally blind to:
+candidate-width truncation applies to **chunk** candidate lists, and the corpus's 55 chunks
+(26 notes) fit inside even the narrower pool retrieval reaches
+(`chunk_candidate_pool(10) = 60`; the note view reaches 150), so a **candidate-width** change
+prints bit-identical numbers here while genuinely reordering a real vault. Blindness holds
+exactly while corpus chunks ≤ that pool, and every run that is blind that way says so
+(`pool_blind` in the row, a `[warn]` on stdout). The worked example is
 [#140](https://github.com/AlteredCraft/B2/issues/140)/[#142](https://github.com/AlteredCraft/B2/issues/142):
 the eval saw nothing, the probe saw 10 of 10 probes change, and the change was reverted — a probe
 can say *different*, only labels can say *better*. Run both.

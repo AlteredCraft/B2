@@ -265,8 +265,9 @@ retrieval curve.
     <span class="box" style="border-color:var(--t3)">embed pass · fill missing vectors</span>
   </div>
   <ul class="tidy" style="font-size:13.5px;margin-top:12px">
-    <li><b>Phase 1</b> projects each note's frontmatter and chunks its body (a minimal paragraph splitter, one
-    chunk per maximal run of non-blank lines); chunk text lands in <code>chunks_fts</code> immediately, so
+    <li><b>Phase 1</b> projects each note's frontmatter and chunks its body (the structure-aware qmd chunker:
+    ~450-token target, overlapping, cut at Markdown breaks, each chunk stamped with its
+    <code>heading_path</code> breadcrumb); chunk text lands in <code>chunks_fts</code> immediately, so
     keyword search works before anything is embedded. This fills
     <code>notes(b2id, path)</code> — the <code>path ⇄ b2id</code> resolver — for the <em>whole</em> vault.</li>
     <li><b>Phase 2</b> derives edges by parsing each body's links + frontmatter <code>b2_relations:</code> and
@@ -400,8 +401,9 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       <span class="box">anchor's stored chunk vectors</span><span class="arrow">→</span>
       <span class="box">centroid shortlist — O(notes)</span><span class="arrow">−</span>
       <span class="box" style="border-color:var(--green)">reachable_within(anchor, 1)</span><span class="arrow">→</span>
+      <span class="box" style="border-color:var(--amber)">quality floor — z vs the stage-1 field</span><span class="arrow">→</span>
       <span class="box">exact max-sim per shortlisted note</span><span class="arrow">→</span>
-      <span class="box" style="border-color:var(--amber)">quality floor → rank → cap(limit)</span>
+      <span class="box">rank → cap(limit)</span>
     </div>
     <ul class="tidy" style="font-size:13px;margin:12px 0 0">
       <li><b>No re-embedding, no model call.</b> Each anchor chunk's <em>already-stored</em> vector is the KNN query
@@ -693,9 +695,9 @@ b2_relations:
       <code>b2 reindex --cancel</code> signals it onto the same cooperative-cancel path as Ctrl-C. Still open:
       a smaller/quantized embedder — it composes behind the existing seam.</li>
       <li><b>Deferred, behind clean seams.</b> A cross-encoder reranker (the likely <em>next</em> seam — changes
-      <em>ordering</em>, not the store), query expansion, the qmd-style ~900-token overlap-aware chunker (a pure
-      re-projection — the <code>chunks</code> schema already carries <code>token_count</code> +
-      <code>heading_path</code>), and the actual packaging/distribution build.</li>
+      <em>ordering</em>, not the store), query expansion, and the actual packaging/distribution build.
+      (The qmd chunker, once on this list, shipped — the eval-validated #44 verdict; see
+      <a href="indexing.html">the indexing deep dive</a>.)</li>
     </ul>
   </div>
 </section>
