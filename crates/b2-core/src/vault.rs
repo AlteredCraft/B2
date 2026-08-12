@@ -4,8 +4,8 @@
 //! (and future adapters) are the sole clients of. It owns the open connection, the
 //! embedder, and the id generator, and exposes *only what the shipped commands need*
 //! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
-//! `explain` / `search` / `search_chunks` / `similar` / `link` / `add` / `create` /
-//! `import` / `mv` / `rm`. Add
+//! `explain` / `search` / `search_chunks` / `similar` / `ask` / `link` / `add` /
+//! `create` / `import` / `mv` / `rm`. Add
 //! operations when a command needs them; do not pre-build a sprawling surface.
 //!
 //! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
@@ -19,6 +19,7 @@
 //! embedder — callers must not overstate the fake.
 
 use crate::add::{self, AddReport};
+use crate::chat;
 use crate::chunk::ChunkConfig;
 use crate::db;
 use crate::dirs;
@@ -28,6 +29,7 @@ use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::id::UlidGen;
 use crate::import;
+use crate::llm::{ChatTurn, ContextPassage, LlmProvider};
 use crate::mv;
 use crate::rm;
 use crate::{ingest, note, relation, search};
@@ -505,6 +507,41 @@ pub struct ChunkSearchResult {
     pub score: f64,
     /// The chunk's stored text, verbatim.
     pub text: String,
+}
+
+/// The answer to one grounded-chat ask — flow ④'s display view (GH #151/#153).
+/// The model's streamed text with its `[n]` citation markers resolved back to
+/// the vault; per the standing convention this view type is the adapters' JSON
+/// / IPC contract when the chat surfaces land.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AnswerView {
+    /// The answer, verbatim as streamed — including any marker that did *not*
+    /// resolve: model output is untrusted content (E5) but it is never
+    /// rewritten here; an unmatched marker is simply absent from `citations`.
+    pub answer: String,
+    /// The resolved citations, ascending by marker; one entry per **distinct**
+    /// marker that names a real passage.
+    pub citations: Vec<Citation>,
+    /// `true` when the caller's callback broke the stream mid-answer: `answer`
+    /// then holds the partial text honestly (the [`Completion`] marker,
+    /// surfaced), and citations resolve over what actually arrived.
+    ///
+    /// [`Completion`]: crate::llm::Completion
+    pub cancelled: bool,
+}
+
+/// One resolved `[n]` citation: the passage's note, plus a one-line excerpt of
+/// the cited passage as display evidence (the `SimilarView::evidence` posture).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Citation {
+    /// The marker as it appears in the answer text (1-based passage number).
+    pub marker: usize,
+    /// Vault-relative path of the cited note — what an adapter opens on click.
+    pub path: String,
+    /// The cited note's durable identity (survives a rename; L1).
+    pub b2id: String,
+    /// A one-line excerpt of the cited passage (its head, length-bounded).
+    pub excerpt: String,
 }
 
 /// One semantically-similar candidate for `b2 similar`: a note near the anchor in
@@ -1244,6 +1281,96 @@ impl Vault {
             });
         }
         Ok(out)
+    }
+
+    /// Flow ④ — grounded chat over the vault (GH #151/#153): condense →
+    /// retrieve → assemble → stream → cite, orchestrated here, with the core
+    /// logic in [`crate::chat`]. The provider is injected **per call** — chat
+    /// is the sole consumer, and unlike the embedder it carries no index
+    /// identity (contrast M2), so nothing about it belongs on the open vault.
+    ///
+    /// - **Condense** (multi-turn only): one provider call rewrites the
+    ///   follow-up into a standalone retrieval query; a single-turn ask skips
+    ///   it; on failure or a cancelled stream it degrades to the raw question
+    ///   — that step can never break chat ([`chat::condense_query`]).
+    /// - **Retrieve**: [`search_chunks`](Self::search_chunks) at
+    ///   [`chat::ASK_PASSAGES`] — hybrid, with the same BM25-only fallback on
+    ///   a projected-but-unembedded vault (M4) and the same model-mismatch
+    ///   fail-fast: chat is a reader (C1), and it holds `search`'s posture.
+    /// - **Stream**: answer tokens flow up through `on_token` as they arrive;
+    ///   returning `ControlFlow::Break(())` cancels at token granularity, and
+    ///   the result reports it honestly ([`AnswerView::cancelled`]).
+    /// - **Cite**: distinct `[n]` markers in the answer resolve to
+    ///   `(path, b2id, excerpt)`; a hallucinated marker resolves to nothing
+    ///   and the answer text is never rewritten.
+    ///
+    /// Nothing model-derived is stored anywhere — no response caching, no
+    /// `meta` rows, and history is the caller's, session-only (S4). Errors:
+    /// retrieval errors as `search` raises them; a failed *answer* call as
+    /// [`Error::Llm`](crate::Error::Llm).
+    pub fn ask(
+        &self,
+        llm: &dyn LlmProvider,
+        question: &str,
+        history: &[ChatTurn],
+        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
+    ) -> Result<AnswerView> {
+        let _op = tracing::debug_span!(
+            target: "b2::vault",
+            "ask",
+            question,
+            multi_turn = !history.is_empty()
+        )
+        .entered();
+        let query = if history.is_empty() {
+            question.to_string()
+        } else {
+            chat::condense_query(llm, question, history)
+        };
+        let passages: Vec<ContextPassage> = self
+            .search_chunks(&query, chat::ASK_PASSAGES)?
+            .into_iter()
+            .map(|c| ContextPassage {
+                path: c.path,
+                b2id: c.b2id,
+                heading_path: c.heading_path,
+                text: c.text,
+            })
+            .collect();
+        tracing::debug!(
+            target: "b2::chat",
+            passages = passages.len(),
+            "retrieved grounding passages"
+        );
+        let req = chat::build_request(question, history, passages);
+        // Normalize: the trait returns the crate-wide `Result`, so a provider
+        // *could* surface `Io`/`Serde`/… — but every failure of this call is a
+        // failed model call, and adapters match `Error::Llm` for the "can't
+        // reach the model server" message (E4). Enforced here, not hoped for.
+        let completion = llm.complete(&req, on_token).map_err(|e| match e {
+            Error::Llm(_) => e,
+            other => Error::Llm(other.to_string()),
+        })?;
+        let citations = chat::cited_markers(&completion.text, req.passages.len())
+            .into_iter()
+            .filter_map(|marker| {
+                // 1-based marker → 0-based passage. `cited_markers` already
+                // filtered to `1..=passage_count`; skip rather than index so
+                // even a broken invariant degrades to a missing citation.
+                let p = req.passages.get(marker.checked_sub(1)?)?;
+                Some(Citation {
+                    marker,
+                    path: p.path.clone(),
+                    b2id: p.b2id.clone(),
+                    excerpt: snippet(&p.text),
+                })
+            })
+            .collect();
+        Ok(AnswerView {
+            answer: completion.text,
+            citations,
+            cancelled: completion.cancelled,
+        })
     }
 
     /// The shared retrieval core of [`search`](Self::search) and

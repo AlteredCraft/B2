@@ -259,14 +259,23 @@ construction; `create_dir` / `move_dir` / `delete_dir` proxy the OS (create-with
 target refused — / `rename` / `remove_dir_all`) and resolve targets against the disk, so empty folders
 work everywhere (`b2 mv`, `b2 rm -r`, the tree).
 
-### The one seam (Bitter-Lesson tenet: build for tomorrow's model)
+### The seams (Bitter-Lesson tenet: build for tomorrow's model)
 
-The AI part sits behind a swappable trait; the engine is built and tested against a deterministic fake,
-and a real model drops in through the same seam with no schema or flow change.
+The AI parts sit behind swappable traits — the **enumerated seams** (invariant M1); the engine is
+built and tested against deterministic fakes, and a real model drops in through its seam with no
+schema or flow change.
 
 - **`Embedder`** (`b2-core/src/embed.rs`) — text → vector. Real impl is `b2-embed`'s candle-backed
   `LocalEmbedder` (bge-base-en-v1.5, 768-dim); test/dev impl is `FakeEmbedder` (blake3-hashed,
   content-addressed, *not* semantic). The fake is content-addressed so drop→rebuild is reproducible.
+- **`LlmProvider`** (`b2-core/src/llm.rs`) — grounded chat (flow ④, `Vault::ask`; GH #151/#153):
+  messages in, streamed tokens out through a callback whose return value steers **cooperative
+  cancellation** — sync, no tokio. Test/dev impl is `FakeLlm` (a chat request echoes citation
+  markers for its passages; a condensation request echoes the question). Unlike the embedder, chat
+  carries **no index identity** (contrast M2): nothing it produces is stored — no `meta` row, no
+  response caching, session-only history — so swapping chat models never touches the index, and a
+  provider swap is a URL/config change. Note content leaves the machine only by explicit cloud
+  configuration (M5).
 
 *(Connection discovery is deliberately model-free at surface time: `b2 similar` surfaces candidates,
 `b2 link` is the human committing — the human is the precision gate. A reranker would be the next seam
@@ -347,7 +356,7 @@ The **one typed API**. The CLI and the desktop host are its only clients; every 
 module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
-`explain_resource` / `search` / `similar`), writes (`add_note` / `create_note` / `create_dir` /
+`explain_resource` / `search` / `similar` / `ask`), writes (`add_note` / `create_note` / `create_dir` /
 `import_file` / `import_path` / `move_note` / `move_resource` / `move_dir` / `link` / `write` /
 `delete_note` / `delete_resource` / `delete_dir`).
 **Add operations when a command needs them; do not
@@ -378,6 +387,15 @@ adapters wire the real model.
   **`b2 link`** appends a typed `b2_relations:` entry to the source note's frontmatter
   (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
   active edge. No suggestion queue — a connection exists only once you author it.
+- **Flow ④ grounded chat** (`chat.rs` + `Vault::ask`, GH #151/#153) — condense (multi-turn only; a
+  provider call rewrites the follow-up into a standalone query, degrading to the raw question on
+  failure — that step can never break chat) → retrieve (`search_chunks` at `chat::ASK_PASSAGES`,
+  BM25-only fallback unchanged) → assemble (the grounded system prompt + numbered passages — prompt
+  assembly is core logic) → stream (tokens up through the caller's callback; `Break` cancels at
+  token granularity) → cite (`[n]` markers resolve to `(path, b2id, excerpt)` in `AnswerView`; a
+  hallucinated marker resolves to nothing and the answer text is never rewritten). Chat is a
+  **reader** (C1); nothing model-derived is stored (`llm_cache` stays unused), history is
+  session-only (S4), and model output is untrusted content (E5 — enforced at the render surface).
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
   within *k* typed hops of an anchor (scoped traversal). `b2 similar`'s candidate generation is its
   *complement* (`discover::candidates` — nearest notes *not* already connected).

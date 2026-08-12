@@ -7,6 +7,7 @@
 //! tables scored in-process since schema v3, #38 — no extension needed).
 
 pub mod add;
+pub mod chat;
 pub mod chunk;
 pub mod db;
 pub mod dirs;
@@ -18,6 +19,7 @@ pub mod id;
 pub mod import;
 pub mod ingest;
 pub mod link;
+pub mod llm;
 pub mod mv;
 pub mod note;
 mod pathspec;

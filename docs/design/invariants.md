@@ -119,13 +119,16 @@ tomorrow's model* — made mechanical.
   `src` is always a note, because an edge must trace to an authored Markdown line.
   ([index-engine.md](index-engine.md) §3, [data-model.md](data-model.md) §10)
 
-## M — The AI seam & the embedding space
+## M — The AI seams & the embedding space
 
-- **M1 — Exactly one AI seam: `Embedder`.** `b2-core` is model-free and tested against a
-  deterministic, content-addressed fake; a real model drops in through the seam with **no schema or
-  flow change**. Model-compensating machinery (per-pair adjudication, query expansion, heavy
-  orchestration) is deferred or off by default — the Bitter-Lesson tenet. A reranker, if it lands, is
-  the next seam, not an exception. ([index-engine.md](index-engine.md) §5–§6)
+- **M1 — Only enumerated AI seams: `Embedder` and `LlmProvider`.** `b2-core` is model-free and
+  tested against deterministic fakes; a real model drops in through its seam with **no schema or
+  flow change**. `Embedder` (text → vector) carries the index's one recorded identity (M2);
+  `LlmProvider` (chat — streamed, cooperatively cancellable) deliberately carries **none**: nothing
+  it produces is stored, so swapping chat models never touches the index. Model-compensating
+  machinery (per-pair adjudication, query expansion, heavy orchestration) is deferred or off by
+  default — the Bitter-Lesson tenet. A reranker, if it lands, is the next enumerated seam, not an
+  exception. ([index-engine.md](index-engine.md) §5–§6, GH #151/#153)
 - **M2 — The embedding space has one recorded identity: `meta.(embed_model_id, embed_dim)` — and the
   compute device folds into it** (a Metal build tags the id `@metal`). Any identity change is a model
   swap: `search` **fails fast** rather than mixing spaces, `reindex` drops and re-embeds, and `open`
@@ -138,6 +141,11 @@ tomorrow's model* — made mechanical.
   the fallbacks (BM25-only search on a projected-but-unembedded vault) key on it. Centroids are
   derived data sharing the vectors' lifecycle — refreshed by the embed pass, dropped on re-chunk, no
   separate invalidation. ([CLAUDE.md](../../CLAUDE.md), #38)
+- **M5 — Note content is never sent off-machine unbidden.** A cloud model endpoint exists only by
+  explicit user configuration: the default chat configuration is a local endpoint, and a chat
+  request carries the question *and* retrieved note passages — so the consent moment is the
+  configuration moment, informed in place (plain-language privacy copy beside the Cloud-models
+  setting, never a later popup). (GH #151)
 
 ## E — Engineering discipline (what keeps the above true)
 
