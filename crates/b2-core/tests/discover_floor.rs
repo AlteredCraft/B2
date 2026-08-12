@@ -193,7 +193,7 @@ fn facade_floors_a_geometric_space_but_never_a_fake_one() {
         );
     }
 
-    let mut v = Vault::open_with_embedder(&vault_dir, Box::new(GeometricEmbedder)).unwrap();
+    let v = Vault::open_with_embedder(&vault_dir, Box::new(GeometricEmbedder)).unwrap();
     v.reindex().unwrap();
     assert!(
         v.similar("diffuse.md", 10).unwrap().is_empty(),
@@ -204,9 +204,9 @@ fn facade_floors_a_geometric_space_but_never_a_fake_one() {
     assert_eq!(kept[0].path, "mate.md");
     assert!(kept[0].z.is_some(), "the surfaced view carries its z");
 
-    // Disabling the floor is the caller's explicit raw-nearest ask.
-    v.set_discovery_floor(None);
-    assert_eq!(v.similar("diffuse.md", 10).unwrap().len(), 10);
+    // The caller's explicit raw-nearest ask is its own façade method — one call,
+    // no policy mutation (the adapters' `--no-floor` / "Show nearest anyway").
+    assert_eq!(v.similar_raw("diffuse.md", 10).unwrap().len(), 10);
 
     // A fake-embedded space is never floored, whatever the vault's floor setting.
     let fake_dir = tmp.path().join("vf");

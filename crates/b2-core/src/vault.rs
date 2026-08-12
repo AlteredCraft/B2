@@ -165,10 +165,11 @@ pub struct Vault {
     // that overrides it, to A/B chunker levers in-process (the eval harness, crates/b2-embed/evals/).
     chunk_config: ChunkConfig,
     // The discovery quality floor (GH #150) `similar` surfaces under. `Some(default)`
-    // from open; `None` = surface the raw nearest (the CLI's `--no-floor`, the
-    // eval's calibration pass). Held here — like `chunk_config` — so every `similar`
-    // call in a session judges by one policy. Independent of this setting, `similar`
-    // never floors a fake-embedded space (no semantic geometry to gate on).
+    // from open; overridden only by the harness/tests (`set_discovery_floor`, the
+    // `set_chunk_config` posture) — an adapter's per-call raw ask is `similar_raw`,
+    // not a policy change here. Held on the vault so every `similar` call in a
+    // session judges by one policy. Independent of this setting, `similar` never
+    // floors a fake-embedded space (no semantic geometry to gate on).
     discovery_floor: Option<discover::DiscoveryFloor>,
 }
 
@@ -614,11 +615,14 @@ impl Vault {
 
     /// Override the discovery quality floor [`similar`](Self::similar) surfaces
     /// under (default: `Some(DiscoveryFloor::default())`, the calibrated rule).
-    /// `None` disables gating — the adapter's explicit "show me the raw nearest"
-    /// (the CLI's `--no-floor`), and how the eval collects ungated score piles so
-    /// the floor's own calibration data keeps accruing (GH #150). Regardless of
-    /// this setting, a fake-embedded space is never floored — hash vectors have
-    /// no semantic geometry for a z-score to mean anything against.
+    /// Like [`set_chunk_config`](Self::set_chunk_config) this is a harness/test
+    /// lever, not an adapter surface — the shipped adapters never call it: the
+    /// per-call "show me the raw nearest" ask is [`similar_raw`](Self::similar_raw)
+    /// (GH #150). What this exists for is injecting a *non-default* floor — a
+    /// future constant sweep, and the test that proves the fake-regime guard beats
+    /// any setting. Regardless of this setting, a fake-embedded space is never
+    /// floored — hash vectors have no semantic geometry for a z-score to mean
+    /// anything against.
     pub fn set_discovery_floor(&mut self, floor: Option<discover::DiscoveryFloor>) {
         self.discovery_floor = floor;
     }
@@ -1297,6 +1301,38 @@ impl Vault {
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
+        // The floor never applies to a fake-embedded space: hash vectors have no
+        // semantic geometry, so its z-scores would be noise and the gate would
+        // suppress arbitrary anchors. Judged by the RECORDED identity — the space
+        // being searched — not the injected embedder.
+        let floor = match db::recorded_embedder(&self.conn)? {
+            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID => None,
+            _ => self.discovery_floor.as_ref(),
+        };
+        self.similar_with(note_ref, limit, floor)
+    }
+
+    /// [`similar`](Self::similar) with the quality floor off — the raw nearest,
+    /// however weak, up to `limit`. The adapters' explicit escape hatch (`b2
+    /// similar --no-floor`, the pane's *Show nearest anyway*) and how the eval
+    /// collects ungated score piles so the floor's own calibration data keeps
+    /// accruing (GH #150). One façade method rather than a mode the caller
+    /// configures, so an adapter's raw ask is one call and cannot drift.
+    pub fn similar_raw(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "similar_raw", note = note_ref, limit)
+            .entered();
+        self.similar_with(note_ref, limit, None)
+    }
+
+    /// The shared body of [`similar`](Self::similar) / [`similar_raw`](Self::similar_raw):
+    /// refuse a resource anchor, resolve the note, generate candidates under
+    /// `floor`, and dress each as a [`SimilarView`].
+    fn similar_with(
+        &self,
+        note_ref: &str,
+        limit: usize,
+        floor: Option<&discover::DiscoveryFloor>,
+    ) -> Result<Vec<SimilarView>> {
         // A resource anchor is honest, not silent: resources become discoverable
         // when slice 3 gives them chunks + centroids (research §9b #7). Until
         // then an inventoried resource errs "not yet" — never an empty result —
@@ -1307,14 +1343,6 @@ impl Vault {
             return Err(Error::ResourceUnsupported(note_ref.to_string()));
         }
         let b2id = self.resolve_ref(note_ref)?;
-        // The floor never applies to a fake-embedded space: hash vectors have no
-        // semantic geometry, so its z-scores would be noise and the gate would
-        // suppress arbitrary anchors. Judged by the RECORDED identity — the space
-        // being searched — not the injected embedder.
-        let floor = match db::recorded_embedder(&self.conn)? {
-            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID => None,
-            _ => self.discovery_floor.as_ref(),
-        };
         let mut out = Vec::new();
         for c in discover::candidates(&self.conn, &b2id, limit, floor)? {
             let path = db::resolve_b2id_to_path(&self.conn, &c.note_b2id)?.unwrap_or_default();

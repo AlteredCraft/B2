@@ -281,7 +281,7 @@ shape is constrained on two sides:
   notes whose labelled answer is "nothing relates" — scoring *suppression* (does discovery say
   so?), and the eval records every surfaced score into two **cosine piles**: human-labelled
   related vs. everything else surfaced. Both cheap variants were judged against that data and
-  **both failed measured** (runlog 2026-08-10/11): an absolute cosine floor does not transfer
+  **both failed when measured** (runlog 2026-08-10/11): an absolute cosine floor does not transfer
   across vault density (floors read off the labelled piles kept 99–100% of a 228-essay
   single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
   needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))

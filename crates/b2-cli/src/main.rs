@@ -875,13 +875,19 @@ fn cmd_similar(cli: &Cli, note: &str, limit: usize, no_floor: bool) -> Result<()
     // Open with the fake; it's a pure, instant local read. (The discovery floor
     // keys on the vault's RECORDED model id, so opening with the fake for reading
     // never disables it — only --no-floor, the explicit raw-nearest ask, does.)
-    let mut vault = open_vault(cli.vault_or_cwd(), false)?;
-    if no_floor {
-        vault.set_discovery_floor(None);
-    }
-    let results = vault.similar(note, limit)?;
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    let results = if no_floor {
+        vault.similar_raw(note, limit)?
+    } else {
+        vault.similar(note, limit)?
+    };
     if cli.json {
         print_json(&results)?;
+    } else if results.is_empty() && no_floor {
+        // Raw mode: no floor could have filtered anything, so an empty list means
+        // there was nothing to compare at all — and suggesting --no-floor here
+        // would recommend the flag already in effect.
+        println!("Nothing unlinked has stored vectors to compare.");
     } else if results.is_empty() {
         // Two honest empty states (GH #150): a vault with vectors that has nothing
         // strong enough to show, vs a vault whose similarity isn't semantic yet.

@@ -74,7 +74,6 @@
 
 use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
-use b2_core::discover::DiscoveryFloor;
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
@@ -298,7 +297,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let (chunks, embed_secs) = timed_embed(&vault)?;
     let vector = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
     let hybrid = score_pass(&vault, &set.queries, Retrieval::Fused)?;
-    let similar = score_similar(&mut vault, &sim_set)?;
+    let similar = score_similar(&vault, &sim_set)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
          {} for the passage view)\n",
@@ -473,7 +472,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             let (chunks, embed_secs) = timed_embed(&vault)?;
             let vec_pass = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
             let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
-            let sim = score_similar(&mut vault, &sim_set)?;
+            let sim = score_similar(&vault, &sim_set)?;
             println!(
                 "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
                 label,
@@ -614,14 +613,14 @@ fn score_pass(
 /// (the discovery floor as `Vault::open` configures it): positive anchors score
 /// the 1-based rank of the first `expected` note among the top `SIM_K` floored
 /// candidates, and a clean negative anchor is one the floor suppressed to zero.
-/// The cosine piles and per-anchor detail come from a second, **unfloored** pass:
-/// they are the floor's own calibration data, and letting the floor filter them
-/// would blind every future recalibration to exactly the distribution it needs
-/// (the piles' meaning is unchanged from pre-floor rows; the negatives metric is
-/// the one that now measures the floor instead of raw truncation). The vault's
-/// floor is restored before returning.
+/// The cosine piles and per-anchor detail come from a second, **unfloored** pass
+/// (`Vault::similar_raw`): they are the floor's own calibration data, and letting
+/// the floor filter them would blind every future recalibration to exactly the
+/// distribution it needs (the piles' meaning is unchanged from pre-floor rows;
+/// the negatives metric is the one that now measures the floor instead of raw
+/// truncation).
 fn score_similar(
-    vault: &mut Vault,
+    vault: &Vault,
     set: &SimilarSet,
 ) -> Result<SimilarPass, Box<dyn std::error::Error>> {
     let mut pass = SimilarPass::default();
@@ -644,9 +643,8 @@ fn score_similar(
         }
     }
     // Pass 2 — the raw, unfloored surface: the calibration piles + detail.
-    vault.set_discovery_floor(None);
     for label in &set.anchors {
-        let candidates = vault.similar(&label.anchor, SIM_K)?;
+        let candidates = vault.similar_raw(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
         let mut ordered = Vec::with_capacity(candidates.len());
         for c in &candidates {
@@ -665,7 +663,6 @@ fn score_similar(
             candidates: ordered,
         });
     }
-    vault.set_discovery_floor(Some(DiscoveryFloor::default()));
     Ok(pass)
 }
 

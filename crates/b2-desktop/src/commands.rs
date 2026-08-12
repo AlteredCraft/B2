@@ -401,13 +401,14 @@ pub fn similar(
     no_floor: Option<bool>,
 ) -> Result<Vec<SimilarView>, CmdError> {
     // `no_floor` is the pane's explicit "show the raw nearest anyway" (GH #150) —
-    // the GUI sibling of `b2 similar --no-floor`. Per-call and per-vault-open, so
-    // it can't leak into any other command's read.
-    let mut vault = open_read(state.inner())?;
-    if no_floor.unwrap_or(false) {
-        vault.set_discovery_floor(None);
-    }
-    Ok(vault.similar(&note, limit)?)
+    // the GUI sibling of `b2 similar --no-floor`, routed to the façade's own raw
+    // method so the choice lives in the core, not here.
+    let vault = open_read(state.inner())?;
+    Ok(if no_floor.unwrap_or(false) {
+        vault.similar_raw(&note, limit)?
+    } else {
+        vault.similar(&note, limit)?
+    })
 }
 
 #[tauri::command(async)]
