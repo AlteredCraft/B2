@@ -236,6 +236,13 @@ export interface AppState {
    */
   discoveringSimilar: boolean;
   discoveringConnections: boolean;
+  /**
+   * The user asked to see the raw nearest for the open note — the discovery floor
+   * off for this look only (GH #150). Set by the empty state's "Show nearest
+   * anyway", reset on every note open: an escape hatch per look, never a sticky
+   * preference (a persistent off-switch would quietly undo the floor's honesty).
+   */
+  rawDiscovery: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
   searchResults: SearchResult[];
@@ -352,6 +359,7 @@ export const state: AppState = {
   unresolved: [],
   discoveringSimilar: false,
   discoveringConnections: false,
+  rawDiscovery: false,
   searchQuery: "",
   searchResults: [],
   linkTarget: null,

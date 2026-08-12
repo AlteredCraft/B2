@@ -398,9 +398,17 @@ pub fn similar(
     state: State<'_, AppState>,
     note: String,
     limit: usize,
+    no_floor: Option<bool>,
 ) -> Result<Vec<SimilarView>, CmdError> {
+    // `no_floor` is the pane's explicit "show the raw nearest anyway" (GH #150) —
+    // the GUI sibling of `b2 similar --no-floor`, routed to the façade's own raw
+    // method so the choice lives in the core, not here.
     let vault = open_read(state.inner())?;
-    Ok(vault.similar(&note, limit)?)
+    Ok(if no_floor.unwrap_or(false) {
+        vault.similar_raw(&note, limit)?
+    } else {
+        vault.similar(&note, limit)?
+    })
 }
 
 #[tauri::command(async)]

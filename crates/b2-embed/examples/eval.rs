@@ -35,8 +35,12 @@
 //!    surfaced candidate's score lands in one of two **cosine piles** — labelled
 //!    related vs. everything else surfaced — the measured distributions the
 //!    quality floor is calibrated from (index-engine.md §3's ruling, PR #145).
-//!    Until that floor lands in `discover::candidates` the suppression metric is
-//!    red by design: it is the failing target the floor is built against.
+//!    The floor ships (GH #150, the per-anchor z rule in `discover::candidates`),
+//!    so ranks + suppression score the **floored** surface while the piles come
+//!    from a second, **unfloored** pass — the calibration data keeps accruing
+//!    ungated. The two diffuse negatives go clean and are ratcheted in the exit
+//!    gate; the high-affinity pair (watercolor ↔ stain-removal) stays red until
+//!    a pair-level scorer exists — an anchor-local statistic cannot see it.
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -84,6 +88,11 @@ const K: usize = 10;
 const SIM_K: usize = 5;
 /// The soft reference floor on the default config's hybrid note hit@1.
 const FLOOR_HIT1: f64 = 0.75;
+/// The discovery-suppression ratchet (GH #150): at least this many negative
+/// anchors must come back clean under the shipped floor. Two is the measured
+/// state the floor was calibrated to (the diffuse pair — chess, git); the other
+/// two negatives await a pair-level scorer and are deliberately not gated.
+const NEG_CLEAN_FLOOR: usize = 2;
 
 #[derive(Deserialize)]
 struct QuerySet {
@@ -507,17 +516,26 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
 
     eprintln!("\n[eval] appended run to {}", results_path.display());
 
-    // The soft floor, on the DEFAULT config's hybrid pass — so this can double as
-    // a manual quality gate. Not a CI test. The discovery suppression metric is
-    // deliberately NOT part of this gate yet: it is red by design until the
-    // quality floor lands in `discover::candidates` (index-engine.md §3, PR #145),
-    // and gating on it now would exit non-zero on every run, burying the
-    // FLOOR_HIT1 signal the chunker sweep reads. When the floor ships, fold
-    // `similar.neg_clean == similar.neg_n` in here.
+    // The soft floors, on the DEFAULT config's passes — so this can double as
+    // a manual quality gate. Not a CI test.
     if hybrid.note.hit1() < FLOOR_HIT1 {
         eprintln!(
             "\n[warn] hybrid hit@1 {:.2} is below the {FLOOR_HIT1} reference floor — inspect the misses above.",
             hybrid.note.hit1()
+        );
+        return Ok(false);
+    }
+    // The suppression ratchet (GH #150): the shipped discovery floor cleans the
+    // two diffuse negative anchors, and a regression that starts serving
+    // strangers there again must exit non-zero. `>=`, not `==`, so an improvement
+    // passes. The full `neg_clean == neg_n` fold-in stays deliberately out: the
+    // watercolor ↔ stain-removal pair is a *pair-level* miscalibration an
+    // anchor-local rule measurably cannot separate (runlog 2026-08-11) — that red
+    // is the standing demand for a discovery-side pair-scorer, not a floor bug.
+    if similar.neg_clean < NEG_CLEAN_FLOOR {
+        eprintln!(
+            "\n[warn] only {}/{} negative anchors clean under the discovery floor (ratchet: {NEG_CLEAN_FLOOR}) — the floor regressed.",
+            similar.neg_clean, similar.neg_n
         );
         return Ok(false);
     }
@@ -589,18 +607,24 @@ fn score_pass(
     })
 }
 
-/// Score the discovery labels. Positive anchors (non-empty `expected`): the
-/// 1-based rank of the first `expected` note among the top `SIM_K` `similar`
-/// candidates. Negative anchors (empty `expected`): a clean result is zero
-/// candidates; anything surfaced is a stranger served where the labelled answer
-/// is "nothing". Every surfaced candidate's score also lands in a cosine pile —
-/// `related` if a human labelled it, `junk` otherwise — the distributions the
-/// quality floor's cutoff is read from.
+/// Score the discovery labels — **two passes over two surfaces** (GH #150).
+///
+/// The ranks and the suppression tally are scored against the **shipped surface**
+/// (the discovery floor as `Vault::open` configures it): positive anchors score
+/// the 1-based rank of the first `expected` note among the top `SIM_K` floored
+/// candidates, and a clean negative anchor is one the floor suppressed to zero.
+/// The cosine piles and per-anchor detail come from a second, **unfloored** pass
+/// (`Vault::similar_raw`): they are the floor's own calibration data, and letting
+/// the floor filter them would blind every future recalibration to exactly the
+/// distribution it needs (the piles' meaning is unchanged from pre-floor rows;
+/// the negatives metric is the one that now measures the floor instead of raw
+/// truncation).
 fn score_similar(
     vault: &Vault,
     set: &SimilarSet,
 ) -> Result<SimilarPass, Box<dyn std::error::Error>> {
     let mut pass = SimilarPass::default();
+    // Pass 1 — the shipped, floored surface: ranks + suppression.
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
@@ -617,6 +641,11 @@ fn score_similar(
                 .map(|p| p + 1);
             pass.rank.add(rank);
         }
+    }
+    // Pass 2 — the raw, unfloored surface: the calibration piles + detail.
+    for label in &set.anchors {
+        let candidates = vault.similar_raw(&label.anchor, SIM_K)?;
+        let negative = label.expected.is_empty();
         let mut ordered = Vec::with_capacity(candidates.len());
         for c in &candidates {
             let related = !negative && label.expected.iter().any(|e| paths_match(&c.path, e));
@@ -873,7 +902,7 @@ fn print_default_report(
         // Suppression: a clean negative anchor surfaced zero candidates. Red by
         // design until the quality floor lands (index-engine.md §3, PR #145).
         println!(
-            "  negatives  {}/{} anchors clean — {} cards surfaced where the label says \"nothing\"",
+            "  negatives  {}/{} anchors clean under the floor — {} cards surfaced where the label says \"nothing\"",
             similar.neg_clean, similar.neg_n, similar.neg_cards
         );
     }

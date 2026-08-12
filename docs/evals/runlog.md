@@ -1120,3 +1120,129 @@ how a rank-inert knob qualified.
 **Status:** #44 resolved — the gate ran with real numbers on a corpus it can see (chunk n=20,
 `pool_blind: false` at three of eight rows), and qmd's default held. The eval's remaining open
 thread is #150's per-anchor rule; the negatives stay 0/4 by design until it ships.
+
+---
+
+## 2026-08-11 — #150's rule: the full per-anchor structures, the z-floor, and what ships
+
+**Runs:** two scratch-vault probes (the labelled corpus at `--limit 25`; a rebuilt 228-essay PG
+vault read from `note_centroids` directly) · `just eval` post-ship · branch
+`claude/discovery-floor-150` · `results.jsonl` row 30
+
+### The data the last probe couldn't see
+
+The 2026-08-10 PG probe read `b2 similar --limit 10` — the served *prefix*. This session read
+every anchor's **full ranked candidate list** (all 25 candidates on the eval corpus, exact
+max-sim; all 227 in centroid space on PG), which is the population a per-anchor statistic is
+actually judged against. Method: `cp corpus → tmp; b2 reindex` (real model), then `similar
+--limit 25 --json` per note; for centroid space, unpack `note_centroids` straight from the
+scratch `.b2/b2.sqlite`.
+
+The labelled anchors, in exact max-sim space (z against the anchor's own 25-candidate pool):
+
+| anchor | top-1 z | labelled mates' z | best junk z |
+|---|---|---|---|
+| espresso | +2.60 | +2.60, +2.36 | +1.09 |
+| insomnia | +2.80 | +2.80, +2.35 | +0.75 |
+| photosynthesis | +2.33 | +2.33, +1.49 | +1.16 |
+| encryption | +1.99 | +1.99, **+0.96** | **+1.51** |
+| volcano | +2.95 | +2.95, +2.04 | +0.97 |
+| bicycle | +2.96 | +2.96 | +1.21 |
+| watercolor (NEG) | **+2.93** | — | — |
+| stain-removal (NEG) | +2.26 | — | — |
+| chess (NEG) | **+1.60** | — | — |
+| git-cheatsheet (NEG) | **+1.74** | — | — |
+
+Three structural facts fall out, and they decided everything:
+
+1. **Five of six positive anchors put their mates in a clean block above every stranger** —
+   mates ≥ +1.49, best junk ≤ +1.21 per anchor. A per-anchor bar separates them perfectly.
+2. **The negatives split into two classes.** The diffuse pair (chess +1.60, git +1.74 — flat
+   lists, one undifferentiated cloud) sits *below* every positive leader (min +1.99): a leader
+   gate suppresses them entirely. The high-affinity pair (watercolor ↔ stain-removal, cos 0.684,
+   z +2.93/+2.26) is **structurally indistinguishable from a genuine single-mate positive** —
+   compare bicycle at +2.96. No function of the anchor's own score list separates them.
+3. **encryption is a pair-level ranking inversion, not a cutoff problem**: its second mate
+   (phishing, +0.96) sits *below three strangers* (+1.51, +1.45, +0.98). No threshold on these
+   scores keeps phishing without the strangers — same failure class as watercolor, from the
+   other side.
+
+### The rule, judged as confusion matrices (all 10 labelled anchors)
+
+| rule | neg clean | pos exact | mates kept | junk served |
+|---|---|---|---|---|
+| status quo (top-5, no floor) | 0/4 | 0/6 | 11/11 | **39** |
+| fixed Δ=0.06 from top-1 | 0/4 | 4/6 | 9/11 | 18 |
+| member z ≥ 1.4 only | 0/4 | 5/6 | 10/11 | 10 |
+| **leader z ≥ 1.9 + member z ≥ 1.4** | **2/4** | **5/6** | 10/11 | **5** |
+
+A pure "within Δ of top-1" rule can never return zero (it always keeps its leader), and Δ is an
+absolute cosine width that cannot transfer (PG's whole #1→#10 range is ~0.04). The z-form fixes
+both, and the leader gate's operating window is real: every threshold in [1.75, 1.9] gives
+2/4 clean with all six positives still surfacing.
+
+**Centroid space is the implementable space, and the signal survives it.** At vault scale, exact
+max-sim over every candidate defeats #38's two-stage design; the full population the shipped
+flow already computes per call is the stage-1 centroid scan. Recomputed there (unit centroids,
+`d² = 2 − 2·cos`, so z transfers exactly with the sign flipped): positive leaders ≥ +1.90,
+mates ≥ +1.90 (except the phishing inversion at +0.53), diffuse negatives ≤ +1.73. One wrinkle
+recorded honestly: stain-removal's centroid leader drops to +1.88 (its max-sim spike averages
+out), so a gate at 1.89 would go 3/4 clean — **0.02σ from encryption's +1.90 leader**. That is a
+coin flip, not a rule; the shipped default deliberately sits at 1.85, mid-window, and claims 2/4.
+
+**PG transfer (228 anchors, centroid space):** leader-z spans 1.56–5.98 (median 2.15); the
+member bar at ~1.9 trims a single-author vault to a median of 1–4 candidates — the same
+constants produce honest short lists at the opposite density extreme, where the measured Δ≈0.02
+knee said "median 3". The leader gate at 1.85–1.9 suppresses ~25% of PG anchors entirely; with
+no labels there, whether that is right is exactly the single-author caveat the last entry
+recorded — noted, not claimed.
+
+### What shipped (the code half)
+
+- **`DiscoveryFloor { leader_z: 1.85, member_z: 1.85 }`** in `discover::candidates`, judged on
+  the full stage-1 centroid population *before* shortlist truncation. Z-scores make the floor
+  model-relative **by construction** — no recorded constant, nothing to re-derive on a model or
+  device swap. Inert below 12 candidates (a starter vault serves everything) or at zero
+  variance; never applied to a fake-embedded space (`FAKE_MODEL_ID`, judged by the *recorded*
+  identity — so the CLI's fake-opened read of a real index still floors). Every surfaced
+  candidate carries its `z`.
+- **Adapters:** `b2 similar --no-floor` (the explicit raw-nearest ask) and two honest CLI empty
+  states (embedded-but-nothing-strong vs not-embedded). The desktop pane replaces the raw
+  negated-L2 score with a **strength band** derived from z (`ui/src/strength.ts` — no z, no
+  band), gets a "No strong candidates" empty state with a per-look **Show nearest anyway**
+  button (reset on every note open — an escape hatch, never a sticky preference), and labels a
+  raw list as raw.
+- **Tests:** `tests/discover_floor.rs` — a purpose-built *geometric* embedder (hand-placed unit
+  vectors behind `VEC:` markers), since the fake can't carry semantic structure: mate-vs-cloud,
+  diffuse-anchor suppression, no-floor passthrough, small-pool inertness, and the façade's
+  fake-regime refusal. Engine suite: 35 binaries green, stability probe clean (fake space —
+  floor never applies, nothing may drift).
+- **`index-engine.md §3`** rewritten from pending-projection to measured verdict, including why
+  both originally-proposed variants failed.
+
+### The eval's after-state (row 30), and the ratchet
+
+The eval now scores discovery on **two surfaces**: ranks + suppression against the shipped
+(floored) surface, the cosine piles from a second **unfloored** pass — the piles are the floor's
+own calibration data, and letting the floor filter them would blind every future recalibration.
+
+| metric | row 22 (pre-floor) | row 30 (floored surface) |
+|---|---|---|
+| negatives clean | 0/4 (20 cards) | **2/4 (3 cards)** |
+| discovery hit@1 / hit@3 / MRR | 1.00 / 1.00 / 1.000 | 1.00 / 1.00 / 1.000 |
+| retrieval (all note/chunk metrics) | — | bit-identical to row 22 |
+| piles / gap | related 11, junk 39, −0.113 | identical (unfloored pass) |
+
+The 3 remaining cards are exactly the calibration's prediction: watercolor→{stain, houseplant},
+stain→{watercolor}. The exit gate gains the interim ratchet `neg_clean ≥ 2` beside
+`FLOOR_HIT1` — a floor regression now exits non-zero on every `just eval`. The full
+`neg_clean == neg_n` fold-in stays deliberately out: the surviving red is the **pair-level**
+class (watercolor ↔ stain, and phishing's inversion) that an anchor-local statistic measurably
+cannot reach — the standing, now-quantified demand for the discovery-side pair-scorer
+(index-engine.md §3's named escalation, a new issue when Sam rules it warranted).
+
+**Status:** #150's floor is designed from measured structure, shipped model-relative,
+config-surfaced in both adapters, and ratcheted in the eval. Open residue, both pair-level: the
+watercolor/stain negatives (2/4 stays red) and encryption's phishing inversion. Either a label
+re-ruling (is watercolor ↔ stain-removal *really* "nothing relates"? — pigment, water, fabric)
+or the pair-scorer resolves them; that call is the next conversation, not this entry's to make.

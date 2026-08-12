@@ -58,7 +58,7 @@ fn candidates_are_the_complement_not_self_or_direct_neighbors() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = linked_chain_vault(tmp.path());
 
-    let notes = note_set(&discover::candidates(&conn, A, 10).unwrap());
+    let notes = note_set(&discover::candidates(&conn, A, 10, None).unwrap());
 
     assert!(!notes.contains(A), "the anchor is never its own candidate");
     assert!(
@@ -81,7 +81,7 @@ fn candidates_are_ranked_best_first() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = linked_chain_vault(tmp.path());
 
-    let cands = discover::candidates(&conn, A, 10).unwrap();
+    let cands = discover::candidates(&conn, A, 10, None).unwrap();
     for w in cands.windows(2) {
         assert!(w[0].score >= w[1].score, "scores must be descending");
     }
@@ -92,10 +92,10 @@ fn limit_keeps_the_best_ranked_prefix() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = linked_chain_vault(tmp.path());
 
-    let full = discover::candidates(&conn, A, 10).unwrap();
+    let full = discover::candidates(&conn, A, 10, None).unwrap();
     assert!(full.len() >= 2, "the chain vault has ≥2 candidates for a");
 
-    let capped = discover::candidates(&conn, A, 1).unwrap();
+    let capped = discover::candidates(&conn, A, 1, None).unwrap();
     assert_eq!(capped.len(), 1);
     assert_eq!(capped[0], full[0], "limit keeps the best-ranked prefix");
 }
@@ -105,7 +105,7 @@ fn evidence_chunk_belongs_to_its_candidate_note() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = linked_chain_vault(tmp.path());
 
-    for c in discover::candidates(&conn, A, 10).unwrap() {
+    for c in discover::candidates(&conn, A, 10, None).unwrap() {
         let owner = db::note_for_chunk(&conn, c.evidence_chunk_id).unwrap();
         assert_eq!(
             owner.as_deref(),
@@ -121,8 +121,8 @@ fn generation_is_deterministic() {
     let conn = linked_chain_vault(tmp.path());
 
     assert_eq!(
-        discover::candidates(&conn, A, 10).unwrap(),
-        discover::candidates(&conn, A, 10).unwrap(),
+        discover::candidates(&conn, A, 10, None).unwrap(),
+        discover::candidates(&conn, A, 10, None).unwrap(),
         "same vault + anchor → identical candidates"
     );
 }
@@ -134,8 +134,10 @@ fn a_directly_connected_pair_yields_no_candidates() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
-    assert!(discover::candidates(&conn, SRS_ID, 10).unwrap().is_empty());
-    assert!(discover::candidates(&conn, MEMORY_ID, 10)
+    assert!(discover::candidates(&conn, SRS_ID, 10, None)
+        .unwrap()
+        .is_empty());
+    assert!(discover::candidates(&conn, MEMORY_ID, 10, None)
         .unwrap()
         .is_empty());
 }
@@ -204,6 +206,7 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
             note_b2id,
             score: -(d.sqrt() as f64),
             evidence_chunk_id,
+            z: None,
         })
         .collect();
     expected.sort_by(|a, b| {
@@ -213,7 +216,7 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
             .then(a.note_b2id.cmp(&b.note_b2id))
     });
 
-    let got = discover::candidates(&conn, anchor, NOTES).unwrap();
+    let got = discover::candidates(&conn, anchor, NOTES, None).unwrap();
     assert_eq!(got.len(), NOTES - 1, "every other note is a candidate");
     assert_eq!(
         got, expected,
@@ -228,13 +231,13 @@ fn unknown_or_chunkless_anchor_and_zero_limit_yield_no_candidates() {
     let conn = linked_chain_vault(tmp.path());
 
     assert!(
-        discover::candidates(&conn, "01JZZZZZZZZZZZZZZZZZZZZZZZZZ", 10)
+        discover::candidates(&conn, "01JZZZZZZZZZZZZZZZZZZZZZZZZZ", 10, None)
             .unwrap()
             .is_empty(),
         "an anchor with no chunks has no candidates"
     );
     assert!(
-        discover::candidates(&conn, A, 0).unwrap().is_empty(),
+        discover::candidates(&conn, A, 0, None).unwrap().is_empty(),
         "limit 0 short-circuits to empty"
     );
 }
