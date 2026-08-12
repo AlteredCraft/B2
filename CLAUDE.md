@@ -30,17 +30,18 @@ eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + di
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar` ranks plus the discovery negatives —
 loner anchors whose labelled answer is "nothing relates" — and the related/junk score piles that
 calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log.
-The harness's **decision history is `docs/evals/runlog.md`** — the append-only lab notebook, every
+The harness's high-level overview is **`docs/evals/README.md`**; its
+**decision history is `docs/evals/runlog.md`** — the append-only lab notebook, every
 claim traced to a `results.jsonl` row; its Orientation section carries the process rules (corpus
 edits need a runlog entry + the two-direction token audit; a paired per-query win/loss list is the
 primary A/B readout). Read it before touching the corpus, the labels, or the metrics.
 That corpus scores *relevance* and is deliberately small, which makes it blind to one class of change:
 retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per signal (150 for the note
-view, `note_candidate_pool`), so on 29 chunks neither signal is truncated and a **candidate-width** change
+view, `note_candidate_pool`), so on its 55 chunks neither signal is truncated and a **candidate-width** change
 (either hit pool, `pool_size`) prints bit-identical numbers
 (GH #141). The harness's other half measures that — `just stability`, a model-free rank probe on
 `fixtures/test-vault` — and `just eval` says out loud when its corpus fits inside the pool. The blindness
-is to candidates, not to fusion: `RRF_K` re-weights the same lists and *does* move scores on 29 chunks.
+is to candidates, not to fusion: `RRF_K` re-weights the same lists and *does* move scores on 55 chunks.
 The two halves rule together, and have: GH #140 widened the passage view to the note view's 3× as
 plumbing, the eval saw nothing, the probe saw 10 of 10 probes' top-4 passages change — and GH #142 put the
 width back, because a probe can say *different* but only a labelled corpus can say *better*.
@@ -90,8 +91,8 @@ cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (ne
                                         # the real model, so it lives here rather than behind #[ignore])
 cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
-# Rank stability — the harness's model-free half (GH #141). The eval's 26-chunk corpus is smaller
-# than the 150-candidate pool retrieval reaches, so it CANNOT see a candidate-width change; this
+# Rank stability — the harness's model-free half (GH #141). The eval's 55-chunk corpus fits inside
+# even the 60-candidate chunk pool retrieval reaches, so it CANNOT see a candidate-width change; this
 # probe can. It asks the same queries at widening pools on fixtures/test-vault (~200 notes / ~780
 # chunks) and diffs the shipped top-10 against a committed snapshot. Fake embedder, so it is
 # deterministic, needs no `just init`, and its baseline is reproducible on any machine — the cost is
