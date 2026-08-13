@@ -326,10 +326,12 @@
     </div>
 
     <div class="ground"><b>Ground truth:</b> <span class="mono">embed_batch_matches_embed_per_element</span>
-    (embed.rs) pins the fake's batch = map(embed); <span class="mono">batched_equals_single_per_row</span>
-    (b2-embed, an <code>#[ignore]</code>d real-model test, cosine &gt; 0.9999) pins the real model's batch =
-    single, row for row. The retrieval eval (<code>--example eval</code>, out of CI) confirms Accelerate left
-    ranking quality unchanged.</div>
+    (embed.rs) pins the fake's batch = map(embed); <span class="mono">check_batch_matches_single</span>
+    (b2-embed, cosine &gt; 0.9999) pins the real model's batch = single, row for row. That one needs the
+    provisioned model, so it lives in the <b>eval harness</b> rather than in <code>cargo test</code> — it runs
+    on every <code>just eval</code>, instead of sitting behind an <code>#[ignore]</code> nobody passes
+    <code>--ignored</code> to. The same run's retrieval eval confirms Accelerate left ranking quality
+    unchanged.</div>
   </section>
 
   <!-- ========================================================= -->

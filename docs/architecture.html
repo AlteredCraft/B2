@@ -111,12 +111,13 @@
     <span class="badge green"><span class="pip"></span> <b>model-free</b>&nbsp;· deterministic suite</span>
     <span class="badge"><b>4</b>&nbsp;crates: <b>b2-core</b> · <b>b2-embed</b> · <b>b2-cli</b> · <b>b2-desktop</b></span>
     <span class="badge">Rust&nbsp;<b>1.96</b>&nbsp;· edition&nbsp;2021</span>
-    <span class="badge">v1 kernel: <b>reindex · search · neighbors · explain · add · mv · similar · link</b></span>
+    <span class="badge">v1 kernel: <b>init · reindex · status · search · similar · link · neighbors · explain · add · write · mv · rm</b></span>
   </div>
   <p class="sub" style="margin-top:14px">The suite is <em>integration-first</em>: most tests open a real SQLite
   database, ingest a real vault on disk, and assert on the resulting projection — so it describes the built
-  system, not mocks of it. One additional <code>#[ignore]</code> test exercises the real embedder and runs out
-  of CI. <b>The LLM relator was cut 2026-07-04</b> (per-pair cost didn't scale) — its crate, seam, and
+  system, not mocks of it. Nothing is <code>#[ignore]</code>d; the checks that need the real embedder live in
+  the out-of-CI eval harness, which runs on demand and therefore actually runs.
+  <b>The LLM relator was cut 2026-07-04</b> (per-pair cost didn't scale) — its crate, seam, and
   suggestion queue are gone; connection discovery is now local, free, and instant.</p>
 </header>
 
