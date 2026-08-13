@@ -601,9 +601,10 @@ export function boundOf<T extends BindingId>(e: KeyEventLike, ids: readonly T[])
 // --- conflicts ---------------------------------------------------------------------
 //
 // "Conflict" is the keyboard word throughout — this section, menukeys.ts, editorkeys.ts
-// and their tests. "Collision" is spoken for: it is the cross-note `b2id` collision of
-// GH #81 (`B2idCollision` in types.ts, `collisions` on a projection report), which has
-// nothing to do with keystrokes. One word each, so neither needs its context read (#120).
+// and their tests. It was picked because "collision" was spoken for: the cross-note
+// `b2id` collision of GH #81, which had nothing to do with keystrokes. GH #170 removed
+// the stamp and that whole vocabulary with it, so nothing competes for either word now
+// — but one word per meaning is the point (#120), so "conflict" stays the only one used.
 
 /** The physical key presses a chord answers to.
  *

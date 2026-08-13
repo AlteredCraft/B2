@@ -23,11 +23,11 @@ fn ingest(vault: &Path, db: &Path) -> Connection {
 
 #[test]
 fn add_relation_creates_a_block_when_absent() {
-    let raw = "---\nb2id: 01JX\ntype: note\n---\nBody.\n";
+    let raw = "---\ntype: note\n---\nBody.\n";
     let mut n = parse(raw);
     n.add_relation("contradicts [[concepts/memory|Human memory]] — because")
         .unwrap();
-    let expected = "---\nb2id: 01JX\ntype: note\nb2_relations:\n  - \"contradicts [[concepts/memory|Human memory]] — because\"\n---\nBody.\n";
+    let expected = "---\ntype: note\nb2_relations:\n  - \"contradicts [[concepts/memory|Human memory]] — because\"\n---\nBody.\n";
     assert_eq!(n.as_str(), expected);
     // re-parse is stable + the entry reads back
     assert_eq!(parse(n.as_str()).as_str(), expected);
@@ -39,16 +39,16 @@ fn add_relation_creates_a_block_when_absent() {
 
 #[test]
 fn add_relation_appends_to_an_existing_block() {
-    let raw = "---\nb2id: 01JX\ntype: note\nb2_relations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
+    let raw = "---\ntype: note\nb2_relations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
     let mut n = parse(raw);
     n.add_relation("refutes [[b|B]]").unwrap();
-    let expected = "---\nb2id: 01JX\ntype: note\nb2_relations:\n  - \"supports [[a|A]]\"\n  - \"refutes [[b|B]]\"\n---\nBody.\n";
+    let expected = "---\ntype: note\nb2_relations:\n  - \"supports [[a|A]]\"\n  - \"refutes [[b|B]]\"\n---\nBody.\n";
     assert_eq!(n.as_str(), expected);
 }
 
 #[test]
 fn add_relation_preserves_other_keys_and_body() {
-    let raw = "---\ntitle: Keep me\nb2id: 01JX\ncustom: [1, 2, 3]  # comment\ntype: note\n---\nBody stays.\nLine 2.\n";
+    let raw = "---\ntitle: Keep me\ncustom: [1, 2, 3]  # comment\ntype: note\n---\nBody stays.\nLine 2.\n";
     let mut n = parse(raw);
     n.add_relation("relates [[x|X]]").unwrap();
     let out = n.as_str();
@@ -63,7 +63,7 @@ fn add_relation_preserves_other_keys_and_body() {
 
 #[test]
 fn add_relation_quotes_safely() {
-    let raw = "---\nb2id: 01JX\ntype: note\n---\nBody.\n";
+    let raw = "---\ntype: note\n---\nBody.\n";
     let mut n = parse(raw);
     n.add_relation("relates [[x|X]] — has \"quotes\" inside")
         .unwrap();
@@ -78,7 +78,7 @@ fn add_relation_quotes_safely() {
 fn a_generic_relations_key_is_not_b2s() {
     // The namespace is the point (data-model §1): another tool's `relations:` is
     // an unknown key — preserved verbatim, never projected into edges.
-    let raw = "---\nb2id: 01JX\ntype: note\nrelations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
+    let raw = "---\ntype: note\nrelations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
     let n = parse(raw);
     assert!(n.fields().relations.is_empty(), "generic key must not read");
     assert_eq!(n.as_str(), raw, "and it round-trips untouched");

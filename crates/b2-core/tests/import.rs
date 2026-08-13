@@ -6,9 +6,11 @@
 //! keeps its bytes), it **projects** what it placed so the tree/search see it with no
 //! reindex, it routes on the extension exactly as the vault walk does (note vs
 //! resource, data-model.md §10), and it never clobbers or lands anywhere but where it
-//! was aimed. The one failure worth its own test is the arriving *copy of a note*:
-//! it carries the original's `b2id`, and letting it project would transfer that
-//! identity — and every inbound edge — to the copy (GH #81).
+//! was aimed. The arriving *copy of a note* is the case that used to need its own
+//! refusal — the copy carried the original's `b2id`, so projecting it would have
+//! transferred that identity and every inbound edge (GH #81). Since GH #170 there is
+//! no identity to steal: the copy is simply a second note at a second path, which is
+//! what it looks like in Finder too, and that is what this file now pins.
 
 mod common;
 

@@ -1,6 +1,7 @@
 //! `Vault::read` — the one façade op the Desktop UI MVP adds
-//! (crates/b2-desktop/CLAUDE.md). Its contract: resolve a note by path
-//! **or** `b2id`, return the note's raw Markdown body **from disk** (source of
+//! (crates/b2-desktop/CLAUDE.md). Its contract: resolve a note by its
+//! vault-relative path — with or without the `.md`, the only two ref forms since
+//! GH #170 — and return the note's raw Markdown body **from disk** (source of
 //! truth, frontmatter stripped) plus the display metadata. A pure read, model-free
 //! (FakeEmbedder), against the golden-vault fixture.
 
@@ -25,13 +26,12 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
     assert_eq!(note.created.as_deref(), Some("2026-06-20"));
 
     // the body is the Markdown *after* the frontmatter — the raw source, not a
-    // projection. It must not carry any frontmatter (no fence, no b2id line).
+    // projection. It must not carry any frontmatter: neither the fence nor a key.
     assert!(note.body.contains("The brain encodes"));
     assert!(
         !note.body.contains("---"),
         "frontmatter fence must be stripped"
     );
-    assert!(!note.body.contains("b2id:"), "frontmatter must be stripped");
     assert!(
         !note.body.contains("title:"),
         "frontmatter must be stripped"
@@ -78,17 +78,20 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
 }
 
 #[test]
-fn read_resolves_path_stem_and_b2id_to_the_same_note() {
+fn read_resolves_a_path_and_its_stem_to_the_same_note() {
+    // Both accepted ref forms, and since GH #170 the only two: the full
+    // vault-relative path, and the extensionless stem the wikilink habit writes.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
     let by_path = vault.read("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.read("notes/spaced-repetition").unwrap();
-    let by_id = vault.read(SRS_PATH).unwrap();
 
     assert_eq!(by_path, by_stem);
-    assert_eq!(by_path, by_id);
-    assert_eq!(by_id.path, SRS_PATH);
+    assert_eq!(
+        by_path.path, SRS_PATH,
+        "and it resolves to the canonical path"
+    );
 }
 
 #[test]
