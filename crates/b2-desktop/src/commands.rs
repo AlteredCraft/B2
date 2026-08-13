@@ -253,8 +253,10 @@ pub fn write_note(
 /// frontmatter sibling with the identical posture: **model-free** (an unchanged
 /// body keeps its vectors, so no model is ever needed), outside the embed slot,
 /// and guarded by the same `base_revision` conflict contract the frontend
-/// recognizes. The b2id identity guard and the fence refusal live behind the
-/// façade (`Vault::write_frontmatter`), not here.
+/// recognizes. The fence refusal — the one thing the façade still checks, because a
+/// stray `---` would shift bytes into the body — lives behind
+/// `Vault::write_frontmatter`, not here. B2 owns no line *inside* the block: the
+/// `b2id` guard went with the stamp (GH #170).
 #[tauri::command(async)]
 pub fn write_frontmatter(
     state: State<'_, AppState>,
@@ -347,7 +349,7 @@ pub fn move_note(
     move_note_impl(state.inner(), &note, &to)
 }
 
-/// [`move_note`]'s resource sibling — same posture, minus the `b2id`.
+/// [`move_note`]'s resource sibling — same posture, same path-keyed identity (L3).
 #[tauri::command(async)]
 pub fn move_resource(
     state: State<'_, AppState>,
@@ -377,7 +379,7 @@ pub fn delete_note(state: State<'_, AppState>, note: String) -> Result<DeleteRep
     delete_note_impl(state.inner(), &note)
 }
 
-/// [`delete_note`]'s resource sibling — same posture, minus the `b2id`.
+/// [`delete_note`]'s resource sibling — same posture, same path-keyed identity (L3).
 #[tauri::command(async)]
 pub fn delete_resource(
     state: State<'_, AppState>,

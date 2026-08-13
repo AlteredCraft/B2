@@ -1,23 +1,27 @@
-//! Lossless note parsing + the surgical `b2id` stamp.
+//! Lossless note parsing and the surgical frontmatter/body splices.
 //!
 //! A note is YAML frontmatter (optional) followed by a Markdown body. To make
 //! `parse → serialize → parse` byte-identical (data-model.md §6), a [`ParsedNote`]
 //! keeps the **raw text verbatim** and records only the byte spans of the
-//! frontmatter. Serialization returns the raw bytes; the *only* mutation is the
-//! surgical insertion of a `b2id:` line. The queryable fields are extracted by a
-//! read-only YAML parse and never used to re-serialize.
+//! frontmatter. Serialization returns the raw bytes; every mutation here is a
+//! surgical splice performed on the human's explicit command (W3) — appending a
+//! `b2_relations:` entry, replacing the body, replacing the frontmatter block. The
+//! queryable fields are extracted by a read-only YAML parse and never used to
+//! re-serialize.
+//!
+//! There is no `stamp_b2id` any more (GH #170). A note's identity is its path, so
+//! nothing is written on first sight, and the `b2id:` key an older B2 left in a file
+//! is now an ordinary unknown key: never parsed, never rewritten, round-tripped
+//! verbatim like any other.
 
 use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
 
 /// The frontmatter fields B2 projects into the `notes` table. Extraction is
 /// best-effort: unparseable frontmatter still round-trips (raw is preserved); the
-/// fields just come back empty — except `b2id`, which falls back to a raw line
-/// scan so the stamp write can never re-fire on YAML it can't read (#75, see
-/// [`extract_fields`]).
+/// fields just come back empty.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
-    pub b2id: Option<String>,
     pub r#type: Option<String>,
     /// The frontmatter `title:` value, parsed only so it round-trips and can be
     /// inspected. It has **no special meaning**: a note's display title is its
@@ -74,7 +78,8 @@ pub fn parse(raw: &str) -> ParsedNote {
 }
 
 impl ParsedNote {
-    /// The note serialized — byte-identical to what was parsed (plus any stamp).
+    /// The note serialized — byte-identical to what was parsed, plus whatever
+    /// splice the caller asked for.
     pub fn as_str(&self) -> &str {
         &self.raw
     }
@@ -108,28 +113,11 @@ impl ParsedNote {
     /// when the YAML is malformed or isn't a mapping — the raw bytes still
     /// round-trip verbatim, but the projected [`fields`](Self::fields) came back
     /// empty-handed. Surfaced so an adapter can tell the human "B2 can't read this
-    /// frontmatter" instead of silently showing blank metadata (GH #79) — the
-    /// warn-don't-block side of the self-healing stance (#75); parse tolerance
-    /// itself is unchanged.
+    /// frontmatter" instead of silently showing blank metadata (GH #79) — warn,
+    /// never block: the bytes stay the human's to fix, and nothing B2 does depends
+    /// on reading them.
     pub fn frontmatter_readable(&self) -> bool {
         self.fm_readable
-    }
-
-    /// Stamp a missing `b2id`. A no-op if one is already present (never
-    /// re-stamp). Inserts exactly one line at the top of the frontmatter, or
-    /// creates a minimal frontmatter block if the note has none. This is B2's one
-    /// always-allowed write to the vault (data-model.md §1).
-    pub fn stamp_b2id(&mut self, id: &str) {
-        if self.fields.b2id.is_some() {
-            return;
-        }
-        match self.fm {
-            Some(f) => self
-                .raw
-                .insert_str(f.content_start, &format!("b2id: {id}\n")),
-            None => self.raw.insert_str(0, &format!("---\nb2id: {id}\n---\n")),
-        }
-        self.reparse();
     }
 
     /// Replace the note's **body** with `new_body`, verbatim — the byte-honest
@@ -150,7 +138,7 @@ impl ParsedNote {
             }
         }
         // Re-derive spans + fields from the mutated text so state stays exact
-        // (the same discipline as stamp_b2id/add_relation; a body could even
+        // (the same discipline as add_relation/replace_frontmatter; a body could even
         // introduce a frontmatter block if it starts with `---`).
         self.reparse();
     }
@@ -272,7 +260,6 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             None => readable = true,
             Some(doc) => {
                 readable = doc.as_hash().is_some() || matches!(doc, Yaml::Null);
-                f.b2id = doc["b2id"].as_str().map(str::to_string);
                 f.r#type = doc["type"].as_str().map(str::to_string);
                 f.title = doc["title"].as_str().map(str::to_string);
                 f.description = doc["description"].as_str().map(str::to_string);
@@ -284,49 +271,13 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             }
         }
     }
-    // Stamping — B2's one autonomous write — is gated on `b2id` being *definitively
-    // absent*, never on "the YAML wouldn't parse" (#75): without this fallback, a
-    // note with unparseable frontmatter read as id-less on every pass, so ingest
-    // stamped a fresh line each reindex — the file grew forever and the note's
-    // identity churned. When the parsed route yields no id (parse failure, or a
-    // value that isn't a plain string), a conservative raw scan for a `b2id:` line
-    // supplies it: unreadable-but-present still counts, and the projection keeps a
-    // stable identity while the malformed YAML stays the human's to fix.
-    if f.b2id.is_none() {
-        f.b2id = scan_b2id(yaml);
-    }
+    // GH #75's raw `b2id:` line scan lived here: stamping was gated on the id being
+    // *definitively* absent, and a parse failure reading as "absent" made ingest
+    // stamp a fresh line on every pass — the file grew forever and the note's
+    // identity churned. With nothing stamped (GH #170) there is no write to gate, so
+    // malformed frontmatter now costs exactly what it should: empty projected fields,
+    // raw bytes untouched, and a warning through `frontmatter_readable`.
     (f, readable)
-}
-
-/// Count the top-level (column-0) `b2id:` lines in a frontmatter region — the
-/// duplicate half of `Vault::write_frontmatter`'s identity guard. Two lines make
-/// identity ambiguous ([`scan_b2id`] takes the first, a YAML parse the last), so
-/// the guard refuses rather than letting the ambiguity land on disk.
-pub(crate) fn b2id_line_count(yaml: &str) -> usize {
-    yaml.lines().filter(|l| l.starts_with("b2id:")).count()
-}
-
-/// Raw-scan fallback for [`extract_fields`]: the first top-level (column-0)
-/// `b2id:` line's value, whitespace-trimmed with one pair of surrounding quotes
-/// stripped. First match wins — the stamp inserts at the top of the block. This is
-/// a gate for the stamp write plus a stable identity, not a YAML parser: an odd
-/// value is kept verbatim rather than risking a second stamp.
-fn scan_b2id(yaml: &str) -> Option<String> {
-    for line in yaml.lines() {
-        let Some(rest) = line.strip_prefix("b2id:") else {
-            continue;
-        };
-        let v = rest.trim();
-        let v = v
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-            .unwrap_or(v);
-        if !v.is_empty() {
-            return Some(v.to_string());
-        }
-    }
-    None
 }
 
 /// Read a scalar as text, tolerating YAML that typed it as a number/bool (e.g. a
@@ -424,12 +375,30 @@ mod tests {
         let raw = "---\nb2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n---\nbody\n";
         let note = parse(raw);
         // The exact bytes on disk, not a re-serialization — `b2_relations:` (a key
-        // the projected fields flatten) survives verbatim.
+        // the projected fields flatten) survives verbatim, and so does the legacy
+        // `b2id:` line, which since GH #170 is an unknown key like any other.
         assert_eq!(
             note.frontmatter(),
             Some("b2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n")
         );
         assert_eq!(note.body(), "body\n");
+    }
+
+    /// A vault indexed by an older B2 still has `b2id:` lines in it, and W5 is the
+    /// whole migration story: the key is not read, not rewritten, not removed —
+    /// which is what makes "delete `.b2/` and reindex" a complete upgrade.
+    #[test]
+    fn a_legacy_b2id_line_is_an_ordinary_unknown_key() {
+        let raw = "---\nb2id: 01JMEM0000000000000000000A\ntype: concept\n---\nThe body.\n";
+        let mut note = parse(raw);
+        assert_eq!(note.as_str(), raw, "round-trips byte-identically");
+        assert_eq!(note.fields().r#type.as_deref(), Some("concept"));
+        // A body save splices only the body, so the line survives that too.
+        note.replace_body("Rewritten.\n");
+        assert_eq!(
+            note.as_str(),
+            "---\nb2id: 01JMEM0000000000000000000A\ntype: concept\n---\nRewritten.\n"
+        );
     }
 
     #[test]
@@ -451,7 +420,7 @@ mod tests {
         // No block, an empty block, and a mapping all read fine.
         assert!(parse("just a body\n").frontmatter_readable());
         assert!(parse("---\n---\nbody\n").frontmatter_readable());
-        assert!(parse("---\nb2id: 01A\ntags: [x]\n---\nbody\n").frontmatter_readable());
+        assert!(parse("---\ntitle: X\ntags: [x]\n---\nbody\n").frontmatter_readable());
         // Malformed YAML and a non-mapping block don't — the fields come back
         // empty while the bytes round-trip, so the human should be told.
         let broken = parse("---\ntitle: \"unclosed\ntags: [a\n---\nbody\n");
@@ -491,15 +460,6 @@ mod tests {
         note.replace_frontmatter("");
         assert_eq!(note.as_str(), "only a body\n");
         assert_eq!(note.frontmatter(), None);
-    }
-
-    #[test]
-    fn b2id_line_count_sees_only_top_level_lines() {
-        assert_eq!(b2id_line_count("b2id: 01A\ntitle: X\n"), 1);
-        assert_eq!(b2id_line_count("b2id: 01A\nb2id: 01B\n"), 2);
-        // Indented (nested) and absent keys don't count.
-        assert_eq!(b2id_line_count("meta:\n  b2id: 01A\n"), 0);
-        assert_eq!(b2id_line_count("title: X\n"), 0);
     }
 
     #[test]

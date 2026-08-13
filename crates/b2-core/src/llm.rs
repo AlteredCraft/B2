@@ -81,10 +81,9 @@ pub const NO_EVIDENCE_ANSWER: &str = "I don't find that in your notes.";
 /// Numbering is positional and 1-based: passage `i` is cited as `[i + 1]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextPassage {
-    /// Vault-relative path of the note the passage came from.
+    /// Vault-relative path of the note the passage came from — its identity (L1),
+    /// and what a citation resolves back to.
     pub path: String,
-    /// The note's `b2id` — what a citation resolves back to.
-    pub b2id: String,
     /// The chunk's heading breadcrumb, when the chunker recorded one.
     pub heading_path: Option<String>,
     /// The passage text, verbatim (the chunk's stored text).

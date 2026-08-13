@@ -79,10 +79,10 @@ export const api = {
    *  `VaultInfo`, or `null` if the user cancelled (the current vault stays put). */
   chooseVault: (): Promise<VaultInfo | null> => invoke("choose_vault"),
 
-  /** A note's body + metadata for the left pane (path or b2id). */
+  /** A note's body + metadata for the left pane, by vault-relative path. */
   readNote: (note: string): Promise<NoteView> => invoke("read_note", { note }),
 
-  /** Every indexed note (b2id, path, title; no body) — the file tree's source. */
+  /** Every indexed note (path, title; no body) — the file tree's source. */
   listNotes: (): Promise<NoteSummary[]> => invoke("list_notes"),
 
   /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
@@ -142,10 +142,10 @@ export const api = {
    * Save a note's frontmatter — `writeNote`'s frontmatter sibling (GH #79):
    * the raw YAML is spliced verbatim between the fences (`Vault::write_frontmatter`),
    * body untouched, model-free, guarded by the same `revision` contract (rejects
-   * with `WRITE_CONFLICT_MESSAGE` on an external change). The host refuses an
-   * edit that would change/remove/duplicate the `b2id` line, or a `---` line that
-   * would end the block early — both come back as actionable messages to show
-   * inline; anything else (including YAML B2 can't read) saves fine.
+   * with `WRITE_CONFLICT_MESSAGE` on an external change). The host's one refusal is
+   * a `---` line that would end the block early and shift bytes into the body; it
+   * comes back as an actionable message to show inline. Everything else — including
+   * YAML B2 can't read — saves fine: B2 owns no line inside the block.
    */
   writeFrontmatter: (
     note: string,
@@ -195,14 +195,14 @@ export const api = {
   pickImportFiles: (): Promise<string[]> => invoke("pick_import_files"),
 
   /**
-   * Move/rename a note (path or b2id) to a new vault-relative path — inbound
+   * Move/rename a note to a new vault-relative path — inbound
    * links are rewritten and the index re-projects. Needs the real model (the
    * rewritten files re-embed), so it can reject with the "run `b2 init`" state.
    */
   moveNote: (note: string, to: string): Promise<MoveReport> =>
     invoke("move_note", { note, to }),
 
-  /** `moveNote`'s resource sibling — same posture, no b2id in the report. */
+  /** `moveNote`'s resource sibling — same posture, same report shape. */
   moveResource: (path: string, to: string): Promise<ResourceMoveReport> =>
     invoke("move_resource", { path, to }),
 
@@ -211,12 +211,12 @@ export const api = {
     invoke("move_dir", { from, to }),
 
   /**
-   * Delete a note (path or b2id) from the vault *and* the disk. Model-free —
+   * Delete a note from the vault *and* the disk. Model-free —
    * inbound links dangle (surfacing as unresolved), they are never rewritten.
    */
   deleteNote: (note: string): Promise<DeleteReport> => invoke("delete_note", { note }),
 
-  /** `deleteNote`'s resource sibling — same posture, no b2id in the report. */
+  /** `deleteNote`'s resource sibling — same posture, same report shape. */
   deleteResource: (path: string): Promise<ResourceDeleteReport> =>
     invoke("delete_resource", { path }),
 
@@ -239,8 +239,8 @@ export const api = {
 
   /**
    * Phase 1 of a reindex — the fast, **model-free** projection pass
-   * (docs/design/index-engine.md): notes + keyword index + graph, stamping
-   * missing b2ids. Once it resolves, the tree and keyword search are live; call
+   * (docs/design/index-engine.md): notes + keyword index + graph, writing nothing
+   * to the vault. Once it resolves, the tree and keyword search are live; call
    * `embed` to fill the vectors behind it.
    */
   project: (): Promise<ProjectReport> => invoke("project"),

@@ -45,12 +45,6 @@ export interface ReconcileIndexDeps {
    *  fire-and-forget: it debounces, coalesces with the save path's own timer, and
    *  refreshes discovery when it lands — none of which the reconcile should wait on. */
   healVectors: () => void;
-  /** Surface a completed pulse-projection's report — the GH #81 anomalies
-   *  (a Finder-duplicated note collides *here*, on the very pulse the copy
-   *  landed), rendered by anomalies.ts. Optional; never called when the projection
-   *  was skipped (a reindex owns the index and its own reporting) or failed
-   *  (best-effort hum). */
-  onReport?: (report: unknown) => void;
 }
 
 /**
@@ -62,8 +56,7 @@ export interface ReconcileIndexDeps {
 export async function reconcileIndex(deps: ReconcileIndexDeps): Promise<void> {
   if (!deps.reindexing) {
     try {
-      const report = await deps.project();
-      deps.onReport?.(report);
+      await deps.project();
     } catch {
       // Best-effort: refused (a reindex won the race) or failed (unreadable vault) —
       // re-list whatever the index has; the next reindex/pulse heals the rest.

@@ -19,7 +19,8 @@ pub enum Direction {
 /// display label (the verb for outbound, the inverse for inbound).
 #[derive(Debug, Clone)]
 pub struct Neighbor {
-    /// The `b2id` at the other end of the edge.
+    /// The vault-relative path at the other end of the edge — the note's identity
+    /// (L1).
     pub other: String,
     /// The stored relation verb.
     pub edge_type: String,
@@ -29,30 +30,30 @@ pub struct Neighbor {
     pub label: String,
     pub explanation: Option<String>,
     /// Edge provenance — `inline` (human body link), `frontmatter` (a relation B2
-    /// accepted, or a human/importer authored) (data-model.md §0). Only `active`
-    /// edges are returned, so `suggested` never appears here. `b2 explain` surfaces
-    /// this so a human body link reads distinctly from a B2-committed one.
+    /// accepted, or a human/importer authored) (data-model.md §0). `b2 explain`
+    /// surfaces this so a human body link reads distinctly from a B2-committed one.
     pub origin: String,
 }
 
-/// All neighbors of `b2id` — outbound edges (this note → others) then inbound edges
-/// (others → this note), each labeled for display. Every edge is authored and active
-/// (there is no suggestion lifecycle), so this is the note's full typed graph.
-pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
+/// All neighbors of the note at `note_path` — outbound edges (this note → others)
+/// then inbound edges (others → this note), each labeled for display. Every edge is
+/// authored and active (there is no suggestion lifecycle), so this is the note's full
+/// typed graph.
+pub fn neighbors(conn: &Connection, note_path: &str) -> Result<Vec<Neighbor>> {
     let mut out = collect_neighbors(
         conn,
-        "SELECT dst_id, type, explanation, origin FROM edges
-         WHERE src_id = ?1 AND dst_id IS NOT NULL
-         ORDER BY type, dst_id",
-        b2id,
+        "SELECT dst_path, type, explanation, origin FROM edges
+         WHERE src_path = ?1 AND dst_path IS NOT NULL
+         ORDER BY type, dst_path",
+        note_path,
         Direction::Outbound,
     )?;
     out.extend(collect_neighbors(
         conn,
-        "SELECT src_id, type, explanation, origin FROM edges
-         WHERE dst_id = ?1
-         ORDER BY type, src_id",
-        b2id,
+        "SELECT src_path, type, explanation, origin FROM edges
+         WHERE dst_path = ?1
+         ORDER BY type, src_path",
+        note_path,
         Direction::Inbound,
     )?);
     Ok(out)
@@ -64,11 +65,11 @@ pub fn neighbors(conn: &Connection, b2id: &str) -> Result<Vec<Neighbor>> {
 fn collect_neighbors(
     conn: &Connection,
     sql: &str,
-    b2id: &str,
+    note_path: &str,
     direction: Direction,
 ) -> Result<Vec<Neighbor>> {
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map([b2id], |r| {
+    let rows = stmt.query_map([note_path], |r| {
         let edge_type: String = r.get(1)?;
         let label = match direction {
             Direction::Outbound => edge_type.clone(),
@@ -87,7 +88,7 @@ fn collect_neighbors(
 }
 
 /// One outbound link that resolved to **nothing** — neither a note nor a resource
-/// exists at its target, so it is a *dangling* edge (`dst_id IS NULL AND
+/// exists at its target, so it is a *dangling* edge (`dst_path IS NULL AND
 /// dst_resource_path IS NULL`). A note is one `.md` file (data-model.md §1), so a
 /// `[[Hermes]]` that names a *folder* — or a plain typo — never resolves. These are
 /// surfaced rather than silently dropped so a broken link is visible (GH #12).
@@ -104,17 +105,17 @@ pub struct Unresolved {
 
 /// A note's **dangling** outbound links: the edges it authored whose target resolves
 /// to no note and no resource, in a deterministic order. The complement of
-/// [`neighbors`]'s outbound half (which keeps only `dst_id IS NOT NULL`) — together
+/// [`neighbors`]'s outbound half (which keeps only `dst_path IS NOT NULL`) — together
 /// they cover every outbound edge, so a link is either a resolved neighbor or a
 /// surfaced unresolved link, never silently gone (GH #12). Backed by the
 /// `edges_dangling_idx` partial index, whose predicate this query mirrors.
-pub fn unresolved_outbound(conn: &Connection, b2id: &str) -> Result<Vec<Unresolved>> {
+pub fn unresolved_outbound(conn: &Connection, note_path: &str) -> Result<Vec<Unresolved>> {
     let mut stmt = conn.prepare(
         "SELECT dst_path_raw, type, origin, explanation FROM edges
-         WHERE src_id = ?1 AND dst_id IS NULL AND dst_resource_path IS NULL
+         WHERE src_path = ?1 AND dst_path IS NULL AND dst_resource_path IS NULL
          ORDER BY type, dst_path_raw, occurrence_index",
     )?;
-    let rows = stmt.query_map([b2id], |r| {
+    let rows = stmt.query_map([note_path], |r| {
         Ok(Unresolved {
             target: r.get(0)?,
             edge_type: r.get(1)?,

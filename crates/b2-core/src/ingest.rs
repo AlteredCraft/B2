@@ -1,6 +1,13 @@
-//! Ingest (Flow ① of index-engine.md): parse → stamp a
-//! missing `b2id` (write file) → project into `notes`/`note_aliases`,
-//! `chunks` (+FTS), and the typed `edges` graph.
+//! Ingest (Flow ① of index-engine.md): parse → project into `notes`/`note_aliases`,
+//! `chunks` (+FTS), and the typed `edges` graph, all keyed by the note's
+//! vault-relative **path** (invariants L1, GH #170).
+//!
+//! **Ingest writes nothing to the vault** (W1). It used to make exactly one write —
+//! stamping a missing `b2id` into a note's frontmatter on first sight — and that
+//! stamp is what a whole subsystem hung off: a claim pre-scan and incumbent-wins
+//! collision resolution, identity-restamp surfacing, and a single-note steal guard.
+//! With identity path-keyed, none of those states are representable (the filesystem
+//! already gives one file per path), so this module is a pure read of the vault.
 //!
 //! A full ingest is **two separately-invokable passes**
 //! (index-engine.md): [`project_vault`] — the
@@ -18,7 +25,6 @@ use crate::chunk::{chunk_body, ChunkConfig};
 use crate::db::{self, EdgeRow, NoteRow};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
-use crate::id::IdGen;
 use crate::note;
 use crate::resource::ResourceClass;
 use rusqlite::Connection;
@@ -40,11 +46,12 @@ use std::path::Path;
 /// sooner — another reason not to over-size it.
 const EMBED_BATCH: usize = 16;
 
-/// Everything a **projection** needs: the index connection, the vault root, the id
-/// source (for stamping a missing `b2id`), and the vault's chunking policy. The four
-/// travel together through every write-side op — `mv`, `add`, `rm`, `link`, the save
-/// path — so they are one parameter rather than four in three orders
-/// ([#134](https://github.com/AlteredCraft/B2/issues/134)).
+/// Everything a **projection** needs: the index connection, the vault root, and the
+/// vault's chunking policy. The three travel together through every write-side op —
+/// `mv`, `add`, `rm`, `link`, the save path — so they are one parameter rather than
+/// three in two orders ([#134](https://github.com/AlteredCraft/B2/issues/134)).
+/// (It was four before GH #170: the id generator went with the `b2id` stamp, since
+/// nothing in the core mints anything any more — a note's identity is where it sits.)
 ///
 /// It carries a **posture**, and that is the point: an op that takes a `ProjectionCtx`
 /// holds no embedder and therefore *cannot* embed. The model-free rule the module docs
@@ -53,32 +60,20 @@ const EMBED_BATCH: usize = 16;
 /// A short-lived, `Copy`, borrow-only view struct passed into a call and never stored
 /// — the sanctioned exception to "prefer owned fields" (CLAUDE.md, Rust data modeling;
 /// the `NoteRow` precedent). Built by `Vault::ctx`; the integration tests build their
-/// own with [`ProjectionCtx::new`]. No `Debug`: two of its four fields are trait
-/// objects, which have none to derive.
+/// own with [`ProjectionCtx::new`].
 #[derive(Clone, Copy)]
 pub struct ProjectionCtx<'a> {
     pub(crate) conn: &'a Connection,
     pub(crate) root: &'a Path,
-    pub(crate) idgen: &'a dyn IdGen,
     pub(crate) cfg: &'a ChunkConfig,
 }
 
 impl<'a> ProjectionCtx<'a> {
-    /// Bundle the four projection inputs. `cfg` is the vault's *one* chunking policy
+    /// Bundle the three projection inputs. `cfg` is the vault's *one* chunking policy
     /// (never re-defaulted per call), so every path that chunks a given vault cuts
     /// identically and `incremental ≡ full rebuild` holds by construction.
-    pub fn new(
-        conn: &'a Connection,
-        root: &'a Path,
-        idgen: &'a dyn IdGen,
-        cfg: &'a ChunkConfig,
-    ) -> Self {
-        Self {
-            conn,
-            root,
-            idgen,
-            cfg,
-        }
+    pub fn new(conn: &'a Connection, root: &'a Path, cfg: &'a ChunkConfig) -> Self {
+        Self { conn, root, cfg }
     }
 }
 
@@ -113,110 +108,36 @@ pub(crate) fn unix_mtime(meta: &fs::Metadata) -> Option<i64> {
 /// Outcome of ingesting one file.
 #[derive(Debug, Clone)]
 pub struct Ingested {
-    pub b2id: String,
-    /// Whether B2 had to stamp a missing `b2id` (and thus wrote the file).
-    pub stamped: bool,
+    /// The note's vault-relative path — its identity (L1).
+    pub path: String,
     /// Whether this note was (re)embedded this run — `false` when an unchanged body
     /// let the incremental path reuse its existing vectors.
     pub embedded: bool,
 }
 
-/// What [`project_note_and_chunks`] returns for one note: identity, what the pass
-/// did to it, and the material later phases need (body for edge derivation,
-/// pending `(chunk_id, text)` pairs for the embed step).
+/// What [`project_note_and_chunks`] returns for one note: the material later phases
+/// need — the body for edge derivation, and the `(text_hash, text)` pairs still
+/// needing a vector for the embed step.
 struct ProjectedNote {
-    b2id: String,
-    /// A missing `b2id` was stamped (B2's one always-allowed write, data-model.md §1).
-    stamped: bool,
-    /// `Some(old_id)` when that stamp replaced a *known* identity: the index
-    /// attributed this path to `old_id`, but the file presented no `b2id` (an
-    /// external edit blanked or removed the line — the #75 discipline reads an
-    /// empty value as absent), so the fresh stamp changed the note's identity and
-    /// inbound edges keyed to `old_id` now dangle (G5). The identity-churn
-    /// signature GH #81 surfaces; `None` for a genuinely new note.
-    restamped_from: Option<String>,
     body: String,
     relations: Vec<String>,
-    pending: Vec<(i64, String)>,
+    pending: Vec<(String, String)>,
 }
 
 /// One note's entry in a [`plan_reindex`] preview (the `reindex --dry-run`): what a
-/// real reindex *would* do to this file, decided read-only (no writes).
+/// real reindex *would* do to this file, decided read-only.
+///
+/// Only one question is left to preview. Before GH #170 the dry-run also answered
+/// "which notes would be stamped", "which stamps would churn an identity", and
+/// "which files collide" — a preview worth having because a real run *wrote* to the
+/// vault. A run that writes nothing (W1) has nothing to warn about beyond the work
+/// it will do.
 #[derive(Debug, Clone)]
 pub struct PlannedNote {
     /// Vault-relative path of the note.
     pub path: String,
-    /// A real reindex would stamp a `b2id` (the file currently lacks one).
-    pub would_stamp: bool,
     /// A real reindex would (re)embed this note's body (changed, fresh, or forced).
     pub would_embed: bool,
-    /// That stamp would *change* an identity: the index attributes this path to
-    /// the carried id, but the file no longer presents one — a real run restamps
-    /// fresh and inbound edges keyed to the old id dangle (GH #81).
-    pub would_restamp_from: Option<String>,
-}
-
-/// What [`plan_reindex`] returns: the per-note preview plus the cross-note `b2id`
-/// collisions a real run would surface (GH #81) — both decided read-only.
-#[derive(Debug, Clone)]
-pub struct ReindexPlanOutcome {
-    pub notes: Vec<PlannedNote>,
-    pub collisions: Vec<B2idCollision>,
-}
-
-/// Why the kept path kept a contested `b2id` (GH #81). The one *confident*
-/// precedence signal is index memory — no vault-pure signal distinguishes an
-/// original from its copy (a copy preserves content and frontmatter bytes), so a
-/// pass with no usable memory can only tie-break reproducibly, never rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CollisionPrecedence {
-    /// The index already attributed this `b2id` to the kept path and that file
-    /// still claims it this pass — the incumbent keeps the identity, confidently;
-    /// every other claimant is the anomaly.
-    Incumbent,
-    /// No incumbent among the claimants (a from-scratch rebuild, or every
-    /// claimant is new): the first path in the sorted walk keeps the row purely
-    /// so the pass is reproducible. **Not** an identity ruling — the notice flags
-    /// every path and the human decides.
-    TieBreak,
-}
-
-/// A cross-note `b2id` collision surfaced by a projection pass (GH #81): two or
-/// more files presented the same id — e.g. a note duplicated in Finder. One file
-/// keeps the identity (see [`CollisionPrecedence`]); the rest are **shadowed** —
-/// still on disk, but with no row they have no search hits, no graph presence, and
-/// no entry in an adapter's file tree either (those list notes from the index) — so
-/// this notice is the only place a shadowed copy is visible at all. Re-surfaced on
-/// *every* pass until the human resolves it:
-/// delete the copy, remove the copy's `b2id:` line (the next pass stamps a fresh
-/// identity), or delete the original (the copy then inherits the identity).
-/// Surfacing only — B2 never edits either file of its own accord (W4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct B2idCollision {
-    /// The contested id.
-    pub b2id: String,
-    /// The path whose row holds the identity after this pass.
-    pub kept_path: String,
-    /// Why `kept_path` won (confident incumbent vs. reproducibility tie-break).
-    pub precedence: CollisionPrecedence,
-    /// The other claimants (sorted walk order), left un-projected this pass.
-    pub shadowed_paths: Vec<String>,
-}
-
-/// An identity restamp surfaced by a projection pass (GH #81): the file at
-/// `path` presented no `b2id` while the index attributed `old_b2id` to that
-/// path — an external edit blanked/removed the line — so the pass stamped
-/// `new_b2id` and the note's identity changed. Inbound edges keyed to
-/// `old_b2id` now dangle (surfaced per G5, never dropped). Deliberately **not**
-/// auto-restored: removing the `b2id:` line is also the documented gesture for
-/// *requesting* a fresh identity (the collision fix above), so restoring the old
-/// id would guess intent — B2 notifies instead.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RestampedNote {
-    pub path: String,
-    pub old_b2id: String,
-    pub new_b2id: String,
 }
 
 /// Progress during the embed phase of a full reindex, reported **per batch** so a
@@ -248,11 +169,11 @@ pub struct ReindexProgress {
 }
 
 /// Project one note's frontmatter + chunks (everything derivable without resolving
-/// links). Returns the note's `b2id`, whether it was stamped, its body (kept so
-/// phase 2 can derive edges without re-reading), its frontmatter relations, and the
-/// `(chunk_id, text)` pairs still needing a vector — embedding is deferred (to
-/// [`embed_pending`] on the inline path, to [`embed_vault`] on the full-vault path).
-/// No embedder here.
+/// links). Returns its body (kept so phase 2 can derive edges without re-reading),
+/// its frontmatter relations, and the `(text_hash, text)` pairs still needing a
+/// vector — embedding is deferred (to [`embed_pending`] on the inline path, to
+/// [`embed_vault`] on the full-vault path). No embedder here, and **no write to the
+/// vault**: the note is identified by `rel_path`, so there is nothing to stamp.
 ///
 /// **Incremental:** unless `force`, a note whose body hash is unchanged is left
 /// untouched — its chunks (and any vectors they carry) are re-used verbatim and the
@@ -280,32 +201,10 @@ fn project_note_and_chunks(
     force: bool,
     consult_vectors: bool,
 ) -> Result<ProjectedNote> {
-    let ProjectionCtx {
-        conn, root, cfg, ..
-    } = ctx;
+    let ProjectionCtx { conn, root, cfg } = ctx;
     let abs = root.join(rel_path);
     let raw = fs::read_to_string(&abs)?;
-    let mut parsed = note::parse(&raw);
-
-    let mut stamped = false;
-    let mut restamped_from = None;
-    let b2id = match parsed.fields().b2id.clone() {
-        Some(id) => id,
-        None => {
-            // Identity churn check (GH #81), read *before* the upsert below drops the
-            // stale row: a fresh stamp onto a path the index already attributes to
-            // another id means an external edit blanked/removed the `b2id:` line —
-            // the note's identity is about to change, which the pass must surface.
-            restamped_from = db::resolve_path_to_b2id(conn, rel_path)?;
-            // The one always-allowed write: stamp it into the file. The id lives in the
-            // frontmatter, so identity travels with the note — nothing else to record.
-            let id = ctx.idgen.new_id();
-            parsed.stamp_b2id(&id);
-            fs::write(&abs, parsed.as_str())?;
-            stamped = true;
-            id
-        }
-    };
+    let parsed = note::parse(&raw);
 
     let body = parsed.body().to_string();
     let body_hash = blake3::hash(body.as_bytes()).to_hex().to_string();
@@ -315,9 +214,9 @@ fn project_note_and_chunks(
     // also reads vector state (its caller ensured the space, hence
     // `space_exists = true`); the projection pass reads only `notes`.
     let rechunk = if consult_vectors {
-        would_reembed(conn, &b2id, &body_hash, force, true)?
+        would_reembed(conn, rel_path, &body_hash, force, true)?
     } else {
-        force || db::note_body_hash(conn, &b2id)?.as_deref() != Some(body_hash.as_str())
+        force || db::note_body_hash(conn, rel_path)?.as_deref() != Some(body_hash.as_str())
     };
 
     let fields = parsed.fields();
@@ -329,7 +228,6 @@ fn project_note_and_chunks(
     db::upsert_note(
         conn,
         &NoteRow {
-            b2id: &b2id,
             path: rel_path,
             // `type` is required by the model; default the projection to "note"
             // for the rare untyped file (the file itself is never modified).
@@ -350,27 +248,43 @@ fn project_note_and_chunks(
     // and return no pending work (`rechunk = false`). `force` bypasses this; on the
     // inline path so does a model swap, which emptied the vector tables
     // (note_fully_embedded then returns false).
+    //
+    // A re-chunk hands back `(text_hash, text)` pairs for a batched embed (Flow ①),
+    // and only for chunks with **no stored vector**: the store is content-addressed
+    // (M4), so re-chunking a note whose text is unchanged — the case a move produces
+    // — finds every vector already there and yields nothing pending at all.
     let pending = if rechunk {
-        // Chunk → project rows; hand the (id, text) pairs back for a batched embed
-        // (Flow ①). replace_chunks also clears any stale vectors for this note.
         let chunks = chunk_body(&body, cfg);
-        let chunk_ids = db::replace_chunks(conn, &b2id, &chunks)?;
-        chunk_ids
-            .into_iter()
-            .zip(chunks.into_iter().map(|c| c.text))
-            .collect()
+        db::replace_chunks(conn, rel_path, &chunks)?;
+        if consult_vectors {
+            pending_for_note(conn, rel_path)?
+        } else {
+            // The projection pass never reads vector state (index-engine.md); the
+            // embed pass derives its own pending set from the DB.
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
 
     Ok(ProjectedNote {
-        b2id,
-        stamped,
-        restamped_from,
         body,
         relations,
         pending,
     })
+}
+
+/// The `(text_hash, text)` pairs of one note's chunks that still lack a stored
+/// vector — the single-note form of [`db::chunks_missing_vectors`], for the inline
+/// path that embeds as it projects. Its own query rather than a filter over the
+/// whole-vault set, because `move_dir` calls this once per moved note and the
+/// filtered version would make that O(vault × moved). Requires the embedding space
+/// to exist.
+fn pending_for_note(conn: &Connection, note_path: &str) -> Result<Vec<(String, String)>> {
+    Ok(db::note_chunks_missing_vectors(conn, note_path)?
+        .into_iter()
+        .map(|c| (c.text_hash, c.text))
+        .collect())
 }
 
 /// Whether a note's body would be (re)embedded this run — the negation of the
@@ -386,7 +300,7 @@ fn project_note_and_chunks(
 /// `embeddings` table that does not exist yet (which would error).
 fn would_reembed(
     conn: &Connection,
-    b2id: &str,
+    note_path: &str,
     body_hash: &str,
     force: bool,
     space_exists: bool,
@@ -394,8 +308,8 @@ fn would_reembed(
     if force || !space_exists {
         return Ok(true);
     }
-    let unchanged = db::note_body_hash(conn, b2id)?.as_deref() == Some(body_hash)
-        && db::note_fully_embedded(conn, b2id)?;
+    let unchanged = db::note_body_hash(conn, note_path)?.as_deref() == Some(body_hash)
+        && db::note_fully_embedded(conn, note_path)?;
     Ok(!unchanged)
 }
 
@@ -411,7 +325,7 @@ struct NoteEmbedOutcome {
     completed: bool,
 }
 
-/// Embed a note's pending `(chunk_id, text)` pairs into `embeddings`, in batches of
+/// Embed a note's pending `(text_hash, text)` pairs into `embeddings`, in batches of
 /// [`EMBED_BATCH`] via [`Embedder::embed_batch`], calling `on_batch` with each
 /// batch's size (so a full reindex can report cumulative progress **and** cooperatively
 /// cancel). Chunk vectors are independent, so batch boundaries never change the result.
@@ -431,8 +345,8 @@ struct NoteEmbedOutcome {
 fn embed_pending(
     conn: &Connection,
     embedder: &dyn Embedder,
-    note_b2id: &str,
-    pending: &[(i64, String)],
+    note_path: &str,
+    pending: &[(String, String)],
     mut on_batch: impl FnMut(usize) -> ControlFlow<()>,
 ) -> Result<NoteEmbedOutcome> {
     let total = pending.len();
@@ -441,8 +355,8 @@ fn embed_pending(
     for batch in pending.chunks(EMBED_BATCH) {
         let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
         let vectors = embedder.embed_batch(&texts)?;
-        for ((id, _), v) in batch.iter().zip(&vectors) {
-            db::set_chunk_vector(conn, *id, v)?;
+        for ((hash, _), v) in batch.iter().zip(&vectors) {
+            db::set_vector(conn, hash, v)?;
         }
         done += batch.len();
         if on_batch(batch.len()).is_break() {
@@ -452,7 +366,7 @@ fn embed_pending(
     }
     let completed = done == total;
     if completed {
-        db::refresh_note_centroid(conn, note_b2id)?;
+        db::refresh_note_centroid(conn, note_path)?;
     }
     Ok(NoteEmbedOutcome {
         cancelled,
@@ -476,7 +390,12 @@ fn embed_pending(
 /// `#fragment` suffix is stripped for the lookup only (`dst_path_raw` keeps the
 /// authored text). Markdown-form targets (`[…](path)`) additionally try
 /// **note-relative first** — standard Markdown semantics — before vault-root.
-fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[String]) -> Result<()> {
+fn project_edges(
+    conn: &Connection,
+    src_path: &str,
+    body: &str,
+    relations: &[String],
+) -> Result<()> {
     // Gather authored links: body first (inline), then frontmatter (frontmatter).
     let mut staged: Vec<(crate::link::ParsedLink, &'static str)> = Vec::new();
     for link in crate::link::parse_links(body) {
@@ -489,29 +408,31 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
     }
 
     // The source note's directory — the base for a Markdown-form relative target.
-    let src_dir = db::resolve_b2id_to_path(conn, src_id)?
-        .as_deref()
-        .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.to_string()))
+    // Read straight off the path now that the path *is* the identity (GH #170); this
+    // was a resolver round-trip through the index before.
+    let src_dir = src_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
         .unwrap_or_default();
 
     // Resolve targets; record which (target, type) the frontmatter authors.
     let mut fm_keys: HashSet<(String, String)> = HashSet::new();
     let mut resolved = Vec::with_capacity(staged.len());
     for (link, origin) in staged {
-        let (dst_id, dst_resource_path) = resolve_target(conn, &src_dir, &link)?;
-        let target_key = dst_id
+        let (dst_path, dst_resource_path) = resolve_target(conn, src_dir, &link)?;
+        let target_key = dst_path
             .clone()
             .or_else(|| dst_resource_path.clone())
             .unwrap_or_else(|| link.target_path.clone());
         if origin == "frontmatter" {
             fm_keys.insert((target_key.clone(), link.edge_type.clone()));
         }
-        resolved.push((link, origin, dst_id, dst_resource_path, target_key));
+        resolved.push((link, origin, dst_path, dst_resource_path, target_key));
     }
 
     let mut occ: HashMap<(String, String), i64> = HashMap::new();
     let mut rows = Vec::with_capacity(resolved.len());
-    for (link, origin, dst_id, dst_resource_path, target_key) in resolved {
+    for (link, origin, dst_path, dst_resource_path, target_key) in resolved {
         let key = (target_key.clone(), link.edge_type.clone());
         if origin == "inline" && fm_keys.contains(&key) {
             continue; // frontmatter wins — it alone can carry the explanation
@@ -520,9 +441,9 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
         occ.insert(key, occurrence_index + 1);
 
         rows.push(EdgeRow {
-            id: derive_edge_id(src_id, &target_key, &link.edge_type, occurrence_index),
-            src_id: src_id.to_string(),
-            dst_id,
+            id: derive_edge_id(src_path, &target_key, &link.edge_type, occurrence_index),
+            src_path: src_path.to_string(),
+            dst_path,
             dst_resource_path,
             dst_path_raw: link.target_path.clone(),
             r#type: link.edge_type.clone(),
@@ -534,10 +455,10 @@ fn project_edges(conn: &Connection, src_id: &str, body: &str, relations: &[Strin
         });
     }
 
-    db::replace_authored_edges(conn, src_id, &rows)
+    db::replace_authored_edges(conn, src_path, &rows)
 }
 
-/// Resolve one parsed link to `(dst_id, dst_resource_path)` — at most one is
+/// Resolve one parsed link to `(dst_path, dst_resource_path)` — at most one is
 /// `Some`; both `None` means dangling. The lookup path is the authored target
 /// minus any `#fragment`; kind dispatch is extension-only (see [`project_edges`]).
 fn resolve_target(
@@ -578,8 +499,8 @@ fn resolve_target(
             if let Some(path) = db::resolve_resource_target(conn, candidate)? {
                 return Ok((None, Some(path)));
             }
-        } else if let Some(id) = db::resolve_link_target(conn, candidate)? {
-            return Ok((Some(id), None));
+        } else if let Some(note_path) = db::resolve_link_target(conn, candidate)? {
+            return Ok((Some(note_path), None));
         }
     }
     Ok((None, None))
@@ -607,11 +528,14 @@ fn join_vault_relative(base_dir: &str, target: &str) -> Option<String> {
 }
 
 /// Deterministic id for an authored edge from its identity tuple (data-model.md
-/// §2/§3): `(src, dst|dst_path_raw, type, occurrence)`. Stable across re-index,
-/// so the same body always yields the same edge id.
-fn derive_edge_id(src_id: &str, target_key: &str, edge_type: &str, occurrence: i64) -> String {
+/// §2/§3): `(src path, dst path|dst_path_raw, type, occurrence)`. Stable across
+/// re-index, so the same body at the same path always yields the same edge id — and
+/// deliberately *not* stable across a move, since both ends are now paths (L1). Edge
+/// ids live only in the disposable index and are re-derived by the re-projection a
+/// move performs, so that is bookkeeping rather than a lost handle.
+fn derive_edge_id(src_path: &str, target_key: &str, edge_type: &str, occurrence: i64) -> String {
     let mut h = blake3::Hasher::new();
-    for part in [src_id, target_key, edge_type] {
+    for part in [src_path, target_key, edge_type] {
         h.update(part.as_bytes());
         h.update(b"\x1f"); // unit separator — avoids field-boundary collisions
     }
@@ -627,10 +551,6 @@ pub fn ingest_file(ctx: EmbedCtx, rel_path: &str) -> Result<Ingested> {
     let EmbedCtx { proj, embedder } = ctx;
     let conn = proj.conn;
     db::ensure_embedding_space(conn, embedder.model_id(), embedder.dim())?;
-    // Refuse an identity steal up front (GH #81): a file claiming a `b2id` whose
-    // incumbent still exists and still claims it is a copy — erroring here beats
-    // silently shadowing the incumbent out of the index.
-    guard_single_note_collision(conn, proj.root, rel_path)?;
     // Incremental (force=false): a frontmatter-only edit (e.g. a committed relation)
     // leaves the body unchanged, so this re-projects the note + edges without
     // needlessly re-embedding it. Vector state IS consulted (`consult_vectors`):
@@ -638,13 +558,12 @@ pub fn ingest_file(ctx: EmbedCtx, rel_path: &str) -> Result<Ingested> {
     let p = project_note_and_chunks(proj, rel_path, false, true)?;
     let embedded = !p.pending.is_empty();
     // A single-note re-projection is never cancelled — always run to completion.
-    embed_pending(conn, embedder, &p.b2id, &p.pending, |_| {
+    embed_pending(conn, embedder, rel_path, &p.pending, |_| {
         ControlFlow::Continue(())
     })?;
-    project_edges(conn, &p.b2id, &p.body, &p.relations)?;
+    project_edges(conn, rel_path, &p.body, &p.relations)?;
     Ok(Ingested {
-        b2id: p.b2id,
-        stamped: p.stamped,
+        path: rel_path.to_string(),
         embedded,
     })
 }
@@ -671,10 +590,6 @@ pub struct IngestOutcome {
     /// The resource inventory's counts (see [`ProjectOutcome`]).
     pub resources_indexed: usize,
     pub resources_pruned: usize,
-    /// Cross-note `b2id` collisions and identity restamps the projection pass
-    /// surfaced (see [`ProjectOutcome`], GH #81).
-    pub collisions: Vec<B2idCollision>,
-    pub restamped: Vec<RestampedNote>,
 }
 
 /// Ingest every `.md` file under `vault_root` (two-phase, deterministic order),
@@ -687,36 +602,32 @@ pub struct IngestOutcome {
 pub fn ingest_vault(
     conn: &Connection,
     vault_root: &Path,
-    idgen: &dyn IdGen,
     embedder: &dyn Embedder,
 ) -> Result<Vec<Ingested>> {
     let cfg = ChunkConfig::default();
-    let ctx = EmbedCtx::new(ProjectionCtx::new(conn, vault_root, idgen, &cfg), embedder);
+    let ctx = EmbedCtx::new(ProjectionCtx::new(conn, vault_root, &cfg), embedder);
     Ok(ingest_vault_with_progress(ctx, false, &mut |_| ControlFlow::Continue(()))?.notes)
 }
 
-/// One note's projection outcome: its `b2id` and whether a missing `b2id` was
-/// stamped (B2's one always-allowed write to the vault, data-model.md §1).
+/// One note's projection outcome: its vault-relative path, which is its identity
+/// (L1) and everything a caller can learn from a pass that writes nothing.
 #[derive(Debug, Clone)]
 pub struct Projected {
-    pub b2id: String,
-    pub stamped: bool,
+    pub path: String,
 }
 
 /// Re-project a single note at `ctx.root/rel_path` **model-free** — the
 /// single-note sibling of [`project_vault`], and the pass `Vault::write` runs after
-/// its body splice: note + chunks (+FTS) + edges, stamping
-/// a missing `b2id`, never touching the embedding space. A changed body re-chunks
-/// (clearing its stale vectors), and the chunks join the DB-derived pending set for
-/// **any** later embed pass to fill — so the save path needs no embedder and no
+/// its body splice: note + chunks (+FTS) + edges, never touching the embedding
+/// space. A changed body re-chunks, and the chunks join the DB-derived pending set
+/// for **any** later embed pass to fill — so the save path needs no embedder and no
 /// coordination with one. Contrast [`ingest_file`], which embeds inline (the
 /// `add`/`link`/`mv` path — those ops already require the model).
 pub fn project_file(ctx: ProjectionCtx, rel_path: &str) -> Result<Projected> {
     let p = project_note_and_chunks(ctx, rel_path, false, false)?;
-    project_edges(ctx.conn, &p.b2id, &p.body, &p.relations)?;
+    project_edges(ctx.conn, rel_path, &p.body, &p.relations)?;
     Ok(Projected {
-        b2id: p.b2id,
-        stamped: p.stamped,
+        path: rel_path.to_string(),
     })
 }
 
@@ -763,20 +674,13 @@ pub struct ProjectOutcome {
     /// inventory rows pruned — the slice-1 resource pass (spec §2).
     pub resources_indexed: usize,
     pub resources_pruned: usize,
-    /// Cross-note `b2id` collisions this pass (GH #81) — re-surfaced on *every*
-    /// pass until the human resolves them, so the state is never quietly ambient.
-    pub collisions: Vec<B2idCollision>,
-    /// Identity restamps this pass (GH #81) — per-pass events (the next pass has
-    /// no old row left to compare); the durable trace is the dangling inbound
-    /// edges G5 keeps surfacing.
-    pub restamped: Vec<RestampedNote>,
 }
 
 /// The result of a (possibly cancelled) **embed pass** ([`embed_vault`]): which
 /// notes fully embedded this run, and whether a cooperative cancel cut it short.
 #[derive(Debug, Clone)]
 pub struct EmbedOutcome {
-    /// `b2id`s of the notes that fully embedded this run, in the order they were
+    /// Paths of the notes that fully embedded this run, in the order they were
     /// worked (path order). Notes whose vectors were already complete do no work and
     /// are not listed.
     pub embedded: Vec<String>,
@@ -784,124 +688,17 @@ pub struct EmbedOutcome {
     pub cancelled: bool,
 }
 
-/// Scan every note's *claimed* `b2id` — a read-only pre-pass over the sorted walk
-/// (GH #81). The collision decision needs the full claim map before any row is
-/// written (the incumbent may sort *after* its copy — `a copy.md` < `a.md` — so
-/// deciding per-file during projection would let walk order rule). Uses the same
-/// [`note::parse`] the projection reads, so the scan and the pass can never
-/// disagree about what a file claims. An unreadable file takes no part — the
-/// main loop skips (and reports) it.
-///
-/// Phase 1 then reads each file a second time — deliberate, not an oversight:
-/// the re-read is page-cache-warm (this scan touched the file moments earlier),
-/// and re-reading at stamp time keeps the window in which a stamp write-back
-/// (`project_note_and_chunks`'s `fs::write`) could clobber a mid-pass external
-/// edit as small as it has always been — caching this scan's bytes would widen
-/// that window to the whole pre-scan. Revisit (cache the parse, id-carrying
-/// files only) only if `B2_LOG` timings ever show this pass hot.
-fn scan_b2id_claims(vault_root: &Path, rel_paths: &[String]) -> HashMap<String, Vec<String>> {
-    let mut claims: HashMap<String, Vec<String>> = HashMap::new();
-    for rel in rel_paths {
-        let Ok(raw) = fs::read_to_string(vault_root.join(rel)) else {
-            continue;
-        };
-        if let Some(id) = note::parse(&raw).fields().b2id.clone() {
-            claims.entry(id).or_default().push(rel.clone());
-        }
-    }
-    claims
-}
-
-/// Resolve the contested ids in a claim map (GH #81): for each `b2id` claimed by
-/// more than one file this pass, decide the keeper — the index's **incumbent**
-/// when it is among the claimants (the one confident precedence signal), else
-/// first-in-sorted-walk as a reproducibility tie-break — and return the
-/// collision notices plus the set of shadowed paths the projection pass must
-/// leave un-projected. Claimant lists arrive in sorted walk order (the caller
-/// walks `rel_paths` sorted), so `claimants[0]` *is* the tie-break winner.
-fn resolve_collisions(
-    conn: &Connection,
-    claims: HashMap<String, Vec<String>>,
-) -> Result<(Vec<B2idCollision>, HashSet<String>)> {
-    let mut contested: Vec<(String, Vec<String>)> =
-        claims.into_iter().filter(|(_, c)| c.len() > 1).collect();
-    contested.sort_by(|a, b| a.0.cmp(&b.0)); // deterministic notice order
-    let mut collisions = Vec::with_capacity(contested.len());
-    let mut shadowed = HashSet::new();
-    for (b2id, claimants) in contested {
-        let incumbent = db::resolve_b2id_to_path(conn, &b2id)?
-            .filter(|held| claimants.iter().any(|c| c == held));
-        let (kept_path, precedence) = match incumbent {
-            Some(held) => (held, CollisionPrecedence::Incumbent),
-            None => (claimants[0].clone(), CollisionPrecedence::TieBreak),
-        };
-        let shadowed_paths: Vec<String> =
-            claimants.into_iter().filter(|c| *c != kept_path).collect();
-        shadowed.extend(shadowed_paths.iter().cloned());
-        collisions.push(B2idCollision {
-            b2id,
-            kept_path,
-            precedence,
-            shadowed_paths,
-        });
-    }
-    Ok((collisions, shadowed))
-}
-
-/// The single-note collision guard (GH #81), run by [`ingest_file`] — the
-/// `add`/`link`/`mv` path — before any row is written: refuse to project a file
-/// whose claimed `b2id` the index attributes to a *different* file that still
-/// exists **and still claims it** (read from disk, so a blanked incumbent — the
-/// documented "give the copy the identity" gesture — correctly passes). A
-/// vanished incumbent is the normal external-move case: identity follows the id
-/// and the upsert repoints the path, exactly as before. [`project_file`] does
-/// **not** guard: it re-projects a file the human just edited in-app (the save
-/// path), where refusing after the bytes hit disk would strand the index stale —
-/// the whole-vault pass owns reconciling (and surfacing) that state instead.
-/// [`crate::import`] *does* guard, and rolls its own write back on a refusal: the
-/// file it just placed is an arriving copy, which is precisely this case.
-pub(crate) fn guard_single_note_collision(
-    conn: &Connection,
-    vault_root: &Path,
-    rel_path: &str,
-) -> Result<()> {
-    // A read failure here is deferred to the ingest's own read, which classifies it.
-    let Ok(raw) = fs::read_to_string(vault_root.join(rel_path)) else {
-        return Ok(());
-    };
-    let Some(id) = note::parse(&raw).fields().b2id.clone() else {
-        return Ok(()); // no claim — a fresh stamp can't collide
-    };
-    let Some(holder) = db::resolve_b2id_to_path(conn, &id)? else {
-        return Ok(()); // id unknown to the index
-    };
-    if holder == rel_path {
-        return Ok(()); // this file IS the incumbent
-    }
-    match fs::read_to_string(vault_root.join(&holder)) {
-        Ok(holder_raw)
-            if note::parse(&holder_raw).fields().b2id.as_deref() == Some(id.as_str()) =>
-        {
-            Err(Error::B2idCollision {
-                b2id: id,
-                path: rel_path.to_string(),
-                holder,
-            })
-        }
-        _ => Ok(()),
-    }
-}
-
 /// The **projection pass** (index-engine.md): project every `.md`
-/// file under `ctx.root` — Phase 1 (note + chunks + FTS, stamping missing
-/// `b2id`s) then Phase 2 (the typed edges) — with **no embedder and no embedding
-/// space**: it never creates the vector tables, so it needs neither the model nor
-/// its `dim`, and a projected-but-unembedded index is already complete for keyword
-/// search and the graph. Incremental: unless `force`, a note is re-chunked only
-/// when its body changed or it is new — read purely from `notes`, never from vector
-/// state (missing vectors are [`embed_vault`]'s job). Re-chunking a previously
-/// embedded note clears its stale vectors (via [`db::replace_chunks`]), so
-/// `project(force)` → `embed()` is the full rebuild.
+/// file under `ctx.root` — Phase 1 (note + chunks + FTS) then Phase 2 (the typed
+/// edges) — with **no embedder and no embedding space**: it never creates the vector
+/// tables, so it needs neither the model nor its `dim`, and a
+/// projected-but-unembedded index is already complete for keyword search and the
+/// graph. Incremental: unless `force`, a note is re-chunked only when its body
+/// changed or it is new — read purely from `notes`, never from vector state (missing
+/// vectors are [`embed_vault`]'s job), so `project(force)` → `embed()` is the full
+/// rebuild.
+///
+/// It writes nothing to the vault at all (W1): the pass reads files and fills tables.
 ///
 /// *Naming note:* the index invariant's "index = projection of Markdown" means the
 /// **full** index — this pass plus [`embed_vault`] together. The pass is named for
@@ -914,41 +711,21 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
     rel_paths.sort();
     resource_files.sort_by(|a, b| a.0.cmp(&b.0)); // paths are unique — a total order
 
-    // Cross-note `b2id` collisions (GH #81): resolve *before* any row is written —
-    // incumbent-wins where the index remembers a holder, sorted-first tie-break
-    // where it can't — so the winner never depends on walk order (today's
-    // `ON CONFLICT(b2id)` last-wins would hand the identity to whichever file the
-    // walk visited last). Shadowed claimants are left un-projected and surfaced.
-    let (collisions, shadowed) = resolve_collisions(conn, scan_b2id_claims(root, &rel_paths))?;
-
-    // Phase 1: project every note + its chunks (this fills the link resolver for
-    // every note, so phase 2 never depends on file order). The returned pending
-    // pairs are deliberately dropped: the embed pass derives its work from the DB
-    // (`chunks_missing_vectors`), so nothing is handed over in memory (§2).
+    // Phase 1: project every note + its chunks (this fills the resolver for every
+    // note, so phase 2 never depends on file order). No pending pairs come back —
+    // the embed pass derives its work from the DB (`chunks_missing_vectors`), so
+    // nothing is handed over in memory (§2).
     let mut staged = Vec::with_capacity(rel_paths.len());
     let mut skipped = Vec::new();
-    let mut restamped = Vec::new();
     for rel in &rel_paths {
-        if shadowed.contains(rel.as_str()) {
-            continue; // identity contested (GH #81) — surfaced in `collisions`, no row
-        }
         match project_note_and_chunks(ctx, rel, force, false) {
-            Ok(p) => {
-                if let Some(old_b2id) = &p.restamped_from {
-                    restamped.push(RestampedNote {
-                        path: rel.clone(),
-                        old_b2id: old_b2id.clone(),
-                        new_b2id: p.b2id.clone(),
-                    });
-                }
-                staged.push((p.b2id, p.stamped, p.body, p.relations));
-            }
-            // A note we cannot read or stamp (non-UTF-8, permission-denied, vanished
-            // mid-walk) is *skipped*, not fatal: one bad file must never abort a
-            // whole-vault reindex. This catches only filesystem failures reading THIS
-            // note — the DB layer surfaces `Error::Sqlite`, a systemic failure that
-            // still aborts. No partial row is written for a skipped note, since the
-            // read/stamp fails before any `upsert` (§ — the invariant holds).
+            Ok(p) => staged.push((rel.clone(), p.body, p.relations)),
+            // A note we cannot read (non-UTF-8, permission-denied, vanished mid-walk)
+            // is *skipped*, not fatal: one bad file must never abort a whole-vault
+            // reindex. This catches only filesystem failures reading THIS note — the
+            // DB layer surfaces `Error::Sqlite`, a systemic failure that still aborts.
+            // No partial row is written for a skipped note, since the read fails
+            // before any `upsert` (§ — the invariant holds).
             Err(Error::Io(e)) => skipped.push(SkippedNote {
                 path: rel.clone(),
                 reason: skip_reason(&e),
@@ -960,16 +737,28 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
     // Deletion reconciliation (#31): prune the rows of notes whose files are gone —
     // deleted outside b2 with no replacement — so an incremental reindex converges on
     // what a from-scratch rebuild would hold instead of serving ghosts to
-    // `list_notes`/search/`similar`/the graph. "Gone" is decided by `b2id`: every
-    // note the walk read was staged above, so an unstaged b2id has no file — except a
-    // file skipped as unreadable, whose b2id is unknowable this run; its row is kept
-    // by path (the walk *saw* the file — evicting it would lie). Runs before phase 2
-    // so edges re-derive against the pruned resolver and links at a deleted note
-    // re-dangle, exactly as a full rebuild resolves them. Whole-vault only: the
-    // single-note paths (`ingest_file`/`project_file`) touch one note and never prune.
-    let projected_ids: HashSet<&str> = staged.iter().map(|(b2id, ..)| b2id.as_str()).collect();
-    let skipped_paths: HashSet<&str> = skipped.iter().map(|s| s.path.as_str()).collect();
-    let notes_pruned = db::prune_notes_except(conn, &projected_ids, &skipped_paths)?;
+    // `list_notes`/search/`similar`/the graph. "Gone" means "the walk did not meet
+    // this path": every note it read was staged above, and a file it *saw* but could
+    // not read is kept (evicting it would lie). Runs before phase 2 so edges
+    // re-derive against the pruned resolver and links at a deleted note re-dangle,
+    // exactly as a full rebuild resolves them. Whole-vault only: the single-note
+    // paths (`ingest_file`/`project_file`) touch one note and never prune.
+    let seen: HashSet<&str> = staged
+        .iter()
+        .map(|(path, ..)| path.as_str())
+        .chain(skipped.iter().map(|s| s.path.as_str()))
+        .collect();
+    let notes_pruned = db::prune_notes_except(conn, &seen)?;
+
+    // Vectors are content-addressed (M4), so they do NOT die with the chunk rows
+    // that pruning and re-chunking just removed — that survival is what lets a moved
+    // note re-use them. Collecting what is now unreferenced is therefore this pass's
+    // job, and it belongs here, where the chunk set for the run is final. Guarded on
+    // the space existing so the model-free pass still never touches a vault that has
+    // never been embedded.
+    if db::embedding_space_exists(conn)? {
+        db::prune_orphan_vectors(conn)?;
+    }
 
     // Resource inventory — between the phases so the rows exist before phase 2
     // resolves links (a `![[img.png]]` edge resolves against `resources`, spec §3).
@@ -981,20 +770,17 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
     // that projected are here, so a skipped note simply has no rows and no edges; a
     // link pointing at it stays unresolved, exactly as for any absent target.
     let mut notes = Vec::with_capacity(staged.len());
-    for (b2id, stamped, body, relations) in staged {
-        project_edges(conn, &b2id, &body, &relations)?;
-        notes.push(Projected { b2id, stamped });
+    for (path, body, relations) in staged {
+        project_edges(conn, &path, &body, &relations)?;
+        notes.push(Projected { path });
     }
     tracing::debug!(
         target: "b2::ingest",
         notes = notes.len(),
-        stamped = notes.iter().filter(|n| n.stamped).count(),
         skipped = skipped.len(),
         notes_pruned,
         resources = resources_indexed,
         resources_pruned,
-        collisions = collisions.len(),
-        restamped = restamped.len(),
         force,
         "projection pass complete"
     );
@@ -1004,8 +790,6 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
         notes_pruned,
         resources_indexed,
         resources_pruned,
-        collisions,
-        restamped,
     })
 }
 
@@ -1031,15 +815,23 @@ pub fn embed_vault(
 
     // Group the (path, seq)-ordered pending chunks by note; consecutive rows share a
     // note, so per-note batching + progress reproduce the fused reindex's shape.
-    // One entry per pending note: `(b2id, path, that note's (chunk_id, text) pairs)`.
-    type PendingNote = (String, String, Vec<(i64, String)>);
+    // One entry per pending note: `(path, that note's (text_hash, text) pairs)`.
+    //
+    // A hash is embedded **once per run**, however many notes hold that text: the
+    // store is content-addressed (M4), so the second note's chunk is already served
+    // by the first note's vector. Notes are worked in order and each batch is written
+    // before the next note starts, so by the time a de-duplicated note is reached its
+    // vectors are in the table — its (now empty) pending list completes immediately
+    // and its centroid still refreshes off the shared rows.
+    type PendingNote = (String, Vec<(String, String)>);
     let mut by_note: Vec<PendingNote> = Vec::new();
+    let mut claimed: HashSet<String> = HashSet::new();
     for c in db::chunks_missing_vectors(conn)? {
+        let fresh = claimed.insert(c.text_hash.clone());
+        let pair = fresh.then_some((c.text_hash, c.text));
         match by_note.last_mut() {
-            Some((last, _, pending)) if *last == c.note_b2id => {
-                pending.push((c.chunk_id, c.text));
-            }
-            _ => by_note.push((c.note_b2id, c.note_path, vec![(c.chunk_id, c.text)])),
+            Some((last, pending)) if *last == c.note_path => pending.extend(pair),
+            _ => by_note.push((c.note_path, pair.into_iter().collect())),
         }
     }
 
@@ -1047,13 +839,13 @@ pub fn embed_vault(
     tracing::debug!(
         target: "b2::ingest",
         notes_to_embed,
-        pending_chunks = by_note.iter().map(|(_, _, p)| p.len()).sum::<usize>(),
+        pending_chunks = by_note.iter().map(|(_, p)| p.len()).sum::<usize>(),
         "embed pass starting (DB-derived pending set)"
     );
     let mut embedded = Vec::new();
     let mut chunks_done = 0usize;
     let mut cancelled = false;
-    for (i, (b2id, path, pending)) in by_note.iter().enumerate() {
+    for (i, (path, pending)) in by_note.iter().enumerate() {
         // Per-note span: under a span-close subscriber each note reports how long
         // its embed took — the kernel's slowest step, hence the one worth plotting.
         let _note_span = tracing::debug_span!(
@@ -1063,7 +855,7 @@ pub fn embed_vault(
         .entered();
         let notes_embedded = i + 1; // 1-based position for the progress line
         let note_chunks = pending.len();
-        let outcome = embed_pending(conn, embedder, b2id, pending, |n| {
+        let outcome = embed_pending(conn, embedder, path, pending, |n| {
             chunks_done += n;
             on_progress(ReindexProgress {
                 note_path: path.clone(),
@@ -1074,7 +866,7 @@ pub fn embed_vault(
             })
         })?;
         if outcome.completed {
-            embedded.push(b2id.clone());
+            embedded.push(path.clone());
         }
         if outcome.cancelled {
             cancelled = true;
@@ -1119,8 +911,6 @@ pub fn ingest_vault_with_progress(
         notes_pruned,
         resources_indexed,
         resources_pruned,
-        collisions,
-        restamped,
     } = project_vault(ctx.proj, force)?;
     let embed = embed_vault(ctx.proj.conn, ctx.embedder, on_progress)?;
 
@@ -1129,13 +919,9 @@ pub fn ingest_vault_with_progress(
     let embedded: HashSet<&str> = embed.embedded.iter().map(String::as_str).collect();
     let notes = projected_notes
         .into_iter()
-        .map(|p| {
-            let was_embedded = embedded.contains(p.b2id.as_str());
-            Ingested {
-                b2id: p.b2id,
-                stamped: p.stamped,
-                embedded: was_embedded,
-            }
+        .map(|p| Ingested {
+            embedded: embedded.contains(p.path.as_str()),
+            path: p.path,
         })
         .collect();
     Ok(IngestOutcome {
@@ -1145,43 +931,33 @@ pub fn ingest_vault_with_progress(
         notes_pruned,
         resources_indexed,
         resources_pruned,
-        collisions,
-        restamped,
     })
 }
 
 /// A **read-only** preview of a reindex — the `reindex --dry-run`. Walks every `.md`
 /// file (same sorted order + dotfolder skip as [`ingest_vault`]) and decides, per
-/// note, whether a real run would stamp a `b2id` (the file lacks one) and would
-/// (re)embed its body — with **no writes at all**: no stamp to the Markdown (B2's
-/// one vault write, data-model.md §1), no index or log mutation, no embedding. So a
-/// user can preview an (incremental) reindex against a pristine vault.
+/// note, whether a real run would (re)embed its body.
+///
+/// Since GH #170 that is the *whole* preview, and the shrinkage is the feature: the
+/// dry-run existed largely because a real run wrote to the vault (a `b2id` stamp,
+/// possibly churning an identity, possibly shadowing a colliding copy), and "show me
+/// before you touch my files" is a fair thing to ask. A run that writes nothing (W1)
+/// has nothing to warn about — only work to forecast.
 ///
 /// The embed decision reads the *currently stored* vectors, so it previews an
 /// incremental run under the embedder the index was built with; it does **not**
 /// detect a pending model swap (that needs the real model loaded, which a dry-run
 /// deliberately avoids). Needs no embedder — a pure read, like the graph queries.
-///
-/// Also previews the GH #81 anomalies, from the same parse: cross-note `b2id`
-/// collisions a real run would surface (and resolve incumbent-wins), and stamps
-/// that would *change* an identity (`would_restamp_from`). Nothing anomaly-shaped
-/// is ever *stored* — every notice is re-derivable from the vault + index, so a
-/// dropped index re-diagnoses instead of forgetting (S2).
-pub fn plan_reindex(
-    conn: &Connection,
-    vault_root: &Path,
-    force: bool,
-) -> Result<ReindexPlanOutcome> {
+pub fn plan_reindex(conn: &Connection, vault_root: &Path, force: bool) -> Result<Vec<PlannedNote>> {
     let space_exists = db::embedding_space_exists(conn)?;
     let mut rel_paths = Vec::new();
-    // The dry-run previews *notes* (stamp/embed decisions); the resource inventory
-    // has no per-file decisions to preview, so its walk output is unused here.
+    // The dry-run previews *notes* (the embed decision); the resource inventory has
+    // no per-file decisions to preview, so its walk output is unused here.
     let mut resource_files = Vec::new();
     collect_vault_files(vault_root, vault_root, &mut rel_paths, &mut resource_files)?;
     rel_paths.sort();
 
     let mut out = Vec::with_capacity(rel_paths.len());
-    let mut claims: HashMap<String, Vec<String>> = HashMap::new();
     for rel in rel_paths {
         // Skip an unreadable file rather than abort the preview — a real reindex would
         // skip it too (see [`project_vault`]), so the dry-run must not be the one place
@@ -1190,38 +966,18 @@ pub fn plan_reindex(
             Ok(raw) => raw,
             Err(_) => continue,
         };
-        let parsed = note::parse(&raw);
-        let would_stamp = parsed.fields().b2id.is_none();
-        // A stamp onto a path the index attributes to another id is an identity
-        // restamp (GH #81) — previewed here so the churn is visible *before* it
-        // happens, not just reported after.
-        let would_restamp_from = if would_stamp {
-            db::resolve_path_to_b2id(conn, &rel)?
-        } else {
-            None
-        };
-        let body_hash = blake3::hash(parsed.body().as_bytes()).to_hex().to_string();
-        // A note with no b2id is new to the index → always (re)embedded; one with a
-        // b2id is compared against its stored state, exactly as the real run decides.
-        let would_embed = match &parsed.fields().b2id {
-            Some(id) => {
-                claims.entry(id.clone()).or_default().push(rel.clone());
-                would_reembed(conn, id, &body_hash, force, space_exists)?
-            }
-            None => true,
-        };
+        let body_hash = blake3::hash(note::parse(&raw).body().as_bytes())
+            .to_hex()
+            .to_string();
+        // An unindexed path has no stored body hash, so this reads `true` for a note
+        // new to the index — exactly as the real run decides it.
+        let would_embed = would_reembed(conn, &rel, &body_hash, force, space_exists)?;
         out.push(PlannedNote {
             path: rel,
-            would_stamp,
             would_embed,
-            would_restamp_from,
         });
     }
-    let (collisions, _shadowed) = resolve_collisions(conn, claims)?;
-    Ok(ReindexPlanOutcome {
-        notes: out,
-        collisions,
-    })
+    Ok(out)
 }
 
 /// Walk the vault once, routing every file: `.md` (case-insensitive) → `notes`,

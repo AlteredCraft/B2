@@ -24,11 +24,11 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-/// What [`delete_note`] did: the deleted note's identity, and the surviving files
-/// whose links at it now dangle (sorted, deduped; empty when nothing linked here).
+/// What [`delete_note`] did: the deleted note's path — its identity (L1) — and the
+/// surviving files whose links at it now dangle (sorted, deduped; empty when nothing
+/// linked here).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteReport {
-    pub b2id: String,
     pub path: String,
     /// Vault-relative paths of the files whose links at the deleted note now
     /// dangle. They are re-projected, never rewritten — the link text stays as
@@ -36,8 +36,9 @@ pub struct DeleteReport {
     pub dangled: Vec<String>,
 }
 
-/// What [`delete_resource`] did — the resource sibling of [`DeleteReport`],
-/// minus the identity field (a resource has no `b2id`; data-model.md §10).
+/// What [`delete_resource`] did — the resource sibling of [`DeleteReport`]; the two
+/// now carry the same fields, since notes and resources share one identity model
+/// (L3, data-model.md §10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceDeleteReport {
     pub path: String,
@@ -80,26 +81,29 @@ fn reproject_dangled(ctx: ProjectionCtx, dangled: &BTreeSet<String>) -> Result<(
     Ok(())
 }
 
-/// Delete the note `b2id` (currently at `rel`): file off disk, projection rows
-/// off the index (chunks/FTS/vectors/centroid/aliases/outbound edges cascade
-/// with the `notes` row, as in whole-vault pruning), then re-project the inbound
-/// linkers so their edges re-dangle. The caller (the façade) resolved the ref.
-pub fn delete_note(ctx: ProjectionCtx, b2id: &str, rel: &str) -> Result<DeleteReport> {
+/// Delete the note at `rel`: file off disk, projection rows off the index
+/// (chunks/FTS/centroid/aliases/outbound edges cascade with the `notes` row, as in
+/// whole-vault pruning), then re-project the inbound linkers so their edges
+/// re-dangle. The caller (the façade) resolved the ref.
+///
+/// The note's chunk **vectors** deliberately do not cascade — they are
+/// content-addressed and may be shared (M4), so the whole-vault pass collects them
+/// when nothing references them ([`db::prune_orphan_vectors`]).
+pub fn delete_note(ctx: ProjectionCtx, rel: &str) -> Result<DeleteReport> {
     let (conn, root) = (ctx.conn, ctx.root);
     // The graph names the bounded inbound set before the rows go. A self-link's
     // source is the note itself — it dies with the file, so it is not re-projected.
-    let dangled: BTreeSet<String> = db::inbound_edge_targets(conn, b2id)?
+    let dangled: BTreeSet<String> = db::inbound_edge_targets(conn, rel)?
         .into_iter()
         .map(|e| e.src_path)
         .filter(|p| p != rel)
         .collect();
 
     remove_file_if_present(&root.join(rel))?;
-    conn.execute("DELETE FROM notes WHERE b2id = ?1", [b2id])?;
+    conn.execute("DELETE FROM notes WHERE path = ?1", [rel])?;
     reproject_dangled(ctx, &dangled)?;
 
     Ok(DeleteReport {
-        b2id: b2id.to_string(),
         path: rel.to_string(),
         dangled: dangled.into_iter().collect(),
     })
@@ -151,8 +155,8 @@ pub fn delete_dir(ctx: ProjectionCtx, dir_input: &str) -> Result<DirDeleteReport
     // with it and must not be re-projected (their files are gone).
     let prefix = format!("{dir}/");
     let mut dangled: BTreeSet<String> = BTreeSet::new();
-    for (b2id, _path) in &notes {
-        for e in db::inbound_edge_targets(conn, b2id)? {
+    for note_path in &notes {
+        for e in db::inbound_edge_targets(conn, note_path)? {
             if !e.src_path.starts_with(&prefix) {
                 dangled.insert(e.src_path);
             }
@@ -167,8 +171,8 @@ pub fn delete_dir(ctx: ProjectionCtx, dir_input: &str) -> Result<DirDeleteReport
     }
 
     fs::remove_dir_all(&abs)?;
-    for (b2id, _path) in &notes {
-        conn.execute("DELETE FROM notes WHERE b2id = ?1", [b2id])?;
+    for note_path in &notes {
+        conn.execute("DELETE FROM notes WHERE path = ?1", [note_path])?;
     }
     for path in &resources {
         conn.execute("DELETE FROM resources WHERE path = ?1", [path])?;

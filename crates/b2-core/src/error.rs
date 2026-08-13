@@ -17,15 +17,9 @@ pub enum Error {
     #[error("frontmatter edit unsupported: {0}")]
     Frontmatter(String),
 
-    /// `write_frontmatter` would change, remove, or duplicate the note's `b2id`
-    /// — the identity every edge keys on (invariants L1), and the one line B2
-    /// protects in an otherwise human-owned block (GH #79). Refused before any
-    /// byte reaches disk; the path is carried for debug detail.
-    #[error("frontmatter edit would change note identity (b2id): {0}")]
-    FrontmatterIdentity(String),
-
-    /// A note reference (path or `b2id`) did not resolve to any indexed note —
-    /// the one domain error the façade distinguishes from "found, no results".
+    /// A note reference (a vault-relative path) did not resolve to any indexed
+    /// note — the one domain error the façade distinguishes from "found, no
+    /// results".
     #[error("note not found: {0}")]
     NoteNotFound(String),
 
@@ -74,19 +68,6 @@ pub enum Error {
     /// can phrase it for note creation rather than a move.
     #[error("invalid new-note path: {0}")]
     AddDestination(String),
-
-    /// A single-note ingest presented a `b2id` the index attributes to a
-    /// *different* file that still exists on disk and still claims it (GH #81).
-    /// Projecting would silently transfer the identity — and every inbound edge —
-    /// to this file, so the ingest refuses instead; the whole-vault projection
-    /// pass resolves the same state incumbent-wins and *surfaces* it
-    /// (`ProjectOutcome::collisions`) rather than erroring.
-    #[error("note '{path}' claims b2id {b2id}, already held by '{holder}'")]
-    B2idCollision {
-        b2id: String,
-        path: String,
-        holder: String,
-    },
 
     /// `b2 add` would overwrite an existing file — refused (the vault never clobbers,
     /// data-model.md §1). The path is echoed for the user-facing message.

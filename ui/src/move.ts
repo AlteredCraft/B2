@@ -23,7 +23,7 @@ export function baseName(path: string): string {
  * `doc_kind` (b2-core `resource.rs`), the *one* rule shared with the adapters'
  * argument dispatch: **an extension other than `md` means a resource; `.md` or
  * no extension means a note** (which also covers the extensionless wikilink
- * habit `[[concepts/memory]]` and a bare b2id). A trailing `#fragment` is
+ * habit `[[concepts/memory]]`). A trailing `#fragment` is
  * dropped first, matching the core's link resolver. Used to route a followed
  * wikilink to the note pane vs the resource pane so a `[[file.pdf]]` opens the
  * resource card instead of failing a note read; the host re-validates either way.
