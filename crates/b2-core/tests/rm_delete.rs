@@ -63,10 +63,17 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
     assert!(!root.join(MEMORY_PATH).exists());
     assert_eq!(fs::read_to_string(root.join(SRS_PATH)).unwrap(), srs_before);
 
-    // The note no longer resolves — and the path being the identity (L1), there is
-    // no second handle left that could still find it.
+    // The note no longer resolves by *either* ref form. Both arms are the point: the
+    // pre-GH #170 version of this test paired the path with a b2id lookup to prove no
+    // handle survives a delete, and the path being the identity (L1) shrank the handles
+    // to two spellings of one key — so the stem is what that second arm becomes, not
+    // something the pivot made redundant.
     assert!(matches!(
         vault.read(MEMORY_PATH).unwrap_err(),
+        Error::NoteNotFound(_)
+    ));
+    assert!(matches!(
+        vault.read("concepts/memory").unwrap_err(),
         Error::NoteNotFound(_)
     ));
 
