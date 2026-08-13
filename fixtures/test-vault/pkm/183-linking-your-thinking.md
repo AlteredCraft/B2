@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXGXMBV9WK1MDPVC3KM
 type: note
 title: "Linking Your Thinking"
 ---

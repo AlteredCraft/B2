@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY669N42HCG2SPARFM4
 type: note
 title: "Lifetimes Explained"
 ---

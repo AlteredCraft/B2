@@ -38,7 +38,6 @@ function check(name: string, fn: () => void): void {
 
 function neighbor(over: Partial<NeighborView>): NeighborView {
   return {
-    b2id: "01X",
     path: "notes/x.md",
     title: "x",
     relation: "references",
@@ -52,7 +51,7 @@ function neighbor(over: Partial<NeighborView>): NeighborView {
 }
 
 function ghost(over: Partial<SimilarView>): SimilarView {
-  return { b2id: "01G", path: "notes/g.md", title: "g", score: 0.5, evidence: "", ...over };
+  return { path: "notes/g.md", title: "g", score: 0.5, evidence: "", ...over };
 }
 
 function input(over: Partial<GraphInput>): GraphInput {
@@ -93,8 +92,8 @@ check("anchor centered; authored on the inner orbit, ghosts on the outer halo", 
     input({
       connections: [
         neighbor({}),
-        neighbor({ b2id: "01Y", path: "notes/y.md", title: "y", relation: "supports" }),
-        neighbor({ b2id: "01Z", path: "notes/z.md", title: "z", relation: "part-of" }),
+        neighbor({ path: "notes/y.md", title: "y", relation: "supports" }),
+        neighbor({ path: "notes/z.md", title: "z", relation: "part-of" }),
       ],
       ghosts: [ghost({})],
     }),
@@ -116,7 +115,7 @@ check("anchor centered; authored on the inner orbit, ghosts on the outer halo", 
 
 check("ghosts are capped, dashed-latent, and score-tagged", () => {
   const many = Array.from({ length: 10 }, (_, i) =>
-    ghost({ b2id: `01G${i}`, path: `notes/g${i}.md`, title: `g${i}`, score: 0.9 - i * 0.05 }),
+    ghost({ path: `notes/g${i}.md`, title: `g${i}`, score: 0.9 - i * 0.05 }),
   );
   const s = buildScene(input({ ghosts: many }));
   const ghosts = s.nodes.filter((n) => n.kind === "ghost");
@@ -148,8 +147,8 @@ check("arrowheads follow the verb — directed yes, symmetric no; direction is a
     input({
       connections: [
         neighbor({ relation: "elaborates" }),
-        neighbor({ b2id: "01Y", path: "notes/y.md", title: "y", relation: "contradicts" }),
-        neighbor({ b2id: "01Z", path: "notes/z.md", title: "z", relation: "supports", direction: "inbound" }),
+        neighbor({ path: "notes/y.md", title: "y", relation: "contradicts" }),
+        neighbor({ path: "notes/z.md", title: "z", relation: "supports", direction: "inbound" }),
       ],
     }),
   );
@@ -160,7 +159,7 @@ check("arrowheads follow the verb — directed yes, symmetric no; direction is a
   };
   assert(by("elaborates").arrow, "a directed (tail) verb has an arrow");
   assert(!by("contradicts").arrow, "the symmetric verb has none");
-  equal(by("supports").from, "01Z", "an inbound edge is drawn from the neighbor…");
+  equal(by("supports").from, "notes/z.md", "an inbound edge is drawn from the neighbor…");
   equal(by("supports").to, "anchor", "…at the anchor (authored direction)");
 });
 
@@ -195,8 +194,8 @@ check("resource and dangling targets are distinct node kinds, never hidden", () 
 
 check("the scene is deterministic: same input, same scene", () => {
   const shared = input({
-    connections: [neighbor({}), neighbor({ b2id: "01Y", path: "notes/y.md", title: "y", relation: "contradicts" })],
-    ghosts: [ghost({}), ghost({ b2id: "01H", path: "notes/h.md", title: "h", score: 0.4 })],
+    connections: [neighbor({}), neighbor({ path: "notes/y.md", title: "y", relation: "contradicts" })],
+    ghosts: [ghost({}), ghost({ path: "notes/h.md", title: "h", score: 0.4 })],
   });
   equal(
     JSON.stringify(buildScene(shared)),
@@ -213,7 +212,7 @@ check("an isolated note is just the anchor — no edges, no ghosts", () => {
 
 check("every node lands inside the drawing space (with its own radius of margin)", () => {
   const many = Array.from({ length: 12 }, (_, i) =>
-    neighbor({ b2id: `01N${i}`, path: `notes/n${i}.md`, title: `note ${i}`, relation: "references" }),
+    neighbor({ path: `notes/n${i}.md`, title: `note ${i}`, relation: "references" }),
   );
   const s = buildScene(input({ connections: many, ghosts: [ghost({})] }));
   for (const n of s.nodes) {

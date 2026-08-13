@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTDYEFTCP05A4M01T84
 type: note
 title: "Single-Origin Beans"
 ---

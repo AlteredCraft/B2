@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV6XKJNBPYQ9KRPBTPX
 type: note
 title: "Connection Pooling"
 b2_relations:

@@ -39,9 +39,9 @@ assertEq(
 // --- wikiCandidates: rank notes + resources against the query ----------------------
 
 const notes: NoteSummary[] = [
-  { b2id: "1", path: "docs/alpha.md", title: "Alpha" },
-  { b2id: "2", path: "docs/beta.md", title: null },
-  { b2id: "3", path: "notes/alpha-two.md", title: "Alpha Two" },
+  { path: "docs/alpha.md", title: "Alpha" },
+  { path: "docs/beta.md", title: null },
+  { path: "notes/alpha-two.md", title: "Alpha Two" },
 ];
 const resources: ResourceSummary[] = [
   { path: "docs/pic.png", class: "image", size: 1, mtime: null },
@@ -89,7 +89,7 @@ assertEq(
   "a resource candidate: full path target, filename label, folder detail",
 );
 assertEq(
-  wikiCandidates([{ b2id: "4", path: "root.md", title: null }], [], "root")[0].detail,
+  wikiCandidates([{ path: "root.md", title: null }], [], "root")[0].detail,
   "",
   "a root-level entry has an empty folder detail",
 );
@@ -98,8 +98,8 @@ assertEq(
 assertEq(
   wikiCandidates(
     [
-      { b2id: "5", path: "a-dir/note.md", title: "Zebra" },
-      { b2id: "6", path: "zebra-notes/other.md", title: "Aardvark" },
+      { path: "a-dir/note.md", title: "Zebra" },
+      { path: "zebra-notes/other.md", title: "Aardvark" },
     ],
     [],
     "zeb",

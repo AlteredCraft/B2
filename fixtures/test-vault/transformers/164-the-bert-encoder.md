@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ08Z73YY77DFM684DW
 type: note
 title: "The BERT Encoder"
 ---

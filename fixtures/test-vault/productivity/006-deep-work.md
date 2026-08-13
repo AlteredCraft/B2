@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXH7H11K35WRRMYJB4X
 type: note
 title: "Deep Work"
 ---

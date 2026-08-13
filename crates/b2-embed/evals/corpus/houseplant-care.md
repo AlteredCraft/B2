@@ -1,7 +1,6 @@
 ---
 type: note
 title: Houseplant care
-b2id: 01JEVAL1HSPLT000000000000M
 ---
 Most indoor plants die of kindness: overwatering drowns the pot, so let the top
 of the soil dry before watering again and always use a container that drains.

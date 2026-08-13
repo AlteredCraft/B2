@@ -1,7 +1,6 @@
 ---
 type: note
 title: Fermentation
-b2id: 01JEVAL1FERMT000000000000V
 ---
 Controlled spoilage, essentially: give the right microbes a head start and they
 transform sugar and starch into acid, gas, and alcohol before the wrong microbes

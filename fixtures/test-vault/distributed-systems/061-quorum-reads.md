@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVJGSA5QSHRPKC9407R
 type: note
 title: "Quorum Reads"
 ---

@@ -1354,6 +1354,41 @@ pub fn refresh_note_centroid(conn: &Connection, note_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Every fully-embedded note with **no** centroid row, path-ordered — the second
+/// half of the embed pass's work list (GH #170).
+///
+/// It exists because content-addressing broke a coupling the old design leaned on.
+/// `replace_chunks` drops a note's centroid (it summarized the chunk set being
+/// replaced), and it used to drop that note's vectors with it — so a re-chunked note
+/// always had pending chunks, and refreshing the centroid inside the embed loop was
+/// enough. Vectors now survive a re-chunk, which is the whole point: a moved or
+/// re-cut-but-identical note re-embeds nothing. That leaves a note that can reach the
+/// embed pass with a *complete* vector set and no centroid, and nothing pending to
+/// bring it back.
+///
+/// Silently. `similar`'s coarse stage scans centroids only (#38), so such a note
+/// would stop being discoverable while looking perfectly indexed everywhere else —
+/// and an incremental pass would diverge from a from-scratch rebuild (S3), which is
+/// how the property suite caught it.
+///
+/// "Fully embedded" is the gate, not "has any vector": a centroid over a partial set
+/// would be wrong rather than merely stale, so a note cut off mid-embed is left for
+/// the pass that finishes it. Requires the embedding space to exist.
+pub fn notes_missing_centroids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT c.note_path FROM chunks c
+         WHERE NOT EXISTS (
+                 SELECT 1 FROM note_centroids nc WHERE nc.note_path = c.note_path)
+           AND NOT EXISTS (
+                 SELECT 1 FROM chunks c2
+                 LEFT JOIN embeddings e ON e.text_hash = c2.text_hash
+                 WHERE c2.note_path = c.note_path AND e.text_hash IS NULL)
+         ORDER BY c.note_path",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Stream every stored `(note_path, centroid_blob)` through `f`, one row at a time —
 /// discovery's first-stage coarse scan. O(notes), the whole point of the two-stage
 /// shape (#38): the O(chunks) work happens only for the shortlisted notes. The blob

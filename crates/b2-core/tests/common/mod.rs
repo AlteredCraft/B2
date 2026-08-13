@@ -14,52 +14,20 @@
 #![allow(dead_code)]
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::{IdGen, UlidGen};
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
 use b2_core::vault::Vault;
 use rusqlite::Connection;
-use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// b2ids of the two golden-vault notes (data-model.md §8).
-pub const MEMORY_ID: &str = "01JMEM0000000000000000000A";
-pub const SRS_ID: &str = "01JSRS0000000000000000000B";
-
-/// Vault-relative paths of the two golden-vault notes.
+/// Vault-relative paths of the two golden-vault notes (data-model.md §8) — which
+/// **are** their identities (L1, GH #170), so these constants are what the suite
+/// asserts against. The `MEMORY_ID`/`SRS_ID` ULIDs they replaced, and the
+/// `FixedId`/`SeqId` generators that made a stamped id assertable, went with the
+/// stamp: the core mints nothing, so there is no injected id seam left to fake.
 pub const MEMORY_PATH: &str = "concepts/memory.md";
 pub const SRS_PATH: &str = "notes/spaced-repetition.md";
-
-/// Deterministic id generator so stamped `b2id`s are assertable.
-pub struct FixedId(pub &'static str);
-impl IdGen for FixedId {
-    fn new_id(&self) -> String {
-        self.0.to_string()
-    }
-}
-
-/// Sequential deterministic ids, for pipeline tests that mint several ids in one
-/// run (where `FixedId`'s single constant would collide on the edges primary key).
-/// ULID-shaped (26 chars) and monotonic, so a run's minted ids are assertable.
-pub struct SeqId(Cell<u32>);
-impl SeqId {
-    pub fn new() -> Self {
-        Self(Cell::new(0))
-    }
-}
-impl Default for SeqId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl IdGen for SeqId {
-    fn new_id(&self) -> String {
-        let n = self.0.get();
-        self.0.set(n + 1);
-        format!("01JSEQ{n:020}")
-    }
-}
 
 pub fn copy_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
@@ -75,8 +43,11 @@ pub fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-/// Copy the committed golden vault into `dst` so ingest (which may stamp a
-/// `b2id`) never mutates the repo fixtures.
+/// Copy the committed golden vault into `dst`, so no test can mutate the repo
+/// fixtures. Ingest no longer writes to a vault at all (W1), so this is now belt
+/// and braces rather than the load-bearing guard it was — kept because a test that
+/// edits a committed fixture is a bad idea under any write posture, and CI's
+/// `git diff --exit-code` step would fail on one regardless.
 pub fn golden_vault_copy(dst: &Path) {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
     copy_dir(&src, dst);
@@ -124,6 +95,6 @@ pub fn ingest_golden(dir: &Path, embedder: &FakeEmbedder) -> Connection {
     let vault = dir.join("vault");
     golden_vault_copy(&vault);
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, embedder).unwrap();
+    ingest_vault(&conn, &vault, embedder).unwrap();
     conn
 }

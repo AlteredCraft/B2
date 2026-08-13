@@ -1,7 +1,6 @@
 ---
 type: note
 title: Passwords
-b2id: 01JEVAL1PSSWD000000000000P
 ---
 Length beats cleverness: a long passphrase of several random words holds up
 better than a short string of symbol substitutions, because guessing cost grows

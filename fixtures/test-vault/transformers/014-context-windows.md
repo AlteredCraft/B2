@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYK4GF2M6N1BEZPPZGK
 type: note
 title: "Context Windows"
 ---

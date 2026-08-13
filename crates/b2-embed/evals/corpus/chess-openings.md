@@ -1,7 +1,6 @@
 ---
 type: note
 title: Chess openings
-b2id: 01JEVAL2CHESS000000000000B
 ---
 The first dozen moves decide what kind of game it will be. Classical advice
 compresses to three rules: fight for the center squares, develop knights and

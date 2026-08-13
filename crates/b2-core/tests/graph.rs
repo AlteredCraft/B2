@@ -5,14 +5,13 @@ mod common;
 
 use b2_core::embed::FakeEmbedder;
 use b2_core::graph::{neighbors, unresolved_outbound, Direction};
-use b2_core::id::UlidGen;
 use b2_core::ingest::{ingest_file, ingest_vault, EmbedCtx, ProjectionCtx};
 use b2_core::open;
-use common::{golden_vault_copy, ingest_golden, MEMORY_ID, SRS_ID};
+use common::{golden_vault_copy, ingest_golden, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::fs;
 
-/// (src_id, dst_id, dst_path_raw, type, origin, occ, explanation), ordered — the
+/// (src_path, dst_path, dst_path_raw, type, origin, occ, explanation), ordered — the
 /// comparable shape of the whole edge set (id excluded; it is a deterministic
 /// function of the rest). Every edge is authored + active, so there is no `status`.
 type EdgeTuple = (
@@ -28,9 +27,9 @@ type EdgeTuple = (
 fn edge_snapshot(conn: &Connection) -> Vec<EdgeTuple> {
     let mut stmt = conn
         .prepare(
-            "SELECT src_id, dst_id, dst_path_raw, type, origin, occurrence_index, explanation
+            "SELECT src_path, dst_path, dst_path_raw, type, origin, occurrence_index, explanation
              FROM edges
-             ORDER BY src_id, type, dst_path_raw, occurrence_index",
+             ORDER BY src_path, type, dst_path_raw, occurrence_index",
         )
         .unwrap();
     stmt.query_map([], |r| {
@@ -60,8 +59,8 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
         vec![
             // references: spaced-repetition → memory (prose bare wikilink)
             (
-                SRS_ID.to_string(),
-                Some(MEMORY_ID.to_string()),
+                SRS_PATH.to_string(),
+                Some(MEMORY_PATH.to_string()),
                 "concepts/memory".to_string(),
                 "references".to_string(),
                 "inline".to_string(),
@@ -71,8 +70,8 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
             // supports: spaced-repetition → memory (`b2_relations:` entry, with
             // explanation — the augment shape, data-model §2/§8)
             (
-                SRS_ID.to_string(),
-                Some(MEMORY_ID.to_string()),
+                SRS_PATH.to_string(),
+                Some(MEMORY_PATH.to_string()),
                 "concepts/memory".to_string(),
                 "supports".to_string(),
                 "frontmatter".to_string(),
@@ -93,22 +92,22 @@ fn neighbors_label_by_direction_at_both_ends() {
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::default());
 
     // The target end: inbound edges, inverse-labelled, all from spaced-repetition.
-    let inbound = neighbors(&conn, MEMORY_ID).unwrap();
+    let inbound = neighbors(&conn, MEMORY_PATH).unwrap();
     let mut labels: Vec<&str> = inbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
     assert_eq!(labels, vec!["referenced-by", "supported-by"]);
     assert!(inbound
         .iter()
-        .all(|n| n.other == SRS_ID && n.direction == Direction::Inbound));
+        .all(|n| n.other == SRS_PATH && n.direction == Direction::Inbound));
 
     // The source end: the very same two edges, outbound, labelled by their verbs.
-    let outbound = neighbors(&conn, SRS_ID).unwrap();
+    let outbound = neighbors(&conn, SRS_PATH).unwrap();
     let mut labels: Vec<&str> = outbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
     assert_eq!(labels, vec!["references", "supports"]);
     assert!(outbound
         .iter()
-        .all(|n| n.other == MEMORY_ID && n.direction == Direction::Outbound));
+        .all(|n| n.other == MEMORY_PATH && n.direction == Direction::Outbound));
     assert_eq!(inbound.len(), outbound.len(), "one edge set, two views");
 }
 
@@ -121,24 +120,22 @@ fn unresolved_outbound_surfaces_folder_and_typo_links() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
-    let guide = "01JGUIDE00000000000000001";
+    let guide = "guide.md";
     fs::write(
-        vault.join("guide.md"),
-        format!(
-            "---\nb2id: {guide}\ntype: note\ntitle: Guide\n---\n\
-             - [[Hermes]] is the R&D machine\n\
-             See [[concepts/memory|Human memory]] for context.\n\
-             A [[concepts/memoryy]] typo.\n"
-        ),
+        vault.join(guide),
+        "---\ntype: note\ntitle: Guide\n---\n\
+         - [[Hermes]] is the R&D machine\n\
+         See [[concepts/memory|Human memory]] for context.\n\
+         A [[concepts/memoryy]] typo.\n",
     )
     .unwrap();
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
     // Only the one resolvable link is an outbound neighbor.
     let ns = neighbors(&conn, guide).unwrap();
     assert_eq!(ns.len(), 1, "only the memory link resolves: {ns:?}");
-    assert_eq!(ns[0].other, MEMORY_ID);
+    assert_eq!(ns[0].other, MEMORY_PATH);
     assert_eq!(ns[0].direction, Direction::Outbound);
 
     // The folder + typo links are surfaced as unresolved (ordered by target), each an
@@ -150,7 +147,7 @@ fn unresolved_outbound_surfaces_folder_and_typo_links() {
     assert!(dangling.iter().all(|u| u.origin == "inline"));
 
     // A fully-resolved note has none — no false positives.
-    assert!(unresolved_outbound(&conn, SRS_ID).unwrap().is_empty());
+    assert!(unresolved_outbound(&conn, SRS_PATH).unwrap().is_empty());
 }
 
 #[test]
@@ -160,13 +157,13 @@ fn one_note_reindex_equals_full() {
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     let after_full = edge_snapshot(&conn);
 
     // Re-project a single note against the already-complete index.
     let cfg = b2_core::chunk::ChunkConfig::default();
     let embedder = FakeEmbedder::default();
-    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
     ingest_file(ctx, "notes/spaced-repetition.md").unwrap();
     let after_incremental = edge_snapshot(&conn);
 
@@ -176,7 +173,7 @@ fn one_note_reindex_equals_full() {
     );
 
     // And a second full reindex is identical too (idempotent).
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         after_full,
         edge_snapshot(&conn),

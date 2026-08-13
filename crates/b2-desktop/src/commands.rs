@@ -1118,7 +1118,7 @@ mod tests {
         assert!(notes.iter().any(|n| n.path == "inbox/idea.md"));
         let note = read_note_impl(&state, "inbox/idea").unwrap();
         assert_eq!(note.body, "");
-        assert_eq!(note.b2id, report.b2id);
+        assert_eq!(note.path, report.path);
     }
 
     /// The drop path end to end at this layer: base64 in → the façade places and
@@ -1136,7 +1136,7 @@ mod tests {
             import_file_impl(&state, "resources", "dropped.png", &BASE64.encode(bytes)).unwrap();
 
         assert_eq!(report.path, "resources/dropped.png");
-        assert_eq!(report.b2id, None); // a resource has no identity to stamp
+        assert!(!report.note); // a non-`.md` file is routed as a resource
         assert_eq!(fs::read(root.join("resources/dropped.png")).unwrap(), bytes);
         let listed = open_read(&state).unwrap().list_resources().unwrap();
         assert!(listed.iter().any(|r| r.path == "resources/dropped.png"));
@@ -1248,12 +1248,12 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Save a new block based on the read's revision (keeping the golden b2id);
-        // the returned revision chains the next save, and a fresh read round-trips
-        // the block verbatim with the body untouched.
+        // Save a new block based on the read's revision; the returned revision chains
+        // the next save, and a fresh read round-trips the block verbatim with the body
+        // untouched.
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         let body_before = note.body.clone();
-        let new_fm = "b2id: 01JMEM0000000000000000000A\ntags: [edited]\n";
+        let new_fm = "tags: [edited]\n";
         let report =
             write_frontmatter_impl(&state, "concepts/memory", new_fm, &note.revision).unwrap();
         assert_ne!(report.revision, note.revision);
@@ -1265,38 +1265,40 @@ mod tests {
         assert_eq!(reread.revision, report.revision);
     }
 
+    /// The drawer's one refusal, and the shape of everything it no longer refuses.
+    /// A `---` line would end the block early and shift bytes into the *body*, which
+    /// is not this op's to change; every other edit saves, because since GH #170 B2
+    /// owns no line inside the block (W3).
     #[test]
-    fn write_frontmatter_identity_refusal_is_generic_and_actionable() {
+    fn write_frontmatter_refuses_only_the_fence_and_says_so_without_internals() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Dropping the b2id line is the one edit the drawer refuses outright.
+        // Wholesale replacement — the edit that used to be an identity refusal — saves.
         let note = read_note_impl(&state, "concepts/memory").unwrap();
-        let err = write_frontmatter_impl(&state, "concepts/memory", "tags: [x]\n", &note.revision)
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            CmdError::Core(b2_core::Error::FrontmatterIdentity(_))
-        ));
-        let msg = user_message(&err);
-        assert!(msg.contains("b2id"), "names the protected line: {msg}");
-        assert!(!msg.to_lowercase().contains("sqlite"), "no internals");
+        let report =
+            write_frontmatter_impl(&state, "concepts/memory", "tags: [x]\n", &note.revision)
+                .expect("the block is the human's");
 
-        // The fence refusal surfaces its domain detail, still no internals.
         let err = write_frontmatter_impl(
             &state,
             "concepts/memory",
-            "b2id: 01JMEM0000000000000000000A\n---\nleak\n",
-            &note.revision,
+            "tags: [x]\n---\nleak\n",
+            &report.revision,
         )
         .unwrap_err();
         assert!(matches!(
             err,
             CmdError::Core(b2_core::Error::Frontmatter(_))
         ));
-        assert!(user_message(&err).starts_with("Can't save this frontmatter:"));
+        let msg = user_message(&err);
+        assert!(msg.starts_with("Can't save this frontmatter:"), "{msg}");
+        assert!(
+            !msg.to_lowercase().contains("sqlite"),
+            "no internals: {msg}"
+        );
     }
 
     #[test]
@@ -1440,7 +1442,6 @@ mod tests {
         assert!(state.try_start_reindex());
         let report = project_impl(&state).unwrap();
         assert_eq!(report.indexed, 2);
-        assert_eq!(report.stamped, 0, "golden notes already carry b2ids");
 
         // The tree is live off projection alone — no model, no vectors.
         let notes = list_notes_impl(&state).unwrap();

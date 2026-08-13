@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWG527DVRJK6TCXE0YT
 type: note
 title: "Elevation Gain"
 ---

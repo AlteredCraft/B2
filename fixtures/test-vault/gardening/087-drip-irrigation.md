@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DW7XEN5229ZXMPAS24T
 type: note
 title: "Drip Irrigation"
 ---

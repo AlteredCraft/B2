@@ -9,7 +9,6 @@ mod common;
 use b2_core::chunk::ChunkConfig;
 use b2_core::db;
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::{
     embed_vault, ingest_file, ingest_vault, project_file, project_vault, EmbedCtx, ProjectionCtx,
 };
@@ -30,8 +29,7 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
     // Projection alone: no embedder anywhere near the call. If it issued any query
     // against `embeddings` (which does not exist yet), this would error.
     let cfg = ChunkConfig::default();
-    let outcome =
-        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
+    let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
     assert_eq!(outcome.notes.len(), 2);
 
     // The keyword + graph index is complete…
@@ -59,7 +57,7 @@ fn embed_fills_exactly_the_missing_vectors() {
     let embedder = FakeEmbedder::new(64);
     let cfg = ChunkConfig::default();
 
-    project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
+    project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
 
     // First embed: every chunk lacks a vector → both notes embed, space is full.
     let first = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
@@ -94,7 +92,7 @@ fn observable_state(root: &Path) -> Observable {
     let notes = count(&conn, "notes");
     let chunk_texts = {
         let mut stmt = conn
-            .prepare("SELECT note_b2id, seq, text FROM chunks ORDER BY note_b2id, seq")
+            .prepare("SELECT note_path, seq, text FROM chunks ORDER BY note_path, seq")
             .unwrap();
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -105,8 +103,8 @@ fn observable_state(root: &Path) -> Observable {
         let mut stmt = conn
             .prepare(
                 "SELECT c.text, v.vector FROM chunks c
-                 JOIN embeddings v ON v.chunk_id = c.id
-                 ORDER BY c.note_b2id, c.seq",
+                 JOIN embeddings v ON v.text_hash = c.text_hash
+                 ORDER BY c.note_path, c.seq",
             )
             .unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
@@ -115,7 +113,7 @@ fn observable_state(root: &Path) -> Observable {
     let edges = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, src_id, dst_id, type, origin, occurrence_index
+                "SELECT id, src_path, dst_path, type, origin, occurrence_index
                  FROM edges ORDER BY id",
             )
             .unwrap();
@@ -160,10 +158,7 @@ fn project_then_embed_matches_reindex() {
     let r = fused.reindex().unwrap();
 
     // The reports agree…
-    assert_eq!(
-        (p.indexed, p.stamped, e.embedded),
-        (r.indexed, r.stamped, r.embedded)
-    );
+    assert_eq!((p.indexed, e.embedded), (r.indexed, r.embedded));
 
     // …and so does every observable aspect of the two indexes (§7.1).
     drop(split);
@@ -199,8 +194,7 @@ fn project_skips_unreadable_file_and_indexes_the_rest() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     let cfg = ChunkConfig::default();
 
-    let outcome =
-        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
+    let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
 
     // Both readable notes projected; the bad one is skipped, not fatal.
     assert_eq!(outcome.notes.len(), 2, "both readable notes still index");
@@ -215,53 +209,43 @@ fn project_skips_unreadable_file_and_indexes_the_rest() {
     assert!(count(&conn, "chunks") > 0);
 }
 
+/// A file replaced out of band — deleted and another renamed onto its path — is
+/// simply that path's note now. The `UNIQUE constraint failed: notes.path` crash this
+/// regresses came from two identities contending for one path, and GH #170 removed the
+/// contention rather than the reconciliation: the path *is* the identity, so
+/// `ON CONFLICT(path)` is the whole of it.
 #[test]
-fn reindex_reconciles_a_path_taken_over_by_another_note() {
-    // A file renamed/replaced outside `b2 mv` can hand its path to a *different* b2id,
-    // leaving the prior holder's row stale. Projection must reconcile (drop the stale
-    // holder) rather than abort on `notes.path` UNIQUE — an incremental reindex must
-    // equal a from-scratch rebuild (index-engine's core invariant). Regression for the
-    // `UNIQUE constraint failed: notes.path` reindex crash.
+fn reindex_reconciles_a_path_taken_over_by_another_file() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("foo.md"),
-        "---\nb2id: 01AAAAAAAAAAAAAAAAAAAAAAAA\n---\n\nAlpha body.\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("bar.md"),
-        "---\nb2id: 01BBBBBBBBBBBBBBBBBBBBBBBB\n---\n\nBeta body.\n",
-    )
-    .unwrap();
+    write_note(&root, "foo.md", "Alpha body.");
+    write_note(&root, "bar.md", "Beta body about tidal pools.");
 
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 2);
 
-    // Out-of-b2 edit: delete foo.md, rename bar.md → foo.md. foo.md now carries B, and
-    // the index's (A, foo.md) row is stale — its path is taken over by B.
+    // Out-of-b2 edit: delete foo.md, rename bar.md → foo.md.
     fs::remove_file(root.join("foo.md")).unwrap();
     fs::rename(root.join("bar.md"), root.join("foo.md")).unwrap();
 
-    // The incremental reindex must succeed and converge on the current truth: one note,
-    // b2id B at foo.md — byte-identical to what a from-scratch rebuild would produce.
+    // The incremental reindex converges on the current truth: one note at foo.md,
+    // carrying bar's content — byte-identical to a from-scratch rebuild (S3).
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 1);
     let notes = vault.list_notes().unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].path, "foo.md");
-    assert_eq!(notes[0].b2id, "01BBBBBBBBBBBBBBBBBBBBBBBB");
+    assert!(
+        vault.read("foo.md").unwrap().body.contains("tidal pools"),
+        "the surviving row describes the file that is actually there"
+    );
 }
 
-/// Write a minimal note with a fixed `b2id` (so two roots can build comparable
-/// indexes) at `root/name`.
-fn write_note(root: &Path, name: &str, b2id: &str, body: &str) {
-    fs::write(
-        root.join(name),
-        format!("---\nb2id: {b2id}\n---\n\n{body}\n"),
-    )
-    .unwrap();
+/// Write a minimal note at `root/name` — the same bytes in every root, so two roots
+/// build comparable indexes (a note's identity is its path, which the caller picks).
+fn write_note(root: &Path, name: &str, body: &str) {
+    fs::write(root.join(name), format!("---\n---\n\n{body}\n")).unwrap();
 }
 
 #[test]
@@ -273,24 +257,9 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
-    write_note(
-        &root,
-        "foo.md",
-        "01AAAAAAAAAAAAAAAAAAAAAAAA",
-        "Alpha body. See [[bar]].",
-    );
-    write_note(
-        &root,
-        "bar.md",
-        "01BBBBBBBBBBBBBBBBBBBBBBBB",
-        "Beta body about tidal pools.",
-    );
-    write_note(
-        &root,
-        "baz.md",
-        "01CCCCCCCCCCCCCCCCCCCCCCCC",
-        "Gamma body, unlinked.",
-    );
+    write_note(&root, "foo.md", "Alpha body. See [[bar]].");
+    write_note(&root, "bar.md", "Beta body about tidal pools.");
+    write_note(&root, "baz.md", "Gamma body, unlinked.");
 
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 3);
@@ -323,33 +292,23 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
     assert_eq!(count(&conn, "chunks_fts"), count(&conn, "chunks"));
     // …and foo's `[[bar]]` re-dangled: phase 2 re-resolved it against the pruned
     // resolver, keeping the authored link visible for repair (#12), not dropped.
-    let (dst_id, dst_path_raw): (Option<String>, String) = conn
+    let (dst_path, dst_path_raw): (Option<String>, String) = conn
         .query_row(
-            "SELECT dst_id, dst_path_raw FROM edges WHERE src_id = ?1",
-            ["01AAAAAAAAAAAAAAAAAAAAAAAA"],
+            "SELECT dst_path, dst_path_raw FROM edges WHERE src_path = ?1",
+            ["foo.md"],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(dst_id, None, "the inbound edge re-dangles");
+    assert_eq!(dst_path, None, "the inbound edge re-dangles");
     assert_eq!(dst_path_raw, "bar");
     drop(conn);
 
     // The invariant itself: the incrementally-reconciled index equals a from-scratch
-    // rebuild of the same final vault (same files, same b2ids).
+    // rebuild of the same final vault (the same files at the same paths).
     let fresh_root = tmp.path().join("fresh");
     fs::create_dir_all(&fresh_root).unwrap();
-    write_note(
-        &fresh_root,
-        "foo.md",
-        "01AAAAAAAAAAAAAAAAAAAAAAAA",
-        "Alpha body. See [[bar]].",
-    );
-    write_note(
-        &fresh_root,
-        "baz.md",
-        "01CCCCCCCCCCCCCCCCCCCCCCCC",
-        "Gamma body, unlinked.",
-    );
+    write_note(&fresh_root, "foo.md", "Alpha body. See [[bar]].");
+    write_note(&fresh_root, "baz.md", "Gamma body, unlinked.");
     Vault::open(&fresh_root).unwrap().reindex().unwrap();
     assert_eq!(
         observable_state(&root),
@@ -365,8 +324,8 @@ fn prune_spares_a_file_skipped_as_unreadable() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
-    write_note(&root, "foo.md", "01AAAAAAAAAAAAAAAAAAAAAAAA", "Alpha body.");
-    write_note(&root, "bar.md", "01BBBBBBBBBBBBBBBBBBBBBBBB", "Beta body.");
+    write_note(&root, "foo.md", "Alpha body.");
+    write_note(&root, "bar.md", "Beta body.");
 
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 2);
@@ -380,7 +339,7 @@ fn prune_spares_a_file_skipped_as_unreadable() {
     assert_eq!(report.notes_pruned, 0, "a skipped file is never pruned");
     let notes = vault.list_notes().unwrap();
     assert_eq!(notes.len(), 2, "the unreadable file keeps its index row");
-    assert!(notes.iter().any(|n| n.b2id == "01BBBBBBBBBBBBBBBBBBBBBBBB"));
+    assert!(notes.iter().any(|n| n.path == "bar.md"));
 }
 
 #[test]
@@ -392,36 +351,25 @@ fn single_note_ingest_never_prunes() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&vault_dir).unwrap();
-    write_note(
-        &vault_dir,
-        "foo.md",
-        "01AAAAAAAAAAAAAAAAAAAAAAAA",
-        "Alpha body.",
-    );
-    write_note(
-        &vault_dir,
-        "bar.md",
-        "01BBBBBBBBBBBBBBBBBBBBBBBB",
-        "Beta body.",
-    );
+    write_note(&vault_dir, "foo.md", "Alpha body.");
+    write_note(&vault_dir, "bar.md", "Beta body.");
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     let embedder = FakeEmbedder::new(64);
-    ingest_vault(&conn, &vault_dir, &UlidGen, &embedder).unwrap();
+    ingest_vault(&conn, &vault_dir, &embedder).unwrap();
     assert_eq!(count(&conn, "notes"), 2);
 
     fs::remove_file(vault_dir.join("bar.md")).unwrap();
 
     // Neither single-note path evicts the now-ghost row…
     let cfg = ChunkConfig::default();
-    let proj = ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg);
+    let proj = ProjectionCtx::new(&conn, &vault_dir, &cfg);
     project_file(proj, "foo.md").unwrap();
     assert_eq!(count(&conn, "notes"), 2, "project_file prunes nothing");
     ingest_file(EmbedCtx::new(proj, &embedder), "foo.md").unwrap();
     assert_eq!(count(&conn, "notes"), 2, "ingest_file prunes nothing");
 
     // …only the whole-vault pass reconciles the deletion.
-    let outcome =
-        project_vault(ProjectionCtx::new(&conn, &vault_dir, &UlidGen, &cfg), false).unwrap();
+    let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
     assert_eq!(outcome.notes_pruned, 1);
     assert_eq!(count(&conn, "notes"), 1);
 }
@@ -505,7 +453,7 @@ fn embed_status_reports_the_coverage_fraction() {
     // The two unchanged notes keep their vectors (project never re-embeds them).
     fs::write(
         root.join("fresh.md"),
-        "---\nb2id: 01CCCCCCCCCCCCCCCCCCCCCCCC\n---\n\nA fresh unembedded note.\n",
+        "---\n---\n\nA fresh unembedded note.\n",
     )
     .unwrap();
     vault.project(false).unwrap();

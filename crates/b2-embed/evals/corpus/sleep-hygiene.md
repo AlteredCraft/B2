@@ -1,7 +1,6 @@
 ---
 type: note
 title: Sleep hygiene
-b2id: 01JEVAL1SLPHG000000000000J
 ---
 The habits that set up a good night: going to bed and getting up at the same
 hour every day, keeping the bedroom dark, quiet, and slightly cool, and winding

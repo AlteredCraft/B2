@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYBZ8SNWE2NQSDNB1GX
 type: note
 title: "Slices over Vecs"
 ---

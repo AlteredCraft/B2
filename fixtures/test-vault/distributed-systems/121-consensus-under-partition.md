@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVQZV69JDZ003H055D7
 type: note
 title: "Consensus Under Partition"
 b2_relations:

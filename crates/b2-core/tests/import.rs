@@ -30,10 +30,7 @@ fn a_dropped_binary_lands_in_the_folder_byte_for_byte_and_inventories() {
         .unwrap();
 
     assert_eq!(report.path, "resources/schematic.png");
-    assert_eq!(
-        report.b2id, None,
-        "a resource has no identity to stamp (L3)"
-    );
+    assert!(!report.note, "a non-`.md` file is routed as a resource");
     assert_eq!(
         fs::read(root.join("resources/schematic.png")).unwrap(),
         PNG_BYTES,
@@ -52,27 +49,25 @@ fn a_dropped_markdown_file_lands_as_a_note_with_its_own_frontmatter_intact() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // A note from somewhere else: its own frontmatter, its own keys, no b2id.
+    // A note from somewhere else: its own frontmatter, its own keys.
     let doc = "---\ntitle: \"From elsewhere\"\ncreated: 2026-01-02\nsource: web\n---\n\nA clipped paragraph about hydroponics.\n";
     let report = vault
         .import_file("notes", "clipped.md", doc.as_bytes())
         .unwrap();
 
     assert_eq!(report.path, "notes/clipped.md");
-    let b2id = report.b2id.expect("a note is stamped on first sight");
+    assert!(report.note, "a `.md` is routed as a note");
 
-    // Byte-honest: the only change is the b2id stamp — B2's one unbidden write (W1).
+    // Byte-honest, and now byte-*identical*: B2 adds nothing at all (W1), because
+    // the destination path it was given is already the note's identity (L1).
     let on_disk = fs::read_to_string(root.join("notes/clipped.md")).unwrap();
-    assert!(
-        on_disk.contains("source: web"),
-        "unknown keys survive: {on_disk}"
-    );
-    assert!(on_disk.contains("title: \"From elsewhere\""), "{on_disk}");
-    assert!(on_disk.contains("about hydroponics"), "{on_disk}");
-    assert!(on_disk.contains(&format!("b2id: {b2id}")), "{on_disk}");
+    assert_eq!(on_disk, doc, "the bytes are the human's, verbatim");
 
     // Projected: readable and keyword-searchable immediately, no reindex.
-    assert_eq!(vault.read("notes/clipped.md").unwrap().b2id, b2id);
+    assert_eq!(
+        vault.read("notes/clipped.md").unwrap().path,
+        "notes/clipped.md"
+    );
     let hits = vault.search("hydroponics", 10).unwrap();
     assert!(
         hits.iter().any(|h| h.path == "notes/clipped.md"),
@@ -160,34 +155,40 @@ fn a_name_that_is_really_a_path_cannot_redirect_the_import() {
     assert!(!root.join("notes/sub").exists());
 }
 
+/// A copy of a note you already have is, since GH #170, simply a second note — the
+/// same thing it is in Finder. The refusal this replaces (`Error::B2idCollision`)
+/// existed because the copy carried the incumbent's stamped id and projecting it
+/// would have moved that identity, and every inbound edge, onto the copy. With the
+/// path as the identity there is nothing to steal: two paths, two notes.
 #[test]
-fn an_arriving_copy_of_a_note_is_refused_and_leaves_nothing_behind() {
+fn an_arriving_copy_of_a_note_is_just_a_second_note() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // Exactly what dragging an already-indexed note back in produces: a second file
-    // claiming the incumbent's b2id (GH #81). Projecting it would move that identity
-    // — and every inbound edge — onto the copy.
     let original = fs::read_to_string(root.join(MEMORY_PATH)).unwrap();
-    let err = vault
+    let report = vault
         .import_file("notes", "memory-copy.md", original.as_bytes())
-        .unwrap_err();
-    assert!(matches!(err, Error::B2idCollision { .. }), "{err:?}");
+        .unwrap();
+    assert_eq!(report.path, "notes/memory-copy.md");
 
-    // The rollback: a refused import is not half-done. B2 removes the file *it*
-    // just placed (never vault material — it was never indexed), so the vault is
-    // exactly as it was.
-    assert!(
-        !root.join("notes/memory-copy.md").exists(),
-        "the placed file is removed again on a refusal"
-    );
-    let conn = index_conn(&root);
-    assert_eq!(count(&conn, "notes"), 2, "no row was written for the copy");
+    // Both exist, both index, and the original keeps every inbound edge it had —
+    // the copy took nothing from it.
     assert_eq!(
-        vault.read(MEMORY_PATH).unwrap().path,
-        MEMORY_PATH,
-        "the incumbent keeps its identity"
+        fs::read_to_string(root.join("notes/memory-copy.md")).unwrap(),
+        original,
+        "the copy is byte-identical to what was dropped"
     );
+    assert!(
+        vault.read(MEMORY_PATH).is_ok(),
+        "the original still resolves"
+    );
+    assert!(
+        !vault.neighbors(MEMORY_PATH).unwrap().is_empty(),
+        "the original keeps its backlinks"
+    );
+    let listed = vault.list_notes().unwrap();
+    assert!(listed.iter().any(|n| n.path == MEMORY_PATH));
+    assert!(listed.iter().any(|n| n.path == "notes/memory-copy.md"));
 }
 
 #[test]
@@ -204,7 +205,7 @@ fn import_path_copies_the_picked_file_keeping_its_name() {
     let report = vault.import_path("resources", &source).unwrap();
 
     assert_eq!(report.path, "resources/paper.pdf");
-    assert_eq!(report.b2id, None);
+    assert!(!report.note, "a PDF is routed as a resource");
     assert_eq!(
         fs::read(root.join("resources/paper.pdf")).unwrap(),
         PNG_BYTES
@@ -262,7 +263,7 @@ fn importing_into_a_never_reindexed_vault_needs_no_model_and_no_index_first() {
         )
         .unwrap();
 
-    assert!(report.b2id.is_some());
+    assert!(report.note);
     assert!(root.join("notes/first.md").is_file());
     let conn = index_conn(&root);
     assert_eq!(
@@ -295,14 +296,11 @@ fn a_reindex_after_an_import_changes_nothing_it_did() {
     // ordinary vault material the moment it lands, with nothing special recorded.
     vault.reindex().unwrap();
 
-    assert_eq!(
-        vault.read("notes/arrival.md").unwrap().b2id,
-        imported.b2id.unwrap()
-    );
+    assert_eq!(vault.read("notes/arrival.md").unwrap().path, imported.path);
     assert_eq!(
         fs::read_to_string(root.join("notes/arrival.md")).unwrap(),
         after_import,
-        "the reindex re-stamps nothing"
+        "the reindex writes nothing back to the imported file"
     );
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "notes"), 3);

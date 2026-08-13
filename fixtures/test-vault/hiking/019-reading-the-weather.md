@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWH5E1SJTRM2PDXMXHN
 type: note
 title: "Reading the Weather"
 b2_relations:

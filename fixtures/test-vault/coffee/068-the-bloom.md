@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DSXWZF64HWN8DJW6CWD
 type: note
 title: "The Bloom"
 ---

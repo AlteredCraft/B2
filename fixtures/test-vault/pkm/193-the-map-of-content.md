@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXH6BVGXRV9W2MAZ4B5
 type: note
 title: "The Map of Content"
 b2_relations:

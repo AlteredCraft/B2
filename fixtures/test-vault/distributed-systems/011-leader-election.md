@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVC8HZJYA6HAYJ9P1T8
 type: note
 title: "Leader Election"
 ---

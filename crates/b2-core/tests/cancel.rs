@@ -9,7 +9,6 @@ mod common;
 
 use b2_core::chunk::ChunkConfig;
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::{ingest_vault_with_progress, EmbedCtx, ProjectionCtx};
 use b2_core::open;
 use b2_core::vault::Vault;
@@ -27,7 +26,7 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
     // Break at the very first embed batch. The golden vault's notes are small (one
     // batch each), so this embeds the first note only.
     let cfg = ChunkConfig::default();
-    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
     let outcome = ingest_vault_with_progress(ctx, false, &mut |_| ControlFlow::Break(())).unwrap();
     assert!(outcome.cancelled, "the run reports itself cancelled");
 

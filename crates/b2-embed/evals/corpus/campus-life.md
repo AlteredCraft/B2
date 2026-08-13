@@ -1,7 +1,6 @@
 ---
 type: note
 title: First term at university
-b2id: 01JEVAL2CAMPS000000000000A
 ---
 The first weeks at a university are mostly logistics wearing the costume of
 independence. Freshers collect a student card, work out which lecture theatre

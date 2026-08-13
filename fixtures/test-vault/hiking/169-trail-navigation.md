@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWWH4VPP3W7997PAENR
 type: note
 title: "Trail Navigation"
 ---

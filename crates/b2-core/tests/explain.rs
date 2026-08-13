@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{reindexed_vault, MEMORY_ID, SRS_ID};
+use common::{reindexed_vault, MEMORY_PATH, SRS_PATH};
 use std::fs;
 
 #[test]
@@ -15,7 +15,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
 
     let view = vault.explain("notes/spaced-repetition").unwrap();
     // Header: the note resolved to its identity + display fields.
-    assert_eq!(view.b2id, SRS_ID);
+    assert_eq!(view.path, SRS_PATH);
     assert_eq!(view.path, "notes/spaced-repetition.md");
     assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
@@ -24,7 +24,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     // side by side (data-model §8).
     assert_eq!(view.connections.len(), 2, "{:?}", view.connections);
     assert!(view.connections.iter().all(|c| c.direction == "outbound"));
-    assert!(view.connections.iter().all(|c| c.b2id == MEMORY_ID));
+    assert!(view.connections.iter().all(|c| c.path == MEMORY_PATH));
 
     let supports = view
         .connections
@@ -116,7 +116,7 @@ fn explain_surfaces_unresolved_folder_and_typo_links() {
     let view = vault.explain("guide").unwrap();
     // The resolvable link is a normal outbound connection…
     assert_eq!(view.connections.len(), 1, "{:?}", view.connections);
-    assert_eq!(view.connections[0].b2id, MEMORY_ID);
+    assert_eq!(view.connections[0].path, MEMORY_PATH);
     assert_eq!(view.connections[0].direction, "outbound");
     // …and the folder link is surfaced as unresolved, carrying its authored target.
     assert_eq!(view.unresolved.len(), 1, "{:?}", view.unresolved);
@@ -131,11 +131,11 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
     let (vault, _root) = reindexed_vault(tmp.path());
 
     // Memory is only pointed *at* (by SRS) — inbound edges, inverse-labelled.
-    let view = vault.explain(MEMORY_ID).unwrap();
+    let view = vault.explain(MEMORY_PATH).unwrap();
     assert_eq!(view.title.as_deref(), Some("memory"));
     assert!(!view.connections.is_empty());
     assert!(view.connections.iter().all(|c| c.direction == "inbound"));
-    assert!(view.connections.iter().all(|c| c.b2id == SRS_ID));
+    assert!(view.connections.iter().all(|c| c.path == SRS_PATH));
 
     let supported_by = view
         .connections
@@ -157,8 +157,8 @@ fn explain_resolves_by_path_and_by_b2id() {
     let (vault, _root) = reindexed_vault(tmp.path());
 
     let by_path = vault.explain("concepts/memory").unwrap();
-    let by_id = vault.explain(MEMORY_ID).unwrap();
-    assert_eq!(by_path.b2id, by_id.b2id);
+    let by_id = vault.explain(MEMORY_PATH).unwrap();
+    assert_eq!(by_path.path, by_id.path);
     assert_eq!(by_path.connections.len(), by_id.connections.len());
 }
 
@@ -181,7 +181,7 @@ fn explain_surfaces_frontmatter_provenance() {
     let edge = view
         .connections
         .iter()
-        .find(|c| c.b2id == MEMORY_ID)
+        .find(|c| c.path == MEMORY_PATH)
         .expect("the frontmatter relation edge");
     assert_eq!(edge.origin, "frontmatter");
     assert_eq!(edge.label, "supports");

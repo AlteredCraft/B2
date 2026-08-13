@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV8WPKNPMDZ569FGRVS
 type: note
 title: "Schema Migrations"
 ---

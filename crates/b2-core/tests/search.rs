@@ -10,15 +10,14 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
 use b2_core::{open, search::Hit};
-use common::{count, golden_vault_copy, index_conn, ingest_golden, MEMORY_ID, SRS_ID};
+use common::{count, golden_vault_copy, index_conn, ingest_golden, MEMORY_PATH, SRS_PATH};
 use std::fs;
 
 fn note_set(hits: &[Hit]) -> std::collections::BTreeSet<String> {
-    hits.iter().map(|h| h.note_b2id.clone()).collect()
+    hits.iter().map(|h| h.note_path.clone()).collect()
 }
 
 #[test]
@@ -204,12 +203,12 @@ fn keyword_search_finds_chunks_by_term() {
     // 'forgetting' lives only in spaced-repetition's body.
     let note: String = conn
         .query_row(
-            "SELECT note_b2id FROM chunks WHERE id = ?1",
+            "SELECT note_path FROM chunks WHERE id = ?1",
             [ids[0]],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(note, SRS_ID);
+    assert_eq!(note, SRS_PATH);
 }
 
 #[test]
@@ -253,8 +252,8 @@ fn hybrid_search_combines_signals_and_resolves_to_notes() {
     let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
     assert!(!hits.is_empty());
     // every hit resolves to a real note, and SRS (the only keyword match) is present
-    assert!(hits.iter().all(|h| !h.note_b2id.is_empty()));
-    assert!(note_set(&hits).contains(SRS_ID));
+    assert!(hits.iter().all(|h| !h.note_path.is_empty()));
+    assert!(note_set(&hits).contains(SRS_PATH));
 }
 
 /// The dense half alone (GH #158): the ablation instrument the eval scores beside
@@ -268,7 +267,7 @@ fn vector_only_search_is_the_dense_half_alone() {
     let hits =
         search::vector_only_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
     assert!(!hits.is_empty());
-    assert!(hits.iter().all(|h| !h.note_b2id.is_empty()));
+    assert!(hits.iter().all(|h| !h.note_path.is_empty()));
     // Negated-distance scores, best first — the graph_filtered_search convention.
     for w in hits.windows(2) {
         assert!(w[0].score >= w[1].score, "scores must be descending");
@@ -308,7 +307,7 @@ fn search_vector_only_dedups_and_refuses_to_impersonate_keywords() {
     let mut seen = std::collections::BTreeSet::new();
     for h in &hits {
         assert!(
-            seen.insert(h.b2id.clone()),
+            seen.insert(h.path.clone()),
             "note {} appeared twice",
             h.path
         );
@@ -324,58 +323,44 @@ fn graph_filtered_search_restricts_to_reachable_notes() {
     fs::create_dir_all(&vault).unwrap();
     fs::write(
         vault.join("a.md"),
-        "---\nb2id: 01JA0000000000000000000001\ntype: note\ntitle: A\n---\nshared topic alpha. See [[b]].\n",
+        "---\ntype: note\ntitle: A\n---\nshared topic alpha. See [[b]].\n",
     )
     .unwrap();
     fs::write(
         vault.join("b.md"),
-        "---\nb2id: 01JB0000000000000000000002\ntype: note\ntitle: B\n---\nshared topic beta.\n",
+        "---\ntype: note\ntitle: B\n---\nshared topic beta.\n",
     )
     .unwrap();
     fs::write(
         vault.join("c.md"),
-        "---\nb2id: 01JC0000000000000000000003\ntype: note\ntitle: C\n---\nshared topic gamma.\n",
+        "---\ntype: note\ntitle: C\n---\nshared topic gamma.\n",
     )
     .unwrap();
 
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
 
     // Within 1 hop of A: {A, B}. C is disconnected and must be excluded even
     // though its text matches the query.
-    let hits = search::graph_filtered_search(
-        &conn,
-        &FakeEmbedder::new(64),
-        "shared topic",
-        "01JA0000000000000000000001",
-        1,
-        10,
-    )
-    .unwrap();
+    let hits =
+        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "shared topic", "a.md", 1, 10)
+            .unwrap();
 
     let notes = note_set(&hits);
     assert!(!notes.is_empty());
     assert!(
-        !notes.contains("01JC0000000000000000000003"),
+        !notes.contains("c.md"),
         "disconnected note must be filtered out"
     );
-    assert!(notes
-        .iter()
-        .all(|n| n == "01JA0000000000000000000001" || n == "01JB0000000000000000000002"));
+    assert!(notes.iter().all(|n| n == "a.md" || n == "b.md"));
 
     // …and `limit` genuinely truncates that reachable set. This is the complement of
     // tests/vector_pool_scale.rs, which pins the other side — that a limit *above*
     // what is reachable returns everything rather than a silently capped prefix.
     assert!(hits.len() > 1, "the fixture must have room to truncate");
-    let capped = search::graph_filtered_search(
-        &conn,
-        &FakeEmbedder::new(64),
-        "shared topic",
-        "01JA0000000000000000000001",
-        1,
-        1,
-    )
-    .unwrap();
+    let capped =
+        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "shared topic", "a.md", 1, 1)
+            .unwrap();
     assert_eq!(capped.len(), 1, "the scan stops at the limit");
 }
 
@@ -393,7 +378,7 @@ fn a_long_chunks_snippet_windows_around_the_matched_term() {
     fs::write(
         root.join("long.md"),
         format!(
-            "---\nb2id: 01JLONG000000000000000001\ntype: note\n---\n\
+            "---\ntype: note\n---\n\
              {lead}\nThe capybara paragraph is the one the query is looking for.\n"
         ),
     )
@@ -459,7 +444,7 @@ fn search_chunks_exposes_passage_level_hits() {
     // chunk text (the term itself), not a trimmed snippet.
     let srs = hits
         .iter()
-        .find(|h| h.b2id == SRS_ID)
+        .find(|h| h.path == SRS_PATH)
         .expect("the one keyword-matching note must surface at chunk level");
     assert!(srs.path.ends_with("spaced-repetition.md"));
     assert!(srs.text.contains("forgetting"));
@@ -487,18 +472,18 @@ fn a_ranked_chunk_that_no_longer_resolves_costs_no_hit_slot() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    for (n, id) in [1, 2, 3, 4].iter().zip(['A', 'B', 'C', 'D']) {
+    for n in [1, 2, 3, 4] {
         fs::write(
             vault.join(format!("n{n}.md")),
             format!(
-                "---\nb2id: 01JDEAD000000000000000000{id}\ntype: note\ntitle: N{n}\n---\n\
+                "---\ntype: note\ntitle: N{n}\n---\n\
                  A note about the capybara, and more capybara prose to rank on.\n"
             ),
         )
         .unwrap();
     }
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
 
     let healthy = search::keyword_only_search(&conn, "capybara", 2).unwrap();
     assert_eq!(healthy.len(), 2, "the fixture must have room to under-fill");
@@ -572,11 +557,16 @@ fn a_zero_limit_returns_no_hits() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_ID, 1, 0)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(search::graph_filtered_search(
+        &conn,
+        &FakeEmbedder::new(64),
+        "brain",
+        MEMORY_PATH,
+        1,
+        0
+    )
+    .unwrap()
+    .is_empty());
 }
 
 /// …and it gets there without *doing* anything. The observable proof is the
@@ -627,7 +617,7 @@ fn graph_filter_with_zero_hops_is_just_the_anchor() {
 
     // 0 hops from memory → only memory's own chunks are eligible.
     let hits =
-        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_ID, 0, 10)
+        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_PATH, 0, 10)
             .unwrap();
-    assert!(hits.iter().all(|h| h.note_b2id == MEMORY_ID));
+    assert!(hits.iter().all(|h| h.note_path == MEMORY_PATH));
 }

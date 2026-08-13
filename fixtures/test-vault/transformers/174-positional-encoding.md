@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ0YFR0FAC2V2RBMH93
 type: note
 title: "Positional Encoding"
 ---

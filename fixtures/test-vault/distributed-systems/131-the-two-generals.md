@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVRCVC5HD9JXX59Y5YD
 type: note
 title: "The Two Generals"
 ---

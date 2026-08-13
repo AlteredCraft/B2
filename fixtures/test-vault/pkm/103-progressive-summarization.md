@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DX9AWWTA309BGNNPXTE
 type: note
 title: "Progressive Summarization"
 ---

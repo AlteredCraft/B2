@@ -8,7 +8,8 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
+use common::{golden_vault_copy, reindexed_vault, MEMORY_PATH, SRS_PATH};
+use std::fs;
 
 #[test]
 fn open_creates_the_b2_dir_and_index() {
@@ -29,15 +30,32 @@ fn reindex_reports_counts_and_is_idempotent() {
     golden_vault_copy(&root);
     let vault = Vault::open(&root).unwrap();
 
+    let before: Vec<String> = ["concepts/memory.md", "notes/spaced-repetition.md"]
+        .iter()
+        .map(|p| fs::read_to_string(root.join(p)).unwrap())
+        .collect();
+
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 2, "golden vault has two notes");
-    // both golden notes already carry a b2id → nothing is stamped.
-    assert_eq!(report.stamped, 0);
+    assert_eq!(report.embedded, 2, "both are fresh to the index");
 
-    // a second reindex still indexes both and stamps nothing.
+    // a second reindex still indexes both, and embeds neither: the bodies are
+    // unchanged, so their chunks hash to vectors already stored (M4).
     let again = vault.reindex().unwrap();
     assert_eq!(again.indexed, 2);
-    assert_eq!(again.stamped, 0);
+    assert_eq!(again.embedded, 0);
+
+    // W1, asserted rather than assumed: indexing a vault twice writes nothing to it.
+    for (path, was) in ["concepts/memory.md", "notes/spaced-repetition.md"]
+        .iter()
+        .zip(&before)
+    {
+        assert_eq!(
+            &fs::read_to_string(root.join(path)).unwrap(),
+            was,
+            "{path} must be byte-identical — a reindex reads, it does not write"
+        );
+    }
 }
 
 #[test]
@@ -45,14 +63,14 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    let ns = vault.neighbors(MEMORY_ID).unwrap();
+    let ns = vault.neighbors(MEMORY_PATH).unwrap();
     let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
     assert_eq!(labels, vec!["referenced-by", "supported-by"]);
 
     // every neighbor is the SRS note, inbound, resolved to its path + title (the
     // filename, data-model.md §1).
-    assert!(ns.iter().all(|n| n.b2id == SRS_ID));
+    assert!(ns.iter().all(|n| n.path == SRS_PATH));
     assert!(ns.iter().all(|n| n.direction == "inbound"));
     assert!(ns.iter().all(|n| n.path == "notes/spaced-repetition.md"));
     assert!(ns
@@ -71,14 +89,14 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     // by path, by path-without-.md, and by b2id must all resolve to the same set.
     let by_path = vault.neighbors("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.neighbors("notes/spaced-repetition").unwrap();
-    let by_id = vault.neighbors(SRS_ID).unwrap();
+    let by_id = vault.neighbors(SRS_PATH).unwrap();
 
     for ns in [&by_path, &by_stem, &by_id] {
         let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
         labels.sort_unstable();
         // outbound labels are the verbs themselves.
         assert_eq!(labels, vec!["references", "supports"]);
-        assert!(ns.iter().all(|n| n.b2id == MEMORY_ID));
+        assert!(ns.iter().all(|n| n.path == MEMORY_PATH));
         assert!(ns.iter().all(|n| n.direction == "outbound"));
         assert!(ns.iter().all(|n| n.path == "concepts/memory.md"));
         assert!(ns.iter().all(|n| n.title.as_deref() == Some("memory")));
@@ -122,7 +140,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     // its note with a non-empty snippet showing the matched term.
     let srs = hits
         .iter()
-        .find(|h| h.b2id == SRS_ID)
+        .find(|h| h.path == SRS_PATH)
         .expect("SRS must be a hit for 'forgetting'");
     assert_eq!(srs.path, "notes/spaced-repetition.md");
     assert_eq!(srs.title.as_deref(), Some("spaced-repetition"));
@@ -130,7 +148,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     assert!(srs.score > 0.0);
 
     // results are note-level: no note appears twice.
-    let mut ids: Vec<&str> = hits.iter().map(|h| h.b2id.as_str()).collect();
+    let mut ids: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
     ids.sort_unstable();
     let deduped = {
         let mut v = ids.clone();

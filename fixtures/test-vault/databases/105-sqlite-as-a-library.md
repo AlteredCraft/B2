@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV3AS98T3FKD0N0GHZE
 type: note
 title: "SQLite as a Library"
 ---

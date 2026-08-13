@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DW24J0G8PTKREVMBH9M
 type: note
 title: "Attracting Pollinators"
 ---

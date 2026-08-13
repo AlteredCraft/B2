@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTWDZMDWMT124D5V0BY
 type: note
 title: "Vacuuming"
 ---

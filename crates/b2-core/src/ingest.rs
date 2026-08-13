@@ -873,6 +873,16 @@ pub fn embed_vault(
             break; // cooperative cancel: stop starting new notes
         }
     }
+    // The centroid half of the pass. A note whose chunks were re-cut but whose text
+    // is unchanged has every vector already stored (M4), so it never enters the loop
+    // above — yet `replace_chunks` dropped the centroid summarizing its *old* chunks.
+    // Left unrefreshed it would vanish from discovery's coarse scan while looking
+    // fully indexed, and an incremental pass would diverge from a rebuild (S3).
+    // Runs after a cancel too: the query only offers notes that are *fully* embedded,
+    // so a note the cancel cut short is left to the pass that finishes it.
+    for note_path in db::notes_missing_centroids(conn)? {
+        db::refresh_note_centroid(conn, &note_path)?;
+    }
     tracing::debug!(
         target: "b2::ingest",
         notes_embedded = embedded.len(),

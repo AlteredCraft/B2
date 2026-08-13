@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY7Z12AG76CES5JH2MY
 type: note
 title: "Zero-Cost Abstractions"
 ---

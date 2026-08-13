@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV2A06P3MWXVBK145K3
 type: note
 title: "Denormalization"
 b2_relations:

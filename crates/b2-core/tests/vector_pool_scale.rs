@@ -30,7 +30,6 @@ mod common;
 
 use b2_core::db;
 use b2_core::embed::{Embedder, FakeEmbedder};
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::{discover, open, search};
 use rusqlite::Connection;
@@ -39,7 +38,7 @@ use std::path::Path;
 
 /// Build a vault of `notes` unlinked notes, each body `paras` blank-line-separated
 /// paragraphs, and ingest it (project + fake-embed). Returns the connection and the
-/// notes' b2ids in creation order.
+/// notes' paths in creation order.
 ///
 /// **Chunking is size-targeted, not one-per-paragraph.** The qmd chunker (#19/#42)
 /// coalesces small paragraphs toward its ~450-token (~1800-char) target, so these
@@ -54,21 +53,19 @@ fn big_vault(dir: &Path, notes: usize, paras: usize) -> (Connection, Vec<String>
     fs::create_dir_all(&vault).unwrap();
     let mut ids = Vec::new();
     for n in 0..notes {
-        // ULID-shaped (26 chars), digits only after the prefix → all valid, unique.
-        let b2id = format!("01JN{n:022}");
         let body = (0..paras)
             .map(|p| format!("note {n} paragraph {p}: shared topic alpha beta gamma"))
             .collect::<Vec<_>>()
             .join("\n\n");
         fs::write(
             vault.join(format!("n{n}.md")),
-            format!("---\nb2id: {b2id}\ntype: note\ntitle: N{n}\n---\n{body}\n"),
+            format!("---\ntype: note\ntitle: N{n}\n---\n{body}\n"),
         )
         .unwrap();
-        ids.push(b2id);
+        ids.push(format!("n{n}.md"));
     }
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
     (conn, ids)
 }
 
@@ -77,10 +74,10 @@ fn chunk_count(conn: &Connection) -> i64 {
         .unwrap()
 }
 
-fn note_chunk_count(conn: &Connection, b2id: &str) -> i64 {
+fn note_chunk_count(conn: &Connection, note_path: &str) -> i64 {
     conn.query_row(
-        "SELECT COUNT(*) FROM chunks WHERE note_b2id = ?1",
-        [b2id],
+        "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
+        [note_path],
         |r| r.get(0),
     )
     .unwrap()
@@ -149,7 +146,7 @@ fn similar_returns_the_full_candidate_set_without_a_silent_cap() {
         "every unlinked note is a candidate for the anchor"
     );
     assert!(
-        all.iter().all(|c| c.note_b2id != ids[0]),
+        all.iter().all(|c| c.note_path != ids[0]),
         "the anchor is never its own candidate"
     );
 }
@@ -181,7 +178,7 @@ fn graph_filtered_search_returns_every_reachable_chunk_without_a_silent_cap() {
         "every one of the disconnected anchor's chunks comes back, un-truncated"
     );
     assert!(
-        hits.iter().all(|h| h.note_b2id == ids[0]),
+        hits.iter().all(|h| h.note_path == ids[0]),
         "only the (disconnected) anchor is reachable"
     );
 }

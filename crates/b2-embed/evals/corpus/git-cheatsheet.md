@@ -1,7 +1,6 @@
 ---
 type: note
 title: Git cheatsheet
-b2id: 01JEVAL2GITCH000000000000A
 ---
 Commands worth pinning down, collected to stop the same lookups recurring.
 

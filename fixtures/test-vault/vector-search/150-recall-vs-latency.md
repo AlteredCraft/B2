@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZGDV2A8TWPNNH4FXGK
 type: note
 title: "Recall vs Latency"
 b2_relations:

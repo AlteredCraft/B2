@@ -1,7 +1,6 @@
 ---
 type: note
 title: The observable universe
-b2id: 01JEVAL2COSMO000000000000A
 ---
 The observable universe is the sphere of everything whose glow has had time to
 arrive: about 46 billion light-years in radius, holding on the order of two

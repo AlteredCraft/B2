@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV698ZEPFC8GTMXM7EQ
 type: note
 title: "The Write-Ahead Log"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVFZ49PDRXTA4RM88DW
 type: note
 title: "The CAP Tradeoff"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTFY1MVT9J4XDAJKYSS
 type: note
 title: "Freshness and Degassing"
 ---

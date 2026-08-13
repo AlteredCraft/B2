@@ -64,12 +64,12 @@ fn two_topic_vault(dir: &std::path::Path) -> (Vault, PathBuf) {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("capybara.md"),
-        "---\nb2id: 01JCAP0000000000000000000A\ntype: note\n---\nThe capybara is the largest living rodent.\n",
+        "---\ntype: note\n---\nThe capybara is the largest living rodent.\n",
     )
     .unwrap();
     fs::write(
         root.join("quokka.md"),
-        "---\nb2id: 01JQUO0000000000000000000B\ntype: note\n---\nThe quokka is a small wallaby from Rottnest Island.\n",
+        "---\ntype: note\n---\nThe quokka is a small wallaby from Rottnest Island.\n",
     )
     .unwrap();
     let vault = Vault::open(&root).unwrap();
@@ -98,12 +98,18 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
     assert!(view.answer.starts_with("Grounded in [1]"));
 
     // FakeLlm cites every passage it was handed, so citations mirror retrieval:
-    // markers 1..=k ascending, each resolved to a real note + a b2id + evidence.
+    // markers 1..=k ascending, each resolved to a real note path + evidence. The
+    // path IS the citation's handle (L1) — as durable as any path, which is the
+    // trade GH #170 made deliberately.
     assert!(!view.citations.is_empty());
     for (i, c) in view.citations.iter().enumerate() {
         assert_eq!(c.marker, i + 1, "markers are ascending and 1-based");
         assert!(c.path.ends_with(".md"), "path resolves: {:?}", c.path);
-        assert_eq!(c.b2id.len(), 26, "a ULID-shaped b2id: {:?}", c.b2id);
+        assert!(
+            vault.read(&c.path).is_ok(),
+            "a citation must open: {:?}",
+            c.path
+        );
         assert!(!c.excerpt.is_empty(), "the cited passage is the evidence");
     }
     // 'forgetting' lives only in spaced-repetition.md — the keyword match must
@@ -460,13 +466,11 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
     let passages = vec![
         ContextPassage {
             path: "concepts/memory.md".into(),
-            b2id: "01JMEM0000000000000000000A".into(),
             heading_path: Some("Memory > Encoding".into()),
             text: "The brain encodes information.".into(),
         },
         ContextPassage {
             path: "notes/spaced-repetition.md".into(),
-            b2id: "01JSRS0000000000000000000B".into(),
             heading_path: None,
             text: "Review at increasing intervals.".into(),
         },

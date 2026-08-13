@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ97YFCWM7Z76XFHWVW
 type: note
 title: "Chunking Strategy"
 ---

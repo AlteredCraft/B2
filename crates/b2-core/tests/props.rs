@@ -2,14 +2,17 @@
 //! invariants the golden-vault scenarios cover only pointwise (invariants.md):
 //!
 //!   1. **Round-trip is lossless** — `parse → serialize` is byte-identical for *any*
-//!      text, and the surgical edits (`stamp_b2id`, `replace_body`) are exact splices
-//!      that touch nothing else (data-model.md §6).
+//!      text, and the surgical edit (`replace_body`) is an exact splice that touches
+//!      nothing else (data-model.md §6).
 //!   2. **`full reindex ≡ incremental`** — after any sequence of *external* vault
 //!      mutations (edits, adds, deletes, renames through plain `fs`, the hard path),
 //!      the incrementally maintained index equals a from-scratch rebuild of the same
 //!      files ("index = a pure projection of (the vault directory)").
 //!   3. **Rename keeps every backlink resolving** (`b2 mv`) — and the repair lives in
-//!      the *Markdown*, not just the DB: a drop-and-rebuild sees the same graph.
+//!      the *Markdown*, not just the DB: a drop-and-rebuild sees the same graph. Since
+//!      GH #170 the moved note's identity **is** the path it moved to, so the property
+//!      is that the inbound set arrives intact at the destination, not that a stable id
+//!      carried it there.
 //!
 //! **Determinism (the suite's hard rule):** the runner uses a *fixed* ChaCha seed, so
 //! every run explores the identical case sequence — no flaky CI, and a failure
@@ -60,47 +63,6 @@ fn any_text_round_trips_byte_identical() {
     });
 }
 
-/// The stamp is a *single surgical insertion* (note.rs contract): one `b2id:` line at
-/// the top of the frontmatter — or a minimal block if there is none — every other
-/// byte untouched. And it is **effective and final** for any input (#75): after one
-/// stamp the id is always readable back, so a second stamp is always a byte no-op —
-/// the property that rules out the invalid-YAML re-stamp loop.
-#[test]
-fn stamping_is_a_single_surgical_insertion() {
-    let id = "01JPQ000000000000000000000";
-    check(512, any::<String>(), |s| {
-        let before = parse(&s);
-        let mut n = before.clone();
-        n.stamp_b2id(id);
-        if before.fields().b2id.is_some() {
-            prop_assert_eq!(
-                n.as_str(),
-                s.as_str(),
-                "an existing b2id is never re-stamped"
-            );
-        } else if let Some(old_fm) = before.frontmatter() {
-            let want = format!("b2id: {id}\n{old_fm}");
-            prop_assert_eq!(n.frontmatter(), Some(want.as_str()));
-            prop_assert_eq!(n.body(), before.body(), "the body must not move");
-        } else {
-            let want = format!("b2id: {id}\n");
-            prop_assert_eq!(n.frontmatter(), Some(want.as_str()));
-            prop_assert_eq!(n.body(), s.as_str(), "the whole original text is the body");
-        }
-        // Whatever the input — valid, invalid, or no YAML — the note now HAS an id…
-        prop_assert!(
-            n.fields().b2id.is_some(),
-            "a stamp must be readable back, or ingest would stamp forever (#75)"
-        );
-        // …and a fresh parse of the bytes agrees, so the stamp can never re-fire.
-        let mut again = parse(n.as_str());
-        prop_assert_eq!(again.fields().b2id.as_deref(), n.fields().b2id.as_deref());
-        again.stamp_b2id("01JPQ000000000000000000001");
-        prop_assert_eq!(again.as_str(), n.as_str(), "a second stamp is a byte no-op");
-        Ok(())
-    });
-}
-
 /// `replace_body` is the byte-honest splice behind `Vault::write`: the result is
 /// exactly (everything up to the old body) + the new body, for any inputs.
 #[test]
@@ -122,13 +84,6 @@ const DIRS: &[&str] = &["", "notes", "concepts", "deep/nested"];
 const VERBS: &[&str] = &["references", "supports", "contradicts", "extends"];
 const RES_EXTS: &[&str] = &["png", "txt", "bin"];
 
-/// A deterministic, ULID-shaped b2id per note index, so generated vaults never
-/// depend on the façade's real `UlidGen` (whose ids are random but value-irrelevant
-/// to every property here).
-fn prop_id(i: usize) -> String {
-    format!("01JPQ{i:021}")
-}
-
 fn sans_md(path: &str) -> &str {
     path.strip_suffix(".md").unwrap_or(path)
 }
@@ -137,13 +92,11 @@ fn sans_md(path: &str) -> &str {
 struct NoteSpec {
     dir_ix: usize,
     slug: String,
-    /// Pre-stamped with a deterministic b2id, or left for ingest to stamp.
-    stamped: bool,
     title: Option<String>,
     /// A frontmatter key B2 doesn't model — must survive everything verbatim.
     custom: Option<String>,
-    /// Inject lines that make the frontmatter unparseable YAML (#75): the note
-    /// must still index, keep a stable identity, and never be re-stamped.
+    /// Inject lines that make the frontmatter unparseable YAML: the note must
+    /// still index, and its raw bytes must survive every pass untouched.
     bad_yaml: bool,
     paras: Vec<String>,
     /// Body wikilinks: (target note index (mod n), aliased?).
@@ -169,7 +122,6 @@ fn note_spec() -> impl Strategy<Value = NoteSpec> {
     (
         0..DIRS.len(),
         "[a-z][a-z0-9]{0,6}",
-        any::<bool>(),
         prop::option::of("[A-Za-z][A-Za-z0-9 ]{0,18}"),
         prop::option::of("[a-z]{2,8}"),
         prop::bool::weighted(0.15),
@@ -179,19 +131,16 @@ fn note_spec() -> impl Strategy<Value = NoteSpec> {
         prop::collection::vec(any::<usize>(), 0..2),
     )
         .prop_map(
-            |(dir_ix, slug, stamped, title, custom, bad_yaml, paras, links, rels, res_links)| {
-                NoteSpec {
-                    dir_ix,
-                    slug,
-                    stamped,
-                    title,
-                    custom,
-                    bad_yaml,
-                    paras,
-                    links,
-                    rels,
-                    res_links,
-                }
+            |(dir_ix, slug, title, custom, bad_yaml, paras, links, rels, res_links)| NoteSpec {
+                dir_ix,
+                slug,
+                title,
+                custom,
+                bad_yaml,
+                paras,
+                links,
+                rels,
+                res_links,
             },
         )
 }
@@ -233,10 +182,9 @@ impl VaultSpec {
         let paths = self.note_paths();
         let res = self.res_paths();
         for (i, n) in self.notes.iter().enumerate() {
-            let id = n.stamped.then(|| prop_id(i));
             write_file(
                 &root.join(&paths[i]),
-                render_note(id.as_deref(), n, &paths[i], &paths, &res).as_bytes(),
+                render_note(n, &paths[i], &paths, &res).as_bytes(),
             );
         }
         for (i, (_, _, bytes)) in self.resources.iter().enumerate() {
@@ -264,16 +212,12 @@ fn write_file(path: &Path, bytes: &[u8]) {
 /// Render one note's raw text. Self-links are skipped (the rename property is about
 /// *inbound* repair; a self-link's semantics under `mv` is its own question).
 fn render_note(
-    id: Option<&str>,
     n: &NoteSpec,
     own_path: &str,
     note_targets: &[String],
     res_targets: &[String],
 ) -> String {
     let mut fm: Vec<String> = Vec::new();
-    if let Some(id) = id {
-        fm.push(format!("b2id: {id}"));
-    }
     if let Some(t) = &n.title {
         fm.push(format!("title: \"{t}\""));
     }
@@ -281,8 +225,9 @@ fn render_note(
         fm.push(format!("x_custom: {c}"));
     }
     if n.bad_yaml {
-        // The #75 shape: a tab-key line and an unclosed flow sequence — this
-        // frontmatter will never YAML-parse, but the note must behave.
+        // A tab-key line and an unclosed flow sequence — this frontmatter will
+        // never YAML-parse, but the note must behave (it indexes, its projected
+        // fields come back empty, and its bytes are never touched).
         fm.push("\t: :".to_string());
         fm.push("broken: [unclosed".to_string());
     }
@@ -440,8 +385,7 @@ fn apply(m: &Mutation, lv: &mut LiveVault) {
         Mutation::AddNote(spec) => {
             lv.minted += 1;
             let path = in_dir(spec.dir_ix, &format!("{}-x{}.md", spec.slug, lv.minted));
-            let id = spec.stamped.then(|| prop_id(1000 + lv.minted));
-            let contents = render_note(id.as_deref(), spec, &path, &lv.notes, &lv.resources);
+            let contents = render_note(spec, &path, &lv.notes, &lv.resources);
             write_file(&lv.root.join(&path), contents.as_bytes());
             lv.notes.push(path);
         }
@@ -496,27 +440,27 @@ fn dump(root: &Path) -> Vec<String> {
     let sections: &[(&str, &str, usize)] = &[
         (
             "note",
-            "SELECT b2id, path, type, ifnull(title,''), ifnull(description,''),
+            "SELECT path, type, ifnull(title,''), ifnull(description,''),
                     ifnull(created,''), ifnull(updated,''), body_hash
              FROM notes ORDER BY path",
-            8,
+            7,
         ),
         (
             "alias",
-            "SELECT note_b2id, alias FROM note_aliases ORDER BY note_b2id, alias",
+            "SELECT note_path, alias FROM note_aliases ORDER BY note_path, alias",
             2,
         ),
         (
             "chunk",
-            "SELECT note_b2id, CAST(seq AS TEXT), CAST(char_start AS TEXT),
+            "SELECT note_path, CAST(seq AS TEXT), CAST(char_start AS TEXT),
                     CAST(char_end AS TEXT), CAST(token_count AS TEXT),
                     ifnull(heading_path,''), text
-             FROM chunks ORDER BY note_b2id, seq",
+             FROM chunks ORDER BY note_path, seq",
             7,
         ),
         (
             "edge",
-            "SELECT id, src_id, ifnull(dst_id,''), ifnull(dst_resource_path,''),
+            "SELECT id, src_path, ifnull(dst_path,''), ifnull(dst_resource_path,''),
                     dst_path_raw, type, origin, ifnull(explanation,''),
                     CAST(embed AS TEXT), ifnull(caption,''), CAST(occurrence_index AS TEXT)
              FROM edges ORDER BY id",
@@ -530,14 +474,14 @@ fn dump(root: &Path) -> Vec<String> {
         ),
         (
             "vec",
-            "SELECT c.note_b2id, CAST(c.seq AS TEXT), hex(e.vector)
-             FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
-             ORDER BY c.note_b2id, c.seq",
+            "SELECT c.note_path, CAST(c.seq AS TEXT), hex(e.vector)
+             FROM embeddings e JOIN chunks c ON c.text_hash = e.text_hash
+             ORDER BY c.note_path, c.seq",
             3,
         ),
         (
             "centroid",
-            "SELECT note_b2id, hex(centroid) FROM note_centroids ORDER BY note_b2id",
+            "SELECT note_path, hex(centroid) FROM note_centroids ORDER BY note_path",
             2,
         ),
     ];
@@ -622,7 +566,7 @@ fn incremental_reindex_equals_full_rebuild() {
 
 // --- invariant 3: rename keeps every backlink resolving --------------------------
 
-/// A note's inbound set as sortable `(label, src_b2id)` pairs — the thing a move
+/// A note's inbound set as sortable `(label, src_path)` pairs — the thing a move
 /// must leave unchanged (same helper shape as tests/mv.rs).
 fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
     let mut ns: Vec<(String, String)> = vault
@@ -630,7 +574,7 @@ fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
         .unwrap()
         .into_iter()
         .filter(|n| n.direction == "inbound")
-        .map(|n| (n.label, n.b2id))
+        .map(|n| (n.label, n.path))
         .collect();
     ns.sort();
     ns
@@ -641,18 +585,13 @@ fn rename_keeps_every_backlink_resolving() {
     check(
         32,
         (vault_spec(2), any::<usize>(), 0..DIRS.len(), "[a-z]{2,6}"),
-        |(mut spec, mover, dest_dir, dest_slug)| {
-            // Known ids for every note so the graph is addressable by construction.
-            for n in &mut spec.notes {
-                n.stamped = true;
-            }
+        |(spec, mover, dest_dir, dest_slug)| {
             let tmp = tempfile::TempDir::new().unwrap();
             let root = tmp.path().join("vault");
             spec.write(&root);
 
             let paths = spec.note_paths();
             let mover_ix = mover % paths.len();
-            let mover_id = prop_id(mover_ix);
             // Guarantee at least one inbound link, whatever the generator rolled:
             // a neighboring note gains a body wikilink to the mover.
             let other = &paths[(mover_ix + 1) % paths.len()];
@@ -664,7 +603,7 @@ fn rename_keeps_every_backlink_resolving() {
             let vault = Vault::open(&root).unwrap();
             vault.reindex().unwrap();
 
-            let before = inbound(&vault, &mover_id);
+            let before = inbound(&vault, &paths[mover_ix]);
             prop_assert!(
                 !before.is_empty(),
                 "the appended link guarantees an inbound edge"
@@ -675,11 +614,13 @@ fn rename_keeps_every_backlink_resolving() {
             let dest = in_dir(dest_dir, &format!("moved-{dest_slug}.md"));
             vault.move_note(&paths[mover_ix], &dest).unwrap();
 
-            prop_assert_eq!(&inbound(&vault, &mover_id), &before, "backlink set by b2id");
+            // The property, path-keyed (L1): every backlink arrives at the
+            // destination. `before` was read at the old path, so an equal set at the
+            // new one is exactly "no edge was lost, dropped, or re-pointed elsewhere".
             prop_assert_eq!(
                 &inbound(&vault, &dest),
                 &before,
-                "resolvable by the new path"
+                "backlinks follow the move"
             );
             prop_assert!(
                 vault.read(&paths[mover_ix]).is_err(),
@@ -688,18 +629,20 @@ fn rename_keeps_every_backlink_resolving() {
             drop(vault);
 
             // The repair must live in the Markdown, not just the DB: a fresh
-            // rebuild from the files alone sees the identical backlink set.
+            // rebuild from the files alone sees the identical backlink set. This is
+            // the half that would fail if `move_note` had only re-keyed the index
+            // and left the inbound `[[oldpath]]` text pointing at nothing.
             fs::remove_dir_all(root.join(".b2")).unwrap();
             let fresh = Vault::open(&root).unwrap();
             fresh.reindex().unwrap();
             prop_assert_eq!(
-                &inbound(&fresh, &mover_id),
+                &inbound(&fresh, &dest),
                 &before,
                 "the graph survives a rebuild"
             );
             prop_assert_eq!(
-                fresh.read(&dest).unwrap().b2id,
-                mover_id,
+                fresh.read(&dest).unwrap().path,
+                dest,
                 "the moved file answers at its new path"
             );
             Ok(())

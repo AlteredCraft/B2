@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYNNGVND3VXPZF16C9E
 type: note
 title: "The Feed-Forward Block"
 ---

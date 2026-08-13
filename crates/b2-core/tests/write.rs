@@ -113,7 +113,7 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
     let outbound: Vec<(String, String)> = {
         let mut s = conn
             .prepare(
-                "SELECT e.type, e.origin FROM edges e JOIN notes n ON n.b2id = e.src_id
+                "SELECT e.type, e.origin FROM edges e JOIN notes n ON n.path = e.src_path
                  WHERE n.path = ?1 ORDER BY e.type",
             )
             .unwrap();
@@ -131,14 +131,33 @@ fn write_reprojects_keyword_graph_and_clears_stale_vectors() {
         "edges re-projected from the saved body + the untouched frontmatter"
     );
 
-    // …and the re-chunked note's vectors were cleared into the pending set, which
-    // an embed pass then fills exactly (§7 invariant 5 — convergence).
+    // …and the re-chunked note's new chunk text joined the pending set, which an
+    // embed pass then fills exactly (§7 invariant 5 — convergence).
     let missing = db::chunks_missing_vectors(&conn).unwrap();
     assert!(!missing.is_empty(), "saved chunks await embedding");
     assert!(missing.iter().all(|c| c.note_path == SRS_PATH));
     let embed = vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
     assert_eq!(embed.embedded, 1, "the embed pass fills the saved note");
-    assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
+    assert!(
+        db::chunks_missing_vectors(&conn).unwrap().is_empty(),
+        "every chunk now addresses a stored vector"
+    );
+
+    // The *superseded* text's vector is still on disk — vectors outlive the chunks
+    // that addressed them since GH #170, which is what makes a move free. It is
+    // unreachable (every read joins through `chunks`), and the next whole-vault pass
+    // collects it, so a save leaves the index correct and slightly over-full rather
+    // than paying a scan on the interactive path.
+    assert!(
+        count(&conn, "embeddings") > count(&conn, "chunks"),
+        "the pre-save text's vector is retained until the next whole-vault pass"
+    );
+    vault.project(false).unwrap();
+    assert_eq!(
+        count(&conn, "embeddings"),
+        count(&conn, "chunks"),
+        "which collects it"
+    );
 }
 
 #[test]
@@ -193,7 +212,7 @@ fn write_an_empty_body_and_recover() {
     let conn = index_conn(&root);
     let chunks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM chunks c JOIN notes n ON n.b2id = c.note_b2id WHERE n.path = ?1",
+            "SELECT COUNT(*) FROM chunks c JOIN notes n ON n.path = c.note_path WHERE n.path = ?1",
             [SRS_PATH],
             |r| r.get(0),
         )
@@ -227,19 +246,22 @@ fn write_returns_the_revision_of_the_final_on_disk_bytes() {
     golden_vault_copy(&root);
     fs::write(
         root.join("fresh.md"),
-        "---\ntype: note\ntitle: Fresh\n---\nNo b2id yet.\n",
+        "---\ntype: note\ntitle: Fresh\n---\nA body.\n",
     )
     .unwrap();
     let vault = Vault::open(&root).unwrap();
-    vault.project(false).unwrap(); // stamps fresh.md on first sight
+    vault.project(false).unwrap(); // projects fresh.md on first sight
 
     let note = vault.read("fresh").unwrap();
     let report = vault
         .write("fresh", "A saved body.\n", &note.revision)
         .unwrap();
     let on_disk = fs::read_to_string(root.join("fresh.md")).unwrap();
-    assert!(on_disk.contains("b2id:"), "identity travels in the file");
     assert!(on_disk.ends_with("A saved body.\n"));
+    assert!(
+        on_disk.starts_with("---\ntype: note\ntitle: Fresh\n---\n"),
+        "the frontmatter is spliced around, never rewritten: {on_disk}"
+    );
     assert_eq!(
         report.revision,
         blake3::hash(on_disk.as_bytes()).to_hex().to_string(),

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DX039QXJRBFD387FJ2Q
 type: note
 title: "Local-First Vaults"
 ---

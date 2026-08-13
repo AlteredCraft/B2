@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXPHB8DF7PTFFNAPY01
 type: note
 title: "The Weekly Review"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWZTNB1K7HTJC9TGS2B
 type: note
 title: "Blister Prevention"
 ---

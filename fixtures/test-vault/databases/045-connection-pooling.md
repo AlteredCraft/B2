@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTYEP46K80SADT1VX1A
 type: note
 title: "Connection Pooling"
 ---

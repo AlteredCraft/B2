@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DX517A6R5HWE9H7NS4T
 type: note
 title: "The Zettelkasten"
 ---

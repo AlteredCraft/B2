@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYZXM3SZ6A89KNXZG90
 type: note
 title: "Self-Attention"
 ---

@@ -637,7 +637,7 @@ impl Vault {
     }
 
     /// [`reindex`](Self::reindex) with three knobs its adapters need: `force`
-    /// re-embeds every note even if unchanged (a full rebuild without dropping the
+    /// re-chunks every note even if unchanged (a full rebuild without dropping the
     /// index); `on_progress` fires after each embed batch so a slow full reindex under
     /// the real model shows a live progress line instead of looking frozen; and the
     /// callback's [`ControlFlow`] return **cooperatively cancels** the embed phase —
@@ -646,6 +646,16 @@ impl Vault {
     /// The desktop host maps a cancel flag to `Break`; the CLI
     /// always returns `Continue` (no behavior change for the non-cancel path, which
     /// stays byte-identical). A cancelled run sets [`ReindexReport::cancelled`].
+    ///
+    /// **`force` re-chunks; whether it re-*embeds* is content's to decide** (M4,
+    /// GH #170). Vectors are keyed by chunk text, so forcing a rebuild over unchanged
+    /// notes finds every vector already stored and reports `embedded: 0` — truthfully,
+    /// since a second forward pass over identical input could only produce identical
+    /// bytes. Where `force` is actually reached for — a chunker-policy change, the
+    /// eval harness's `set_chunk_config` → `project(force)` — the chunk text moves,
+    /// the hashes miss, and the model runs on exactly what changed. The one thing it
+    /// no longer repairs is a *damaged* stored vector; the index is disposable, so
+    /// deleting `.b2/` is the answer there and always was the better one.
     pub fn reindex_with_progress(
         &self,
         force: bool,

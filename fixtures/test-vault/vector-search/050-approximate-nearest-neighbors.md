@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ6ERA0YQN3GCYBSVX9
 type: note
 title: "Approximate Nearest Neighbors"
 ---

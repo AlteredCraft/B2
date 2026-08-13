@@ -58,7 +58,6 @@ fn extracts_queryable_fields_without_disturbing_raw() {
     let raw = golden("notes/spaced-repetition.md");
     let n = parse(&raw);
     let f = n.fields();
-    assert_eq!(f.b2id.as_deref(), Some("01JSRS0000000000000000000B"));
     assert_eq!(f.r#type.as_deref(), Some("concept"));
     // title is the logical value (quotes are a serialization detail kept in raw).
     assert_eq!(f.title.as_deref(), Some("Spaced repetition"));

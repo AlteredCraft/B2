@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTJ78BJDDRFR4MCB0NN
 type: note
 title: "The Espresso Shot"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY8XK60VXX8VNRS6EP8
 type: note
 title: "Iterators and Laziness"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWA3KJ86A43KD82DXC2
 type: note
 title: "Crop Rotation"
 b2_relations:

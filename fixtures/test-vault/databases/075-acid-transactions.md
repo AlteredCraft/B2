@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV09GB7SS6EQWJJ26T3
 type: note
 title: "ACID Transactions"
 ---

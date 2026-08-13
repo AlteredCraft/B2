@@ -6,10 +6,9 @@ mod common;
 
 use b2_core::chunk::{chunk_body, BreakWeights, ChunkConfig};
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{golden_vault_copy, SRS_ID};
+use common::{golden_vault_copy, SRS_PATH};
 
 #[test]
 fn chunks_are_projected_for_each_note() {
@@ -17,7 +16,7 @@ fn chunks_are_projected_for_each_note() {
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
@@ -29,8 +28,8 @@ fn chunks_are_projected_for_each_note() {
     // paragraph splitter's two-chunk split is exactly the regression #19 fixes.
     let srs_chunks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM chunks WHERE note_b2id = ?1",
-            [SRS_ID],
+            "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
+            [SRS_PATH],
             |r| r.get(0),
         )
         .unwrap();
@@ -39,8 +38,8 @@ fn chunks_are_projected_for_each_note() {
     // char offsets must address the slice that produced the chunk text.
     let (start, end, text): (i64, i64, String) = conn
         .query_row(
-            "SELECT char_start, char_end, text FROM chunks WHERE note_b2id = ?1 AND seq = 0",
-            [SRS_ID],
+            "SELECT char_start, char_end, text FROM chunks WHERE note_path = ?1 AND seq = 0",
+            [SRS_PATH],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
@@ -54,20 +53,20 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
     // 'forgetting' appears only in spaced-repetition's Relations text (now folded
     // into that note's single chunk); the match still resolves to that note.
     let note: String = conn
         .query_row(
-            "SELECT c.note_b2id FROM chunks_fts f
+            "SELECT c.note_path FROM chunks_fts f
              JOIN chunks c ON c.id = f.rowid
              WHERE chunks_fts MATCH 'forgetting'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(note, SRS_ID);
+    assert_eq!(note, SRS_PATH);
 }
 
 #[test]
@@ -109,7 +108,7 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     golden_vault_copy(&vault);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     let fts_count = |c: &rusqlite::Connection| -> i64 {
         c.query_row("SELECT COUNT(*) FROM chunks_fts", [], |r| r.get(0))
             .unwrap()
@@ -117,7 +116,7 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     let before = fts_count(&conn);
 
     // Re-ingesting must replace, not accumulate (delete sentinel + reinsert).
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         before,
         fts_count(&conn),

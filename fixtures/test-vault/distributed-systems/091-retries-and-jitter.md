@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVM7D0X06QXY2KXF3XC
 type: note
 title: "Retries and Jitter"
 ---

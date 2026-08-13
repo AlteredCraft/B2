@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ88RQE99MSTBRR3TVT
 type: note
 title: "HNSW Graphs"
 ---

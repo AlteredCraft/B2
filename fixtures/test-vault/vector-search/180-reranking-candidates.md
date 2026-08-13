@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZJSY8MNXPJH50BF6Y5
 type: note
 title: "Reranking Candidates"
 ---

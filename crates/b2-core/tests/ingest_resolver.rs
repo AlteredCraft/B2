@@ -1,37 +1,46 @@
-//! Step 1 — ingest into `notes`/`note_aliases` and the `b2id ⇄ path` resolver
-//! (index-engine.md): ingest the golden vault and resolve `memory ⇄ path` both
-//! ways, then prove `aliases:` projects into the alias table.
+//! Step 1 — ingest into `notes`/`note_aliases` and the link resolver
+//! (index-engine.md): ingest the golden vault, resolve a wikilink in both the
+//! extensionless and `.md` forms, then prove `aliases:` projects into the alias
+//! table.
 //!
-//! *Stamping is not here.* It is `tests/stamp.rs`'s subject end to end (the exact
-//! inserted bytes, the invalid-YAML case, and the reindex-settles-after-one-pass
-//! loop), with `tests/props.rs` proving the surgical-insertion property over
-//! generated input. This file is only about what ingest *projects*.
+//! Since GH #170 the resolver is one-way and one-step: a note's identity **is** its
+//! vault-relative path, so there is nothing to translate — `resolve_link_target`
+//! only decides whether the authored target names a note, and the `+ ".md"` ladder
+//! is the whole of the tolerance it offers.
 
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::{db, open};
-use common::{ingest_golden, MEMORY_ID};
+use common::{ingest_golden, MEMORY_PATH};
 use std::fs;
 
 #[test]
-fn ingests_golden_vault_and_resolves_b2id_path_both_ways() {
+fn ingests_golden_vault_and_resolves_a_link_in_both_authored_forms() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::default());
 
-    // resolver, both directions, for concepts/memory.md
-    let b2id = db::resolve_path_to_b2id(&conn, "concepts/memory.md")
-        .unwrap()
-        .expect("memory note should resolve");
-    assert_eq!(b2id, MEMORY_ID);
-    let path = db::resolve_b2id_to_path(&conn, &b2id)
-        .unwrap()
-        .expect("b2id should resolve back to a path");
-    assert_eq!(path, "concepts/memory.md");
+    // The resolver canonicalizes both authored forms onto the one identity: the
+    // Obsidian habit writes `[[concepts/memory]]`, a Markdown link writes the
+    // extension, and each must name the same note.
+    assert_eq!(
+        db::resolve_link_target(&conn, "concepts/memory").unwrap(),
+        Some(MEMORY_PATH.to_string()),
+        "the extensionless wikilink form resolves"
+    );
+    assert_eq!(
+        db::resolve_link_target(&conn, MEMORY_PATH).unwrap(),
+        Some(MEMORY_PATH.to_string()),
+        "so does the literal path"
+    );
+    assert_eq!(
+        db::resolve_link_target(&conn, "concepts/nope").unwrap(),
+        None,
+        "a target naming no note is dangling, not an error (G5)"
+    );
 
-    // both golden notes landed (they already carry a b2id — nothing to stamp)
+    // both golden notes landed
     assert_eq!(common::count(&conn, "notes"), 2);
 }
 
@@ -42,19 +51,19 @@ fn aliases_are_projected_and_searchable() {
     fs::create_dir_all(&vault).unwrap();
     fs::write(
         vault.join("srs.md"),
-        "---\nb2id: 01JALIAS00000000000000000A\ntype: concept\ntitle: \"Spaced repetition\"\naliases: [SRS, spacing-effect]\n---\nBody.\n",
+        "---\ntype: concept\ntitle: \"Spaced repetition\"\naliases: [SRS, spacing-effect]\n---\nBody.\n",
     )
     .unwrap();
 
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
     let alias_hit: String = conn
         .query_row(
-            "SELECT note_b2id FROM note_aliases WHERE alias = 'SRS'",
+            "SELECT note_path FROM note_aliases WHERE alias = 'SRS'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(alias_hit, "01JALIAS00000000000000000A");
+    assert_eq!(alias_hit, "srs.md", "aliases key on the note's path (L1)");
 }

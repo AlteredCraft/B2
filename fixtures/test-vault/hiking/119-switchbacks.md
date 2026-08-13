@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWRY30B9JEMFHDDG63T
 type: note
 title: "Switchbacks"
 ---
