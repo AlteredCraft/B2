@@ -1,19 +1,25 @@
-//! Move / rename a note and repair inbound links (invariants.md).
+//! Move / rename a note and repair inbound links (invariants.md L1).
 //!
-//! The typed graph keys every edge by `b2id`, never by path, so a move **never
-//! breaks the graph** — the target's `b2id` is untouched and every b2id-keyed edge
-//! stays valid the instant the index learns the new path. What a move *does* make
-//! stale is the human-facing convenience copy: the inline `[[oldpath|alias]]` text
-//! in the files that link *at* the moved note. This module rewrites exactly those.
+//! **A move is where "rename keeps every backlink resolving" is actually earned.**
+//! Identity is the vault-relative path (GH #170), so a move changes the moved note's
+//! identity — and this module is what makes that a re-key rather than a break. Two
+//! halves, and both are bounded by the moved note's backlink count:
+//!
+//! 1. the human-facing copy — the inline `[[oldpath|alias]]` text in every file that
+//!    links *at* the moved note, rewritten in place;
+//! 2. the index — one [`db::repoint_note_path`], whose `ON UPDATE CASCADE` FKs carry
+//!    the note's chunks, aliases, centroid and outbound edges to the new path
+//!    atomically, followed by a re-projection of the inbound sources so their
+//!    `edges.dst_path` (which carries no FK — it must be free to dangle, G5) points
+//!    at the new path.
+//!
+//! The moved note's **vectors are not touched at all**: they are content-addressed
+//! (M4), so they belong to the chunk text, which a move does not change.
 //!
 //! It is **Markdown-first** (like [`crate::vault::Vault::link`]): rewrite
 //! the inbound files' text, move the file on disk, *then* re-project the index from
 //! the now-current Markdown. The disposable index is rebuilt from the source of
 //! truth; a crash mid-move leaves the Markdown correct and a `b2 reindex` recovers.
-//!
-//! A move is fully reconstructible from Markdown — files sit at their new paths with
-//! their `b2id`s intact — so nothing durable is recorded; the index re-derives from
-//! Markdown (`index = projection of (Markdown)`, CLAUDE.md, the core invariant).
 //!
 //! Bounded, not a scan: [`db::inbound_edge_targets`] reads the materialized graph
 //! to name *exactly* the inbound files and link strings to touch (index-engine.md
@@ -28,12 +34,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-/// What [`move_note`] did: the note that moved (by `b2id`), its old and new
-/// vault-relative paths, the inbound files whose link text was rewritten, and the
-/// total number of `[[…]]` targets repaired across them.
+/// What [`move_note`] did: the note's old and new vault-relative paths, the inbound
+/// files whose link text was rewritten, and the total number of `[[…]]` targets
+/// repaired across them. `to` is the note's identity after the move (L1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MoveReport {
-    pub b2id: String,
     pub from: String,
     pub to: String,
     /// Vault-relative paths of the inbound files whose link text was rewritten
@@ -43,25 +48,22 @@ pub struct MoveReport {
     pub links_rewritten: usize,
 }
 
-/// Move the note `b2id` (currently at `old_rel`) to `new_rel_input`, rewriting
-/// every inbound `[[oldpath|alias]]` link to the new path and re-projecting the
-/// index. `old_rel` is the note's current vault-relative path (as the façade
-/// resolved it); `new_rel_input` is the raw destination the user gave (a `.md`
-/// suffix is optional and added if missing).
+/// Move the note at `old_rel` to `new_rel_input`, rewriting every inbound
+/// `[[oldpath|alias]]` link to the new path and re-keying the index. `old_rel` is the
+/// note's current vault-relative path (as the façade resolved it); `new_rel_input` is
+/// the raw destination the user gave (a `.md` suffix is optional and added if
+/// missing).
 ///
 /// Re-projection **re-embeds the inbound files** (their bodies changed — the link
 /// text moved), so the caller must open the vault with the same embedder the index
-/// was built with (the CLI loads the real model for `mv`, as for `reindex`).
+/// was built with (the CLI loads the real model for `mv`, as for `reindex`). The
+/// *moved* note re-embeds nothing: its chunk text is unchanged, and vectors are
+/// content-addressed (M4).
 ///
 /// Errors with [`Error::MoveDestination`] for an invalid destination (empty,
 /// absolute, escaping the vault, or equal to the source) and
 /// [`Error::MoveTargetExists`] rather than clobber an existing file.
-pub fn move_note(
-    ctx: EmbedCtx,
-    b2id: &str,
-    old_rel: &str,
-    new_rel_input: &str,
-) -> Result<MoveReport> {
+pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<MoveReport> {
     let (conn, root) = (ctx.proj.conn, ctx.proj.root);
     let new_rel = normalize_dest(new_rel_input)?;
     refuse_same_path(&new_rel, old_rel, "note")?;
@@ -74,13 +76,20 @@ pub fn move_note(
     // there. Group by file into a target→replacement map, each link keeping its own
     // `.md`-or-not convention ([`wiki_replacement`]).
     let mut by_file = ByFile::new();
-    for e in db::inbound_edge_targets(conn, b2id)? {
+    for e in db::inbound_edge_targets(conn, old_rel)? {
         let replacement = wiki_replacement(&new_rel, &e.dst_raw);
         by_file
             .entry(e.src_path)
             .or_default()
             .insert(e.dst_raw, replacement);
     }
+    // Every inbound source is re-projected below, whether or not its *text* changed:
+    // its `edges.dst_path` names the old path and carries no FK to cascade (it must
+    // be free to be NULL — the dangling case, G5). The two sets differ for a
+    // Markdown-form link at a note (`[x](notes/a.md)`), which resolves as an edge but
+    // is not a form `move_note` rewrites — its edge must still re-resolve, or it
+    // would keep naming a path that no longer exists.
+    let inbound: Vec<String> = by_file.keys().cloned().collect();
 
     // 1. Markdown first: rewrite inbound link text in place — the `[[…]]` form, which
     //    is the one a note move repairs (the `[…](…)` pass is the resource move's).
@@ -91,11 +100,17 @@ pub fn move_note(
     // 2. Move the file on disk (creating any missing parent directories).
     rename_with_parents(&old_abs, &new_abs)?;
 
-    // 3. Re-project from the now-current Markdown. The moved note goes first so its
-    //    `notes.path` is current before inbound files re-resolve their links to it.
-    //    (An unchanged body means the moved note reuses its vectors — no re-embed.)
+    // 3. Re-key the index before anything re-projects, so path-based link resolution
+    //    is independent of re-projection order (the same reason full ingest is
+    //    two-phase). One statement; the FK cascades carry the note's chunks,
+    //    aliases, centroid and outbound edges with it.
+    db::repoint_note_path(conn, old_rel, &new_rel)?;
+
+    // 4. Re-project from the now-current Markdown: the moved note (refreshing its
+    //    filename-derived title and mtime), then every inbound source so its edges
+    //    re-resolve at the new path.
     ingest::ingest_file(ctx, &new_rel)?;
-    for src_path in &rewrote {
+    for src_path in &inbound {
         if src_path == old_rel {
             continue; // the moved note itself (a self-link) — already re-projected
         }
@@ -103,7 +118,6 @@ pub fn move_note(
     }
 
     Ok(MoveReport {
-        b2id: b2id.to_string(),
         from: old_rel.to_string(),
         to: new_rel,
         rewrote,
@@ -120,8 +134,10 @@ fn normalize_dest(input: &str) -> Result<String> {
     crate::pathspec::normalize_rel_md(input).map_err(Error::MoveDestination)
 }
 
-/// What [`move_resource`] did — the resource sibling of [`MoveReport`], minus the
-/// identity field (a resource has no `b2id` to carry; data-model.md §10).
+/// What [`move_resource`] did — the resource sibling of [`MoveReport`]. Since
+/// GH #170 the two carry the same fields, both arms being path-keyed
+/// (data-model.md §10); they stay separate types because the reports are
+/// separate contracts, not because the shapes diverge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceMoveReport {
     pub from: String,
@@ -440,9 +456,14 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
     let mut wiki_by_file = ByFile::new();
     let mut md_by_file = ByFile::new();
 
-    for (b2id, old_path) in &moved_notes {
+    // Every inbound source of a moved note re-projects, rewritten or not — same
+    // reason as `move_note`: its `edges.dst_path` names a path that is about to
+    // change and no FK cascades it.
+    let mut inbound_notes: BTreeSet<String> = BTreeSet::new();
+    for old_path in &moved_notes {
         let new_path = remap_prefix(old_path, &from, &to);
-        for e in db::inbound_edge_targets(conn, b2id)? {
+        for e in db::inbound_edge_targets(conn, old_path)? {
+            inbound_notes.insert(e.src_path.clone());
             let replacement = wiki_replacement(&new_path, &e.dst_raw);
             if replacement != e.dst_raw {
                 wiki_by_file
@@ -483,8 +504,8 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
     //    (old and new sets are disjoint — the destination didn't exist — so the
     //    UNIQUE(path) constraint can't trip), then every moved resource's
     //    inventory row (so resource links resolve at their new paths too).
-    for (b2id, old_path) in &moved_notes {
-        db::repoint_note_path(conn, b2id, &remap_prefix(old_path, &from, &to))?;
+    for old_path in &moved_notes {
+        db::repoint_note_path(conn, old_path, &remap_prefix(old_path, &from, &to))?;
     }
     for old_path in &moved_resources {
         let new_path = remap_prefix(old_path, &from, &to);
@@ -493,16 +514,22 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
 
     // 4. Re-project from the now-current Markdown: every moved note (refreshes
     //    the filename-derived title, mtime, and its outbound edges — an unchanged
-    //    body reuses its vectors), then every rewritten file outside the moved
-    //    set (moved ones were just re-projected at their new paths).
-    let moved_note_old_paths: std::collections::BTreeSet<&str> =
-        moved_notes.iter().map(|(_, p)| p.as_str()).collect();
-    for (_b2id, old_path) in &moved_notes {
+    //    body reuses its vectors), then every touched file outside the moved
+    //    set (moved ones were just re-projected at their new paths). "Touched" is
+    //    the union of the rewritten files and the inbound sources of moved notes,
+    //    which differ for a Markdown-form link at a note (see `move_note`).
+    let moved_note_old_paths: BTreeSet<&str> = moved_notes.iter().map(String::as_str).collect();
+    for old_path in &moved_notes {
         let new_path = remap_prefix(old_path, &from, &to);
         ingest::ingest_file(ctx, &new_path)?;
     }
-    for src_path in &rewrote_old_paths {
-        if moved_note_old_paths.contains(src_path.as_str()) {
+    let touched: BTreeSet<&str> = rewrote_old_paths
+        .iter()
+        .map(String::as_str)
+        .chain(inbound_notes.iter().map(String::as_str))
+        .collect();
+    for src_path in touched {
+        if moved_note_old_paths.contains(src_path) {
             continue;
         }
         ingest::ingest_file(ctx, src_path)?;

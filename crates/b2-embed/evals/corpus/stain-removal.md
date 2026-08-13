@@ -1,7 +1,6 @@
 ---
 type: note
 title: Stain removal
-b2id: 01JEVAL2STAIN000000000000C
 ---
 Speed beats chemistry: almost anything comes out if treated before it dries,
 and almost nothing does after a trip through a hot dryer sets it. Blot from

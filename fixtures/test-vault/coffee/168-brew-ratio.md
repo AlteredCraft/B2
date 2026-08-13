@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTH6HVE1RH3MJKPN271
 type: note
 title: "Brew Ratio"
 ---

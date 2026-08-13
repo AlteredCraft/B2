@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DX10RAHFNEV0DXS7PB2
 type: note
 title: "Evergreen Notes"
 ---

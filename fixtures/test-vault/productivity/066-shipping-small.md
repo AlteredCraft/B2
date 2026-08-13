@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXN36CYG52QFYYGF4JT
 type: note
 title: "Shipping Small"
 ---

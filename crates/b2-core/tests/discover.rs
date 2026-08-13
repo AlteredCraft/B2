@@ -13,24 +13,24 @@ mod common;
 use b2_core::db;
 use b2_core::discover::{self, CandidateNote};
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{ingest_golden, MEMORY_ID, SRS_ID};
+use common::{ingest_golden, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const A: &str = "01JA0000000000000000000001";
-const B: &str = "01JB0000000000000000000002";
-const C: &str = "01JC0000000000000000000003";
-const E: &str = "01JE0000000000000000000005";
+// The four notes, by the thing that identifies them: their vault-relative paths (L1).
+const A: &str = "a.md";
+const B: &str = "b.md";
+const C: &str = "c.md";
+const E: &str = "e.md";
 
-fn write_note(vault: &Path, name: &str, b2id: &str, body: &str) {
+fn write_note(vault: &Path, name: &str, body: &str) {
     fs::write(
         vault.join(name),
-        format!("---\nb2id: {b2id}\ntype: note\ntitle: {name}\n---\n{body}\n"),
+        format!("---\ntype: note\ntitle: {name}\n---\n{body}\n"),
     )
     .unwrap();
 }
@@ -40,17 +40,17 @@ fn write_note(vault: &Path, name: &str, b2id: &str, body: &str) {
 fn linked_chain_vault(dir: &Path) -> Connection {
     let vault = dir.join("vault");
     fs::create_dir_all(&vault).unwrap();
-    write_note(&vault, "a.md", A, "shared topic alpha. See [[b]].");
-    write_note(&vault, "b.md", B, "shared topic beta. See [[e]].");
-    write_note(&vault, "c.md", C, "shared topic gamma.");
-    write_note(&vault, "e.md", E, "shared topic delta.");
+    write_note(&vault, A, "shared topic alpha. See [[b]].");
+    write_note(&vault, B, "shared topic beta. See [[e]].");
+    write_note(&vault, C, "shared topic gamma.");
+    write_note(&vault, E, "shared topic delta.");
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
     conn
 }
 
 fn note_set(cands: &[CandidateNote]) -> BTreeSet<String> {
-    cands.iter().map(|c| c.note_b2id.clone()).collect()
+    cands.iter().map(|c| c.note_path.clone()).collect()
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn evidence_chunk_belongs_to_its_candidate_note() {
         let owner = db::note_for_chunk(&conn, c.evidence_chunk_id).unwrap();
         assert_eq!(
             owner.as_deref(),
-            Some(c.note_b2id.as_str()),
+            Some(c.note_path.as_str()),
             "the evidence chunk must belong to the candidate it scored"
         );
     }
@@ -134,10 +134,10 @@ fn a_directly_connected_pair_yields_no_candidates() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
-    assert!(discover::candidates(&conn, SRS_ID, 10, None)
+    assert!(discover::candidates(&conn, SRS_PATH, 10, None)
         .unwrap()
         .is_empty());
-    assert!(discover::candidates(&conn, MEMORY_ID, 10, None)
+    assert!(discover::candidates(&conn, MEMORY_PATH, 10, None)
         .unwrap()
         .is_empty());
 }
@@ -161,20 +161,20 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    let mut ids = Vec::new();
+    let mut paths = Vec::new();
     for n in 0..NOTES {
-        let b2id = format!("01JN{n:022}");
         let body = (0..PARAS)
             .map(|p| format!("note {n} para {p}: topic {}", (n * 31 + p * 7) % 97))
             .collect::<Vec<_>>()
             .join("\n\n");
-        write_note(&vault, &format!("n{n}.md"), &b2id, &body);
-        ids.push(b2id);
+        let name = format!("n{n}.md");
+        write_note(&vault, &name, &body);
+        paths.push(name);
     }
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
 
-    let anchor = &ids[0];
+    let anchor = &paths[0];
     let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(&conn, anchor)
         .unwrap()
         .into_iter()
@@ -202,8 +202,8 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
     .unwrap();
     let mut expected: Vec<CandidateNote> = best
         .into_iter()
-        .map(|(note_b2id, (d, evidence_chunk_id))| CandidateNote {
-            note_b2id,
+        .map(|(note_path, (d, evidence_chunk_id))| CandidateNote {
+            note_path,
             score: -(d.sqrt() as f64),
             evidence_chunk_id,
             z: None,
@@ -213,7 +213,7 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
         b.score
             .partial_cmp(&a.score)
             .unwrap()
-            .then(a.note_b2id.cmp(&b.note_b2id))
+            .then(a.note_path.cmp(&b.note_path))
     });
 
     let got = discover::candidates(&conn, anchor, NOTES, None).unwrap();

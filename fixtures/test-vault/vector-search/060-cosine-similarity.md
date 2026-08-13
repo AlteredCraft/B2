@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ7MRQPKPN87GDAK4T7
 type: note
 title: "Cosine Similarity"
 ---

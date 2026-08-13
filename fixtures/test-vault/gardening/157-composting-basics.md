@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWC0XWZYN2R8RKDFDDV
 type: note
 title: "Composting Basics"
 ---

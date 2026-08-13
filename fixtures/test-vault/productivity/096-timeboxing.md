@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXSPFJ23C7QKFS99PB0
 type: note
 title: "Timeboxing"
 b2_relations:

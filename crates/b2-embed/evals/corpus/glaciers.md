@@ -1,7 +1,6 @@
 ---
 type: note
 title: Glaciers
-b2id: 01JEVAL1GLACR000000000000S
 ---
 Rivers of ice that flow downhill a few meters a year, plucking bedrock and
 dragging it along as an abrasive underbelly that grinds valleys from a V into a

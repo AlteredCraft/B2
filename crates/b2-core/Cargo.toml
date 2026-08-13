@@ -16,7 +16,6 @@ thiserror = "2.0.18"
 # Structured debug logging (facade only — emitting events costs nothing until an
 # adapter installs a subscriber; the CLI's is opt-in via B2_LOG/B2_DEBUG).
 tracing = "0.1.41"
-ulid = "1.2.1"
 yaml-rust2 = "0.11.0"
 
 [dev-dependencies]

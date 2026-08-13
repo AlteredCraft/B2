@@ -1,7 +1,6 @@
 ---
 type: note
 title: Earthquakes
-b2id: 01JEVAL1QUAKE000000000000R
 ---
 Stress builds for decades along a locked fault until the rock suddenly slips,
 releasing the stored strain as seismic waves that shake the ground for miles.

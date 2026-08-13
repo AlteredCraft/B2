@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DW4DC8EMX7Q98H2X61B
 type: note
 title: "Overwintering"
 ---

@@ -6,9 +6,16 @@ Two committed vaults, for two different jobs. This file lives *outside* both —
 ## `golden-vault/`
 
 The small, hand-authored vault the **deterministic integration tests** copy into a tempdir and
-assert against (fixed `b2id`s in `crates/b2-core/tests/common/mod.rs`; shape per
-`docs/design/data-model.md §8`). Model-free — the suite runs the `FakeEmbedder`. Change it only
-with the tests.
+assert against (fixed note *paths* — the identity, L1 — in `crates/b2-core/tests/common/mod.rs`;
+shape per `docs/design/data-model.md §8`). Model-free — the suite runs the `FakeEmbedder`. Change
+it only with the tests.
+
+The copy-to-a-tempdir step is now belt and braces rather than load-bearing: it existed because
+ingest could *write* to a note it met without a `b2id`, and since [GH #170] nothing does (W1). It
+stays because a test that mutates a committed fixture is a bad idea whatever the current write
+posture is, and CI's `git diff --exit-code` step would catch it either way.
+
+[GH #170]: https://github.com/AlteredCraft/B2/issues/170
 
 ## `test-vault/`
 
@@ -36,6 +43,6 @@ retrieval-quality experiments** that need volume, *not* the deterministic suite:
   (`just stability-bless`) in the same commit that changes the fixture.
 
 The prose is templated (sentences recombined from the pools), not human-authored — realistic
-enough to cluster and embed like real notes, not meant to be read. Every note carries a `b2id`,
-so an ad-hoc `b2 reindex -C fixtures/test-vault` neither stamps nor rewrites anything; the
-disposable `.b2/` index it builds is gitignored.
+enough to cluster and embed like real notes, not meant to be read. An ad-hoc
+`b2 reindex -C fixtures/test-vault` rewrites nothing — indexing writes nothing to a vault at all
+(W1) — and the disposable `.b2/` index it builds is gitignored.

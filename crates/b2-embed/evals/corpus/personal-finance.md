@@ -1,7 +1,6 @@
 ---
 type: note
 title: Personal finance
-b2id: 01JEVAL1FNANC000000000000X
 ---
 Money management is a plumbing problem before it is an investing problem:
 income flows in, fixed costs drain out, and the design question is where the

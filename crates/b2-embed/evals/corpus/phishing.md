@@ -1,7 +1,6 @@
 ---
 type: note
 title: Phishing
-b2id: 01JEVAL1PHSHG000000000000Q
 ---
 A fraud email dressed up as your bank, a courier, or the IT desk, engineered to
 panic you into clicking: an urgent subject line, a spoofed sender domain one

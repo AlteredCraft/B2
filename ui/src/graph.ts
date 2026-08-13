@@ -43,8 +43,8 @@ export const GHOST_LIMIT = 6;
 export const NODE_R = { anchor: 34, note: 24, resource: 22, dangling: 22, ghost: 22 } as const;
 
 export interface GraphNode {
-  /** Stable scene identity: the note's b2id, `res:<path>`, `dangling:<n>`,
-   *  `ghost:<b2id>`, or `anchor`. */
+  /** Stable scene identity: the note's vault-relative path (its identity, L1),
+   *  `res:<path>`, `dangling:<n>`, `ghost:<path>`, or `anchor`. */
   id: string;
   kind: "anchor" | "note" | "resource" | "dangling" | "ghost";
   x: number;
@@ -129,7 +129,7 @@ function authoredOf(input: GraphInput): Authored[] {
   const out: Authored[] = [];
   for (const c of input.connections) {
     out.push({
-      nodeId: c.b2id,
+      nodeId: c.path,
       kind: "note",
       name: noteName(c.title, c.path),
       sub: null,
@@ -352,7 +352,7 @@ export function buildScene(input: GraphInput): GraphScene {
     const at = halo[i];
     const name = noteName(g.title, g.path);
     nodes.push({
-      id: `ghost:${g.b2id}`,
+      id: `ghost:${g.path}`,
       kind: "ghost",
       x: at.x,
       y: at.y,
@@ -365,7 +365,7 @@ export function buildScene(input: GraphInput): GraphScene {
     const seg = trim(CENTER, NODE_R.anchor, at, NODE_R.ghost);
     edges.push({
       from: "anchor",
-      to: `ghost:${g.b2id}`,
+      to: `ghost:${g.path}`,
       ...seg,
       cx: null,
       cy: null,

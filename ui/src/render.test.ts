@@ -55,7 +55,6 @@ function check(name: string, fn: () => void): void {
 
 function note(over: Partial<NoteView> = {}): NoteView {
   return {
-    b2id: "01ANCHOR",
     path: "notes/anchor.md",
     title: "anchor",
     type: null,
@@ -72,7 +71,6 @@ function note(over: Partial<NoteView> = {}): NoteView {
 
 function neighbor(over: Partial<NeighborView> = {}): NeighborView {
   return {
-    b2id: "01EDGE",
     path: "notes/edge.md",
     title: "edge",
     relation: "supports",
@@ -86,7 +84,7 @@ function neighbor(over: Partial<NeighborView> = {}): NeighborView {
 }
 
 function ghost(over: Partial<SimilarView> = {}): SimilarView {
-  return { b2id: "01GHOST", path: "notes/ghost.md", title: "ghost", score: 0.42, evidence: "", ...over };
+  return { path: "notes/ghost.md", title: "ghost", score: 0.42, evidence: "", ...over };
 }
 
 function resourceLink(over: Partial<ResourceLink> = {}): ResourceLink {
@@ -112,7 +110,6 @@ const dangling = (target: string): UnresolvedLink => ({
 });
 
 const hit = (path: string): SearchResult => ({
-  b2id: "01HIT",
   path,
   title: path,
   score: 1,
@@ -225,70 +222,6 @@ check("search mode's clear button carries an id — the one focusable that isn't
     /data-side-row="[^"]+"/.test(tagWith(html, "notes/kivo.md")),
     "a result row still carries its row key (what paintSide restores rows by)",
   );
-});
-
-// --- the anomaly review panel (GH #88) --------------------------------------------------
-
-// The panel's one load-bearing claim: which of an anomaly's paths B2 can actually reach.
-// A shadowed copy has no index row, so it is not in the file tree and `read_note` cannot
-// resolve it — offering "Open" there would be a button that does nothing, which is the
-// same complaint (#88) about inert text one step worse.
-check("a collision row offers Open on the keeper and Copy path on the shadowed copy", () => {
-  const html = modalHtml(
-    app({
-      anomaliesOpen: true,
-      anomalies: {
-        collisions: [
-          {
-            b2id: "01ABC",
-            kept_path: "notes/a.md",
-            precedence: "incumbent",
-            shadowed_paths: ["notes/a copy.md"],
-          },
-        ],
-        restamped: [],
-      },
-    }),
-  );
-  assert(html.includes('data-anomaly-open="notes/a.md"'), "the keeper opens");
-  assert(html.includes('data-anomaly-copy="notes/a copy.md"'), "the shadowed copy is copyable");
-  assert(!html.includes('data-anomaly-open="notes/a copy.md"'), "an un-indexed file never opens");
-  assert(html.includes("data-anomalies-close"), "the panel has a Done control");
-});
-
-check("each anomaly is its own row, and an empty report says so", () => {
-  const html = modalHtml(
-    app({
-      anomaliesOpen: true,
-      anomalies: {
-        collisions: [
-          { b2id: "01A", kept_path: "a.md", precedence: "incumbent", shadowed_paths: ["a2.md"] },
-        ],
-        restamped: [{ path: "x.md", old_b2id: "01OLD", new_b2id: "01NEW" }],
-      },
-    }),
-  );
-  assert(
-    (html.match(/data-anomaly="/g) ?? []).length === 2,
-    "two anomalies paint two rows — never one run-on paragraph (the #88 regression)",
-  );
-  const empty = modalHtml(app({ anomaliesOpen: true, anomalies: { collisions: [], restamped: [] } }));
-  assert(empty.includes("anomaly-empty"), "a clean pass gets an explicit empty state");
-  assert(!empty.includes("data-anomaly="), "and no rows");
-});
-
-// "No pass has run" is not "the pass found nothing", and `null` is the *ordinary* state
-// of a healthy vault: auto-index-on-open returns early when the index is already
-// complete, so a session that opens a good vault and touches nothing never runs a
-// whole-vault pass. Vouching for a vault nothing has looked at is the silent-shadowing
-// failure #81 exists to end, so the two states must not share a message.
-check("the panel distinguishes 'no pass yet' from 'the pass found nothing'", () => {
-  const never = modalHtml(app({ anomaliesOpen: true, anomalies: null }));
-  const clean = modalHtml(app({ anomaliesOpen: true, anomalies: { collisions: [], restamped: [] } }));
-  assert(never.includes("No index pass has run"), "an un-run pass says so");
-  assert(never.includes("Reindex"), "and names the way to run one");
-  assert(!never.includes("found none"), "it must not report a result it never had");
-  assert(clean.includes("found none"), "a pass that ran and found nothing still says so");
 });
 
 // The Keyboard panel is the K1 promise's *findable* half, and #119 extended it to chords

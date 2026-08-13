@@ -8,10 +8,9 @@ mod common;
 
 use b2_core::db;
 use b2_core::embed::{Embedder, FakeEmbedder};
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{count, golden_vault_copy, ingest_golden, SRS_ID};
+use common::{count, golden_vault_copy, ingest_golden, SRS_PATH};
 use rusqlite::Connection;
 use std::ops::ControlFlow;
 
@@ -64,7 +63,7 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     let mut events: Vec<ReindexProgress> = Vec::new();
     let cfg = b2_core::chunk::ChunkConfig::default();
     let embedder = FakeEmbedder::new(64);
-    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &UlidGen, &cfg), &embedder);
+    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
     ingest_vault_with_progress(ctx, false, &mut |p| {
         events.push(p);
         ControlFlow::Continue(())
@@ -124,11 +123,36 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
     let edited = vault.reindex().unwrap();
     assert_eq!(edited.embedded, 1, "only the changed note re-embeds");
 
-    // --force re-embeds everything regardless of change.
+    // --force re-chunks everything regardless of change — and, since the vector
+    // store is content-addressed (M4), re-*embeds* only what genuinely differs.
+    // On an unchanged vault that is nothing: the same chunk text hashes to the
+    // vector already stored, and recomputing it could only produce the same bytes.
+    // Where force still matters — a chunker-config change, the eval harness's
+    // `set_chunk_config` → `project(force)` — the chunk text *does* change, so the
+    // hashes miss and the model runs.
     let forced = vault
         .reindex_with_progress(true, &mut |_| ControlFlow::Continue(()))
         .unwrap();
-    assert_eq!(forced.embedded, 2, "force re-embeds every note");
+    assert_eq!(forced.indexed, 2, "force re-projects every note");
+    assert_eq!(
+        forced.embedded, 0,
+        "identical chunk text needs no second forward pass"
+    );
+
+    // The proof that force is still doing its job: change the chunking, and every
+    // note's text — and therefore every hash — moves.
+    let mut rechunked = Vault::open(&root).unwrap();
+    rechunked.set_chunk_config(b2_core::chunk::ChunkConfig {
+        target_tokens: 20,
+        ..Default::default()
+    });
+    let forced = rechunked
+        .reindex_with_progress(true, &mut |_| ControlFlow::Continue(()))
+        .unwrap();
+    assert!(
+        forced.embedded > 0,
+        "re-cut chunks are new text, so they embed: {forced:?}"
+    );
 }
 
 #[test]
@@ -166,8 +190,8 @@ fn centroids_track_the_stored_chunk_vectors() {
     let assert_centroids_current = |conn: &Connection| {
         let notes_with_vectors: i64 = conn
             .query_row(
-                "SELECT COUNT(DISTINCT c.note_b2id) FROM chunks c
-                 JOIN embeddings e ON e.chunk_id = c.id",
+                "SELECT COUNT(DISTINCT c.note_path) FROM chunks c
+                 JOIN embeddings e ON e.text_hash = c.text_hash",
                 [],
                 |r| r.get(0),
             )
@@ -178,7 +202,7 @@ fn centroids_track_the_stored_chunk_vectors() {
             "one centroid per embedded note"
         );
         let mut stmt = conn
-            .prepare("SELECT note_b2id, centroid FROM note_centroids")
+            .prepare("SELECT note_path, centroid FROM note_centroids")
             .unwrap();
         let rows: Vec<(String, Vec<u8>)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -218,8 +242,8 @@ fn knn_finds_the_chunk_whose_text_we_query() {
     // pick a known chunk, query with the embedding of its own text
     let (id, text): (i64, String) = conn
         .query_row(
-            "SELECT id, text FROM chunks WHERE note_b2id = ?1 ORDER BY seq LIMIT 1",
-            [SRS_ID],
+            "SELECT id, text FROM chunks WHERE note_path = ?1 ORDER BY seq LIMIT 1",
+            [SRS_PATH],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
@@ -245,19 +269,19 @@ fn reindex_yields_identical_vectors() {
     let vec_for_srs_seq0 = |c: &Connection| -> Vec<u8> {
         c.query_row(
             "SELECT v.vector FROM embeddings v
-             JOIN chunks c ON c.id = v.chunk_id
-             WHERE c.note_b2id = ?1 AND c.seq = 0",
-            [SRS_ID],
+             JOIN chunks c ON c.text_hash = v.text_hash
+             WHERE c.note_path = ?1 AND c.seq = 0",
+            [SRS_PATH],
             |r| r.get(0),
         )
         .unwrap()
     };
 
-    ingest_vault(&conn, &vault, &UlidGen, &embedder).unwrap();
+    ingest_vault(&conn, &vault, &embedder).unwrap();
     let before = vec_for_srs_seq0(&conn);
 
     // A full re-index re-embeds deterministically → byte-identical vectors.
-    ingest_vault(&conn, &vault, &UlidGen, &embedder).unwrap();
+    ingest_vault(&conn, &vault, &embedder).unwrap();
     assert_eq!(before, vec_for_srs_seq0(&conn));
 }
 
@@ -305,6 +329,11 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
 
     const ROUNDS: usize = 3;
     const PASSES: i64 = 8;
+    /// Distinct text per racing pass, so the eight writes are eight rows rather
+    /// than one row written eight times (which would pass this vacuously).
+    fn text_of(seq: i64) -> String {
+        format!("chunk text {seq}")
+    }
 
     for round in 0..ROUNDS {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -313,16 +342,19 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
         {
             let conn = open(&db_path).unwrap();
             conn.execute(
-                "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
-                 VALUES ('01NOTE', 'n.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+                "INSERT INTO notes(path, type, body_hash, indexed_at)
+                 VALUES ('n.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
                 [],
             )
             .unwrap();
+            // One chunk per racing pass, each with its own text so each addresses
+            // its own vector (the store is content-addressed — M4).
             for seq in 0..PASSES {
                 conn.execute(
-                    "INSERT INTO chunks(id, note_b2id, seq, char_start, char_end, token_count, text)
-                     VALUES (?1, '01NOTE', ?1, 0, 1, 1, 'text')",
-                    [seq],
+                    "INSERT INTO chunks
+                       (id, note_path, seq, char_start, char_end, token_count, text, text_hash)
+                     VALUES (?1, 'n.md', ?1, 0, 1, 1, ?2, ?3)",
+                    rusqlite::params![seq, text_of(seq), db::text_hash(&text_of(seq))],
                 )
                 .unwrap();
             }
@@ -338,7 +370,7 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
                     start.wait();
                     // What `embed_vault` does: ensure the space, then write vectors into it.
                     db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128)?;
-                    db::set_chunk_vector(&conn, chunk_id, &[0.5; 128])
+                    db::set_vector(&conn, &db::text_hash(&text_of(chunk_id)), &[0.5; 128])
                 })
             })
             .collect();

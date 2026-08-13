@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWCTPDVV4XCCKDVH0WW
 type: note
 title: "Soil pH"
 ---

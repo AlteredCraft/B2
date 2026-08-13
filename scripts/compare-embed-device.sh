@@ -10,7 +10,7 @@
 # Hygiene:
 #   - The committed fixture is NEVER mutated: each run works on an isolated copy in the
 #     system tempdir (same pattern the integration tests use for fixtures/golden-vault/),
-#     removed on exit. So no `.b2/` index or b2id churn ever lands in the repo.
+#     removed on exit. So no `.b2/` index ever lands in the repo.
 #   - The two JSONL logs go under the already-gitignored logs/ for post-hoc inspection.
 #   - `.gitignore` also covers an ad-hoc `b2 reindex` run against the fixture directly.
 #

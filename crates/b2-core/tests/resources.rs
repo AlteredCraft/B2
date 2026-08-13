@@ -84,8 +84,8 @@ fn v3_index_is_dropped_and_rebuilt_at_v4() {
     {
         let conn = open(&db_path).unwrap();
         conn.execute_batch(
-            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
-               VALUES ('01JX000000000000000000000A', 'a.md', 'note', 'h', 'now');
+            "INSERT INTO notes(path, type, body_hash, indexed_at)
+               VALUES ('a.md', 'note', 'h', 'now');
              INSERT INTO resources(path, class, size, content_hash, indexed_at)
                VALUES ('img.png', 'image', 3, 'h', 'now');",
         )
@@ -125,15 +125,15 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
     conn.execute_batch(
-        "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
-           VALUES ('01JX000000000000000000000A', 'a.md', 'note', 'h', 'now');",
+        "INSERT INTO notes(path, type, body_hash, indexed_at)
+           VALUES ('a.md', 'note', 'h', 'now');",
     )
     .unwrap();
 
     // FK: the target row must exist.
     let orphan = conn.execute(
-        "INSERT INTO edges(id, src_id, dst_resource_path, dst_path_raw, type, origin)
-         VALUES ('e0', '01JX000000000000000000000A', 'missing.png', 'missing.png',
+        "INSERT INTO edges(id, src_path, dst_resource_path, dst_path_raw, type, origin)
+         VALUES ('e0', 'a.md', 'missing.png', 'missing.png',
                  'references', 'inline')",
         [],
     );
@@ -142,17 +142,17 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     conn.execute_batch(
         "INSERT INTO resources(path, class, size, content_hash, indexed_at)
            VALUES ('img.png', 'image', 3, 'h', 'now');
-         INSERT INTO edges(id, src_id, dst_resource_path, dst_path_raw, type, origin, embed, caption)
-           VALUES ('e1', '01JX000000000000000000000A', 'img.png', 'img.png',
+         INSERT INTO edges(id, src_path, dst_resource_path, dst_path_raw, type, origin, embed, caption)
+           VALUES ('e1', 'a.md', 'img.png', 'img.png',
                    'references', 'inline', 1, 'a sailboat');",
     )
     .unwrap();
 
-    // Dedup: same (src, resource, type, occurrence) must refuse — NULL dst_id makes
+    // Dedup: same (src, resource, type, occurrence) must refuse — NULL dst_path makes
     // the note-edge UNIQUE constraint inert here, hence the partial index.
     let dup = conn.execute(
-        "INSERT INTO edges(id, src_id, dst_resource_path, dst_path_raw, type, origin)
-         VALUES ('e2', '01JX000000000000000000000A', 'img.png', 'img.png',
+        "INSERT INTO edges(id, src_path, dst_resource_path, dst_path_raw, type, origin)
+         VALUES ('e2', 'a.md', 'img.png', 'img.png',
                  'references', 'inline')",
         [],
     );
@@ -334,7 +334,7 @@ fn incremental_resource_update_equals_full_rebuild() {
 // Step 4 — resolution: kind dispatch, dst_resource_path, dangling (spec §3)
 // ---------------------------------------------------------------------------
 
-/// All edges out of one source path: `(dst_id, dst_resource_path, dst_path_raw,
+/// All edges out of one source path: `(dst_path, dst_resource_path, dst_path_raw,
 /// type, embed, caption)`, in raw-target order.
 type EdgeTuple = (
     Option<String>,
@@ -348,8 +348,8 @@ fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
     let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT e.dst_id, e.dst_resource_path, e.dst_path_raw, e.type, e.embed, e.caption
-             FROM edges e JOIN notes n ON n.b2id = e.src_id
+            "SELECT e.dst_path, e.dst_resource_path, e.dst_path_raw, e.type, e.embed, e.caption
+             FROM edges e JOIN notes n ON n.path = e.src_path
              WHERE n.path = ?1 ORDER BY e.dst_path_raw, e.occurrence_index",
         )
         .unwrap();
@@ -370,7 +370,7 @@ fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
     rows
 }
 
-/// Resource links resolve to `dst_resource_path` (never `dst_id`), capture the
+/// Resource links resolve to `dst_resource_path` (never `dst_path`), capture the
 /// authored caption + embed marker, and a missing target dangles with both
 /// resolution columns NULL and the raw text retained.
 #[test]
@@ -454,8 +454,8 @@ fn markdown_note_links_resolve_with_fragment_stripped() {
 
     let edges = edges_from(tmp.path(), "notes/md-note-links.md");
     assert_eq!(edges.len(), 2);
-    for (dst_id, dst_resource, raw, r#type, _, _) in &edges {
-        assert_eq!(dst_id.as_deref(), Some(common::MEMORY_ID), "raw: {raw}");
+    for (dst_path, dst_resource, raw, r#type, _, _) in &edges {
+        assert_eq!(dst_path.as_deref(), Some(common::MEMORY_PATH), "raw: {raw}");
         assert_eq!(*dst_resource, None);
         assert_eq!(r#type, "references");
     }

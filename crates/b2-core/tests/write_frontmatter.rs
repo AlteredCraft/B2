@@ -1,10 +1,15 @@
 //! `Vault::write_frontmatter` — the drawer's write op, `Vault::write`'s
 //! frontmatter sibling (GH #79). The invariants under test: the body (bytes AND
-//! boundary) is invariant under a frontmatter save; the `b2id` identity guard
-//! refuses a changed/removed/duplicated id before any byte reaches disk; the
-//! revision guard mirrors `write`'s; malformed-but-human YAML saves fine
-//! (warn-don't-block, surfaced via `NoteView::frontmatter_readable`); and the
-//! saved block re-projects edges/tags without touching chunks or vectors.
+//! boundary) is invariant under a frontmatter save; the one refusal — a `---` line,
+//! which would end the block early and shift bytes into the body — holds before any
+//! byte reaches disk; the revision guard mirrors `write`'s; malformed-but-human YAML
+//! saves fine (warn-don't-block, surfaced via `NoteView::frontmatter_readable`); and
+//! the saved block re-projects edges/tags without touching chunks or vectors.
+//!
+//! The identity guard this file used to open with is gone with the stamp (GH #170):
+//! B2 owned exactly one line inside this block and no longer owns any, so the block
+//! is wholly the human's (W3). What replaces that test is the one below it — every
+//! key survives whatever the human writes.
 
 mod common;
 
@@ -15,7 +20,6 @@ use rusqlite::Connection;
 use std::fs;
 
 const SRS_PATH: &str = "notes/spaced-repetition.md";
-const SRS_ID: &str = "01JSRS0000000000000000000B";
 
 #[test]
 fn saves_the_block_verbatim_and_leaves_the_body_untouched() {
@@ -25,7 +29,7 @@ fn saves_the_block_verbatim_and_leaves_the_body_untouched() {
     let note = vault.read(SRS_PATH).unwrap();
     let body_before = note.body.clone();
 
-    let new_fm = format!("b2id: {SRS_ID}\ntags: [learning, memory]\nmy_key: kept verbatim\n");
+    let new_fm = "tags: [learning, memory]\nmy_key: kept verbatim\n".to_string();
     let report = vault
         .write_frontmatter(SRS_PATH, &new_fm, &note.revision)
         .unwrap();
@@ -45,39 +49,35 @@ fn saves_the_block_verbatim_and_leaves_the_body_untouched() {
     assert!(reread.frontmatter_readable);
 }
 
+/// The other side of the removed identity guard (GH #170): B2 owns **no** line
+/// inside this block, so every edit a human can express saves. The four inputs are
+/// exactly the ones that used to be refused — a block with no `b2id`, a different
+/// one, a blanked one, a duplicated one — and each is now just YAML, round-tripped
+/// verbatim like any other unknown key (W5).
 #[test]
-fn refuses_a_changed_removed_or_duplicated_b2id() {
+fn owns_no_line_in_the_block_so_every_human_edit_saves() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
-    let note = vault.read(SRS_PATH).unwrap();
-    let on_disk_before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
 
-    // Removed, changed, blanked, and duplicated all refuse — identity is the one
-    // line B2 protects (L1) — and none of them touch the file.
-    for bad in [
+    for block in [
         "title: no id at all\n".to_string(),
         "b2id: 01JDIFFERENT000000000000AA\n".to_string(),
         "b2id:\n".to_string(),
-        format!("b2id: {SRS_ID}\nb2id: {SRS_ID}\n"),
+        "b2id: 01JA\nb2id: 01JB\n".to_string(),
     ] {
-        let err = vault
-            .write_frontmatter(SRS_PATH, &bad, &note.revision)
-            .unwrap_err();
+        let note = vault.read(SRS_PATH).unwrap();
+        vault
+            .write_frontmatter(SRS_PATH, &block, &note.revision)
+            .expect("the block is the human's");
+        let on_disk = fs::read_to_string(root.join(SRS_PATH)).unwrap();
         assert!(
-            matches!(&err, Error::FrontmatterIdentity(p) if p == SRS_PATH),
-            "expected identity refusal for {bad:?}, got {err:?}"
+            on_disk.starts_with(&format!("---\n{block}---\n")),
+            "saved verbatim: {on_disk:?}"
         );
+        // And the note is still the note: identity is the path, which no edit to
+        // this block can reach.
+        assert_eq!(vault.read(SRS_PATH).unwrap().path, SRS_PATH);
     }
-    assert_eq!(
-        fs::read_to_string(root.join(SRS_PATH)).unwrap(),
-        on_disk_before,
-        "a refused save must not touch the file"
-    );
-
-    // Re-quoting the same id is identity-preserving, not an edit of it.
-    vault
-        .write_frontmatter(SRS_PATH, &format!("b2id: \"{SRS_ID}\"\n"), &note.revision)
-        .unwrap();
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn refuses_a_fence_line_that_would_leak_into_the_body() {
     let err = vault
         .write_frontmatter(
             SRS_PATH,
-            &format!("b2id: {SRS_ID}\n---\nleaked into the body\n"),
+            "tags: [x]\n---\nleaked into the body\n",
             &note.revision,
         )
         .unwrap_err();
@@ -119,7 +119,7 @@ fn conflicts_when_the_file_changed_on_disk() {
 
     // …so a save based on the stale revision is refused, and nothing is written.
     let err = vault
-        .write_frontmatter(SRS_PATH, &format!("b2id: {SRS_ID}\n"), &note.revision)
+        .write_frontmatter(SRS_PATH, "tags: [x]\n", &note.revision)
         .unwrap_err();
     assert!(matches!(err, Error::WriteConflict(p) if p == SRS_PATH));
     assert_eq!(fs::read_to_string(&abs).unwrap(), external);
@@ -127,7 +127,7 @@ fn conflicts_when_the_file_changed_on_disk() {
     // The "Keep mine" path: a fresh read (current revision) + write succeeds.
     let fresh = vault.read(SRS_PATH).unwrap();
     vault
-        .write_frontmatter(SRS_PATH, &format!("b2id: {SRS_ID}\n"), &fresh.revision)
+        .write_frontmatter(SRS_PATH, "tags: [x]\n", &fresh.revision)
         .unwrap();
 }
 
@@ -135,14 +135,14 @@ fn conflicts_when_the_file_changed_on_disk() {
 fn malformed_yaml_saves_and_surfaces_as_unreadable_not_an_error() {
     // Warn, don't block (W4/W5): broken YAML in the human's keys is the human's to
     // fix — the same edit made in vim would land on disk too. B2 keeps identity
-    // (the b2id line still raw-scans, #75), keeps the bytes verbatim, and flags
-    // the block unreadable on every subsequent read.
+    // keeps the bytes verbatim, and flags the block unreadable on every
+    // subsequent read.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
     let note = vault.read(SRS_PATH).unwrap();
     assert!(note.frontmatter_readable, "golden note starts clean");
 
-    let broken = format!("b2id: {SRS_ID}\ntitle: \"unclosed\ntags: [a\n");
+    let broken = "title: \"unclosed\ntags: [a\n".to_string();
     vault
         .write_frontmatter(SRS_PATH, &broken, &note.revision)
         .unwrap();
@@ -150,11 +150,14 @@ fn malformed_yaml_saves_and_surfaces_as_unreadable_not_an_error() {
     let reread = vault.read(SRS_PATH).unwrap();
     assert!(!reread.frontmatter_readable, "the warning flag is up");
     assert_eq!(reread.frontmatter.as_deref(), Some(broken.as_str()));
-    assert_eq!(reread.b2id, SRS_ID, "identity survives via the raw scan");
+    assert_eq!(
+        reread.path, SRS_PATH,
+        "identity is the path — unreadable YAML cannot touch it"
+    );
     assert!(reread.tags.is_empty(), "unreadable YAML projects no fields");
 
     // And the fix heals it through the same op: readable again, fields back.
-    let fixed = format!("b2id: {SRS_ID}\ntags: [a]\n");
+    let fixed = "tags: [a]\n".to_string();
     vault
         .write_frontmatter(SRS_PATH, &fixed, &reread.revision)
         .unwrap();
@@ -174,9 +177,8 @@ fn reprojects_edges_from_the_new_block_without_touching_vectors() {
     // Retype the golden `supports` relation to `contradicts` by editing the block —
     // the hand-authoring path the drawer makes in-app (legitimate per GH #79).
     let note = vault.read(SRS_PATH).unwrap();
-    let new_fm = format!(
-        "b2id: {SRS_ID}\nb2_relations:\n  - \"contradicts [[concepts/memory]] — retyped by hand\"\n"
-    );
+    let new_fm =
+        "b2_relations:\n  - \"contradicts [[concepts/memory]] — retyped by hand\"\n".to_string();
     vault
         .write_frontmatter(SRS_PATH, &new_fm, &note.revision)
         .unwrap();
@@ -185,8 +187,8 @@ fn reprojects_edges_from_the_new_block_without_touching_vectors() {
     let types: Vec<String> = {
         let mut s = conn
             .prepare(
-                "SELECT e.type FROM edges e JOIN notes n ON n.b2id = e.src_id
-                 WHERE n.path = ?1 AND e.origin = 'frontmatter' ORDER BY e.type",
+                "SELECT type FROM edges
+                 WHERE src_path = ?1 AND origin = 'frontmatter' ORDER BY type",
             )
             .unwrap();
         s.query_map([SRS_PATH], |r| r.get(0))
@@ -220,11 +222,7 @@ fn needs_no_embedding_space() {
 
     let note = vault.read(SRS_PATH).unwrap();
     vault
-        .write_frontmatter(
-            SRS_PATH,
-            &format!("b2id: {SRS_ID}\ntags: [modelfree]\n"),
-            &note.revision,
-        )
+        .write_frontmatter(SRS_PATH, "tags: [modelfree]\n", &note.revision)
         .unwrap();
 
     let conn = index_conn(&root);
@@ -244,15 +242,11 @@ fn sequential_saves_chain_revisions_and_mix_with_body_saves() {
 
     let note = vault.read(SRS_PATH).unwrap();
     let fm1 = vault
-        .write_frontmatter(SRS_PATH, &format!("b2id: {SRS_ID}\n"), &note.revision)
+        .write_frontmatter(SRS_PATH, "tags: [x]\n", &note.revision)
         .unwrap();
     let body = vault.write(SRS_PATH, "New body.\n", &fm1.revision).unwrap();
     let fm2 = vault
-        .write_frontmatter(
-            SRS_PATH,
-            &format!("b2id: {SRS_ID}\ntags: [x]\n"),
-            &body.revision,
-        )
+        .write_frontmatter(SRS_PATH, "tags: [x]\n", &body.revision)
         .unwrap();
     assert_ne!(fm1.revision, fm2.revision);
 

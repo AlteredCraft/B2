@@ -18,7 +18,6 @@ import type {
   UnresolvedLink,
 } from "./types";
 import type { NodeKind } from "./move";
-import type { IndexAnomalies } from "./anomalies";
 // Carries its `.ts` because it is a *value* import (the others here are type-only, and
 // erase): render.test.ts / sanitize.test.ts reach this module through render.ts under
 // node's type-stripping, which resolves by real filename. render.ts says the same.
@@ -259,19 +258,6 @@ export interface AppState {
    * which is the chord's whole meaning.
    */
   settingsTab: SettingsTabId;
-  /**
-   * The GH #81 anomalies the **latest** projection pass surfaced — duplicate `b2id`s
-   * and identity restamps — or null before any pass has run in this session. Drives
-   * the top bar's ⚠ badge and the review panel (GH #88).
-   *
-   * Deliberately just the last report, replaced wholesale on every pass and cleared by
-   * a clean one: nothing anomaly-shaped is ever *stored* (index-engine.md §8, S2), so
-   * this is a view of what the vault + index say right now, not an accumulating queue.
-   * A restart shows nothing until the next pass re-derives the same anomaly.
-   */
-  anomalies: IndexAnomalies | null;
-  /** The anomaly review panel (⇧⌘A, or the ⚠ badge) is open. */
-  anomaliesOpen: boolean;
   /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
   theme: ThemePref;
   /**
@@ -366,8 +352,6 @@ export const state: AppState = {
   linkRelation: "references",
   settingsOpen: false,
   settingsTab: DEFAULT_SETTINGS_TAB,
-  anomalies: null,
-  anomaliesOpen: false,
   theme: "system",
   keyOverrides: {},
   recorder: null,

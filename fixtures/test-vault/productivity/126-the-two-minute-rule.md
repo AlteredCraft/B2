@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXVR1E981H04S3EN51P
 type: note
 title: "The Two-Minute Rule"
 ---

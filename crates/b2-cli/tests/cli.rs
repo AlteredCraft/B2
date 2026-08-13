@@ -10,10 +10,12 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const MEMORY_ID: &str = "01JMEM0000000000000000000A";
+/// The golden note the graph assertions hang off, by the thing that identifies it:
+/// its vault-relative path (L1).
+const MEMORY_PATH: &str = "concepts/memory.md";
 
-/// A temp copy of the golden vault (so reindex, which may stamp, never touches the
-/// repo fixtures). The `TempDir` guard is returned so it outlives the test.
+/// A temp copy of the golden vault, so no test can mutate the repo fixtures. The
+/// `TempDir` guard is returned so it outlives the test.
 fn golden_vault() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
@@ -119,7 +121,10 @@ fn reindex_reports_counts_human_and_json() {
     assert!(json.status.success());
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(v["indexed"], 2);
-    assert_eq!(v["stamped"], 0);
+    assert!(
+        v.get("stamped").is_none(),
+        "a reindex writes nothing to the vault, so it reports no stamps (GH #170)"
+    );
 
     // the index + log folder is created inside the vault (one portable folder).
     assert!(root.join(".b2/b2.sqlite").is_file());
@@ -141,19 +146,25 @@ fn reindex_is_incremental_and_force_reembeds() {
     let v: Value = serde_json::from_slice(&again.stdout).unwrap();
     assert_eq!(v["embedded"], 0, "unchanged notes are not re-embedded");
 
-    // --force re-embeds every note regardless.
+    // --force re-chunks every note; whether it re-*embeds* is content's to decide.
+    // Unchanged text hashes to vectors already stored (M4), so a forced pass over an
+    // untouched vault correctly reports no embedding work rather than recomputing
+    // bytes it already has.
     let forced = run_in(&root, &["--json", "reindex", "--force"]);
     let v: Value = serde_json::from_slice(&forced.stdout).unwrap();
-    assert_eq!(v["embedded"], 2, "--force re-embeds everything");
+    assert_eq!(v["indexed"], 2, "--force re-projects everything");
+    assert_eq!(
+        v["embedded"], 0,
+        "identical text needs no second forward pass"
+    );
 }
 
 #[test]
 fn reindex_dry_run_previews_and_writes_nothing() {
     let (_g, root) = golden_vault();
-    // A note with no b2id, so the preview has something to "would stamp".
     std::fs::write(
         root.join("fresh.md"),
-        "---\ntype: note\ntitle: Fresh\n---\nNo b2id yet.\n",
+        "---\ntype: note\ntitle: Fresh\n---\nA third note.\n",
     )
     .unwrap();
     let before = std::fs::read_to_string(root.join("fresh.md")).unwrap();
@@ -164,21 +175,17 @@ fn reindex_dry_run_previews_and_writes_nothing() {
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(v["would_index"], 3);
     assert_eq!(v["would_embed"], 3);
-    assert_eq!(v["would_stamp"], 1);
     assert!(v.get("indexed").is_none(), "not the real-reindex shape");
 
-    // Human: says it's a preview and made no changes.
+    // Human: says it's a preview.
     let human = run_in(&root, &["reindex", "--dry-run"]);
     assert!(human.status.success(), "{}", stderr(&human));
     assert!(stdout(&human).contains("Dry run"), "{:?}", stdout(&human));
-    assert!(
-        stdout(&human).contains("No changes made"),
-        "{:?}",
-        stdout(&human)
-    );
 
-    // Nothing was written: the b2id-less note is byte-identical (never stamped),
-    // and the work is still pending — a real reindex now embeds all 3.
+    // Nothing was indexed, and the work is still pending — a real reindex now
+    // embeds all 3. (That a *real* reindex leaves the vault byte-identical too is
+    // W1's business, asserted in the engine suite; here the point is the dry run
+    // did no index work.)
     assert_eq!(
         std::fs::read_to_string(root.join("fresh.md")).unwrap(),
         before
@@ -187,7 +194,6 @@ fn reindex_dry_run_previews_and_writes_nothing() {
     let v: Value = serde_json::from_slice(&real.stdout).unwrap();
     assert_eq!(v["indexed"], 3);
     assert_eq!(v["embedded"], 3, "the dry-run did no embedding work");
-    assert_eq!(v["stamped"], 1);
 }
 
 /// Hold a vault's reindex lock exactly the way a running `b2 reindex` does — take the
@@ -473,7 +479,7 @@ fn explicit_flag_overrides_b2_vault_path_env_var() {
 fn add_creates_a_note_human_and_json() {
     let (_g, root) = golden_vault();
 
-    // Human: reports the created path + b2id.
+    // Human: reports the created path.
     let human = run_in(
         &root,
         &[
@@ -493,9 +499,10 @@ fn add_creates_a_note_human_and_json() {
         stdout(&human)
     );
 
-    // The file exists with a stamped, titled frontmatter and the body.
+    // The file exists with the titled frontmatter and the body — and nothing else:
+    // projecting it added no key of B2's (W1).
     let text = std::fs::read_to_string(root.join("notes/gadgets.md")).unwrap();
-    assert!(text.contains("b2id:"), "{text}");
+    assert!(!text.contains("b2id"), "nothing is stamped: {text}");
     assert!(text.contains(r#"title: "All about gadgets""#), "{text}");
     assert!(text.contains("Gadgets are handy little devices."), "{text}");
 
@@ -513,7 +520,7 @@ fn add_creates_a_note_human_and_json() {
     assert!(json.status.success(), "{}", stderr(&json));
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(v["path"], "notes/another.md");
-    assert!(v["b2id"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(v.get("b2id").is_none(), "the path is the identity (L1)");
 }
 
 #[test]
@@ -542,7 +549,8 @@ fn add_invalid_path_fails_cleanly() {
 fn write_replaces_body_from_stdin_and_reprojects() {
     let (_g, root) = reindexed();
 
-    // Overwrite memory's body with piped Markdown (by path here; b2id works too).
+    // Overwrite memory's body with piped Markdown, addressed by path (L1) — in the
+    // extensionless wikilink form, which the resolver's `.md` ladder accepts.
     let out = run_in_stdin(
         &root,
         &["write", "concepts/memory"],
@@ -555,14 +563,13 @@ fn write_replaces_body_from_stdin_and_reprojects() {
         stdout(&out)
     );
 
-    // Markdown-first + byte-honest: the frontmatter (b2id, title) is untouched, the
-    // body is the piped text verbatim, and the old body is gone.
+    // Markdown-first + byte-honest: the frontmatter is untouched, the body is the
+    // piped text verbatim, and the old body is gone.
     let text = std::fs::read_to_string(root.join("concepts/memory.md")).unwrap();
     assert!(
-        text.contains("b2id: 01JMEM0000000000000000000A"),
+        text.starts_with("---\ntype: concept\ntitle: \"Human memory\"\n"),
         "frontmatter preserved verbatim: {text}"
     );
-    assert!(text.contains(r#"title: "Human memory""#), "{text}");
     assert!(
         text.contains("marmots and their burrows"),
         "new body written: {text}"
@@ -588,7 +595,7 @@ fn write_replaces_body_from_stdin_and_reprojects() {
 fn write_json_returns_path_and_new_revision() {
     let (_g, root) = reindexed();
 
-    let out = run_in_stdin(&root, &["--json", "write", MEMORY_ID], "Fresh body.\n");
+    let out = run_in_stdin(&root, &["--json", "write", MEMORY_PATH], "Fresh body.\n");
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["path"], "concepts/memory.md");
@@ -666,7 +673,7 @@ fn explain_unknown_note_fails_cleanly() {
 }
 
 #[test]
-fn neighbors_by_path_and_by_b2id() {
+fn neighbors_resolve_in_both_authored_path_forms() {
     let (_g, root) = reindexed();
 
     let by_path = run_in(&root, &["neighbors", "notes/spaced-repetition"]);
@@ -678,9 +685,10 @@ fn neighbors_by_path_and_by_b2id() {
     assert!(out.contains("references"), "{out}");
     assert!(out.contains("memory"), "{out}");
 
-    let by_id = run_in(&root, &["neighbors", MEMORY_ID]);
-    assert!(by_id.status.success(), "{}", stderr(&by_id));
-    let out = stdout(&by_id);
+    // The other end, addressed with the `.md` a Markdown link would write.
+    let by_full_path = run_in(&root, &["neighbors", MEMORY_PATH]);
+    assert!(by_full_path.status.success(), "{}", stderr(&by_full_path));
+    let out = stdout(&by_full_path);
     // memory sees the inbound inverse labels, from the SRS note.
     assert!(out.contains("supported-by"), "{out}");
     assert!(out.contains("referenced-by"), "{out}");
@@ -690,7 +698,7 @@ fn neighbors_by_path_and_by_b2id() {
 #[test]
 fn neighbors_json_shape() {
     let (_g, root) = reindexed();
-    let out = run_in(&root, &["--json", "neighbors", MEMORY_ID]);
+    let out = run_in(&root, &["--json", "neighbors", MEMORY_PATH]);
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     let arr = v.as_array().expect("neighbors --json is an array");
@@ -1226,11 +1234,11 @@ fn rm_deletes_a_note_and_reports_dangled() {
 fn rm_json_shape() {
     let (_g, root) = reindexed();
 
-    let rm = run_in(&root, &["--json", "rm", MEMORY_ID]);
+    let rm = run_in(&root, &["--json", "rm", MEMORY_PATH]);
     assert!(rm.status.success(), "{}", stderr(&rm));
     let v: Value = serde_json::from_slice(&rm.stdout).unwrap();
-    assert_eq!(v["b2id"], MEMORY_ID);
-    assert_eq!(v["path"], "concepts/memory.md");
+    assert_eq!(v["path"], MEMORY_PATH);
+    assert!(v.get("b2id").is_none(), "the path is the identity (L1)");
     assert_eq!(
         v["dangled"],
         serde_json::json!(["notes/spaced-repetition.md"])
@@ -1274,7 +1282,10 @@ fn rm_dispatches_to_the_resource_delete() {
     assert!(rm.status.success(), "{}", stderr(&rm));
     let v: Value = serde_json::from_slice(&rm.stdout).unwrap();
     assert_eq!(v["path"], "resources/data.txt");
-    assert!(v.get("b2id").is_none(), "a resource report carries no b2id");
+    assert!(
+        v.get("b2id").is_none(),
+        "no report carries one any more (L1)"
+    );
     assert!(!root.join("resources/data.txt").exists());
 }
 

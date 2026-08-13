@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYGHAAF3FJFTKW6F11V
 type: note
 title: "The Newtype Pattern"
 ---

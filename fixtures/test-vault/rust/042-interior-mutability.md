@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY4JRTR2HEM3Q7WRMSR
 type: note
 title: "Interior Mutability"
 ---

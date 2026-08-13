@@ -34,17 +34,12 @@ tomorrow's model* — made mechanical.
   creates a member it would then never see). The files stay on disk untouched; they are simply outside
   the projection. ([data-model.md](data-model.md) §1 "Hidden means hidden", §10,
   [index-engine.md](index-engine.md) §3, [GH #136](https://github.com/AlteredCraft/B2/issues/136))
-- **S3 — `full-reindex ≡ incremental-update`.** Re-deriving one changed note converges on exactly the
-  state a from-scratch rebuild would produce — including reconciling path ownership and pruning rows
-  for deleted files on a whole-vault pass. ([index-engine.md](index-engine.md) §8)
-  *Carve-out (GH #81):* a **cross-note `b2id` collision** — two files presenting one id, e.g. a copy
-  made in Finder — is a vault state with **no well-defined projection**, and no vault-pure signal
-  distinguishes original from copy (a copy preserves every byte). While one stands, the contested id
-  resolves **incumbent-wins**: the file the index already attributed it to keeps it; a memory-less
-  rebuild tie-breaks first-in-sorted-walk, flagged as such — so an incremental pass and a
-  from-scratch rebuild may disagree *about the colliding rows only*. The collision is re-surfaced on
-  **every** pass until the human resolves it (per W4: surfaced, never auto-fixed); equivalence
-  resumes the moment they do. ([index-engine.md](index-engine.md) §8)
+- **S3 — `full-reindex ≡ incremental-update`, unconditionally.** Re-deriving one changed note
+  converges on exactly the state a from-scratch rebuild would produce — including pruning rows for
+  deleted files on a whole-vault pass. There is no carve-out: with identity **path-keyed** (L1), the
+  filesystem itself guarantees one member per path, so the "two files presenting one identity" state
+  that once needed one (a Finder-duplicated note, GH #81) cannot arise — a copy is simply another
+  note at another path. ([index-engine.md](index-engine.md) §8, [GH #170](https://github.com/AlteredCraft/B2/issues/170))
 - **S4 — No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
   index-only authored facts. Scope: *B2-derived* data — the human's own directory tree is vault
   material, for which the **filesystem is authoritative** (folders are never projected; the tree
@@ -55,9 +50,12 @@ tomorrow's model* — made mechanical.
 
 ## W — Write discipline: the vault changes only on your command
 
-- **W1 — B2's one unbidden write is stamping a missing `b2id`** (a ULID, into frontmatter, on first
-  sight of a note). Everything else B2 writes is the mechanics of an operation the human explicitly
-  invoked. ([data-model.md](data-model.md) §1)
+- **W1 — B2 makes no unbidden writes. Period.** Every byte B2 writes to the vault is the mechanics of
+  an operation the human explicitly invoked (W3). Reading a vault — walking it, projecting it,
+  reindexing it — writes **nothing**, so `reindex` runs unchanged on a read-only vault and a
+  git-versioned vault shows no diff from having been indexed. This is the claim the `b2id` stamp
+  used to hold an asterisk over; removing the stamp (GH #170) is what let the asterisk go.
+  ([data-model.md](data-model.md) §1)
 - **W2 — B2 never authors the body, and never asks it to carry B2 syntax.** The body is 100% the
   human's document. The lone body write is the mechanical move-repair: rewriting an inbound
   `[[oldpath|alias]]`'s *path text* when its target moves — fixing a link the human already wrote,
@@ -66,26 +64,36 @@ tomorrow's model* — made mechanical.
   `b2 link` (frontmatter, never the body); the move-repair of W2; the editor save (`Vault::write` — a
   byte-honest splice of the *human's own* body bytes, guarded by a content-hash revision); the
   frontmatter save (`Vault::write_frontmatter` — the same-guard splice of the *human's own*
-  frontmatter bytes, body untouched, refusing only an edit that changes/removes the `b2id` — GH #79);
+  frontmatter bytes, body untouched, and otherwise unjudged: B2 owns no line in that block);
   and create/move/delete of notes, resources, and folders on explicit command.
 - **W4 — B2 never deletes, moves, or archives vault files of its own accord.** Consequences of human
   edits (orphans, dangling links, hash-matched move candidates) are *surfaced*, flagged, or proposed —
   never silently applied. ([index-engine.md](index-engine.md) §8)
 - **W5 — Round-trip losslessness.** `parse → serialize → parse` is byte-identical outside the specific
-  edit performed; unknown frontmatter keys survive verbatim, in order. B2's own keys are namespaced
-  (`b2id`, `b2_relations`) so they can never collide; a generic `relations:` key is *not* read.
+  edit performed; unknown frontmatter keys survive verbatim, in order. B2's one key is namespaced
+  (`b2_relations`) so it can never collide; a generic `relations:` key is *not* read. A `b2id:` line
+  left by an older B2 is now exactly an unknown key — never read, never rewritten, never removed;
+  nothing needs migrating, and deleting `.b2/` is the whole upgrade (GH #170).
   ([data-model.md](data-model.md) §6, §1)
 
 ## L — Identity & links
 
-- **L1 — The graph keys every edge by `b2id`, never by path or title.** The inline `[[path|alias]]`
-  is a repairable convenience copy. Consequence, also locked: **rename keeps every backlink
-  resolving** — a move rewrites path *text* and zero edge rows. ([data-model.md](data-model.md) §1)
+- **L1 — A note's identity is its vault-relative path, and the graph keys every edge by path**
+  (GH #170). Both link homes are *already* written by path — a body `[[path]]`, a frontmatter
+  `b2_relations:` entry — so an edge stores what the human authored, resolved at projection time,
+  with no machine id in the file and nothing to key on that the vault does not already carry.
+  Consequence: **rename keeps every backlink resolving *when B2 does the move*** — a move rewrites
+  the inbound path *text* and re-keys the moved note's rows in one transaction. A move made
+  **outside** B2 is a delete plus a create: the inbound links surface as dangling (G5) — identified,
+  never silently dropped — which is exactly the durability a path handle has in Obsidian, and one
+  notch better in that B2 says so. ([data-model.md](data-model.md) §1, §3)
 - **L2 — A note's title is its filename.** The frontmatter `title:` key is recognized but inert —
   round-tripped, never driving display, aliases, or search. `b2 link` therefore writes a bare
   `[[path]]`, no alias. ([data-model.md](data-model.md) §1, §9)
-- **L3 — Resources are path-keyed peers with no `b2id` and no sidecar files, ever.** The one
-  asymmetry vs. notes is authoring surface, not status: B2 can read them, never write them.
+- **L3 — Notes and resources share one identity model: the vault-relative path, index-only, with no
+  sidecar files ever.** Since GH #170 the remaining asymmetry is **authoring surface alone**, not
+  status and no longer identity: a note has frontmatter and authored edges because Markdown is the
+  one format whose bytes B2 may write; a resource is a peer document B2 can read and never write.
   ([data-model.md](data-model.md) §10)
 - **L4 — The body is read strictly as ordinary Markdown.** Every body link — wikilink, Markdown link,
   embed — is an untyped, **directed** `references` edge; no prose shape (list marker, leading verb)
@@ -136,11 +144,16 @@ tomorrow's model* — made mechanical.
 - **M3 — One embedding space in v1.** Every vault member funnels to *text* through the same model;
   multimodal spaces and describers are documented future seams, default-off.
   ([data-model.md](data-model.md) §10)
-- **M4 — Vectors live in plain tables, scored in-process; their existence *is* the signal.** The
-  vector tables are created at embed time, so "tables exist" = "this vault has an embedding space" —
-  the fallbacks (BM25-only search on a projected-but-unembedded vault) key on it. Centroids are
-  derived data sharing the vectors' lifecycle — refreshed by the embed pass, dropped on re-chunk, no
-  separate invalidation. ([CLAUDE.md](../../CLAUDE.md), #38)
+- **M4 — Vectors live in plain tables, scored in-process; their existence *is* the signal; and they
+  are keyed by the hash of what was embedded.** The vector tables are created at embed time, so
+  "tables exist" = "this vault has an embedding space" — the fallbacks (BM25-only search on a
+  projected-but-unembedded vault) key on it. `embeddings` is **content-addressed**
+  (`text_hash → vector`, GH #170): the embed input is exactly the chunk's stored text, so identical
+  text has one vector, a renamed or moved note re-embeds nothing, and the store needs no
+  invalidation rule beyond "a hash no chunk references is garbage" — pruned by the whole-vault pass.
+  Centroids are the same derived data keyed by note path — refreshed by the embed pass, dropped on
+  re-chunk. Model identity is not part of the key because it does not have to be: a swap drops the
+  whole table (M2). ([CLAUDE.md](../../CLAUDE.md), #38)
 - **M5 — Note content is never sent off-machine unbidden.** A cloud model endpoint exists only by
   explicit user configuration: the default chat configuration is a local endpoint, and a chat
   request carries the question *and* retrieved note passages — so the consent moment is the
@@ -149,9 +162,11 @@ tomorrow's model* — made mechanical.
 
 ## E — Engineering discipline (what keeps the above true)
 
-- **E1 — The core is deterministic.** No wall-clock and no randomness inside `b2-core`; ids and
-  timestamps are injected (`IdGen`, `created` params). Clocks and log subscribers live in the
-  adapters. ([CLAUDE.md](../../CLAUDE.md) Conventions)
+- **E1 — The core is deterministic.** No wall-clock and no randomness inside `b2-core`; timestamps
+  are injected (`created` params) and nothing is minted at all — since GH #170 identity is the path,
+  so the id generator that was the core's other randomness source is gone rather than merely
+  injected. Clocks and log subscribers live in the adapters.
+  ([CLAUDE.md](../../CLAUDE.md) Conventions)
 - **E2 — `cargo test` is fast, deterministic, and model-free; model quality never enters CI.**
   Real-model work lives behind `b2 init` / the out-of-CI eval. `#[ignore]` is forbidden — a
   hard-to-write test is a signal to re-anchor on the invariant or fix the system.

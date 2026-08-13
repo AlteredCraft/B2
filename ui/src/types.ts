@@ -63,7 +63,6 @@ export interface EmbedStat {
 
 /** `Vault::read` — a note's body + display metadata for the left pane. */
 export interface NoteView {
-  b2id: string;
   path: string;
   title: string | null;
   type: string | null;
@@ -97,7 +96,6 @@ export interface NoteView {
 
 /** `Vault::list_notes` — one note's identity for the file tree (no body). */
 export interface NoteSummary {
-  b2id: string;
   path: string;
   title: string | null;
 }
@@ -115,7 +113,6 @@ export interface ResourceSummary {
 
 /** One note linking at a resource, with the edge's authored context. */
 export interface ResourceBacklink {
-  b2id: string;
   path: string;
   title: string | null;
   type: string;
@@ -135,7 +132,6 @@ export interface ResourceExplainView {
 
 /** `Vault::similar` — a semantically-near, not-yet-linked candidate. */
 export interface SimilarView {
-  b2id: string;
   path: string;
   title: string | null;
   score: number;
@@ -148,7 +144,6 @@ export interface SimilarView {
 
 /** `Vault::search` — one hybrid-search hit. */
 export interface SearchResult {
-  b2id: string;
   path: string;
   title: string | null;
   score: number;
@@ -157,7 +152,6 @@ export interface SearchResult {
 
 /** One typed edge of a note, resolved for display (from `Vault::explain`). */
 export interface NeighborView {
-  b2id: string;
   path: string;
   title: string | null;
   relation: string;
@@ -175,8 +169,8 @@ export interface NeighborView {
 /**
  * One outbound link a note authors at a **resource** (an image, a PDF — any
  * non-`.md` vault file), from `Vault::explain` — the third target kind an edge
- * can have (note / resource / dangling, GH #22). No `b2id`/direction: a resource
- * never authors edges, so these are always outbound.
+ * can have (note / resource / dangling, GH #22). No direction: a resource never
+ * authors edges, so these are always outbound.
  */
 export interface ResourceLink {
   path: string;
@@ -192,7 +186,7 @@ export interface ResourceLink {
  * One outbound link that resolves to nothing — no note and no resource exists at
  * its target (a `[[Hermes]]` naming a *folder*, or a typo). A note is one `.md` file,
  * so a folder is never a valid target; B2 surfaces the link as broken rather than
- * dropping it (GH #12). Has no `b2id`/`path` — nothing resolved.
+ * dropping it (GH #12). Has no `path` — nothing resolved.
  */
 export interface UnresolvedLink {
   /** The target exactly as written in the Markdown (`[[target]]`) — e.g. `Hermes`. */
@@ -209,7 +203,6 @@ export interface UnresolvedLink {
  * links whose target names no note or file, shown with a broken-link emblem (GH #12).
  */
 export interface ExplainView {
-  b2id: string;
   path: string;
   title: string | null;
   connections: NeighborView[];
@@ -229,28 +222,27 @@ export interface WriteReport {
 }
 
 /**
- * `Vault::create_note` — the created note's identity: the `b2id` projection
- * stamped, and the vault-relative path (`.md`-normalized) to open it by.
+ * `Vault::create_note` — the created note's vault-relative path
+ * (`.md`-normalized), which is its identity (L1) and how it is opened.
  */
 export interface AddReport {
-  b2id: string;
   path: string;
 }
 
 /**
  * `Vault::import_file` / `Vault::import_path` — where an imported file landed, and
- * the `b2id` its projection stamped. `null` for a resource: a non-`.md` file is a
- * path-keyed peer with no identity to stamp (data-model.md §10).
+ * whether it was routed as a note (a `.md`, projected) or a resource (one inventory
+ * row). Both are path-keyed peers (L3), so the path is the whole identity either way.
  */
 export interface ImportReport {
   path: string;
-  b2id: string | null;
+  note: boolean;
 }
 
 /**
  * `Vault::create_dir` — the created folder's normalized vault-relative path. A
- * folder is user-authored structure (a real `mkdir` on disk), so there is no
- * b2id and no index row to report.
+ * folder is user-authored structure (a real `mkdir` on disk), so it has no index
+ * row to report at all.
  */
 export interface DirCreateReport {
   dir: string;
@@ -261,14 +253,13 @@ export interface DirCreateReport {
  * paths, plus which inbound files had their link text rewritten.
  */
 export interface MoveReport {
-  b2id: string;
   from: string;
   to: string;
   rewrote: string[];
   links_rewritten: number;
 }
 
-/** `Vault::move_resource` — the resource sibling of `MoveReport` (no b2id). */
+/** `Vault::move_resource` — the resource sibling of `MoveReport` (same shape). */
 export interface ResourceMoveReport {
   from: string;
   to: string;
@@ -290,16 +281,15 @@ export interface DirMoveReport {
 }
 
 /**
- * `Vault::delete_note` — the completed delete: the note's identity, plus the
- * surviving files whose links at it now dangle (they are never rewritten).
+ * `Vault::delete_note` — the completed delete: the note's path, plus the surviving
+ * files whose links at it now dangle (they are never rewritten).
  */
 export interface DeleteReport {
-  b2id: string;
   path: string;
   dangled: string[];
 }
 
-/** `Vault::delete_resource` — the resource sibling of `DeleteReport` (no b2id). */
+/** `Vault::delete_resource` — the resource sibling of `DeleteReport` (same shape). */
 export interface ResourceDeleteReport {
   path: string;
   dangled: string[];
@@ -333,45 +323,6 @@ export interface SkippedNote {
 }
 
 /**
- * Why the kept path kept a contested `b2id` (GH #81): `incumbent` — the index
- * already attributed the id to that file, the one confident signal (a copy
- * preserves every byte, so nothing in the vault distinguishes it from the
- * original); `tie_break` — no incumbent (a fresh index), first-in-path-order
- * kept purely so the pass is reproducible, NOT an identity ruling.
- */
-export type CollisionPrecedence = "incumbent" | "tie_break";
-
-/**
- * A cross-note `b2id` collision the projection pass surfaced (GH #81) — e.g. a
- * note duplicated in Finder. One file keeps the identity; the `shadowed_paths`
- * stay on disk but are NOT indexed until the human resolves: delete the copy,
- * remove its `b2id:` line (next pass stamps a fresh identity), or delete the
- * original (the copy inherits). Surfacing only — B2 never edits either file of
- * its own accord.
- *
- * With no index row a shadowed path is also absent from the file tree (which lists
- * `list_notes`), so the review panel (GH #88) can offer it for *copying* but never
- * for opening — see `anomalies.ts`.
- */
-export interface B2idCollision {
-  b2id: string;
-  kept_path: string;
-  precedence: CollisionPrecedence;
-  shadowed_paths: string[];
-}
-
-/**
- * An identity restamp the projection pass surfaced (GH #81): the file's `b2id`
- * line was removed or blanked outside b2, so the pass stamped a fresh id — the
- * note's identity changed, and inbound links keyed to `old_b2id` now dangle.
- */
-export interface RestampedNote {
-  path: string;
-  old_b2id: string;
-  new_b2id: string;
-}
-
-/**
  * `Vault::project` — what the fast, model-free projection pass did
  * (docs/design/index-engine.md). Once this resolves, the tree and keyword
  * search are live; only vectors are missing. `skipped` names any unreadable files the
@@ -379,17 +330,12 @@ export interface RestampedNote {
  */
 export interface ProjectReport {
   indexed: number;
-  stamped: number;
   skipped: SkippedNote[];
   /** Ghost note rows pruned this pass — files deleted outside b2 (#31). */
   notes_pruned: number;
   /** Resources inventoried this pass, and stale inventory rows pruned (slice 1). */
   resources_indexed: number;
   resources_pruned: number;
-  /** Cross-note b2id collisions this pass (GH #81) — re-surfaced every pass until resolved. */
-  collisions: B2idCollision[];
-  /** Identity restamps this pass (GH #81) — per-pass events; the dangling links persist. */
-  restamped: RestampedNote[];
 }
 
 /** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */

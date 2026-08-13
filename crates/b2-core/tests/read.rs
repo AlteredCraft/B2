@@ -7,7 +7,7 @@
 mod common;
 
 use b2_core::vault::Vault;
-use common::{golden_vault_copy, reindexed_vault, MEMORY_ID, SRS_ID};
+use common::{golden_vault_copy, reindexed_vault, MEMORY_PATH, SRS_PATH};
 
 #[test]
 fn read_returns_body_and_metadata_with_frontmatter_stripped() {
@@ -18,7 +18,7 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 
     // Identity + display metadata: the title is the filename (data-model.md §1 — the
     // frontmatter `title:` is inert); type/created still come from the frontmatter.
-    assert_eq!(note.b2id, MEMORY_ID);
+    assert_eq!(note.path, MEMORY_PATH);
     assert_eq!(note.path, "concepts/memory.md");
     assert_eq!(note.title.as_deref(), Some("memory"));
     assert_eq!(note.r#type.as_deref(), Some("concept"));
@@ -51,7 +51,6 @@ fn read_returns_the_raw_frontmatter_block_verbatim() {
     // while the note's display `title` is its filename (data-model.md §1).
     assert!(fm.contains(r#"title: "Human memory""#));
     assert_eq!(note.title.as_deref(), Some("memory"));
-    assert!(fm.contains(&format!("b2id: {MEMORY_ID}")));
     assert!(fm.contains("type: concept"));
     assert!(!fm.contains("---"), "fences are excluded from the block");
     // …and it is genuinely separate from the body (frontmatter isn't duplicated there).
@@ -85,11 +84,11 @@ fn read_resolves_path_stem_and_b2id_to_the_same_note() {
 
     let by_path = vault.read("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.read("notes/spaced-repetition").unwrap();
-    let by_id = vault.read(SRS_ID).unwrap();
+    let by_id = vault.read(SRS_PATH).unwrap();
 
     assert_eq!(by_path, by_stem);
     assert_eq!(by_path, by_id);
-    assert_eq!(by_id.b2id, SRS_ID);
+    assert_eq!(by_id.path, SRS_PATH);
 }
 
 #[test]

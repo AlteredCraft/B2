@@ -7,11 +7,11 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{reindexed_vault, MEMORY_ID};
+use common::{reindexed_vault, MEMORY_PATH};
 use std::fs;
 
 #[test]
-fn add_writes_a_stamped_note_and_projects_it() {
+fn add_writes_a_minimal_note_and_projects_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
@@ -23,14 +23,14 @@ fn add_writes_a_stamped_note_and_projects_it() {
         )
         .unwrap();
 
-    // The `.md` suffix was appended and the b2id is a real, non-empty id.
+    // The `.md` suffix was appended; the path is the note's identity (L1).
     assert_eq!(report.path, "notes/widgets.md");
-    assert!(!report.b2id.is_empty());
 
-    // The file exists with the expected, stamped frontmatter + body.
+    // The file exists with exactly the template's frontmatter + body — and nothing
+    // else: projecting it added no key of B2's (W1).
     let file = root.join("notes/widgets.md");
     let text = fs::read_to_string(&file).unwrap();
-    assert!(text.contains(&format!("b2id: {}", report.b2id)), "{text}");
+    assert!(!text.contains("b2id"), "nothing is stamped: {text}");
     // `type:` is not seeded — the template stamps only what can't be reconstructed
     // later; ingest defaults an absent type to "note" (GH #80).
     assert!(!text.contains("type:"), "{text}");
@@ -41,13 +41,13 @@ fn add_writes_a_stamped_note_and_projects_it() {
         "{text}"
     );
 
-    // It round-trips losslessly (the stamp is the only mutation ingest made).
+    // It round-trips losslessly.
     let parsed = b2_core::note::parse(&text);
     assert_eq!(parsed.as_str(), text);
 
-    // Projected: it resolves by path and by b2id, and keyword search finds it.
+    // Projected: it resolves in both authored link forms, and search finds it.
     assert!(vault.explain("notes/widgets").is_ok());
-    assert!(vault.explain(&report.b2id).is_ok());
+    assert!(vault.explain(&report.path).is_ok());
     let hits = vault.search("widgets", 10).unwrap();
     assert!(
         hits.iter().any(|h| h.path == "notes/widgets.md"),
@@ -70,19 +70,19 @@ fn add_projects_the_edges_its_body_authors() {
         .unwrap();
 
     // The outbound reference edge is live from the new note…
-    let out = vault.neighbors(&report.b2id).unwrap();
+    let out = vault.neighbors(&report.path).unwrap();
     assert!(
         out.iter().any(|n| n.direction == "outbound"
-            && n.b2id == MEMORY_ID
+            && n.path == MEMORY_PATH
             && n.relation == "references"),
         "add must project the new note's body links: {out:?}"
     );
     // …and shows up as an inbound backlink on the target.
-    let inbound = vault.neighbors(MEMORY_ID).unwrap();
+    let inbound = vault.neighbors(MEMORY_PATH).unwrap();
     assert!(
         inbound
             .iter()
-            .any(|n| n.direction == "inbound" && n.b2id == report.b2id),
+            .any(|n| n.direction == "inbound" && n.path == report.path),
         "the target gains a backlink from the new note: {inbound:?}"
     );
 }
@@ -142,27 +142,26 @@ fn add_refuses_to_clobber_an_existing_file() {
 }
 
 #[test]
-fn create_note_writes_a_stamped_minimal_note_model_free() {
+fn create_note_writes_a_minimal_note_model_free() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     let before = vault.embed_status().unwrap();
 
     let report = vault.create_note("inbox/idea").unwrap();
     assert_eq!(report.path, "inbox/idea.md");
-    assert!(!report.b2id.is_empty());
 
     // On disk: the minimal frontmatter (no title — the display title is the
-    // filename, data-model.md §1), stamped, body-less, in a freshly-created dir.
+    // filename, data-model.md §1), body-less, in a freshly-created dir.
     let text = fs::read_to_string(root.join("inbox/idea.md")).unwrap();
-    assert!(text.contains(&format!("b2id: {}", report.b2id)), "{text}");
+    assert!(!text.contains("b2id"), "nothing is stamped: {text}");
     // `type:` is not seeded — ingest defaults it to "note" (GH #80).
     assert!(!text.contains("type:"), "{text}");
     assert!(text.contains("created:"), "{text}");
     assert!(!text.contains("title:"), "{text}");
 
-    // Projected: it resolves by path and b2id, and the tree lists it.
+    // Projected: it resolves in both authored link forms, and the tree lists it.
     assert!(vault.explain("inbox/idea").is_ok());
-    assert!(vault.explain(&report.b2id).is_ok());
+    assert!(vault.explain(&report.path).is_ok());
     assert!(vault
         .list_notes()
         .unwrap()

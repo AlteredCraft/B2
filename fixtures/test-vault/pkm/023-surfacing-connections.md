@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DX2VX39GSREMHT39M81
 type: note
 title: "Surfacing Connections"
 ---

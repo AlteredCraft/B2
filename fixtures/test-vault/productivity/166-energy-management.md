@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXZ4ZNBKQPEP61W61X9
 type: note
 title: "Energy Management"
 ---

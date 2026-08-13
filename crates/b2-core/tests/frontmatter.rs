@@ -5,7 +5,6 @@
 mod common;
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::note::parse;
 use b2_core::open;
@@ -13,12 +12,12 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
 
-const A: &str = "01JA0000000000000000000001";
-const B: &str = "01JB0000000000000000000002";
+const A: &str = "a.md";
+const B: &str = "b.md";
 
 fn ingest(vault: &Path, db: &Path) -> Connection {
     let conn = open(db).unwrap();
-    ingest_vault(&conn, vault, &UlidGen, &FakeEmbedder::default()).unwrap();
+    ingest_vault(&conn, vault, &FakeEmbedder::default()).unwrap();
     conn
 }
 
@@ -92,19 +91,19 @@ fn reader_projects_frontmatter_relations_as_frontmatter_edges() {
     fs::create_dir_all(&vault).unwrap();
     fs::write(
         vault.join("a.md"),
-        format!("---\nb2id: {A}\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]]\"\n---\nBody.\n"),
+        "---\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]]\"\n---\nBody.\n",
     )
     .unwrap();
     fs::write(
         vault.join("b.md"),
-        format!("---\nb2id: {B}\ntype: note\ntitle: B\n---\nBody.\n"),
+        "---\ntype: note\ntitle: B\n---\nBody.\n",
     )
     .unwrap();
     let conn = ingest(&vault, &tmp.path().join("b2.sqlite"));
 
     let (dst, typ, origin): (String, String, String) = conn
         .query_row(
-            "SELECT dst_id, type, origin FROM edges WHERE src_id = ?1",
+            "SELECT dst_path, type, origin FROM edges WHERE src_path = ?1",
             [A],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
@@ -124,12 +123,12 @@ fn frontmatter_wins_when_the_same_edge_is_in_both_body_and_frontmatter() {
     // frontmatter — with an explanation only the frontmatter home can carry.
     fs::write(
         vault.join("a.md"),
-        format!("---\nb2id: {A}\ntype: note\ntitle: A\nb2_relations:\n  - \"references [[b|B]] — the why\"\n---\nSee [[b|B]].\n"),
+        "---\ntype: note\ntitle: A\nb2_relations:\n  - \"references [[b|B]] — the why\"\n---\nSee [[b|B]].\n",
     )
     .unwrap();
     fs::write(
         vault.join("b.md"),
-        format!("---\nb2id: {B}\ntype: note\ntitle: B\n---\nBody.\n"),
+        "---\ntype: note\ntitle: B\n---\nBody.\n",
     )
     .unwrap();
     let conn = ingest(&vault, &tmp.path().join("b2.sqlite"));
@@ -138,7 +137,7 @@ fn frontmatter_wins_when_the_same_edge_is_in_both_body_and_frontmatter() {
     // §0/§3), and its explanation survives.
     let rows: Vec<(String, Option<String>)> = {
         let mut s = conn
-            .prepare("SELECT origin, explanation FROM edges WHERE src_id = ?1 AND dst_id = ?2 AND type = 'references'")
+            .prepare("SELECT origin, explanation FROM edges WHERE src_path = ?1 AND dst_path = ?2 AND type = 'references'")
             .unwrap();
         s.query_map([A, B], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
@@ -160,19 +159,19 @@ fn a_typed_relation_augments_a_body_link_as_a_second_edge() {
     // reference; a `supports` entry over the same target adds the typed edge.
     fs::write(
         vault.join("a.md"),
-        format!("---\nb2id: {A}\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]] — backs it\"\n---\nSee [[b|B]].\n"),
+        "---\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]] — backs it\"\n---\nSee [[b|B]].\n",
     )
     .unwrap();
     fs::write(
         vault.join("b.md"),
-        format!("---\nb2id: {B}\ntype: note\ntitle: B\n---\nBody.\n"),
+        "---\ntype: note\ntitle: B\n---\nBody.\n",
     )
     .unwrap();
     let conn = ingest(&vault, &tmp.path().join("b2.sqlite"));
 
     let mut rows: Vec<(String, String)> = {
         let mut s = conn
-            .prepare("SELECT type, origin FROM edges WHERE src_id = ?1 AND dst_id = ?2")
+            .prepare("SELECT type, origin FROM edges WHERE src_path = ?1 AND dst_path = ?2")
             .unwrap();
         s.query_map([A, B], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()

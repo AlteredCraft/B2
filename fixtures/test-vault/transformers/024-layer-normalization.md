@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYMM1JXBTZJV8PFW3KZ
 type: note
 title: "Layer Normalization"
 ---

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWT1VWRB58VSYQ27Q1X
 type: note
 title: "Leave No Trace"
 ---

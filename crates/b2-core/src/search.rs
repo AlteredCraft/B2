@@ -27,7 +27,8 @@ pub const RRF_K: usize = 60;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub chunk_id: i64,
-    pub note_b2id: String,
+    /// The note the hit's chunk belongs to, by vault-relative path (L1).
+    pub note_path: String,
     /// Higher is better (RRF score for hybrid; negated distance for vector-only).
     pub score: f64,
 }
@@ -251,10 +252,10 @@ fn resolve_hits(
         if hits.len() == limit {
             break;
         }
-        if let Some(note_b2id) = db::note_for_chunk(conn, chunk_id)? {
+        if let Some(note_path) = db::note_for_chunk(conn, chunk_id)? {
             hits.push(Hit {
                 chunk_id,
-                note_b2id,
+                note_path,
                 score,
             });
         }
@@ -293,13 +294,13 @@ pub fn graph_filtered_search(
         if hits.len() == limit {
             break;
         }
-        let Some(note_b2id) = chunk_note.get(&chunk_id) else {
+        let Some(note_path) = chunk_note.get(&chunk_id) else {
             continue;
         };
-        if reachable.contains(note_b2id) {
+        if reachable.contains(note_path) {
             hits.push(Hit {
                 chunk_id,
-                note_b2id: note_b2id.clone(),
+                note_path: note_path.clone(),
                 score: -(distance as f64), // closer = higher
             });
         }

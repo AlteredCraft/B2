@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DV9Q30V41CJ2PA0Q3CB
 type: note
 title: "Query Planning"
 ---

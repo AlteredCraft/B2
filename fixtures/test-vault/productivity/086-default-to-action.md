@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXRMN7JEAF5JEF7RRYE
 type: note
 title: "Default to Action"
 ---

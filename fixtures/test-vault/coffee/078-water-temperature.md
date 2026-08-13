@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DSY4AB3QQMJ9AJ9H2FZ
 type: note
 title: "Water Temperature"
 ---

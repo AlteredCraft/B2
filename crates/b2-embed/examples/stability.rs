@@ -182,9 +182,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("stability.json lists no probes".into());
     }
 
-    // Work on a throwaway copy: indexing writes `.b2/` (and would stamp a missing
-    // `b2id`), and the committed fixtures are never ours to mutate — the same
-    // isolation the integration tests and `just compare-device` use.
+    // Work on a throwaway copy: indexing writes `.b2/`, and the committed fixtures
+    // are never ours to mutate — the same isolation the integration tests and
+    // `just compare-device` use. (Indexing no longer writes to the vault itself at
+    // all — W1, GH #170 — so the copy is now about `.b2/` alone.)
     let tmp = tempfile::TempDir::new()?;
     let root = tmp.path().join("vault");
     copy_dir_all(&source, &root)?;

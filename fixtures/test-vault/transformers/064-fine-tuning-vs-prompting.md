@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYQ4DXYB6K7Q1B9CX8J
 type: note
 title: "Fine-Tuning vs Prompting"
 ---

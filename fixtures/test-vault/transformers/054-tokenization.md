@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYP7NRW4SMXEH4VZZP7
 type: note
 title: "Tokenization"
 ---

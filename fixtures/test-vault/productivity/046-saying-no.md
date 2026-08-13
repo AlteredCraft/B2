@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXMJFTKNE8PGRDVY4XT
 type: note
 title: "Saying No"
 ---

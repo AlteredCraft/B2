@@ -16,7 +16,6 @@ mod common;
 
 use b2_core::discover::{self, DiscoveryFloor};
 use b2_core::embed::{Embedder, FakeEmbedder};
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
 use b2_core::vault::Vault;
@@ -75,13 +74,10 @@ impl Embedder for GeometricEmbedder {
 
 const NOISE_NOTES: usize = 13;
 
-fn write_note(vault: &Path, name: &str, seq: usize, tag: &str) {
-    let b2id = format!("01JF{seq:022}");
+fn write_note(vault: &Path, name: &str, tag: &str) {
     fs::write(
         vault.join(name),
-        format!(
-            "---\nb2id: {b2id}\ntype: note\ntitle: {name}\n---\ntopic marker VEC:{tag} body.\n"
-        ),
+        format!("---\ntype: note\ntitle: {name}\n---\ntopic marker VEC:{tag} body.\n"),
     )
     .unwrap();
 }
@@ -91,19 +87,20 @@ fn write_note(vault: &Path, name: &str, seq: usize, tag: &str) {
 fn geometric_vault(dir: &Path) -> (Connection, String, String, String) {
     let vault = dir.join("vault");
     fs::create_dir_all(&vault).unwrap();
-    write_note(&vault, "anchor.md", 1, "ANCHOR");
-    write_note(&vault, "mate.md", 2, "MATE");
-    write_note(&vault, "diffuse.md", 3, "DIFFUSE");
+    write_note(&vault, "anchor.md", "ANCHOR");
+    write_note(&vault, "mate.md", "MATE");
+    write_note(&vault, "diffuse.md", "DIFFUSE");
     for i in 0..NOISE_NOTES {
-        write_note(&vault, &format!("noise{i}.md"), 10 + i, &format!("N{i}"));
+        write_note(&vault, &format!("noise{i}.md"), &format!("N{i}"));
     }
     let conn = open(&dir.join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &GeometricEmbedder).unwrap();
+    ingest_vault(&conn, &vault, &GeometricEmbedder).unwrap();
+    // The three named notes, by the thing that identifies them: their paths (L1).
     (
         conn,
-        format!("01JF{:022}", 1),
-        format!("01JF{:022}", 2),
-        format!("01JF{:022}", 3),
+        "anchor.md".to_string(),
+        "mate.md".to_string(),
+        "diffuse.md".to_string(),
     )
 }
 
@@ -116,7 +113,7 @@ fn floor_keeps_the_mate_and_cuts_the_noise_cloud() {
     assert_eq!(
         cands
             .iter()
-            .map(|c| c.note_b2id.clone())
+            .map(|c| c.note_path.clone())
             .collect::<Vec<_>>(),
         vec![mate],
         "the mate stands far above the anchor's noise floor; nothing else does"
@@ -137,7 +134,7 @@ fn floor_suppresses_a_diffuse_anchor_entirely() {
     assert!(
         cands.is_empty(),
         "one undifferentiated cloud has no leader: the honest answer is nothing, got {:?}",
-        cands.iter().map(|c| &c.note_b2id).collect::<Vec<_>>()
+        cands.iter().map(|c| &c.note_path).collect::<Vec<_>>()
     );
 }
 
@@ -147,7 +144,7 @@ fn no_floor_serves_the_raw_nearest_with_no_z() {
     let (conn, anchor, mate, _) = geometric_vault(tmp.path());
     let cands = discover::candidates(&conn, &anchor, 10, None).unwrap();
     assert_eq!(cands.len(), 10, "ungated discovery fills to limit");
-    assert_eq!(cands[0].note_b2id, mate, "ranking itself is unchanged");
+    assert_eq!(cands[0].note_path, mate, "ranking itself is unchanged");
     assert!(
         cands.iter().all(|c| c.z.is_none()),
         "no statistics were computed, so no z is claimed"
@@ -161,14 +158,14 @@ fn floor_is_inert_below_the_minimum_population() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    write_note(&vault, "anchor.md", 1, "ANCHOR");
-    write_note(&vault, "n0.md", 10, "N0");
-    write_note(&vault, "n1.md", 11, "N1");
-    write_note(&vault, "n2.md", 12, "N2");
+    write_note(&vault, "anchor.md", "ANCHOR");
+    write_note(&vault, "n0.md", "N0");
+    write_note(&vault, "n1.md", "N1");
+    write_note(&vault, "n2.md", "N2");
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &GeometricEmbedder).unwrap();
+    ingest_vault(&conn, &vault, &GeometricEmbedder).unwrap();
     let floor = DiscoveryFloor::default();
-    let cands = discover::candidates(&conn, &format!("01JF{:022}", 1), 10, Some(&floor)).unwrap();
+    let cands = discover::candidates(&conn, "anchor.md", 10, Some(&floor)).unwrap();
     assert_eq!(cands.len(), 3, "tiny pool: floor inert, everything served");
     assert!(cands.iter().all(|c| c.z.is_none()));
 }
@@ -181,16 +178,11 @@ fn facade_floors_a_geometric_space_but_never_a_fake_one() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("v");
     fs::create_dir_all(&vault_dir).unwrap();
-    write_note(&vault_dir, "anchor.md", 1, "ANCHOR");
-    write_note(&vault_dir, "mate.md", 2, "MATE");
-    write_note(&vault_dir, "diffuse.md", 3, "DIFFUSE");
+    write_note(&vault_dir, "anchor.md", "ANCHOR");
+    write_note(&vault_dir, "mate.md", "MATE");
+    write_note(&vault_dir, "diffuse.md", "DIFFUSE");
     for i in 0..NOISE_NOTES {
-        write_note(
-            &vault_dir,
-            &format!("noise{i}.md"),
-            10 + i,
-            &format!("N{i}"),
-        );
+        write_note(&vault_dir, &format!("noise{i}.md"), &format!("N{i}"));
     }
 
     let v = Vault::open_with_embedder(&vault_dir, Box::new(GeometricEmbedder)).unwrap();
@@ -211,11 +203,11 @@ fn facade_floors_a_geometric_space_but_never_a_fake_one() {
     // A fake-embedded space is never floored, whatever the vault's floor setting.
     let fake_dir = tmp.path().join("vf");
     fs::create_dir_all(&fake_dir).unwrap();
-    write_note(&fake_dir, "anchor.md", 1, "ANCHOR");
-    write_note(&fake_dir, "mate.md", 2, "MATE");
-    write_note(&fake_dir, "diffuse.md", 3, "DIFFUSE");
+    write_note(&fake_dir, "anchor.md", "ANCHOR");
+    write_note(&fake_dir, "mate.md", "MATE");
+    write_note(&fake_dir, "diffuse.md", "DIFFUSE");
     for i in 0..NOISE_NOTES {
-        write_note(&fake_dir, &format!("noise{i}.md"), 10 + i, &format!("N{i}"));
+        write_note(&fake_dir, &format!("noise{i}.md"), &format!("N{i}"));
     }
     let mut vf = Vault::open_with_embedder(&fake_dir, Box::new(FakeEmbedder::new(64))).unwrap();
     vf.reindex().unwrap();

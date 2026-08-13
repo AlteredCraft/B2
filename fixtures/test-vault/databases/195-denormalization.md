@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVBA1NKA7NB6DAFPP3G
 type: note
 title: "Denormalization"
 ---

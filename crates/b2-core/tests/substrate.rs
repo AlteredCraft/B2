@@ -323,8 +323,8 @@ fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
         let conn = open(&db_path).unwrap();
         // A note the index believes is projected — the row that must not outlive the repair.
         conn.execute(
-            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
-             VALUES ('01SURVIVOR', 'kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            "INSERT INTO notes(path, type, body_hash, indexed_at)
+             VALUES ('kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
             [],
         )
         .unwrap();
@@ -366,8 +366,8 @@ fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
     {
         let conn = open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO notes(b2id, path, type, body_hash, indexed_at)
-             VALUES ('01SURVIVOR', 'kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            "INSERT INTO notes(path, type, body_hash, indexed_at)
+             VALUES ('kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
             [],
         )
         .unwrap();

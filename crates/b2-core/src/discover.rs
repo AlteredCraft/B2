@@ -114,8 +114,8 @@ impl Default for DiscoveryFloor {
 /// for `b2 similar` without threading a lifetime through generation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateNote {
-    /// The candidate note's `b2id`.
-    pub note_b2id: String,
+    /// The candidate note's vault-relative path — its identity (L1).
+    pub note_path: String,
     /// Best chunk-pair similarity across the anchor's chunks × this note's chunks —
     /// higher is nearer (negated L2 distance, matching [`Hit`](crate::search::Hit)).
     pub score: f64,
@@ -131,7 +131,7 @@ pub struct CandidateNote {
 }
 
 /// Generate up to `limit` connection-discovery candidates for `anchor`, best score
-/// first (ties broken by `note_b2id` for determinism). `limit` is a cap, not a
+/// first (ties broken by `note_path` for determinism). `limit` is a cap, not a
 /// promise (index-engine.md §3): with a [`DiscoveryFloor`] the list ends where the
 /// anchor's own score distribution says the candidates stop being signal — possibly
 /// at zero — and without one it under-fills only for want of scorable notes (a
@@ -239,9 +239,9 @@ pub fn candidates(
     // earliest (lowest-`seq`) chunk on ties, deterministically. A shortlisted note
     // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
     let mut out: Vec<CandidateNote> = Vec::new();
-    for (i, (_, note_b2id)) in coarse.into_iter().enumerate() {
+    for (i, (_, note_path)) in coarse.into_iter().enumerate() {
         let mut best: Option<(f32, i64)> = None;
-        for (chunk_id, v) in db::note_chunk_vectors(conn, &note_b2id)? {
+        for (chunk_id, v) in db::note_chunk_vectors(conn, &note_path)? {
             for a in &anchor_vecs {
                 let dist_sq = l2_sq(a, &v);
                 if best.is_none_or(|(cur, _)| dist_sq < cur) {
@@ -251,7 +251,7 @@ pub fn candidates(
         }
         if let Some((dist_sq, evidence_chunk_id)) = best {
             out.push(CandidateNote {
-                note_b2id,
+                note_path,
                 score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
                 evidence_chunk_id,
                 z: zs.as_ref().and_then(|z| z.get(i)).copied(),
@@ -259,13 +259,13 @@ pub fn candidates(
         }
     }
 
-    // Best score first; ties broken by id so the ranking (and thus `limit`'s prefix)
-    // is deterministic.
+    // Best score first; ties broken by path so the ranking (and thus `limit`'s
+    // prefix) is deterministic.
     out.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.note_b2id.cmp(&b.note_b2id))
+            .then(a.note_path.cmp(&b.note_path))
     });
     out.truncate(limit);
     Ok(out)

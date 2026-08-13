@@ -12,7 +12,6 @@
 //! subscriber (see the note in `tests/logging.rs`).
 
 use b2_core::embed::FakeEmbedder;
-use b2_core::id::UlidGen;
 use b2_core::ingest::ingest_vault;
 use b2_core::{discover, open};
 use std::fs;
@@ -43,10 +42,10 @@ impl<'a> MakeWriter<'a> for Capture {
 }
 
 /// The exact template `db::note_for_chunk` emits — a per-hit chunk→note resolution.
-const PER_HIT_SQL: &str = "SELECT note_b2id FROM chunks WHERE id = ?1";
+const PER_HIT_SQL: &str = "SELECT note_path FROM chunks WHERE id = ?1";
 /// The stage-1 coarse scan `db::for_each_note_centroid` emits — must run **once**
 /// per call: it is the only whole-space read discovery is allowed.
-const CENTROID_SCAN_SQL: &str = "SELECT note_b2id, centroid FROM note_centroids";
+const CENTROID_SCAN_SQL: &str = "SELECT note_path, centroid FROM note_centroids";
 /// The whole-space chunk-vector scan (`db::for_each_stored_vector`) — search's
 /// primitive, which discovery must **never** run: reading every stored vector per
 /// note-open is exactly the O(vault) cost #38 removed.
@@ -68,27 +67,27 @@ fn candidates_issues_bounded_sql_never_o_chunks() {
     fs::create_dir_all(&vault).unwrap();
     let mut ids = Vec::new();
     for n in 0..NOTES {
-        let b2id = format!("01JN{n:022}"); // ULID-shaped, unique, all-valid
         let body = (0..PARAS)
             .map(|p| format!("note {n} paragraph {p}: shared topic alpha beta gamma. ").repeat(40))
             .collect::<Vec<_>>()
             .join("\n\n");
+        let name = format!("n{n}.md");
         fs::write(
-            vault.join(format!("n{n}.md")),
-            format!("---\nb2id: {b2id}\ntype: note\ntitle: N{n}\n---\n{body}\n"),
+            vault.join(&name),
+            format!("---\ntype: note\ntitle: N{n}\n---\n{body}\n"),
         )
         .unwrap();
-        ids.push(b2id);
+        ids.push(name);
     }
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &UlidGen, &FakeEmbedder::new(64)).unwrap();
+    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
 
     let total_chunks: i64 = conn
         .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
         .unwrap();
     let anchor_chunks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM chunks WHERE note_b2id = ?1",
+            "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
             [&ids[0]],
             |r| r.get(0),
         )

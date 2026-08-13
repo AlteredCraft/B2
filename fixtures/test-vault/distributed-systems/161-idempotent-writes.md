@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVVYNHE07BMMFRSERJB
 type: note
 title: "Idempotent Writes"
 ---

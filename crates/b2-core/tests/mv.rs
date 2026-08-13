@@ -7,19 +7,19 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{reindexed_vault, MEMORY_ID, SRS_ID};
+use common::{reindexed_vault, MEMORY_PATH, SRS_PATH};
 use std::fs;
 use std::path::Path;
 
-/// The inbound set of a note, as sortable `(label, b2id)` pairs — the shape the
-/// graph exposes and the thing a move must leave unchanged.
+/// The inbound set of a note, as sortable `(label, src_path)` pairs — the shape the
+/// graph exposes and the thing a move must carry to the destination intact.
 fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
     let mut ns: Vec<(String, String)> = vault
         .neighbors(note_ref)
         .unwrap()
         .into_iter()
         .filter(|n| n.direction == "inbound")
-        .map(|n| (n.label, n.b2id))
+        .map(|n| (n.label, n.path))
         .collect();
     ns.sort();
     ns
@@ -31,12 +31,12 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
     let (vault, root) = reindexed_vault(tmp.path());
 
     // The backlink set of memory, before the move (SRS supports + references it).
-    let before = inbound(&vault, MEMORY_ID);
+    let before = inbound(&vault, MEMORY_PATH);
     assert_eq!(
         before,
         vec![
-            ("referenced-by".to_string(), SRS_ID.to_string()),
-            ("supported-by".to_string(), SRS_ID.to_string()),
+            ("referenced-by".to_string(), SRS_PATH.to_string()),
+            ("supported-by".to_string(), SRS_PATH.to_string()),
         ]
     );
 
@@ -64,9 +64,9 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
     assert!(srs.contains("[[concepts/human-memory|Human memory]]"));
     assert!(!srs.contains("[[concepts/memory|"));
 
-    // The graph is identical — edges key on b2id, so the backlink set is unchanged,
-    // reachable by the new path AND by the (unchanged) b2id.
-    assert_eq!(inbound(&vault, MEMORY_ID), before);
+    // The graph arrives intact at the destination: the note's identity moved with
+    // it (L1), and every backlink came along — index-side through the cascading
+    // re-key, Markdown-side through the rewritten link text above.
     assert_eq!(inbound(&vault, "concepts/human-memory.md"), before);
     // The old path no longer resolves.
     assert!(matches!(
@@ -108,7 +108,7 @@ fn move_leaves_unrelated_files_byte_identical() {
     let bystander = root.join("unrelated.md");
     fs::write(
         &bystander,
-        "---\nb2id: 01JUNREL000000000000000ZZ\ntype: note\ntitle: Unrelated\n---\nNo links here.\n",
+        "---\ntype: note\ntitle: Unrelated\n---\nNo links here.\n",
     )
     .unwrap();
     vault.reindex().unwrap();
@@ -126,7 +126,9 @@ fn move_without_md_suffix_appends_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    let report = vault.move_note(MEMORY_ID, "concepts/human-memory").unwrap();
+    let report = vault
+        .move_note(MEMORY_PATH, "concepts/human-memory")
+        .unwrap();
 
     assert_eq!(report.to, "concepts/human-memory.md");
     assert!(root.join("concepts/human-memory.md").exists());
@@ -200,20 +202,20 @@ fn dir_move_vault(root: &Path) -> Vault {
     fs::create_dir_all(root.join("docs")).unwrap();
     fs::write(
         root.join("docs/alpha.md"),
-        "---\nb2id: 01JALPHA000000000000000A\ntype: note\ntitle: Alpha\n---\n\
+        "---\ntype: note\ntitle: Alpha\n---\n\
          Sibling: [[docs/beta|Beta]]. Image: ![p](pic.png)\n",
     )
     .unwrap();
     fs::write(
         root.join("docs/beta.md"),
-        "---\nb2id: 01JBETA0000000000000000B\ntype: note\ntitle: Beta\n---\nBody.\n",
+        "---\ntype: note\ntitle: Beta\n---\nBody.\n",
     )
     .unwrap();
     fs::write(root.join("docs/pic.png"), b"\x89PNG fake bytes").unwrap();
     fs::write(root.join("docs/.keep"), "unindexed dotfile").unwrap();
     fs::write(
         root.join("hub.md"),
-        "---\nb2id: 01JHUB00000000000000000C\ntype: note\ntitle: Hub\n---\n\
+        "---\ntype: note\ntitle: Hub\n---\n\
          See [[docs/alpha|Alpha]] and ![pic](docs/pic.png).\n",
     )
     .unwrap();
@@ -268,7 +270,7 @@ fn move_dir_rewrites_inbound_and_intra_folder_links_and_graph_is_unchanged() {
     let root = tmp.path().join("vault");
     let vault = dir_move_vault(&root);
 
-    let before = inbound(&vault, "01JALPHA000000000000000A");
+    let before = inbound(&vault, "docs/alpha.md");
     let report = vault.move_dir("docs", "media").unwrap();
 
     // The outside file's wikilink and Markdown resource link are both rewritten.
@@ -291,9 +293,9 @@ fn move_dir_rewrites_inbound_and_intra_folder_links_and_graph_is_unchanged() {
         "hub's two links + alpha's sibling link"
     );
 
-    // The graph is identical — edges key on b2id — and new paths resolve.
-    assert_eq!(inbound(&vault, "01JALPHA000000000000000A"), before);
-    assert_eq!(inbound(&vault, "media/alpha").len(), before.len());
+    // The graph arrives intact at the new paths: every moved note re-keyed with
+    // the folder, and the inbound link text followed.
+    assert_eq!(inbound(&vault, "media/alpha.md"), before);
     assert!(matches!(
         vault.neighbors("docs/alpha").unwrap_err(),
         Error::NoteNotFound(_)
@@ -335,7 +337,7 @@ fn move_dir_incremental_equals_full_rebuild() {
     vault.move_dir("docs", "archive/media").unwrap();
 
     let notes_after_move = vault.list_notes().unwrap();
-    let neighbors_after_move = inbound(&vault, "01JALPHA000000000000000A");
+    let neighbors_after_move = inbound(&vault, "archive/media/alpha.md");
     drop(vault);
 
     // Drop the disposable index and rebuild from the Markdown alone.
@@ -345,7 +347,7 @@ fn move_dir_incremental_equals_full_rebuild() {
 
     assert_eq!(rebuilt.list_notes().unwrap(), notes_after_move);
     assert_eq!(
-        inbound(&rebuilt, "01JALPHA000000000000000A"),
+        inbound(&rebuilt, "archive/media/alpha.md"),
         neighbors_after_move
     );
 }
@@ -433,17 +435,17 @@ fn move_repairs_only_the_moved_target_not_prefix_siblings() {
     fs::create_dir_all(root.join("concepts")).unwrap();
     fs::write(
         root.join("concepts/memory.md"),
-        "---\nb2id: 01JMEM0000000000000000000A\ntype: concept\ntitle: Memory\n---\nBody.\n",
+        "---\ntype: concept\ntitle: Memory\n---\nBody.\n",
     )
     .unwrap();
     fs::write(
         root.join("concepts/memory-palace.md"),
-        "---\nb2id: 01JMPALACE00000000000000A\ntype: concept\ntitle: Memory palace\n---\nBody.\n",
+        "---\ntype: concept\ntitle: Memory palace\n---\nBody.\n",
     )
     .unwrap();
     fs::write(
         root.join("hub.md"),
-        "---\nb2id: 01JHUB00000000000000000A\ntype: note\ntitle: Hub\n---\n\
+        "---\ntype: note\ntitle: Hub\n---\n\
          See [[concepts/memory|Memory]] and [[concepts/memory-palace|Palace]].\n",
     )
     .unwrap();
@@ -464,4 +466,99 @@ fn move_repairs_only_the_moved_target_not_prefix_siblings() {
         hub.contains("[[concepts/memory-palace|Palace]]"),
         "the prefix-sharing sibling link is untouched"
     );
+}
+
+/// **A move re-embeds nothing** — the content-addressed vector store paying for the
+/// pivot (M4, GH #170). Identity is the path, so moving a note changes it; what
+/// makes that cheap is that vectors are keyed by chunk *text*, which a move does not
+/// touch. Asserted on the vectors themselves, not on a count: the moved note's
+/// passages must come back byte-identical, at the new path, with no forward pass.
+///
+/// The in-band half. The out-of-band half is below, and matters more: there the note
+/// is projected as a delete plus a create, so "re-embeds nothing" is the *only*
+/// thing keeping that path cheap.
+#[test]
+fn a_move_reuses_every_vector() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
+    let conn = common::index_conn(&root);
+
+    let before = note_vectors(&conn, MEMORY_PATH);
+    assert!(!before.is_empty(), "the golden note is embedded");
+
+    let report = vault
+        .move_note(MEMORY_PATH, "archive/human-memory.md")
+        .unwrap();
+    assert_eq!(report.to, "archive/human-memory.md");
+
+    assert_eq!(
+        note_vectors(&conn, "archive/human-memory.md"),
+        before,
+        "the same chunk text addresses the same vectors at the new path"
+    );
+    assert!(
+        note_vectors(&conn, MEMORY_PATH).is_empty(),
+        "and nothing is left at the old one"
+    );
+}
+
+/// The out-of-band move: a `git mv`/Finder rename, which a path-keyed index sees as
+/// a delete plus a create. Two claims, and the pivot needs both:
+///
+///  * the inbound links **surface as dangling** rather than silently resolving or
+///    vanishing (G5) — the scope decision GH #170 made, "identification, not repair";
+///  * it **re-embeds nothing**, because the re-created note's chunks hash to vectors
+///    already stored. That is what keeps the accepted loss to chunk/FTS/edge
+///    re-projection instead of a full re-embed of the moved file.
+#[test]
+fn an_out_of_band_move_dangles_its_backlinks_and_re_embeds_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
+    let conn = common::index_conn(&root);
+    let before = note_vectors(&conn, MEMORY_PATH);
+
+    // Behind B2's back — no `b2 mv`, so no link repair and no re-key.
+    fs::create_dir_all(root.join("archive")).unwrap();
+    fs::rename(root.join(MEMORY_PATH), root.join("archive/human-memory.md")).unwrap();
+
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.notes_pruned, 1, "the old path is gone");
+    assert_eq!(
+        report.embedded, 0,
+        "the moved note's chunk text is unchanged, so its vectors are already stored"
+    );
+    assert_eq!(
+        note_vectors(&conn, "archive/human-memory.md"),
+        before,
+        "and they are the same vectors, reachable at the new path"
+    );
+
+    // The accepted loss, surfaced rather than hidden: SRS still links the old path,
+    // and that link now reads as broken instead of resolving to nothing in silence.
+    let dangling = vault.unresolved_links(SRS_PATH).unwrap();
+    assert!(
+        dangling.iter().any(|u| u.target == "concepts/memory"),
+        "the inbound link surfaces as unresolved: {dangling:?}"
+    );
+    assert!(
+        vault
+            .neighbors("archive/human-memory.md")
+            .unwrap()
+            .is_empty(),
+        "nothing silently re-points at the new path — B2 identifies, it does not repair"
+    );
+}
+
+/// A note's stored chunk vectors in `seq` order, as raw blobs — the unit both move
+/// tests compare, so "re-embeds nothing" is checked on the bytes rather than on a
+/// count that a coincidence could satisfy.
+fn note_vectors(conn: &rusqlite::Connection, note_path: &str) -> Vec<Vec<u8>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.vector FROM chunks c JOIN embeddings e ON e.text_hash = c.text_hash
+             WHERE c.note_path = ?1 ORDER BY c.seq",
+        )
+        .unwrap();
+    let rows = stmt.query_map([note_path], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
 }

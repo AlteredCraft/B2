@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWR6VTBWQHFY5077NE0
 type: note
 title: "Water Treatment"
 ---

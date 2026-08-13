@@ -18,7 +18,6 @@ import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked"
 // resolve there. tsc rewrites nothing (noEmit).
 import { escapeHtml } from "./escape.ts";
 import { sanitizeHtml } from "./sanitize.ts";
-import { anomalyRows, type AnomalyPath, type AnomalyRow } from "./anomalies.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
@@ -362,7 +361,7 @@ export function treePaneHtml(state: AppState): string {
 //
 // The drawer is also the frontmatter's *editing* surface (GH #79): Edit swaps the peek
 // for a raw-YAML textarea with explicit Save/Cancel (no autosave — half-typed YAML is
-// not a body sentence, and the host's b2id guard wants a deliberate save to refuse).
+// not a body sentence, so an autosaved keystroke is not a save).
 // While `fmEditing`, the pane is under the render carve-out (main.ts), so this HTML is
 // built once on entry and the buffer lives in the DOM. A block B2 can't read as YAML
 // gets a non-blocking warning (`frontmatter_readable`) — the same flag an external
@@ -390,8 +389,9 @@ function noteBarHtml(state: AppState, note: NoteView): string {
   let body = "";
   if (open && editing) {
     // Seeded VERBATIM (not the display-trimmed `yaml`): what you edit is what's on
-    // disk. b2id stays visible — hiding it would make the drawer lie about the
-    // bytes — and the host guard is what protects it (E3: the rule lives in core).
+    // disk. Every key shows, including any B2 doesn't model — the block is the
+    // human's, and B2 owns no line inside it (W3; the `b2id` guard went with the
+    // stamp, GH #170).
     const rows = Math.min(16, Math.max(4, fm.split("\n").length + 1));
     // The extra "\n" right after the opening tag is sacrificial: HTML parsing strips
     // exactly one leading newline from a textarea's content, so without it a block
@@ -406,7 +406,7 @@ function noteBarHtml(state: AppState, note: NoteView): string {
           </span>
         </div>
         <div class="fm-actions">
-          <span class="fm-hint">b2id is the note's identity — B2 keeps it as is · ⌘⏎ saves · Esc cancels</span>
+          <span class="fm-hint">This block is yours — B2 changes nothing in it · ⌘⏎ saves · Esc cancels</span>
           <button id="fm-cancel" class="btn small">Cancel</button>
           <button id="fm-save" class="btn small primary">Save</button>
         </div>
@@ -1654,88 +1654,8 @@ function deleteModalHtml(state: AppState): string {
     </div>`;
 }
 
-/** The role caption in front of a path — what this file's part in the anomaly was. */
-const ANOMALY_ROLE: Record<AnomalyPath["role"], string> = {
-  shadowed: "not indexed",
-  kept: "kept the identity",
-  restamped: "re-stamped",
-};
-
-/**
- * One path inside an anomaly row, as a caption + the path + the one thing B2 can do
- * with it (K1: a control, never inert text — which is what #88 was reported about).
- *
- * The action splits on `indexed`, and honestly: a note that still holds its row opens
- * (and the open reveals it in the tree, via `openNote`'s `expandAncestors`), while a
- * **shadowed** copy has no row — the file tree lists notes from the index, so the copy
- * is not there to reveal and `read_note` would not resolve it. What B2 can offer for
- * that file is its path, ready to paste wherever the human will resolve it. Saying so
- * out loud beats a Reveal button that silently does nothing.
- */
-function anomalyPathHtml(p: AnomalyPath): string {
-  const path = escapeHtml(p.path);
-  const action = p.indexed
-    ? `<button class="btn ghost small" data-anomaly-open="${path}" title="Open this note (reveals it in the file tree)">Open</button>`
-    : `<button class="btn ghost small" data-anomaly-copy="${path}" title="Copy this path — the file has no index row, so it isn't in the file tree">Copy path</button>`;
-  return `<li class="anomaly-path">
-        <span class="anomaly-role">${escapeHtml(ANOMALY_ROLE[p.role])}</span>
-        <code class="anomaly-file">${path}</code>
-        ${action}
-      </li>`;
-}
-
-function anomalyRowHtml(row: AnomalyRow): string {
-  return `<section class="anomaly" data-anomaly="${escapeHtml(row.key)}">
-      <h4 class="anomaly-title">${escapeHtml(row.title)}</h4>
-      <p class="anomaly-detail">${escapeHtml(row.detail)}</p>
-      <ul class="anomaly-paths">${row.paths.map(anomalyPathHtml).join("")}</ul>
-      <p class="anomaly-fix">${escapeHtml(row.fix)}</p>
-    </section>`;
-}
-
-/**
- * The anomaly review panel (GH #88) — the ⚠ badge's and ⇧⌘A's surface: every
- * collision and restamp the **latest** projection pass surfaced, one row each,
- * with the files they name as reachable controls.
- *
- * It replaces a toast that ran every anomaly of a pass into one paragraph and
- * cleared on a 4.5s timer regardless of length. What it is *not* is a notification
- * log: it paints `state.anomalies` — the last report, nothing accumulated, nothing
- * persisted (index-engine.md §8, S2) — so an anomaly resolved on disk is gone from
- * here the moment a pass comes back clean, which is also why the empty states say
- * what they say rather than "no notifications".
- *
- * And there are **two** of those, because "no pass has run" is not "the pass found
- * nothing" — a distinction this panel of all surfaces has to keep. `null` is the
- * ordinary state of a healthy vault: auto-index-on-open returns early when the index
- * is already complete, so a session that opens a fully-indexed vault and touches
- * nothing never runs a whole-vault pass at all. Reporting "found none" there would
- * vouch for a vault nothing has looked at, which is exactly the silent-shadowing
- * failure #81 exists to end.
- */
-function anomaliesModalHtml(state: AppState): string {
-  const rows = state.anomalies ? anomalyRows(state.anomalies) : [];
-  const body = !state.anomalies
-    ? `<p class="muted anomaly-empty">No index pass has run this session, so there is nothing to report yet — Reindex to check the vault. (An external change to the vault also triggers a pass.)</p>`
-    : rows.length
-      ? `<div class="anomaly-list">${rows.map(anomalyRowHtml).join("")}</div>`
-      : `<p class="muted anomaly-empty">The latest pass found none. These notices are re-derived from the vault every pass — resolve a file and it stops appearing here.</p>`;
-  return `<div class="modal-backdrop">
-      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="Index anomalies">
-        <h3>Index anomalies</h3>
-        <p class="muted">What the last index pass found and could not decide for you. B2 reports these and changes nothing on its own — which file keeps an identity is yours to say.</p>
-        ${body}
-        <div class="modal-actions">
-          <span class="modal-hint">Esc closes</span>
-          <button class="btn primary" data-anomalies-close>Done</button>
-        </div>
-      </div>
-    </div>`;
-}
-
 export function modalHtml(state: AppState): string {
   if (state.settingsOpen) return settingsModalHtml(state);
-  if (state.anomaliesOpen) return anomaliesModalHtml(state);
   if (state.moveTarget) return moveModalHtml(state);
   if (state.deleteTarget) return deleteModalHtml(state);
   const t = state.linkTarget;

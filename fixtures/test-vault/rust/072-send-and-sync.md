@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY76WJ22WM5ZHEZRXG9
 type: note
 title: "Send and Sync"
 ---

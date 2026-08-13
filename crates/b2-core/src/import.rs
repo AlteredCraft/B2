@@ -35,13 +35,15 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// What an import did: where the file landed, and — for a note — the `b2id` the
-/// projection stamped or read back. `None` for a resource, which has no identity to
-/// stamp (invariants.md L3: resources are path-keyed peers).
+/// What an import did: where the file landed — which, for a note and a resource
+/// alike, is the whole of what arrived (invariants L1/L3: both are path-keyed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportReport {
     pub path: String,
-    pub b2id: Option<String>,
+    /// Whether the arriving file was routed as a **note** (a `.md`, projected with
+    /// chunks/FTS/edges) rather than a resource (one inventory row). The adapters
+    /// use it to decide whether the drop is openable in the editor.
+    pub note: bool,
 }
 
 /// Import `bytes` into the vault folder `dir` (`""` for the root) under `file_name`.
@@ -70,8 +72,8 @@ pub fn import_bytes(
 ///
 /// Same refusals as [`import_bytes`], plus [`Error::ImportDestination`] for a source
 /// that is a folder or has no file name. A source *inside* the vault is a duplicate,
-/// not an error — and if it is a note, the copy carries the original's `b2id`, which
-/// [`project_placed`]'s guard refuses rather than let it steal the identity.
+/// not an error: since a note's identity is its path (L1), a copy landing at a free
+/// path is simply a second note — the same thing it is in Finder.
 pub fn import_path(ctx: ProjectionCtx, dir: &str, source: &Path) -> Result<ImportReport> {
     if source.is_dir() {
         return Err(Error::ImportDestination(format!(
@@ -164,13 +166,9 @@ fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<(
 }
 
 /// Project the just-placed file from disk, routing on its extension exactly as the
-/// vault walk does ([`ResourceClass::of_path`]): `.md` is a note (chunks, FTS, edges,
-/// a stamped `b2id`), everything else is a resource (one inventory row).
-///
-/// A note gets the single-note collision guard first (GH #81). An *arriving* file is
-/// precisely the case that guard exists for: a copied note carries the original's
-/// `b2id`, and projecting it would silently transfer that identity — and every inbound
-/// edge — to the copy.
+/// vault walk does ([`ResourceClass::of_path`]): `.md` is a note (chunks, FTS,
+/// edges), everything else is a resource (one inventory row). B2 adds nothing to
+/// either — the bytes are the human's and the destination path is the identity.
 ///
 /// **On a refusal the placed file is removed again.** That is B2 undoing its own
 /// half-finished write, not deleting vault material (W4): the file becomes vault
@@ -180,11 +178,11 @@ fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<(
 /// The removal is best-effort, and deliberately doesn't mask the error the caller needs:
 /// if the unlink *also* fails, the projection's error is still what's returned — it is
 /// the actionable one — and the leftover file is simply an unindexed file in the vault,
-/// which is the state a Finder copy produces and which the whole-vault pass already
-/// knows how to resolve (a colliding note surfaces there incumbent-wins, GH #81).
+/// which is the state a Finder copy produces and which the next whole-vault pass picks
+/// up as an ordinary new member.
 fn project_placed(ctx: ProjectionCtx, rel: String, abs: &Path) -> Result<ImportReport> {
     match project_from_disk(ctx, &rel) {
-        Ok(b2id) => Ok(ImportReport { path: rel, b2id }),
+        Ok(note) => Ok(ImportReport { path: rel, note }),
         Err(e) => {
             let _ = fs::remove_file(abs);
             Err(e)
@@ -192,12 +190,12 @@ fn project_placed(ctx: ProjectionCtx, rel: String, abs: &Path) -> Result<ImportR
     }
 }
 
-/// The routing itself: the note arm's `b2id`, or `None` for a resource.
-fn project_from_disk(ctx: ProjectionCtx, rel: &str) -> Result<Option<String>> {
+/// The routing itself: `true` for the note arm, `false` for a resource.
+fn project_from_disk(ctx: ProjectionCtx, rel: &str) -> Result<bool> {
     match ResourceClass::of_path(rel) {
         None => {
-            ingest::guard_single_note_collision(ctx.conn, ctx.root, rel)?;
-            Ok(Some(ingest::project_file(ctx, rel)?.b2id))
+            ingest::project_file(ctx, rel)?;
+            Ok(true)
         }
         // `force`: the walk may skip a file whose `(size, mtime)` is unchanged, but an
         // import never may. The row it would be trusting can describe a file that was
@@ -206,7 +204,7 @@ fn project_from_disk(ctx: ProjectionCtx, rel: &str) -> Result<Option<String>> {
         // for bytes that no longer exist. Hash what was actually placed.
         Some(class) => {
             ingest::project_resource_file(ctx.conn, ctx.root, rel, class, true)?;
-            Ok(None)
+            Ok(false)
         }
     }
 }

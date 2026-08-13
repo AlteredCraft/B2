@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXKF1CCE86MPZTNBXDW
 type: note
 title: "Managing Interruptions"
 ---

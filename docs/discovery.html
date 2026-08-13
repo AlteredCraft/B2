@@ -170,11 +170,11 @@
 
         <rect class="node" style="stroke:var(--t1)" x="280" y="320" width="440" height="52" rx="10"/>
         <text class="title" x="500" y="343" text-anchor="middle">rank · cap</text>
-        <text class="sub mono-t" x="500" y="360" text-anchor="middle">sort desc · tie-break b2id · truncate(limit)</text>
+        <text class="sub mono-t" x="500" y="360" text-anchor="middle">sort desc · tie-break path · truncate(limit)</text>
 
         <rect class="node" style="stroke:var(--green)" x="280" y="394" width="440" height="56" rx="10"/>
         <text class="title" x="500" y="418" text-anchor="middle">list candidates — path · title · score · evidence</text>
-        <text class="sub mono-t" x="500" y="436" text-anchor="middle">CandidateNote { note_b2id, score, evidence_chunk_id }</text>
+        <text class="sub mono-t" x="500" y="436" text-anchor="middle">CandidateNote { note_path, score, evidence_chunk_id }</text>
 
         <!-- spine edges -->
         <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,72 L500,92"/>
@@ -207,7 +207,7 @@
     <span class="mono">graph::reachable_within(anchor, 1)</span> excluded up front and a shortlist many times
     <span class="mono">limit</span> kept; <b>stage 2</b>: exact max-sim over only the shortlist's chunk vectors,
     keeping each note's best pair and its evidence chunk. The <b>quality floor</b> (below) is judged on the full
-    stage-1 population before any truncation; the result sorts by score with a <span class="mono">b2id</span>
+    stage-1 population before any truncation; the result sorts by score with a <span class="mono">path</span>
     tie-break and truncates to <span class="mono">limit</span>. Returns empty when there's no embedding space,
     the anchor has no chunks, <span class="mono">limit == 0</span> — or when the floor says nothing genuinely
     relates. Vector-only; re-embeds nothing.</div>
@@ -267,7 +267,7 @@ b2 reindex                    <span class="c"># embed the vault — the only emb
 b2 similar espresso-extraction.md    <span class="c"># instant local KNN — no model, no network, no tokens</span></pre>
 
     <div class="invariant"><b>Deterministic and re-runnable.</b> Candidate generation is pure vector math over
-    stored data — same index, same anchor, same ranked list every time (ties broken by <code>b2id</code>). Run
+    stored data — same index, same anchor, same ranked list every time (ties broken by <code>path</code>). Run
     it as often as you like; it writes nothing and changes nothing.</div>
   </section>
 

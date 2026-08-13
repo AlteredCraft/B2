@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DTNRYNY92K5ZH4BRT89
 type: note
 title: "The Pour-Over"
 ---

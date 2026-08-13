@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ2SVHGY3R90DW67TJ4
 type: note
 title: "Distillation"
 ---

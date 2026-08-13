@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWGJ8HWB6FRVT1EAQ58
 type: note
 title: "Raised Beds"
 b2_relations:

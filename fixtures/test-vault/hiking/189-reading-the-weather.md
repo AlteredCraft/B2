@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWYQD9Q9VT0ZWTXCG05
 type: note
 title: "Reading the Weather"
 ---

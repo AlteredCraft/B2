@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ47PP3GVTE9V817MW0
 type: note
 title: "Approximate Nearest Neighbors"
 b2_relations:

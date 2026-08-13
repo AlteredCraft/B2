@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXS83V6WBJ5R0X4W50G
 type: note
 title: "Managing Interruptions"
 b2_relations:

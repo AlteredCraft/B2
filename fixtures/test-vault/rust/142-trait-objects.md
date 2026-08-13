@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYEBS4F2JTP1GM5TQKC
 type: note
 title: "Trait Objects"
 ---

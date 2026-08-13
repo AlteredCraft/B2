@@ -302,7 +302,7 @@ check("a shifted letter arrives uppercase and still matches", () => {
   // `KeyboardEvent.key` reports "A" when ⇧ is down. The table writes chords lowercase,
   // so the canonical form has to fold the case or ⇧⌘A would never fire.
   assertEq(canonicalKey("A"), "a", "the key folds");
-  assert(isBound(press("A", { metaKey: true, shiftKey: true }), "anomalies.toggle"), "⇧⌘A");
+  assert(isBound(press("N", { metaKey: true, shiftKey: true }), "tree.new-folder"), "⇧⌘N");
 });
 
 check("? asks for no ⇧ of its own, because the browser already applied it", () => {

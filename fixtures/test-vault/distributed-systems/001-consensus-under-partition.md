@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DVB1ARSCS3ZK76TEYM4
 type: note
 title: "Consensus Under Partition"
 ---

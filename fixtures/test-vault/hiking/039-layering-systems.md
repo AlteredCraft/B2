@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWKVRK6B0D6X2929M6C
 type: note
 title: "Layering Systems"
 ---

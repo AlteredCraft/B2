@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ3P1XQH98REF8GY2HQ
 type: note
 title: "Hybrid Retrieval"
 b2_relations:

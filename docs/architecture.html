@@ -173,7 +173,7 @@
       <div class="kicker" style="color:var(--accent)">b2-core · the engine</div>
       <p style="font-size:12.5px;color:var(--muted);margin:2px 0 8px">Turns a folder of Markdown into a queryable
       index and keeps it a pure function of disk. <b>Model-free</b> (no candle, no network) so its suite is fast
-      and deterministic. rusqlite (bundled SQLite + FTS5), blake3, ulid, yaml — no vector extension: vectors are plain tables scored in-process (#38).</p>
+      and deterministic. rusqlite (bundled SQLite + FTS5), blake3, yaml — no vector extension: vectors are plain tables scored in-process (#38).</p>
       <ul class="tidy" style="font-size:12.5px;margin:0">
         <li><code>note</code> · <code>ingest</code> · <code>chunk</code> · <code>link</code> · <code>relation</code></li>
         <li><code>db</code> · <code>graph</code> · <code>search</code> · <code>discover</code></li>
@@ -220,7 +220,6 @@
     <div class="card tight">
       <div class="kicker"><span class="mono">concepts/memory.md</span></div>
 <pre><span class="c">---</span>
-b2id: <span class="u">01JMEM0000000000000000000A</span>
 type: concept
 title: <span class="s">"Human memory"</span>
 created: 2026-06-20
@@ -230,7 +229,6 @@ The brain encodes, stores, and retrieves information…</pre>
     <div class="card tight">
       <div class="kicker"><span class="mono">notes/spaced-repetition.md</span></div>
 <pre><span class="c">---</span>
-b2id: <span class="u">01JSRS0000000000000000000B</span>
 type: concept
 title: <span class="s">"Spaced repetition"</span>
 created: 2026-06-20
@@ -265,7 +263,7 @@ Expanding review intervals exploit the forgetting curve.</pre>
     <span class="box">walk *.md (dotfolders skipped, sorted)</span>
     <span class="arrow">→</span>
     <span class="box" style="border-color:var(--t1)">Phase 1 · notes + chunks (+FTS)</span>
-    <span class="arrow">→ fills the resolver →</span>
+    <span class="arrow">→ fills the path set →</span>
     <span class="box" style="border-color:var(--t1)">Phase 2 · edges</span>
     <span class="arrow">→</span>
     <span class="box" style="border-color:var(--t3)">embed pass · fill missing vectors</span>
@@ -275,16 +273,16 @@ Expanding review intervals exploit the forgetting curve.</pre>
     ~450-token target, overlapping, cut at Markdown breaks, each chunk stamped with its
     <code>heading_path</code> breadcrumb); chunk text lands in <code>chunks_fts</code> immediately, so
     keyword search works before anything is embedded. This fills
-    <code>notes(b2id, path)</code> — the <code>path ⇄ b2id</code> resolver — for the <em>whole</em> vault.</li>
+    <code>notes(path)</code> — the set of paths a link may resolve to — for the <em>whole</em> vault.</li>
     <li><b>Phase 2</b> derives edges by parsing each body's links + frontmatter <code>b2_relations:</code> and
     resolving every <code>[[path]]</code> against the now-complete resolver. From
     <code>spaced-repetition.md</code> that's two directed edges to <code>memory.md</code>: a bare body
     <code>references</code> and a typed frontmatter <code>supports</code>. Body links are always untyped —
     the verb and explanation come only from <code>b2_relations:</code>.</li>
-    <li>If a note lacks a <code>b2id</code>, phase 1 <b>stamps one</b> — mint a ULID, write a single surgical line
-    into the note's frontmatter. That's the whole record: the id travels <em>in the file</em>, so there is no
-    separate log to keep. B2's one always-allowed write during ingest. (Both fixture notes are pre-stamped, so
-    nothing is written here.)</li>
+    <li><b>Ingest writes nothing.</b> A note's identity <em>is</em> its vault-relative path, so there is no id to
+    mint and no line to add — the file B2 read is the file B2 leaves (GH #170). Before that, phase 1 stamped a
+    missing <code>b2id:</code> into the frontmatter; a stamp is not durable state the index needs, and the path
+    already names the note uniquely, so the write went away with it.</li>
     <li><b>The embed pass</b> then batches every chunk still missing a vector through the seam into
     <code>embeddings</code> — metered (per-batch progress) and cooperatively cancellable, which is what lets the
     desktop run it in the background. Our two notes yield one chunk each; <code>memory.md</code>'s chunk lands in
@@ -293,15 +291,16 @@ Expanding review intervals exploit the forgetting curve.</pre>
   </ul>
   <p style="font-size:13px;color:var(--muted);margin:10px 0 0"><b>Incremental by default, ≡ a full rebuild.</b>
   A note whose <code>body_hash</code> is unchanged and whose chunks all still have vectors reuses them verbatim —
-  only edited notes re-embed. Both paths <em>replace</em> rather than accumulate: re-projecting a note deletes its
-  old chunks (FTS triggers fire, stale <code>embeddings</code> rows are cleared) and <em>all</em> its edges, then
+  only edited notes re-embed, and since vectors are addressed by the hash of the text that produced them, only
+  genuinely <em>new</em> text costs a model call. Both paths <em>replace</em> rather than accumulate: re-projecting
+  a note deletes its old chunks (FTS triggers fire) and <em>all</em> its edges, then
   re-derives every edge from the current Markdown (body <code>inline</code> ∪ frontmatter). Because every edge is
   Markdown-derived, a one-note re-parse is exactly a one-note slice of a full rebuild — there is no log term to
   reconcile. <code>b2 reindex --dry-run</code> previews the same decision, writing nothing.</p>
   <div class="ground"><b>Ground truth:</b> <span class="mono">graph.rs · one_note_reindex_equals_full</span> —
   incremental re-index of one note yields a byte-identical edge set to a full rebuild, and a second reindex is
   identical again (idempotent). <span class="mono">chunks.rs</span> proves replace-not-accumulate;
-  <span class="mono">ingest_resolver.rs</span> confirms the two-phase resolver works both directions;
+  <span class="mono">ingest_resolver.rs</span> confirms a link resolves from either authored form;
   <span class="mono">project_embed.rs</span> pins the projection/embedding split (project touches no vectors;
   embed fills exactly the missing set; project→embed ≡ a fused reindex);
   <span class="mono">dry_run.rs</span> proves the preview writes nothing.
@@ -315,12 +314,12 @@ Expanding review intervals exploit the forgetting curve.</pre>
   The schema is <em>derived from</em> the data model — it must satisfy the model, never the reverse.</p>
   <table>
     <tr><th>Table</th><th>Holds</th><th>Derived from</th></tr>
-    <tr><td class="mono">notes</td><td>b2id (PK), path (UNIQUE), type, title, created/updated, body_hash — <em>the resolver <b>is</b> this table</em></td><td>Markdown</td></tr>
-    <tr><td class="mono">chunks</td><td>per-note structure-aware (qmd) chunks with char offsets, token_count + heading_path</td><td>Markdown</td></tr>
+    <tr><td class="mono">notes</td><td>path (PK), type, title, created/updated, body_hash — <em>identity <b>is</b> the path</em>; children reference it <code>ON UPDATE CASCADE</code>, so a move is a re-key</td><td>Markdown</td></tr>
+    <tr><td class="mono">chunks</td><td>per-note structure-aware (qmd) chunks with char offsets, token_count + heading_path, and the <code>text_hash</code> that addresses the chunk's vector</td><td>Markdown</td></tr>
     <tr><td class="mono">chunks_fts</td><td>FTS5 BM25 index (<code>porter unicode61</code>, stemmed — the measured #157 verdict, schema v5), kept in lockstep by triggers</td><td>derived (FTS5)</td></tr>
-    <tr><td class="mono">embeddings</td><td>per-chunk vectors as plain BLOB rows, created at <b>embed time</b> — <em>not</em> in the base migration; scored in-process (<code>embed::l2_sq</code>)</td><td>derived (#38)</td></tr>
+    <tr><td class="mono">embeddings</td><td><b>content-addressed</b> vectors as plain BLOB rows keyed by the blake3 hash of the chunk text that produced them, created at <b>embed time</b> — <em>not</em> in the base migration; scored in-process (<code>embed::l2_sq</code>)</td><td>derived (#38, #170)</td></tr>
     <tr><td class="mono">note_centroids</td><td>one normalized centroid per note, maintained by the embed pass — discovery's O(notes) stage-1 shortlist</td><td>derived (#38)</td></tr>
-    <tr><td class="mono">edges</td><td>typed graph: src→dst, type, origin∈{inline,frontmatter}, dst_id (nullable → dangling), explanation — <em>every edge authored + active</em></td><td>Markdown</td></tr>
+    <tr><td class="mono">edges</td><td>typed graph: src_path→dst_path (nullable → dangling), type, origin∈{inline,frontmatter}, explanation — <em>every edge authored + active</em></td><td>Markdown</td></tr>
     <tr><td class="mono">meta</td><td>schema_version, embed_model_id, embed_dim</td><td>bookkeeping</td></tr>
   </table>
   <p class="sub" style="margin-top:12px;font-size:13px">Two schema details do load-bearing work. <b>There is no
@@ -449,7 +448,7 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
 
   <div class="ground"><b>Ground truth:</b> <span class="mono">discover.rs</span> pins the complement — direct
   neighbor excluded, disconnected near note kept, 2-hop note survives, deterministic ranking (ties broken by
-  <code>b2id</code>), and an empty result when the anchor has no vector space yet; <span class="mono">discover_floor.rs</span>
+  <code>path</code>), and an empty result when the anchor has no vector space yet; <span class="mono">discover_floor.rs</span>
   pins the floor with a purpose-built geometric embedder — mate kept, diffuse anchor honestly empty, tiny pools
   inert, fake spaces never floored.
   <span style="color:var(--muted)">(Removed 2026-07-04: the <code>Relator</code> seam, the <code>ClaudeRelator</code>,
@@ -477,7 +476,8 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
     <div>
       <ul class="tidy" style="font-size:13.5px;margin:0">
         <li><b><code>b2 link &lt;src&gt; &lt;dst&gt; [--type &lt;verb&gt;] [--explanation …]</code>.</b> B2 resolves
-        both refs (path or b2id), builds the typed-link string against the target's <em>current</em> path — a bare
+        both refs (each a path, with or without the <code>.md</code>), builds the typed-link string against the
+        target's <em>current</em> path — a bare
         <code>[[path]]</code>, no alias, since a note's title <em>is</em> its filename — and appends it to the
         source note's <b>frontmatter <code>b2_relations:</code></b> (Markdown-first — never the body).
         <code>--type</code> defaults to <code>references</code>; the palette is the closed three-verb core, and a
@@ -495,7 +495,6 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
     <div class="card tight" style="margin:0">
       <div class="kicker">what <code>b2 link</code> writes into the source note</div>
 <pre><span class="c">---</span>
-b2id: <span class="u">01JSRS…B</span>
 type: concept
 title: <span class="s">"Spaced repetition"</span>
 b2_relations:
@@ -519,33 +518,40 @@ b2_relations:
   <p class="sub">The vault stays the human's. A parsed note keeps its <b>raw text verbatim</b> and records only the
   byte spans of the frontmatter block; serialization returns those raw bytes. So
   <code>parse → serialize → parse</code> is byte-identical — unknown keys, comments, odd whitespace, a missing
-  final newline all survive. Against that backdrop, B2 makes only four narrow writes:</p>
+  final newline all survive. Against that backdrop, every byte B2 writes is the mechanics of a command you
+  invoked — <b>B2 makes no unbidden writes at all</b> (GH #170 removed the last one, the <code>b2id</code>
+  stamp):</p>
   <div class="grid2">
     <div class="card tight" style="margin:0">
       <div class="kicker" style="color:var(--green)">Frontmatter, surgical</div>
       <ul class="tidy" style="font-size:13px;margin:2px 0 0">
-        <li><code>stamp_b2id</code> — one <code>b2id:</code> line; strict no-op if present, <b>never re-stamped</b>.</li>
         <li><code>add_relation</code> — one YAML-quoted typed-link appended to <code>b2_relations:</code> (the <code>b2 link</code> path).</li>
+        <li><code>write_frontmatter</code> — a splice of the <em>human's own</em> frontmatter bytes from the desktop drawer; the body is untouched.</li>
       </ul>
     </div>
     <div class="card tight" style="margin:0">
       <div class="kicker" style="color:var(--accent)">Whole-file ops (CRUD)</div>
       <ul class="tidy" style="font-size:13px;margin:2px 0 0">
-        <li><code>b2 add</code> — create a note (minimal frontmatter, no b2id; ingest stamps it on first sight).</li>
+        <li><code>b2 add</code> — create a note (minimal frontmatter; nothing is added on first sight).</li>
         <li><code>b2 mv</code> — move/rename + rewrite inbound <code>[[oldpath]]</code> link <em>text</em>.</li>
+        <li><code>write</code> — the editor's body splice, guarded by a content-hash revision. Never authored by B2.</li>
       </ul>
     </div>
   </div>
-  <div class="note"><b><code>b2 mv</code> never breaks the graph.</b> Edges key on <code>b2id</code>, and a move
-  leaves the target's id untouched — so <code>neighbors</code>/backlinks show the same set before and after. Only
-  the human convenience-copy <code>[[oldpath|alias]]</code> text is repaired, and only in the exact inbound files
-  the materialized graph names (<code>db::inbound_edge_targets</code> — bounded, never an O(vault) scan). A
-  byte-preserving rewrite swaps only the target token; a prefix-sharing <code>[[foo-bar]]</code> is never touched
-  when moving <code>foo</code>.</div>
+  <div class="note"><b><code>b2 mv</code> never breaks the graph.</b> A note's identity <em>is</em> its path, so a
+  move is a <em>re-key</em>, not a rebuild: children reference <code>notes(path)</code>
+  <code>ON UPDATE CASCADE</code>, and the same statement that renames the row carries chunks, vectors and edges
+  across with it — <code>neighbors</code>/backlinks show the same set before and after, and not one chunk is
+  re-embedded. The human convenience-copy <code>[[oldpath|alias]]</code> text is repaired too, and only in the
+  exact inbound files the materialized graph names (<code>db::inbound_edge_targets</code> — bounded, never an
+  O(vault) scan). A byte-preserving rewrite swaps only the target token; a prefix-sharing
+  <code>[[foo-bar]]</code> is never touched when moving <code>foo</code>. Move a note <em>outside</em> B2 and the
+  bargain is the honest one: the links dangle, visibly, until you repair them.</div>
   <div class="ground"><b>Ground truth:</b> <span class="mono">roundtrip.rs</span> pins losslessness;
-  <span class="mono">stamp.rs · frontmatter.rs</span> pin the surgical writes; <span class="mono">mv.rs</span> (15
-  tests) pins graph-unchanged, byte-exact inbound diffs, prefix-safety, and clean errors on clobber/invalid dest;
-  <span class="mono">add.rs</span> pins stamp-on-create and clobber refusal.</div>
+  <span class="mono">frontmatter.rs</span> pins the surgical frontmatter writes; <span class="mono">mv.rs</span>
+  pins graph-unchanged, byte-exact inbound diffs, prefix-safety, clean errors on clobber/invalid dest, that a move
+  reuses every vector, and that an out-of-band move dangles its backlinks while re-embedding nothing;
+  <span class="mono">add.rs</span> pins create-and-project and clobber refusal.</div>
 </section>
 
 <!-- ============ SEAM ============ -->
@@ -573,7 +579,7 @@ b2_relations:
     <p style="font-size:13px;margin:6px 0">The chat seam behind <b>flow ④</b>, <code>Vault::ask</code>
     (<code>chat.rs</code>): condense a follow-up into a standalone query → retrieve passages → assemble the
     grounded prompt → stream tokens up through the caller's callback → resolve <code>[n]</code> citation markers
-    back to <code>(path, b2id, excerpt)</code>. <b>Fake:</b> <code>FakeLlm</code> echoes citation markers for its
+    back to <code>(path, excerpt)</code>. <b>Fake:</b> <code>FakeLlm</code> echoes citation markers for its
     passages, so the whole flow is testable with no model. Sync, no tokio; the callback's return value is
     cooperative cancellation at <em>token</em> granularity, in the trait from day one because that is the kind of
     contract that calcifies.</p>
@@ -617,7 +623,7 @@ b2_relations:
   <p class="sub">Every engine module is called directly only by the integration tests. The <b><code>Vault</code>
   façade</b> is the single typed entry point whose only clients are the two adapters — the CLI and the Tauri
   desktop host — it owns the
-  connection, the injected embedder, and the id generator, and returns display-ready view structs
+  connection and the injected embedder, and returns display-ready view structs
   (<code>NeighborView</code>, <code>SearchResult</code>, <code>ExplainView</code>, the discovery candidate view, …).
   The <code>b2</code> binary parses args, picks the embedder, calls the façade, and prints — human, or
   <code>--json</code> for agents; each desktop <code>#[tauri::command]</code> is deserialize → one façade call →
@@ -627,7 +633,7 @@ b2_relations:
     <tr><td class="mono">init</td><td>download + verify the configured embedder into the shared cache</td><td>—</td></tr>
     <tr><td class="mono">reindex</td><td>re-project the vault (incremental; <code>--force</code>, <code>--dry-run</code>, <code>--cancel</code>)</td><td>embedder</td></tr>
     <tr><td class="mono">status</td><td>embedding coverage (N/M) + whether a reindex is running, with its pid</td><td>— (a DB read)</td></tr>
-    <tr><td class="mono">add</td><td>create a note, project it (stamps the b2id)</td><td>embedder</td></tr>
+    <tr><td class="mono">add</td><td>create a note and project it</td><td>embedder</td></tr>
     <tr><td class="mono">write</td><td>replace a note's <b>body</b> from stdin; frontmatter untouched</td><td>— (re-projects)</td></tr>
     <tr><td class="mono">mv</td><td>move/rename a note, resource, or folder + repair inbound link paths</td><td>embedder</td></tr>
     <tr><td class="mono">rm</td><td>delete a note, resource, or folder (<code>-r</code>); inbound links dangle, surfaced</td><td>—</td></tr>
@@ -637,7 +643,8 @@ b2_relations:
     <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes (path/title/score/evidence); <code>--no-floor</code></td><td>— (stored vectors)</td></tr>
     <tr><td class="mono">link</td><td>commit a chosen connection to frontmatter <code>b2_relations:</code>, re-project it</td><td>embedder</td></tr>
   </table>
-  <div class="note"><b>Honest by construction.</b> A note ref resolves by <b>path or b2id</b>. Commands that embed
+  <div class="note"><b>Honest by construction.</b> A note ref <em>is</em> a <b>path</b>, with or without the
+  <code>.md</code>. Commands that embed
   fail fast with "run <code>b2 init</code>" if the model is absent; pure-graph commands (and <code>similar</code>,
   which reads the vectors already stored) need no live call. <code>B2_EMBEDDER=fake</code> forces the fake
   everywhere (offline/dev, and what the suite runs under) — under the fake the CLI prints a loud caveat on
@@ -658,10 +665,10 @@ b2_relations:
   <table>
     <tr><th style="width:28%">Invariant</th><th>What it means · where it's defended</th></tr>
     <tr><td><b>Lossless round-trip</b></td><td><code>parse → serialize → parse</code> is byte-identical; B2 only ever makes surgical edits. <span class="mono" style="color:var(--muted)">→ roundtrip.rs</span></td></tr>
-    <tr><td><b>B2 never authors the body</b></td><td>Writes are surgical and in <em>frontmatter</em>: the b2id stamp, and a committed edge in <code>b2_relations:</code> via <code>b2 link</code>. <span class="mono" style="color:var(--muted)">→ stamp · frontmatter</span></td></tr>
+    <tr><td><b>B2 makes no unbidden writes</b></td><td>Every byte B2 writes is the mechanics of a command you invoked — a committed edge in <code>b2_relations:</code> via <code>b2 link</code>, a move's link repair, your own body/frontmatter save. B2 never authors the body, and reading your vault changes nothing. <span class="mono" style="color:var(--muted)">→ frontmatter · dry_run · write</span></td></tr>
     <tr><td><b>Idempotent re-projection</b></td><td>Re-ingest changes nothing; an incremental one-note re-index equals a full rebuild; no stale FTS/vector rows accumulate. <span class="mono" style="color:var(--muted)">→ chunks · graph · embed</span></td></tr>
     <tr><td><b>Disposable index</b></td><td>Drop the DB, rebuild from Markdown → an identical index. Every committed edge returns because it lives in the Markdown; there is no log to replay. <span class="mono" style="color:var(--muted)">→ graph · ingest</span></td></tr>
-    <tr><td><b>The graph never breaks on a move</b></td><td>Edges key on b2id, so a rename repairs only link text — backlinks resolve unchanged. <span class="mono" style="color:var(--muted)">→ mv</span></td></tr>
+    <tr><td><b>The graph never breaks on a B2 move</b></td><td>Identity is the path, so a B2-performed move re-keys the note's rows in place and repairs inbound link text — backlinks resolve unchanged, and nothing re-embeds. Out of band, links dangle visibly instead. <span class="mono" style="color:var(--muted)">→ mv</span></td></tr>
     <tr><td><b>index = projection of (Markdown)</b></td><td>No durable state outside your notes; an edge exists iff it is authored in the Markdown (body or frontmatter). <span class="mono" style="color:var(--muted)">→ graph · ingest</span></td></tr>
   </table>
 </section>
@@ -671,34 +678,35 @@ b2_relations:
   <h3>Grounded in the tests</h3>
   <p class="sub">Nothing here is aspirational: the suite is the <b>executable specification</b>, integration-first,
   and every property above is asserted in it. Most tests share the <a href="#example">golden vault</a>, copied into
-  a temp dir before every run so ingest never mutates the committed fixture, with two fixed b2ids so exact ids are
-  assertable. Determinism is a hard requirement of the core — no wall clock, no randomness; timestamps and ids are
+  a temp dir before every run, at two fixed paths — <code>concepts/memory.md</code> and
+  <code>notes/spaced-repetition.md</code> — which are the notes' identities, so every assertion names them
+  directly. Determinism is a hard requirement of the core — no wall clock, no randomness; timestamps are
   passed in.</p>
   <div class="card">
-    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(417 tests under <code>cargo test</code>, as of 2026-08-13)</span></div>
+    <div class="kicker">Coverage at a glance — model-free, all green <span style="color:var(--muted)">(405 tests under <code>cargo test</code>, as of 2026-08-13)</span></div>
     <table>
       <tr><th>Property</th><th>Pinned by</th><th class="mono" style="text-align:right">tests</th></tr>
       <tr><td>Substrate — FTS5 + the in-process vector read share one connection; concurrent openers</td><td class="mono">substrate.rs</td><td class="mono" style="text-align:right">8</td></tr>
-      <tr><td>Lossless parse · b2id stamp · the two-phase resolver</td><td class="mono">roundtrip · stamp · ingest_resolver</td><td class="mono" style="text-align:right">10</td></tr>
+      <tr><td>Lossless parse · the two-phase link resolver</td><td class="mono">roundtrip · ingest_resolver</td><td class="mono" style="text-align:right">5</td></tr>
       <tr><td>Chunking (+FTS), the tokenizer, and the typed graph</td><td class="mono">chunks · fts_tokenizer · graph</td><td class="mono" style="text-align:right">27</td></tr>
       <tr><td>Vectors, the embedder seam &amp; the projection/embedding split (incl. cancel)</td><td class="mono">embed · project_embed · cancel · vector_pool_scale</td><td class="mono" style="text-align:right">28</td></tr>
       <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">22</td></tr>
       <tr><td>Discovery — candidates (near ∖ connected), the quality floor, its query budget</td><td class="mono">discover · discover_floor · discover_query_count</td><td class="mono" style="text-align:right">14</td></tr>
       <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter.rs</td><td class="mono" style="text-align:right">8</td></tr>
-      <tr><td>Explain (orphan flag) · dry-run previews · surfaced vault anomalies</td><td class="mono">explain · dry_run · collision</td><td class="mono" style="text-align:right">19</td></tr>
-      <tr><td>Note &amp; folder CRUD — add · mv · rm · dirs · import</td><td class="mono">add · mv · rm_delete · dirs · import</td><td class="mono" style="text-align:right">53</td></tr>
+      <tr><td>Explain (orphan flag) · dry-run previews (which now write nothing on either path)</td><td class="mono">explain · dry_run</td><td class="mono" style="text-align:right">11</td></tr>
+      <tr><td>Note &amp; folder CRUD — add · mv · rm · dirs · import</td><td class="mono">add · mv · rm_delete · dirs · import</td><td class="mono" style="text-align:right">55</td></tr>
       <tr><td>The desktop editing façade ops — read · write (revision guard) · frontmatter save · list</td><td class="mono">read · write · write_frontmatter · list</td><td class="mono" style="text-align:right">22</td></tr>
       <tr><td>Resources — non-<code>.md</code> peers, and what stays hidden</td><td class="mono">resources · hidden</td><td class="mono" style="text-align:right">18</td></tr>
       <tr><td>Grounded chat (flow ④) — condense, retrieve, cite, cancel</td><td class="mono">ask.rs</td><td class="mono" style="text-align:right">11</td></tr>
       <tr><td>Structured logging is parseable JSONL</td><td class="mono">logging.rs</td><td class="mono" style="text-align:right">1</td></tr>
-      <tr><td>The <code>Vault</code> façade · invariant property tests</td><td class="mono">vault · props</td><td class="mono" style="text-align:right">12</td></tr>
+      <tr><td>The <code>Vault</code> façade · invariant property tests</td><td class="mono">vault · props</td><td class="mono" style="text-align:right">11</td></tr>
       <tr><td>Engine units — parse, relation vocabulary, pathspec, chunker, …</td><td class="mono">b2-core <code>src/**</code></td><td class="mono" style="text-align:right">49</td></tr>
       <tr><td>The <code>b2</code> CLI end to end (each case spawns the real binary)</td><td class="mono">cli.rs</td><td class="mono" style="text-align:right">48</td></tr>
       <tr><td>Embedder config, the model registry &amp; provisioning</td><td class="mono">b2-embed</td><td class="mono" style="text-align:right">12</td></tr>
       <tr><td>The Tauri host stays a dumb adapter — commands · errors · fs-watch · menu</td><td class="mono">b2-desktop</td><td class="mono" style="text-align:right">55</td></tr>
     </table>
     <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Run under <code>cargo test</code> (rustc 1.96,
-    the fake embedder), alongside the frontend's own 498 checks (<code>ui/</code>, node's test runner) — both
+    the fake embedder), alongside the frontend's own 493 checks (<code>ui/</code>, node's test runner) — both
     gates are one recipe, <code>just ci</code>, which is verbatim what CI runs. <b>Nothing is
     <code>#[ignore]</code>d</b>: a check that genuinely needs the real model lives in the eval harness, which
     runs on demand and actually runs, rather than hiding in the suite behind a flag nobody passes. Open any file

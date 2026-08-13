@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DT9RDPFSKTAA317TS0W
 type: note
 title: "Extraction Yield"
 b2_relations:

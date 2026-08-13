@@ -149,12 +149,6 @@ export const DEFAULT_BINDINGS = [
   { id: "pane.discovery", label: "Focus discovery", keys: ["Mod-3"], scope: "global" },
   { id: "delete.focused", label: "Delete the focused row", keys: ["Mod-Backspace"], scope: "global" },
   { id: "settings.toggle", label: "Settings", keys: ["Mod-,"], scope: "global" },
-  {
-    id: "anomalies.toggle",
-    label: "Review the index anomalies",
-    keys: ["Mod-Shift-a"],
-    scope: "global",
-  },
   { id: "edit.toggle", label: "Enter or leave edit mode", keys: ["Mod-e"], scope: "global" },
   // The `</>` chip's chord, and ⌘E's shift-sibling on purpose: ⌘E changes whether you're
   // editing, ⇧⌘E changes what you're looking at — and both work in either mode, because

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZ5PX1RWYERA5KT2YT5
 type: note
 title: "Dense vs Sparse"
 ---

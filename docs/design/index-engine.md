@@ -1,5 +1,4 @@
 ---
-b2id: 01KWSRKASCAYXRPQ1AP5HE6R2N
 title: "B2 — Index Engine: rebuild qmd on SQLite"
 type: note
 tags: [b2, index-engine, sqlite, fts5, vectors, search, reranker, architecture]
@@ -21,8 +20,8 @@ status: draft
 
 - qmd is an excellent *blueprint* for hybrid retrieval (BM25 + vector + RRF + LLM rerank) and proves
   the whole pipeline runs locally. But it is a **search engine**, and B2 is not — B2 is a **typed graph
-  with hybrid retrieval over it**. qmd has no notion of typed edges, backlinks, or `b2id`-stable identity,
-  which are the reasons B2 exists ([invariants.md](invariants.md)).
+  with hybrid retrieval over it**. qmd has no notion of typed edges or backlinks, which are the
+  reasons B2 exists ([invariants.md](invariants.md)).
 - SQLite gives us **one embedded store for every *queryable* concern at once** — full-text (FTS5),
   vectors (plain tables scored in-process), and the typed graph — with transactional consistency across them, so
   `b2 similar` candidate generation joins all three in a single query. That single-store property is
@@ -75,9 +74,9 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 | Full-text search | ✅ FTS5/BM25 | ✅ same |
 | Semantic search | ✅ `sqlite-vec` | ✅ in-process scan |
 | Rerank | ✅ cross-encoder | ✅ fast-follow |
-| **Typed graph** (`b2id→b2id` edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
+| **Typed graph** (path→path edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
 | **Backlinks** (who points at X, typed, over the whole vault) | ❌ none | ⭐ core (area 5) |
-| **`b2id`-keyed identity** surviving move/rename | ❌ path-keyed, cache is disposable | ⭐ core (invariants L1) |
+| **Move-safe links** (a B2-performed move repairs every backlink) | ❌ nothing rewrites links | ⭐ core (invariants L1) |
 | **Markdown as source of truth** (index is rebuildable/derived) | ~ index *is* the artifact | ⭐ non-negotiable (principle #1) |
 | Distribution | npm package, Node runtime | ⭐ single binary (principle #5) |
 
@@ -112,18 +111,17 @@ Markdown its sole authored subset — notes + every committed edge); the index i
 ```
 b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any time)
 ├── MIRROR OF MARKDOWN (source of truth for *knowledge*; lets us diff vs. disk)
-│   ├── notes(b2id PK, path, title, type, frontmatter_json, body_hash, mtime, …)  -- b2id ← frontmatter
-│   └── note_bodies(note_b2id, content)          -- optional cache of file text
+│   └── notes(path PK, title, type, body_hash, mtime, …)   -- the path IS the identity (L1)
 │
 ├── DERIVED FROM MARKDOWN: SEARCH
-│   ├── chunks(id, note_b2id, seq, char_start, char_end, token_count, text)
+│   ├── chunks(id, note_path, seq, char_start, char_end, token_count, text, text_hash)
 │   ├── chunks_fts                                -- FTS5 over chunk text (BM25)
-│   ├── embeddings(chunk_id, vector)              -- plain BLOB vectors (768-dim), scored in-process
-│   └── note_centroids(note_b2id, centroid)       -- per-note centroid (discovery's coarse stage)
+│   ├── embeddings(text_hash PK, vector)          -- CONTENT-ADDRESSED plain BLOB vectors (768-dim)
+│   └── note_centroids(note_path, centroid)       -- per-note centroid (discovery's coarse stage)
 │
 ├── DERIVED FROM MARKDOWN: TYPED GRAPH
-│   └── edges(id, src_id, dst_id, type, origin,   -- every row ← Markdown (body links + FM b2_relations:)
-│             explanation, …)                     -- origin ∈ {inline, frontmatter}; every edge active
+│   └── edges(id, src_path, dst_path, type,       -- every row ← Markdown (body links + FM b2_relations:)
+│             origin, explanation, …)             -- origin ∈ {inline, frontmatter}; every edge active
 │
 └── CACHES (disposable)
     └── llm_cache(key, value, created)            -- reserved for a future reranker (fast-follow, §5)
@@ -147,7 +145,7 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   clauses). Class is by **extension only** (deterministic; misclassification degrades, never mis-executes):
   `note` · `text` · `html` · `pdf` · `image` · `media` · `binary` (the total fallback), each answering the
   same three questions — what index text, can it be a graph endpoint, how does it render.
-- **`chunks` generalizes** from `note_b2id` to a **document reference** (a note `b2id` *or* a resource
+- **`chunks` generalizes** from `note_path` to a **document reference** (a note path *or* a resource
   path — as one-of nullable FKs on the single table, CASCADE intact for both parents; locked,
   [#66](https://github.com/AlteredCraft/B2/issues/66)); search resolves hits up to the
   owning document and results carry a `kind`. **Centroids follow** — two-stage discovery's coarse stage
@@ -158,7 +156,8 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
   aggregated inbound alt-text — embedded through the **existing** bge space: one embedding space in v1,
   the multimodal seam documented for later (§6 posture, [data-model.md](data-model.md) §10).
 - **`edges.dst` may be a resource** — a body `![[photo.png]]` / `[[papers/x.pdf]]` resolves against
-  `resources` and records a `dst_resource_path`; `src` stays a note (resources author no outbound edges in
+  `resources` and records a `dst_resource_path` rather than a `dst_path`; `src` stays a note (resources
+  author no outbound edges in
   v1). The existing `dst_path_raw` + dangling-edge index (`db.rs`) is already half of this; the `link.rs`
   parser learns the two Markdown-native forms `![alt](path)` / `[text](path)` (relative paths only) and the
   `![[file.ext]]` embed, capturing the alt/caption text on the edge (it becomes the image's index text).
@@ -170,12 +169,23 @@ whole vault directory, so **`index = projection of (the vault directory)`**:
 
 Why this shape fits B2 specifically:
 
-- **Edges key on `b2id`, never path** — directly implements the link-identity decision
-  ([data-model.md](data-model.md) §1). `notes.b2id` is the durable
-  frontmatter identity (B2's one always-allowed write); `src_id`/`dst_id` and `note_b2id` all hold
-  `b2id` values. A move rewrites `notes.path` and inbound `[[path|title]]` text; every row in `edges`
-  is untouched because it never referenced the path. "Rename keeps every backlink resolving" becomes a
-  foreign-key truth, not a fix-up pass.
+- **Everything keys on the vault-relative path** — directly implements the link-identity decision
+  ([data-model.md](data-model.md) §1, [invariants.md](invariants.md) L1, GH #170). `notes.path` is the
+  primary key; `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path` and
+  `edges.src_path` are `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`, which is what
+  makes a B2-performed move a **path re-key rather than a rebuild**: `UPDATE notes SET path = …`
+  cascades through every child in one transaction, alongside the inbound `[[path|title]]` text rewrite
+  and a re-projection of the inbound sources (whose `edges.dst_path` is deliberately *not* an FK — it
+  must be allowed to be NULL, the dangling case, G5). "Rename keeps every backlink resolving" is
+  therefore a property of the **move operation**, not of the key; the price of the pivot is that a
+  move made *outside* B2 is a delete plus a create.
+- **Vectors are content-addressed, and that is what makes the price small** (M4). `embeddings` is
+  keyed by `text_hash` — blake3 of the chunk text, which *is* the embed input, verbatim — so a note
+  that moves (in band or out) re-embeds nothing at all: its chunks hash identically, find their
+  vectors already stored, and only chunk/FTS/edge rows re-project. The store needs no invalidation
+  rule beyond "a hash no chunk references is garbage", pruned by the whole-vault pass on the same
+  derived-data lifecycle as centroids. Identical text anywhere in the vault shares one vector, which
+  is a correctness statement before it is a saving: the same input has the same embedding.
 - **Every `edges` row derives from Markdown** — body links (`origin=inline`, all untyped `references`) ∪
   frontmatter `b2_relations:` (`origin=frontmatter`, the sole typed home), deduped frontmatter-wins on
   same-`(target, type)` overlap. There is **no `status` column and no suggestion queue**: an edge exists
@@ -258,7 +268,7 @@ queries are fast.** It is therefore not a third subsystem beside FTS5 and the ve
 **disposable** table in the same store, populated by the **same parse pass** that already walks each body
 for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. qmd (§2); the typed,
 traversable graph is the value-add, not the search. The standing cost of carrying it is the
-`b2id`-under-`[[path]]` write-amplification budgeted in §8.
+move-repair write-amplification budgeted in §8.
 
 ### Discovery surfacing is quality-gated — `limit` is a cap, not a promise
 
@@ -315,8 +325,10 @@ The engine provides it. Therefore **semantic search is in v1.**
 
 How it runs — an **exact, in-process scan**, no vector extension, no ANN:
 
-- **Storage & scoring:** vectors live in plain tables — `embeddings(chunk_id, vector)` plus per-note
-  `note_centroids` — read with one sequential statement and scored in-process (`embed::l2_sq`). A
+- **Storage & scoring:** vectors live in plain tables — `embeddings(text_hash, vector)` plus per-note
+  `note_centroids` — read with one statement and scored in-process (`embed::l2_sq`). Content-addressing
+  (M4) costs the scan one indexed join back to `chunks` to recover which chunk each vector ranks for;
+  it buys a vault-wide "identical text, one vector" store where a move re-embeds nothing. A
   `vec0`-style virtual table charges a per-row shadow-table probe on every scan, which dominates at
   real-vault scale; the plain-table scan does not. Full analysis + options:
   [#38](https://github.com/AlteredCraft/B2/issues/38).
@@ -493,72 +505,62 @@ the fast suite. Eval is a `cargo run -p b2-embed --example eval` pass (precision
   config-selectable EmbeddingGemma-300M are both 768-dim (§6); a model/dim change is a
   full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
 - **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
-  Keep `chunks.note_b2id` as the join and resolve search hits up to notes for graph operations — already
+  Keep `chunks.note_path` as the join and resolve search hits up to notes for graph operations — already
   reflected in §3.
 
-### Operational burden — the bill for a `b2id`-keyed graph under `[[path|title]]` links
+### Operational burden — the bill for a path-keyed graph under `[[path|title]]` links
 
-The graph buys B2 its reason to exist (typed, `b2id`-stable edges — §2), but the decision to
-keep links written as human-clickable `[[path|title]]` while the graph keys on `b2id`
-([data-model.md](data-model.md) §9) has standing operational costs. These are
-*the trade working as designed*, not defects — but they must be budgeted, tested, and watched.
+The graph buys B2 its reason to exist (typed, traversable edges — §2). Keying it by the
+vault-relative path ([data-model.md](data-model.md) §9, GH #170) makes the stored key *the same thing*
+the human authored, which removes a whole class of state the old stamped-id design had to reconcile —
+and leaves exactly one standing cost in its place. These are *the trade working as designed*, not
+defects; they must be budgeted, tested, and watched.
 
-- **Write amplification on move.** The inline `path` is a repairable convenience copy, so moving one note
-  rewrites the inbound link text in **every** file that points at it — an N-file write, not a one-file
-  write. It's bounded and mechanical (the `b2id`-keyed edges name exactly which files/links to touch,
-  Markdown-first then index), but moving a heavily-linked note is proportional to its backlink count, not
-  O(1). Watch the cost on hub notes; keep the rewrite transactional so a partial move never half-updates
-  the vault.
-- **Out-of-band moves degrade gracefully, not perfectly.** A `git mv`/Finder move + reindex re-reads the
-  frontmatter `b2id` and re-establishes `b2id → newpath`, repairing dangling inbound links — **if** there is
-  prior index continuity. A **cold reindex with no prior state** can only repair a dangling `[[oldpath]]`
-  heuristically (e.g. via the alias); those links are **flagged for repair, not silently dropped**. This
-  is the same failure surface as moving files with Obsidian closed — acceptable, but it means the index is
-  load-bearing for full repair fidelity.
-- **Path ownership follows the Markdown, and a reindex never aborts on it.** `notes.path` is unique, but a
-  path can change hands out of band — a note deleted then recreated at the same path, or files renamed/
-  swapped outside `b2 mv` so a path now belongs to a different `b2id`. Projection reconciles to the current
-  truth: `db::upsert_note` drops the **stale** row that still holds the path (its chunks/edges cascade)
-  before writing the new owner, so an incremental reindex converges on the same state as a from-scratch
-  rebuild (`full-reindex ≡ incremental-update`) instead of failing on a raw `UNIQUE(notes.path)` error.
-  A note file *deleted with no replacement* is reconciled by the whole-vault projection pass
-  ([#31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault` prunes every `notes` row whose
-  `b2id` it did not project this run (`db::prune_notes_except` — chunks/FTS/vectors/outgoing edges
-  cascade; inbound links re-dangle when phase 2 re-derives edges against the pruned resolver), **except**
-  rows whose file was skipped as unreadable — the walk saw that file, its `b2id` is merely unknowable this
-  run, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note and never
-  prunes. *(Resources churn more than notes — images/PDFs get added and deleted freely — and their
-  inventory pass prunes the same way; [#66](https://github.com/AlteredCraft/B2/issues/66).)*
-- **Duplicate `b2id`s resolve incumbent-wins and are surfaced, never guessed at**
-  ([#81](https://github.com/AlteredCraft/B2/issues/81)). Two files presenting one id (a Finder
-  duplicate) has no well-defined projection, and no vault-pure signal distinguishes original from
-  copy — a copy preserves every byte, and `note copy.md` even *sorts before* `note.md`, so any
-  walk-order or path-order rule would hand the identity to the copy. The projection pass therefore
-  pre-scans claims and resolves each contested id **before any row is written**: the **incumbent**
-  (the path the index already attributes the id to, when that file still claims it) keeps the
-  identity — the one confident signal, and it lives in index memory, which is why this is a
-  documented carve-out on S3 ([invariants.md](invariants.md)); a memory-less rebuild tie-breaks
-  first-in-sorted-walk, *flagged as a tie-break, not a ruling*. Shadowed claimants stay on disk
-  but get **no row** — and therefore no presence in the file tree either, which lists notes from
-  the index (`list_notes`); only folders are read live off the filesystem. That is what makes the
-  notice the *only* way a human learns the copy exists, and why the desktop's review panel offers
-  a shadowed path for copying rather than a reveal that could not resolve
-  ([#88](https://github.com/AlteredCraft/B2/issues/88)). The collision is reported (`collisions` on
-  the reindex/project reports, with kept path + precedence + shadowed paths) on **every pass until
-  resolved**: delete the copy; or remove its `b2id:` line (the next pass stamps a fresh identity —
-  the documented fork gesture); or delete the original (the copy then inherits the identity through
-  the ordinary move repointing). Single-note ingest through `ingest_file` (the `add`/`mv`/`link`
-  path) **refuses** an identity steal outright (`Error::B2idCollision`) when the incumbent still
-  exists and still claims the id; `project_file` (the in-app save path — `write`/`create_note`)
-  deliberately does not guard, since refusing after the bytes hit disk would strand the index
-  stale — the whole-vault pass owns reconciling and surfacing that state. The same pass
-  also surfaces **identity restamps** (`restamped`): a file whose `b2id:` line was removed/blanked
-  out-of-band reads as absent (#75), so the stamp mints a fresh id — identity churn that dangles
-  every inbound edge keyed to the old id (G5 keeps surfacing those). Deliberately **not**
-  auto-restored: removing the line is also the documented gesture for *requesting* a fresh identity,
-  so restoring the old id would guess intent. Nothing anomaly-shaped is ever stored — every notice
-  re-derives from vault + index each pass (S2), and `reindex --dry-run` previews all of it read-only
-  (which notes lack a `b2id`, which stamps would churn an identity, which files collide).
+- **Write amplification on move.** The inline `path` is the link, so moving one note rewrites the
+  inbound link text in **every** file that points at it — an N-file write, not a one-file write. It's
+  bounded and mechanical (the materialized edges name exactly which files/links to touch,
+  Markdown-first then index), but moving a heavily-linked note is proportional to its backlink count,
+  not O(1). Watch the cost on hub notes; keep the rewrite transactional so a partial move never
+  half-updates the vault. The index side of that move is now wider than it was — the moved note's
+  rows re-key rather than staying put under a stable id — but it is one cascading `UPDATE` plus the
+  re-projection of the inbound sources, both bounded by the same backlink count the file writes are.
+- **Out-of-band moves are identified, not repaired — and that is the scope decision.** A `git mv` or
+  Finder move is, to a path-keyed index, a delete plus a create: the old path's rows prune, the new
+  path projects fresh, and every inbound `[[oldpath]]` becomes a **surfaced dangling edge** (G5) —
+  authored text kept, `dst` NULL, healing by itself on the next pass if the target ever comes back.
+  Nothing is silently dropped and nothing is guessed at. This is the failure surface of moving files
+  with Obsidian closed, with B2 telling you which links broke instead of leaving you to find out by
+  clicking. **Content-addressed vectors (M4) make it cheap as well as honest**: the re-created note's
+  chunk text hashes identically, so the "delete plus create" re-embeds nothing — the cost is
+  chunk/FTS/edge re-projection only. Two repairs were considered and left out of GH #170 as future
+  investigation: a *proposed* hash-match repair (`notes.body_hash` and the resource `content_hash`
+  are already stored, so the data is there — but a proposal must stay the human's to accept, W4), and
+  a `b2 watch` daemon observing renames live, rejected as a lifecycle and coordination surface that
+  shrinks the gap rather than closing it.
+- **Path ownership follows the filesystem, so there is nothing to reconcile.** A path names at most
+  one file — that is the filesystem's guarantee, not B2's — so the states the old design had to
+  arbitrate simply do not arise: a note deleted and recreated at the same path is that path's note, a
+  Finder-duplicated note is two notes at two paths, and `db::upsert_note`'s `ON CONFLICT(path)` is the
+  whole of the reconciliation. A note file *deleted with no replacement* is reconciled by the
+  whole-vault projection pass ([#31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault`
+  prunes every `notes` row whose path the walk did not see this run (`db::prune_notes_except` —
+  aliases/chunks/FTS/centroid/outgoing edges cascade; inbound links re-dangle when phase 2 re-derives
+  edges against the pruned resolver), **except** rows whose file was skipped as unreadable — the walk
+  *saw* that file, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note
+  and never prunes. Orphaned vectors — hashes no chunk references after that pruning — are collected
+  by the same pass, the only bookkeeping content-addressing adds. *(Resources churn more than notes —
+  images/PDFs get added and deleted freely — and their inventory pass has always pruned this way;
+  [#66](https://github.com/AlteredCraft/B2/issues/66).)*
+- **What this section used to budget, and no longer has to.** The stamped `b2id` made "two files, one
+  identity" representable, and everything that followed was the bill for it: a claim pre-scan and
+  incumbent-wins collision resolution ([#81](https://github.com/AlteredCraft/B2/issues/81)), the
+  shadowed-copy review panel ([#88](https://github.com/AlteredCraft/B2/issues/88)), identity-restamp
+  notices, a malformed-YAML re-stamp guard ([#75](https://github.com/AlteredCraft/B2/issues/75)), a
+  frontmatter write guard ([#79](https://github.com/AlteredCraft/B2/issues/79)), and a carve-out on S3.
+  All of it is deleted with the stamp (GH #170). `reindex --dry-run` correspondingly shrinks to what a
+  read-only preview can still honestly say: which notes would (re)embed. Nothing anomaly-shaped was
+  ever stored, so nothing had to be migrated away — each notice re-derived from vault + index every
+  pass (S2), and the ones that no longer exist simply stop being derived.
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
   file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting
@@ -589,7 +591,7 @@ keep links written as human-clickable `[[path|title]]` while the graph keys on `
    ([data-model.md](data-model.md) §8).
 
 > Net: qmd answers "can a great hybrid search engine run locally on Markdown?" — yes, and here's how.
-> B2's question is one layer up: "can that retrieval live inside a typed, `b2id`-stable, agent-operated
+> B2's question is one layer up: "can that retrieval live inside a typed, traversable, agent-operated
 > graph I fully own, in a single binary?" SQLite is the substrate that makes every queryable concern one
 > disposable store, a pure projection of your Markdown. We take qmd's pipeline and build the graph it was
 > never trying to be.

@@ -67,16 +67,17 @@ struct Cli {
 enum Command {
     /// Download + verify the embedding model into the shared cache (one-time setup).
     Init,
-    /// Re-project every note under the vault into the index (stamps missing b2ids).
-    /// Incremental by default: notes whose content is unchanged keep their vectors.
+    /// Re-project every note under the vault into the index. Reads your vault and
+    /// writes only to `.b2/`. Incremental by default: notes whose content is
+    /// unchanged keep their vectors.
     Reindex {
         /// Vault root (overrides --vault / $B2_VAULT_PATH). Required — no cwd default.
         vault: Option<PathBuf>,
         /// Re-embed every note, even unchanged ones (a full rebuild in place).
         #[arg(long)]
         force: bool,
-        /// Preview what a reindex would do without writing anything — no b2id
-        /// stamped, no index or log change, no embedding.
+        /// Preview what a reindex would do without touching the index — how many
+        /// notes it would project and embed.
         #[arg(long)]
         dry_run: bool,
         /// Stop a reindex already running on this vault — the way to reach one
@@ -105,24 +106,24 @@ enum Command {
     },
     /// Replace a note's **body** with Markdown piped on stdin — the CLI/agent editing
     /// surface (the counterpart to the desktop editor's save). NOTE is a vault-relative
-    /// path or a b2id; the note must already exist (`b2 add` creates one). Pipe the body
-    /// **alone** — the frontmatter (including B2's managed `b2id` / `b2_relations:`) is
+    /// path; the note must already exist (`b2 add` creates one). Pipe the body
+    /// **alone** — the frontmatter (including B2's managed `b2_relations:`) is
     /// left untouched, so no `---` block. The note is re-projected (chunks + FTS + graph)
     /// so the index stays live; a later `b2 reindex` fills the changed body's vectors.
     Write {
-        /// The note whose body to overwrite: a vault-relative path or a b2id.
+        /// The note whose body to overwrite: a vault-relative path.
         note: String,
     },
-    /// Show a note's typed neighbors. NOTE is a vault-relative path or a b2id.
+    /// Show a note's typed neighbors. NOTE is a vault-relative path.
     Neighbors { note: String },
     /// Explain a note's connections — every typed edge and its "why". NOTE is a
-    /// vault-relative path or a b2id.
+    /// vault-relative path.
     Explain { note: String },
     /// Move/rename a note, file, or folder and rewrite every inbound link to
     /// point at the new path. An existing directory moves as a whole folder
     /// (everything under it, one rename).
     Mv {
-        /// What to move: a vault-relative path (note, file, or folder) or a b2id.
+        /// What to move: a vault-relative path (note, file, or folder).
         from: String,
         /// The new vault-relative path (for a note, the `.md` extension is optional).
         to: String,
@@ -131,7 +132,7 @@ enum Command {
     /// are never rewritten — they dangle and surface as unresolved (`b2 explain`).
     /// An existing directory deletes as a whole folder and requires --recursive.
     Rm {
-        /// What to delete: a vault-relative path (note, file, or folder) or a b2id.
+        /// What to delete: a vault-relative path (note, file, or folder).
         target: String,
         /// Required to delete a folder (and everything inside it, unindexed files too).
         #[arg(short = 'r', long)]
@@ -145,10 +146,10 @@ enum Command {
         limit: usize,
     },
     /// Surface the notes most semantically similar to NOTE that you haven't linked
-    /// yet — connection discovery. NOTE is a vault-relative path or a b2id. A local
+    /// yet — connection discovery. NOTE is a vault-relative path. A local
     /// read over stored vectors (run `b2 reindex` with the real model first).
     Similar {
-        /// The note to find similar notes for: a vault-relative path or a b2id.
+        /// The note to find similar notes for: a vault-relative path.
         note: String,
         /// Maximum number of similar notes to return.
         #[arg(long, default_value_t = 10)]
@@ -159,11 +160,11 @@ enum Command {
         no_floor: bool,
     },
     /// Commit a typed connection SRC → DST into SRC's frontmatter `b2_relations:`.
-    /// SRC and DST are each a vault-relative path or a b2id.
+    /// SRC and DST are each a vault-relative path.
     Link {
-        /// The source note (the edge points *from* it): path or b2id.
+        /// The source note (the edge points *from* it): a vault-relative path.
         src: String,
-        /// The target note (the edge points *to* it): path or b2id.
+        /// The target note (the edge points *to* it): a vault-relative path.
         dst: String,
         /// The relation verb (a core verb: references/supports/contradicts).
         #[arg(long = "type", default_value = "references")]
@@ -434,43 +435,18 @@ fn cmd_reindex(
 /// plan itself).
 fn print_reindex_plan(plan: &b2_core::vault::ReindexPlan) {
     println!(
-        "Dry run: would index {} note(s) — {} to embed, {} to stamp. No changes made.",
-        plan.would_index, plan.would_embed, plan.would_stamp
+        "Dry run: would index {} note(s) — {} to embed. Nothing in your vault is written either way.",
+        plan.would_index, plan.would_embed
     );
-    // The GH #81 previews: which notes have no identity yet, which
-    // stamps would *change* an identity, and which files contest one.
-    if !plan.stamp_paths.is_empty() {
-        println!("Notes without a b2id (a real run stamps these):");
-        for p in &plan.stamp_paths {
-            println!("  - {p}");
-        }
-    }
-    if !plan.would_restamp.is_empty() {
-        println!(
-            "Would restamp identity (the b2id line was removed or blanked; links to the old id will dangle):"
-        );
-        for r in &plan.would_restamp {
-            println!("  - {} (was {})", r.path, r.old_b2id);
-        }
-    }
-    for c in &plan.collisions {
-        println!(
-            "Duplicate b2id {}: a real run keeps {} and leaves {} un-indexed until resolved.",
-            c.b2id,
-            c.kept_path,
-            c.shadowed_paths.join(", ")
-        );
-    }
 }
 
 /// The human-readable reindex summary: the one stdout line, then the stderr
-/// notices — skipped files, the GH #81 anomalies, and the cancelled line.
+/// notices — skipped files and the cancelled line.
 fn print_reindex_report(report: &b2_core::vault::ReindexReport) {
     println!(
-        "Indexed {} notes ({} embedded, {} stamped{}) and {} resources{}",
+        "Indexed {} notes ({} embedded{}) and {} resources{}",
         report.indexed,
         report.embedded,
-        report.stamped,
         if report.notes_pruned > 0 {
             format!(", {} pruned", report.notes_pruned)
         } else {
@@ -490,36 +466,6 @@ fn print_reindex_report(report: &b2_core::vault::ReindexReport) {
         eprintln!("Skipped {} unreadable file(s):", report.skipped.len());
         for s in &report.skipped {
             eprintln!("  - {} ({})", s.path, s.reason);
-        }
-    }
-    // The GH #81 anomaly notices (stderr, like `skipped`): surfaced every
-    // run until resolved, never auto-fixed — the human decides which file
-    // keeps a contested identity.
-    for c in &report.collisions {
-        let why = match c.precedence {
-            b2_core::vault::CollisionPrecedence::Incumbent => "it already held the identity",
-            b2_core::vault::CollisionPrecedence::TieBreak => {
-                "first in path order — b2 could not tell which file is the original"
-            }
-        };
-        eprintln!(
-            "Duplicate b2id {}: kept {} ({}); not indexed: {}.",
-            c.b2id,
-            c.kept_path,
-            why,
-            c.shadowed_paths.join(", ")
-        );
-        eprintln!(
-            "  To resolve: delete the copy, or remove its `b2id:` line to give it a fresh identity."
-        );
-    }
-    if !report.restamped.is_empty() {
-        eprintln!(
-            "Restamped identity on {} note(s) — the b2id line was removed or blanked outside b2, so links to the old identity now dangle:",
-            report.restamped.len()
-        );
-        for r in &report.restamped {
-            eprintln!("  - {} (was {}, now {})", r.path, r.old_b2id, r.new_b2id);
         }
     }
     // The counts above already report the partial work truthfully; add the
@@ -598,7 +544,7 @@ fn cmd_add(
     if cli.json {
         print_json(&report)?;
     } else {
-        println!("Created {} (b2id {}).", report.path, report.b2id);
+        println!("Created {}.", report.path);
     }
     Ok(())
 }
@@ -696,7 +642,7 @@ fn cmd_explain(cli: &Cli, note: &str) -> Result<(), CliError> {
         print_json(&view)?;
     } else {
         let name = display_name(view.title.as_deref(), &view.path);
-        println!("{name} ({})  [b2id {}]", view.path, view.b2id);
+        println!("{name} ({})", view.path);
         if view.connections.is_empty() && view.resources.is_empty() && view.unresolved.is_empty() {
             // Zero connections at all — nothing links to it and it links to
             // nothing (an orphan; the kernel only surfaces, never archives).
@@ -763,7 +709,7 @@ fn cmd_mv(cli: &Cli, from: &str, to: &str) -> Result<(), CliError> {
     let vault = open_vault(root, true)?;
     // Kind dispatch (§9b #8): an existing directory moves as a folder
     // (every file under it, one rename); otherwise the two file arms
-    // differ only in the report type (a resource has no b2id to carry).
+    // differ only in the report type they print.
     // The human "Moved" line differs per arm, the rewrite tally is shared.
     if is_dir_arg(root, from) {
         let report = vault.move_dir(from, to)?;
@@ -1191,7 +1137,7 @@ enum CliError {
 fn user_message(err: &CliError) -> String {
     let msg = match err {
         CliError::Core(b2_core::Error::NoteNotFound(r)) => format!(
-            "Note not found: '{r}'. Check the path or b2id, and run `b2 reindex` first."
+            "Note not found: '{r}'. Check the path, and run `b2 reindex` first."
         ),
         CliError::Core(b2_core::Error::ModelMismatch { .. }) => {
             "This vault's index was built with a different embedding model. Run `b2 reindex` to rebuild it.".to_string()
@@ -1226,12 +1172,6 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::Frontmatter(d)) => {
             format!("Can't edit that frontmatter: {d}.")
         }
-        CliError::Core(b2_core::Error::FrontmatterIdentity(_)) => {
-            "That edit would change or remove the note's b2id — the note's identity, which every link keys on. Keep the b2id line exactly as it is.".to_string()
-        }
-        CliError::Core(b2_core::Error::B2idCollision { path, holder, .. }) => format!(
-            "'{path}' carries the same b2id as '{holder}' — two files can't share an identity. Remove the `b2id:` line from the copy to give it a fresh one, then run `b2 reindex`."
-        ),
         CliError::Core(b2_core::Error::ResourceNotFound(r)) => format!(
             "File not found in the vault: '{r}'. Check the path, and run `b2 reindex` first."
         ),

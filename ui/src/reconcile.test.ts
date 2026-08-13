@@ -215,47 +215,4 @@ await check("a failed coverage read is a hum, not a reconcile failure", async ()
   assert(!threw, "coverage is a hint — the tree refresh already landed and must stand");
 });
 
-// --- the GH #81 anomaly surfacing: the onReport plumbing ------------------------
-//
-// Only the plumbing lives here. What the report is *rendered* into — the ping and the
-// review panel's rows — moved to anomalies.ts when #88 grew it past one sentence, and
-// anomalies.test.ts pins that wording.
-
-await check("hands the projection's report to onReport (the pulse notice path)", async () => {
-  const seen: unknown[] = [];
-  const report = { collisions: [], restamped: [] };
-  await reconcileIndex(
-    deps({
-      project: async () => report,
-      onReport: (r) => {
-        seen.push(r);
-      },
-    }),
-  );
-  assert(seen.length === 1 && seen[0] === report, "onReport must receive the resolved report");
-});
-
-await check("no onReport while a reindex owns the index, or when projection fails", async () => {
-  let called = 0;
-  await reconcileIndex(
-    deps({
-      reindexing: true,
-      onReport: () => {
-        called++;
-      },
-    }),
-  );
-  await reconcileIndex(
-    deps({
-      project: async () => {
-        throw new Error("refused");
-      },
-      onReport: () => {
-        called++;
-      },
-    }),
-  );
-  assert(called === 0, "a skipped or failed projection has no report to surface");
-});
-
 console.log(`reconcile.test.ts: ${passed} checks passed`);

@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWBVBQVGKTYB9DMFVF7
 type: note
 title: "Companion Planting"
 ---

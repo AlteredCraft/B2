@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DYKK2Z8YXA821PFD1QC
 type: note
 title: "CLS Pooling"
 ---

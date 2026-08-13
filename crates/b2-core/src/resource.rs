@@ -60,7 +60,7 @@ impl ResourceClass {
 /// can never drift on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
-    /// A note ref: a `.md` path, or a syntactically valid ULID (`b2id`).
+    /// A note ref: a path, with or without the `.md`.
     Note,
     /// A resource ref: any other path.
     Resource,
@@ -70,8 +70,9 @@ pub enum DocKind {
 /// `b2 mv <arg> …`, a `similar` anchor) or a link target — to the note or
 /// resource arm, by the reference's own shape, never by DB state: **an
 /// extension other than `md` means resource; `.md` or no extension means
-/// note.** Extensionless covers both the wikilink habit (`concepts/memory`)
-/// and a `b2id` (ULIDs carry no dot), so no separate ULID rule is needed.
+/// note.** Extensionless covers the wikilink habit (`concepts/memory`), which
+/// since GH #170 is the only extra form a note ref takes — a note is named by
+/// its path and nothing else.
 /// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a
 /// note ref here — it is still walked, inventoried, and reachable through
 /// surfaces that know its kind (the tree); revisit if a real vault hurts.
@@ -123,7 +124,6 @@ mod tests {
             ("notes/a.md", DocKind::Note),
             ("A.MD", DocKind::Note),
             ("concepts/memory", DocKind::Note), // the wikilink habit: extensionless
-            ("01JMEM0000000000000000000A", DocKind::Note), // a b2id: extensionless
             ("papers/attention.pdf", DocKind::Resource),
             ("img/photo.png", DocKind::Resource),
             ("archive.tar.gz", DocKind::Resource),

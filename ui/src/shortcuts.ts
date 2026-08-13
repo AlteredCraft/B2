@@ -176,7 +176,6 @@ const OWN_SHEET: readonly SheetGroup[] = [
     title: "The app",
     rows: [
       { ids: ["settings.toggle"], action: "Settings" },
-      { ids: ["anomalies.toggle"], action: "Review the last index pass's anomalies" },
       { ids: ["help.keyboard"], action: "This table (Settings → Keyboard)" },
       { ids: ["overlay.focus.step"], action: "Step through the controls on screen" },
       // The dialogs' commit chord lives here rather than beside the graph's ⏎: two ⏎ rows

@@ -1,7 +1,6 @@
 ---
 type: note
 title: Throat singing
-b2id: 01JEVAL2KHOOM000000000000D
 ---
 Two notes at once from one voice: a low fundamental held steady in the chest
 while the mouth's shape carves its overtones into a whistling melody floating

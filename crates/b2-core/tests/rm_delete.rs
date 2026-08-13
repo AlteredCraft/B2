@@ -8,19 +8,28 @@
 mod common;
 
 use b2_core::Error;
-use common::{count, index_conn, reindexed_vault, MEMORY_ID};
+use common::{count, index_conn, reindexed_vault, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::fs;
 
-const MEMORY_PATH: &str = "concepts/memory.md";
-const SRS_PATH: &str = "notes/spaced-repetition.md";
+/// The vectors any read can actually reach: every one is joined to through
+/// `chunks` (M4), so this — not `COUNT(*) FROM embeddings` — is the vector state a
+/// caller can observe.
+fn reachable_vectors(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM chunks c JOIN embeddings e ON e.text_hash = c.text_hash",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
 
 /// Every edge row's identity + resolution, ordered — the shape that must match a
 /// from-scratch rebuild for `delete ≡ external-delete + reindex` to hold.
 fn edge_rows(conn: &Connection) -> Vec<(String, String, Option<String>, String, String, i64)> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, src_id, dst_id, dst_path_raw, type, occurrence_index
+            "SELECT id, src_path, dst_path, dst_path_raw, type, occurrence_index
              FROM edges ORDER BY id",
         )
         .unwrap();
@@ -46,7 +55,7 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
     let srs_before = fs::read_to_string(root.join(SRS_PATH)).unwrap();
 
     let report = vault.delete_note(MEMORY_PATH).unwrap();
-    assert_eq!(report.b2id, MEMORY_ID);
+    assert_eq!(report.path, MEMORY_PATH);
     assert_eq!(report.path, MEMORY_PATH);
     assert_eq!(report.dangled, vec![SRS_PATH.to_string()]);
 
@@ -61,7 +70,7 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
         Error::NoteNotFound(_)
     ));
     assert!(matches!(
-        vault.read(MEMORY_ID).unwrap_err(),
+        vault.read(MEMORY_PATH).unwrap_err(),
         Error::NoteNotFound(_)
     ));
 
@@ -70,8 +79,8 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
     assert_eq!(count(&conn, "notes"), 1);
     let chunk_owners: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM chunks WHERE note_b2id = ?1",
-            [MEMORY_ID],
+            "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
+            [MEMORY_PATH],
             |r| r.get(0),
         )
         .unwrap();
@@ -118,12 +127,26 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
     assert_eq!(edge_rows(&conn_a), edge_rows(&conn_b));
     assert_eq!(count(&conn_a, "notes"), count(&conn_b, "notes"));
     assert_eq!(count(&conn_a, "chunks"), count(&conn_b, "chunks"));
-    assert_eq!(count(&conn_a, "embeddings"), count(&conn_b, "embeddings"));
+    // The vectors *reachable from a chunk* — which is every vector any read can see,
+    // since each one joins through `chunks` (M4). The raw `embeddings` row count is
+    // deliberately not compared: since GH #170 a vector outlives the chunk that
+    // addressed it, so the single-note delete path leaves the deleted note's vectors
+    // behind as collectible garbage while B's whole-vault pass has already swept
+    // them. Invisible either way, and warm if the same text returns.
+    assert_eq!(reachable_vectors(&conn_a), reachable_vectors(&conn_b));
 
-    // And the delete is stable under a further reindex: nothing left to prune.
+    // And the delete is stable under a further reindex: nothing left to prune, and
+    // that pass is where A's garbage is collected — so the two indexes converge
+    // physically as well.
     let again = vault_a.reindex().unwrap();
     assert_eq!(again.notes_pruned, 0);
-    assert_eq!(edge_rows(&index_conn(&root_a)), edge_rows(&conn_b));
+    let conn_a = index_conn(&root_a);
+    assert_eq!(edge_rows(&conn_a), edge_rows(&conn_b));
+    assert_eq!(
+        count(&conn_a, "embeddings"),
+        count(&conn_b, "embeddings"),
+        "the whole-vault pass collects the orphaned vectors"
+    );
 }
 
 #[test]
@@ -205,7 +228,7 @@ fn delete_dir_removes_subtree_and_dangles_outside_links() {
 
     assert!(!root.join("concepts").exists());
     assert!(matches!(
-        vault.read(MEMORY_ID).unwrap_err(),
+        vault.read(MEMORY_PATH).unwrap_err(),
         Error::NoteNotFound(_)
     ));
 
@@ -232,8 +255,8 @@ fn delete_dir_containing_the_linker_leaves_the_target_intact() {
 
     assert!(!root.join("notes").exists());
     let memory = vault.read(MEMORY_PATH).unwrap();
-    assert_eq!(memory.b2id, MEMORY_ID);
-    assert!(vault.neighbors(MEMORY_ID).unwrap().is_empty());
+    assert_eq!(memory.path, MEMORY_PATH);
+    assert!(vault.neighbors(MEMORY_PATH).unwrap().is_empty());
     assert_eq!(count(&index_conn(&root), "notes"), 1);
 }
 

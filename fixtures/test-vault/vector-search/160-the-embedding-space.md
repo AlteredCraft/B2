@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DZH1T0GARCYYX9YXNVX
 type: note
 title: "The Embedding Space"
 ---

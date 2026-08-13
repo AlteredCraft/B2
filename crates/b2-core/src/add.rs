@@ -7,11 +7,9 @@
 //! not exist.
 //!
 //! **Markdown-first**, like [`crate::mv`] and [`crate::vault::Vault::link`]: write the
-//! `.md` file, then project it into the index from that source of truth. The new note
-//! is stamped its `b2id` by the ordinary ingest path ([`ingest::ingest_file`]) —
-//! "stamp on first sight" (§1), one code path for every note's identity. The note is
-//! fully reconstructible from Markdown (file on disk, `b2id` inside), so `add` records
-//! nothing durable of its own.
+//! `.md` file, then project it into the index from that source of truth. The note is
+//! fully reconstructible from Markdown — it is a file at a path, and that path is its
+//! identity (L1) — so `add` records nothing durable of its own.
 //!
 //! The `created` date is passed in (the façade's determinism boundary, like the
 //! move/link timestamps), keeping `b2-core` wall-clock-free.
@@ -23,11 +21,10 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
-/// What [`add_note`] did: the created note's `b2id` (stamped by ingest) and its
-/// vault-relative path (`.md`-normalized).
+/// What [`add_note`] did: the created note's vault-relative path
+/// (`.md`-normalized), which is its identity (L1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AddReport {
-    pub b2id: String,
     pub path: String,
 }
 
@@ -52,13 +49,10 @@ pub fn add_note(
 ) -> Result<AddReport> {
     let rel = write_new_note(ctx.proj.root, path_input, title, content, created)?;
 
-    // 2. Project from that Markdown: stamp the `b2id`, chunk + embed the body, and
-    //    derive any edges its content authors.
-    let ingested = ingest::ingest_file(ctx, &rel)?;
-    Ok(AddReport {
-        b2id: ingested.b2id,
-        path: rel,
-    })
+    // 2. Project from that Markdown: chunk + embed the body, and derive any edges
+    //    its content authors.
+    ingest::ingest_file(ctx, &rel)?;
+    Ok(AddReport { path: rel })
 }
 
 /// The **model-free** sibling of [`add_note`] — the desktop's New-note action
@@ -79,18 +73,15 @@ pub fn create_note(
     created: &str,
 ) -> Result<AddReport> {
     let rel = write_new_note(ctx.root, path_input, title, content, created)?;
-    let projected = ingest::project_file(ctx, &rel)?;
-    Ok(AddReport {
-        b2id: projected.b2id,
-        path: rel,
-    })
+    ingest::project_file(ctx, &rel)?;
+    Ok(AddReport { path: rel })
 }
 
 /// The shared create step: validate `path_input`, refuse to clobber, render the
 /// minimal frontmatter + body, and write the new file (creating missing parent
-/// dirs). Markdown first (step 1 of both entry points) — the `b2id` is deliberately
-/// left off; ingest/projection stamps it on first sight (§1). Returns the
-/// vault-relative `.md` path.
+/// dirs). Markdown first (step 1 of both entry points). Returns the vault-relative
+/// `.md` path — which is also the note's identity, so there is nothing further to
+/// mint or record.
 fn write_new_note(
     vault_root: &Path,
     path_input: &str,
@@ -114,15 +105,14 @@ fn write_new_note(
 /// Render a new note's text: a minimal valid frontmatter block followed by the body.
 /// `title` is YAML-quoted (so any character is a safe scalar) and omitted entirely
 /// when `None`; `content` is trimmed of trailing newlines and, when non-empty,
-/// placed after one blank line. The `b2id` is intentionally absent — ingest stamps
-/// it (§1), keeping one identity-minting code path for every note.
+/// placed after one blank line.
 ///
 /// The template seeds only what can't be reconstructed later: `created` (deterministic,
 /// lost forever if not stamped now) and an optional `title`. `type:` is deliberately
 /// *not* seeded — ingest defaults an absent `type` to `"note"` (data-model.md §1), so
 /// stamping it here would be pure redundancy (GH #80). And no key is `b2`-namespaced:
 /// these are seeded courtesies owned by the human the moment they're written, not keys
-/// B2 owns and machines on (`b2id`, `b2_relations:` are the only such keys).
+/// B2 owns and machines on (`b2_relations:` is the only such key).
 fn render_note(title: Option<&str>, content: Option<&str>, created: &str) -> String {
     let mut s = String::from("---\n");
     if let Some(t) = title {
@@ -178,8 +168,7 @@ mod tests {
 
     #[test]
     fn the_rendered_note_round_trips_and_parses_its_fields() {
-        // A note `add` writes must parse back with exactly the fields it set (and no
-        // b2id yet — ingest stamps that).
+        // A note `add` writes must parse back with exactly the fields it set.
         let out = render_note(Some("Spaced repetition"), Some("Body."), "2026-07-03");
         let parsed = crate::note::parse(&out);
         assert_eq!(parsed.as_str(), out, "renders round-trip losslessly");
@@ -187,6 +176,5 @@ mod tests {
         assert!(f.r#type.is_none(), "type is not seeded (GH #80)");
         assert_eq!(f.title.as_deref(), Some("Spaced repetition"));
         assert_eq!(f.created.as_deref(), Some("2026-07-03"));
-        assert!(f.b2id.is_none(), "b2id is stamped by ingest, not by render");
     }
 }

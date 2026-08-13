@@ -90,13 +90,6 @@ import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, typ
 import { BOUNDS, initPanes } from "./panes";
 import { reconcileIndex } from "./reconcile";
 import {
-  anomalyCount,
-  anomalyKey,
-  anomalySummary,
-  REVIEW_CHORD,
-  type IndexAnomalies,
-} from "./anomalies";
-import {
   contextMenuHtml,
   embedBannerHtml,
   escapeHtml,
@@ -317,7 +310,6 @@ function render(): void {
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
   paintReindex();
-  paintAnomalyBadge();
   paintNav();
   // The vault switcher stays enabled with no vault open — it's the in-app way to pick
   // the first one — but not mid-op, to avoid re-entrant switches. It stays live during
@@ -400,38 +392,6 @@ function paintReindex(): void {
   }
 }
 
-// Paint just the ⚠ anomaly badge — the durable half of the GH #88 surfacing, and the
-// answer to "where did that toast go". A toast is the right *ping* for a projection
-// pass that turned something up and the wrong place to *keep* it: it clears on a fixed
-// timer whether it carried one anomaly or ten, and a pass that lands while you're
-// reading is gone before you look up. The badge stays until a pass comes back clean —
-// which is the same thing as the anomaly being resolved on disk, since nothing here is
-// stored (index-engine.md §8, S2) — and it lives in the persistent shell rather than a
-// pane's innerHTML, so it holds its identity (and the keyboard) across every repaint.
-/** The badge's only markup, built once. Hoisted so the assignment below is a *constant*
- *  string rather than a template with a hole in it — see `paintAnomalyBadge`. */
-const ANOMALY_BADGE_ICON = icon("exclamation-triangle", { size: 12 });
-
-function paintAnomalyBadge(): void {
-  const badge = document.getElementById("anomaly-badge") as HTMLButtonElement | null;
-  if (!badge) return;
-  const n = state.anomalies ? anomalyCount(state.anomalies) : 0;
-  // Never hide it out from under the open panel: closing that panel restores focus to
-  // whatever opened it, and focus cannot land on a hidden button.
-  badge.hidden = n === 0 && !state.anomaliesOpen;
-  // The ⚠ is an icon now, so the badge takes markup where it used to take `textContent`.
-  // The split keeps that from being a step down: `innerHTML` receives a constant, and the
-  // one value that *varies* is appended as a **text node**, which no parser ever sees. That
-  // is stronger than escaping the count would be — `n` is a number today, and this stays
-  // correct if it ever isn't. The count is an anonymous flex item; `.anomaly-badge`'s `gap`
-  // spaces it from the icon.
-  badge.innerHTML = ANOMALY_BADGE_ICON;
-  badge.append(String(n));
-  const what = n === 1 ? "1 index anomaly" : `${n} index anomalies`;
-  badge.title = `${what} from the last index pass — review (${REVIEW_CHORD})`;
-  badge.setAttribute("aria-label", `Review ${what}`);
-}
-
 let statusTimer: number | undefined;
 function flash(msg: string): void {
   state.status = msg;
@@ -484,7 +444,7 @@ async function loadNotes(): Promise<boolean> {
  * (#52): everything after the edit-mode guard. `commit` runs the history-stack
  * mutation the moment the read succeeds — before the slower discovery tail, so rapid
  * navigations can't interleave stack updates out of order — and receives the
- * canonical vault-relative path (the ref may be a b2id or a wikilink target).
+ * canonical vault-relative path (the ref may be a wikilink target, so `.md`-less).
  * Resolves false when the read failed (its error already toasted), so back/forward
  * can prune a dead entry.
  */
@@ -793,7 +753,7 @@ function focusSidePane(): void {
 // is the only honest place to move focus — moving it on every render would fight the
 // user's own Tab while a modal is up.
 
-type OverlayKind = "settings" | "anomalies" | "move" | "delete" | "link" | "menu" | null;
+type OverlayKind = "settings" | "move" | "delete" | "link" | "menu" | null;
 
 /**
  * Which overlay is up, in the same precedence `modalHtml` renders them — the guard
@@ -809,10 +769,6 @@ type OverlayKind = "settings" | "anomalies" | "move" | "delete" | "link" | "menu
  */
 function currentOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
-  // Exclusive with Settings by construction — `openSettings` and `openAnomalies` both
-  // run `dismissOverlays` first — so the order between the two here never has to
-  // arbitrate a stack, same as every other pair on this layer.
-  if (state.anomaliesOpen) return "anomalies";
   if (state.moveTarget) return "move";
   if (state.deleteTarget) return "delete";
   if (state.linkTarget) return "link";
@@ -823,13 +779,13 @@ function currentOverlay(): OverlayKind {
 /**
  * Take down every overlay, so the caller's own can be the one that is up.
  *
- * This is what makes "exactly one is ever up" true rather than aspirational. ⌘, and ⇧⌘A
- * are deliberately **unguarded** toggles — you can hit them from anywhere, editing
- * included — so they are the two paths that open an overlay while another is already on
- * screen. `currentOverlay` and `modalHtml` both rank Settings and Anomalies above the
- * rest, so the newcomer *paints*; but a `moveTarget` left set is not a dismissed modal,
- * it is a **hidden** one, and it comes back the moment the newcomer closes. ⌘, over
- * Move… then Esc used to put the Move modal on screen with nothing having asked for it.
+ * This is what makes "exactly one is ever up" true rather than aspirational. ⌘, is a
+ * deliberately **unguarded** toggle — you can hit it from anywhere, editing included —
+ * so it is the path that opens an overlay while another is already on screen.
+ * `currentOverlay` and `modalHtml` both rank Settings above the rest, so the newcomer
+ * *paints*; but a `moveTarget` left set is not a dismissed modal, it is a **hidden**
+ * one, and it comes back the moment the newcomer closes. ⌘, over Move… then Esc used to
+ * put the Move modal on screen with nothing having asked for it.
  *
  * Discarding beats deferring here, and beats refusing: pressing ⌘, is an unambiguous
  * "take me to Settings", and a modal you have to dismiss twice is worse than one that
@@ -840,7 +796,6 @@ function dismissOverlays(): void {
   state.contextMenu = null;
   state.settingsOpen = false;
   clearRecorder(); // the chord recorder lives inside Settings and goes with it
-  state.anomaliesOpen = false;
   state.moveTarget = null;
   state.deleteTarget = null;
   state.linkTarget = null;
@@ -906,8 +861,8 @@ function captureReturnFocus(): (() => void) | null {
   }
   // A graph node, by its scene id — the same ⇧F10 → Link… path taken from a *ghost*, where
   // committing re-runs discovery and repaints the graph out from under the node. The
-  // committed ghost is exactly the authored node for the same b2id (graph.ts ids a ghost
-  // `ghost:<b2id>`), so the solidified node is where the keyboard belongs; failing that,
+  // committed ghost is exactly the authored node for the same path (graph.ts ids a ghost
+  // `ghost:<path>`), so the solidified node is where the keyboard belongs; failing that,
   // the pane, which keeps the keyboard in the graph rather than at the top of the window.
   const gnode = active.closest<SVGElement>("[data-gnode]");
   if (gnode) {
@@ -1023,14 +978,13 @@ function toggleFrontmatter(): void {
 // --- frontmatter mini-editor (GH #79) ---------------------------------------------
 //
 // The drawer's editing surface: the raw YAML in a plain textarea with explicit
-// Save/Cancel — no autosave, deliberately: half-typed YAML isn't a body sentence,
-// and the host's b2id guard wants a deliberate save to refuse cleanly. While it's
-// live the note pane is under the render carve-out (the body editor's pattern), so
-// the buffer lives only in the DOM and the inline error is painted imperatively.
-// The rules live behind the façade (E3): b2id must survive unchanged, a `---` line
-// is refused, and anything else saves — including YAML B2 can't read, which comes
-// back flagged `frontmatter_readable: false` and warns in the drawer, the same as
-// an external hand-edit would.
+// Save/Cancel — no autosave, deliberately: half-typed YAML isn't a body sentence.
+// While it's live the note pane is under the render carve-out (the body editor's
+// pattern), so the buffer lives only in the DOM and the inline error is painted
+// imperatively. The one rule lives behind the façade (E3): a `---` line is refused
+// because it would shift bytes into the body, and anything else saves — including
+// YAML B2 can't read, which comes back flagged `frontmatter_readable: false` and
+// warns in the drawer, the same as an external hand-edit would.
 
 function enterFmEdit(): void {
   const n = state.current;
@@ -1304,8 +1258,8 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
 // path, wired in wireEvents) or pick them in an OS dialog from the tree's right-click
 // menu (the keyboard path — K1: a drag is pointer-only, so it can't be the only way
 // in). Both place the files through `Vault::import_file`/`import_path`, which copies
-// the bytes verbatim and projects them: a `.md` lands as a note (b2id stamped), any
-// other file as a resource, and the tree shows it with no reindex.
+// the bytes verbatim and projects them — adding nothing to either: a `.md` lands as a
+// note, any other file as a resource, and the tree shows it with no reindex.
 //
 // The two differ only in what they can hand the host. A drop yields **bytes** — WebKit
 // gives the page content, never a path — so the file rides the IPC as base64 and is
@@ -1371,9 +1325,9 @@ async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<
   const imported: string[] = [];
   importInFlight = true;
   try {
-    // Sequential on purpose: one file's refusal (a name already taken, a note
-    // carrying a b2id this vault holds) must not cancel the rest of the drop, and
-    // the reports read in the order the user dropped them.
+    // Sequential on purpose: one file's refusal (a name already taken) must not
+    // cancel the rest of the drop, and the reports read in the order the user
+    // dropped them.
     for (const entry of plan.accepted) {
       if (!entry.file) continue;
       try {
@@ -1918,67 +1872,10 @@ function selectSettingsTab(tab: SettingsTabId, focusTab: boolean): void {
   if (focusTab) document.getElementById(`settings-tab-${tab}`)?.focus();
 }
 
-// --- the index anomalies (GH #81 → #88) --------------------------------------------
-//
-// Every projection pass hands back the anomalies it surfaced — duplicate `b2id`s and
-// identity restamps — and every path that runs one funnels its report through
-// `adoptAnomalies`. That includes the pass nobody asked for: auto-index-on-open is
-// silent by design (no toast — the user didn't request it), but silence about a
-// *finding* is different from silence about the run, and launching the app is exactly
-// when a duplicate made in Finder last week first gets noticed. The badge covers that
-// without a toast.
-//
-// The report replaces its predecessor wholesale, so a clean pass clears the badge:
-// nothing anomaly-shaped is stored, and the notice exists only as long as the vault and
-// the index still produce it (index-engine.md §8, S2).
-
-/**
- * Take a projection report's anomalies as the current state of the world, and hand the
- * caller what it needs to decide whether to say anything: the one-line ping (`null` on
- * a clean pass), and whether this set differs from the one already on the badge.
- *
- * The two callers want different things from `changed`, which is why it isn't decided
- * here: a reindex the user *asked for* reports its findings every time, while the
- * fs-watch pulse — which re-projects on every external save — pings only on news.
- */
-function adoptAnomalies(report: IndexAnomalies): { summary: string | null; changed: boolean } {
-  const before = anomalyKey(state.anomalies);
-  state.anomalies = { collisions: report.collisions, restamped: report.restamped };
-  return {
-    summary: anomalySummary(state.anomalies),
-    changed: anomalyKey(state.anomalies) !== before,
-  };
-}
-
-function openAnomalies(): void {
-  dismissOverlays(); // one exclusive overlay at a time (`currentOverlay`)
-  state.anomaliesOpen = true;
-  render();
-}
-
-function closeAnomalies(): void {
-  if (!state.anomaliesOpen) return;
-  state.anomaliesOpen = false;
-  render();
-}
-
-/** Open a note named by an anomaly row — the collision's keeper, or the note that was
- *  re-stamped. Closes the panel first: `openNote` reveals the note in the tree and
- *  repaints behind us, and leaving a modal over the thing you asked to look at is the
- *  same "inert text" complaint one level up. */
-async function openFromAnomaly(path: string): Promise<void> {
-  closeAnomalies();
-  await openNote(path);
-}
-
 /**
  * Hand a path over to the clipboard and say so.
  *
- * Shared by the anomaly panel and the file tree's two copy items. The anomaly case is
- * the one that argues for the mechanism: a shadowed copy has no index row — so it is
- * not in the file tree and `read_note` cannot resolve it (that *is* the anomaly) — and
- * B2 will not edit or delete it on its own (W4), so the path itself, ready to paste
- * into Finder or another editor, is the only actionable thing on the row.
+ * The file tree's two copy items share it.
  *
  * The failure branch is not decoration: WebKit can refuse a programmatic clipboard
  * write, and a silent no-op would leave a copy action looking like it worked. Falling
@@ -2325,10 +2222,6 @@ async function switchVault(): Promise<void> {
     state.selectedDir = ""; // the create context belongs to the vault we left
     state.dirs = []; // loadNotes below re-lists the new vault's structure
     state.treeCreate = null;
-    // Anomalies belong to the vault that produced them; the new vault's own pass
-    // re-derives its own (auto-index-on-open runs one below).
-    state.anomalies = null;
-    state.anomaliesOpen = false;
     navClear(); // history is per-vault: the old stack's paths mean nothing here
     const input = document.getElementById("search-input") as HTMLInputElement | null;
     if (input) input.value = "";
@@ -2416,11 +2309,6 @@ async function doReindex(): Promise<void> {
           .map((s) => `${s.path} (${s.reason})`)
           .join(", ")}`
       : "";
-    // The GH #81 anomalies (duplicate b2ids, identity restamps): the badge takes the
-    // detail, and the reindex flash gets a one-line ping pointing at it (#88) — the
-    // detail itself outlived this toast's timer by a wide margin.
-    const { summary } = adoptAnomalies(p);
-    const anomalies = summary ? ` ${summary}` : "";
     // The tree paints HERE — a projection can add, remove, or rename notes, and the
     // vault is browsable + keyword-searchable while embedding runs.
     await loadNotes();
@@ -2433,7 +2321,7 @@ async function doReindex(): Promise<void> {
       // host would clear the flag and run to completion). The projected index is
       // complete and consistent; vectors fill on the next run.
       flash(
-        `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}${anomalies}`,
+        `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}`,
       );
       return;
     }
@@ -2456,8 +2344,8 @@ async function doReindex(): Promise<void> {
     await refreshEmbedStatus(startedRoot);
     flash(
       r.cancelled
-        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}${anomalies}`
-        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded, ${p.stamped} stamped.${skipped}${anomalies}`,
+        ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}`
+        : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded.${skipped}`,
     );
     if (state.current) {
       // Projection may have stamped the open note on disk; re-read it, and refresh
@@ -2509,14 +2397,8 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
   render();
   try {
     if (needsProject) {
-      const p = await api.project();
+      await api.project();
       if (state.vaultRoot !== startedRoot) return; // a switch took over — it owns the UI
-      // Silent (no toast — the user didn't ask for this run), but not *mute*: the
-      // anomalies this pass finds still light the ⚠ badge, which is how a duplicate
-      // made in Finder last week gets noticed on the launch that first indexes it (#88).
-      // After the switch guard, or a departing vault's findings would light the badge
-      // over the vault that replaced it.
-      adoptAnomalies(p);
       await loadNotes(); // the tree paints HERE; keyword search is live
       await refreshEmbedStatus(startedRoot); // caveat reads "keyword-only for now (0/M)"
       render();
@@ -3454,15 +3336,6 @@ async function reconcileExternalChange(): Promise<void> {
       return state.notesTotal > 0 && state.notesEmbedded < state.notesTotal;
     },
     healVectors: scheduleTrailingEmbed,
-    // The GH #81 anomalies, on the very pulse the anomaly landed (a Finder duplicate
-    // collides HERE, not on the next manual reindex): the badge takes the detail and a
-    // one-line ping toasts. Clean passes stay silent *and* clear the badge — a resolved
-    // anomaly must stop being advertised. So do *repeat* passes over an unchanged set:
-    // pulses fire on every external save, and the badge is already carrying the notice.
-    onReport: (report) => {
-      const { summary, changed } = adoptAnomalies(report as IndexAnomalies);
-      if (summary && changed) flash(summary);
-    },
   });
 
   // The open note. Two cases are deliberately left alone:
@@ -3473,7 +3346,7 @@ async function reconcileExternalChange(): Promise<void> {
   //     (crates/b2-desktop/CLAUDE.md), the one case live reload can't own safely.
   //   • reindexing — our own project/embed run owns the open note's refresh (doReindex);
   //     reconciling here would fight it. Its own writes don't pulse anyway (sqlite under
-  //     `.b2/`, filtered host-side), but a projection can rewrite `.md` (b2id stamp).
+  //     `.b2/`, filtered host-side) — a projection writes nothing to the vault at all.
   if (state.current && !state.editing && !state.fmEditing && !state.reindexing) {
     const cur = state.current;
     try {
@@ -3533,12 +3406,6 @@ function buildShell(): void {
                title="Search the vault — ⇧⌘F (⌘F finds inside the open note)" />
       </form>
       <div class="topbar-right">
-        <!-- The ⚠ anomaly badge (GH #88): hidden until a projection pass surfaces a
-             duplicate b2id or an identity restamp, and gone again the pass after the
-             human resolves it. Lives in the shell, not a pane's innerHTML, so it keeps
-             its identity across repaints — which is what lets the review panel hand
-             focus back to it on close (crates/b2-desktop/CLAUDE.md, K1). -->
-        <button id="anomaly-badge" class="btn ghost anomaly-badge" hidden></button>
         <!-- The vault and its indexing state, as one group: a progress meter is *about*
              a vault, so it reads beside the name of the one being indexed rather than
              floating at the far end of the bar. Hidden between runs, so this is just the
@@ -3826,33 +3693,6 @@ function wireEvents(): void {
         closeSettings();
       }
       return; // clicks inside the settings modal do nothing else
-    }
-
-    // The ⚠ badge opens the anomaly review panel (GH #88) — the mouse's path to the
-    // same surface ⇧⌘A reaches.
-    if (target.closest("#anomaly-badge")) {
-      openAnomalies();
-      return;
-    }
-    // The panel itself: a row's Open / Copy path, else Done or the backdrop closes it.
-    if (state.anomaliesOpen) {
-      const open = target.closest<HTMLElement>("[data-anomaly-open]");
-      if (open) {
-        void openFromAnomaly(open.dataset.anomalyOpen ?? "");
-        return;
-      }
-      const copy = target.closest<HTMLElement>("[data-anomaly-copy]");
-      if (copy) {
-        void copyPath(copy.dataset.anomalyCopy ?? "");
-        return;
-      }
-      if (
-        target.closest("[data-anomalies-close]") ||
-        target.classList.contains("modal-backdrop")
-      ) {
-        closeAnomalies();
-      }
-      return; // clicks inside the panel do nothing else
     }
 
     const cancel = target.closest<HTMLElement>("[data-cancel]");
@@ -4527,16 +4367,6 @@ function wireEvents(): void {
       else void openSettings();
       return;
     }
-    // ⇧⌘A — the anomaly review panel, the keyboard sibling of the ⚠ badge (GH #88). A
-    // toggle like ⌘,, and reachable while editing for the same reason: it opens a modal
-    // over the pane rather than touching the live buffer. Nothing to review is not a
-    // reason to refuse — the panel then says so, which beats a chord that looks broken.
-    if (isBound(e, "anomalies.toggle")) {
-      e.preventDefault();
-      if (state.anomaliesOpen) closeAnomalies();
-      else openAnomalies();
-      return;
-    }
     // ⌘E toggles edit mode — the keyboard sibling of the Edit / Done buttons. A modal
     // owns the keyboard first; a resource or empty pane has nothing to edit. Works while
     // editing (CodeMirror leaves Mod-e unbound, so the event bubbles here) to flip back.
@@ -4574,10 +4404,6 @@ function wireEvents(): void {
       }
       if (state.settingsOpen) {
         closeSettings();
-        return;
-      }
-      if (state.anomaliesOpen) {
-        closeAnomalies();
         return;
       }
       if (state.linkTarget || state.moveTarget || state.deleteTarget) {

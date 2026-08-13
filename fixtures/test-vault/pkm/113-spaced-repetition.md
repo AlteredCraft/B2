@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DXAV32E377X48VY11TJ
 type: note
 title: "Spaced Repetition"
 ---

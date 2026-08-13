@@ -1,5 +1,4 @@
 ---
-b2id: 01KWSRHXGB0G6ZEHKYGDEQFW40
 title: "B2 — Read me / map"
 type: note
 tags: [b2, readme, overview, map]

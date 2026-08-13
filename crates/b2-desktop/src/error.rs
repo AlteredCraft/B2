@@ -60,7 +60,7 @@ pub enum CmdError {
 pub fn user_message(err: &CmdError) -> String {
     let msg = match err {
         CmdError::Core(b2_core::Error::NoteNotFound(r)) => {
-            format!("Note not found: '{r}'. Check the path or b2id, and reindex first.")
+            format!("Note not found: '{r}'. Check the path, and reindex first.")
         }
         CmdError::Core(b2_core::Error::ModelMismatch { .. }) => {
             "This vault's index was built with a different embedding model. Reindex to rebuild it."
@@ -96,9 +96,6 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::AddTargetExists(p)) => format!(
             "A note already exists at '{p}'. Choose a different name, or open that note."
         ),
-        CmdError::Core(b2_core::Error::B2idCollision { path, holder, .. }) => format!(
-            "'{path}' carries the same b2id as '{holder}' — two files can't share an identity. Remove the `b2id:` line from the copy to give it a fresh one, then reindex."
-        ),
         CmdError::Core(b2_core::Error::AddDestination(_)) => {
             "That note name isn't valid. Give a vault-relative name like `notes/new-idea`."
                 .to_string()
@@ -130,10 +127,6 @@ pub fn user_message(err: &CmdError) -> String {
             // The detail is a domain message (never an internal): today either the
             // fence refusal from `write_frontmatter` or `b2 link`'s flow-style refusal.
             format!("Can't save this frontmatter: {d}.")
-        }
-        CmdError::Core(b2_core::Error::FrontmatterIdentity(_)) => {
-            "This edit would change or remove the note's b2id — B2's identity line, which every link to this note depends on. Keep the b2id line exactly as it is, then save again."
-                .to_string()
         }
         CmdError::Core(b2_core::Error::ResourceNotFound(r)) => {
             format!("File not found in the vault: '{r}'. Check the path, and reindex first.")

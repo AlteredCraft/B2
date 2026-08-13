@@ -20,7 +20,7 @@
 //! adds nothing to the webview's least-privilege capability set (capabilities/default.json;
 //! listening for a host event is covered by `core:default`). The frontend never touches the
 //! disk; it re-reads through the façade, which keeps `index = projection of (Markdown)`
-//! honest and path/`b2id` resolution centralized.
+//! honest and path resolution centralized.
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};

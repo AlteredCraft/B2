@@ -17,14 +17,13 @@ use std::path::Path;
 
 /// A vault whose Markdown is split across the managed subtree and three hidden
 /// places: a dot-prefixed note at the root, one inside a managed folder, and an
-/// ordinary-looking note inside a dot-folder. None of the three carries a `b2id`,
-/// so a stamp would be visible in the bytes.
+/// ordinary-looking note inside a dot-folder.
 fn vault_with_hidden_markdown(root: &Path) -> Vault {
     fs::create_dir_all(root.join("notes")).unwrap();
     fs::create_dir_all(root.join(".templates")).unwrap();
     fs::write(
         root.join("notes/real.md"),
-        "---\nb2id: 01JREAL0000000000000000AA\ntype: note\ntitle: Real\n---\nA visible note about capybaras.\n",
+        "---\ntype: note\ntitle: Real\n---\nA visible note about capybaras.\n",
     )
     .unwrap();
     fs::write(root.join(".scratch.md"), "# Scratch\ncapybaras again.\n").unwrap();
@@ -64,7 +63,7 @@ fn dot_prefixed_markdown_is_not_a_note() {
     // note route ever grows a second entry point.
     let chunk_notes: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT DISTINCT note_b2id FROM chunks")
+            .prepare("SELECT DISTINCT note_path FROM chunks")
             .unwrap();
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
@@ -73,7 +72,7 @@ fn dot_prefixed_markdown_is_not_a_note() {
             .collect();
         rows
     };
-    assert_eq!(chunk_notes, vec!["01JREAL0000000000000000AA".to_string()]);
+    assert_eq!(chunk_notes, vec!["notes/real.md".to_string()]);
 
     // …and the term they all share finds only the managed one.
     let hits = vault.search("capybaras", 10).unwrap();
@@ -81,11 +80,12 @@ fn dot_prefixed_markdown_is_not_a_note() {
     assert_eq!(hits[0].path, "notes/real.md");
 }
 
-/// W4 holds for a skipped file: not indexing it is not touching it. In particular
-/// the one unbidden write b2 makes — stamping a missing `b2id` — must not reach a
-/// hidden file, or the "outside the projection" claim would still mutate the vault.
+/// W4 holds for a skipped file: not indexing it is not touching it. Since GH #170
+/// b2 makes no unbidden write to *any* file (W1), so this is now the weaker half of
+/// a stronger rule — kept because it is the rule this issue's walk is responsible
+/// for, and a future write path would have to pass here before it shipped.
 #[test]
-fn a_hidden_markdown_file_is_never_stamped() {
+fn a_hidden_markdown_file_is_never_written_to() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     let vault = vault_with_hidden_markdown(&root);
@@ -96,8 +96,7 @@ fn a_hidden_markdown_file_is_never_stamped() {
         .map(|p| fs::read_to_string(root.join(p)).unwrap())
         .collect();
 
-    let report = vault.reindex().unwrap();
-    assert_eq!(report.stamped, 0, "the one managed note already has a b2id");
+    vault.reindex().unwrap();
 
     for (path, was) in hidden.iter().zip(&before) {
         assert_eq!(
@@ -109,8 +108,8 @@ fn a_hidden_markdown_file_is_never_stamped() {
 }
 
 /// `plan_reindex` shares `collect_vault_files` with the real pass, so the preview
-/// must agree about what is *not* a note. A dry run that promised to stamp a
-/// `.scratch.md` the real run then skipped would be a lying preview.
+/// must agree about what is *not* a note. A dry run that counted a `.scratch.md`
+/// the real run then skipped would be a lying preview.
 #[test]
 fn dry_run_agrees_the_hidden_files_are_not_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -119,12 +118,10 @@ fn dry_run_agrees_the_hidden_files_are_not_notes() {
 
     let plan = vault.plan_reindex(false).unwrap();
     assert_eq!(plan.would_index, 1);
-    assert_eq!(plan.would_stamp, 0);
-    assert!(plan.stamp_paths.is_empty());
 
     let report = vault.reindex().unwrap();
     assert_eq!(plan.would_index, report.indexed);
-    assert_eq!(plan.would_stamp, report.stamped);
+    assert_eq!(plan.would_embed, report.embedded);
 }
 
 // The byte-wise half of the same rule — a name UTF-8 rejects, which must still read
@@ -136,8 +133,9 @@ fn dry_run_agrees_the_hidden_files_are_not_notes() {
 /// that *was* indexed under a managed name and is then hidden drops out of the
 /// projection on the next pass — ghost-pruned (#31), because incremental must equal
 /// a from-scratch rebuild (S3) and a rebuild would never have collected it. The file
-/// keeps its bytes and its stamped `b2id` (W4), so renaming it back re-adopts the
-/// same identity rather than minting a new one.
+/// keeps its bytes (W4), so renaming it back re-adopts it at exactly the path it
+/// left — which, since GH #170, *is* its identity, so the round trip is lossless
+/// without anything having been stamped into it.
 #[test]
 fn a_note_renamed_into_hiding_is_pruned_and_readopted_on_the_way_back() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -151,15 +149,18 @@ fn a_note_renamed_into_hiding_is_pruned_and_readopted_on_the_way_back() {
     assert_eq!(report.notes_pruned, 1, "the hidden note is a ghost row now");
     assert!(vault.list_notes().unwrap().is_empty());
 
-    // Pruned from the index, untouched on disk — identity included.
+    // Pruned from the index, byte-untouched on disk.
     let hidden = fs::read_to_string(root.join("notes/.real.md")).unwrap();
-    assert!(hidden.contains("b2id: 01JREAL0000000000000000AA"));
+    assert_eq!(
+        hidden,
+        "---\ntype: note\ntitle: Real\n---\nA visible note about capybaras.\n"
+    );
 
     fs::rename(root.join("notes/.real.md"), root.join("notes/real.md")).unwrap();
     vault.reindex().unwrap();
     let notes = vault.list_notes().unwrap();
     assert_eq!(notes.len(), 1);
-    assert_eq!(notes[0].b2id, "01JREAL0000000000000000AA");
+    assert_eq!(notes[0].path, "notes/real.md");
 }
 
 /// The write side of the same rule: b2 refuses to *create* what it would then never

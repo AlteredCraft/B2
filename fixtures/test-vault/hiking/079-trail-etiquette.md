@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DWN80SH0QWEKTAYYHXP
 type: note
 title: "Trail Etiquette"
 ---

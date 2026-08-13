@@ -1,5 +1,4 @@
 ---
-b2id: 01JSRS0000000000000000000B
 type: concept
 title: "Spaced repetition"
 created: 2026-06-20

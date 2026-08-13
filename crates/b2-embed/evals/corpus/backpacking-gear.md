@@ -1,7 +1,6 @@
 ---
 type: note
 title: Backpacking gear
-b2id: 01JEVAL1BKPCK000000000000W
 ---
 Multi-day walking is a logistics problem wearing a scenery costume: everything
 you might need for sleeping, eating, weather, and repair has to ride on your

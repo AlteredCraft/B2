@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY2XK1M0W3HH87VN3P2
 type: note
 title: "Error Enums with thiserror"
 ---

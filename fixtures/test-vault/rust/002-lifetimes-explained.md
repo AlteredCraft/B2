@@ -1,5 +1,4 @@
 ---
-b2id: 01KXF21DY16E8W4QQNQVF6BKCJ
 type: note
 title: "Lifetimes Explained"
 b2_relations:
