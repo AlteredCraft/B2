@@ -94,9 +94,9 @@
     end to end, then opens the same vault in the <b>desktop app</b>; they're two front ends over one engine,
     so nothing you do here is CLI-only.</p>
     <p class="sublead">Your <code>.md</code> files stay plain and yours the whole way. B2's whole write
-    surface is a hidden <code>.b2/</code> index folder plus <b>two lines of frontmatter</b>: a
-    <code>b2id</code> it stamps the first time it indexes a note, and a <code>b2_relations:</code> entry when
-    <em>you</em> commit a typed link. Your prose is never rewritten.</p>
+    surface is a hidden <code>.b2/</code> index folder plus <b>one line of frontmatter</b> — a
+    <code>b2_relations:</code> entry, and only when <em>you</em> commit a typed link. Indexing itself
+    writes nothing to your notes at all. Your prose is never rewritten.</p>
   </header>
 
   <!-- ============================================================= -->
@@ -220,22 +220,17 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
     <div class="head"><div class="num">4</div><h3>Know what B2 will and won't touch</h3></div>
     <div class="body">
       <p>Nothing is hidden — the files stay ordinary Markdown that work in Obsidian, or anything else,
-      with no B2 running. After indexing (next step), the second note gains exactly one line B2 manages.
-      It had no frontmatter at all, so B2 opens a minimal block for it and writes nothing else:</p>
-<pre><span class="c">---</span>
-<span class="c">b2id: 01KWMCW242E0WSKVYDYNQBT7SN</span>   <span class="c"># set by B2 on first index — a stable id, never changes</span>
-<span class="c">---</span>
-<span class="c">Spaced repetition exploits the retrieval curve of [[concepts/memory]].</span>
+      with no B2 running. Indexing (next step) changes <b>nothing at all</b> in them: the second note has
+      no frontmatter, and after a full reindex it still has none.</p>
+<pre><span class="c">Spaced repetition exploits the retrieval curve of [[concepts/memory]].</span>
 <span class="c"></span>
 <span class="c">Expanding review intervals beat massed practice for long-term recall.</span></pre>
-      <p>On a note that already has frontmatter, the <code>b2id:</code> line is inserted at the top of the
-      existing block and every other key is left exactly as you wrote it — same bytes, same order, same
-      comments.</p>
-      <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly two
-      places, both in <b>frontmatter</b>, and <b>never touches your prose</b>:
+      <p>A note that already has frontmatter keeps every key exactly as you wrote it — same bytes, same
+      order, same comments. A note that has none stays that way. B2 knows a note by <b>where it sits</b>:
+      its path in the vault is its identity, so there is nothing to stamp into the file.</p>
+      <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly
+      <b>one</b> place, in <b>frontmatter</b>, and <b>never touches your prose</b>:
       <ul style="margin:8px 0 4px">
-        <li><code>b2id:</code> — stamped the first time B2 indexes a note. This one is <em>not</em>
-        opt-in: it's the stable identity that lets a link survive you renaming or moving the file.</li>
         <li><code>b2_relations:</code> — a typed connection, appended only when <em>you</em> commit one
         (step&nbsp;8, or a click in the desktop app).</li>
       </ul>
@@ -249,19 +244,21 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
   <div class="step">
     <div class="head"><div class="num">5</div><h3>Index the vault</h3></div>
     <div class="body">
-      <p><code>b2 reindex</code> reads every note, stamps any missing <code>b2id</code>, and builds the
-      searchable index. It's how B2 catches up to files you've created or edited by hand:</p>
+      <p><code>b2 reindex</code> reads every note and builds the searchable index — reading only; your
+      notes are not written to. It's how B2 catches up to files you've created or edited by hand:</p>
 <pre><span class="p">$</span> <span class="k">cd</span> ~/vault
 <span class="p">$</span> <span class="k">b2</span> reindex .
 <span class="o">Indexing /Users/you/vault</span>
 <span class="o">  embedding 2/2 · notes/spaced-repetition.md (2 chunks)</span>
-<span class="o">Indexed 2 notes (2 embedded, 2 stamped) and 0 resources</span></pre>
+<span class="o">Indexed 2 notes (2 embedded) and 0 resources</span></pre>
       <p>Run it again after editing notes — it's <b>incremental</b>: unchanged notes keep their vectors,
       so only what actually changed is re-embedded. Two flags help:</p>
       <ul>
-        <li><code>b2 reindex --dry-run</code> — preview what <em>would</em> happen (writes nothing, not
-          even a <code>b2id</code>).</li>
-        <li><code>b2 reindex --force</code> — re-embed everything from scratch.</li>
+        <li><code>b2 reindex --dry-run</code> — preview how much work a run would be, touching neither
+          your notes nor the index.</li>
+        <li><code>b2 reindex --force</code> — re-project everything from scratch. It re-embeds only what
+          genuinely differs: identical text always produces the identical vector, so B2 keeps the one it
+          has rather than recomputing it.</li>
       </ul>
       <p><code>b2 status</code> answers "is it done?" at any point — how many notes are embedded (so
       semantic ranking is live rather than keyword-only), and whether a reindex is running.</p>
@@ -303,16 +300,16 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
 <span class="o">→ references  memory (concepts/memory.md)</span>
 
 <span class="p">$</span> <span class="k">b2</span> explain <span class="s">concepts/memory</span>
-<span class="o">memory (concepts/memory.md)  [b2id 01KWMCW242E0WSKVYDYNQBT7SN]</span>
+<span class="o">memory (concepts/memory.md)</span>
 <span class="o">Connections:</span>
 <span class="o">  ← referenced-by  spaced-repetition (notes/spaced-repetition.md)  [inline]</span></pre>
       <p>That's the body wikilink, read back as a graph edge: untyped (<code>references</code>), sourced
       from the body (<code>inline</code>), and shown from the far end under its inverse label
       (<code>referenced-by</code>). The edge is stored once and directed — the inverse is display only.
       Step&nbsp;8 adds a <em>typed</em> one and this listing grows a second row.</p>
-      <p>You can pass a note as either its vault-relative path or its <code>b2id</code>. When nothing
-      points at a note, <code>explain</code> flags it as an <b>orphan</b> — surfaced for you to notice,
-      never auto-changed.</p>
+      <p>You address a note by its vault-relative path, with or without the <code>.md</code> — the same
+      two forms a link is written in. When nothing points at a note, <code>explain</code> flags it as an
+      <b>orphan</b> — surfaced for you to notice, never auto-changed.</p>
     </div>
   </div>
 
@@ -361,7 +358,7 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       cannot infer for you — everything else about the connection is already in the two notes.
       <code>--explanation</code> records the "why", and <code>b2 explain</code> reads it back:</p>
 <pre><span class="p">$</span> <span class="k">b2</span> explain <span class="s">notes/cramming</span>
-<span class="o">cramming (notes/cramming.md)  [b2id 01KWMD1S6Q7YB0F3T2H8XR9V4C]</span>
+<span class="o">cramming (notes/cramming.md)</span>
 <span class="o">Connections:</span>
 <span class="o">  ← contradicts  spaced-repetition (notes/spaced-repetition.md)  [frontmatter]</span>
 <span class="o">      why: massed vs. spaced practice</span></pre>
@@ -380,11 +377,15 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
 <pre><span class="p">$</span> <span class="k">b2</span> mv <span class="s">concepts/memory</span> <span class="s">concepts/human-memory</span>
 <span class="o">Moved concepts/memory.md → concepts/human-memory.md</span>
 <span class="o">Rewrote 1 inbound link(s) across 1 file(s).</span></pre>
-  <p>Because connections key on the immutable <code>b2id</code>, a move <b>never breaks a backlink</b> — and
-  B2 rewrites the now-stale path inside every note that pointed at the old one, so the Markdown still reads
-  correctly in any other editor. Folders move as a whole. Refactor fearlessly: move, split, merge, rename.
-  After a batch of hand-edits, a quick <code>b2 reindex</code> catches everything up — or nothing at all,
-  if you're in the desktop app, which is watching the folder anyway.</p>
+  <p>A move made <em>through B2</em> <b>never breaks a backlink</b>: it rewrites the now-stale path inside
+  every note that pointed at the old one — so the Markdown still reads correctly in any other editor — and
+  re-keys the index in the same breath. Folders move as a whole. Refactor fearlessly: move, split, merge,
+  rename. After a batch of hand-edits, a quick <code>b2 reindex</code> catches everything up — or nothing
+  at all, if you're in the desktop app, which is watching the folder anyway.</p>
+  <p>Rename a note <em>outside</em> B2 — in Finder, or with <code>git mv</code> — and the links pointing at
+  it break, exactly as they would with Obsidian closed. The difference is that B2 <b>tells you</b>:
+  <code>b2 explain</code> lists each one as unresolved, with the path it was written to, and it heals by
+  itself the moment a note exists there again.</p>
 
   <!-- ============================================================= -->
   <h2 class="sec">The same vault, in a window</h2>

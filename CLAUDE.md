@@ -1,5 +1,4 @@
 ---
-b2id: 01KWSRHGY9XCT43ZW22W73QBY4
 ---
 # CLAUDE.md
 
@@ -168,7 +167,7 @@ links candle, and `b2-cli`'s tests spawn the binary under `B2_EMBEDDER=fake`. On
 step follows the gate: **`git diff --exit-code`**, asserting no stage edited a tracked file. That
 turns two standing conventions into enforcement — the lockfile can't drift out from under
 `package.json`, and the engine suite can't mutate `fixtures/golden-vault/` (the tests copy it to a
-tempdir first precisely so `b2id` stamping never touches the repo copy).
+tempdir first, so a suite can never edit a committed fixture).
 
 **Advisory-but-exit-0 output is a hole in any gate.** A tool that reports a problem and exits `0`
 passes green: clippy does it with warnings (hence `-D warnings` on every lint stage), and
@@ -224,23 +223,31 @@ so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored v
    derived rows only). Every committed connection lives in the Markdown: a body `[[link]]` (always
    untyped), or a frontmatter `b2_relations:` entry (the sole home of a typed relation; written by
    `b2 link` or by hand).
-2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings` + `note_centroids`, scored in-process) + the typed `edges` graph.
+2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings`, content-addressed by chunk-text hash, + `note_centroids`, scored in-process) + the typed `edges` graph.
    Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable
    B2-derived state lives outside the Markdown** (the human's own directory tree is vault material,
    not B2 state — see the folders paragraph below).
 
+**A note's identity is its vault-relative path** (invariant L1, GH #170), which is why the second tier
+holds no key the first doesn't: `notes.path` is the primary key and every derived row cascades off it.
+
 Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
-edge is re-derived from Markdown on every reindex; the only write B2 makes to a note *of its own accord*
-is stamping a missing `b2id` (a ULID) — every other write is the mechanics of a command: `b2 link`
-appending a frontmatter `b2_relations:` entry, the move-repair of inbound link paths, the desktop
-editor's saves through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded
-by a content-hash revision; B2 never authors body content itself), and the frontmatter drawer's saves
-through `Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes,
-body untouched, refusing only a changed/removed `b2id` — GH #79). **Import** (`Vault::import_file` /
-`import_path`, the desktop's drag-a-file-from-Finder-onto-the-tree gesture) is the same posture applied
-to a *new* file: the bytes are the human's, copied verbatim and then projected — B2 authors nothing, so a
-dropped `.md` keeps its own frontmatter and a dropped PDF its bytes, and the only thing added is the
-`b2id` stamp every note gets on first sight.
+edge is re-derived from Markdown on every reindex; and **B2 makes no unbidden write at all** — reading a
+vault, walking it, reindexing it, writes nothing (W1), so `reindex` runs on a read-only vault and leaves
+a git-versioned one with no diff. Every write is the mechanics of a command: `b2 link` appending a
+frontmatter `b2_relations:` entry, the move-repair of inbound link paths, the desktop editor's saves
+through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded by a content-hash
+revision; B2 never authors body content itself), and the frontmatter drawer's saves through
+`Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes, body
+untouched — B2 owns no line inside that block). **Import** (`Vault::import_file` / `import_path`, the
+desktop's drag-a-file-from-Finder-onto-the-tree gesture) is the same posture applied to a *new* file:
+the bytes are the human's, copied verbatim and then projected — B2 adds nothing to them, so a dropped
+`.md` keeps its own frontmatter and a dropped PDF its bytes.
+
+*(Through 2026-08 B2 stamped a `b2id:` ULID into every note it saw. GH #170 removed it: no link ever
+named it, and it bought out-of-band-move re-binding at the cost of a collision subsystem, a carve-out on
+S3, and a machine key in the user's files. A `b2id:` line an older B2 left behind is now an ordinary
+unknown key — never read, never removed. There is no migration: `rm -rf .b2/` and reindex.)*
 
 **Many processes hold one index open at once** (invariant C1, index-engine.md §3 "Opening the index
 concurrently"): `b2 reindex &` racing a `b2 status`, the desktop app launching against a vault a CLI
@@ -365,17 +372,17 @@ adapters wire the real model.
 
 ### Data flows
 
-- **Flow ① ingest/reindex** (`ingest.rs`) — parse → stamp missing `b2id` (write file) → project
-  notes, chunks (+FTS), embeddings, and the typed `edges` graph. Two-phase so link resolution is
+- **Flow ① ingest/reindex** (`ingest.rs`) — parse → project notes, chunks (+FTS), embeddings, and the
+  typed `edges` graph, **writing nothing to the vault**. Two-phase so link resolution is
   independent of file order. It is **two separately-invokable passes**
   (the `project`/`embed` split, #15): model-free `project_vault` (notes/chunks/FTS/edges) and
   `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
-  falls back to BM25-only on a projected-but-unembedded vault. The projection pass also *surfaces*
-  vault anomalies instead of absorbing them (#81, index-engine.md §8): a cross-note `b2id`
-  collision (a Finder-duplicated note) resolves **incumbent-wins** — never walk-order — with the
-  shadowed copy un-indexed and reported on every pass until the human resolves it, and an identity
-  **restamp** (a `b2id:` line blanked/removed outside b2, re-stamped fresh) is reported old → new.
-  Surfacing only, no auto-fix (W4); `reindex --dry-run` previews all of it read-only.
+  falls back to BM25-only on a projected-but-unembedded vault. The whole-vault pass owns every
+  *reconciliation*: pruning rows for files the walk no longer met (#31) and collecting vectors no
+  chunk references (GH #170) — the single-note paths touch one note and never prune. Anomalies it
+  used to surface (duplicate `b2id`s, identity restamps — #81/#88) went with the stamp: a
+  Finder-duplicated note is now simply two notes at two paths, which is what it looks like in
+  Finder too.
 - **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (an exact in-process scan
   of `embeddings`) fused with Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL
   queries are sanitized into a safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would
@@ -392,7 +399,7 @@ adapters wire the real model.
   failure — that step can never break chat) → retrieve (`search_chunks` at `chat::ASK_PASSAGES`,
   BM25-only fallback unchanged) → assemble (the grounded system prompt + numbered passages — prompt
   assembly is core logic) → stream (tokens up through the caller's callback; `Break` cancels at
-  token granularity) → cite (`[n]` markers resolve to `(path, b2id, excerpt)` in `AnswerView`; a
+  token granularity) → cite (`[n]` markers resolve to `(path, excerpt)` in `AnswerView`; a
   hallucinated marker resolves to nothing and the answer text is never rewritten). Chat is a
   **reader** (C1); nothing model-derived is stored (`llm_cache` stays unused), history is
   session-only (S4), and model output is untrusted content (E5 — enforced at the render surface).
@@ -416,11 +423,19 @@ inverse labels are display-only.
 
 ### Embedding-space discipline
 
-Vectors live in **plain tables** — `embeddings(chunk_id, vector)` and `note_centroids(note_b2id,
+Vectors live in **plain tables** — `embeddings(text_hash, vector)` and `note_centroids(note_path,
 centroid)` — created at **embed time**, not in the base migration: their existence is the "this vault
 has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
-computed **in-process** (`embed::l2_sq`, one sequential scan statement; rationale:
-#38). `meta` records `(embed_model_id,
+computed **in-process** (`embed::l2_sq`, one scan; rationale: #38).
+
+The vector store is **content-addressed** (GH #170): the key is blake3 of the chunk text, which *is*
+the embed input, so identical text has one vector and a moved or renamed note re-embeds nothing — the
+thing that makes path-keyed identity cheap. Two consequences to hold onto: a vector **outlives** the
+chunk that addressed it (it may be shared, so `replace_chunks` no longer cascades it away), which is
+why the whole-vault pass collects unreferenced hashes; and `--force` re-*chunks* but re-embeds only
+what genuinely differs, because recomputing identical input could only produce identical bytes. Every
+read joins through `chunks`, so an uncollected orphan is invisible to search, discovery and coverage
+alike. `meta` records `(embed_model_id,
 embed_dim)` — the only place a model swap is detectable. The compute **device** folds into this
 identity: the real embedder tags its recorded `embed_model_id` with the resolved device (CPU stays the
 bare repo id; a `--features metal` GPU build appends `@metal`, `b2-embed/src/model.rs`), so a
@@ -436,8 +451,9 @@ invalidation exists or is needed.
 
 - **Determinism is a hard requirement of the core.** No wall-clock and no randomness inside `b2-core`:
   timestamps and ids are passed in (see `IdGen`, and the `created` param on write ops), so operations are
-  reproducible and unit-testable. Tests assert against fixed ids (`FixedId`, the golden-vault b2ids in
-  `tests/common/mod.rs`).
+  reproducible and unit-testable. Nothing in the core mints anything — a note's identity is its path
+  — so the `IdGen` seam is gone; tests assert against the golden-vault *paths* in
+  `tests/common/mod.rs`.
 - **Keep `cargo test` fast, deterministic, and model-free.** Real-model work belongs out of CI —
   behind `b2 init`, `--example eval`, or manual runs. Never add candle/tokenizers deps to `b2-core`.
 - **Never `#[ignore]` a test, and a hard-to-write test is a signal, not a chore.** `#[ignore]` hides a
@@ -463,8 +479,9 @@ invalidation exists or is needed.
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
   CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
   This matches the repo-wide logging policy in the parent `CLAUDE.md`.
-- Integration tests copy the committed `fixtures/golden-vault/` into a tempdir first, so ingest (which
-  may stamp a `b2id`) never mutates the repo fixtures. `fixtures/test-vault/` is a *separate*,
+- Integration tests copy the committed `fixtures/golden-vault/` into a tempdir first, so no suite can
+  mutate the repo fixtures. (Ingest writes nothing to a vault now — W1 — so this is belt and braces
+  rather than the guard it was; CI's `git diff --exit-code` is the backstop either way.) `fixtures/test-vault/` is a *separate*,
   larger synthetic fixture (~200 notes) for **out-of-CI throughput/quality experiments**, not the
   deterministic suite — see `fixtures/README.md` and `just compare-device` (the CPU-vs-Metal embed A/B).
 

@@ -259,8 +259,8 @@ pub fn candidates(
         }
     }
 
-    // Best score first; ties broken by id so the ranking (and thus `limit`'s prefix)
-    // is deterministic.
+    // Best score first; ties broken by path so the ranking (and thus `limit`'s
+    // prefix) is deterministic.
     out.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)

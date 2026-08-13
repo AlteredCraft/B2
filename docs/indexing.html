@@ -100,7 +100,7 @@
     separately-invokable passes</b>: model-free <b>projection</b> (<code>project_vault</code> — notes, chunks,
     FTS, edges), then the <b>embed pass</b> (<code>embed_vault</code> — fill the DB-derived set of chunks still
     missing a vector). Projection itself runs in <b>two phases</b> so link resolution never depends on file
-    order: phase 1 projects every note + its chunks (filling the <code>path → b2id</code> resolver for the
+    order: phase 1 projects every note + its chunks (filling the resolver — the set of known note paths — for the
     whole vault), phase 2 derives edges against that now-complete resolver. Everything expensive — embedding —
     happens in the embed pass, and the heuristics below decide how little of it a routine reindex must redo.
     Because FTS lands at projection time, a projected-but-unembedded vault is already keyword-searchable
@@ -110,10 +110,10 @@
     <div class="card tight">
       <div class="kickerlbl">Per note, projection does three things; the embed pass does the fourth</div>
       <ul class="tidy" style="margin:6px 0 0;font-size:13.5px">
-        <li><b>Parse &amp; stamp.</b> Read the file losslessly; if it has no <code>b2id</code>, mint a ULID
-        and write one surgical frontmatter line (B2's <em>one</em> always-allowed write during ingest) —
-        logged as <code>b2id.stamped</code>. An unreadable file (non-UTF-8, permission denied) is <b>skipped
-        and reported</b>, never fatal to the whole vault.</li>
+        <li><b>Parse.</b> Read the file losslessly and write nothing back to it — indexing is pure
+        observation, so a reindex leaves a git-versioned vault with no diff. An unreadable file
+        (non-UTF-8, permission denied) is <b>skipped and reported</b>, never fatal to the whole
+        vault.</li>
         <li><b>Project the note row</b> — <code>upsert_note</code>, which records the body's
         <code>body_hash</code> (the incremental signal used next time).</li>
         <li><b>Re-chunk only if the body changed</b> (or <code>--force</code>) — the heuristic below; chunk
@@ -151,7 +151,7 @@
 
         <!-- parse -->
         <rect class="node" style="stroke:var(--t1)" x="340" y="118" width="320" height="58" rx="10"/>
-        <text class="title" x="500" y="142" text-anchor="middle">parse · stamp b2id if missing</text>
+        <text class="title" x="500" y="142" text-anchor="middle">parse (read-only — nothing is written back)</text>
         <text class="sub mono-t" x="500" y="160" text-anchor="middle">upsert_note → stores body_hash</text>
 
         <!-- decision -->

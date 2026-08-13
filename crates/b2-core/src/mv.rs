@@ -134,8 +134,10 @@ fn normalize_dest(input: &str) -> Result<String> {
     crate::pathspec::normalize_rel_md(input).map_err(Error::MoveDestination)
 }
 
-/// What [`move_resource`] did — the resource sibling of [`MoveReport`], minus the
-/// identity field (a resource has no `b2id` to carry; data-model.md §10).
+/// What [`move_resource`] did — the resource sibling of [`MoveReport`]. Since
+/// GH #170 the two carry the same fields, both arms being path-keyed
+/// (data-model.md §10); they stay separate types because the reports are
+/// separate contracts, not because the shapes diverge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceMoveReport {
     pub from: String,

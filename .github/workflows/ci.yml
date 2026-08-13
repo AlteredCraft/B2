@@ -72,9 +72,10 @@ jobs:
 
       # Nothing above is allowed to edit a tracked file. This catches two real invariants at
       # once: `ui-install` rewriting package-lock.json (drift between package.json and the
-      # committed lockfile), and the engine suite mutating fixtures/golden-vault/ — the tests
-      # copy it into a tempdir first precisely so ingest's `b2id` stamping can't touch the repo
-      # copy (CLAUDE.md, "Conventions"), and that has been a convention with nothing behind it.
+      # committed lockfile), and the engine suite mutating fixtures/golden-vault/. The tests
+      # still copy the fixture into a tempdir first (CLAUDE.md, "Conventions"), but since
+      # GH #170 the deeper claim is that they wouldn't need to: B2 makes no unbidden writes,
+      # so indexing a vault leaves every byte of it alone. This is what stands behind that.
       - name: Assert the gate left the working tree clean
         run: |
           if ! git diff --exit-code; then

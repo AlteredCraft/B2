@@ -79,7 +79,7 @@ const TORN_READ_HEADROOM: usize = 2;
 /// chunk that shares a note onto that note's best one; several top chunks routinely
 /// *do* share a note, so a pool of exactly `limit` would under-fill `limit` distinct
 /// notes on an ordinary query. The same headroom absorbs the other reason a hit is
-/// dropped — a `resolve_b2id_to_path` that misses because the row vanished
+/// dropped — a chunk whose note row vanished
 /// mid-query, the concurrent-reindex window C1 explicitly allows (index-engine.md
 /// §3). Dedup is the binding reason and it scales with `limit`, so the widening does
 /// too; contrast [`chunk_hit_pool`], whose reason does not.
@@ -90,7 +90,7 @@ fn note_hit_pool(limit: usize) -> usize {
 /// How wide a hit pool [`Vault::search_chunks`] retrieves: `limit` plus a fixed
 /// [`TORN_READ_HEADROOM`]. There is no dedup here — this is deliberately the
 /// un-deduped passage view — so the *only* hit it drops is one whose
-/// `resolve_b2id_to_path`/`chunk_detail` lookup missed on a torn read. That window
+/// `chunk_detail` lookup missed on a torn read. That window
 /// is rare and bounded, not proportional to the ask, so a constant covers it and
 /// `limit`'s own multiple would buy nothing more: GH #137 asked for backfill, not
 /// for width.
@@ -628,7 +628,7 @@ impl Vault {
     }
 
     /// Re-project every `.md` note under the vault root into the index (Flow ①):
-    /// notes, chunks (+embeddings), and the typed graph. Stamps any missing `b2id`.
+    /// notes, chunks (+embeddings), and the typed graph. Writes nothing to the vault.
     /// **Incremental** — a note whose body is unchanged reuses its vectors rather
     /// than re-embedding (see [`reindex_with_progress`](Self::reindex_with_progress)
     /// to force a full re-embed or observe progress).
@@ -675,12 +675,14 @@ impl Vault {
     }
 
     /// The **projection pass** alone (index-engine.md): re-project
-    /// every `.md` note into `notes`/`chunks`(+FTS)/`edges` — stamping missing
-    /// `b2id`s — with **no model and no vector work**. After it returns, the file
+    /// every `.md` note into `notes`/`chunks`(+FTS)/`edges` with **no model and no
+    /// vector work**, and no write to the vault. After it returns, the file
     /// tree lists, notes open, keyword search answers, and the graph resolves; only
     /// vectors (and thus `similar` / semantic ranking) wait for
-    /// [`embed`](Self::embed). `force` re-chunks every note (clearing its stale
-    /// vectors), so `project(force)` + `embed` is a full rebuild.
+    /// [`embed`](Self::embed). `force` re-chunks every note, so `project(force)` +
+    /// `embed` is a full rebuild — though a re-chunked note whose text is unchanged
+    /// re-addresses the vectors it already had (GH #170), so "full" costs model
+    /// calls only where the text genuinely moved.
     /// [`reindex`](Self::reindex) remains the composition of the two passes.
     ///
     /// *(The invariant's "index = projection of Markdown" still means the* full
@@ -721,10 +723,10 @@ impl Vault {
     }
 
     /// Preview a reindex (`reindex --dry-run`): report what [`reindex`](Self::reindex)
-    /// **would** do — how many notes it would index, (re)embed, and stamp — with
-    /// **no** writes: no `b2id` stamped to the Markdown (B2's one vault write,
-    /// data-model.md §1), no index/log mutation, no embedding. `force` previews a
-    /// full rebuild (every note would re-embed). A pure read, so it needs no model
+    /// **would** do — how many notes it would index and (re)embed — with
+    /// **no** writes: no byte to the Markdown (which is true of the real run too
+    /// since GH #170), no index mutation, no embedding. `force` previews a
+    /// re-chunk of every note. A pure read, so it needs no model
     /// (the CLI opens with the fake for it, like `neighbors`).
     pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
         let _op = tracing::debug_span!(target: "b2::vault", "plan_reindex", force).entered();
@@ -735,8 +737,9 @@ impl Vault {
         })
     }
 
-    /// Active neighbors of the note referenced by `note_ref` (path **or** `b2id`),
-    /// each resolved to the other note's path + title for display. Errors with
+    /// Active neighbors of the note referenced by `note_ref` (a path, with or
+    /// without the `.md`), each resolved to the other note's path + title for
+    /// display. Errors with
     /// [`Error::NoteNotFound`] when the ref matches no indexed note (distinct from
     /// a found note that simply has no neighbors → an empty list).
     pub fn neighbors(&self, note_ref: &str) -> Result<Vec<NeighborView>> {
@@ -745,7 +748,7 @@ impl Vault {
         self.neighbors_of(&path)
     }
 
-    /// The active neighbors of an already-resolved `b2id`, each resolved to the
+    /// The active neighbors of an already-resolved path, each resolved to the
     /// other note's path + title for display. Shared by [`neighbors`](Self::neighbors)
     /// and [`explain`](Self::explain) so the two present the same edge shape.
     fn neighbors_of(&self, note_path: &str) -> Result<Vec<NeighborView>> {
@@ -771,7 +774,7 @@ impl Vault {
         Ok(out)
     }
 
-    /// The resource links of an already-resolved `b2id` — every outbound edge at a
+    /// The resource links of an already-resolved path — every outbound edge at a
     /// non-`.md` file, resolved with its inventory class for display (GH #22).
     fn resource_links_of(&self, note_path: &str) -> Result<Vec<ResourceLinkView>> {
         Ok(db::outbound_resource_edges(&self.conn, note_path)?
@@ -788,7 +791,7 @@ impl Vault {
             .collect())
     }
 
-    /// The unresolved (dangling) outbound links of an already-resolved `b2id` —
+    /// The unresolved (dangling) outbound links of an already-resolved path —
     /// authored links whose target names no note and no resource (a folder or a
     /// typo). Shared by [`explain`](Self::explain) and
     /// [`unresolved_links`](Self::unresolved_links) so both present the same shape.
@@ -805,7 +808,7 @@ impl Vault {
     }
 
     /// The unresolved (dangling) outbound links of the note referenced by `note_ref`
-    /// (path **or** `b2id`): links it authored that resolve to no note and no
+    /// (a path, `.md` optional): links it authored that resolve to no note and no
     /// resource — a `[[Hermes]]` naming a *folder*, or a typo (GH #12). Surfaced so a
     /// broken link is visible, not silently dropped; `b2 neighbors`/`b2 explain` show
     /// them. Errors with [`Error::NoteNotFound`] for an unknown ref; a note whose
@@ -818,7 +821,7 @@ impl Vault {
     }
 
     /// Explain a note's connections (`b2 explain`): the note referenced by
-    /// `note_ref` (path **or** `b2id`) resolved to its identity + title, together
+    /// `note_ref` (a path, `.md` optional) resolved to its identity + title, together
     /// with every active typed edge and its "why", its outbound **resource** links
     /// (images/PDFs — the third target kind, GH #22), plus any **unresolved**
     /// outbound links (dangling — a folder target or a typo, surfaced not
@@ -845,11 +848,11 @@ impl Vault {
 
     /// Read a note for display (`Vault::read`) — the Desktop UI MVP's left pane and
     /// the one new façade op that surface adds (crates/b2-desktop/CLAUDE.md). Resolve
-    /// `note_ref` (path **or** `b2id`) to its file and return the note's **raw
+    /// `note_ref` (a path, `.md` optional) to its file and return the note's **raw
     /// Markdown body from disk** (the source of truth, not the index projection) plus
     /// the frontmatter metadata worth showing a reader. A pure read — no embedding,
     /// like [`neighbors`](Self::neighbors) — so an adapter needs no model just to
-    /// render a note; path/`b2id` resolution is centralized here so the adapter never
+    /// render a note; ref resolution is centralized here so the adapter never
     /// touches the filesystem itself. Errors with [`Error::NoteNotFound`] for an
     /// unknown ref.
     pub fn read(&self, note_ref: &str) -> Result<NoteView> {
@@ -888,8 +891,7 @@ impl Vault {
     /// DB-derived pending set for any later [`embed`](Self::embed) to fill). No
     /// embedder is touched, so saving works with no model provisioned.
     ///
-    /// Returns the **new revision** (hashing the *final* on-disk bytes — a
-    /// missing-`b2id` stamp, the one write beyond the body, is reflected), which the
+    /// Returns the **new revision**, hashing the *final* on-disk bytes — which the
     /// editor chains its next save on: sequential saves never self-conflict, and
     /// only an external write trips the guard ("last save wins — by construction").
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
@@ -908,10 +910,12 @@ impl Vault {
         parsed.replace_body(body);
         fs::write(&abs, parsed.as_str())?;
 
-        // Re-project model-free; stamps a missing b2id through the ordinary path.
+        // Re-project model-free, through the ordinary path.
         ingest::project_file(self.ctx(), &path)?;
 
-        // Hash the FINAL on-disk bytes (a stamp re-wrote the file after our splice).
+        // Hash the final on-disk bytes. Since GH #170 projection writes nothing, so
+        // these are our own splice — read back rather than assumed, because the
+        // revision the editor chains on must describe the file, not our intent.
         let final_raw = fs::read_to_string(&abs)?;
         Ok(WriteReport {
             path,
@@ -929,14 +933,12 @@ impl Vault {
     /// a frontmatter save never re-embeds; the notes row and the typed edges
     /// re-derive from the new block.
     ///
-    /// Two refusals, both before any byte reaches disk:
-    /// - a top-level `---` line in `frontmatter` ([`Error::Frontmatter`]) — it
-    ///   would close the block early and shift the rest into the body, and the
-    ///   body is not this op's to change;
-    /// - a changed, removed, or duplicated `b2id` ([`Error::FrontmatterIdentity`])
-    ///   — the one line B2 protects (L1: every edge keys on it). Validated on the
-    ///   **re-parsed spliced candidate**, so the guard sees exactly what a reindex
-    ///   would see; re-quoting the same id is fine (identity, not bytes).
+    /// **One** refusal, before any byte reaches disk: a top-level `---` line in
+    /// `frontmatter` ([`Error::Frontmatter`]) — it would close the block early and
+    /// shift the rest into the body, and the body is not this op's to change. It
+    /// used to be two: a changed or removed `b2id` was also refused, because
+    /// identity lived in the block being spliced. Since GH #170 identity is the
+    /// path, which this op cannot touch, so there is no line left to protect.
     ///
     /// Everything else in the block is the human's (W4/W5): malformed YAML saves
     /// fine — it round-trips verbatim, projects best-effort, and surfaces through
@@ -979,7 +981,7 @@ impl Vault {
         })
     }
 
-    /// Every indexed note as a lightweight [`NoteSummary`] (`b2id`, `path`, `title`;
+    /// Every indexed note as a lightweight [`NoteSummary`] (`path`, `title`;
     /// no body), ordered by `path` — the vault listing the desktop UI's file tree is
     /// built from (spec's navigation surface). A pure, model-free read like
     /// [`read`](Self::read): the tree shows exactly the notes the index knows, and
@@ -1221,7 +1223,7 @@ impl Vault {
     ///   returning `ControlFlow::Break(())` cancels at token granularity, and
     ///   the result reports it honestly ([`AnswerView::cancelled`]).
     /// - **Cite**: distinct `[n]` markers in the answer resolve to
-    ///   `(path, b2id, excerpt)`; a hallucinated marker resolves to nothing
+    ///   `(path, excerpt)`; a hallucinated marker resolves to nothing
     ///   and the answer text is never rewritten.
     ///
     /// Nothing model-derived is stored anywhere — no response caching, no
@@ -1334,7 +1336,7 @@ impl Vault {
         Ok(EmbedStatus { embedded, total })
     }
 
-    /// Surface the notes most semantically similar to `note_ref` (path **or** `b2id`)
+    /// Surface the notes most semantically similar to `note_ref` (a path, `.md` optional)
     /// that are **not already connected** to it — connection-discovery candidate
     /// generation ([`discover::candidates`]) exposed directly: vector KNN over the
     /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked by best
@@ -1408,7 +1410,7 @@ impl Vault {
     /// Commit a typed connection `src --type--> dst` (`b2 link`, Flow ③): append a
     /// typed-link string to the **source note's frontmatter `b2_relations:`** (Markdown
     /// first, **never the body** — data-model.md §0) and re-project it as an
-    /// `origin='frontmatter'` active edge. Both ends resolve by path **or** `b2id`.
+    /// `origin='frontmatter'` active edge. Both ends resolve by path (`.md` optional).
     /// `edge_type` must be a **core** verb (data-model.md §2) — the CLI defaults it to
     /// `references`; a non-core verb errors with [`Error::InvalidRelation`] rather than
     /// silently storing a typo. **Idempotent:** if the directed `(src, dst, type)` edge
@@ -1483,7 +1485,8 @@ impl Vault {
     /// directory — unindexed files inside travel too — after every inbound link
     /// at the moved set (including vault-root wikilinks *between* co-moved
     /// notes) is rewritten, then the index re-projects; the graph never breaks
-    /// (edges key on `b2id`). Errors with [`Error::DirNotFound`] for a missing
+    /// (each moved note's rows are re-keyed to its new path, `ON UPDATE CASCADE`).
+    /// Errors with [`Error::DirNotFound`] for a missing
     /// source folder, [`Error::MoveDestination`] for an invalid destination
     /// (including one inside the moved folder), or [`Error::MoveTargetExists`]
     /// rather than merge into an existing entry.
@@ -1496,12 +1499,13 @@ impl Vault {
         mv::move_dir(self.embed_ctx(), from, to)
     }
 
-    /// Move/rename the note `note_ref` (path **or** `b2id`) to `to` (a
+    /// Move/rename the note `note_ref` (a path, `.md` optional) to `to` (a
     /// vault-relative path; a `.md` suffix is optional), rewriting every inbound
     /// `[[oldpath|alias]]` link to the new path and re-projecting the index
-    /// (invariants.md). The graph never breaks — edges key on `b2id`, so
-    /// `neighbors`/backlinks show the same set before and after; only the human
-    /// convenience-copy link text is repaired. Errors with [`Error::NoteNotFound`]
+    /// (invariants.md). The graph never breaks — the note's rows are re-keyed to the
+    /// new path (`ON UPDATE CASCADE`), so `neighbors`/backlinks show the same set
+    /// before and after and not one chunk is re-embedded; the human convenience-copy
+    /// link text is repaired alongside. Errors with [`Error::NoteNotFound`]
     /// for an unknown source, or [`Error::MoveDestination`] /
     /// [`Error::MoveTargetExists`] for a bad or occupied destination.
     ///
@@ -1514,7 +1518,7 @@ impl Vault {
         mv::move_note(self.embed_ctx(), &old_rel, to)
     }
 
-    /// Delete the note `note_ref` (path **or** `b2id`): the file leaves the disk,
+    /// Delete the note `note_ref` (a path, `.md` optional): the file leaves the disk,
     /// its projection rows leave the index, and every inbound link at it
     /// **dangles** — never rewritten, surfacing as an unresolved link (GH #12) —
     /// exactly the state an external `rm` plus a full reindex produces. Errors
@@ -1554,8 +1558,8 @@ impl Vault {
     /// [`Error::AddTargetExists`] rather than clobber an existing file.
     ///
     /// Projection **embeds** the new note, so the CLI opens the vault with the real
-    /// model for `add`, as for `reindex`/`link`/`mv`. The `b2id` is stamped by the
-    /// ordinary ingest path, so the note is fully reconstructible from Markdown.
+    /// model for `add`, as for `reindex`/`link`/`mv`. Nothing is added to the file
+    /// beyond what the template wrote: the note is fully reconstructible from Markdown.
     pub fn add_note(
         &self,
         path: &str,
@@ -1587,9 +1591,8 @@ impl Vault {
     /// Import a file the human already has into the vault folder `dir` (`""` for the
     /// root) under `file_name`, from its **bytes** — the desktop's drag-a-file-onto-
     /// the-tree gesture, where the OS hands the webview content rather than a path.
-    /// A `.md` lands as a note (projected, its `b2id` stamped if it carried none);
-    /// anything else lands as a resource (one inventory row), exactly as the vault
-    /// walk would have classified it.
+    /// A `.md` lands as a note (projected); anything else lands as a resource (one
+    /// inventory row), exactly as the vault walk would have classified it.
     ///
     /// The bytes are written **verbatim** — B2 authors nothing here, unlike
     /// [`add_note`](Self::add_note), which mints a document
@@ -1598,10 +1601,11 @@ impl Vault {
     ///
     /// Errors with [`Error::ImportDestination`] for a name that isn't a file name or
     /// a folder/name pair that isn't a valid vault-relative path, and
-    /// [`Error::ImportTargetExists`] rather than clobber an existing file. An
-    /// arriving note that claims a `b2id` this vault already holds is refused
-    /// ([`Error::B2idCollision`]) instead of being allowed to steal it, and the
-    /// placed file is removed again — an import either lands and indexes, or leaves
+    /// [`Error::ImportTargetExists`] rather than clobber an existing file. The
+    /// destination path *is* the arriving note's identity, so refusing an occupied
+    /// one is the whole of the collision story — there is no id inside the file that
+    /// could clash with a note already here (GH #170). If projection fails, the
+    /// placed file is removed again: an import either lands and indexes, or leaves
     /// nothing behind.
     pub fn import_file(&self, dir: &str, file_name: &str, bytes: &[u8]) -> Result<ImportReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "import", dir, file_name).entered();
