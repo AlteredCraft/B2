@@ -47,16 +47,27 @@
   a.cta p{color:var(--muted);font-size:13.5px;margin:8px 0 0;max-width:640px}
   /* value grid */
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:30px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0 0}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
   .card .h{font-size:14px;font-weight:600;margin:0 0 6px}
   .card p{font-size:13px;color:var(--muted);margin:0;line-height:1.55}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  /* the two front ends */
+  .h2sec{font-size:13px;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted);margin:42px 0 6px;padding-top:16px;border-top:1px solid var(--line)}
+  .adapter{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .adapter .h{font-size:16px;font-weight:600;margin:0 0 2px;letter-spacing:-.2px}
+  .adapter .for{font-size:12px;color:var(--muted);margin:0 0 10px}
+  .adapter ul{margin:0;padding-left:18px}
+  .adapter li{font-size:13px;color:var(--muted);line-height:1.5;margin:4px 0}
+  .adapter li b{color:var(--ink);font-weight:600}
+  .why{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--purple);border-radius:8px;padding:13px 16px;margin:16px 0 0;font-size:13.5px;color:var(--muted)}
+  .why b{color:var(--ink)}
   /* links row */
   .more{display:flex;flex-wrap:wrap;gap:22px;margin:30px 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:14px}
   .more a{display:flex;align-items:center;gap:8px}
   .more .m{color:var(--muted);font-size:12.5px}
   footer{color:var(--muted);font-size:12.5px;padding:26px 0 60px}
-  @media(max-width:760px){.grid3{grid-template-columns:1fr}h1.word{font-size:46px}a.cta .row{flex-direction:column;align-items:flex-start;gap:6px}}
+  @media(max-width:760px){.grid3,.grid2{grid-template-columns:1fr}h1.word{font-size:46px}a.cta .row{flex-direction:column;align-items:flex-start;gap:6px}}
 </style>
 </head>
 <body>
@@ -73,9 +84,9 @@
     <p class="lead">A personal, local-first Markdown knowledge vault with an AI layer that surfaces the
     <em>semantically nearest</em> notes — for you to connect.</p>
     <p class="sublead">The Markdown stays plain and yours — B2 is the intelligence layer <em>over</em> your
-    notes, not a container around them. This repository is the index engine plus its two adapters: the
-    <code>b2</code> CLI and a Tauri desktop app (read, edit, discover, link — with live external-edit
-    reconciliation).</p>
+    notes, not a container around them. It comes as <b>two equal front ends over one engine</b>: the
+    <code>b2</code> <b>CLI</b> for the terminal, scripts, and agents, and a <b>desktop app</b> for reading,
+    writing, and discovering connections in a window. Use either, or both on the same vault.</p>
 
     <div class="eqcard">
       <div class="eq">index = projection of ( Markdown )</div>
@@ -84,21 +95,66 @@
     </div>
 
     <div class="badges">
-      <span class="badge green"><span class="pip"></span><b>192</b>&nbsp;tests passing</span>
+      <span class="badge green"><span class="pip"></span><b>417</b>&nbsp;Rust tests&nbsp;· <b>498</b> UI checks</span>
       <span class="badge"><b>Rust</b>&nbsp;· one static binary</span>
       <span class="badge"><b>4</b> crates · SQLite (FTS5 + in-process vectors)</span>
-      <span class="badge">status: <b>engine + CLI + desktop app</b> · connection discovery via <code>b2 similar</code> + <code>b2 link</code></span>
+      <span class="badge">status: <b>engine + CLI + desktop app</b> · connection discovery you commit yourself</span>
     </div>
   </header>
+
+  <h2 class="h2sec">Two front ends, one engine</h2>
+  <p style="color:var(--muted);font-size:14px;margin:8px 0 0;max-width:700px">Neither wraps the other. Both
+  are thin adapters over the same typed <code>Vault</code> façade — same index, same search, same discovery,
+  same rules about what may be written to your notes. Point them at the same folder and they agree, because
+  there is only one implementation of the behavior underneath.</p>
+
+  <div class="grid2">
+    <div class="adapter">
+      <div class="h"><span class="dot" style="background:var(--cyan)"></span>The <code>b2</code> CLI</div>
+      <p class="for">A terminal, a script, or an AI agent driving the vault</p>
+      <ul>
+        <li><b>Scriptable and pipeable</b> — <code>--json</code> on every command makes agents and shell
+          pipelines first-class users, not an afterthought.</li>
+        <li><b>One static binary</b>, no window, no GUI toolchain — fine over SSH or in a cron job.</li>
+        <li><b>Explicit</b> by design: indexing is a command you run (<code>b2 reindex</code>), so nothing
+          touches the vault you didn't ask for.</li>
+        <li>The whole surface, twelve commands: <code>init</code> · <code>reindex</code> ·
+          <code>status</code> · <code>search</code> · <code>similar</code> · <code>link</code> ·
+          <code>neighbors</code> · <code>explain</code> · <code>add</code> · <code>write</code> ·
+          <code>mv</code> · <code>rm</code>.</li>
+      </ul>
+    </div>
+    <div class="adapter">
+      <div class="h"><span class="dot" style="background:var(--pink)"></span>The desktop app</div>
+      <p class="for">Reading, writing, and connecting notes in a window</p>
+      <ul>
+        <li><b>Indexing is automatic</b> — it indexes on open and a native fs-watch keeps up with edits made
+          outside the app, so there is no <code>reindex</code> to remember (a manual one is still there, in
+          Settings, with live progress and Cancel).</li>
+        <li><b>Discovery is ambient</b>: the similar-but-unlinked notes sit beside what you're reading, and a
+          typed link is one click — plus a graph view of the connections around a note.</li>
+        <li><b>An editor</b>: CodeMirror 6 with live preview, autosave, syntax-highlighted fences, and a
+          conflict bar when the file changed under you.</li>
+        <li><b>Keyboard-complete and rebindable</b>, a file tree with drag-in import from Finder, and a
+          Settings pane that picks the embedding model and shows the CPU/Metal device.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="why"><b>Why keep both?</b> They are good at different things, and the cost of the second one is
+  low by construction. The engine, the index, and every rule about your Markdown live in <code>b2-core</code>
+  behind one typed façade; each front end is <em>deserialize → one façade call → render</em>. So the GUI can't
+  drift from the CLI, a fix in the core fixes both — and the desktop app inherits the engine test suite the
+  CLI already bought, rather than re-implementing search, discovery, or the write rules in a second place.</div>
 
   <a class="cta" href="quickstart.html">
     <div class="row">
       <h2>Quick start — set up and work with a vault →</h2>
       <span class="arrow">↗</span>
     </div>
-    <p>A hands-on walkthrough: build the <code>b2</code> CLI, point it at a folder of Markdown, and
-    <strong>search, explore, and surface semantically similar notes</strong> to link by hand — from an empty
-    checkout to a working vault in about ten minutes.</p>
+    <p>A hands-on walkthrough: build B2, point it at a folder of Markdown — new or one you already have — and
+    <strong>search, explore, and surface semantically similar notes</strong> to link by hand. Both front ends
+    are covered: the CLI end to end, then the same vault in the desktop app.</p>
   </a>
 
   <a class="cta" href="architecture.html">
@@ -114,14 +170,15 @@
   <div class="grid3">
     <div class="card">
       <div class="h"><span class="dot" style="background:var(--amber)"></span>Typed links, on your call</div>
-      <p>Not just "related." <code>b2 similar</code> surfaces the semantically nearest notes; you commit the
-      ones worth keeping with <code>b2 link</code> — <em>supersedes</em>, <em>elaborates</em>,
-      <em>refutes</em> — as typed frontmatter. You are the precision gate.</p>
+      <p>Not just "related." B2 surfaces the semantically nearest notes; you commit the ones worth keeping,
+      with the stance you choose — <em>references</em>, <em>supports</em>, <em>contradicts</em> — written into
+      the note's frontmatter. You are the precision gate.</p>
     </div>
     <div class="card">
-      <div class="h"><span class="dot" style="background:var(--green)"></span>Your Markdown, untouched</div>
-      <p>Plain <code>.md</code> files, fully usable in Obsidian with no B2 running. B2's only writes are
-      surgical and in frontmatter — it never authors your body.</p>
+      <div class="h"><span class="dot" style="background:var(--green)"></span>Your prose, untouched</div>
+      <p>Plain <code>.md</code> files, fully usable in Obsidian with no B2 running. B2 writes only in
+      frontmatter — a <code>b2id</code> when it first indexes a note, and a typed relation when you ask for
+      one. It never authors your body.</p>
     </div>
     <div class="card">
       <div class="h"><span class="dot" style="background:var(--purple)"></span>Built for tomorrow's model</div>

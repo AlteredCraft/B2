@@ -277,13 +277,14 @@ b2 similar espresso-extraction.md    <span class="c"># instant local KNN — no 
     <div class="files">docs/design/invariants.md · docs/design/data-model.md §4</div>
     <p class="sub">The list is candidates, not connections. You pick the ones worth keeping and <b>commit</b>
     them. Two ways, both authored in Markdown — B2 supplies the mechanics, you supply the judgment and the
-    type:</p>
+    type. They are <em>not</em> interchangeable: only one of them can carry a stance.</p>
     <div class="grid2">
       <div class="card tight">
         <div class="kickerlbl" style="color:var(--cyan)">write a body link yourself</div>
-        <p style="font-size:13px;margin:6px 0 0">Type a bare <code>[[path|title]]</code> (an untyped
-        <code>references</code> edge) or a typed <code>- &lt;verb&gt; [[path|title]] — …</code> line in your
-        note's body. B2 <b>reads</b> it on the next reindex; it never writes your body.</p>
+        <p style="font-size:13px;margin:6px 0 0">Type a <code>[[path]]</code> (or <code>[[path|title]]</code>)
+        anywhere in your note's body. That edge is <b>always untyped</b> — a plain <code>references</code>, no
+        verb, no "why": the body has no B2 syntax to express one, by design, so your prose stays prose. B2
+        <b>reads</b> it on the next reindex; it never writes your body.</p>
       </div>
       <div class="card tight">
         <div class="kickerlbl" style="color:var(--green)">or run <code>b2 link</code></div>
@@ -297,17 +298,17 @@ b2 similar espresso-extraction.md    <span class="c"># instant local KNN — no 
     <div class="example">
       <div class="kickerlbl">A worked example</div>
       <p style="font-size:14px;margin:6px 0 10px"><code>b2 similar espresso-extraction.md</code> surfaced
-      <span class="num">Grind size</span> as its nearest unlinked note. You agree it's load-bearing — the shot
+      <span class="num">dialing-in-grind</span> as its nearest unlinked note. You agree it's load-bearing — the shot
       depends on the grind — so you commit it with the verb <em>you</em> choose from the core vocabulary:</p>
     </div>
 
     <pre><span class="c"># 1 — surface the nearest not-yet-linked notes (free, local, instant)</span>
 b2 similar espresso-extraction.md
-  <span class="n">0.8143</span>  Grind size (notes/dialing-in-grind.md)
+  <span class="n">0.8143</span>  dialing-in-grind (notes/dialing-in-grind.md)
       Finer grinds raise extraction pressure; past a point the shot chokes and turns bitter…
-  <span class="n">0.7920</span>  Water temperature (notes/brew-temp.md)
+  <span class="n">0.7920</span>  brew-temp (notes/brew-temp.md)
       Temperature stability matters as much as the target — a swing mid-shot muddies the cup…
-  <span class="n">0.7614</span>  Tamping (notes/tamping.md)
+  <span class="n">0.7614</span>  tamping (notes/tamping.md)
       An even tamp keeps the puck flat so water can't channel down one side…
 <span class="c"># stderr: Commit one with:  b2 link espresso-extraction.md &lt;note&gt; --type &lt;verb&gt;</span>
 
@@ -319,20 +320,23 @@ Linked espresso-extraction.md —<span class="g">supports</span>→ notes/dialin
     <p class="cap">What changed on disk is one line, in the <b>source</b> note's frontmatter — the body is
     untouched:</p>
     <pre> <span class="n">b2_relations:</span>
-<span class="g">+  - "supports [[dialing-in-grind.md|Grind size]] — grind size sets the extraction pressure"</span></pre>
+<span class="g">+  - "supports [[notes/dialing-in-grind.md]] — grind size sets the extraction pressure"</span></pre>
 
     <div class="invariant"><b>An edge exists iff it's in the Markdown.</b> There is no <code>suggested</code>
     or <code>rejected</code> status and no review queue to survive a rebuild — drop the index, reindex, and the
     edge comes back <em>because it's in your note</em>. A committed edge is pristine: just the
-    <code>&lt;verb&gt; [[path|title]]</code> line, no <code>by</code>, <code>confidence</code>, or provenance
+    <code>&lt;verb&gt; [[path]]</code> line, no <code>by</code>, <code>confidence</code>, or provenance
     stapled on. To undo one, delete its <code>b2_relations:</code> entry; it's gone on the next reindex.</div>
 
-    <div class="ground"><b>Ground truth:</b> the core vocabulary is the closed 10-verb set in
-    <span class="mono">relation::CORE</span> — <span class="mono">references · relates · elaborates · supports ·
-    refutes · contradicts · example-of · part-of · supersedes · derived-from</span> — now your typing palette on
-    <span class="mono">b2 link</span>. Mirrored across <span class="mono">data-model.md §4</span>,
-    <span class="mono">index-engine.md §3</span>, and <span class="mono">invariants.md</span>.
-    <b>(192 workspace tests, model-free.)</b></div>
+    <div class="ground"><b>Ground truth:</b> the core vocabulary is the closed <b>three-verb stance</b> set in
+    <span class="mono">relation::CORE</span> — <span class="mono">references</span> (neutral) ·
+    <span class="mono">supports</span> (for) · <span class="mono">contradicts</span> (against) — which is your
+    typing palette on <span class="mono">b2 link --type</span>, and the only thing it accepts. Three, because
+    stance is precisely what the vectors <em>can't</em> tell you: they already found that these two notes are
+    about the same thing. A verb outside the core, written by hand into
+    <span class="mono">b2_relations:</span>, is kept verbatim and treated as opaque. Mirrored across
+    <span class="mono">data-model.md §4</span>, <span class="mono">index-engine.md §3</span>, and
+    <span class="mono">invariants.md</span>. <b>(417 workspace tests, model-free.)</b></div>
   </section>
 
   <footer>
