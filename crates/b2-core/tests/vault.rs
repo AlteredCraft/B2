@@ -1,8 +1,9 @@
 //! The `Vault` façade — the one typed core API the CLI and tests are clients of
 //! (invariants.md). This slice's contract:
-//! `open` / `reindex` / `neighbors` / `search`, resolving a note by path **or**
-//! `b2id`, against the golden-vault fixture. Fully deterministic (FakeEmbedder),
-//! so it proves the plumbing, not model quality.
+//! `open` / `reindex` / `neighbors` / `search`, resolving a note by its
+//! vault-relative path — with or without the `.md` — against the golden-vault
+//! fixture. Fully deterministic (FakeEmbedder), so it proves the plumbing, not
+//! model quality.
 
 mod common;
 
@@ -86,12 +87,11 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // by path, by path-without-.md, and by b2id must all resolve to the same set.
+    // Both ref forms — by path and by path-without-.md — resolve to the same set.
     let by_path = vault.neighbors("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.neighbors("notes/spaced-repetition").unwrap();
-    let by_id = vault.neighbors(SRS_PATH).unwrap();
 
-    for ns in [&by_path, &by_stem, &by_id] {
+    for ns in [&by_path, &by_stem] {
         let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
         labels.sort_unstable();
         // outbound labels are the verbs themselves.
@@ -101,8 +101,7 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
         assert!(ns.iter().all(|n| n.path == "concepts/memory.md"));
         assert!(ns.iter().all(|n| n.title.as_deref() == Some("memory")));
     }
-    assert_eq!(by_path.len(), by_id.len());
-    assert_eq!(by_stem.len(), by_id.len());
+    assert_eq!(by_path.len(), by_stem.len());
 }
 
 /// Every façade op that resolves a note ref rejects an unknown one the same way,

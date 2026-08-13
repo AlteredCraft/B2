@@ -30,7 +30,8 @@ export interface ReconcileIndexDeps {
   /** The model-free projection pass (`api.project`) — cheap (no model load),
    *  idempotent, and host-safe outside the reindex slot, the same op the first tree
    *  paint uses. Its own side effects can't loop this: `.b2/` writes are filtered
-   *  host-side, and a b2id stamp on a new note re-pulses into a no-op pass. */
+   *  host-side, and since GH #170 projection writes nothing to the vault at all
+   *  (W1), so there is no longer a stamp that could pulse the watcher back. */
   project: () => Promise<unknown>;
   /** Re-fetch the tree lists (`loadNotes`). Its errors are the caller's contract
    *  (toast + empty tree) and pass through untouched. */

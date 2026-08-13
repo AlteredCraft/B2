@@ -71,7 +71,7 @@ fn explain_surfaces_outbound_resource_links() {
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("notes/uses-diagram.md"),
-        "---\nb2id: 01JUSD0000000000000000000C\ntype: note\ntitle: Uses diagram\n---\n\
+        "---\ntype: note\ntitle: Uses diagram\n---\n\
          ![a tiny diagram](../resources/diagram.png)\n\
          See [[concepts/memory|Human memory]].\n",
     )
@@ -106,7 +106,7 @@ fn explain_surfaces_unresolved_folder_and_typo_links() {
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("guide.md"),
-        "---\nb2id: 01JGUIDE00000000000000001\ntype: note\ntitle: Guide\n---\n\
+        "---\ntype: note\ntitle: Guide\n---\n\
          - [[Hermes]] is the R&D machine\n\
          See [[concepts/memory|Human memory]] for context.\n",
     )
@@ -152,14 +152,17 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
 }
 
 #[test]
-fn explain_resolves_by_path_and_by_b2id() {
+fn explain_resolves_a_stem_and_a_full_path_to_the_same_note() {
+    // The two ref forms `explain` still accepts since GH #170 — the extensionless
+    // wikilink habit and the full vault-relative path. There is no third form: the
+    // path *is* the identity (L1), so "or by b2id" is gone rather than renamed.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    let by_path = vault.explain("concepts/memory").unwrap();
-    let by_id = vault.explain(MEMORY_PATH).unwrap();
-    assert_eq!(by_path.path, by_id.path);
-    assert_eq!(by_path.connections.len(), by_id.connections.len());
+    let by_stem = vault.explain("concepts/memory").unwrap();
+    let by_path = vault.explain(MEMORY_PATH).unwrap();
+    assert_eq!(by_stem.path, by_path.path);
+    assert_eq!(by_stem.connections.len(), by_path.connections.len());
 }
 
 #[test]
@@ -170,7 +173,7 @@ fn explain_surfaces_frontmatter_provenance() {
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("author.md"),
-        "---\nb2id: 01JAUTH000000000000000001\ntype: note\ntitle: Author\n\
+        "---\ntype: note\ntitle: Author\n\
          b2_relations:\n  - \"supports [[concepts/memory|Human memory]] — via frontmatter\"\n---\n\
          A body with no links.\n",
     )
@@ -193,7 +196,7 @@ fn explain_reports_an_isolated_note_with_no_connections() {
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
         root.join("lonely.md"),
-        "---\nb2id: 01JLONELY0000000000000001\ntype: note\ntitle: Lonely\n---\nNo links at all.\n",
+        "---\ntype: note\ntitle: Lonely\n---\nNo links at all.\n",
     )
     .unwrap();
     vault.reindex().unwrap();

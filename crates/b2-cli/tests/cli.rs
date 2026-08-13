@@ -727,7 +727,7 @@ fn neighbors_unknown_note_fails_cleanly() {
 fn guide_with_dangling_link(root: &Path) {
     std::fs::write(
         root.join("guide.md"),
-        "---\nb2id: 01JGUIDE00000000000000001\ntype: note\ntitle: Guide\n---\n\
+        "---\ntype: note\ntitle: Guide\n---\n\
          - [[Hermes]] is the R&D machine\n",
     )
     .unwrap();

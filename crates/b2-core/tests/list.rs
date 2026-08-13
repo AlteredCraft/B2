@@ -1,5 +1,5 @@
 //! `Vault::list_notes` — the vault listing the desktop UI's file tree is built from.
-//! Its contract: every indexed note as a lightweight `NoteSummary` (`b2id`, `path`,
+//! Its contract: every indexed note as a lightweight `NoteSummary` (`path`,
 //! `title`; no body), ordered by `path`, and each entry `read`-resolvable. A pure
 //! read, model-free (FakeEmbedder), against the golden-vault fixture.
 

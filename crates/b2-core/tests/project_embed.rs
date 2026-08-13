@@ -319,8 +319,9 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
 
 #[test]
 fn prune_spares_a_file_skipped_as_unreadable() {
-    // The #31 carve-out: a file the walk *saw* but could not read has an unknowable
-    // b2id this run — "not projected" must not mean "deleted". Its existing row stays.
+    // The #31 carve-out: a file the walk *saw* but could not read yields no
+    // projection this run — and "not projected" must not mean "deleted", since the
+    // file is plainly still on disk at its path. Its existing row stays.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -345,7 +346,7 @@ fn prune_spares_a_file_skipped_as_unreadable() {
 #[test]
 fn single_note_ingest_never_prunes() {
     // Pruning is a *whole-vault* reconciliation: only `project_vault` sees every file,
-    // so only it may decide a b2id is gone. The single-note paths (`project_file` /
+    // so only it may decide a note is gone. The single-note paths (`project_file` /
     // `ingest_file`, the add/mv/link/write substrate) touch their one note and must
     // leave every other row alone — even a genuine ghost.
     let tmp = tempfile::TempDir::new().unwrap();

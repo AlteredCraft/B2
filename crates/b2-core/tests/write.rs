@@ -236,11 +236,11 @@ fn write_an_empty_body_and_recover() {
 #[test]
 fn write_returns_the_revision_of_the_final_on_disk_bytes() {
     // The contract the save chain hangs on (§4 step 5): whatever the save left on
-    // disk — body splice, and any ordinary-path work like a `b2id` stamp — the
-    // returned revision hashes those FINAL bytes, so the next save never
-    // self-conflicts. (An indexed note's file always carries its stamp — projection
-    // stamps on first sight — so the stamp arm is defensive; the contract is what
-    // the chain needs proven.)
+    // disk, the returned revision hashes those FINAL bytes, so the next save never
+    // self-conflicts. Since GH #170 a save writes nothing but the body splice — the
+    // `b2id` stamp that used to ride along on the same write is gone (W1) — so the
+    // "final bytes" are the spliced bytes; the guarantee is unchanged and the chain
+    // still needs it proven.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);

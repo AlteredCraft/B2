@@ -129,7 +129,6 @@ check(".md and extensionless refs are notes", () => {
   equal(refKind("notes/a.md"), "note", "explicit .md");
   equal(refKind("A.MD"), "note", "uppercase .md");
   equal(refKind("concepts/memory"), "note", "the extensionless wikilink habit");
-  equal(refKind("01JMEM0000000000000000000A"), "note", "a bare b2id");
   equal(refKind("LICENSE"), "note", "extensionless file (the documented limit)");
 });
 
