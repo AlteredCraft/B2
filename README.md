@@ -30,8 +30,9 @@ explained connections between them yourself.
 > **read → discover → link → edit → reconcile** arc is complete: read a note on the left, commit a typed
 > link to its **similar-but-unlinked notes** on the right with a click, edit the body in place
 > (CodeMirror 6 with live preview, autosave, and a revision-guarded conflict bar), and a native fs-watch
-> reconciles external edits live. Reindex is a **cancellable background action** — live progress, a Cancel
-> button, and the UI stays usable while a large vault indexes; projection and embedding are decoupled, so
+> reconciles external edits live. **Indexing is automatic in the app** — on open, and on every fs-watch pulse —
+> so there is no `reindex` to remember; the manual one lives in Settings as a **cancellable background action**
+> (live progress, a Cancel button, the UI usable throughout). Projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
 > ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `just app` — pick a vault from the
 > in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —

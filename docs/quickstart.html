@@ -84,15 +84,19 @@
   </div>
 
   <header class="hero">
-    <div class="kicker">Set up · index · search · discover connections</div>
+    <div class="kicker">Set up · index · search · discover connections · in the terminal or a window</div>
     <h1 class="word">Get started with B2</h1>
     <p class="lead">Point B2 at a folder of Markdown and it becomes a second brain that reads
     everything, lets you <em>search</em> it, and surfaces the notes most <em>similar in meaning</em>
     for you to connect.</p>
     <p class="sublead">This guide takes you from an empty checkout to a working vault you can search and
-    grow — about ten minutes, most of it a one-time model download. Your <code>.md</code> files stay
-    plain and yours the whole way; B2 only ever adds a hidden index folder and (with your say-so) a
-    typed link in a note's frontmatter.</p>
+    grow — about ten minutes, most of it a one-time model download. It walks the <b><code>b2</code> CLI</b>
+    end to end, then opens the same vault in the <b>desktop app</b>; they're two front ends over one engine,
+    so nothing you do here is CLI-only.</p>
+    <p class="sublead">Your <code>.md</code> files stay plain and yours the whole way. B2's whole write
+    surface is a hidden <code>.b2/</code> index folder plus <b>two lines of frontmatter</b>: a
+    <code>b2id</code> it stamps the first time it indexes a note, and a <code>b2_relations:</code> entry when
+    <em>you</em> commit a typed link. Your prose is never rewritten.</p>
   </header>
 
   <!-- ============================================================= -->
@@ -100,14 +104,19 @@
 
   <p>You'll need a <b>Rust toolchain</b> (<a href="https://rustup.rs">rustup.rs</a>) to build the
   <code>b2</code> binary — B2 ships as source today, as one static binary. macOS and Linux are the
-  tested platforms.</p>
+  tested platforms. For the <b>desktop app</b> (its own section near the end) add <b>Node + npm</b> and the
+  <b>Tauri CLI</b>; a <code>just doctor</code> in the checkout checks all of it and prints the fix for
+  anything missing.</p>
 
   <p>One thing is <b>optional</b>, and it's <em>local</em> — B2 makes no network calls and needs no
   account or API key at any point:</p>
   <ul>
-    <li><b>The embedding model</b> — a one-time ~440&nbsp;MB download (<code>b2 init</code>) of a local
-      model that powers <em>semantic</em> search and connection discovery. Skip it and run in an offline
-      keyword-only mode instead (shown below). Everything runs entirely on your machine.</li>
+    <li><b>The embedding model</b> — a one-time download (<code>b2 init</code>) of a local model that powers
+      <em>semantic</em> search and connection discovery. Two are supported, and you can switch later:
+      <b>BGE Base</b> (768-dim, ~440&nbsp;MB) is the default and the better ranker;
+      <b>BGE Small</b> (384-dim, ~130&nbsp;MB) downloads and embeds a lot faster for a modest quality drop —
+      worth it on a big vault. Skip the model entirely and run in an offline keyword-only mode instead (shown
+      below). Everything runs on your machine either way.</li>
   </ul>
 
   <!-- ============================================================= -->
@@ -142,7 +151,22 @@
       shared cache once — it is <em>not</em> re-downloaded per vault, and there is never a surprise
       download mid-command later.</p>
 <pre><span class="p">$</span> <span class="k">b2</span> init
-<span class="o">Installed 'bge-base-en-v1.5' (768 dims). Run `b2 reindex` to embed your vault.</span></pre>
+<span class="c">Downloading config.json from BAAI/bge-base-en-v1.5…</span>
+<span class="c">Downloading tokenizer.json from BAAI/bge-base-en-v1.5…</span>
+<span class="c">Downloading model.safetensors from BAAI/bge-base-en-v1.5…</span>
+<span class="c">Verifying model…</span>
+<span class="o">Installed 'BAAI/bge-base-en-v1.5' (768 dims). Run `b2 reindex` to embed your vault.</span></pre>
+      <p><code>b2 init</code> provisions whichever model is <em>configured</em> — the 768-dim base model
+      unless you've said otherwise. To take the smaller, faster one instead, set it once before running
+      <code>init</code> (see <a href="#config">Config &amp; environment</a>), or pick it from the desktop
+      app's Settings, which offers the same two and downloads on the spot:</p>
+<pre><span class="c"># &lt;config dir&gt;/b2/config.toml</span>
+<span class="k">[embedder]</span>
+<span class="k">model</span> = <span class="s">"BAAI/bge-small-en-v1.5"</span>   <span class="c"># 384-dim, ~130 MB</span></pre>
+      <div class="note warn"><span class="tag">Switching later</span> Both adapters read that one config, so
+      they always agree on the model. Changing it <em>is</em> a model swap: the vectors are rebuilt on the
+      next <code>reindex</code>, and until then <code>search</code> refuses rather than mixing two embedding
+      spaces. Your Markdown is untouched by any of it.</div>
       <div class="note"><span class="tag">No model?</span> You can do everything in this guide
       <em>offline</em> by prefixing commands with <code>B2_EMBEDDER=fake</code>. Search still works on
       keywords (BM25), but the semantic half is switched off — the CLI tells you so, and never pretends
@@ -157,39 +181,38 @@
   or start fresh — there's no import step and no proprietary format to convert into.</p>
 
   <div class="step">
-    <div class="head"><div class="num">3</div><h3>Create some notes</h3></div>
+    <div class="head"><div class="num">3</div><h3>Create some notes — or choose a folder you already have</h3></div>
     <div class="body">
-      <p>Just write Markdown files. Here are two — a concept and a note that connects to it. The
-      frontmatter is minimal; the body is plain prose:</p>
-<pre><span class="c"># ~/vault/concepts/memory.md</span>
+      <p><b>Already have one?</b> An Obsidian vault, a docs tree, a directory of daily notes — that's a
+      vault. Point B2 at it and skip to step&nbsp;5. Nothing is converted, moved, or rewritten; B2 reads
+      what's there as it is.</p>
+      <p><b>Starting fresh?</b> Just write Markdown files. <b>Frontmatter is supported, not required</b> —
+      B2 reads it when it's there and preserves every key it doesn't understand (yours, or another tool's),
+      and it indexes a note with none at all just as happily. Here's one of each:</p>
+<pre><span class="c"># ~/vault/concepts/memory.md — with frontmatter</span>
 ---
 type: concept
-title: "Human memory"
 created: 2026-07-03
+tags: [cognition]
 ---
 The brain encodes, stores, and retrieves information.</pre>
-<pre><span class="c"># ~/vault/notes/spaced-repetition.md</span>
----
-type: note
-title: "Spaced repetition"
-created: 2026-07-03
----
-Spaced repetition exploits the retrieval curve.
+<pre><span class="c"># ~/vault/notes/spaced-repetition.md — without any</span>
+Spaced repetition exploits the retrieval curve of [[concepts/memory]].
 
-## Relations
-- elaborates [[concepts/memory|Human memory]] — applies the forgetting curve</pre>
-      <p>That last line is a <b>typed connection</b>: the verb <code>elaborates</code>, a
-      <b>wikilink</b> <code>[[concepts/memory|Human memory]]</code> to the target, and a "why". A bare
-      <code>[[path|title]]</code> anywhere in prose is an untyped <code>references</code> link. The verbs
-      come from a small closed vocabulary — <code>references</code>, <code>relates</code>,
-      <code>elaborates</code>, <code>supports</code>, <code>refutes</code>, <code>contradicts</code>,
-      <code>example-of</code>, <code>part-of</code>, <code>supersedes</code>,
-      <code>derived-from</code> — the same palette you'll pick from with <code>b2 link</code>.</p>
+Expanding review intervals beat massed practice for long-term recall.</pre>
+      <p>That <code>[[concepts/memory]]</code> is an ordinary Obsidian-style <b>wikilink</b>, and B2 reads
+      it as a connection between the two notes. There is <b>no B2 syntax for the body</b> — nothing to learn
+      here, and nothing left behind to un-learn if you stop using B2. Connections that carry a
+      <em>stance</em> ("this one supports that one") do exist, but they live in frontmatter and you'll meet
+      them in step&nbsp;8.</p>
+      <div class="note"><span class="tag">On titles</span> A note's display title is its <b>filename</b>
+      (<code>spaced-repetition</code>), so <code>concepts/memory.md</code> shows up as
+      <code>memory</code> below. A frontmatter <code>title:</code> is inert to B2 — kept verbatim for
+      whatever tool of yours does use it, never a second source of truth for the name.</div>
       <div class="note tip"><span class="tag">Or scaffold one</span> Prefer a command?
-      <code>b2 add notes/spaced-repetition --title "Spaced repetition" --content "…"</code> writes a
-      valid note <em>and</em> indexes it in one step (so you can skip the reindex in step&nbsp;5 for
-      notes you create this way). The <code>.md</code> extension is optional; parent folders are created
-      for you.</div>
+      <code>b2 add notes/spaced-repetition --content "…"</code> writes a valid note <em>and</em> indexes it
+      in one step (so you can skip the reindex in step&nbsp;5 for notes you create this way). The
+      <code>.md</code> extension is optional; parent folders are created for you.</div>
     </div>
   </div>
 
@@ -197,21 +220,29 @@ Spaced repetition exploits the retrieval curve.
     <div class="head"><div class="num">4</div><h3>Know what B2 will and won't touch</h3></div>
     <div class="body">
       <p>Nothing is hidden — the files stay ordinary Markdown that work in Obsidian, or anything else,
-      with no B2 running. After indexing (next step), that first note gains exactly one line B2 manages:</p>
+      with no B2 running. After indexing (next step), the second note gains exactly one line B2 manages.
+      It had no frontmatter at all, so B2 opens a minimal block for it and writes nothing else:</p>
 <pre><span class="c">---</span>
 <span class="c">b2id: 01KWMCW242E0WSKVYDYNQBT7SN</span>   <span class="c"># set by B2 on first index — a stable id, never changes</span>
-<span class="c">type: note</span>
-<span class="c">title: "Spaced repetition"</span>
-<span class="c">created: 2026-07-03</span>
 <span class="c">---</span>
-<span class="c">Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.</span></pre>
+<span class="c">Spaced repetition exploits the retrieval curve of [[concepts/memory]].</span>
+<span class="c"></span>
+<span class="c">Expanding review intervals beat massed practice for long-term recall.</span></pre>
+      <p>On a note that already has frontmatter, the <code>b2id:</code> line is inserted at the top of the
+      existing block and every other key is left exactly as you wrote it — same bytes, same order, same
+      comments.</p>
       <div class="note"><span class="tag">The one rule</span> B2 writes to your notes in exactly two
-      places, and <b>never touches your prose</b>: it stamps the <code>b2id</code> the first time it
-      indexes a note, and — only when you run <code>b2 link</code> (step&nbsp;8) — it appends a typed link
-      to a frontmatter <code>b2_relations:</code> block. Links you write yourself in the body are ordinary
-      Markdown (no special B2 syntax), always untyped <code>references</code> edges labelled
-      <code>inline</code>; typed relations (a verb, an optional "why") live in frontmatter and are
-      labelled <code>frontmatter</code>. That's the whole of B2's write surface.</div>
+      places, both in <b>frontmatter</b>, and <b>never touches your prose</b>:
+      <ul style="margin:8px 0 4px">
+        <li><code>b2id:</code> — stamped the first time B2 indexes a note. This one is <em>not</em>
+        opt-in: it's the stable identity that lets a link survive you renaming or moving the file.</li>
+        <li><code>b2_relations:</code> — a typed connection, appended only when <em>you</em> commit one
+        (step&nbsp;8, or a click in the desktop app).</li>
+      </ul>
+      That's the whole of B2's write surface, plus the disposable <code>.b2/</code> index folder. Links you
+      write yourself in the body stay ordinary Markdown — B2 reads them, never edits them, and treats each
+      as an untyped <code>references</code> edge (labelled <code>inline</code>). A <em>typed</em> relation
+      is a frontmatter-only thing (labelled <code>frontmatter</code>).</div>
     </div>
   </div>
 
@@ -224,7 +255,7 @@ Spaced repetition exploits the retrieval curve.
 <span class="p">$</span> <span class="k">b2</span> reindex .
 <span class="o">Indexing /Users/you/vault</span>
 <span class="o">  embedding 2/2 · notes/spaced-repetition.md (2 chunks)</span>
-<span class="o">Indexed 2 notes (2 embedded, 2 stamped)</span></pre>
+<span class="o">Indexed 2 notes (2 embedded, 2 stamped) and 0 resources</span></pre>
       <p>Run it again after editing notes — it's <b>incremental</b>: unchanged notes keep their vectors,
       so only what actually changed is re-embedded. Two flags help:</p>
       <ul>
@@ -232,10 +263,16 @@ Spaced repetition exploits the retrieval curve.
           even a <code>b2id</code>).</li>
         <li><code>b2 reindex --force</code> — re-embed everything from scratch.</li>
       </ul>
+      <p><code>b2 status</code> answers "is it done?" at any point — how many notes are embedded (so
+      semantic ranking is live rather than keyword-only), and whether a reindex is running.</p>
       <div class="note tip"><span class="tag">Where it lives</span> The index goes in a single
       <code>.b2/</code> folder inside your vault. It's <b>disposable</b> — delete it and the next
       <code>reindex</code> rebuilds it identical from your Markdown. Nothing durable lives outside your
       notes. Add <code>.b2/</code> to your <code>.gitignore</code> if the vault is a git repo.</div>
+      <div class="note"><span class="tag">In the app</span> The desktop app does this step for you — it
+      indexes the vault when you open it and watches the folder for changes made outside the app, so
+      there's no <code>reindex</code> to remember. The CLI keeps it explicit on purpose: a command you run
+      is a command that can't surprise you in a script.</div>
     </div>
   </div>
 
@@ -248,9 +285,9 @@ Spaced repetition exploits the retrieval curve.
       <p>One command, hybrid ranking — it fuses keyword (BM25) and semantic (vector) matches, so you
       find notes by wording <em>and</em> by meaning:</p>
 <pre><span class="p">$</span> <span class="k">b2</span> search <span class="s">"how does forgetting work"</span>
-<span class="o">0.0328  Spaced repetition (notes/spaced-repetition.md)</span>
-<span class="o">    Spaced repetition exploits the retrieval curve.</span>
-<span class="o">0.0161  Human memory (concepts/memory.md)</span>
+<span class="o">0.0328  spaced-repetition (notes/spaced-repetition.md)</span>
+<span class="o">    Spaced repetition exploits the retrieval curve of [[concepts/memory]].</span>
+<span class="o">0.0161  memory (concepts/memory.md)</span>
 <span class="o">    The brain encodes, stores, and retrieves information.</span></pre>
       <p>Use <code>--limit N</code> to widen or narrow the result set.</p>
     </div>
@@ -260,15 +297,19 @@ Spaced repetition exploits the retrieval curve.
     <div class="head"><div class="num">7</div><h3>Explore the graph</h3></div>
     <div class="body">
       <p>Follow the connections around any note. <code>neighbors</code> is a quick list of what a note
-      links to and from; <code>explain</code> adds each connection's <em>why</em> and its provenance:</p>
+      links to and from; <code>explain</code> adds each connection's provenance, and its <em>why</em> when
+      it has one:</p>
 <pre><span class="p">$</span> <span class="k">b2</span> neighbors <span class="s">notes/spaced-repetition</span>
-<span class="o">→ elaborates  Human memory (concepts/memory.md) — applies the forgetting curve</span>
+<span class="o">→ references  memory (concepts/memory.md)</span>
 
 <span class="p">$</span> <span class="k">b2</span> explain <span class="s">concepts/memory</span>
-<span class="o">Human memory (concepts/memory.md)  [b2id 01KWMCW242E0WSKVYDYNQBT7SN]</span>
+<span class="o">memory (concepts/memory.md)  [b2id 01KWMCW242E0WSKVYDYNQBT7SN]</span>
 <span class="o">Connections:</span>
-<span class="o">  ← elaborated-by  Spaced repetition (notes/spaced-repetition.md)  [inline]</span>
-<span class="o">      why: applies the forgetting curve</span></pre>
+<span class="o">  ← referenced-by  spaced-repetition (notes/spaced-repetition.md)  [inline]</span></pre>
+      <p>That's the body wikilink, read back as a graph edge: untyped (<code>references</code>), sourced
+      from the body (<code>inline</code>), and shown from the far end under its inverse label
+      (<code>referenced-by</code>). The edge is stored once and directed — the inverse is display only.
+      Step&nbsp;8 adds a <em>typed</em> one and this listing grows a second row.</p>
       <p>You can pass a note as either its vault-relative path or its <code>b2id</code>. When nothing
       points at a note, <code>explain</code> flags it as an <b>orphan</b> — surfaced for you to notice,
       never auto-changed.</p>
@@ -283,27 +324,51 @@ Spaced repetition exploits the retrieval curve.
       the vectors <code>reindex</code> already stored. <b>No model call, no network, no cost:</b> the
       ranking and the "∖ already-connected" exclusion happen locally over your whole vault.</p>
 <pre><span class="p">$</span> <span class="k">b2</span> similar <span class="s">notes/spaced-repetition</span>
-<span class="o">0.7132  Cramming works (notes/cramming.md)</span>
+<span class="o">0.7132  cramming (notes/cramming.md)</span>
 <span class="o">    Massed practice yields only short-term recall.</span>
-<span class="o">0.6318  The forgetting curve (concepts/forgetting-curve.md)</span>
+<span class="o">0.6318  forgetting-curve (concepts/forgetting-curve.md)</span>
 <span class="o">    Retention decays exponentially without review.</span>
 <span class="c"># stderr: Commit one with:  b2 link notes/spaced-repetition &lt;note&gt; --type &lt;verb&gt;</span></pre>
-      <p>Each row is a similarity score, the note's title and path, and the passage that made it similar.
-      The note itself and anything already linked to it never appear. It lists ten by default;
-      <code>--limit N</code> widens or narrows that.</p>
+      <p>Each row is a similarity score, the note's name and path, and the passage that made it similar.
+      The note itself and anything already linked to it never appear. <code>--limit N</code> caps the list
+      (ten by default).</p>
+      <div class="note"><span class="tag">Zero is an answer</span> <code>--limit</code> is a cap, not a
+      quota. When nothing in the vault stands out as genuinely related, <code>b2 similar</code> says so and
+      returns an empty list rather than padding it with ten weak matches. <code>--no-floor</code> shows the
+      raw nearest anyway, however weak.</div>
       <div class="note tip"><span class="tag">You're the precision gate</span> B2 finds the candidates;
       <em>you</em> supply the judgment and the type. There's no review queue and nothing "inert until
       accepted" — a connection exists only once you author it. The intelligence is in the whole-vault
       semantic surfacing, which is free and local; the decision stays yours.</div>
-      <p>Pick the connections worth keeping and commit them. Either write a <code>[[link]]</code> in your
-      note's body yourself, or run <code>b2 link</code>:</p>
+      <p>Pick the connections worth keeping and commit them. There are <b>two ways</b>, and they are not
+      the same connection:</p>
+      <ul>
+        <li>Write a <code>[[link]]</code> in your note's body, in any editor. Cheap, and it reads naturally
+          in prose — but a body link is always <b>untyped</b>: B2 records it as a plain
+          <code>references</code> edge, with no stance and no "why". The body has no syntax for those.</li>
+        <li>Run <code>b2 link</code> (or click <b>Link</b> in the desktop app). This writes a <b>typed</b>
+          relation — a stance verb, optionally a "why" — into the source note's frontmatter.</li>
+      </ul>
 <pre><span class="p">$</span> <span class="k">b2</span> link <span class="s">notes/spaced-repetition</span> <span class="s">notes/cramming</span> --type <span class="s">contradicts</span> --explanation <span class="s">"massed vs. spaced practice"</span>
 <span class="o">Linked notes/spaced-repetition.md —contradicts→ notes/cramming.md. Wrote the relation into the source note's frontmatter.</span></pre>
-      <p><code>b2 link &lt;src&gt; &lt;dst&gt;</code> appends the typed relation to the <em>source</em>
-      note's frontmatter <code>b2_relations:</code> — Markdown-first, <b>never the body</b>. <code>--type</code>
-      picks the verb from the closed vocabulary (defaults to <code>references</code>);
-      <code>--explanation</code> records the "why". Re-run <code>b2 similar</code> afterward and a note you
-      just linked drops off the list — it's connected now, so the exclusion filters it out.</p>
+      <p>What changed on disk is one line, in the <em>source</em> note's frontmatter — the body is
+      untouched:</p>
+<pre><span class="c">b2_relations:</span>
+<span class="s">  - "contradicts [[notes/cramming.md]] — massed vs. spaced practice"</span></pre>
+      <p><code>--type</code> takes a verb from the <b>closed stance core</b> — <code>references</code>
+      (neutral), <code>supports</code> (for), <code>contradicts</code> (against); it defaults to
+      <code>references</code>. Three, not thirty, because stance is the one thing embedding similarity
+      cannot infer for you — everything else about the connection is already in the two notes.
+      <code>--explanation</code> records the "why", and <code>b2 explain</code> reads it back:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> explain <span class="s">notes/cramming</span>
+<span class="o">cramming (notes/cramming.md)  [b2id 01KWMD1S6Q7YB0F3T2H8XR9V4C]</span>
+<span class="o">Connections:</span>
+<span class="o">  ← contradicts  spaced-repetition (notes/spaced-repetition.md)  [frontmatter]</span>
+<span class="o">      why: massed vs. spaced practice</span></pre>
+      <p>Re-run <code>b2 similar</code> afterward and a note you just linked drops off the list — it's
+      connected now, so the exclusion filters it out. To undo a link, delete its
+      <code>b2_relations:</code> entry; it's gone on the next reindex. There is nothing else to clean up,
+      because the edge only ever lived in your Markdown.</p>
     </div>
   </div>
 
@@ -315,18 +380,57 @@ Spaced repetition exploits the retrieval curve.
 <pre><span class="p">$</span> <span class="k">b2</span> mv <span class="s">concepts/memory</span> <span class="s">concepts/human-memory</span>
 <span class="o">Moved concepts/memory.md → concepts/human-memory.md</span>
 <span class="o">Rewrote 1 inbound link(s) across 1 file(s).</span></pre>
-  <p>Because connections key on the immutable <code>b2id</code>, a move <b>never breaks a backlink</b> —
-  B2 also repairs the human-readable link text in every note that pointed at it. Refactor fearlessly:
-  move, split, merge, rename. After a batch of hand-edits, a quick <code>b2 reindex</code> catches
-  everything up.</p>
+  <p>Because connections key on the immutable <code>b2id</code>, a move <b>never breaks a backlink</b> — and
+  B2 rewrites the now-stale path inside every note that pointed at the old one, so the Markdown still reads
+  correctly in any other editor. Folders move as a whole. Refactor fearlessly: move, split, merge, rename.
+  After a batch of hand-edits, a quick <code>b2 reindex</code> catches everything up — or nothing at all,
+  if you're in the desktop app, which is watching the folder anyway.</p>
 
-  <div class="note tip"><span class="tag">Prefer a window?</span> The same engine drives a <b>desktop app</b>
-  (Tauri + CodeMirror, <code>crates/b2-desktop</code> + <code>ui/</code>): read and edit notes with
-  live-preview Markdown and autosave, see the similar-but-unlinked notes beside what you're reading, and
-  commit a typed link with a click — with reindex as a cancellable background action and external edits
-  reconciled live. From a checkout: <code>just ui-install</code> once, then
-  <code>B2_VAULT_PATH=~/vault just app</code>. Details in the
-  <a href="https://github.com/AlteredCraft/B2#the-desktop-app-cratesb2-desktop--ui">README</a>.</div>
+  <!-- ============================================================= -->
+  <h2 class="sec">The same vault, in a window</h2>
+
+  <p>Everything above has a <b>desktop app</b> counterpart — not a viewer bolted onto the CLI, but the
+  <em>other</em> front end over the same engine. Same index, same search, same discovery, same rules about
+  what may be written to your notes. Open the vault you just built and it's all there; run both against it
+  and they stay in step.</p>
+
+<pre><span class="p">$</span> <span class="k">just</span> doctor              <span class="c"># checks Node, npm, the Tauri CLI, the platform toolchain</span>
+<span class="p">$</span> <span class="k">B2_VAULT_PATH</span>=~/vault <span class="k">just</span> app</pre>
+
+  <p>On first launch with nothing remembered, the window opens with no vault selected — click the vault
+  switcher and pick a folder. After that it reopens whatever you had open last, and
+  <code>B2_VAULT_PATH</code> is just a way to skip that first pick.</p>
+
+  <p>What the window adds over the terminal:</p>
+  <ul>
+    <li><b>You never run <code>reindex</code>.</b> It indexes the vault on open and a native fs-watch keeps
+      up with edits made outside the app — an external editor, a <code>git pull</code> — re-projecting and
+      re-embedding what changed. Projection and embedding are decoupled, so a cold vault is browsable and
+      keyword-searchable in seconds while the vectors stream in behind. A manual reindex is still there in
+      <b>Settings → Index</b>; the top bar keeps the live progress meter and a Cancel, since a long run has
+      to stay watchable with the dialog shut.</li>
+    <li><b>Discovery sits next to what you're reading.</b> The similar-but-unlinked notes are a pane, not a
+      command you remember to run — with a strength band per candidate, a <em>Show nearest anyway</em>
+      escape hatch when the quality floor suppresses the list, and a one-click typed <b>Link</b> that writes
+      the same <code>b2_relations:</code> line <code>b2 link</code> does. There's also a <b>graph view</b> of
+      the connections around the open note.</li>
+    <li><b>An editor.</b> CodeMirror 6 with live-preview Markdown, autosave, syntax-highlighted code
+      fences, <code>[[wikilink]]</code> completion, and a conflict bar if the file changed under you. A
+      frontmatter drawer edits the block on its own, body untouched.</li>
+    <li><b>A file tree</b> over the real folders — create, rename, move, delete, and drag files in from
+      Finder to import them (a dropped <code>.md</code> keeps its own frontmatter; a dropped PDF keeps its
+      bytes).</li>
+    <li><b>Settings (⌘,)</b> — pick the embedding model (base or small, downloaded on the spot), see
+      whether embedding is running on CPU or the Metal GPU, and browse the whole keyboard map, where
+      <b>every chord is rebindable</b>.</li>
+  </ul>
+
+  <div class="note tip"><span class="tag">Why both</span> The desktop app is a <em>second dumb adapter</em>:
+  each of its actions is deserialize → one call into the same typed <code>Vault</code> façade the CLI calls
+  → render. That's what keeps them honest — the GUI can't grow its own idea of what "linked" means, a fix in
+  the engine fixes both, and the app inherits the engine's test suite instead of re-implementing search or
+  discovery a second time. Use the CLI when you want scripts, pipes, agents, or SSH; use the app when you
+  want to read and write. Neither is the "real" one.</div>
 
   <div class="eqcard">
     <div class="eq">index = projection of ( Markdown )</div>
@@ -342,29 +446,38 @@ Spaced repetition exploits the retrieval curve.
   <table>
     <thead><tr><th>Command</th><th>What it does</th><th>Model?</th></tr></thead>
     <tbody>
-      <tr><td><code>b2 init</code></td><td class="d">Download + verify the embedding model (one-time, per machine).</td><td class="d">downloads it</td></tr>
-      <tr><td><code>b2 add &lt;path&gt;</code></td><td class="d">Create a note (<code>--title</code>, <code>--content</code>) and index it.</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 init</code></td><td class="d">Download + verify the configured embedding model (one-time, per machine).</td><td class="d">downloads it</td></tr>
       <tr><td><code>b2 reindex</code></td><td class="d">Re-project the vault; incremental. <code>--dry-run</code>, <code>--force</code>, <code>--cancel</code> (stop a run backgrounded with <code>&amp;</code>; <code>b2 status</code> names its pid).</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 status</code></td><td class="d">Embedding coverage (is semantic ranking live?) and whether a reindex is running.</td><td class="d">no</td></tr>
       <tr><td><code>b2 search &lt;query&gt;</code></td><td class="d">Hybrid keyword + semantic search. <code>--limit N</code>.</td><td class="d">embeds query</td></tr>
-      <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's typed links, in and out.</td><td class="d">no</td></tr>
-      <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its "why" + provenance; flags orphans.</td><td class="d">no</td></tr>
-      <tr><td><code>b2 mv &lt;from&gt; &lt;to&gt;</code></td><td class="d">Move/rename a note and repair every inbound link.</td><td class="d">re-embeds touched</td></tr>
-      <tr><td><code>b2 similar &lt;note&gt;</code></td><td class="d">Surface the semantically nearest notes you haven't linked yet. <code>--limit N</code>.</td><td class="d">reads vectors</td></tr>
-      <tr><td><code>b2 link &lt;src&gt; &lt;dst&gt;</code></td><td class="d">Commit a typed relation into the source note's frontmatter. <code>--type</code>, <code>--explanation</code>.</td><td class="d">re-embeds note</td></tr>
+      <tr><td><code>b2 similar &lt;note&gt;</code></td><td class="d">Surface the semantically nearest notes you haven't linked yet. <code>--limit N</code>, <code>--no-floor</code> (show the raw nearest even when nothing stands out).</td><td class="d">reads vectors</td></tr>
+      <tr><td><code>b2 link &lt;src&gt; &lt;dst&gt;</code></td><td class="d">Commit a typed relation into the source note's frontmatter. <code>--type</code> (<code>references</code>/<code>supports</code>/<code>contradicts</code>), <code>--explanation</code>.</td><td class="d">re-embeds note</td></tr>
+      <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's links, in and out; flags ones that resolve to nothing.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its provenance and "why"; flags orphans.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 add &lt;path&gt;</code></td><td class="d">Create a note (<code>--content</code>, and <code>--title</code> for a frontmatter <code>title:</code> — inert to B2) and index it.</td><td class="d">embeds</td></tr>
+      <tr><td><code>b2 write &lt;note&gt;</code></td><td class="d">Replace a note's <b>body</b> from stdin — the scripting/agent editing surface. Frontmatter is left alone.</td><td class="d">no</td></tr>
+      <tr><td><code>b2 mv &lt;from&gt; &lt;to&gt;</code></td><td class="d">Move/rename a note, file, or folder and repair every inbound link.</td><td class="d">re-embeds touched</td></tr>
+      <tr><td><code>b2 rm &lt;target&gt;</code></td><td class="d">Delete a note, file, or folder from the vault and disk (<code>-r</code> for a folder). Inbound links dangle and are surfaced, never rewritten.</td><td class="d">no</td></tr>
     </tbody>
   </table>
   </div>
 
   <!-- ============================================================= -->
-  <h2 class="sec">Config &amp; environment</h2>
+  <h2 class="sec" id="config">Config &amp; environment</h2>
 
   <p>Zero-config is the happy path — everything above works with no config file. When you want to tune,
   a single optional TOML in your platform's config dir configures the embedder —
   <code>~/.config/b2/config.toml</code> on Linux, <code>~/Library/Application&nbsp;Support/b2/config.toml</code>
-  on macOS:</p>
+  on macOS. <b>Both front ends read this one file</b>, so the CLI and the desktop app can never disagree
+  about which model built your vectors:</p>
 <pre><span class="c"># &lt;config dir&gt;/b2/config.toml  (all optional)</span>
 <span class="k">[embedder]</span>
-<span class="k">model</span> = <span class="s">"bge-base-en-v1.5"</span></pre>
+<span class="k">model</span> = <span class="s">"BAAI/bge-base-en-v1.5"</span>    <span class="c"># default — 768-dim, ~440 MB, the better ranker</span>
+<span class="c"># model = "BAAI/bge-small-en-v1.5"</span>  <span class="c"># 384-dim, ~130 MB, faster to download and embed</span></pre>
+  <p>Those two are the supported models — the same pair the desktop app's <b>Settings → Embedding</b> picker
+  offers, where switching also downloads the new one for you. After a switch, run <code>b2 init</code> (if
+  you changed it by hand) and <code>b2 reindex</code>; the vectors are rebuilt, and until they are,
+  <code>search</code> refuses rather than mixing embedding spaces.</p>
 
   <div class="tablewrap">
   <table>
