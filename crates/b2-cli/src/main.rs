@@ -15,7 +15,7 @@ use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
 use b2_core::resource::{doc_kind, DocKind};
 use b2_core::vault::{AnswerView, Vault};
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
-use b2_llm::{LlmConfig, LlmError, OpenAiCompatProvider};
+use b2_llm::{is_ollama, LlmConfig, LlmError, OpenAiCompatProvider};
 use clap::{Args, Parser, Subcommand};
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
@@ -1403,16 +1403,13 @@ enum CliError {
     StdinRequired,
 }
 
-/// Does this endpoint look like the Ollama daemon — its port, or a host that
-/// names it? It decides one thing only: whether Ollama's own commands belong in
-/// an error message. `--llm-url` also points at LM Studio, llama.cpp, vLLM and
-/// cloud endpoints, where "run `ollama serve`" is advice about the wrong
-/// program. A guess in the safe direction: wrong here costs a generic sentence,
-/// never a wrong instruction.
-fn is_ollama(endpoint: &str) -> bool {
-    let endpoint = endpoint.to_lowercase();
-    endpoint.contains(":11434") || endpoint.contains("ollama")
-}
+// `is_ollama` — "does this endpoint look like the Ollama daemon" — used below to
+// decide whether Ollama's own commands belong in an error message (`--llm-url`
+// also points at LM Studio, llama.cpp, vLLM and cloud endpoints, where "run
+// `ollama serve`" is advice about the wrong program). The rule lives in `b2-llm`
+// (GH #155): the Ollama-native onboarding corner there needs the same answer for
+// a bigger decision — whether to ask the daemon what it has installed — and one
+// rule with two callers cannot drift the way two copies would.
 
 /// The head of a model server's own model list, for "…or pick one it already
 /// serves". Bounded: a local runtime holds a handful, but a cloud endpoint lists

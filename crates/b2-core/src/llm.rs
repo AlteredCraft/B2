@@ -20,19 +20,28 @@
 //! cancellation is just returning early from a blocking read loop.
 
 use crate::error::Result;
+use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
 
 /// One side of a chat turn. `User` turns are the human's; `Assistant` turns are
 /// prior model answers the adapter carried forward (session-only history — a
 /// persisted transcript would be B2-derived state outside Markdown, S4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Assistant,
 }
 
 /// One turn of the conversation, oldest first in [`ChatRequest::turns`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable **both ways**, unlike the read-only view types: history is the
+/// adapter's (session-only, S4), so a GUI carrying a conversation across the IPC
+/// hands it back turn by turn on the next ask — the desktop's `ask` command
+/// deserializes exactly this rather than defining a parallel DTO
+/// (crates/b2-desktop/CLAUDE.md). Nothing about that makes it stored state: it
+/// crosses a process boundary, it never reaches disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatTurn {
     pub role: Role,
     pub content: String,

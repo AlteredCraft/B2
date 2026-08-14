@@ -59,8 +59,9 @@ const MANIFEST: Record<string, readonly string[]> = {
     "folder2-open",
   ],
 
-  // Create actions (tree head) and the top bar.
-  actions: ["file-earmark-plus", "folder-plus", "gear", "search", "x-lg"],
+  // Create actions (tree head) and the top bar — `chat-dots` is the chat pane's toggle
+  // (GH #155), which is a top-bar control beside Settings and the vault switcher.
+  actions: ["chat-dots", "file-earmark-plus", "folder-plus", "gear", "search", "x-lg"],
 
   // Note-bar toggles: the connection graph and the Markdown-source view. They sit side by
   // side, so they have to come from the same family.

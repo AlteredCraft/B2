@@ -81,7 +81,8 @@ export type Scope =
   | "overlay:delete"
   | "textentry:create"
   | "textentry:rename"
-  | "textentry:find";
+  | "textentry:find"
+  | "textentry:chat"; // the chat composer (GH #155)
 
 /** One command and the chords that fire it. Deliberately *only* chord, scope and id (plus
  *  the two display strings below) — the conditions under which a chord applies stay
@@ -170,6 +171,11 @@ export const DEFAULT_BINDINGS = [
     keys: ["Mod-g"],
     scope: "global",
   },
+  // Chat takes the right column, so its chord sits with the other things that change what
+  // a *pane* shows (⌘G, ⇧⌘E) rather than with ⌘1/⌘2/⌘3, which change where the keyboard
+  // is. ⌘J is free in every one of the four keyboards that can claim a chord here — B2's
+  // own, CodeMirror's, the menu bar's, and macOS's — which is what the checkers assert.
+  { id: "chat.toggle", label: "Ask your notes", keys: ["Mod-j"], scope: "global" },
   // `Any-` because Escape is the way out and must not be conditional on what else is
   // held down: a user who just pressed ⌘F and hasn't let go of ⌘ yet still gets out.
   {
@@ -344,6 +350,18 @@ export const DEFAULT_BINDINGS = [
     label: "Close the find bar",
     keys: ["Any-Escape"],
     scope: "textentry:find",
+    fixed: TEXT_FIELD_REFLEX,
+  },
+  // The chat composer. ⏎ asks and ⇧⏎ is a newline — the reflex of every multi-line
+  // message field there has ever been, which is exactly what `fixed` is for: offering to
+  // rebind it would be offering to break what the user's hands already know. (The
+  // composer is a textarea, so ⇧⏎ needs no binding at all: it is the platform's default,
+  // and B2's job is only to *not* claim it.)
+  {
+    id: "chat.send",
+    label: "Ask the question",
+    keys: ["Enter"],
+    scope: "textentry:chat",
     fixed: TEXT_FIELD_REFLEX,
   },
 ] as const satisfies readonly Binding[];

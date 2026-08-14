@@ -54,6 +54,7 @@ import {
   type TreeRow,
 } from "./treenav";
 import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
+import { answerMessage, chatHistory, errorMessage, userMessage } from "./chat";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
 import { externalUrl, isInPageAnchor } from "./links";
 import { livePreview, wikilink } from "./livepreview";
@@ -257,9 +258,30 @@ function paintSide(): void {
   const html = sidePaneHtml(state);
   if (html === lastSidePaneHtml) return;
   const restore = capturePaneFocus(el("side-pane"));
+  // The chat composer's half-typed question lives only in the DOM (`paintTree`'s inline
+  // create input, in the right column): a repaint this pane doesn't know about — a toast
+  // timer, a watcher pulse, an answer landing — would otherwise wipe a question mid-word.
+  // Carried by value and caret, since the element itself does not survive the swap.
+  const carryInput = captureChatInput();
   el("side-pane").innerHTML = html;
   lastSidePaneHtml = html;
+  carryInput();
   restore?.();
+}
+
+/** The chat composer's contents across a side-pane repaint — value, caret and all.
+ *  A no-op thunk when the composer isn't up or is empty, so nothing is restored over a
+ *  pane that has moved on to something else. */
+function captureChatInput(): () => void {
+  const prev = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+  if (!prev || prev.value === "") return () => {};
+  const saved = { value: prev.value, start: prev.selectionStart, end: prev.selectionEnd };
+  return () => {
+    const next = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+    if (!next) return;
+    next.value = saved.value;
+    next.setSelectionRange(saved.start, saved.end);
+  };
 }
 
 /**
@@ -1720,6 +1742,9 @@ async function doSearch(raw: string): Promise<void> {
   }
   state.loading = true;
   state.searchQuery = query;
+  // Search and chat both own the right column, and a search is an explicit act — so it
+  // wins, and the conversation waits in state until ⌘J brings it back (chat.ts's header).
+  state.chatOpen = false;
   render();
   try {
     state.searchResults = await api.search(query);
@@ -1737,6 +1762,213 @@ function clearSearch(): void {
   state.searchResults = [];
   const input = document.getElementById("search-input") as HTMLInputElement | null;
   if (input) input.value = "";
+  render();
+}
+
+// --- chat (flow ④, GH #151/#153/#155) -----------------------------------------------
+//
+// The wiring; the paint is render.ts's `chatPaneHtml` and the pure logic is chat.ts.
+// What lives here is what only the running app can own: the streaming turn, its
+// cancellation, and the focus/repaint discipline a token-by-token surface demands.
+//
+// **Streaming does not go through `render()`.** A full render on every token would swap
+// the side pane's `innerHTML` a hundred times an answer — destroying the composer's caret,
+// resetting the pane's scroll, and (worst) ejecting a keyboard user to `<body>` mid-answer.
+// So tokens land in `state.chatStreaming` and are painted into one element
+// (`paintChatStream`), the same targeted-repaint shape `paintReindex` uses for streamed
+// index progress. One full render at the start of a turn, one at the end.
+
+/** Show or hide the chat pane. Opening it probes the model server (so the setup card is
+ *  right the moment it appears) and puts the keyboard in the composer, which is the only
+ *  thing anyone opens this pane to do. */
+function toggleChat(): void {
+  if (state.chatOpen) {
+    closeChat();
+    return;
+  }
+  state.chatOpen = true;
+  // Chat and search both own the whole column, one at a time (chat.ts's header) — and
+  // `clearSearch` is also this branch's repaint, since it renders on its way out.
+  clearSearch();
+  focusChatInput();
+  void refreshChatSetup();
+}
+
+/** Close the pane. A streaming answer is stopped first — a pane you can't see must not
+ *  keep a model working, and the partial text is kept either way, since the turn resolves
+ *  normally with `cancelled` set. The conversation survives a close: reopening continues
+ *  it (it dies with the window, S4, not with the toggle). */
+function closeChat(): void {
+  // A failed cancel is nothing the user can act on and nothing to interrupt a close with:
+  // the turn resolves on its own either way, and the pane is going away regardless.
+  if (state.chatStreaming !== null) void api.cancelAsk().catch(() => {});
+  state.chatOpen = false;
+  render();
+}
+
+function focusChatInput(): void {
+  (document.getElementById("chat-input") as HTMLTextAreaElement | null)?.focus();
+}
+
+/** Ask the host what the chat provider can do right now — the setup card's whole input.
+ *  Never throws in practice (the probe is a status), but a rejected IPC must not take the
+ *  pane down with it: an unknown setup reads as the "loading" state, which is honest. */
+async function refreshChatSetup(): Promise<void> {
+  try {
+    state.chatSetup = await api.chatSetup();
+    state.chatCloud = state.chatSetup.cloud;
+  } catch (e) {
+    flash(errText(e));
+    return;
+  }
+  render();
+}
+
+/**
+ * One turn: the question goes up, tokens come back, the resolved answer replaces the
+ * stream. The transcript keeps a failed turn too — the question is still on screen to
+ * retry, and chat.ts's `chatHistory` leaves it out of the next ask because there is no
+ * answer to carry forward.
+ */
+async function sendChat(question: string): Promise<void> {
+  const q = question.trim();
+  if (!q || state.chatStreaming !== null) return;
+  // The history the *next* ask carries is derived from the transcript before this
+  // question joins it — the question itself is the `ask` argument, not history.
+  const history = chatHistory(state.chatMessages);
+  // The vault this turn is grounded in. A switch mid-answer clears the transcript (the
+  // old vault's paths mean nothing in the new one), so an answer that lands afterwards
+  // must be dropped rather than pushed into a conversation it doesn't belong to — the
+  // `stale()` guard discovery uses, keyed on the vault instead of the note.
+  const askedIn = state.vaultRoot;
+  state.chatMessages.push(userMessage(q));
+  state.chatStreaming = "";
+  render();
+  const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+  if (input) input.value = "";
+  scrollChatToEnd();
+  try {
+    const view = await api.ask(q, history, (token) => {
+      // Guard against a token arriving after the turn ended (a cancel racing the last
+      // frame): appending to a null stream would resurrect the live row.
+      if (state.chatStreaming === null) return;
+      state.chatStreaming += token;
+      paintChatStream();
+    });
+    if (state.vaultRoot === askedIn) state.chatMessages.push(answerMessage(view));
+  } catch (e) {
+    if (state.vaultRoot === askedIn) state.chatMessages.push(errorMessage(errText(e)));
+  } finally {
+    // Where the keyboard was *before* the closing repaint — read here because `render()`
+    // swaps the pane on the next line and the answer would already be `<body>`.
+    const active = document.activeElement;
+    const composerHeld =
+      active === document.body || (active instanceof HTMLElement && active.id === "chat-input");
+    state.chatStreaming = null;
+    render();
+    scrollChatToEnd();
+    // Back to the composer — a conversation is a sequence of questions, and hunting for
+    // the field after every answer is the fastest way to make a keyboard user reach for
+    // the mouse (K1). Only when the composer is where the keyboard actually was, though:
+    // an answer landing while the reader is in a note or on a citation must **give** focus
+    // back, never take it (crates/b2-desktop/CLAUDE.md, "Two things that bite").
+    if (composerHeld) focusChatInput();
+  }
+}
+
+/** Paint the streaming answer — the one targeted repaint on this surface. `textContent`,
+ *  never `innerHTML`: a half-arrived answer is not a document, and model output is
+ *  untrusted content either way (E5 — the finished answer goes through the sanitizing
+ *  `renderMarkdown` seam on the next full render). */
+function paintChatStream(): void {
+  const live = document.getElementById("chat-stream");
+  if (!live || state.chatStreaming === null) return;
+  live.textContent = state.chatStreaming;
+  scrollChatToEnd();
+}
+
+/** Keep the newest text in view. Only when the reader is already at the bottom would be
+ *  the polished rule; the simple one is right here because the pane is a conversation the
+ *  user just spoke into — they are at the bottom. */
+function scrollChatToEnd(): void {
+  const log = document.getElementById("chat-log");
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
+/** Esc while an answer streams: stop it. Returns whether there was one to stop, so the
+ *  `dismiss` chord can fall through to closing the pane when there wasn't. */
+function stopChatAnswer(): boolean {
+  if (state.chatStreaming === null) return false;
+  void api.cancelAsk().catch((e) => flash(errText(e)));
+  return true;
+}
+
+/** Start over. The transcript is session state and nothing else — dropping it writes
+ *  nothing, deletes nothing, and costs no reindex. */
+function newChat(): void {
+  state.chatMessages = [];
+  state.sideFocus = null;
+  render();
+  focusChatInput();
+}
+
+/** Switch the Settings section between the two named configurations. **Local** seeds the
+ *  endpoint back to the local default; **Cloud models** clears it, because there is no
+ *  default cloud provider — picking one is the explicit act M5 is about, and pre-filling a
+ *  company's URL would be B2 making that choice. Neither saves: Save and test does. */
+function setChatMode(cloud: boolean): void {
+  state.chatCloud = cloud;
+  render();
+  const url = document.getElementById("settings-chat-url") as HTMLInputElement | null;
+  if (url) {
+    url.value = cloud ? "" : LOCAL_CHAT_ENDPOINT;
+    url.focus();
+  }
+}
+
+/** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
+ *  the only place the frontend spells it. The host's `b2_llm::DEFAULT_BASE_URL` is the
+ *  authority (it is what an unset endpoint resolves to); this is the field's seed when the
+ *  user presses *Local* after typing a cloud URL. */
+const LOCAL_CHAT_ENDPOINT = "http://localhost:11434/v1";
+
+/** Settings → Chat: save the endpoint/model/key and re-probe, so "Save and test" is one
+ *  act. The key is sent only when the user typed one — an untouched field must not clear
+ *  a key that is already in force (the host applies the same rule). */
+async function saveChatConfig(): Promise<void> {
+  const value = (id: string): string | null => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    const v = el?.value.trim() ?? "";
+    return v === "" ? null : v;
+  };
+  const url = value("settings-chat-url");
+  const model = value("settings-chat-model");
+  const key = value("settings-chat-key");
+  try {
+    state.chatSetup = await api.setChatConfig(url, model, key);
+    state.chatCloud = state.chatSetup.cloud;
+    flash(
+      state.chatSetup.state === "ready"
+        ? `Chat model saved — connected to ${state.chatSetup.model}.`
+        : (state.chatSetup.message ?? "Chat settings saved."),
+    );
+  } catch (e) {
+    flash(errText(e));
+  }
+  render();
+}
+
+/** The setup card's installed-model list: pick one and it becomes the configured model.
+ *  A one-click fix for the commonest local mistake — the daemon is up, the model name is
+ *  just not one it has. */
+async function useChatModel(model: string): Promise<void> {
+  try {
+    state.chatSetup = await api.setChatConfig(null, model, null);
+    state.chatCloud = state.chatSetup.cloud;
+    flash(`Chat model set to ${model}.`);
+  } catch (e) {
+    flash(errText(e));
+  }
   render();
 }
 
@@ -1842,6 +2074,11 @@ async function openSettings(tab?: SettingsTabId): Promise<void> {
   } catch (e) {
     flash(errText(e));
   }
+  // The Chat section's status, deliberately *not* in the `Promise.all` above: it is a
+  // network probe, and an unreachable cloud endpoint takes seconds to say so — long
+  // enough to hold the whole dialog empty for a user who came here to change the theme.
+  // It fills in behind the paint, exactly as the pane's own card does.
+  void refreshChatSetup();
   // No explicit focus call: the open edge put the keyboard on the selected tab, and
   // `paintModal` hands it back across this repaint by the tab's id.
   render();
@@ -2218,6 +2455,14 @@ async function switchVault(): Promise<void> {
     state.unresolved = [];
     state.searchQuery = "";
     state.searchResults = [];
+    // The conversation is grounded in the vault we just left — every citation in it
+    // names a path that means nothing here (a note's identity is its path, L1). Dropping
+    // it writes nothing and loses nothing durable: the transcript was session state. The
+    // answer in flight is stopped for the reason a departing reindex is: nothing should
+    // keep working on the vault the app has left. `sendChat` drops what it was holding.
+    if (state.chatStreaming !== null) void api.cancelAsk().catch(() => {});
+    state.chatMessages = [];
+    state.chatStreaming = null;
     state.expandedDirs = new Set<string>();
     state.selectedDir = ""; // the create context belongs to the vault we left
     state.dirs = []; // loadNotes below re-lists the new vault's structure
@@ -3422,6 +3667,11 @@ function buildShell(): void {
             <button id="cancel-reindex" class="btn ghost small">Cancel</button>
           </div>
         </div>
+        <button id="open-chat" class="btn ghost icon-btn" title="Ask your notes (${escapeHtml(
+          displayKeys(["chat.toggle"]),
+        )})" aria-label="Ask your notes">
+          ${icon("chat-dots", { size: 15 })}
+        </button>
         <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
           ${icon("folder", { size: 15 })}
         </button>
@@ -3620,6 +3870,26 @@ function wireEvents(): void {
       void openSettings();
       return;
     }
+    if (target.closest("#open-chat")) {
+      toggleChat();
+      return;
+    }
+    // The chat pane's own chrome. `data-chat-stop` is Esc's equal for the mouse (K1 cuts
+    // both ways: no action reachable only by keyboard either).
+    if (target.closest("[data-chat-stop]")) {
+      stopChatAnswer();
+      return;
+    }
+    if (target.closest("[data-chat-new]")) {
+      newChat();
+      return;
+    }
+    // The setup card's retry — the card is looked at *while* the user goes and starts the
+    // daemon or pulls a model, so it has to be able to notice that they did.
+    if (target.closest("[data-chat-recheck]")) {
+      void refreshChatSetup();
+      return;
+    }
     // The install banner (the "semantic search is off" strip): its primary action opens
     // Settings → Embedding, where the Download button it is pointing at lives; the ✕
     // dismisses for this session. ("Don't remind me again" is a checkbox — handled in the
@@ -3644,6 +3914,24 @@ function wireEvents(): void {
       }
       if (target.closest("#settings-provision")) {
         void provisionModel();
+        return;
+      }
+      // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (render.ts
+      // says why), so pressing one rewrites the URL field to that configuration's starting
+      // point and shows or hides the key + its privacy copy — the consent moment is the
+      // configuration moment (M5).
+      const chatMode = target.closest<HTMLElement>("[data-chat-mode]");
+      if (chatMode) {
+        setChatMode(chatMode.dataset.chatMode === "cloud");
+        return;
+      }
+      if (target.closest("#settings-chat-save")) {
+        void saveChatConfig();
+        return;
+      }
+      const useModel = target.closest<HTMLElement>("[data-chat-use-model]");
+      if (useModel) {
+        void useChatModel(useModel.dataset.chatUseModel ?? "");
         return;
       }
       // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
@@ -4047,6 +4335,14 @@ function wireEvents(): void {
       const input = document.getElementById("search-input") as HTMLInputElement | null;
       void doSearch(input?.value ?? "");
     }
+    // The chat composer is a form so its Ask button is a submit button — the platform's
+    // own "this field's default action", which is what makes ⏎ work in it without B2
+    // claiming the key twice (the registry marks `chat.send` fixed for that reason).
+    if ((e.target as HTMLElement).id === "chat-composer") {
+      e.preventDefault();
+      const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
+      void sendChat(input?.value ?? "");
+    }
   });
 
   // Keep the modal's verb preview in sync with the relation select.
@@ -4117,6 +4413,15 @@ function wireEvents(): void {
         e.preventDefault();
         cancelTreeRename();
       }
+      return;
+    }
+    // The chat composer's ⏎. Deliberately **not** a `return` like the two branches above:
+    // a name field is a modal little world, but a composer is somewhere you sit and think,
+    // and ⌘J, ⌘, and Esc have to keep working while the caret is in it. ⇧⏎ is a newline —
+    // the textarea's own behavior, which B2 keeps by not claiming it (bindings.ts).
+    if ((e.target as HTMLElement).id === "chat-input" && isBound(e, "chat.send")) {
+      e.preventDefault();
+      void sendChat((e.target as HTMLTextAreaElement).value);
       return;
     }
     // Settings' rail (K1, the ARIA tabs pattern — settingstabs.ts owns the moves). Above
@@ -4220,6 +4525,15 @@ function wireEvents(): void {
     // once there are no matches to step (bindings.test.ts pins that shadow). Editing is
     // out for the same reason the chip isn't drawn there — the pane belongs to the live
     // editor, so `render` won't paint the graph over it and the flip would be invisible.
+    // Chat takes the right column (⌘J). Unlike the graph it is *not* refused while
+    // editing: asking your notes a question is a thing you do mid-sentence, and the pane
+    // it opens is not the one the editor owns.
+    if (isBound(e, "chat.toggle")) {
+      if (currentOverlay() !== null) return;
+      e.preventDefault();
+      toggleChat();
+      return;
+    }
     if (isBound(e, "graph.toggle")) {
       if (currentOverlay() !== null || state.editing) return;
       e.preventDefault();
@@ -4418,6 +4732,15 @@ function wireEvents(): void {
       // An open find bar dismisses next (Escape from anywhere, not just its input).
       if (findOpen) {
         closeFind();
+        return;
+      }
+      // Chat, innermost part first: Esc **stops a streaming answer** (the spec's own
+      // cancellation gesture — the partial text stands and is marked stopped), and only a
+      // second Esc closes the pane. Stopping and closing on one keystroke would make the
+      // stop invisible, which is the opposite of rendering a cancelled turn honestly.
+      if (stopChatAnswer()) return;
+      if (state.chatOpen) {
+        closeChat();
         return;
       }
       // With nothing else to dismiss, Escape backs out of the graph into reading.

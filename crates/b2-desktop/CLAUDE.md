@@ -81,6 +81,17 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   (Root CLAUDE.md error policy + parent `Projects/CLAUDE.md` logging policy.)
 - **Determinism unchanged.** Push no wall-clock or randomness into `b2-core`; timestamps come from the
   façade clock (`now()` / `today()`), same as the CLI.
+- **Chat provider injection, the embedder's sibling** (`src/chat.rs`, GH #155). `ask` picks a provider the
+  way the CLI's `open_llm` does — `B2_LLM=fake` forces the deterministic `FakeLlm`, else the configured
+  OpenAI-compatible endpoint — and resolution itself stays in `b2_llm::LlmConfig::from_env`, with this
+  host's Settings laid over it exactly as a CLI flag would be. Two differences from the embedder are
+  deliberate. **Chat carries no index identity** (contrast M2): nothing it produces is stored, so changing
+  the chat model costs no reindex, and the endpoint + model persist beside the remembered vault rather than
+  in the vault. And **the API key is session-only**: a **Cloud models** configuration (M5) needs a bearer
+  token, which this host holds in memory and never writes to disk — `B2_LLM_API_KEY` is how a user makes one
+  persist. A secret B2 stores is a secret B2 is responsible for; a plaintext file in Application Support is
+  not where that responsibility gets taken. It never crosses back to the webview either: the status view
+  carries `has_api_key`, never the key.
 - **Structured logging installed here, like the CLI.** `logging::init_logging` (called first in `main`)
   is the desktop's opt-in `B2_LOG`/`B2_DEBUG`/`B2_LOG_FILE` subscriber — the GUI sibling of the CLI's, same
   JSONL shape (b2-core only emits; the subscriber + clock live in the adapter, keeping the core
@@ -209,6 +220,17 @@ Every new surface owes all four. They are cheap while you're building it and exp
   the gate is *not*: `conflicts()` asks a same-scope question, and scope buys nothing here — a menu
   accelerator is taken before the webview is consulted, so `menuOverlaps` compares across every
   scope.
+- **`ui/src/chat.ts`** — the chat pane's pure logic, and sidenav.ts's client rather than its rival
+  ([#155](https://github.com/AlteredCraft/B2/issues/155)). Chat is the right column's *third mode*, so its
+  transcript is emitted as the same `SideRow` shape discovery's cards are, and `sideRows` delegates here
+  when the pane is in that mode — which is what makes the whole ARIA `tree` walk, the roving tabstop and
+  (the load-bearing one) `paintSide`'s focus-restoration-by-row-key apply to a surface that repaints on
+  every streamed token, for free. The pane is where it is *because* of the citations: a citation opens its
+  note in the centre pane, and chat in the centre would make every citation a choice between the answer and
+  the evidence. Two things it deliberately does not own: what a citation opens (that is `data-open` in the
+  markup, so the mouse and ⏎ share one path) and the streaming paint (`paintChatStream`, main.ts — a full
+  render per token would swap the pane's `innerHTML` a hundred times an answer and eject the keyboard with
+  every one).
 - **`ui/src/icons.ts`** — the icon registry, and the reason a fourth obligation didn't need
   adding above: an icon here is `aria-hidden` with no opt-out, so it is always *beside* an
   accessible name and never instead of one. It maps a **meaning** (`resourceIcon(class)`,
@@ -298,6 +320,16 @@ that list — the frontend's is *routing*, the host's is the **refusal**, and th
 program to run. Two layers again, and the schemes are spelled on both sides of the seam, so change them
 together (`only_web_links_are_openable` in `src/commands.rs`, `links.test.ts` in the UI). ⏎ on a focused
 anchor dispatches a click, so the keyboard and the mouse share the one activation path (K1).
+
+**A model's answer is note content that has been through a model** ([#155](https://github.com/AlteredCraft/B2/issues/155)).
+Flow ④ feeds retrieved passages — which anyone could have authored — to an LLM and renders what comes back,
+so a chat answer is untrusted by both arguments at once: it is *derived from* hostile input, and it is
+generated text that nobody reviewed. It therefore takes the same one path every note body takes
+(`renderMarkdown`, sanitized), and its **citations never become links**: a citation is a `data-open` button
+that opens the note in-app, so there is no `href` for the webview to follow and no second activation path to
+keep in step with the mouse's. The *streaming* half is stricter still and deliberately so — tokens are
+written into the live element as `textContent` (`paintChatStream` in `ui/src/main.ts`), so a half-arrived
+answer is never parsed as markup at all.
 
 **What a new surface owes:** anything that reaches `innerHTML` gets its content from `renderMarkdown` (note
 bodies) or from `escapeHtml` (every value B2 interpolates into chrome — titles, paths, snippets). There is

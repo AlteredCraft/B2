@@ -28,6 +28,7 @@
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chat;
 mod commands;
 mod error;
 mod logging;
@@ -38,6 +39,7 @@ mod watch;
 use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
 use b2_embed::{EmbedConfig, LocalEmbedder};
+use chat::ChatPrefs;
 use error::CmdError;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,6 +68,13 @@ const CANCEL_POLL: Duration = Duration::from_millis(25);
 /// outside it by design — index-engine.md); a running embed checks
 /// `reindex_cancel` at each batch boundary (via the closure it passes to
 /// `Vault::embed`) and stops cooperatively when it is set.
+/// The chat bits mirror the reindex ones exactly, and for the same reason: an
+/// answer is a long, streaming, **cancellable** background op driven from the
+/// window (the pane's Esc), so *how the window drives and interrupts it* is host
+/// infrastructure while *what* it retrieves and asks stays behind the façade.
+/// `ask_cancel` is read by the token callback at every token — the seam's own
+/// cancellation checkpoint (GH #153) — and `ask_running` is the single-in-flight
+/// guard that keeps one turn's stale cancel from killing the next.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
     /// Set by `cancel_reindex` (and a vault switch); the running reindex closure
@@ -74,15 +83,78 @@ pub struct AppState {
     /// `true` while a reindex is in flight — the single-in-flight guard (a second
     /// `reindex` is refused; see [`AppState::try_start_reindex`]).
     reindex_running: AtomicBool,
+    /// Set by `cancel_ask` (the chat pane's Esc); the running answer's token
+    /// callback observes it and returns `ControlFlow::Break`, which the seam
+    /// reports honestly as a cancelled — not failed — completion.
+    ask_cancel: AtomicBool,
+    /// `true` while an answer is streaming — the single-in-flight guard.
+    ask_running: AtomicBool,
+    /// The chat endpoint, model, and (session-only) key. Behind a `Mutex` for the
+    /// vault root's reason: Settings changes it at runtime and every later ask
+    /// resolves a fresh provider from it. **Never vault or index state**
+    /// (GH #151) — see `chat.rs`.
+    chat: Mutex<ChatPrefs>,
 }
 
 impl AppState {
     pub fn new(root: Option<PathBuf>) -> Self {
+        Self::with_chat(root, ChatPrefs::default())
+    }
+
+    /// [`new`](Self::new) with explicit chat preferences — what `main` builds
+    /// from the persisted file, and what the tests build without touching it.
+    pub fn with_chat(root: Option<PathBuf>, chat: ChatPrefs) -> Self {
         Self {
             root: Mutex::new(root),
             reindex_cancel: AtomicBool::new(false),
             reindex_running: AtomicBool::new(false),
+            ask_cancel: AtomicBool::new(false),
+            ask_running: AtomicBool::new(false),
+            chat: Mutex::new(chat),
         }
+    }
+
+    /// The chat preferences in force, cloned out so the lock is **not** held
+    /// while a command opens a network connection (the `current_root` rule).
+    pub fn chat_prefs(&self) -> ChatPrefs {
+        lock_recover(&self.chat).clone()
+    }
+
+    /// Replace the chat preferences (the Settings section's Save). Takes effect
+    /// for every subsequent ask, since each resolves a fresh provider.
+    pub fn set_chat_prefs(&self, prefs: ChatPrefs) {
+        *lock_recover(&self.chat) = prefs;
+    }
+
+    /// Claim the single answer slot — [`try_start_reindex`](Self::try_start_reindex)
+    /// for chat. `true` if this call won it (release via [`AskGuard`]).
+    pub fn try_start_ask(&self) -> bool {
+        self.ask_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Release the answer slot (always, even on error — see [`AskGuard`]).
+    pub fn finish_ask(&self) {
+        self.ask_running.store(false, Ordering::SeqCst);
+    }
+
+    /// Clear the cancel flag now that a fresh answer owns the slot, so the Esc
+    /// that stopped the *last* answer can't stop this one before its first token.
+    pub fn arm_ask(&self) {
+        self.ask_cancel.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether the streaming answer has been asked to stop (read at every token).
+    pub fn ask_cancelled(&self) -> bool {
+        self.ask_cancel.load(Ordering::SeqCst)
+    }
+
+    /// Signal the streaming answer to stop at its next token (the `cancel_ask`
+    /// command — the pane's Esc). Cooperative, like the reindex's: the partial
+    /// text stands and is rendered honestly. A no-op if nothing is streaming.
+    pub fn request_ask_cancel(&self) {
+        self.ask_cancel.store(true, Ordering::SeqCst);
     }
 
     /// The current vault root, cloned out so the lock is **not** held while a command
@@ -164,6 +236,15 @@ pub(crate) struct ReindexGuard<'a>(pub(crate) &'a AppState);
 impl Drop for ReindexGuard<'_> {
     fn drop(&mut self) {
         self.0.finish_reindex();
+    }
+}
+
+/// [`ReindexGuard`] for the chat seam: releases the single answer slot on every
+/// exit path — a finished stream, an early `?` (no vault, no model), a panic.
+pub(crate) struct AskGuard<'a>(pub(crate) &'a AppState);
+impl Drop for AskGuard<'_> {
+    fn drop(&mut self) {
+        self.0.finish_ask();
     }
 }
 
@@ -320,7 +401,11 @@ fn main() {
     // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
     // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
     let _guard = logging::init_logging();
-    let state = AppState::new(resolve_root());
+    // The chat endpoint/model the user last chose, if any (chat.rs). Adapter
+    // state like the remembered vault — never vault or index state — and
+    // best-effort: an absent or unreadable file is "nothing configured", which
+    // resolves to the same local default the CLI uses with no flags.
+    let state = AppState::with_chat(resolve_root(), chat::read_prefs());
     tauri::Builder::default()
         // The menu bar, declared (#119). Without this call Tauri installs
         // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate
@@ -393,6 +478,10 @@ fn main() {
             commands::embed_device,
             commands::embed_stats,
             commands::menu_chords,
+            commands::ask,
+            commands::cancel_ask,
+            commands::chat_setup,
+            commands::set_chat_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the B2 desktop app");

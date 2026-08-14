@@ -16,6 +16,7 @@ import { chordProblems } from "./keymap.ts";
 import { PROBE_AFTER_MS, silenceHint } from "./recorder.ts";
 import { state, type AppState } from "./state.ts";
 import type {
+  ChatSetup,
   NeighborView,
   NoteView,
   ResourceLink,
@@ -115,6 +116,21 @@ const hit = (path: string): SearchResult => ({
   score: 1,
   snippet: "",
 });
+
+/** A ready local chat provider — the setup the pane paints a conversation under. */
+function chatSetup(over: Partial<ChatSetup> = {}): ChatSetup {
+  return {
+    base_url: "http://localhost:11434/v1",
+    model: "llama3.2",
+    cloud: false,
+    has_api_key: false,
+    state: "ready",
+    message: null,
+    available: [],
+    ollama: null,
+    ...over,
+  };
+}
 
 /** A fresh `AppState` over the app's own defaults — with its own collections, so a case
  *  that mutates one can't leak into the next. */
@@ -430,6 +446,85 @@ check("the folder-context menu offers no path to copy", () => {
   );
   assert(!html.includes("data-ctx-copy"), "no copy item without a node");
   assert(html.includes("data-ctx-new-note"), "but the create pair is still there");
+});
+
+// --- chat (flow ④, GH #155) ------------------------------------------------------------
+
+check("a citation navigates in-app — a button with a path, never a link with an href", () => {
+  // The E5 rule this pane owes on top of sanitizing: the webview *is* the app, so a
+  // citation must not be something the browser can follow. It is the same `data-open`
+  // button search results and discovery cards are, which also gives the mouse and ⏎ one
+  // activation path (K1) rather than two to keep in step.
+  const html = sidePaneHtml(
+    app({
+      chatOpen: true,
+      vaultRoot: "/vault",
+      chatSetup: chatSetup(),
+      chatMessages: [
+        { role: "user", text: "what about memory?", citations: [], cancelled: false },
+        {
+          role: "assistant",
+          text: "Grounded in [1].",
+          citations: [{ marker: 1, path: "concepts/memory.md", excerpt: "spacing works" }],
+          cancelled: false,
+        },
+      ],
+    }),
+  );
+  const tag = tagWith(html, 'data-open="concepts/memory.md"');
+  assert(tag.startsWith("<button"), `a citation is a button, not ${tag}`);
+  assert(!html.includes("href="), "nothing in the transcript is a followable link");
+  // And it is a row of the pane's tree, with the identity `paintSide` restores focus by.
+  assert(tag.includes('role="treeitem"'), "a citation is a navigable row");
+  assert(tag.includes("data-side-row="), "carrying the key focus is restored by");
+});
+
+check("a streaming answer paints as escaped text under the id tokens land in", () => {
+  // Tokens are written into `#chat-stream` as `textContent` (main.ts) rather than
+  // re-rendered, so this element is the contract between the two. The first paint escapes
+  // the partial text for the same reason: a half-arrived answer is not a document.
+  const html = sidePaneHtml(
+    app({
+      chatOpen: true,
+      vaultRoot: "/vault",
+      chatSetup: chatSetup(),
+      chatStreaming: "<script>alert(1)</script> partial",
+    }),
+  );
+  assert(html.includes('id="chat-stream"'), "the stream has the id main.ts writes into");
+  assert(!html.includes("<script>"), "and the partial text is escaped, never parsed");
+  // The composer is disabled while an answer is arriving, and Stop replaces Ask — Esc's
+  // equal for the mouse.
+  assert(html.includes("data-chat-stop"), "Stop is on screen while streaming");
+});
+
+check("no server: the pane shows the setup card instead of a composer that can't work", () => {
+  const html = sidePaneHtml(
+    app({
+      chatOpen: true,
+      vaultRoot: "/vault",
+      chatSetup: chatSetup({
+        state: "unreachable",
+        message: "Can't reach the model server at http://localhost:11434/v1 — is Ollama running?",
+        ollama: {
+          root: "http://localhost:11434",
+          running: false,
+          installed: [],
+          ram_gb: 16,
+          tiers: [{ min_ram_gb: 16, ram: "16 GB", size: "7–8B", model: "llama3.1:8b" }],
+          suggested: { min_ram_gb: 16, ram: "16 GB", size: "7–8B", model: "llama3.1:8b" },
+        },
+      }),
+    }),
+  );
+  assert(html.includes("is Ollama running?"), "the actionable sentence is the card's lead");
+  assert(html.includes("ollama pull llama3.1:8b"), "with a pull sized to this machine");
+  assert(
+    html.includes("search, discovery, editing"),
+    "and the promise that everything else still works (E4)",
+  );
+  const input = html.includes('id="chat-input"');
+  assert(!input, "no composer until there is something to answer with");
 });
 
 console.log(`render: ${passed} checks passed`);

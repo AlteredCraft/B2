@@ -57,7 +57,17 @@ import {
   sectionRowKey,
   sideRows,
 } from "./sidenav.ts";
-import type { NoteView, ResourceExplainView } from "./types.ts";
+import {
+  type ChatMessage,
+  STREAMING_ROW_KEY,
+  chatEmptyState,
+  citationRowKey,
+  formatModelSize,
+  pullCommand,
+  retrievalNote,
+  turnRowKey,
+} from "./chat.ts";
+import type { ChatSetup, NoteView, ResourceExplainView } from "./types.ts";
 import {
   buildScene,
   NODE_R,
@@ -564,6 +574,10 @@ export function notePaneHtml(state: AppState): string {
  */
 export function sidePaneHtml(state: AppState): string {
   const roving = rovingSideKey(sideRows(state), state.sideFocus);
+  // Chat owns the column outright when it's open (chat.ts's header says why it lives
+  // here at all): one column, one thing in it, and opening chat or running a search
+  // closes the other (main.ts).
+  if (state.chatOpen) return chatPaneHtml(state, roving);
   return state.searchQuery
     ? searchSectionHtml(state, roving)
     : discoverySectionHtml(state, roving);
@@ -884,6 +898,269 @@ function unresolvedCardsHtml(state: AppState, roving: string | null): string {
         </div>`;
     })
     .join("");
+}
+
+// --- chat (flow ④, GH #151/#153/#155) -----------------------------------------------
+//
+// The right column's third mode: ask a question, watch the answer stream, click a
+// citation to open the note behind it — *without* the conversation leaving the screen,
+// which is why chat lives here rather than in the centre pane (chat.ts's header).
+//
+// Three rules this builder holds, all of them invariants rather than styling:
+//
+//   • **E5 — model output is untrusted content.** An answer is a string from a model that
+//     was itself fed note content (which anyone can author), so it renders through the one
+//     sanitizing `renderMarkdown` seam like every other document. The *streaming* half is
+//     stronger still: it is written as `textContent` by `paintChatStream` (main.ts), so a
+//     half-arrived answer is never parsed as markup at all.
+//   • **A citation navigates in-app, never the webview.** Each one is a `data-open` button
+//     — the same delegation search results and discovery cards use — so the mouse and ⏎
+//     share one activation path (K1), and no `href` ever exists to be followed.
+//   • **K1 — the pane is keyboard-complete.** Rows are `role="treeitem"` over chat.ts's
+//     row order (the same order the arrows walk), with a roving tabstop; every control has
+//     a stable `id` so `paintSide` can hand focus back across the repaint each token causes.
+function chatPaneHtml(state: AppState, roving: string | null): string {
+  const setup = state.chatSetup;
+  const streaming = state.chatStreaming !== null;
+  const model = setup
+    ? `<span class="chat-model" title="${escapeHtml(
+        `${setup.model} · ${setup.base_url}`,
+      )}">${escapeHtml(setup.model)}</span>`
+    : "";
+  const head = `<div class="side-head chat-head">
+      <h2>Chat</h2>
+      ${model}
+      <button id="chat-new" class="linklike"${
+        state.chatMessages.length === 0 || streaming ? " disabled" : ""
+      } data-chat-new title="Start a new conversation — nothing here is saved">new</button>
+    </div>`;
+  // No composer until there is something to answer with: a disabled field under a card
+  // that says why is chrome with nothing behind it, and one more stop for a keyboard user
+  // to walk past on the way to the fix the card is pointing at.
+  const ready =
+    chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup }) === "ready";
+  return head + chatStageHtml(state, roving) + (ready ? chatComposerHtml(state) : "");
+}
+
+/** The conversation, or the state that stands in for one (chat.ts's `chatEmptyState`
+ *  makes that choice once, so the paint doesn't re-derive it branch by branch). */
+function chatStageHtml(state: AppState, roving: string | null): string {
+  switch (chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup })) {
+    case "no-vault":
+      return `<p class="side-empty">Open a vault to chat with your notes.</p>`;
+    case "loading":
+      return `<p class="side-empty">Looking for a model…</p>`;
+    case "no-server":
+    case "no-model":
+      return chatSetupCardHtml(state.chatSetup, false);
+    case "ready":
+      return chatLogHtml(state, roving);
+  }
+}
+
+/** The transcript. Empty until the first question — and then it is what the pane is. */
+function chatLogHtml(state: AppState, roving: string | null): string {
+  if (state.chatMessages.length === 0 && state.chatStreaming === null) {
+    const fake = state.chatSetup?.state === "fake";
+    return `<div class="chat-log" id="chat-log">
+        <div class="chat-intro">
+          <p><strong>Ask your notes a question.</strong></p>
+          <p class="muted">Answers come only from passages B2 retrieves from this vault, cited by
+            [n]. Nothing here is written to your notes, and the conversation isn’t saved.</p>
+          ${
+            fake
+              ? `<p class="muted">The fake chat provider is in use (<code>B2_LLM=fake</code>) — answers are deterministic test scaffolding, not a model.</p>`
+              : ""
+          }
+        </div>
+      </div>`;
+  }
+  const turns = state.chatMessages
+    .map((m, i) => chatTurnHtml(m, i, roving))
+    .join("");
+  // The in-flight answer is a row of its own so the keyboard can sit on it while it
+  // fills. `#chat-stream` is the element `paintChatStream` writes tokens into — as text,
+  // never markup — which is what keeps a streaming answer off the full-render path.
+  const live =
+    state.chatStreaming === null
+      ? ""
+      : `<div class="chat-turn chat-answer chat-live" role="treeitem" aria-level="1"${sideTab(
+          STREAMING_ROW_KEY,
+          roving,
+        )} data-side-row="${escapeHtml(STREAMING_ROW_KEY)}" aria-live="polite">
+          <div class="chat-role">B2</div>
+          <div class="chat-text" id="chat-stream">${escapeHtml(state.chatStreaming)}</div>
+        </div>`;
+  return `<div class="chat-log" id="chat-log" role="tree" aria-label="Conversation">${turns}${live}</div>`;
+}
+
+/** One turn: the question as typed, or the answer — rendered through the sanitizing
+ *  Markdown seam (E5) — with its citations as rows beneath it. */
+function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): string {
+  const key = turnRowKey(index);
+  const row = (cls: string, role: string, body: string): string =>
+    `<div class="chat-turn ${cls}" role="treeitem" aria-level="1"${sideTab(
+      key,
+      roving,
+    )} data-side-row="${escapeHtml(key)}">
+      <div class="chat-role">${role}</div>
+      ${body}
+    </div>`;
+  if (m.role === "user") {
+    return row("chat-question", "You", `<div class="chat-text">${escapeHtml(m.text)}</div>`);
+  }
+  if (m.error !== undefined) {
+    return row(
+      "chat-answer chat-failed",
+      "B2",
+      `<div class="chat-error">${escapeHtml(m.error)}</div>`,
+    );
+  }
+  const stopped = m.cancelled
+    ? `<p class="chat-stopped">Stopped — this answer is partial.</p>`
+    : "";
+  const cites = m.citations
+    .map(
+      (c) => `<button class="chat-cite" role="treeitem" aria-level="2"${sideTab(
+        citationRowKey(index, c.marker, c.path),
+        roving,
+      )} data-side-row="${escapeHtml(
+        citationRowKey(index, c.marker, c.path),
+      )}" data-open="${escapeHtml(c.path)}" title="Open ${escapeHtml(c.path)}">
+        <span class="chat-cite-marker">[${c.marker}]</span>
+        <span class="chat-cite-path">${escapeHtml(c.path)}</span>
+        ${c.excerpt ? `<span class="chat-cite-excerpt">${escapeHtml(c.excerpt)}</span>` : ""}
+      </button>`,
+    )
+    .join("");
+  return (
+    row(
+      "chat-answer",
+      "B2",
+      `<div class="chat-text">${renderMarkdown(m.text)}</div>${stopped}`,
+    ) + cites
+  );
+}
+
+/**
+ * The composer. A `<textarea>` rather than an input because a question can be a
+ * paragraph: ⏎ asks, ⇧⏎ is a newline (the platform's own reflex in a multi-line field,
+ * which is why the registry marks the chord `fixed`).
+ *
+ * While an answer streams, Ask becomes **Stop** — the mouse's equal of Esc (K1: no action
+ * reachable only by keyboard either). The field itself stays **enabled** throughout: you
+ * can line up the next question while this answer arrives, and — the reason it matters —
+ * disabling a focused control drops the keyboard to `<body>`, so the one gesture that
+ * always precedes a stream would be the one that ejects you from the pane. `sendChat`
+ * refuses a second turn instead, where it costs nobody their focus.
+ */
+function chatComposerHtml(state: AppState): string {
+  const streaming = state.chatStreaming !== null;
+  const note = retrievalNote(state);
+  return `<form class="chat-composer" id="chat-composer">
+      <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask your notes…"
+        aria-label="Ask your notes"></textarea>
+      <div class="chat-actions">
+        ${
+          streaming
+            ? `<button type="button" class="btn small" id="chat-stop" data-chat-stop title="Stop this answer (${escapeHtml(
+                displayKeys(["dismiss"]),
+              )})">Stop</button>`
+            : `<button type="submit" class="btn small primary" id="chat-send">Ask</button>`
+        }
+        ${note ? `<span class="chat-note muted">${escapeHtml(note)}</span>` : ""}
+      </div>
+    </form>`;
+}
+
+/**
+ * The setup card — deliberately **Ollama-native** (GH #151: guided setup is a per-runtime
+ * feature, and Ollama is the runtime B2 guides), shown both as the chat pane's empty state
+ * and inside Settings → Chat.
+ *
+ * Three cards, one builder, because they are the same facts in a different order: no
+ * server (start the daemon), no model (pull one — sized to this machine, illustrative and
+ * non-binding), and the Settings copy of both. A non-Ollama endpoint gets the message and
+ * nothing else: there is no honest instruction to give about pulling a model into LM
+ * Studio or a cloud provider.
+ */
+function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string {
+  if (!setup) return "";
+  const ollama = setup.ollama;
+  const message = setup.message
+    ? `<p class="chat-setup-message">${escapeHtml(setup.message)}</p>`
+    : "";
+  // What's installed, when the daemon answered — so "no model" can offer what *is* there
+  // instead of only naming what isn't.
+  const installed =
+    ollama && ollama.running && ollama.installed.length > 0
+      ? `<div class="chat-setup-block">
+          <div class="settings-subhead">Installed models</div>
+          <ul class="chat-models">${ollama.installed
+            .map(
+              (m) =>
+                `<li><button type="button" class="linklike" data-chat-use-model="${escapeHtml(
+                  m.name,
+                )}">${escapeHtml(m.name)}</button> <span class="muted">${escapeHtml(
+                  [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · "),
+                )}</span></li>`,
+            )
+            .join("")}</ul>
+        </div>`
+      : "";
+  const suggestion =
+    ollama && ollama.suggested
+      ? `<div class="chat-setup-block">
+          <div class="settings-subhead">Suggested for this machine</div>
+          <p class="settings-detail muted">${
+            ollama.ram_gb ? `${ollama.ram_gb} GB of memory` : "This machine"
+          } — a ${escapeHtml(ollama.suggested.size)} model. Illustrative, not a requirement.</p>
+          <p class="chat-command"><code>${escapeHtml(
+            pullCommand(ollama.suggested.model),
+          )}</code></p>
+        </div>`
+      : "";
+  const tiers =
+    ollama && ollama.tiers.length > 0
+      ? `<details class="chat-tiers"><summary>Sizes by memory</summary>
+          <ul>${ollama.tiers
+            .map(
+              (t) =>
+                `<li>${escapeHtml(t.ram)} → ${escapeHtml(t.size)} <code>${escapeHtml(
+                  t.model,
+                )}</code></li>`,
+            )
+            .join("")}</ul>
+        </details>`
+      : "";
+  const install =
+    ollama && !ollama.running
+      ? `<p class="settings-note">B2 talks to any OpenAI-compatible model server; Ollama is the
+          one it can walk you through. Start it with <code>ollama serve</code>, or install it
+          from <a href="https://ollama.com">ollama.com</a>.</p>`
+      : "";
+  // A retry, in the pane only: the card's whole job is to be looked at while the user
+  // goes and fixes something (starts the daemon, pulls a model), so it must be able to
+  // notice that they did — without making them close and reopen the pane. Settings has
+  // its own re-probe, spelled *Save and test*.
+  const recheck = inSettings
+    ? ""
+    : `<div class="settings-action"><button class="btn small" id="chat-recheck" data-chat-recheck>Check again</button></div>`;
+  return `<div class="chat-setup${inSettings ? " chat-setup-inline" : ""}">
+      ${inSettings ? "" : `<div class="chat-setup-head">Chat isn’t ready yet</div>`}
+      ${message}
+      ${recheck}
+      ${install}
+      ${suggestion}
+      ${installed}
+      ${tiers}
+      ${
+        inSettings
+          ? ""
+          : `<p class="settings-note">Everything else in B2 — search, discovery, editing —
+              works exactly as it does with chat off.</p>`
+      }
+    </div>`;
 }
 
 // --- the anchored ghost graph (GH #22) ----------------------------------------------
@@ -1226,9 +1503,84 @@ function settingsPanelHtml(state: AppState): string {
       return indexPanelHtml(state);
     case "embedding":
       return embeddingPanelHtml(state);
+    case "chat":
+      return chatPanelHtml(state);
     case "keyboard":
       return keyboardPanelHtml(state);
   }
+}
+
+// Chat — which model answers your questions, and where it runs. The spec's two named
+// configurations (GH #151), and they are one setting rather than two: **Local** is a
+// localhost endpoint (Ollama's, unless pointed elsewhere) and **Cloud models** is a
+// provider's, so the segmented control below is a *view* of the URL, not a second piece
+// of state to keep in step with it.
+//
+// The privacy copy sits beside the Cloud fields deliberately: **the consent moment is the
+// configuration moment** (invariant M5 — note content never leaves the machine unbidden),
+// informed where the decision is made rather than by a popup later.
+//
+// None of this is vault or index state. Changing the chat model costs no reindex — the
+// contrast with M2 that makes "change models at any time" true by construction.
+function chatPanelHtml(state: AppState): string {
+  const setup = state.chatSetup;
+  const cloud = state.chatCloud;
+  const modes: { id: "local" | "cloud"; label: string }[] = [
+    { id: "local", label: "Local" },
+    { id: "cloud", label: "Cloud models" },
+  ];
+  const segments = modes
+    .map((m) => {
+      const on = cloud === (m.id === "cloud");
+      return `<button type="button" class="seg${on ? " seg-on" : ""}" id="settings-chat-${
+        m.id
+      }" data-chat-mode="${m.id}" aria-pressed="${on}">${m.label}</button>`;
+    })
+    .join("");
+  // The status line, in the setup card's own words when there's a problem — the same
+  // sentence the chat pane shows, from the same probe.
+  const status = ((): string => {
+    if (!setup) return `<p class="settings-detail muted">Checking the model server…</p>`;
+    if (setup.state === "ready")
+      return `<p class="settings-detail">Connected · ${escapeHtml(setup.model)}</p>`;
+    if (setup.state === "fake")
+      return `<p class="settings-detail">${escapeHtml(setup.message ?? "")}</p>`;
+    return chatSetupCardHtml(setup, true);
+  })();
+  const key = cloud
+    ? `<label class="field">API key
+        <input id="settings-chat-key" type="password" autocomplete="off" spellcheck="false"
+          placeholder="${setup?.has_api_key ? "•••••••• (set for this session)" : "sk-…"}" />
+      </label>
+      <p class="settings-note">
+        <strong>Cloud models send your question and the retrieved note passages to the
+        configured provider.</strong> Nothing else leaves your machine, and B2 still writes
+        nothing to your notes. The key is kept for this session only and never saved to
+        disk — set <code>B2_LLM_API_KEY</code> in your environment to have it persist.
+      </p>`
+    : `<p class="settings-note">Local models keep everything on this machine — your
+        question and the retrieved passages never leave it. B2 talks to any
+        OpenAI-compatible server; Ollama is the one it can walk you through.</p>`;
+  return `<div class="settings-subhead">Chat model</div>
+      <p class="settings-detail muted">Grounded chat answers only from passages B2 retrieves
+        from this vault. Changing the model costs no reindex — nothing about chat is stored.</p>
+      <div class="field">
+        <span class="field-label">Where it runs</span>
+        <div class="segmented" role="group" aria-label="Chat model location">${segments}</div>
+      </div>
+      <label class="field">Endpoint
+        <input id="settings-chat-url" type="text" autocomplete="off" spellcheck="false"
+          value="${escapeHtml(setup?.base_url ?? "")}" placeholder="http://localhost:11434/v1" />
+      </label>
+      <label class="field">Model
+        <input id="settings-chat-model" type="text" autocomplete="off" spellcheck="false"
+          value="${escapeHtml(setup?.model ?? "")}" placeholder="llama3.2" />
+      </label>
+      ${key}
+      <div class="settings-action">
+        <button class="btn small primary" id="settings-chat-save">Save and test</button>
+      </div>
+      ${status}`;
 }
 
 // General — app-wide preferences that belong to no subsystem. Appearance is the only one

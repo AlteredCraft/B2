@@ -33,6 +33,105 @@ export interface MenuChord {
   keys: string;
 }
 
+// --- chat (flow ④, GH #151/#153/#155) ------------------------------------------------
+
+/**
+ * One turn of the conversation, as `ask` takes it (`b2-core`'s `ChatTurn`). The only
+ * shape here that crosses the seam *inbound*: history is the **adapter's**, session-only
+ * (invariant S4), so the pane holds it and hands it back turn by turn — nothing about a
+ * chat is ever written to the vault, the index, or `localStorage`.
+ */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * `ask` — one grounded answer (`b2-core`'s `AnswerView`), the same view `b2 ask --json`
+ * ends its event stream with. The tokens arrive first over the command's channel; this is
+ * what they add up to, plus the citations resolved back to notes.
+ */
+export interface AnswerView {
+  /** The answer verbatim, including any `[n]` marker that resolved to nothing —
+   *  model output is untrusted (E5) but it is never rewritten. */
+  answer: string;
+  /** One entry per distinct marker that names a real passage, ascending. */
+  citations: Citation[];
+  /** The stream was stopped mid-answer (Esc): `answer` is an honest prefix. */
+  cancelled: boolean;
+}
+
+/** One resolved `[n]` citation: which marker, which note, and a line of evidence. */
+export interface Citation {
+  marker: number;
+  /** Vault-relative path — the note's identity (L1), and what a click **opens in-app**. */
+  path: string;
+  excerpt: string;
+}
+
+/** How ready chat is right now (`b2-llm`'s `ChatState`) — the setup card's branch. */
+export type ChatState = "ready" | "unreachable" | "model_missing" | "fake";
+
+/** One model an Ollama daemon has installed, from its native `/api/tags`. */
+export interface OllamaModel {
+  name: string;
+  /** On-disk size in bytes. */
+  size: number;
+  /** Ollama's own parameter label ("3.2B"), when it gives one. */
+  parameters: string | null;
+}
+
+/** One rung of the pull heuristic — illustrative and non-binding (GH #151). */
+export interface ModelTier {
+  min_ram_gb: number;
+  ram: string;
+  size: string;
+  model: string;
+}
+
+/**
+ * The Ollama-native half of the setup card. Present only when the configured endpoint
+ * looks like Ollama's: guided setup is a per-runtime feature, and Ollama is the runtime
+ * B2 guides (GH #151) — there is nothing honest to say about pulling a model into
+ * LM Studio.
+ */
+export interface OllamaSetup {
+  /** The daemon's native root (`http://localhost:11434`). */
+  root: string;
+  /** Whether the native API answered at all. */
+  running: boolean;
+  /** What is installed. Empty *with* `running` is the "no model" card, which is a
+   *  different sentence from the "no server" one. */
+  installed: OllamaModel[];
+  ram_gb: number | null;
+  tiers: ModelTier[];
+  /** The rung this machine sits on, or null when memory couldn't be read. */
+  suggested: ModelTier | null;
+}
+
+/**
+ * `chat_setup` / `set_chat_config` — everything the chat surface needs before a question
+ * is asked (`b2-llm`'s `ChatSetup`). Adapter-level state, never vault or index state, so
+ * changing it costs no reindex (contrast M2).
+ *
+ * `has_api_key` and never the key: the token does not cross this boundary in either
+ * direction, and the host holds it for the session only (`b2-desktop/src/chat.rs`).
+ */
+export interface ChatSetup {
+  base_url: string;
+  model: string;
+  /** `false` for **Local**, `true` for **Cloud models** — what the privacy copy hangs
+   *  off (invariant M5). */
+  cloud: boolean;
+  has_api_key: boolean;
+  state: ChatState;
+  /** A generic, actionable sentence when `state` isn't `"ready"` (E4). */
+  message: string | null;
+  /** Models the endpoint says it serves, when it said. */
+  available: string[];
+  ollama: OllamaSetup | null;
+}
+
 /**
  * `list_models` / `set_model` — one embedding model the settings picker offers
  * (b2-embed `ModelChoice`). `current` is the model B2 is configured to use now;

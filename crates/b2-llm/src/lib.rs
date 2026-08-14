@@ -34,9 +34,14 @@
 //! index — which is what makes "change models at any time" true by construction.
 
 mod provider;
+pub mod setup;
 mod sse;
 
 pub use provider::OpenAiCompatProvider;
+pub use setup::{
+    is_local, is_ollama, probe_setup, pull_command, ChatSetup, ChatState, ModelTier, OllamaModel,
+    OllamaSetup, MODEL_TIERS,
+};
 
 /// Where the Ollama daemon serves its OpenAI-compatible surface. The *guided*
 /// default per GH #151: local-first, no key, and the runtime B2's onboarding
@@ -146,6 +151,20 @@ impl LlmConfig {
         }
         if let Some(model) = model {
             self.model = model.to_string();
+        }
+        self
+    }
+
+    /// Lay an adapter's **explicit** bearer token over this config —
+    /// [`with_overrides`](Self::with_overrides)'s sibling, separate because a key
+    /// is not a setting like the other two: it is env-only for the CLI (a key in
+    /// a flag is a key in `ps`), and the desktop holds one for the session
+    /// without ever writing it down. `None` keeps whatever the environment
+    /// supplied, so "I didn't type a key" never *clears* `B2_LLM_API_KEY`.
+    #[must_use]
+    pub fn with_api_key(mut self, api_key: Option<&str>) -> Self {
+        if let Some(key) = api_key {
+            self.api_key = Some(key.to_string());
         }
         self
     }
