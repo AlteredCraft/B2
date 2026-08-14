@@ -1,0 +1,49 @@
+{
+  "description": "Hand-labelled groundedness set for the chat seam (GH #154), scored out of CI by `cargo run -p b2-llm --example groundedness`. Each entry is a question asked of the SAME corpus the retrieval eval uses (crates/b2-embed/evals/corpus), and `expect` lists the vault-relative note(s) a correct answer must cite. An EMPTY `expect` is a deliberate negative — the corpus does not answer that question, so the only correct answer is the grounded prompt's refusal ('I don't find that in your notes.'). Two kinds of negative are present on purpose: one far from anything in the corpus, and one whose neighbourhood the corpus does cover (endurance training vs. the cycling and backpacking notes), because a model that confabulates does it from loosely related passages, not from nothing. Questions are phrased as a person would type them, not as keyword queries — unlike queries.json, they do NOT avoid the target's vocabulary: this set scores what the model does with retrieved passages, not what retrieval finds.",
+  "questions": [
+    {
+      "question": "how does a glacier turn a V-shaped valley into a U-shaped one?",
+      "expect": ["glaciers.md"]
+    },
+    {
+      "question": "what happens at first crack when you roast coffee, and what does roasting past it cost you?",
+      "expect": ["coffee-roasting.md"]
+    },
+    {
+      "question": "why do real systems use both symmetric and asymmetric encryption instead of just one?",
+      "expect": ["encryption.md"]
+    },
+    {
+      "question": "what actually makes a password hard to guess?",
+      "expect": ["passwords.md"]
+    },
+    {
+      "question": "how can I tell a phishing email from a real one?",
+      "expect": ["phishing.md"]
+    },
+    {
+      "question": "I keep lying awake at night — what should I change?",
+      "expect": ["insomnia.md", "sleep-hygiene.md"]
+    },
+    {
+      "question": "how do roots get water out of the soil?",
+      "expect": ["plant-roots.md"]
+    },
+    {
+      "question": "how is a french press different from espresso?",
+      "expect": ["french-press.md", "espresso.md"]
+    },
+    {
+      "question": "where should my money go first each payday?",
+      "expect": ["personal-finance.md"]
+    },
+    {
+      "question": "what were the main causes of the French Revolution?",
+      "expect": []
+    },
+    {
+      "question": "how many weeks should I train before running a marathon?",
+      "expect": []
+    }
+  ]
+}

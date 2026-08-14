@@ -44,3 +44,7 @@ crates/b2-embed/evals/results.jsonl
 # drop a disposable index here (also matched by the global `.b2/` rule; listed for clarity).
 fixtures/test-vault/.b2/
 logs/embed-compare-*.jsonl
+
+# The groundedness eval's append-only results log (the chat harness, crates/b2-llm/evals/):
+# one JSON line per scored run, machine-local (the numbers depend on the machine's models).
+crates/b2-llm/evals/results.jsonl

@@ -1310,3 +1310,285 @@ fn rm_unknown_target_fails_cleanly() {
         stderr(&file)
     );
 }
+
+// ---------------------------------------------------------------------------
+// flow ④: grounded chat — `ask` and `chat` (GH #154)
+// ---------------------------------------------------------------------------
+//
+// Every case here runs under the **fake chat provider** (`B2_LLM=fake`), the
+// `B2_EMBEDDER=fake` sibling: no model server, no network, deterministic answers.
+// So these prove the adapter — streaming shape, the JSONL contract, session
+// history, the error phrasing — never answer quality, which is a real-model eval
+// concern (crates/b2-llm/evals/).
+
+/// Run `b2 -C <vault> <args...>` with both seams faked, optionally piping `input`
+/// to stdin (what `chat` reads its turns from). `B2_LLM` is set rather than
+/// inherited, so the suite's behavior can't depend on the developer's shell.
+fn run_chat(vault: &Path, args: &[&str], input: Option<&str>) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut full = vec!["-C", vault.to_str().unwrap()];
+    full.extend_from_slice(args);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_LLM", "fake")
+        .args(&full)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("b2 binary runs");
+    if let Some(text) = input {
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin is piped")
+            .write_all(text.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+    child.wait_with_output().expect("b2 binary completes")
+}
+
+/// Parse an `--json` chat stream: one JSON object per line, in arrival order.
+fn events(out: &Output) -> Vec<Value> {
+    stdout(out)
+        .lines()
+        .map(|l| {
+            serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON stream line ({e}): {l}"))
+        })
+        .collect()
+}
+
+/// `ask --json` is a JSON Lines **event stream**: the tokens as they arrive, then
+/// one final answer event carrying the resolved `AnswerView` (the adapters' shared
+/// view type). The tokens must reassemble into exactly that answer — an agent
+/// rendering the stream live and an agent reading only the last line must end up
+/// with the same text.
+#[test]
+fn ask_json_streams_tokens_then_the_resolved_answer() {
+    let (_g, root) = reindexed();
+
+    let out = run_chat(&root, &["--json", "ask", "what is memory?"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let events = events(&out);
+    let (last, tokens) = events.split_last().expect("at least the answer event");
+
+    assert!(!tokens.is_empty(), "the answer streamed as tokens");
+    assert!(
+        tokens.iter().all(|e| e["event"] == "token"),
+        "every line before the answer is a token event: {tokens:?}"
+    );
+    assert_eq!(last["event"], "answer");
+
+    let streamed: String = tokens
+        .iter()
+        .map(|e| e["text"].as_str().expect("token text"))
+        .collect();
+    assert_eq!(
+        streamed,
+        last["answer"].as_str().expect("answer text"),
+        "the stream and the final view must agree"
+    );
+    assert_eq!(last["cancelled"], false);
+
+    // Citations resolve to real vault paths — the answer's evidence, as data.
+    let citations = last["citations"].as_array().expect("citations array");
+    assert!(!citations.is_empty(), "the fake cites every passage it got");
+    for c in citations {
+        let path = c["path"].as_str().expect("citation path");
+        assert!(
+            root.join(path).exists(),
+            "citation names a real note: {path}"
+        );
+        assert!(c["marker"].is_u64(), "markers are the [n] in the answer");
+    }
+}
+
+/// The human surface: the answer on stdout as it streams, then its sources. The
+/// fake-provider caveat is a stderr notice — stdout stays the answer, so
+/// `b2 ask … > answer.txt` captures an answer and nothing else.
+#[test]
+fn ask_prints_the_answer_then_its_sources_and_keeps_stdout_clean() {
+    let (_g, root) = reindexed();
+
+    let out = run_chat(&root, &["ask", "what is memory?"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("[1]"), "the answer cites its passage: {text}");
+    assert!(text.contains("Sources:"), "{text}");
+    assert!(
+        text.contains("concepts/memory.md") || text.contains("notes/spaced-repetition.md"),
+        "a source names the note it came from: {text}"
+    );
+    assert!(
+        !text.contains("note:"),
+        "the fake-provider caveat belongs on stderr: {text}"
+    );
+    assert!(
+        stderr(&out).contains("B2_LLM=fake"),
+        "never overstate what answered: {}",
+        stderr(&out)
+    );
+}
+
+/// `chat` answers each piped turn and leaves on `/exit`. The turns after the first
+/// are **follow-ups**: the façade sees a non-empty history and condenses, which is
+/// the one externally visible difference between a chat turn and a bare `ask`.
+#[test]
+fn chat_answers_every_turn_and_carries_the_conversation_forward() {
+    let (_g, root) = reindexed();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env("B2_LLM", "fake")
+        // The façade's own span reports whether a turn had history behind it.
+        .env("B2_LOG", "b2::vault=debug")
+        .args(["-C", root.to_str().unwrap(), "--json", "chat"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child
+                .stdin
+                .as_mut()
+                .expect("stdin is piped")
+                .write_all(b"what is memory?\ntell me more\n/exit\n")?;
+            drop(child.stdin.take());
+            child.wait_with_output()
+        })
+        .expect("b2 binary runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let answers: Vec<Value> = events(&out)
+        .into_iter()
+        .filter(|e| e["event"] == "answer")
+        .collect();
+    assert_eq!(answers.len(), 2, "one answer per piped turn");
+
+    // The first turn is standalone; the second carries the first behind it. The
+    // façade's `ask` span records which, so the assertion reads the same fact the
+    // orchestration branched on rather than a proxy for it.
+    let multi_turn: Vec<bool> = stderr(&out)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["span"]["name"] == "ask")
+        .filter_map(|v| v["span"]["multi_turn"].as_bool())
+        .collect();
+    assert_eq!(
+        multi_turn,
+        [false, true],
+        "history is session state the second turn retrieves against"
+    );
+}
+
+/// `/exit` is not the only way out: end-of-input (Ctrl-D at a terminal, or a
+/// finished script) ends the session just as cleanly.
+#[test]
+fn chat_ends_on_end_of_input() {
+    let (_g, root) = reindexed();
+
+    let out = run_chat(&root, &["--json", "chat"], Some("what is memory?\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        events(&out)
+            .iter()
+            .filter(|e| e["event"] == "answer")
+            .count(),
+        1
+    );
+}
+
+/// Chat with no model server is one actionable sentence naming the endpoint that
+/// was actually tried (E4) — not a stack of transport internals, and not advice
+/// about a port the user never configured. The detail stays behind `B2_DEBUG`.
+#[test]
+fn ask_without_a_model_server_says_so_and_names_the_endpoint() {
+    let (_g, root) = reindexed();
+
+    // Port 9 (discard) is reserved and never served: a refused connection, at once.
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env_remove("B2_LLM")
+        .args([
+            "-C",
+            root.to_str().unwrap(),
+            "ask",
+            "what is memory?",
+            "--llm-url",
+            "http://127.0.0.1:9/v1",
+        ])
+        .output()
+        .expect("b2 binary runs");
+    assert!(!out.status.success(), "a stopped server is an error");
+    let err = stderr(&out);
+    assert!(
+        err.contains("Can't reach the model server at http://127.0.0.1:9/v1"),
+        "{err}"
+    );
+    assert!(
+        err.contains("ollama serve"),
+        "the fix is in the message: {err}"
+    );
+    assert!(
+        !err.contains("os error"),
+        "no transport internals without B2_DEBUG: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "nothing was answered");
+}
+
+/// The `B2_VAULT_PATH` precedence rule, applied to the chat config: an explicit
+/// flag beats the environment. Observable because the failure names the endpoint
+/// that was tried.
+#[test]
+fn an_explicit_llm_url_beats_the_environment() {
+    let (_g, root) = reindexed();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env_remove("B2_LLM")
+        .env("B2_LLM_URL", "http://127.0.0.1:9/v1")
+        .args([
+            "-C",
+            root.to_str().unwrap(),
+            "ask",
+            "what is memory?",
+            "--llm-url",
+            "http://127.0.0.1:10/v1",
+        ])
+        .output()
+        .expect("b2 binary runs");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("http://127.0.0.1:10/v1"),
+        "the flag's endpoint is the one tried: {err}"
+    );
+    assert!(
+        !err.contains("http://127.0.0.1:9/v1"),
+        "the environment's was overridden: {err}"
+    );
+}
+
+/// With no flag, the environment supplies the endpoint (and the default supplies
+/// it when neither does) — the other half of the precedence rule.
+#[test]
+fn the_llm_url_environment_variable_is_used_when_no_flag_is_given() {
+    let (_g, root) = reindexed();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+        .env("B2_EMBEDDER", "fake")
+        .env_remove("B2_LLM")
+        .env("B2_LLM_URL", "http://127.0.0.1:9/v1")
+        .args(["-C", root.to_str().unwrap(), "ask", "what is memory?"])
+        .output()
+        .expect("b2 binary runs");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("http://127.0.0.1:9/v1"),
+        "{}",
+        stderr(&out)
+    );
+}

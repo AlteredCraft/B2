@@ -84,10 +84,11 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
 - **Structured logging installed here, like the CLI.** `logging::init_logging` (called first in `main`)
   is the desktop's opt-in `B2_LOG`/`B2_DEBUG`/`B2_LOG_FILE` subscriber — the GUI sibling of the CLI's, same
   JSONL shape (b2-core only emits; the subscriber + clock live in the adapter, keeping the core
-  wall-clock-free). Two host-driven differences, both documented in `logging.rs`: a `tracing-appender`
+  wall-clock-free). One host-driven difference, documented in `logging.rs`: a `tracing-appender`
   **non-blocking** writer (this process is long-lived + multi-threaded, so log I/O must not block the
-  GUI/reindex threads), and the *implied* default scoped to `b2=debug` (not bare `debug`) so Tauri/wry/hyper
-  tracing stays out of the file. `main` must hold the returned `WorkerGuard` for the whole run.
+  GUI/reindex threads). The *implied* default filter — `b2=debug`, not bare `debug`, so foreign
+  `tracing`/`log` records stay out of the file — is now the rule in **both** adapters (GH #154).
+  `main` must hold the returned `WorkerGuard` for the whole run.
 
 ## The keyboard contract (invariant K1)
 

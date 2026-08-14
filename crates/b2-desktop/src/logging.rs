@@ -17,14 +17,15 @@
 //! `just app` (`cargo tauri dev`) that is `crates/b2-desktop/`, not the repo root;
 //! prefer an absolute path.
 //!
-//! **One knob differs from the CLI, deliberately:** when `B2_DEBUG`/`B2_LOG_FILE` imply
-//! a default filter (no explicit `B2_LOG`), the desktop scopes it to **`b2=debug`**, not
-//! the CLI's bare `debug`. The CLI process is quiet — clap/rusqlite emit no `tracing`, so
-//! bare `debug` is already just the kernel's `b2::*` events. This process embeds Tauri +
-//! wry + hyper + reqwest, all noisy `tracing` emitters, and their records have a foreign
-//! shape (`log.line`, `log.module_path`, no `sql`/`duration_us`) that would pollute the
-//! one reportable JSONL dataset. `b2=debug` keeps the *default* file byte-compatible with
-//! the CLI's; opt into the firehose with an explicit `B2_LOG=debug`.
+//! **The implied default is scoped, and both adapters scope it the same way:** with no
+//! explicit `B2_LOG`, `B2_DEBUG`/`B2_LOG_FILE` imply **`b2=debug`** — the kernel's own
+//! targets — never a bare `debug`. This process is the loud case: it embeds Tauri + wry +
+//! hyper + reqwest, all noisy `tracing` emitters whose records have a foreign shape
+//! (`log.line`, `log.module_path`, no `sql`/`duration_us`) that would pollute the one
+//! reportable JSONL dataset. The CLI used to be the quiet counter-example — until chat
+//! linked an HTTP client that logs its connection handling (GH #154), which is how the
+//! two ended up on the same rule rather than one diverging from the other. Opt into the
+//! firehose with an explicit `B2_LOG=debug`, in either adapter.
 //!
 //! **One difference from the CLI, deliberate:** the CLI is a short-lived, single-shot
 //! process, so it writes through a plain `Mutex<File>`. The desktop app is long-lived
