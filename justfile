@@ -128,15 +128,43 @@ check: && test-ui
 # back-to-back those re-ran the engine suite, `ui-build`, and the frontend suite twice over.
 # Note the absent `--exclude b2-desktop` — the `ui-build` prerequisite has already satisfied the
 # desktop crate's `ui/dist` embed, so one clippy pass covers the whole workspace.
-# Stage order is failure order: the cheap mechanical checks first (fmt, then lint), the bulk of
-# the code next, then the frontend suite, and `audit` last — it is the only stage that touches
-# the network, so a slow or unreachable registry can't delay a real failure above it.
+# Stage order is failure order: the cheap mechanical checks first (`no-tokio`, then fmt, then
+# lint), the bulk of the code next, then the frontend suite, and `audit` last — it is the only
+# stage that touches the network, so a slow or unreachable registry can't delay a real failure
+# above it. `no-tokio` leads because it is a manifest-level check: it reads the lockfile and
+# never compiles anything, so it costs a fraction of a second and its failure is structural.
 [group('gates')]
 [doc('Complete gate (~18s warm) — every mechanical check in one pass; exactly what CI runs.')]
-ci: ui-build && test-ui audit
+ci: no-tokio ui-build && test-ui audit
     cargo fmt --check
     cargo clippy --workspace -- -D warnings
     cargo test
+
+# GH #174. `hf-hub` shipped its async download backend (reqwest → hyper → h2 → tokio) under
+# default features, so the whole async HTTP stack compiled into `b2` — at opt-3, per the
+# workspace's dependency profile — to serve an API B2 never calls. Trimming it is what made
+# "nothing in B2 is async" true of the *tree* and not just of the code. This is the guard on
+# that, and it is the `-D warnings` lesson again in a new place: a dependency added with its
+# defaults left on can put the stack back and nothing else in the gate would notice, because
+# the result still builds and still passes — it just costs minutes of every cold build.
+# Scoped to `b2-cli` because that is the shipped binary; `b2-desktop` legitimately links tokio,
+# since **Tauri** does, and that is the host's runtime rather than one of ours.
+# `cargo tree -i` exits NON-ZERO when the package is absent from the graph, so the passing case
+# here is the command failing — hence the inverted test rather than a bare invocation. Inverting
+# an exit code turns *every* other failure into a pass (an unresolvable lockfile, an unreachable
+# registry, a typo in the package name would all read as "no tokio"), so the first line resolves
+# the tree on its own and fails loudly: after it succeeds, the only thing the second command can
+# be reporting is a missing package.
+[group('gates')]
+[doc("Fail if tokio is back in the `b2` binary's dependency tree (GH #174).")]
+no-tokio:
+    @cargo tree -p b2-cli > /dev/null
+    @if cargo tree -p b2-cli -i tokio > /dev/null 2>&1; then \
+        echo "error: tokio is in b2-cli's dependency tree again (GH #174) —"; \
+        echo "       a dependency is probably pulling an async HTTP stack via default features:"; \
+        cargo tree -p b2-cli -i tokio; \
+        exit 1; \
+    fi
 
 [group('gates')]
 [doc('Fast, deterministic, model-free engine suite (b2-core only) — the bulk of the test weight.')]

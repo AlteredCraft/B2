@@ -160,11 +160,16 @@ cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs 
 just check                              # FAST (~3s warm): fmt-check, then clippy with `-D warnings`,
                                         # then the engine suite, then the ui/ suite. The loop you run
                                         # while working — no network, no desktop build.
-just ci                                 # COMPLETE (~18s warm): ui-build, then fmt-check, clippy over
-                                        # the WHOLE workspace (no `--exclude b2-desktop` — ui-build
-                                        # already satisfied its ui/dist embed), the whole cargo suite,
-                                        # the ui/ suite, and `audit` last. This is verbatim what
-                                        # .github/workflows/ci.yml runs; run it before pushing.
+just ci                                 # COMPLETE (~18s warm): no-tokio, ui-build, then fmt-check,
+                                        # clippy over the WHOLE workspace (no `--exclude b2-desktop`
+                                        # — ui-build already satisfied its ui/dist embed), the whole
+                                        # cargo suite, the ui/ suite, and `audit` last. This is
+                                        # verbatim what .github/workflows/ci.yml runs; run it before
+                                        # pushing.
+just no-tokio                           # fails if tokio is back in the `b2` binary's dependency tree
+                                        # (GH #174). Reads the lockfile, compiles nothing. Leads `ci`
+                                        # because a dep added with default features on can restore the
+                                        # whole async HTTP stack, and every other stage stays green.
 just audit                              # npm audit --audit-level=high over ui/ (needs the network).
                                         # Its own recipe, and deliberately NOT a prerequisite of
                                         # ui-install (which is upstream of `just app` — a fresh
@@ -325,12 +330,20 @@ if/when one lands — `index-engine.md` §5.)*
   `embed::l2_sq` over `db::for_each_stored_vector`/`for_each_note_centroid`.)
 - **`b2-embed`** — the real candle-backed embedder. Heavy ML deps (candle, tokenizers, hf-hub) live
   **only here**. `provision` (`b2 init`) downloads + verifies the model into a shared XDG cache;
-  `LocalEmbedder::load` fails fast with "run `b2 init`" if absent.
+  `LocalEmbedder::load` fails fast with "run `b2 init`" if absent. `hf-hub` is taken
+  `default-features = false` — B2 calls its **sync** (`ureq`) API, so the async backend its defaults
+  carry is weight for a path nothing reaches (GH #174); the download's TLS is consequently rustls +
+  webpki-roots, the same stack `b2-llm` already uses.
 - **`b2-llm`** — the real chat provider (GH #154): a hand-rolled **sync** OpenAI-compatible SSE client
   over `ureq` (already in the tree via `hf-hub`), behind the `LlmProvider` seam. Sync end-to-end is the
-  point — **no tokio enters the workspace**, and cancellation is returning early from a blocking read
-  loop. One wire shape (`POST {base}/chat/completions`, `stream: true`, frames until `[DONE]`), so the
-  quirks it owns are its tests: keep-alive comments, multi-line `data:`, CRLF, mid-stream error frames,
+  point — **no B2 code is async and no B2 crate starts a runtime**, and cancellation is returning early
+  from a blocking read loop. That claim used to be made of the *lockfile* ("no tokio enters the
+  workspace") and was false there: `hf-hub`'s default features pulled `reqwest` → `hyper` → `tokio`
+  into the `b2` binary to serve a code path nothing called. GH #174 trimmed them
+  (`default-features = false`), so the binary's tree is now tokio-free too and `just no-tokio` keeps it
+  that way. The desktop host is the one place a runtime exists, and it isn't ours: **Tauri** brings its
+  own, which is what a GUI host is. One wire shape (`POST {base}/chat/completions`, `stream: true`,
+  frames until `[DONE]`), so the quirks it owns are its tests: keep-alive comments, multi-line `data:`, CRLF, mid-stream error frames,
   a stream that stops without `[DONE]` (a *truncated* answer, honestly marked cancelled — not an error),
   and a garbled frame (an error, so a protocol mismatch can't pass as a short answer). Ollama is the
   guided default; any compatible URL works, and a cloud one only by explicit configuration (M5).

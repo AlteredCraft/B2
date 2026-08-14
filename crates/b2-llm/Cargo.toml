@@ -7,8 +7,10 @@ description = "B2's chat provider — a hand-rolled sync OpenAI-compatible SSE c
 
 # The wire half of the second AI seam (GH #151 §"How B2 talks to it", cut as GH #154).
 # The whole dependency list is the decision: `ureq` (already in the tree via b2-embed's
-# hf-hub) is a BLOCKING client, so the crate is sync end-to-end and **no tokio enters the
-# workspace** — cancellation is returning early from a read loop, not a runtime.
+# hf-hub) is a BLOCKING client, so the crate is sync end-to-end — cancellation is returning
+# early from a read loop, not a runtime. That was always true of the code; GH #174 made it
+# true of the tree as well, by dropping hf-hub's default features (which pulled reqwest →
+# hyper → tokio for a code path nothing calls). `just no-tokio` is the guard.
 
 [dependencies]
 b2-core = { path = "../b2-core" }

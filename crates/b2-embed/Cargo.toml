@@ -14,7 +14,19 @@ b2-core = { path = "../b2-core" }
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
-hf-hub = { version = "0.4", features = ["ureq"] }
+# Download seam for `b2 init`. `default-features = false` is load-bearing (GH #174):
+# hf-hub's defaults are ["default-tls", "tokio", "ureq"], and the `tokio` one pulls
+# reqwest → hyper → h2 → tokio — the whole async HTTP stack, compiled at opt-3 by the
+# workspace's dependency profile, to serve an async API B2 never calls (we use
+# `hf_hub::api::sync`). Dropping the defaults also drops `default-tls` → `native-tls`,
+# which is the one *behavioural* change: hf-hub's sync agent falls back to ureq's own
+# default TLS (rustls + webpki-roots) instead of the OS trust store. That is already
+# what b2-llm speaks to cloud endpoints with, and what hf-hub's redirect-following
+# agent used even before this — only the first hop was native-tls. Proxies are
+# unaffected (hf-hub calls `try_proxy_from_env` either way). The trade is that a
+# corporate MITM CA installed in the *system* store is no longer trusted here;
+# `ureq/native-certs` is the escape hatch if that ever bites.
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
 tokenizers = "0.21"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
