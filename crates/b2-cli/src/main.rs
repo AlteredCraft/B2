@@ -1403,6 +1403,17 @@ enum CliError {
     StdinRequired,
 }
 
+/// Does this endpoint look like the Ollama daemon — its port, or a host that
+/// names it? It decides one thing only: whether Ollama's own commands belong in
+/// an error message. `--llm-url` also points at LM Studio, llama.cpp, vLLM and
+/// cloud endpoints, where "run `ollama serve`" is advice about the wrong
+/// program. A guess in the safe direction: wrong here costs a generic sentence,
+/// never a wrong instruction.
+fn is_ollama(endpoint: &str) -> bool {
+    let endpoint = endpoint.to_lowercase();
+    endpoint.contains(":11434") || endpoint.contains("ollama")
+}
+
 /// The head of a model server's own model list, for "…or pick one it already
 /// serves". Bounded: a local runtime holds a handful, but a cloud endpoint lists
 /// hundreds, and a hundred-model line is not a hint.
@@ -1484,16 +1495,26 @@ fn user_message(err: &CliError) -> String {
             "No body piped on stdin. Pipe the new note body in, e.g. `cat new-body.md | b2 write notes/foo`.".to_string()
         }
         // The E4 case chat is most likely to hit: nothing is serving the endpoint.
-        // Named by the endpoint the user actually configured, so pointing B2 at LM
-        // Studio or a cloud provider doesn't produce advice about Ollama's port.
-        CliError::Llm(LlmError::Unreachable { endpoint, .. }) => format!(
+        // Named by the endpoint the user actually configured — and *advised* by it
+        // too: `ollama serve` is the fix for Ollama and no help at all for LM
+        // Studio, llama.cpp, vLLM, or a cloud provider, all of which `--llm-url`
+        // supports.
+        CliError::Llm(LlmError::Unreachable { endpoint, .. }) if is_ollama(endpoint) => format!(
             "Can't reach the model server at {endpoint} — is Ollama running? (`ollama serve`, or install: https://ollama.com)"
         ),
+        CliError::Llm(LlmError::Unreachable { endpoint, .. }) => format!(
+            "Can't reach the model server at {endpoint}. Start it, or point --llm-url (or B2_LLM_URL) at one that's running."
+        ),
         CliError::Llm(LlmError::ModelMissing { model, endpoint, available }) => format!(
-            "Model '{model}' isn't available at {endpoint}. Pull it with `ollama pull {model}`{}.",
+            "Model '{model}' isn't available at {endpoint}. {}{}",
+            if is_ollama(endpoint) {
+                format!("Pull it with `ollama pull {model}`")
+            } else {
+                "Load it there".to_string()
+            },
             match model_hint(available) {
-                Some(list) => format!(", or point --llm-model at one it already serves ({list})"),
-                None => String::new(),
+                Some(list) => format!(", or point --llm-model at one it already serves ({list})."),
+                None => ".".to_string(),
             }
         ),
         // Every remaining chat failure — an HTTP refusal at probe time, a malformed

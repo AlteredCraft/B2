@@ -37,11 +37,13 @@
 //!
 //! Every run appends one JSON line to `evals/results.jsonl` (gitignored, since
 //! the numbers depend on the machine's models) — the same append-only convention
-//! as the retrieval eval and `B2_LOG_FILE`. **Exit code**: 0 normally, 2 only
-//! when *no* answerable question produced a correct citation, which is a broken
-//! pipeline rather than a weak model. Model quality is read off the numbers, not
-//! off the exit code — a gate that fails on every small local model would be a
-//! gate nobody runs.
+//! as the retrieval eval and `B2_LOG_FILE`. **Exit code**: 0 normally, 2 when
+//! retrieval reached labelled notes and yet *no* answer cited one — a broken
+//! pipeline rather than a weak model. A run where retrieval reached nothing
+//! still exits 0 and says so: there was no chat result to judge, and the finding
+//! belongs to `--example eval`. Model quality is read off the numbers, not off
+//! the exit code — a gate that fails on every small local model would be a gate
+//! nobody runs.
 
 use b2_core::chat::{cited_markers, ASK_PASSAGES};
 use b2_core::embed::Embedder;
@@ -167,13 +169,20 @@ fn run() -> Result<bool, Box<dyn Error>> {
     append_result(&results_path, &row)?;
     eprintln!("\n[eval] appended one row to {}", results_path.display());
 
-    // The floor is a liveness check, not a quality bar (see the module doc).
-    let answerable_hits = scored
+    // The floor is a liveness check, not a quality bar (see the module doc): fail
+    // only when retrieval *did* hand the model labelled notes and nothing cited
+    // one — a broken pipeline. When retrieval reached nothing there is no chat
+    // result to judge at all; that is `--example eval`'s finding, printed above as
+    // a retrieval reach of 0, and failing here would blame the wrong half.
+    let reached = scored
         .iter()
         .filter(|s| !s.unanswerable && s.retrieval_hit)
         .count();
-    let correct = scored.iter().filter(|s| s.cited_expected).count();
-    Ok(answerable_hits == 0 || correct > 0)
+    let correct = scored
+        .iter()
+        .filter(|s| !s.unanswerable && s.cited_expected)
+        .count();
+    Ok(reached == 0 || correct > 0)
 }
 
 /// Ask one question through the real flow ④ and score what came back.
@@ -209,7 +218,13 @@ fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored,
         citations: answer.citations.len(),
         cited_expected: answer.citations.iter().any(|c| q.expect.contains(&c.path)),
         hallucinated_markers,
-        refused: answer.answer.contains(NO_EVIDENCE_ANSWER),
+        // A refusal counts when the model said the sentence *and* cited nothing.
+        // Both halves earn their place: "I don't find that in your notes." followed
+        // by cited details is a confabulation wearing a refusal, which is what the
+        // negatives exist to catch — while demanding the sentence *alone* would be
+        // the opposite error, since real models pad it with a clause, and scoring
+        // those as failures would measure verbosity instead of grounding.
+        refused: answer.answer.contains(NO_EVIDENCE_ANSWER) && answer.citations.is_empty(),
         tokens,
         first_token_ms: first_token.unwrap_or(total_ms),
         total_ms,

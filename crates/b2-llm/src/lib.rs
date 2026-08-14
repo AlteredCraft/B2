@@ -8,7 +8,7 @@
 //!
 //! Decisions (GH #151, the spec of record; cut as GH #154):
 //! - **Build our own.** The MVP wire surface is *one* endpoint shape —
-//!   `POST {base}/v1/chat/completions` with `stream: true`, SSE frames until
+//!   `POST {base}/chat/completions` with `stream: true`, SSE frames until
 //!   `[DONE]` — so a client library would buy a dependency tree, not leverage.
 //!   Rig / genai / ollama-rs were evaluated and passed on; the question re-opens
 //!   *inside this crate*, behind the unchanged trait, when the phase-4 agent
@@ -67,7 +67,7 @@ pub const ENV_API_KEY: &str = "B2_LLM_API_KEY";
 /// Two named configurations, per the spec, are just two values of this type:
 /// **Local** (the default — a localhost endpoint, no key) and **Cloud models**
 /// (a provider endpoint + `api_key`, explicit opt-in only).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LlmConfig {
     /// The OpenAI-compatible base URL, e.g. `http://localhost:11434/v1`.
     /// A trailing slash is tolerated (see [`LlmConfig::endpoint`]).
@@ -77,6 +77,28 @@ pub struct LlmConfig {
     /// Bearer token for a cloud endpoint; `None` for a local runtime, which
     /// wants no auth (and where sending one would be noise).
     pub api_key: Option<String>,
+}
+
+/// Hand-written so the key **cannot** be logged. `Debug` is what an adapter
+/// reaches for when something is wrong — a `tracing` field, a panic message, an
+/// error report — and a derived one would put a live bearer token in whichever
+/// of those the user then pastes into an issue. Only its presence is ever
+/// printed, which is the part that helps diagnose "the cloud endpoint rejects
+/// me". The repo's logging policy in one impl (root `CLAUDE.md`).
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field(
+                "api_key",
+                &match self.api_key {
+                    Some(_) => "Some(<redacted>)",
+                    None => "None",
+                },
+            )
+            .finish()
+    }
 }
 
 impl Default for LlmConfig {
@@ -183,4 +205,31 @@ pub enum LlmError {
     /// headers said 200 — the wire quirk a hand-rolled client has to own.
     #[error("the model server failed mid-answer: {0}")]
     Provider(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_the_api_key() {
+        let config = LlmConfig {
+            base_url: "https://api.example.com/v1".into(),
+            model: "some-model".into(),
+            api_key: Some("sk-live-do-not-log-me".into()),
+        };
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains("sk-live-do-not-log-me"),
+            "a bearer token must never reach a log: {rendered}"
+        );
+        // Presence still shows: "is a key configured at all" is the question a
+        // rejected cloud call actually needs answered.
+        assert!(rendered.contains("redacted"), "{rendered}");
+        assert!(rendered.contains("api.example.com"), "{rendered}");
+        assert!(
+            format!("{:?}", LlmConfig::default()).contains("api_key: \"None\""),
+            "the local configuration says so plainly"
+        );
+    }
 }

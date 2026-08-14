@@ -11,7 +11,7 @@ use crate::sse;
 use crate::{LlmConfig, LlmError};
 use b2_core::llm::{ChatRequest, Completion, LlmProvider, Role};
 use serde::{Deserialize, Serialize};
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
@@ -40,6 +40,11 @@ const SEND_ATTEMPTS: usize = 2;
 /// structured message — enough to be diagnostic, bounded so a stray HTML error
 /// page can't become the log.
 const MAX_ERROR_BODY: usize = 500;
+
+/// The largest streamed answer this crate will read. Far past any real
+/// completion (a 16 MiB answer is not an answer), and small enough that a server
+/// sending bytes without end cannot exhaust memory — nothing else bounds it.
+const MAX_STREAM_BYTES: u64 = 16 * 1024 * 1024;
 
 /// B2's real chat provider: any OpenAI-compatible endpoint, streamed.
 ///
@@ -161,9 +166,10 @@ impl OpenAiCompatProvider {
         // a POST isn't one. But a request that never reached a server generated
         // nothing, so re-sending it is invisible — no double answer, no double
         // charge — and the alternative is a working setup that fails one call in
-        // a while for a reason the user can do nothing about. The window closes
-        // the moment a response exists: an error *inside* the stream is never
-        // retried, because tokens have already been delivered.
+        // a while for a reason the user can do nothing about. Which failures those
+        // are is [`worth_resending`]'s judgement, and the window closes the moment
+        // a response exists: an error *inside* the stream is never retried,
+        // because tokens have already been delivered.
         let mut attempt = 0;
         let response = loop {
             attempt += 1;
@@ -180,7 +186,9 @@ impl OpenAiCompatProvider {
             match result {
                 Ok(r) => break r,
                 Err(ureq::Error::Status(status, r)) => return Err(http_error(status, r)),
-                Err(ureq::Error::Transport(t)) if attempt < SEND_ATTEMPTS => {
+                Err(ureq::Error::Transport(t))
+                    if attempt < SEND_ATTEMPTS && worth_resending(&t) =>
+                {
                     tracing::debug!(
                         target: "b2::llm",
                         detail = %t,
@@ -190,7 +198,16 @@ impl OpenAiCompatProvider {
                 Err(ureq::Error::Transport(t)) => return Err(self.unreachable(&t)),
             }
         };
-        let completion = sse::stream_completion(BufReader::new(response.into_reader()), on_token)?;
+        // `take` is the only bound on the stream: `into_reader` applies none (unlike
+        // `into_string`), and the SSE reader grows a line until it meets a newline —
+        // so a broken or hostile endpoint sending an endless run of bytes would
+        // otherwise be free to exhaust memory. Hitting the cap reads as EOF, which
+        // this crate already has an honest ending for: the partial text, marked
+        // cancelled.
+        let completion = sse::stream_completion(
+            BufReader::new(response.into_reader()).take(MAX_STREAM_BYTES),
+            on_token,
+        )?;
         tracing::debug!(
             target: "b2::llm",
             chars = completion.text.len(),
@@ -242,6 +259,40 @@ impl LlmProvider for OpenAiCompatProvider {
     }
 }
 
+/// Is this transport failure one where re-sending the request is *invisible* —
+/// that is, one where the server cannot already be generating an answer?
+///
+/// Two families qualify, and nothing else does:
+///
+/// - **Never connected** (`Dns`, `ConnectionFailed`): no server saw anything.
+/// - **The connection was already dead** (`Io` over a closed/reset/broken
+///   socket): the pooled-connection case this retry exists for — measured, it
+///   arrives as `Io` + `ConnectionAborted`.
+///
+/// A **timeout** is the case that must *not* retry, and the reason this function
+/// isn't just "any transport error": a server that took the request and went
+/// quiet may be loading a model or already generating, so re-sending would ask
+/// for the same expensive work twice. `ureq` reports it in the same `Io` kind as
+/// a dead socket, so the underlying `io::ErrorKind` is what separates them.
+fn worth_resending(t: &ureq::Transport) -> bool {
+    match t.kind() {
+        ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed => true,
+        ureq::ErrorKind::Io => matches!(
+            std::error::Error::source(t)
+                .and_then(|s| s.downcast_ref::<std::io::Error>())
+                .map(|e| e.kind()),
+            Some(
+                std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        ),
+        _ => false,
+    }
+}
+
 /// Does the server's model list name this model? Lenient on purpose, in the one
 /// direction that matters: Ollama accepts `llama3.2` and *lists*
 /// `llama3.2:latest`, so an exact comparison would refuse the single most common
@@ -250,8 +301,11 @@ impl LlmProvider for OpenAiCompatProvider {
 /// un-pulled model is still caught.
 fn model_listed(model: &str, available: &[String]) -> bool {
     fn normalize(s: &str) -> String {
-        let s = s.trim();
-        s.strip_suffix(":latest").unwrap_or(s).to_lowercase()
+        // Lowercase *before* stripping: a server that lists `Llama3.2:LATEST`
+        // must normalize to the same thing `llama3.2` does, or the check would
+        // invent the mistake it exists to catch.
+        let s = s.trim().to_lowercase();
+        s.strip_suffix(":latest").unwrap_or(&s).to_string()
     }
     let want = normalize(model);
     available.iter().any(|a| normalize(a) == want)
@@ -369,6 +423,13 @@ mod tests {
         assert!(model_listed("llama3.2:latest", &available));
         assert!(model_listed("Llama3.2", &available));
         assert!(model_listed("qwen3:8b", &available));
+        // The tag is case-insensitive too: normalizing has to lowercase before it
+        // strips, or a server that shouts its tag looks like a missing model.
+        assert!(model_listed(
+            "llama3.2",
+            &["Llama3.2:LATEST".to_string(), "QWEN3:8B".to_string()]
+        ));
+        assert!(model_listed("qwen3:8b", &["QWEN3:8B".to_string()]));
     }
 
     #[test]

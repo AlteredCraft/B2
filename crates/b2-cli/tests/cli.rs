@@ -1501,15 +1501,9 @@ fn chat_ends_on_end_of_input() {
     );
 }
 
-/// Chat with no model server is one actionable sentence naming the endpoint that
-/// was actually tried (E4) — not a stack of transport internals, and not advice
-/// about a port the user never configured. The detail stays behind `B2_DEBUG`.
-#[test]
-fn ask_without_a_model_server_says_so_and_names_the_endpoint() {
-    let (_g, root) = reindexed();
-
-    // Port 9 (discard) is reserved and never served: a refused connection, at once.
-    let out = Command::new(env!("CARGO_BIN_EXE_b2"))
+/// Ask against an endpoint nothing is serving, from the `--llm-url` flag.
+fn ask_dead_endpoint(root: &Path, url: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_b2"))
         .env("B2_EMBEDDER", "fake")
         .env_remove("B2_LLM")
         .args([
@@ -1518,10 +1512,21 @@ fn ask_without_a_model_server_says_so_and_names_the_endpoint() {
             "ask",
             "what is memory?",
             "--llm-url",
-            "http://127.0.0.1:9/v1",
+            url,
         ])
         .output()
-        .expect("b2 binary runs");
+        .expect("b2 binary runs")
+}
+
+/// Chat with no model server is one actionable sentence naming the endpoint that
+/// was actually tried (E4) — not a stack of transport internals, and not advice
+/// about a program the user isn't running. The detail stays behind `B2_DEBUG`.
+#[test]
+fn ask_without_a_model_server_says_so_and_names_the_endpoint() {
+    let (_g, root) = reindexed();
+
+    // Port 9 (discard) is reserved and never served: a refused connection, at once.
+    let out = ask_dead_endpoint(&root, "http://127.0.0.1:9/v1");
     assert!(!out.status.success(), "a stopped server is an error");
     let err = stderr(&out);
     assert!(
@@ -1529,14 +1534,40 @@ fn ask_without_a_model_server_says_so_and_names_the_endpoint() {
         "{err}"
     );
     assert!(
-        err.contains("ollama serve"),
-        "the fix is in the message: {err}"
+        err.contains("--llm-url"),
+        "the fix names the knob that sets the endpoint: {err}"
+    );
+    // Nothing about this endpoint is Ollama, and `--llm-url` also points at LM
+    // Studio, llama.cpp, vLLM and cloud providers — so `ollama serve` here would
+    // be instructions for a program that isn't in the picture.
+    assert!(
+        !err.to_lowercase().contains("ollama"),
+        "advice about the wrong program: {err}"
     );
     assert!(
         !err.contains("os error"),
         "no transport internals without B2_DEBUG: {err}"
     );
     assert!(stdout(&out).is_empty(), "nothing was answered");
+}
+
+/// …and when the endpoint *is* Ollama's, the message says so — there the daemon
+/// really is the thing to start (the E4 sentence of GH #154).
+#[test]
+fn an_unreachable_ollama_endpoint_names_ollamas_own_fix() {
+    let (_g, root) = reindexed();
+
+    // A name that cannot resolve (RFC 2606 reserves `.invalid`) on Ollama's port:
+    // the failure is immediate, and no Ollama a developer happens to be running
+    // can answer it instead.
+    let out = ask_dead_endpoint(&root, "http://nothing.invalid:11434/v1");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("is Ollama running?"), "{err}");
+    assert!(
+        err.contains("ollama serve"),
+        "the fix is in the message: {err}"
+    );
 }
 
 /// The `B2_VAULT_PATH` precedence rule, applied to the chat config: an explicit
