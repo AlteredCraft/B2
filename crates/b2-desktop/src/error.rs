@@ -164,7 +164,9 @@ pub fn user_message(err: &CmdError) -> String {
         // A failed *answer* call (GH #154/#155). The seam collapses the wire's typed
         // failure to a message on the way through `b2-core` (by design — the core stays
         // free of `b2-llm`'s types), so what's left to say is the CLI's own sentence for
-        // this case, verbatim: the two adapters phrase a dead model server identically.
+        // this case, minus its `(ollama list)` hint: a terminal command is no help to
+        // someone in a window, and Settings → Chat is where this adapter shows the same
+        // thing — the installed models, from the daemon itself.
         CmdError::Core(b2_core::Error::Llm(_)) => {
             "The model server couldn't answer. Check that it's running and that the model is installed, then try again."
                 .to_string()

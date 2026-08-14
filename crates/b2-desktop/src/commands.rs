@@ -683,9 +683,22 @@ pub fn set_chat_config(
 }
 
 /// The testable core of `set_chat_config`: normalize the three fields into
-/// [`ChatPrefs`] and install them. Blank is "unset" (the `LlmConfig::from_env`
-/// rule — an emptied field returns to the environment/default rather than
-/// configuring an unusable endpoint), and an absent key keeps the session's.
+/// [`ChatPrefs`] and install them. Blank is "unset" for the endpoint and the model
+/// (the `LlmConfig::from_env` rule — an emptied field returns to the
+/// environment/default rather than configuring an unusable endpoint).
+///
+/// **The key is three-state, and has to be.** The Settings field paints empty even
+/// when a key is set (a password field that echoes its secret back is a worse
+/// idea), so "I didn't touch it" and "I cleared it" would otherwise be the same
+/// input — and collapsing them either signs the user out on every save, or makes
+/// the key impossible to remove. The second is what shipped, and it has a privacy
+/// edge beyond the annoyance: with the key un-removable, repointing `base_url` at
+/// a different provider would send the *first* provider's bearer token to the
+/// second. So: **absent keeps** (re-saving the endpoint must not sign you out),
+/// **blank clears** (the UI's Remove button, the only way back to a keyless
+/// configuration), a value sets. Clearing drops the *session* key; a
+/// `B2_LLM_API_KEY` in the environment is the user's own configuration and is
+/// still what an unset key resolves to.
 fn set_chat_config_impl(
     state: &AppState,
     base_url: Option<String>,
@@ -696,10 +709,14 @@ fn set_chat_config_impl(
         v.map(|s| s.trim().to_string())
             .filter(|s: &String| !s.is_empty())
     };
+    let api_key = match api_key {
+        None => state.chat_prefs().api_key,
+        Some(typed) => clean(Some(typed)),
+    };
     let prefs = ChatPrefs {
         base_url: clean(base_url),
         model: clean(model),
-        api_key: clean(api_key).or_else(|| state.chat_prefs().api_key),
+        api_key,
     };
     state.set_chat_prefs(prefs.clone());
     prefs
@@ -1834,6 +1851,33 @@ mod tests {
         let config = state.chat_prefs().config();
         assert_eq!(config.api_key.as_deref(), Some("sk-session-only"));
         assert_eq!(config.model, b2_llm::LlmConfig::from_env().model);
+    }
+
+    /// The key's third state, and the reason it has one: **blank clears**. Without
+    /// it a key set once could never be removed through Settings — and repointing
+    /// the endpoint would then send the first provider's bearer token to the
+    /// second, which is the privacy failure, not just the annoyance.
+    #[test]
+    fn a_blanked_key_clears_the_session_key() {
+        let state = AppState::new(None);
+        set_chat_config_impl(&state, None, None, Some("sk-session-only".into()));
+        assert_eq!(
+            state.chat_prefs().api_key.as_deref(),
+            Some("sk-session-only")
+        );
+
+        // Absent: untouched, so the key stands.
+        set_chat_config_impl(&state, None, None, None);
+        assert_eq!(
+            state.chat_prefs().api_key.as_deref(),
+            Some("sk-session-only")
+        );
+
+        // Blank (what the UI's Remove sends): gone. `config()` then resolves the key
+        // from the environment alone — `B2_LLM_API_KEY` is the user's own
+        // configuration, and Settings never had the standing to clear that.
+        set_chat_config_impl(&state, None, None, Some("   ".into()));
+        assert_eq!(state.chat_prefs().api_key, None);
     }
 
     /// The status the setup card renders never carries the key — only that one is set.

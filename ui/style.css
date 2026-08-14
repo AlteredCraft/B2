@@ -3068,7 +3068,6 @@ button.move-dest:hover {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  width: 100%;
   text-align: left;
   background: none;
   border: 1px solid transparent;

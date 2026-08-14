@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 /// plus the session-only key. `None` means "whatever the environment and the
 /// defaults say" — so a user who has never opened the section is exactly the CLI
 /// with no flags, and clearing a field returns to that rather than to `""`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatPrefs {
     /// The OpenAI-compatible base URL the user typed, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,6 +49,30 @@ pub struct ChatPrefs {
     /// able to put one *back*. The module header says why.
     #[serde(skip)]
     pub api_key: Option<String>,
+}
+
+/// Hand-written for `LlmConfig`'s reason, applied to the type that actually holds
+/// the session key: **a secret that is never written to disk must not reach a log
+/// line either.** `#[serde(skip)]` above closes the disk path and says nothing
+/// about formatting — and `Debug` is what an adapter reaches for when something is
+/// wrong (a `tracing` field, a panic message, a `dbg!`), which in this host means
+/// stderr and, under `B2_LOG_FILE`, a JSONL file the user may well paste into an
+/// issue. Only the key's *presence* prints, which is the part that helps diagnose
+/// "the cloud endpoint rejects me".
+impl std::fmt::Debug for ChatPrefs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatPrefs")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field(
+                "api_key",
+                &match self.api_key {
+                    Some(_) => "Some(<redacted>)",
+                    None => "None",
+                },
+            )
+            .finish()
+    }
 }
 
 impl ChatPrefs {
@@ -169,6 +193,32 @@ mod tests {
         assert_eq!(
             back.api_key, None,
             "the key is session-only, by construction"
+        );
+    }
+
+    /// The disk guarantee above has a sibling the derive would have broken:
+    /// `Debug` is how a secret reaches a *log*, and this host's log can be a file
+    /// (`B2_LOG_FILE`). `LlmConfig` hand-writes its own impl for exactly this, and
+    /// the type holding the session key owes the same.
+    #[test]
+    fn debug_never_prints_the_api_key() {
+        let prefs = ChatPrefs {
+            base_url: Some("https://api.example.com/v1".into()),
+            model: Some("some-model".into()),
+            api_key: Some("sk-live-do-not-log-me".into()),
+        };
+        let rendered = format!("{prefs:?}");
+        assert!(
+            !rendered.contains("sk-live-do-not-log-me"),
+            "a bearer token must never reach a log: {rendered}"
+        );
+        assert!(rendered.contains("redacted"), "{rendered}");
+        // Presence still shows — "is a key configured at all" is the question a
+        // rejected cloud call actually needs answered.
+        assert!(rendered.contains("api.example.com"), "{rendered}");
+        assert!(
+            format!("{:?}", ChatPrefs::default()).contains("api_key: \"None\""),
+            "a keyless configuration says so plainly"
         );
     }
 

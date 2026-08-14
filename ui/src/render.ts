@@ -1552,6 +1552,17 @@ function chatPanelHtml(state: AppState): string {
         <input id="settings-chat-key" type="password" autocomplete="off" spellcheck="false"
           placeholder="${setup?.has_api_key ? "•••••••• (set for this session)" : "sk-…"}" />
       </label>
+      ${
+        // The field paints empty whether or not a key is set, so an empty save means
+        // "keep" — which leaves this button as the only way back to a keyless
+        // configuration. Without it a key could never be removed, and repointing the
+        // endpoint would send the old provider's token to the new one.
+        setup?.has_api_key
+          ? `<div class="settings-action"><button class="btn small" id="settings-chat-clear-key" data-chat-clear-key
+               title="Forget the key B2 is holding for this session">Remove key</button>
+             <span class="muted">A key set in <code>B2_LLM_API_KEY</code> is your environment's, and stays.</span></div>`
+          : ""
+      }
       <p class="settings-note">
         <strong>Cloud models send your question and the retrieved note passages to the
         configured provider.</strong> Nothing else leaves your machine, and B2 still writes

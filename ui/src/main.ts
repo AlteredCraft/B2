@@ -175,10 +175,36 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id) return null;
   const id = active.id;
+  // What the human has *typed* into the control the keyboard is in, if it is a field.
+  // A modal's fields are painted from state (`value="…"`), so a repaint the user didn't
+  // cause — Settings → Chat's probe landing seconds after the dialog opened — otherwise
+  // discards the endpoint they were half-way through typing. This is `captureChatInput`'s
+  // rule for the overlay layer, and deliberately narrower than "restore every field":
+  // only the focused one is carried, so a repaint that is *meant* to rewrite a field the
+  // user is not in (picking an installed model rewrites the model field) still does.
+  const typed =
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      ? { value: active.value, start: active.selectionStart, end: active.selectionEnd }
+      : null;
   return () => {
     const stops = overlayFocusables();
     const back = document.getElementById(id);
-    (back && stops.includes(back) ? back : stops[0])?.focus();
+    const target = back && stops.includes(back) ? back : stops[0];
+    if (
+      typed &&
+      target === back &&
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+    ) {
+      target.value = typed.value;
+      // `selectionStart` is null on an input type that doesn't support selection
+      // (`type="number"`, and some engines for `type="password"`); fall back to the end
+      // of the text rather than throwing on the way to restoring focus.
+      target.setSelectionRange?.(
+        typed.start ?? typed.value.length,
+        typed.end ?? typed.value.length,
+      );
+    }
+    target?.focus();
   };
 }
 
@@ -1787,9 +1813,13 @@ function toggleChat(): void {
     return;
   }
   state.chatOpen = true;
-  // Chat and search both own the whole column, one at a time (chat.ts's header) — and
-  // `clearSearch` is also this branch's repaint, since it renders on its way out.
+  // Chat and search both own the whole column, one at a time (chat.ts's header).
   clearSearch();
+  // Explicitly, rather than leaning on `clearSearch`'s own repaint: `focusChatInput`
+  // needs the composer to exist, and a paint that happens only as somebody else's side
+  // effect is one refactor away from not happening. The panes are memoized, so a second
+  // render over identical HTML costs nothing.
+  render();
   focusChatInput();
   void refreshChatSetup();
 }
@@ -1943,6 +1973,9 @@ async function saveChatConfig(): Promise<void> {
   };
   const url = value("settings-chat-url");
   const model = value("settings-chat-model");
+  // An empty key field is `null` — *keep* — not `""`: the field paints empty even when a
+  // key is set, so "I didn't retype my key" must never read as "sign me out". Removing a
+  // key is `clearChatKey`'s explicit button.
   const key = value("settings-chat-key");
   try {
     state.chatSetup = await api.setChatConfig(url, model, key);
@@ -1962,10 +1995,43 @@ async function saveChatConfig(): Promise<void> {
  *  A one-click fix for the commonest local mistake — the daemon is up, the model name is
  *  just not one it has. */
 async function useChatModel(model: string): Promise<void> {
+  // The endpoint rides along explicitly. `null` means *unset* to the host — it is how
+  // an emptied field returns to the environment's value — so sending it here would
+  // quietly reset a configured endpoint back to the default as a side effect of picking
+  // a model off the card. The key is `null` in the other sense: untouched, so kept.
+  await applyChatConfig(state.chatSetup?.base_url ?? null, model, null, `Chat model set to ${model}.`);
+}
+
+/**
+ * Forget the session's API key — the only way back to a keyless configuration, since the
+ * field paints empty whether or not one is set (a password field that echoed its secret
+ * back would be a worse idea than not having this button).
+ *
+ * Sends `""`, which is the host's *clear* signal, as distinct from `null`'s *keep*. What
+ * it clears is the key B2 is holding for this session; a `B2_LLM_API_KEY` in the
+ * environment is the user's own configuration and outlives it — the copy says so.
+ */
+async function clearChatKey(): Promise<void> {
+  await applyChatConfig(
+    state.chatSetup?.base_url ?? null,
+    state.chatSetup?.model ?? null,
+    "",
+    "API key removed for this session.",
+  );
+}
+
+/** Save a chat configuration, re-probe, and say what happened — the shared tail of every
+ *  path that changes it (Save, the card's model picker, Remove key). */
+async function applyChatConfig(
+  baseUrl: string | null,
+  model: string | null,
+  apiKey: string | null,
+  ok: string,
+): Promise<void> {
   try {
-    state.chatSetup = await api.setChatConfig(null, model, null);
+    state.chatSetup = await api.setChatConfig(baseUrl, model, apiKey);
     state.chatCloud = state.chatSetup.cloud;
-    flash(`Chat model set to ${model}.`);
+    flash(ok);
   } catch (e) {
     flash(errText(e));
   }
@@ -3934,6 +4000,10 @@ function wireEvents(): void {
         void useChatModel(useModel.dataset.chatUseModel ?? "");
         return;
       }
+      if (target.closest("[data-chat-clear-key]")) {
+        void clearChatKey();
+        return;
+      }
       // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
       // in here because this branch returns unconditionally — a click inside the dialog
       // never reaches the shell's handlers below. The dialog deliberately stays open: the
@@ -4738,8 +4808,13 @@ function wireEvents(): void {
       // cancellation gesture — the partial text stands and is marked stopped), and only a
       // second Esc closes the pane. Stopping and closing on one keystroke would make the
       // stop invisible, which is the opposite of rendering a cancelled turn honestly.
-      if (stopChatAnswer()) return;
+      //
+      // Both halves are gated on the pane being *open*, because `closeChat` cancels but
+      // `chatStreaming` stays set until the turn resolves a tick later: in that window an
+      // Esc aimed at the graph would otherwise be swallowed by a surface that is no longer
+      // on screen, with nothing visible to show for it.
       if (state.chatOpen) {
+        if (stopChatAnswer()) return;
         closeChat();
         return;
       }

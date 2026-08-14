@@ -493,8 +493,9 @@ check("a streaming answer paints as escaped text under the id tokens land in", (
   );
   assert(html.includes('id="chat-stream"'), "the stream has the id main.ts writes into");
   assert(!html.includes("<script>"), "and the partial text is escaped, never parsed");
-  // The composer is disabled while an answer is arriving, and Stop replaces Ask — Esc's
-  // equal for the mouse.
+  // Stop replaces Ask while an answer is arriving — Esc's equal for the mouse. The
+  // composer itself stays *enabled* on purpose (render.ts says why: disabling a focused
+  // control drops the keyboard to `<body>`), so this asserts only what changes.
   assert(html.includes("data-chat-stop"), "Stop is on screen while streaming");
 });
 

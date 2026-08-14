@@ -51,8 +51,8 @@ pub fn is_ollama(base_url: &str) -> bool {
 /// M5)? Anything else is **Cloud models**: note passages leave the machine, which
 /// is why the desktop shows the privacy copy beside exactly this answer.
 ///
-/// Host-only, and permissive about *how* localhost is spelled (`localhost`,
-/// `127.x`, `[::1]`), because the consequence of guessing "cloud" for a local URL
+/// Host-only, and permissive about *how* loopback is spelled (`localhost`,
+/// `127.0.0.0/8`, `[::1]`), because the consequence of guessing "cloud" for a local URL
 /// is a privacy warning the user doesn't need — while guessing "local" for a
 /// remote one would hide a warning they do. So the test is a **membership** one:
 /// only the known loopback spellings count as local.
@@ -62,8 +62,18 @@ pub fn is_local(base_url: &str) -> bool {
         || host == "::1"
         || host == "[::1]"
         || host == "0.0.0.0"
-        || host.starts_with("127.")
+        || is_loopback_v4(&host)
         || host.ends_with(".localhost")
+}
+
+/// `127.0.0.0/8`, spelled as a dotted quad — and **nothing that merely begins
+/// with `127.`**, because a registrable DNS name may (`127.notes.example.com`
+/// resolves to wherever its owner points it). Parsing rather than prefix-matching
+/// is the membership test [`is_local`] promises: the one direction that must
+/// never happen is a remote host reading as local, which is exactly what the
+/// prefix let through.
+fn is_loopback_v4(host: &str) -> bool {
+    matches!(host.parse::<std::net::Ipv4Addr>(), Ok(ip) if ip.is_loopback())
 }
 
 /// The host portion of a URL, lowercased and without scheme, port, path or
@@ -385,7 +395,17 @@ fn installed_models(root: &str) -> Result<Vec<OllamaModel>, ()> {
     let parsed: TagsResponse = serde_json::from_str(&body).map_err(|e| {
         tracing::debug!(target: "b2::llm", error = %e, url, "unparseable model inventory");
     })?;
-    Ok(parsed
+    Ok(models_from(parsed))
+}
+
+/// Ollama's inventory shape, narrowed to the three fields the card shows. Split
+/// from the HTTP call because it is the only real *parsing* in this module, and a
+/// parse that can only be exercised through a live daemon is a parse nobody tests:
+/// a nameless entry (which the daemon has been known to return for a partial pull)
+/// is dropped rather than painted as a blank row, and an entry with no `details`
+/// keeps its name instead of being lost with it.
+fn models_from(parsed: TagsResponse) -> Vec<OllamaModel> {
+    parsed
         .models
         .into_iter()
         .filter(|m| !m.name.is_empty())
@@ -394,7 +414,7 @@ fn installed_models(root: &str) -> Result<Vec<OllamaModel>, ()> {
             size: m.size,
             parameters: m.details.and_then(|d| d.parameter_size),
         })
-        .collect())
+        .collect()
 }
 
 /// Total system memory in whole GB, or `None` where the platform can't be asked.
@@ -404,8 +424,16 @@ fn installed_models(root: &str) -> Result<Vec<OllamaModel>, ()> {
 /// it feeds is a *non-binding suggestion*, so `None` costs the card its
 /// highlighted row and nothing else.
 pub fn system_ram_gb() -> Option<u64> {
-    system_ram_bytes().map(|b| b / 1_073_741_824)
+    // Rounded, not truncated. The tiers are floors, and a machine sold as "16 GB"
+    // does not always report 16 GiB of usable memory — Linux's `MemTotal` excludes
+    // what the firmware reserved, so it reads ~15.6, and truncation would drop such
+    // a machine a whole rung. Rounding puts it on the rung it was sold as.
+    system_ram_bytes().map(|b| (b + GIB / 2) / GIB)
 }
+
+/// One gibibyte — what "GB" means everywhere in this module (and what `hw.memsize`
+/// and `MemTotal` both report in).
+const GIB: u64 = 1_073_741_824;
 
 #[cfg(target_os = "macos")]
 fn system_ram_bytes() -> Option<u64> {
@@ -466,9 +494,13 @@ mod tests {
         for cloud in [
             "https://api.openai.com/v1",
             "https://api.anthropic.com/v1",
-            // The failure that matters: a host merely *containing* "localhost"
-            // must read as cloud, or the privacy copy hides on a remote endpoint.
+            // The failures that matter, both of the same shape: a host that merely
+            // *looks* loopback must read as cloud, or the privacy copy hides on a
+            // remote endpoint. `127.notes.example.com` is a perfectly registrable
+            // name, and a `starts_with("127.")` test took it for the loopback range.
             "https://localhost.evil.example.com/v1",
+            "https://127.notes.example.com/v1",
+            "https://127.0.0.1.example.com/v1",
             "http://192.168.1.9:11434/v1",
         ] {
             assert!(!is_local(cloud), "{cloud} leaves this machine");
@@ -505,6 +537,38 @@ mod tests {
 
     /// The setup view is what crosses to a webview, so the one thing it must
     /// never carry is the bearer token — only whether there is one.
+    /// The only real parsing in this module, and the reason `models_from` is split
+    /// out of the HTTP call: a nameless entry is dropped rather than painted as a
+    /// blank row, and an entry with no `details` keeps its name instead of going
+    /// with it.
+    #[test]
+    fn the_inventory_reads_ollamas_own_shape() {
+        let body = r#"{"models":[
+            {"name":"llama3.2:latest","size":2019393189,"details":{"parameter_size":"3.2B"}},
+            {"name":"bare:latest","size":10},
+            {"name":"","size":0}
+        ]}"#;
+        let models = models_from(serde_json::from_str(body).unwrap());
+        assert_eq!(
+            models,
+            vec![
+                OllamaModel {
+                    name: "llama3.2:latest".into(),
+                    size: 2_019_393_189,
+                    parameters: Some("3.2B".into()),
+                },
+                OllamaModel {
+                    name: "bare:latest".into(),
+                    size: 10,
+                    parameters: None,
+                },
+            ]
+        );
+        // A body with no `models` key at all is an empty inventory, not a failure:
+        // "the daemon answered and has nothing" is a card B2 draws.
+        assert!(models_from(serde_json::from_str("{}").unwrap()).is_empty());
+    }
+
     #[test]
     fn the_setup_view_reports_a_key_without_carrying_it() {
         let config = LlmConfig {
