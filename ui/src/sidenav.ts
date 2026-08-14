@@ -27,6 +27,11 @@
 // "previous row" in both, and rebinding one leaves the other alone.
 
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
+// A *value* import, and the one dependency this module has on a sibling: chat is the
+// right column's third mode (GH #155), so its rows are emitted here alongside search's
+// and discovery's. chat.ts imports only the `SideRow` *type* back, which erases — so the
+// two modules read as a pair without a runtime cycle.
+import { type ChatMessage, chatRows } from "./chat.ts";
 import type { SideSection } from "./state";
 import type { NeighborView, NoteView, SearchResult, SimilarView, UnresolvedLink } from "./types";
 
@@ -60,6 +65,16 @@ export interface SideRow {
 /** The slice of `AppState` the row list is derived from (so `sideRows(state)` just works,
  *  and a test can build one by hand). Mirrors the paint's inputs exactly. */
 export interface SideNavState {
+  /** The right column is showing the chat pane (GH #155) — its third mode, and the one
+   *  that wins: chat and search both own the whole column, and opening either closes the
+   *  other (main.ts), so a single flag decides which list this is. */
+  chatOpen: boolean;
+  /** The conversation, when chat is open — session-only (S4), held in `AppState`. */
+  chatMessages: readonly ChatMessage[];
+  /** The answer streaming right now, or null between turns — carried in `AppState`'s own
+   *  shape (the text, not a flag) so this slice stays a literal mirror of the paint's
+   *  inputs; all the row list needs of it is whether there is one. */
+  chatStreaming: string | null;
   searchQuery: string;
   searchResults: readonly SearchResult[];
   /** A search in flight: the pane paints "Searching…", so the *previous* query's
@@ -93,14 +108,16 @@ export function cardRowKey(group: string, index: number, id: string): string {
 }
 
 /**
- * Every row the side pane currently paints, in paint order: in search mode the flat list
- * of results; in discovery each section's head followed by its cards (only while the
- * section is expanded), the Connections section carrying its unresolved links last.
+ * Every row the side pane currently paints, in paint order: in chat mode the transcript
+ * (chat.ts, which emits these same rows); in search mode the flat list of results; in
+ * discovery each section's head followed by its cards (only while the section is
+ * expanded), the Connections section carrying its unresolved links last.
  *
  * Mirrors render.ts's branch order exactly, including the states that paint *no* rows —
  * no note open, a search still running, a section with nothing in it.
  */
 export function sideRows(s: SideNavState): SideRow[] {
+  if (s.chatOpen) return chatRows(s.chatMessages, s.chatStreaming !== null);
   if (s.searchQuery) {
     if (s.loading) return [];
     return s.searchResults.map((r, i) => ({
@@ -239,10 +256,17 @@ export function sideArrowMove(
     case "side.row.in": {
       if (from < 0) return at(0);
       const row = rows[from];
-      if (row.fold === null) return null;
-      if (!row.expanded) return { kind: "expand", key: row.key, fold: row.fold };
+      if (row.fold !== null && !row.expanded)
+        return { kind: "expand", key: row.key, fold: row.fold };
       // Open: the next row *is* the first child, when there is one (`sideRows` emits it
-      // inline). A card never has one — its body is content, so → is spent.
+      // inline). A card never has one — its body is content, so → is spent there.
+      //
+      // Reached for an **unfoldable** row too, which is the ARIA pattern's own rule
+      // rather than a special case: "nothing to fold" and "no children" are different
+      // facts, and only the second one stops →. Discovery has no such row (a search
+      // result and a broken link are both childless, so this still returns null for
+      // them); chat's turns are exactly it — nothing folds in a conversation, but an
+      // answer's citations are rows underneath it (chat.ts).
       return row.hasChildRows && from < last && rows[from + 1].depth > row.depth
         ? at(from + 1)
         : null;

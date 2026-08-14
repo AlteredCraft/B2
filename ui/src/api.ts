@@ -8,6 +8,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AddReport,
+  AnswerView,
+  ChatSetup,
+  ChatTurn,
   DeleteReport,
   DirCreateReport,
   DirDeleteReport,
@@ -260,6 +263,57 @@ export const api = {
 
   /** Ask the in-flight embed to stop at its next batch boundary (cooperative). */
   cancelReindex: (): Promise<void> => invoke("cancel_reindex"),
+
+  /**
+   * **Flow ④ — one grounded answer** (GH #151/#153/#155): condense → retrieve → assemble
+   * → stream → cite, behind `Vault::ask`. `onToken` fires per token over a typed Tauri
+   * `Channel` (the `embed` progress precedent) and the Promise resolves with the resolved
+   * [`AnswerView`] — the same two facts `b2 ask --json` emits as a JSONL event stream.
+   *
+   * `history` is the caller's and session-only (S4): the pane holds the conversation and
+   * hands it back each turn. Nothing about a chat is stored anywhere.
+   */
+  ask: (
+    question: string,
+    history: ChatTurn[],
+    onToken: (text: string) => void,
+  ): Promise<AnswerView> => {
+    const channel = new Channel<string>();
+    channel.onmessage = onToken;
+    return invoke("ask", { question, history, onEvent: channel });
+  },
+
+  /**
+   * Stop the streaming answer at its next token — the pane's Esc. Cooperative: the
+   * in-flight `ask` resolves normally, with `cancelled` set and the partial text intact,
+   * so a stopped answer renders honestly rather than as a failure.
+   */
+  cancelAsk: (): Promise<void> => invoke("cancel_ask"),
+
+  /**
+   * What the chat surface needs before a question is asked: the endpoint and model in
+   * force, whether that is the **Local** or the **Cloud models** configuration, and — for
+   * an Ollama endpoint — the native inventory behind the setup card (is the daemon up,
+   * what is installed, what to pull on a machine this size).
+   *
+   * Never rejects: "the daemon isn't running" is the answer the card is asking for.
+   */
+  chatSetup: (): Promise<ChatSetup> => invoke("chat_setup"),
+
+  /**
+   * Save the chat configuration and re-probe it. Adapter state, never vault or index
+   * state — a chat model swap costs no reindex (contrast M2).
+   *
+   * `apiKey` is **session-only** host-side: it is held in memory for the run and never
+   * written to disk (`b2-desktop/src/chat.rs` says why), and it never comes back — the
+   * returned setup carries `has_api_key`, not the key. Passing `null` keeps whatever is
+   * already in force, so re-saving the endpoint can't silently sign you out.
+   */
+  setChatConfig: (
+    baseUrl: string | null,
+    model: string | null,
+    apiKey: string | null,
+  ): Promise<ChatSetup> => invoke("set_chat_config", { baseUrl, model, apiKey }),
 
   /** The embedding models B2 offers, flagged current + installed (Settings picker). */
   listModels: (): Promise<ModelChoice[]> => invoke("list_models"),

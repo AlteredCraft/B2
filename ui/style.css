@@ -2939,3 +2939,251 @@ button.move-dest:hover {
   fill: var(--accent);
   opacity: 0.9;
 }
+
+/* --- chat (flow ④, GH #155) ------------------------------------------------------
+   The right column's third mode. Three regions in a column that fills the pane: the
+   head, a scrolling transcript, and a composer pinned to the bottom — so the question
+   field stays put while answers accumulate above it.
+
+   `.side-pane` scrolls itself for discovery and search; chat takes that over (the log
+   is the scroller) so the composer can be pinned. Hence the `:has()` override rather
+   than a second pane class: the pane's mode is already visible in its content. */
+.side-pane:has(.chat-composer),
+.side-pane:has(.chat-setup) {
+  overflow-y: hidden;
+  padding-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-head {
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.chat-model {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+.chat-head .linklike {
+  flex: none;
+}
+
+.chat-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px -4px 10px;
+  padding: 0 4px;
+}
+.chat-intro p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* One turn. The question is a tinted block, the answer is plain prose on the pane —
+   the asymmetry is the point: an answer is a document you read, a question is a label
+   for it. */
+.chat-turn {
+  border-radius: var(--radius);
+}
+.chat-question {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+}
+.chat-answer {
+  padding: 2px 0;
+}
+.chat-role {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.chat-text {
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+/* The answer is rendered Markdown (through the sanitizing seam), so it can carry the
+   same blocks a note can — kept to the column's scale rather than the reading view's. */
+.chat-text > :first-child {
+  margin-top: 0;
+}
+.chat-text > :last-child {
+  margin-bottom: 0;
+}
+.chat-text p {
+  margin: 0 0 8px;
+}
+.chat-text pre {
+  overflow-x: auto;
+  font-size: 12px;
+}
+/* An answer still arriving: the text is written in as `textContent`, so it needs the
+   same wrapping as rendered prose plus a cue that it isn't finished. */
+.chat-live .chat-text {
+  white-space: pre-wrap;
+}
+.chat-live .chat-text::after {
+  content: "▌";
+  color: var(--accent);
+  animation: chat-caret 1s steps(2) infinite;
+}
+@keyframes chat-caret {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-live .chat-text::after {
+    animation: none;
+  }
+}
+.chat-stopped {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.chat-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* A citation: a row of its own under the answer, and a button — it opens the note
+   in-app (E5), and the mouse and ⏎ share that one path (K1). */
+.chat-cite {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  margin-left: 10px;
+  width: calc(100% - 10px);
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+.chat-cite:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.chat-cite-marker {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.chat-cite-path {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-cite-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.chat-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 48px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.chat-input:disabled {
+  opacity: 0.6;
+}
+.chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-note {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+/* The setup card — the pane's empty state, and the same block inside Settings → Chat. */
+.chat-setup {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chat-setup-head {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.chat-setup-message {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.chat-setup-block {
+  margin-top: 12px;
+}
+.chat-command code,
+.chat-tiers code {
+  font-family: ui-monospace, Menlo, monospace;
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+.chat-models {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.chat-tiers {
+  margin-top: 12px;
+  color: var(--muted);
+}
+.chat-tiers summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.chat-tiers ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.chat-setup-inline {
+  overflow: visible;
+}

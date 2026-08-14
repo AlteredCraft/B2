@@ -46,6 +46,11 @@ const hit = (path: string): SearchResult => ({ path, snippet: "" }) as SearchRes
 /** A note open, both sections populated, nothing folded — the everyday case. */
 function pane(over: Partial<SideNavState> = {}): SideNavState {
   return {
+    // Chat is the column's third mode and owns it outright when open (chat.test.ts
+    // covers its rows); everything here is the other two.
+    chatOpen: false,
+    chatMessages: [],
+    chatStreaming: null,
     searchQuery: "",
     searchResults: [],
     loading: false,
@@ -60,6 +65,20 @@ function pane(over: Partial<SideNavState> = {}): SideNavState {
 }
 
 const keys = (rows: readonly SideRow[]) => rows.map((r) => r.key).join("|");
+
+check("chat mode owns the column: its rows replace search's and discovery's", () => {
+  // The delegation itself — the transcript's shape is chat.test.ts's subject, but *that
+  // the pane switches wholesale* is this module's rule: one column, one list in it.
+  const rows = sideRows(
+    pane({
+      chatOpen: true,
+      chatMessages: [{ role: "user", text: "hi", citations: [], cancelled: false }],
+      searchQuery: "kivo",
+      searchResults: [hit("a.md")],
+    }),
+  );
+  equal(keys(rows), "chat:turn:0", "chat wins over a live search and over discovery");
+});
 
 // --- sideRows: the one order the paint and the arrows share ---------------------------
 

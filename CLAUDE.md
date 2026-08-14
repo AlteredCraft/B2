@@ -90,13 +90,17 @@ cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (ne
                                         # the real model, so it lives here rather than behind #[ignore])
 cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
-# Grounded chat (flow ④, GH #154) — needs a model server, so it is out of CI like the embedder.
+# Grounded chat (flow ④, GH #154/#155) — needs a model server, so it is out of CI like the embedder.
 # Any OpenAI-compatible endpoint works; Ollama is the guided default (`ollama serve` +
 # `ollama pull llama3.2`). `B2_LLM=fake` swaps in the deterministic FakeLlm — no server, no
 # network — which is what the CLI suite runs under.
 cargo run -p b2-cli -- ask "what did I write about X?"        # one-shot, streamed, cited
 cargo run -p b2-cli -- ask "…" --json                         # JSONL event stream: tokens, then AnswerView
 cargo run -p b2-cli -- chat                                   # interactive; Ctrl-C stops an answer, /exit leaves
+# The GUI's half of the same flow (GH #155): ⌘J opens the chat pane in the right column, Esc
+# stops a streaming answer, a citation opens its note in the centre pane, and Settings → Chat
+# (⌘,) is where the Local / Cloud models configuration and the Ollama setup card live. Nothing
+# extra to run — `just app` is the app, and `B2_LLM=fake` works there too.
 just eval-chat                          # = cargo run -p b2-llm --example groundedness — the chat seam's
                                         # quality eval (citation accuracy, refusal on the labelled
                                         # negatives, retrieval reach as its ceiling); appends each run to
@@ -210,8 +214,10 @@ carries a **cloud** endpoint's bearer token (env-only, deliberately: a key in a 
 and `B2_LLM=fake` is `B2_EMBEDDER=fake`'s sibling — the deterministic `FakeLlm`, no server, what the
 CLI suite runs under. `ask`/`chat`'s `--llm-url` / `--llm-model` beat the env, which beats the default
 (the `B2_VAULT_PATH` rule); resolution itself lives once in `b2_llm::LlmConfig::from_env`, so the
-desktop layers its settings over the same base. Chat config is **adapter-level, never vault or index
-state** — nothing about it is recorded, so a model swap costs no reindex (contrast M2).
+desktop layers its settings over the same base — Settings → Chat is that adapter's "flags", persisted
+beside the remembered vault in the app's data dir (GH #155), with the **key held for the session only**
+and never written down (`B2_LLM_API_KEY` is how one persists). Chat config is **adapter-level, never
+vault or index state** — nothing about it is recorded, so a model swap costs no reindex (contrast M2).
 `B2_LOG` turns on structured debug logging: **JSON Lines** (stdout stays pure data), one flat object
 per event — pipe into jq/DuckDB/pandas for reporting/plotting. Sink is stderr by default;
 `B2_LOG_FILE=<path>` writes there instead (append mode, so runs accumulate into one reportable
@@ -329,15 +335,24 @@ if/when one lands — `index-engine.md` §5.)*
   and a garbled frame (an error, so a protocol mismatch can't pass as a short answer). Ollama is the
   guided default; any compatible URL works, and a cloud one only by explicit configuration (M5).
   `probe` is `b2 init`'s posture for chat — one `GET /models` before a human waits, turning "the daemon
-  isn't running" and "that model isn't pulled" into sentences rather than a failed answer.
+  isn't running" and "that model isn't pulled" into sentences rather than a failed answer. `setup` is the
+  same question asked for a *card* instead of a command (GH #155): it never fails, and it is the one
+  deliberately **Ollama-native** corner in a crate that is otherwise generic `/v1` — the daemon's own
+  `GET /api/tags` for what is installed, plus a pull suggestion sized to the machine's memory
+  (illustrative, non-binding). That asymmetry is by design, per #151: guided setup is a per-runtime
+  feature, and Ollama is the runtime B2 guides — so it must not be "generalized" against an abstraction
+  that cannot serve it.
 - **`b2-cli`** — the `b2` binary. A *dumb* adapter over the façade: parse args, pick + inject the
   embedder and (for `ask`/`chat`) the chat provider, call `Vault`, print (human-readable, streamed for
   an answer, or `--json` for agents). Holds no engine logic.
 - **`b2-desktop`** — the Tauri host: the *second* dumb adapter, the GUI sibling of `b2-cli`. Each
   `#[tauri::command]` is deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view
   types as the IPC contract; it also owns host-only infrastructure (the async cancellable reindex task,
-  the fs-watch `vault-changed` pulse, the OS folder dialog, and the **declared menu bar** — `menu.rs`,
-  GH #119). Has its own `CLAUDE.md` with the
+  the fs-watch `vault-changed` pulse, the OS folder dialog, the **declared menu bar** — `menu.rs`,
+  GH #119 — and the streaming, cancellable `ask` that is its exact sibling for chat: tokens out on a
+  `Channel`, a cooperative cancel flag read at every token, and the chat provider injected the way the
+  embedder is, with the endpoint remembered beside the vault and the API key held only for the session
+  (`chat.rs`, GH #155). Has its own `CLAUDE.md` with the
   thin-adapter rules — read it before touching this crate.
 - **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
   toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Rendering a note is a
@@ -365,11 +380,17 @@ if/when one lands — `index-engine.md` §5.)*
   key, graph-node scene id, or a control's stable `id` for the other two; `captureModalFocus` by `id`
   for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
   and the Settings dialog (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
-  `ui/src/settingstabs.ts` — General / Index / Embedding / **Keyboard**, the last being the whole chord
-  table (`ui/src/shortcuts.ts`) that `?` jumps straight to, and *Index* being where the manual Reindex
+  `ui/src/settingstabs.ts` — General / Index / Embedding / **Chat** / **Keyboard**, the last being the
+  whole chord table (`ui/src/shortcuts.ts`) that `?` jumps straight to, *Chat* being where the chat
+  model lives (GH #155: the **Local** / **Cloud models** configurations, the privacy copy beside the
+  cloud one — the consent moment is the configuration moment, M5 — and the Ollama-native setup card), and *Index* being where the manual Reindex
   lives now that indexing is automatic (auto-index on open + the fs-watch pulse): the top bar keeps only
   the live progress meter, beside the vault name it is in reference to, since a run must stay watchable
-  and cancellable with the dialog shut. Chords themselves are declared once in
+  and cancellable with the dialog shut. The **chat pane** (⌘J, GH #155) is the right column's third mode,
+  beside discovery and search rather than in the centre: an answer's citations open their notes *in the
+  centre pane*, so the conversation never has to leave the screen to be checked. Its transcript is
+  `ui/src/chat.ts`, which emits `sidenav.ts`'s own rows — so the pane inherits that column's whole
+  keyboard walk and, load-bearing on a surface that repaints per token, its focus-restoration-by-row-key. Chords themselves are declared once in
   `ui/src/bindings.ts` — the keyboard registry — and the dispatcher, the editor's keymap and that
   sheet all derive from it, so none of the three can drift; `conflicts()` fails the suite on two
   commands sharing a keystroke in one scope, `ui/src/editorkeys.ts` checks B2's chords against
@@ -440,6 +461,11 @@ adapters wire the real model.
   Its CLI surfaces are `b2 ask` (one-shot) and `b2 chat` (interactive, history carried in the
   adapter's own `Vec<ChatTurn>` and nowhere else) — **every surface streams**, which is why `--json`
   is a JSONL *event* stream (token events, then the `AnswerView`) rather than one printed object.
+  The GUI's surface is the chat pane (GH #155), the same two facts over Tauri: tokens on a per-call
+  `Channel`, the `AnswerView` as the command's return, and the history held in the pane's own state
+  for the CLI's reason. Both adapters cancel the same way — Ctrl-C there, **Esc** here — and both
+  render what already arrived rather than discarding it, because `Completion` marks a cut stream
+  rather than failing it.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
   within *k* typed hops of an anchor (scoped traversal). `b2 similar`'s candidate generation is its
   *complement* (`discover::candidates` — nearest notes *not* already connected).

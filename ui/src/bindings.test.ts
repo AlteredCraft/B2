@@ -120,6 +120,10 @@ check("the chords that can't be rebound are exactly the platform's own reflexes"
       "find.input.next",
       "find.input.prev",
       "find.input.close",
+      // ⏎ in the chat composer (GH #155) — the same text-field reflex as the four above
+      // it, in the fourth field that has one. ⇧⏎ stays a newline because B2 never claims
+      // it, which is the other half of the promise.
+      "chat.send",
     ],
     "the fixed set",
   );

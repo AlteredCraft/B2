@@ -28,7 +28,7 @@
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 
 /** The id of a Settings section — the tab, its panel, and `state.settingsTab`. */
-export type SettingsTabId = "general" | "index" | "embedding" | "keyboard";
+export type SettingsTabId = "general" | "index" | "embedding" | "chat" | "keyboard";
 
 export interface SettingsTab {
   id: SettingsTabId;
@@ -51,6 +51,17 @@ export const SETTINGS_TABS: SettingsTab[] = [
     id: "embedding",
     label: "Embedding",
     hint: "The embedding model, its compute device, and how long it takes",
+  },
+  // The spec (GH #151/#155) calls this the **Models** tab. It ships as *Chat* because the
+  // section above it is a model too: "Embedding" and "Models" side by side would name the
+  // subsystem in one row and the technology in the next, and the question a human arrives
+  // with is "which model answers my questions", not "which of these two is a model". The
+  // spec's own open question — whether Embedding eventually folds in here — stays open,
+  // and this naming is what would make that fold read as a merge rather than a rename.
+  {
+    id: "chat",
+    label: "Chat",
+    hint: "The model that answers your questions — local, or a cloud provider",
   },
   { id: "keyboard", label: "Keyboard", hint: "Every chord B2 answers to — ?" },
 ];

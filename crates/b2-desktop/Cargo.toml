@@ -20,6 +20,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
+# The chat provider + the Ollama-native onboarding corner (GH #155), wired here exactly
+# as b2-embed is: the host picks the implementation and injects it, the façade does the
+# work. Sync end-to-end, so it brings no runtime with it.
+b2-llm = { path = "../b2-llm" }
 tauri = { version = "2", features = [] }
 # Native folder picker for the in-app vault switcher. Used host-side only (the
 # `choose_vault` command calls it in Rust); the webview is granted no dialog

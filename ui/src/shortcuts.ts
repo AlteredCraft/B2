@@ -157,6 +157,26 @@ const OWN_SHEET: readonly SheetGroup[] = [
       { ids: ["menu.open"], action: "Open a card's menu — Open note, Link…" },
     ],
   },
+  // Chat is its own group for discovery's reason: it takes over the right column, so
+  // "⏎ opens the focused card" up in *Getting around* is not what ⏎ does once you are
+  // typing a question — and a chord whose meaning depends on a surface the reader hasn't
+  // met yet is a chord they can't trust.
+  {
+    title: "Chat (flow ④)",
+    rows: [
+      { ids: ["chat.toggle"], action: "Ask your notes — open or close the chat pane" },
+      {
+        ids: ["chat.send"],
+        action:
+          "Ask the question (⇧⏎ for a new line); on a citation, open the note it came from",
+      },
+      {
+        ids: ["side.row.prev", "side.row.next"],
+        action: "Walk the conversation — each turn, and the citations under it",
+      },
+      { ids: ["dismiss"], action: "Stop the answer that's streaming, then close the pane" },
+    ],
+  },
   {
     title: "The graph and menus",
     rows: [

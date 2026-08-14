@@ -29,6 +29,11 @@ pub enum CmdError {
     /// suspenders refusal that reaches the webview only in a race.
     #[error("a reindex is already running")]
     ReindexInFlight,
+    /// An `ask` was requested while an answer was already streaming
+    /// ([`CmdError::ReindexInFlight`]'s chat sibling, GH #155). The pane refuses a
+    /// second turn while one is streaming, so this too reaches the webview only in a race.
+    #[error("an answer is already streaming")]
+    AskInFlight,
     /// The OS refused to open a resource in its default app (`open_resource`, the
     /// fallback card's one action). The message is the opener plugin's detail —
     /// logged in full server-side, generic to the webview like everything else.
@@ -152,6 +157,19 @@ pub fn user_message(err: &CmdError) -> String {
         }
         CmdError::ReindexInFlight => {
             "A reindex is already in progress. Please wait for it to finish.".to_string()
+        }
+        CmdError::AskInFlight => {
+            "B2 is still answering. Wait for it to finish, or press Esc to stop it.".to_string()
+        }
+        // A failed *answer* call (GH #154/#155). The seam collapses the wire's typed
+        // failure to a message on the way through `b2-core` (by design — the core stays
+        // free of `b2-llm`'s types), so what's left to say is the CLI's own sentence for
+        // this case, minus its `(ollama list)` hint: a terminal command is no help to
+        // someone in a window, and Settings → Chat is where this adapter shows the same
+        // thing — the installed models, from the daemon itself.
+        CmdError::Core(b2_core::Error::Llm(_)) => {
+            "The model server couldn't answer. Check that it's running and that the model is installed, then try again."
+                .to_string()
         }
         // Everything else in the two composed crates is an internal (sqlite/io/serde/…)
         // the webview must never see. Spelled out rather than `_` so adding a CmdError

@@ -2,7 +2,9 @@
 // actions (in main.ts) mutate this and call the render hook. Small enough that a
 // full-pane re-render on change is imperceptible and keeps the model honest.
 
+import type { ChatMessage } from "./chat";
 import type {
+  ChatSetup,
   EmbedStat,
   MenuChord,
   ModelChoice,
@@ -242,6 +244,37 @@ export interface AppState {
    * preference (a persistent off-switch would quietly undo the floor's honesty).
    */
   rawDiscovery: boolean;
+  /**
+   * The right column is showing **chat** instead of discovery or search results
+   * (GH #155). Chat lives there so a citation can open its note in the centre pane
+   * *without the conversation leaving the screen* — see chat.ts's header. It owns the
+   * whole column, so opening chat and running a search close each other (main.ts).
+   */
+  chatOpen: boolean;
+  /**
+   * The conversation — **session-only** (invariant S4): it lives here and dies with the
+   * window. Never persisted, not even to `localStorage` where the theme and the keymap
+   * live: a saved transcript would be B2-derived state outside the Markdown.
+   */
+  chatMessages: ChatMessage[];
+  /**
+   * The answer streaming right now, as it accumulates, or null between turns. Rendered
+   * as **text**, never parsed — a partial answer is not a document, and the finished one
+   * goes through the sanitizing `renderMarkdown` seam like every other untrusted string
+   * (E5). Tokens land here without a full render (`paintChatStream`), so the composer
+   * keeps its caret and the pane keeps its scroll while an answer arrives.
+   */
+  chatStreaming: string | null;
+  /** The chat provider's status — endpoint, model, Local vs Cloud, and the Ollama-native
+   *  setup card's data. Null until the first probe lands (the "loading" empty state). */
+  chatSetup: ChatSetup | null;
+  /**
+   * The Settings → Chat section is showing the **Cloud models** fields. A pure view flag,
+   * initialized from `chatSetup.cloud`: the configuration itself is just the endpoint, so
+   * this decides which fields (and which privacy copy) are on screen while the user types,
+   * with nothing to keep in sync afterwards.
+   */
+  chatCloud: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
   searchResults: SearchResult[];
@@ -346,6 +379,11 @@ export const state: AppState = {
   discoveringSimilar: false,
   discoveringConnections: false,
   rawDiscovery: false,
+  chatOpen: false,
+  chatMessages: [],
+  chatStreaming: null,
+  chatSetup: null,
+  chatCloud: false,
   searchQuery: "",
   searchResults: [],
   linkTarget: null,

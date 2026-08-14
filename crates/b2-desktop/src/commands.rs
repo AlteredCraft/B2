@@ -15,18 +15,21 @@
 //! The thin `*_impl` split lets the command layer be unit-tested against a real vault
 //! without a Tauri runtime (the `State` wrapper is only in the one-line `#[command]`).
 
+use crate::chat::ChatPrefs;
 use crate::error::CmdError;
 use crate::watch::VaultWatcher;
-use crate::{open_read, open_semantic, open_vault, AppState, ReindexGuard};
+use crate::{open_read, open_semantic, open_vault, AppState, AskGuard, ReindexGuard};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
+use b2_core::llm::{ChatTurn, LlmProvider};
 use b2_core::vault::{
-    DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport, ExplainView,
-    ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView, ProjectReport,
-    ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary, SearchResult,
-    SimilarView, WriteReport,
+    AnswerView, DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport,
+    ExplainView, ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView,
+    ProjectReport, ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
+    SearchResult, SimilarView, Vault, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
+use b2_llm::ChatSetup;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use serde::Serialize;
@@ -593,6 +596,177 @@ pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
 }
 
+/// **Flow ④ — one grounded answer** (GH #151/#153, cut here as GH #155): condense →
+/// retrieve → assemble → stream → cite, all of it behind `Vault::ask`. The host's whole
+/// contribution is the shape of the *delivery*: Tauri runs the `(async)` body on a worker
+/// thread (the cancellable-reindex-task precedent), tokens stream to the webview over a
+/// typed per-invocation [`Channel`] as they arrive, and the resolved [`AnswerView`] is the
+/// command's return — the same two facts `b2 ask --json` emits as a JSONL event stream,
+/// which is the standing convention (the view types are the adapters' shared contract).
+///
+/// `history` is the **caller's**: session-only (S4), held in the pane's own state and
+/// handed back turn by turn, exactly as `b2 chat` holds a `Vec<ChatTurn>`. Nothing about a
+/// chat is stored here or anywhere else — no `meta` row, no cache, no transcript.
+///
+/// Opens the **real-model** vault: retrieval embeds the question for the vector half, like
+/// `search` (and degrades to BM25-only on an unembedded vault, M4 — chat keeps working).
+#[tauri::command(async)]
+pub fn ask(
+    state: State<'_, AppState>,
+    question: String,
+    history: Vec<ChatTurn>,
+    on_event: Channel<String>,
+) -> Result<AnswerView, CmdError> {
+    let state = state.inner();
+    // Pick the provider (`B2_LLM=fake` or the configured endpoint) and open the vault
+    // before claiming the answer slot: both are the wiring `ask_impl` is handed, which is
+    // what makes the streaming half — the guard, the sink, the cancel checkpoint —
+    // testable against `FakeLlm` and a fake-embedder vault with no Tauri runtime and no
+    // environment to set.
+    let llm = crate::chat::provider(&state.chat_prefs());
+    let vault = open_semantic(state)?;
+    ask_impl(state, &vault, llm.as_ref(), &question, &history, &|token| {
+        // A send error means the window navigated or closed; the stream is then
+        // pointless but not broken — the cancel flag is what actually stops it.
+        let _ = on_event.send(token.to_string());
+    })
+}
+
+/// Ask the streaming answer to stop at its next token — the chat pane's Esc. Runs on a
+/// *different* worker thread than `ask`, so it sets the shared flag while that one reads
+/// it; the token callback sees it and breaks cooperatively. The partial text is not
+/// discarded: it comes back as an [`AnswerView`] marked `cancelled`, which is what lets the
+/// pane render a stopped answer honestly rather than as a failure. A no-op if nothing is
+/// streaming.
+#[tauri::command(async)]
+pub fn cancel_ask(state: State<'_, AppState>) {
+    state.request_ask_cancel();
+}
+
+/// What the chat surface needs to draw itself before a question is asked: the endpoint and
+/// model in force, whether that is the **Local** or the **Cloud models** configuration, and
+/// — when the runtime is Ollama — the native inventory behind the setup card (GH #151's
+/// deliberately Ollama-native onboarding corner: is the daemon up, what is installed, what
+/// would you pull on a machine this size).
+///
+/// Thin like `list_models`: this is provider wiring, not a vault op, so the one call is
+/// into `b2-llm` (which owns the probe, the `/api/tags` read and the tier heuristic) and
+/// the rest is serialization. Network-bound, hence `(async)`.
+///
+/// Infallible **by design** — "the daemon isn't running" is the answer the card is asking
+/// for, not an error to raise (`b2_llm::probe_setup`). And it never carries the API key:
+/// the view reports only that one is configured.
+#[tauri::command(async)]
+pub fn chat_setup(state: State<'_, AppState>) -> ChatSetup {
+    chat_setup_impl(state.inner())
+}
+
+/// Save the chat configuration and re-probe it — the Settings section's one write.
+///
+/// **Adapter state, never vault or index state** (GH #151): the endpoint and model persist
+/// beside the remembered vault, so a chat model swap costs no reindex (contrast M2). The
+/// key is held for the session only and never written down (`chat.rs` says why); `None`
+/// leaves whatever is already in force, so re-saving the endpoint doesn't silently clear a
+/// key the user typed a minute ago.
+#[tauri::command(async)]
+pub fn set_chat_config(
+    state: State<'_, AppState>,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+) -> ChatSetup {
+    let prefs = set_chat_config_impl(state.inner(), base_url, model, api_key);
+    // Persisting lives in the command wrapper, not in the state transition, so the
+    // unit-tested core never writes to the real user data dir (`choose_vault`'s split).
+    crate::chat::persist_prefs(&prefs);
+    chat_setup_impl(state.inner())
+}
+
+/// The testable core of `set_chat_config`: normalize the three fields into
+/// [`ChatPrefs`] and install them. Blank is "unset" for the endpoint and the model
+/// (the `LlmConfig::from_env` rule — an emptied field returns to the
+/// environment/default rather than configuring an unusable endpoint).
+///
+/// **The key is three-state, and has to be.** The Settings field paints empty even
+/// when a key is set (a password field that echoes its secret back is a worse
+/// idea), so "I didn't touch it" and "I cleared it" would otherwise be the same
+/// input — and collapsing them either signs the user out on every save, or makes
+/// the key impossible to remove. The second is what shipped, and it has a privacy
+/// edge beyond the annoyance: with the key un-removable, repointing `base_url` at
+/// a different provider would send the *first* provider's bearer token to the
+/// second. So: **absent keeps** (re-saving the endpoint must not sign you out),
+/// **blank clears** (the UI's Remove button, the only way back to a keyless
+/// configuration), a value sets. Clearing drops the *session* key; a
+/// `B2_LLM_API_KEY` in the environment is the user's own configuration and is
+/// still what an unset key resolves to.
+fn set_chat_config_impl(
+    state: &AppState,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+) -> ChatPrefs {
+    let clean = |v: Option<String>| {
+        v.map(|s| s.trim().to_string())
+            .filter(|s: &String| !s.is_empty())
+    };
+    let api_key = match api_key {
+        None => state.chat_prefs().api_key,
+        Some(typed) => clean(Some(typed)),
+    };
+    let prefs = ChatPrefs {
+        base_url: clean(base_url),
+        model: clean(model),
+        api_key,
+    };
+    state.set_chat_prefs(prefs.clone());
+    prefs
+}
+
+/// The testable core of `chat_setup`: the fake provider's own status when
+/// `B2_LLM=fake` is in force (never overstate what answered — the CLI prints the
+/// same note), else one probe of the configured endpoint.
+fn chat_setup_impl(state: &AppState) -> ChatSetup {
+    let config = state.chat_prefs().config();
+    if crate::chat::use_fake_llm() {
+        ChatSetup::fake(&config)
+    } else {
+        b2_llm::probe_setup(&config)
+    }
+}
+
+/// The testable core of `ask`, split from the Tauri `Channel` wrapper so the whole
+/// streaming path — the single-in-flight guard, the token sink, the cancel checkpoint —
+/// is exercised without a Tauri runtime. `sink` is the framing the host owns: every token
+/// the seam delivers, in order, as it arrives.
+fn ask_impl(
+    state: &AppState,
+    vault: &Vault,
+    llm: &dyn LlmProvider,
+    question: &str,
+    history: &[ChatTurn],
+    sink: &dyn Fn(&str),
+) -> Result<AnswerView, CmdError> {
+    // Single-in-flight: two answers at once would share one cancel flag, so the second
+    // one's `arm` would quietly un-cancel the first. The pane already refuses a second
+    // turn while one is streaming, so this is the belt-and-suspenders half.
+    if !state.try_start_ask() {
+        return Err(CmdError::AskInFlight);
+    }
+    let _guard = AskGuard(state);
+    // Clear any stale cancel now that *this* answer owns the slot (the Esc that stopped
+    // the previous turn must not stop this one before its first token).
+    state.arm_ask();
+
+    Ok(vault.ask(llm, question, history, &mut |token| {
+        sink(token);
+        if state.ask_cancelled() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })?)
+}
+
 /// The testable core of `project`: one façade call over the fake vault (projection
 /// is model-free by construction — it never touches the embedding space).
 fn project_impl(state: &AppState) -> Result<ProjectReport, CmdError> {
@@ -804,7 +978,7 @@ mod tests {
 
     use super::*;
     use crate::error::user_message;
-    use b2_core::vault::Vault;
+    use b2_core::llm::FakeLlm;
     use std::fs;
     use std::path::Path;
 
@@ -1553,5 +1727,175 @@ mod tests {
             // If the switch returned, the in-flight run has already wound down.
             assert!(!state.reindex_in_flight());
         });
+    }
+
+    // --- chat (flow ④, GH #155) -----------------------------------------------------
+    //
+    // The host owns exactly one thing here, and it is what these cover: the **framing of
+    // the token stream** — every token, in order, as it arrives — plus the guard and the
+    // cancel checkpoint around it. Everything the answer *is* (condense, retrieve, prompt,
+    // citations) belongs to `Vault::ask` and is covered by the engine suite against the
+    // same `FakeLlm` used here.
+
+    /// A vault whose passages are real, so the fake provider has something to cite.
+    fn ask_state(tmp: &tempfile::TempDir) -> (AppState, Vault) {
+        let root = tmp.path().join("vault");
+        golden_indexed(&root);
+        // The fake-embedder vault the read path uses everywhere in this suite: `ask`'s
+        // retrieval degrades to the same hybrid search the rest of the app runs on.
+        let vault = Vault::open(&root).unwrap();
+        (AppState::new(Some(root)), vault)
+    }
+
+    #[test]
+    fn ask_streams_every_token_in_order_and_returns_the_resolved_answer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        let streamed = std::cell::RefCell::new(Vec::<String>::new());
+
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
+            streamed.borrow_mut().push(t.to_string())
+        })
+        .unwrap();
+
+        // The framing contract: the tokens the webview saw, concatenated, ARE the answer
+        // the command returned. A pane that renders the stream and then the final view
+        // must never see the two disagree.
+        assert_eq!(streamed.borrow().concat(), answer.answer);
+        assert!(!answer.cancelled);
+        assert!(
+            !answer.citations.is_empty(),
+            "the fake cites every passage it was handed: {answer:?}"
+        );
+        // The slot is released on the way out, so the next turn can claim it.
+        assert!(state.try_start_ask());
+    }
+
+    #[test]
+    fn esc_mid_answer_keeps_the_partial_text_and_says_it_was_stopped() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        let streamed = std::cell::RefCell::new(Vec::<String>::new());
+
+        // The pane's Esc, arriving after the first token — `cancel_ask` sets the same flag
+        // from another thread; setting it inside the sink is that race, made deterministic.
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
+            streamed.borrow_mut().push(t.to_string());
+            state.request_ask_cancel();
+        })
+        .unwrap();
+
+        assert!(answer.cancelled, "a stopped answer is marked stopped");
+        assert_eq!(
+            streamed.borrow().len(),
+            1,
+            "cancellation is token-granular: nothing streams after the break"
+        );
+        assert_eq!(streamed.borrow().concat(), answer.answer);
+    }
+
+    #[test]
+    fn a_second_answer_is_refused_while_one_is_streaming() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        // Stand in for an answer already streaming (the real one holds the slot for the
+        // duration of its call).
+        assert!(state.try_start_ask());
+
+        let err = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap_err();
+        assert!(matches!(err, CmdError::AskInFlight));
+        assert_eq!(
+            user_message(&err),
+            "B2 is still answering. Wait for it to finish, or press Esc to stop it."
+        );
+    }
+
+    /// A stale cancel must not kill the *next* answer: `arm_ask` clears it once the fresh
+    /// turn owns the slot, which is the whole reason the flag is armed rather than reset
+    /// by whoever set it.
+    #[test]
+    fn a_stale_cancel_does_not_stop_the_next_answer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        state.request_ask_cancel(); // …from a turn that already ended
+        let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap();
+        assert!(!answer.cancelled);
+    }
+
+    /// Chat settings are adapter state: setting them changes what the next ask resolves,
+    /// and blank means "unset" (back to the environment/default) rather than an unusable
+    /// endpoint. The key is kept when a save doesn't mention it — re-saving the endpoint
+    /// must not silently sign you out of a cloud provider.
+    #[test]
+    fn chat_config_layers_over_the_shared_resolution() {
+        let state = AppState::new(None);
+        set_chat_config_impl(
+            &state,
+            Some("http://localhost:1234/v1".into()),
+            Some("qwen2.5".into()),
+            Some("sk-session-only".into()),
+        );
+        let config = state.chat_prefs().config();
+        assert_eq!(config.base_url, "http://localhost:1234/v1");
+        assert_eq!(config.model, "qwen2.5");
+        assert_eq!(config.api_key.as_deref(), Some("sk-session-only"));
+
+        // Re-save with the key absent (the field the user didn't retype) and a blanked
+        // model: the key survives, the model falls back to the shared default.
+        set_chat_config_impl(
+            &state,
+            Some("http://localhost:1234/v1".into()),
+            Some("  ".into()),
+            None,
+        );
+        let config = state.chat_prefs().config();
+        assert_eq!(config.api_key.as_deref(), Some("sk-session-only"));
+        assert_eq!(config.model, b2_llm::LlmConfig::from_env().model);
+    }
+
+    /// The key's third state, and the reason it has one: **blank clears**. Without
+    /// it a key set once could never be removed through Settings — and repointing
+    /// the endpoint would then send the first provider's bearer token to the
+    /// second, which is the privacy failure, not just the annoyance.
+    #[test]
+    fn a_blanked_key_clears_the_session_key() {
+        let state = AppState::new(None);
+        set_chat_config_impl(&state, None, None, Some("sk-session-only".into()));
+        assert_eq!(
+            state.chat_prefs().api_key.as_deref(),
+            Some("sk-session-only")
+        );
+
+        // Absent: untouched, so the key stands.
+        set_chat_config_impl(&state, None, None, None);
+        assert_eq!(
+            state.chat_prefs().api_key.as_deref(),
+            Some("sk-session-only")
+        );
+
+        // Blank (what the UI's Remove sends): gone. `config()` then resolves the key
+        // from the environment alone — `B2_LLM_API_KEY` is the user's own
+        // configuration, and Settings never had the standing to clear that.
+        set_chat_config_impl(&state, None, None, Some("   ".into()));
+        assert_eq!(state.chat_prefs().api_key, None);
+    }
+
+    /// The status the setup card renders never carries the key — only that one is set.
+    /// (Pinned in `b2-llm` too, on the view type itself; this is the command boundary.)
+    #[test]
+    fn the_chat_setup_view_never_carries_the_key() {
+        let state = AppState::new(None);
+        set_chat_config_impl(
+            &state,
+            // `.invalid` is reserved (RFC 2606), so the probe fails immediately and this
+            // never meets a model server a developer happens to be running.
+            Some("http://b2-no-such-host.invalid:11434/v1".into()),
+            Some("llama3.2".into()),
+            Some("sk-live-must-not-cross".into()),
+        );
+        let setup = chat_setup_impl(&state);
+        let json = serde_json::to_string(&setup).unwrap();
+        assert!(!json.contains("sk-live-must-not-cross"), "{json}");
+        assert!(json.contains("\"has_api_key\":true"), "{json}");
     }
 }
