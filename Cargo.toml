@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/b2-core", "crates/b2-embed", "crates/b2-cli", "crates/b2-desktop"]
+members = [
+    "crates/b2-core",
+    "crates/b2-embed",
+    "crates/b2-llm",
+    "crates/b2-cli",
+    "crates/b2-desktop",
+]
 
 # B2 — local-first Markdown PKM with AI connection discovery.
 # Design lives in docs/design/; this workspace is the index engine
@@ -26,6 +32,8 @@ opt-level = 3
 [profile.dev.package.b2-core]
 opt-level = 0
 [profile.dev.package.b2-embed]
+opt-level = 0
+[profile.dev.package.b2-llm]
 opt-level = 0
 [profile.dev.package.b2-cli]
 opt-level = 0

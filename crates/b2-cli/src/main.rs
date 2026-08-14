@@ -11,10 +11,12 @@
 //! that needs no model, and what the CLI test suite uses to stay fast and model-free.
 
 use b2_core::embed::Embedder;
+use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
 use b2_core::resource::{doc_kind, DocKind};
-use b2_core::vault::Vault;
+use b2_core::vault::{AnswerView, Vault};
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
-use clap::{Parser, Subcommand};
+use b2_llm::{LlmConfig, LlmError, OpenAiCompatProvider};
+use clap::{Args, Parser, Subcommand};
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
 use std::ops::ControlFlow;
@@ -22,17 +24,28 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Set by the SIGINT handler installed for a `reindex` — by Ctrl-C in the foreground,
-/// or by another process's `b2 reindex --cancel` (GH #55), which raises the *same*
-/// signal so both reach here. The embed loop reads it at each batch boundary (through
-/// the [`ControlFlow`] the progress closure returns — the shipped cancel seam) and
-/// stops *after* the current batch: a consistent, re-runnable partial index, never a
-/// torn write (index-engine.md).
+/// Set by the SIGINT handler installed for a long-running command — by Ctrl-C in the
+/// foreground, or (for a `reindex`) by another process's `b2 reindex --cancel` (GH #55),
+/// which raises the *same* signal so both reach here.
+///
+/// Two loops read it, through the same [`ControlFlow`] seam, at the checkpoint cadence
+/// each has: the reindex embed loop at every batch boundary — stopping *after* the
+/// current batch, so a cancel leaves a consistent, re-runnable partial index rather than
+/// a torn write (index-engine.md) — and the chat surfaces' token callback at every token
+/// (GH #154), where stopping renders the partial answer honestly. `chat` clears it before
+/// each turn, so a Ctrl-C that stopped one answer never cancels the next.
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
-/// Map the Ctrl-C flag onto the reindex embed loop's cooperative-cancel signal —
-/// [`ControlFlow::Break`] once a cancel has been requested (stop after the current
-/// batch), else [`ControlFlow::Continue`]. Shared by `reindex`'s two progress closures.
+/// Whether `b2 chat` is streaming an answer right now — which is what decides
+/// what Ctrl-C *means* in the REPL: cancel this answer, or leave. Only `chat`
+/// maintains it (see its handler); every other command's SIGINT meaning is
+/// unconditional.
+static ANSWERING: AtomicBool = AtomicBool::new(false);
+
+/// Map the Ctrl-C flag onto the cooperative-cancel signal the engine's loops read —
+/// [`ControlFlow::Break`] once a cancel has been requested, else
+/// [`ControlFlow::Continue`]. Shared by `reindex`'s two progress closures and by the
+/// chat surfaces' token callback.
 fn cancel_flow() -> ControlFlow<()> {
     if CANCEL.load(Ordering::SeqCst) {
         ControlFlow::Break(())
@@ -173,6 +186,47 @@ enum Command {
         #[arg(long)]
         explanation: Option<String>,
     },
+    /// Ask one question about your vault and stream a grounded answer. The model
+    /// answers **only** from passages retrieved out of your notes and cites them by
+    /// `[n]`; `--json` emits the answer as a JSON Lines event stream (one token
+    /// event per token, then the final answer with its citations resolved).
+    /// Needs a model server — Ollama by default (see `--llm-url`).
+    Ask {
+        /// The question, in plain language.
+        question: String,
+        #[command(flatten)]
+        llm: LlmArgs,
+    },
+    /// Interactive grounded chat about your vault — the same answers as `ask`, with
+    /// follow-up questions that remember the conversation. Ctrl-C stops an answer
+    /// mid-stream (the partial text stands); `/exit` or Ctrl-D leaves. History is
+    /// session-only: nothing about a chat is ever written to your notes or the index.
+    Chat {
+        #[command(flatten)]
+        llm: LlmArgs,
+    },
+}
+
+/// Which model to chat with, and where it lives — shared by `ask` and `chat`.
+///
+/// The precedence is the `B2_VAULT_PATH` convention exactly: an explicit flag beats
+/// the environment beats the built-in default. Resolution itself lives in
+/// `b2_llm::LlmConfig` (one place, so the desktop's settings layer over the same
+/// base) — which is why these are plain options rather than clap `env` args.
+#[derive(Args, Debug)]
+struct LlmArgs {
+    /// The OpenAI-compatible base URL of your model server
+    /// [env: B2_LLM_URL, default: http://localhost:11434/v1 — Ollama's].
+    /// Any compatible endpoint works: LM Studio, llama.cpp, vLLM, or a cloud
+    /// provider's (which sends your question and the retrieved passages to them —
+    /// pair it with B2_LLM_API_KEY).
+    #[arg(long = "llm-url", value_name = "URL")]
+    llm_url: Option<String>,
+    /// The chat model id, as the server names it
+    /// [env: B2_LLM_MODEL, default: llama3.2]. Pull it first, e.g. `ollama pull
+    /// llama3.2`.
+    #[arg(long = "llm-model", value_name = "MODEL")]
+    llm_model: Option<String>,
 }
 
 impl Cli {
@@ -223,14 +277,19 @@ fn main() -> ExitCode {
 ///
 /// `B2_LOG` holds a tracing filter directive (e.g. `debug`, `b2::sqlite=debug`,
 /// `warn` for slow queries only); setting `B2_DEBUG` (which already opts into error
-/// detail) or `B2_LOG_FILE` without `B2_LOG` implies `debug`. With none of the
-/// three set, no subscriber is installed and the kernel's instrumentation stays
-/// inert.
+/// detail) or `B2_LOG_FILE` without `B2_LOG` implies **`b2=debug`** — the kernel's
+/// own targets, scoped exactly as the desktop sink scopes its implied default. That
+/// scoping is what keeps the dataset reportable now that a chat command links an
+/// HTTP client: `ureq` logs its connection handling through the `log` bridge, in a
+/// foreign shape (`log.line`, `log.module_path`, no `duration_us`), and a bare
+/// `debug` would fold it into the same file as the timings. Opt into the firehose
+/// with an explicit `B2_LOG=debug`. With none of the three set, no subscriber is
+/// installed and the kernel's instrumentation stays inert.
 fn init_logging() {
     let log_file = std::env::var_os("B2_LOG_FILE");
     let directive = match std::env::var("B2_LOG") {
         Ok(v) if !v.trim().is_empty() => v,
-        _ if std::env::var_os("B2_DEBUG").is_some() || log_file.is_some() => "debug".to_string(),
+        _ if std::env::var_os("B2_DEBUG").is_some() || log_file.is_some() => "b2=debug".to_string(),
         _ => return,
     };
     let filter = match tracing_subscriber::EnvFilter::try_new(&directive) {
@@ -307,6 +366,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             edge_type,
             explanation,
         } => cmd_link(cli, src, dst, edge_type, explanation.as_deref()),
+        Command::Ask { question, llm } => cmd_ask(cli, question, llm),
+        Command::Chat { llm } => cmd_chat(cli, llm),
     }
 }
 
@@ -890,6 +951,211 @@ fn cmd_link(
     Ok(())
 }
 
+fn cmd_ask(cli: &Cli, question: &str, llm_args: &LlmArgs) -> Result<(), CliError> {
+    // The provider first, deliberately: it is the cheap check, and loading the real
+    // embedder below takes seconds. A stopped model server should cost a round trip,
+    // not a model load followed by a failure.
+    let llm = open_llm(llm_args)?;
+    // Retrieval embeds the question for the vector half → the real model, like `search`.
+    let vault = open_vault(cli.vault_or_cwd(), true)?;
+    // Ctrl-C cancels the answer at the next token rather than killing the process, so
+    // what already streamed stays on screen and is reported as partial.
+    let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
+    ask_streamed(&vault, llm.as_ref(), question, &[], cli.json)?;
+    if !cli.json {
+        note_fake_llm();
+    }
+    Ok(())
+}
+
+fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
+    let llm = open_llm(llm_args)?;
+    let vault = open_vault(cli.vault_or_cwd(), true)?;
+    // Ctrl-C means two different things in a REPL, and a handler that only ever
+    // meant one of them would trap the user: mid-answer it cancels the stream (the
+    // partial text stands), but at an idle prompt — where nothing is running to
+    // cancel — it must still be the way out, since swallowing it would leave
+    // `/exit` and Ctrl-D as the only exits from a program the user is pressing
+    // Ctrl-C at. `ctrlc` runs this on its own thread, so exiting from it is safe.
+    let _ = ctrlc::set_handler(|| {
+        if ANSWERING.load(Ordering::SeqCst) {
+            CANCEL.store(true, Ordering::SeqCst);
+        } else {
+            // 128 + SIGINT, the shell's own convention for "interrupted".
+            std::process::exit(130);
+        }
+    });
+    // Prompts and the banner are chrome for a human at a terminal: on stderr so
+    // stdout stays answers, and only when there's a terminal there to read them
+    // (the `reindex` progress-line rule).
+    let interactive = !cli.json && std::io::stderr().is_terminal();
+    if interactive {
+        eprintln!(
+            "Grounded chat over your notes — answers come only from what B2 retrieves \
+             from them, cited by [n]."
+        );
+        eprintln!(
+            "Model: {}. Ctrl-C stops an answer; /exit or Ctrl-D leaves. \
+             Nothing here is saved.",
+            llm.model_id()
+        );
+    }
+    if !cli.json {
+        note_fake_llm();
+    }
+    // Session-only history (S4): the turns live in this Vec and die with the process —
+    // a persisted transcript would be B2-derived state outside the Markdown.
+    let mut history: Vec<ChatTurn> = Vec::new();
+    let stdin = std::io::stdin();
+    loop {
+        if interactive {
+            eprint!("\nyou> ");
+            let _ = std::io::stderr().flush();
+        }
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            // Ctrl-D / end of a piped script.
+            break;
+        }
+        let question = line.trim();
+        if question.is_empty() {
+            continue;
+        }
+        if matches!(question, "/exit" | "/quit") {
+            break;
+        }
+        // A fresh cancel budget per turn: the Ctrl-C that stopped the *last* answer
+        // must not cancel this one before its first token.
+        CANCEL.store(false, Ordering::SeqCst);
+        ANSWERING.store(true, Ordering::SeqCst);
+        let turn = ask_streamed(&vault, llm.as_ref(), question, &history, cli.json);
+        ANSWERING.store(false, Ordering::SeqCst);
+        match turn {
+            Ok(answer) => {
+                // A cancelled answer goes into the history too: the human saw that
+                // text, so a follow-up referring to it ("go on") must be read
+                // against what was actually said, not against a turn we pretend
+                // never happened.
+                history.push(ChatTurn::user(question));
+                history.push(ChatTurn::assistant(&answer.answer));
+            }
+            // A failed turn ends the turn, not the session: a model server that
+            // hiccuped is worth retyping a question at, not worth losing the
+            // conversation over. The message is the same one the process would
+            // have exited with.
+            Err(e) => eprintln!("{}", user_message(&e)),
+        }
+    }
+    Ok(())
+}
+
+/// One grounded ask, rendered as it arrives — the shared body of `ask` and each
+/// `chat` turn (flow ④'s streaming contract: every surface streams).
+///
+/// Under `--json` this is a **JSON Lines event stream** — one `token` event per
+/// token, then one `answer` event carrying the [`AnswerView`] — so an agent
+/// consuming the pipe sees the answer forming and still gets the resolved
+/// citations as data. Otherwise tokens print to stdout as they land, with the
+/// sources list after them.
+fn ask_streamed(
+    vault: &Vault,
+    llm: &dyn LlmProvider,
+    question: &str,
+    history: &[ChatTurn],
+    json: bool,
+) -> Result<AnswerView, CliError> {
+    let answer = vault.ask(llm, question, history, &mut |token| {
+        if json {
+            print_event(&AskEvent::Token { text: token });
+        } else {
+            print!("{token}");
+            // Streaming is the point: an unflushed line renders in one lump.
+            let _ = std::io::stdout().flush();
+        }
+        cancel_flow()
+    })?;
+    if json {
+        print_event(&AskEvent::Answer(&answer));
+    } else {
+        print_answer_tail(&answer);
+    }
+    Ok(answer)
+}
+
+/// One line of the `--json` ask stream. The framing is the CLI's; the payload of
+/// the final event is `b2-core`'s [`AnswerView`], which is the standing
+/// convention (the view types are the adapters' shared contract — the desktop
+/// carries the same two facts as Tauri events plus a command return).
+#[derive(serde::Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+enum AskEvent<'a> {
+    /// A token, exactly as it arrived from the model.
+    Token { text: &'a str },
+    /// The finished answer: text, resolved citations, and whether it was cut short.
+    Answer(&'a AnswerView),
+}
+
+/// Print one event as a single line of JSON — **not** `print_json`, which is
+/// pretty-printed: this is a stream, so one object per line is the contract.
+fn print_event(event: &AskEvent) {
+    if let Ok(line) = serde_json::to_string(event) {
+        println!("{line}");
+    }
+}
+
+/// The human-readable tail of an answer: end the streamed line, then the sources
+/// the model cited, then — honestly — whether the answer is the whole of one.
+fn print_answer_tail(answer: &AnswerView) {
+    println!();
+    if !answer.citations.is_empty() {
+        println!("\nSources:");
+        for c in &answer.citations {
+            println!("  [{}] {}", c.marker, c.path);
+            if !c.excerpt.is_empty() {
+                println!("      {}", c.excerpt);
+            }
+        }
+    }
+    if answer.cancelled {
+        eprintln!("(stopped early — the answer above is partial.)");
+    }
+}
+
+/// Never overstate what answered (the `search` fake-embedder caveat, applied to
+/// the chat seam): under `B2_LLM=fake` the "answer" is deterministic scaffolding,
+/// not a model. On stderr, so stdout stays the answer.
+fn note_fake_llm() {
+    if use_fake_llm() {
+        eprintln!(
+            "note: the fake chat provider is in use (B2_LLM=fake) — answers are \
+             deterministic test scaffolding, not a model."
+        );
+    }
+}
+
+/// Pick + wire the chat provider — [`open_vault`]'s sibling for the second seam.
+///
+/// `B2_LLM=fake` forces the deterministic [`FakeLlm`] (the `B2_EMBEDDER=fake`
+/// sibling: an offline/dev mode that needs no server, and what the CLI suite runs
+/// under). Otherwise the real client is built from the environment with this
+/// command's flags laid over it, and **probed before anything else happens** — the
+/// `b2 init` posture applied to chat: a stopped daemon or an un-pulled model is a
+/// sentence before the question is asked, never a surprise after it.
+fn open_llm(args: &LlmArgs) -> Result<Box<dyn LlmProvider>, CliError> {
+    if use_fake_llm() {
+        return Ok(Box::new(FakeLlm));
+    }
+    let config =
+        LlmConfig::from_env().with_overrides(args.llm_url.as_deref(), args.llm_model.as_deref());
+    let provider = OpenAiCompatProvider::new(config);
+    provider.probe()?;
+    Ok(Box::new(provider))
+}
+
+fn use_fake_llm() -> bool {
+    std::env::var_os("B2_LLM").is_some_and(|v| v == "fake")
+}
+
 /// Open a vault with the appropriate embedder.
 ///
 /// `needs_semantic` commands (`reindex`, `search`) load the real [`LocalEmbedder`]
@@ -1102,6 +1368,11 @@ enum CliError {
     Core(#[from] b2_core::Error),
     #[error(transparent)]
     Embed(#[from] EmbedError),
+    /// A setup-time chat failure the adapter can act on — an unreachable model
+    /// server, an un-pulled model. Call-time failures arrive as
+    /// [`b2_core::Error::Llm`] instead (the seam collapses them to a message).
+    #[error(transparent)]
+    Llm(#[from] LlmError),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
     /// A filesystem error creating `.b2/` or opening the reindex lock file.
@@ -1130,6 +1401,33 @@ enum CliError {
     /// rather than hang waiting for hand-typed input; the new body must be piped in.
     #[error("no body piped on stdin")]
     StdinRequired,
+}
+
+/// Does this endpoint look like the Ollama daemon — its port, or a host that
+/// names it? It decides one thing only: whether Ollama's own commands belong in
+/// an error message. `--llm-url` also points at LM Studio, llama.cpp, vLLM and
+/// cloud endpoints, where "run `ollama serve`" is advice about the wrong
+/// program. A guess in the safe direction: wrong here costs a generic sentence,
+/// never a wrong instruction.
+fn is_ollama(endpoint: &str) -> bool {
+    let endpoint = endpoint.to_lowercase();
+    endpoint.contains(":11434") || endpoint.contains("ollama")
+}
+
+/// The head of a model server's own model list, for "…or pick one it already
+/// serves". Bounded: a local runtime holds a handful, but a cloud endpoint lists
+/// hundreds, and a hundred-model line is not a hint.
+fn model_hint(available: &[String]) -> Option<String> {
+    const SHOWN: usize = 6;
+    if available.is_empty() {
+        return None;
+    }
+    let head = available.iter().take(SHOWN).cloned().collect::<Vec<_>>();
+    Some(if available.len() > SHOWN {
+        format!("{}, …", head.join(", "))
+    } else {
+        head.join(", ")
+    })
 }
 
 /// Translate an internal error into a generic, actionable, user-facing message —
@@ -1195,6 +1493,34 @@ fn user_message(err: &CliError) -> String {
         ),
         CliError::StdinRequired => {
             "No body piped on stdin. Pipe the new note body in, e.g. `cat new-body.md | b2 write notes/foo`.".to_string()
+        }
+        // The E4 case chat is most likely to hit: nothing is serving the endpoint.
+        // Named by the endpoint the user actually configured — and *advised* by it
+        // too: `ollama serve` is the fix for Ollama and no help at all for LM
+        // Studio, llama.cpp, vLLM, or a cloud provider, all of which `--llm-url`
+        // supports.
+        CliError::Llm(LlmError::Unreachable { endpoint, .. }) if is_ollama(endpoint) => format!(
+            "Can't reach the model server at {endpoint} — is Ollama running? (`ollama serve`, or install: https://ollama.com)"
+        ),
+        CliError::Llm(LlmError::Unreachable { endpoint, .. }) => format!(
+            "Can't reach the model server at {endpoint}. Start it, or point --llm-url (or B2_LLM_URL) at one that's running."
+        ),
+        CliError::Llm(LlmError::ModelMissing { model, endpoint, available }) => format!(
+            "Model '{model}' isn't available at {endpoint}. {}{}",
+            if is_ollama(endpoint) {
+                format!("Pull it with `ollama pull {model}`")
+            } else {
+                "Load it there".to_string()
+            },
+            match model_hint(available) {
+                Some(list) => format!(", or point --llm-model at one it already serves ({list})."),
+                None => ".".to_string(),
+            }
+        ),
+        // Every remaining chat failure — an HTTP refusal at probe time, a malformed
+        // stream — is one sentence with one fix, and the detail is a `B2_DEBUG` away.
+        CliError::Llm(_) | CliError::Core(b2_core::Error::Llm(_)) => {
+            "The model server couldn't answer. Check that it's running and that the model is installed (`ollama list`), then try again.".to_string()
         }
         _ => "Something went wrong. Please check the vault path and try again.".to_string(),
     };

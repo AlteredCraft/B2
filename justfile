@@ -285,3 +285,16 @@ eval-metal:
 [doc('CPU-vs-Metal embed throughput A/B on a vault (default fixtures/test-vault; GH #40, macOS-only).')]
 compare-device vault="fixtures/test-vault":
     scripts/compare-embed-device.sh {{vault}}
+
+# The chat seam's out-of-CI half (GH #154), and the second AI seam's answer to `just eval`:
+# it asks the labelled questions in crates/b2-llm/evals/questions.json through the real
+# `Vault::ask` — real embedder to retrieve, real chat model to answer — and scores
+# groundedness, citation accuracy, and refusal on the deliberate negatives. Needs a model
+# server running (`ollama serve`, or point B2_LLM_URL at any OpenAI-compatible one);
+# B2_LLM_MODEL picks the model. Appends one row to crates/b2-llm/evals/results.jsonl
+# (gitignored). Retrieval reach is reported beside the chat numbers, because the model can
+# only cite what retrieval handed it — a miss there is `just eval`'s result, not this one's.
+[group('model')]
+[doc('Grounded-chat quality eval: citation accuracy + refusal over the eval corpus (real model + model server).')]
+eval-chat:
+    cargo run -p b2-llm --example groundedness

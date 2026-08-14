@@ -24,6 +24,13 @@ explained connections between them yourself.
 > to frontmatter) — the human is the precision gate; there is no LLM in the loop. A tour
 > grounded in the test suite: [docs/architecture.html](docs/architecture.html).
 >
+> **Grounded chat is live in the CLI** — **`b2 ask "…"`** and **`b2 chat`** answer questions *from your
+> notes*, streaming, with `[n]` citations back to the notes the answer came from
+> ([#151](https://github.com/AlteredCraft/B2/issues/151)). It talks to any **OpenAI-compatible** model
+> server (`crates/b2-llm`, a hand-rolled sync SSE client — no tokio anywhere); **Ollama** is the guided
+> default, a cloud model is explicit opt-in, and nothing about a chat is written to your notes or the
+> index. The chat pane in the desktop app is next.
+>
 > **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
 > the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri IPC. The
 > **read → discover → link → edit → reconcile** arc is complete: read a note on the left, commit a typed
@@ -115,6 +122,7 @@ just ci         # THE COMPLETE GATE (~18s): the above over the whole workspace, 
                 # GitHub Actions runs this exact recipe, so green here is green there.
 just init       # download + verify the embedding model into the shared cache
 just eval       # semantic-retrieval quality eval (real model; never part of CI)
+just eval-chat  # grounded-chat quality eval (needs a model server; never part of CI)
 just            # list every recipe, grouped: setup / dev / gates / coverage / model
 ```
 

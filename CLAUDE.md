@@ -90,6 +90,18 @@ cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (ne
                                         # the real model, so it lives here rather than behind #[ignore])
 cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
 
+# Grounded chat (flow ④, GH #154) — needs a model server, so it is out of CI like the embedder.
+# Any OpenAI-compatible endpoint works; Ollama is the guided default (`ollama serve` +
+# `ollama pull llama3.2`). `B2_LLM=fake` swaps in the deterministic FakeLlm — no server, no
+# network — which is what the CLI suite runs under.
+cargo run -p b2-cli -- ask "what did I write about X?"        # one-shot, streamed, cited
+cargo run -p b2-cli -- ask "…" --json                         # JSONL event stream: tokens, then AnswerView
+cargo run -p b2-cli -- chat                                   # interactive; Ctrl-C stops an answer, /exit leaves
+just eval-chat                          # = cargo run -p b2-llm --example groundedness — the chat seam's
+                                        # quality eval (citation accuracy, refusal on the labelled
+                                        # negatives, retrieval reach as its ceiling); appends each run to
+                                        # crates/b2-llm/evals/results.jsonl (gitignored)
+
 # Rank stability — the harness's model-free half (GH #141). The eval's 55-chunk corpus fits inside
 # even the 60-candidate chunk pool retrieval reaches, so it CANNOT see a candidate-width change; this
 # probe can. It asks the same queries at widening pools on fixtures/test-vault (~200 notes / ~780
@@ -192,12 +204,22 @@ silently touch the wrong dir (`Cli::require_vault`).
 `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
 (offline/dev mode, and what the test suite runs under); `B2_DEBUG` makes the CLI print internal error
 detail after the generic message.
+The chat seam has the same shape (GH #154): `B2_LLM_URL` / `B2_LLM_MODEL` name the OpenAI-compatible
+endpoint and model (defaults `http://localhost:11434/v1` + `llama3.2` — Ollama's), `B2_LLM_API_KEY`
+carries a **cloud** endpoint's bearer token (env-only, deliberately: a key in a flag is a key in `ps`),
+and `B2_LLM=fake` is `B2_EMBEDDER=fake`'s sibling — the deterministic `FakeLlm`, no server, what the
+CLI suite runs under. `ask`/`chat`'s `--llm-url` / `--llm-model` beat the env, which beats the default
+(the `B2_VAULT_PATH` rule); resolution itself lives once in `b2_llm::LlmConfig::from_env`, so the
+desktop layers its settings over the same base. Chat config is **adapter-level, never vault or index
+state** — nothing about it is recorded, so a model swap costs no reindex (contrast M2).
 `B2_LOG` turns on structured debug logging: **JSON Lines** (stdout stays pure data), one flat object
 per event — pipe into jq/DuckDB/pandas for reporting/plotting. Sink is stderr by default;
 `B2_LOG_FILE=<path>` writes there instead (append mode, so runs accumulate into one reportable
 dataset, and the capture is pure JSONL even when stderr carries human notices). Its value is a tracing
 filter directive (`debug`, `b2::sqlite=debug`, `warn`, …); `B2_DEBUG` or `B2_LOG_FILE` alone implies
-`B2_LOG=debug`. The kernel
+**`b2=debug`** — the kernel's own targets, in both adapters, so a dependency's `tracing`/`log` records
+(Tauri and wry in the app; `ureq`'s connection handling under `ask`/`chat` since GH #154) stay out of
+the one reportable dataset. The kernel
 emits: per-statement SQLite timings from SQLite's own profiler (`sqlite3_trace_v2` +
 `SQLITE_TRACE_PROFILE`, wired in `db::open` — target `b2::sqlite`, SQL template + numeric `duration_us`
 + `vm_steps`/`fullscan_steps`; statements at/over `B2_SLOW_QUERY_MS` (default 100) log at WARN with
@@ -206,8 +228,8 @@ flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the subs
 lives in the adapter (`init_logging`, in **both** `b2-cli/src/main.rs` and `b2-desktop/src/logging.rs`),
 so `b2-core` stays wall-clock-free and the instrumentation is inert unless an adapter opts in. The two
 sinks emit the same JSONL shape; they differ only where the host demands it — the desktop uses a
-non-blocking writer (long-lived, multi-threaded) and, for the *implied* default, scopes to `b2=debug`
-so Tauri/wry tracing doesn't pollute the file (an explicit `B2_LOG` is honored verbatim in both).
+non-blocking writer (long-lived, multi-threaded), where the CLI's short single-shot run takes a plain
+`Mutex<File>` (an explicit `B2_LOG` is honored verbatim in both).
 **Desktop path quirk:** `just app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a *relative*
 `B2_LOG_FILE=./logs/x.jsonl` lands under that crate dir, not the repo root — pass an **absolute** path
 (e.g. `B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app`) to write where you expect.
@@ -275,10 +297,11 @@ schema or flow change.
 - **`Embedder`** (`b2-core/src/embed.rs`) — text → vector. Real impl is `b2-embed`'s candle-backed
   `LocalEmbedder` (bge-base-en-v1.5, 768-dim); test/dev impl is `FakeEmbedder` (blake3-hashed,
   content-addressed, *not* semantic). The fake is content-addressed so drop→rebuild is reproducible.
-- **`LlmProvider`** (`b2-core/src/llm.rs`) — grounded chat (flow ④, `Vault::ask`; GH #151/#153):
+- **`LlmProvider`** (`b2-core/src/llm.rs`) — grounded chat (flow ④, `Vault::ask`; GH #151/#153/#154):
   messages in, streamed tokens out through a callback whose return value steers **cooperative
-  cancellation** — sync, no tokio. Test/dev impl is `FakeLlm` (a chat request echoes citation
-  markers for its passages; a condensation request echoes the question). Unlike the embedder, chat
+  cancellation** — sync, no tokio. Real impl is `b2-llm`'s `OpenAiCompatProvider` (any
+  OpenAI-compatible endpoint; Ollama by default); test/dev impl is `FakeLlm` (a chat request echoes
+  citation markers for its passages; a condensation request echoes the question). Unlike the embedder, chat
   carries **no index identity** (contrast M2): nothing it produces is stored — no `meta` row, no
   response caching, session-only history — so swapping chat models never touches the index, and a
   provider swap is a URL/config change. Note content leaves the machine only by explicit cloud
@@ -297,8 +320,19 @@ if/when one lands — `index-engine.md` §5.)*
 - **`b2-embed`** — the real candle-backed embedder. Heavy ML deps (candle, tokenizers, hf-hub) live
   **only here**. `provision` (`b2 init`) downloads + verifies the model into a shared XDG cache;
   `LocalEmbedder::load` fails fast with "run `b2 init`" if absent.
+- **`b2-llm`** — the real chat provider (GH #154): a hand-rolled **sync** OpenAI-compatible SSE client
+  over `ureq` (already in the tree via `hf-hub`), behind the `LlmProvider` seam. Sync end-to-end is the
+  point — **no tokio enters the workspace**, and cancellation is returning early from a blocking read
+  loop. One wire shape (`POST {base}/chat/completions`, `stream: true`, frames until `[DONE]`), so the
+  quirks it owns are its tests: keep-alive comments, multi-line `data:`, CRLF, mid-stream error frames,
+  a stream that stops without `[DONE]` (a *truncated* answer, honestly marked cancelled — not an error),
+  and a garbled frame (an error, so a protocol mismatch can't pass as a short answer). Ollama is the
+  guided default; any compatible URL works, and a cloud one only by explicit configuration (M5).
+  `probe` is `b2 init`'s posture for chat — one `GET /models` before a human waits, turning "the daemon
+  isn't running" and "that model isn't pulled" into sentences rather than a failed answer.
 - **`b2-cli`** — the `b2` binary. A *dumb* adapter over the façade: parse args, pick + inject the
-  embedder, call `Vault`, print (human-readable, or `--json` for agents). Holds no engine logic.
+  embedder and (for `ask`/`chat`) the chat provider, call `Vault`, print (human-readable, streamed for
+  an answer, or `--json` for agents). Holds no engine logic.
 - **`b2-desktop`** — the Tauri host: the *second* dumb adapter, the GUI sibling of `b2-cli`. Each
   `#[tauri::command]` is deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view
   types as the IPC contract; it also owns host-only infrastructure (the async cancellable reindex task,
@@ -403,6 +437,9 @@ adapters wire the real model.
   hallucinated marker resolves to nothing and the answer text is never rewritten). Chat is a
   **reader** (C1); nothing model-derived is stored (`llm_cache` stays unused), history is
   session-only (S4), and model output is untrusted content (E5 — enforced at the render surface).
+  Its CLI surfaces are `b2 ask` (one-shot) and `b2 chat` (interactive, history carried in the
+  adapter's own `Vec<ChatTurn>` and nowhere else) — **every surface streams**, which is why `--json`
+  is a JSONL *event* stream (token events, then the `AnswerView`) rather than one printed object.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
   within *k* typed hops of an anchor (scoped traversal). `b2 similar`'s candidate generation is its
   *complement* (`discover::candidates` — nearest notes *not* already connected).

@@ -12,10 +12,12 @@ path = "src/main.rs"
 [dependencies]
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
+b2-llm = { path = "../b2-llm" }
 clap = { version = "4.6.1", features = ["derive", "env"] }
-# The `Serialize` bound on `print_json` — the one shared `--json` printer. Trait only;
-# the view types it prints derive their impls in b2-core, so no `derive` feature here.
-serde = "1.0.228"
+# The `Serialize` bound on `print_json` — the one shared `--json` printer — plus the
+# derive for `AskEvent`, the `ask --json` stream's own framing (the *events* are the
+# CLI's, the `AnswerView` inside the last one is b2-core's and derives there).
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
 # Foreground `reindex` Ctrl-C → cooperative cancel (GH #16): a SIGINT handler flips a

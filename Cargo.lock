@@ -334,6 +334,7 @@ version = "0.1.0"
 dependencies = [
  "b2-core",
  "b2-embed",
+ "b2-llm",
  "clap",
  "ctrlc",
  "nix",
@@ -398,6 +399,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "b2-llm"
+version = "0.1.0"
+dependencies = [
+ "b2-core",
+ "b2-embed",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]
