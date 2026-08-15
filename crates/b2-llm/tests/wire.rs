@@ -82,7 +82,7 @@ fn provider(base_url: &str) -> OpenAiCompatProvider {
     OpenAiCompatProvider::new(LlmConfig {
         base_url: base_url.to_string(),
         model: "test-model".to_string(),
-        api_key: None,
+        ..LlmConfig::default()
     })
 }
 

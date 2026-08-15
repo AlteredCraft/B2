@@ -665,9 +665,10 @@ pub fn chat_setup(state: State<'_, AppState>) -> ChatSetup {
 ///
 /// **Adapter state, never vault or index state** (GH #151): the endpoint and model persist
 /// beside the remembered vault, so a chat model swap costs no reindex (contrast M2). The
-/// key is held for the session only and never written down (`chat.rs` says why); `None`
-/// leaves whatever is already in force, so re-saving the endpoint doesn't silently clear a
-/// key the user typed a minute ago.
+/// key goes to the platform's own encrypted store instead (GH #176 — `keychain.rs` says
+/// why, and what happens when that store says no); `None` leaves whatever is already in
+/// force, so re-saving the endpoint doesn't silently clear a key the user typed a minute
+/// ago.
 #[tauri::command(async)]
 pub fn set_chat_config(
     state: State<'_, AppState>,
@@ -675,9 +676,18 @@ pub fn set_chat_config(
     model: Option<String>,
     api_key: Option<String>,
 ) -> ChatSetup {
-    let prefs = set_chat_config_impl(state.inner(), base_url, model, api_key);
+    let prefs = set_chat_config_impl(
+        state.inner(),
+        base_url,
+        model,
+        api_key,
+        &crate::keychain::Keychain,
+    );
     // Persisting lives in the command wrapper, not in the state transition, so the
     // unit-tested core never writes to the real user data dir (`choose_vault`'s split).
+    // The Keychain is the exception and has to be: whether the store took the key
+    // decides how long it lasts, and the state transition is what records that — so the
+    // store crosses in as a parameter, and tests pass an in-memory one.
     crate::chat::persist_prefs(&prefs);
     chat_setup_impl(state.inner())
 }
@@ -687,36 +697,27 @@ pub fn set_chat_config(
 /// (the `LlmConfig::from_env` rule — an emptied field returns to the
 /// environment/default rather than configuring an unusable endpoint).
 ///
-/// **The key is three-state, and has to be.** The Settings field paints empty even
-/// when a key is set (a password field that echoes its secret back is a worse
-/// idea), so "I didn't touch it" and "I cleared it" would otherwise be the same
-/// input — and collapsing them either signs the user out on every save, or makes
-/// the key impossible to remove. The second is what shipped, and it has a privacy
-/// edge beyond the annoyance: with the key un-removable, repointing `base_url` at
-/// a different provider would send the *first* provider's bearer token to the
-/// second. So: **absent keeps** (re-saving the endpoint must not sign you out),
-/// **blank clears** (the UI's Remove button, the only way back to a keyless
-/// configuration), a value sets. Clearing drops the *session* key; a
-/// `B2_LLM_API_KEY` in the environment is the user's own configuration and is
-/// still what an unset key resolves to.
+/// The key does not go through `clean`, and must not: blank is a *distinct* input
+/// there rather than the absence of one. `chat::apply_key` owns that three-state
+/// rule and the [`KeyStore`](crate::keychain::KeyStore) write it implies.
 fn set_chat_config_impl(
     state: &AppState,
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    keys: &dyn crate::keychain::KeyStore,
 ) -> ChatPrefs {
     let clean = |v: Option<String>| {
         v.map(|s| s.trim().to_string())
             .filter(|s: &String| !s.is_empty())
     };
-    let api_key = match api_key {
-        None => state.chat_prefs().api_key,
-        Some(typed) => clean(Some(typed)),
-    };
+    let (api_key, key_remembered) =
+        crate::chat::apply_key(&state.chat_prefs(), api_key.as_deref(), keys);
     let prefs = ChatPrefs {
         base_url: clean(base_url),
         model: clean(model),
         api_key,
+        key_remembered,
     };
     state.set_chat_prefs(prefs.clone());
     prefs
@@ -978,6 +979,7 @@ mod tests {
 
     use super::*;
     use crate::error::user_message;
+    use crate::keychain::MemoryStore;
     use b2_core::llm::FakeLlm;
     use std::fs;
     use std::path::Path;
@@ -1829,16 +1831,18 @@ mod tests {
     #[test]
     fn chat_config_layers_over_the_shared_resolution() {
         let state = AppState::new(None);
+        let keys = MemoryStore::empty();
         set_chat_config_impl(
             &state,
             Some("http://localhost:1234/v1".into()),
             Some("qwen2.5".into()),
-            Some("sk-session-only".into()),
+            Some("sk-a-cloud-key".into()),
+            &keys,
         );
-        let config = state.chat_prefs().config();
-        assert_eq!(config.base_url, "http://localhost:1234/v1");
-        assert_eq!(config.model, "qwen2.5");
-        assert_eq!(config.api_key.as_deref(), Some("sk-session-only"));
+        let prefs = state.chat_prefs();
+        assert_eq!(prefs.base_url.as_deref(), Some("http://localhost:1234/v1"));
+        assert_eq!(prefs.model.as_deref(), Some("qwen2.5"));
+        assert_eq!(prefs.api_key.as_deref(), Some("sk-a-cloud-key"));
 
         // Re-save with the key absent (the field the user didn't retype) and a blanked
         // model: the key survives, the model falls back to the shared default.
@@ -1847,41 +1851,72 @@ mod tests {
             Some("http://localhost:1234/v1".into()),
             Some("  ".into()),
             None,
+            &keys,
         );
-        let config = state.chat_prefs().config();
-        assert_eq!(config.api_key.as_deref(), Some("sk-session-only"));
-        assert_eq!(config.model, b2_llm::LlmConfig::from_env().model);
+        let prefs = state.chat_prefs();
+        assert_eq!(prefs.api_key.as_deref(), Some("sk-a-cloud-key"));
+        assert_eq!(prefs.model, None);
+        assert_eq!(prefs.config().model, b2_llm::LlmConfig::from_env().model);
+    }
+
+    /// The #176 behavior at the command boundary: a saved key goes into the store, so
+    /// the *next launch* — a fresh `AppState` reading from that same store — starts
+    /// with it already in force.
+    #[test]
+    fn a_saved_key_is_there_at_the_next_launch() {
+        let keys = MemoryStore::empty();
+        set_chat_config_impl(
+            &AppState::new(None),
+            Some("https://api.example.com/v1".into()),
+            None,
+            Some("sk-remember-me".into()),
+            &keys,
+        );
+        assert_eq!(keys.peek().as_deref(), Some("sk-remember-me"));
+
+        let next_launch = crate::chat::read_prefs_from(None, &keys);
+        assert_eq!(next_launch.api_key.as_deref(), Some("sk-remember-me"));
+        assert_eq!(next_launch.api_key_source(), b2_llm::ApiKeySource::Stored);
     }
 
     /// The key's third state, and the reason it has one: **blank clears**. Without
     /// it a key set once could never be removed through Settings — and repointing
     /// the endpoint would then send the first provider's bearer token to the
-    /// second, which is the privacy failure, not just the annoyance.
+    /// second, which is the privacy failure, not just the annoyance. Since #176 the
+    /// removal has to reach the store too, or the key would simply return.
     #[test]
-    fn a_blanked_key_clears_the_session_key() {
+    fn a_blanked_key_clears_it_everywhere() {
         let state = AppState::new(None);
-        set_chat_config_impl(&state, None, None, Some("sk-session-only".into()));
+        let keys = MemoryStore::empty();
+        set_chat_config_impl(&state, None, None, Some("sk-a-cloud-key".into()), &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
-            Some("sk-session-only")
+            Some("sk-a-cloud-key")
         );
 
-        // Absent: untouched, so the key stands.
-        set_chat_config_impl(&state, None, None, None);
+        // Absent: untouched, so the key stands — in memory and in the store.
+        set_chat_config_impl(&state, None, None, None, &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
-            Some("sk-session-only")
+            Some("sk-a-cloud-key")
         );
+        assert_eq!(keys.peek().as_deref(), Some("sk-a-cloud-key"));
 
-        // Blank (what the UI's Remove sends): gone. `config()` then resolves the key
-        // from the environment alone — `B2_LLM_API_KEY` is the user's own
+        // Blank (what the UI's Remove sends): gone from both. `config()` then resolves
+        // the key from the environment alone — `B2_LLM_API_KEY` is the user's own
         // configuration, and Settings never had the standing to clear that.
-        set_chat_config_impl(&state, None, None, Some("   ".into()));
+        set_chat_config_impl(&state, None, None, Some("   ".into()), &keys);
         assert_eq!(state.chat_prefs().api_key, None);
+        assert_eq!(
+            keys.peek(),
+            None,
+            "a removed key must not return next launch"
+        );
     }
 
-    /// The status the setup card renders never carries the key — only that one is set.
-    /// (Pinned in `b2-llm` too, on the view type itself; this is the command boundary.)
+    /// The status the setup card renders never carries the key — only where the key in
+    /// force came from. (Pinned in `b2-llm` too, on the view type itself; this is the
+    /// command boundary.)
     #[test]
     fn the_chat_setup_view_never_carries_the_key() {
         let state = AppState::new(None);
@@ -1892,10 +1927,36 @@ mod tests {
             Some("http://b2-no-such-host.invalid:11434/v1".into()),
             Some("llama3.2".into()),
             Some("sk-live-must-not-cross".into()),
+            &MemoryStore::empty(),
         );
         let setup = chat_setup_impl(&state);
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-must-not-cross"), "{json}");
-        assert!(json.contains("\"has_api_key\":true"), "{json}");
+        // *That* a key is configured still crosses; which source answered depends on
+        // whether the developer's own environment has one, so this asserts the part
+        // that holds either way.
+        assert!(json.contains("\"api_key_source\":"), "{json}");
+        assert!(!json.contains("\"api_key_source\":\"none\""), "{json}");
+    }
+
+    /// A Keychain that refuses must not break the save. The key the user typed is in
+    /// force for this run, nothing was stored, and the configuration says `session` so
+    /// the Settings copy can be honest about how long that lasts (GH #176's fallback
+    /// path — the convenience degrades, chat does not).
+    #[test]
+    fn a_refused_store_leaves_the_key_in_force_for_the_session() {
+        let state = AppState::new(None);
+        let keys = MemoryStore::refusing();
+        set_chat_config_impl(
+            &state,
+            Some("https://api.example.com/v1".into()),
+            None,
+            Some("sk-typed-just-now".into()),
+            &keys,
+        );
+        let prefs = state.chat_prefs();
+        assert_eq!(prefs.api_key.as_deref(), Some("sk-typed-just-now"));
+        assert_eq!(keys.peek(), None, "a refused write stores nothing");
+        assert_eq!(prefs.api_key_source(), b2_llm::ApiKeySource::Session);
     }
 }

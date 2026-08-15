@@ -1547,31 +1547,7 @@ function chatPanelHtml(state: AppState): string {
       return `<p class="settings-detail">${escapeHtml(setup.message ?? "")}</p>`;
     return chatSetupCardHtml(setup, true);
   })();
-  const key = cloud
-    ? `<label class="field">API key
-        <input id="settings-chat-key" type="password" autocomplete="off" spellcheck="false"
-          placeholder="${setup?.has_api_key ? "•••••••• (set for this session)" : "sk-…"}" />
-      </label>
-      ${
-        // The field paints empty whether or not a key is set, so an empty save means
-        // "keep" — which leaves this button as the only way back to a keyless
-        // configuration. Without it a key could never be removed, and repointing the
-        // endpoint would send the old provider's token to the new one.
-        setup?.has_api_key
-          ? `<div class="settings-action"><button class="btn small" id="settings-chat-clear-key" data-chat-clear-key
-               title="Forget the key B2 is holding for this session">Remove key</button>
-             <span class="muted">A key set in <code>B2_LLM_API_KEY</code> is your environment's, and stays.</span></div>`
-          : ""
-      }
-      <p class="settings-note">
-        <strong>Cloud models send your question and the retrieved note passages to the
-        configured provider.</strong> Nothing else leaves your machine, and B2 still writes
-        nothing to your notes. The key is kept for this session only and never saved to
-        disk — set <code>B2_LLM_API_KEY</code> in your environment to have it persist.
-      </p>`
-    : `<p class="settings-note">Local models keep everything on this machine — your
-        question and the retrieved passages never leave it. B2 talks to any
-        OpenAI-compatible server; Ollama is the one it can walk you through.</p>`;
+  const key = cloud ? cloudKeyHtml(setup) : localNoteHtml();
   return `<div class="settings-subhead">Chat model</div>
       <p class="settings-detail muted">Grounded chat answers only from passages B2 retrieves
         from this vault. Changing the model costs no reindex — nothing about chat is stored.</p>
@@ -1592,6 +1568,76 @@ function chatPanelHtml(state: AppState): string {
         <button class="btn small primary" id="settings-chat-save">Save and test</button>
       </div>
       ${status}`;
+}
+
+// The **Local** configuration's whole note: nothing leaves, so there is no key field and
+// no privacy warning to give — only the fact that makes the difference legible.
+function localNoteHtml(): string {
+  return `<p class="settings-note">Local models keep everything on this machine — your
+        question and the retrieved passages never leave it. B2 talks to any
+        OpenAI-compatible server; Ollama is the one it can walk you through.</p>`;
+}
+
+// The **Cloud models** key field, and the sentence saying where that key lives.
+//
+// Four states, because a user has to be told *before* they wonder (GH #176). B2 remembers
+// a key in the macOS Keychain — encrypted at rest, and there next launch — but two of the
+// four are cases where what they just did isn't quite what they'd assume:
+//
+//   - `environment` — `B2_LLM_API_KEY` overrides anything saved here, so a key typed into
+//     this field is stored and *not used*. Saying so is the difference between a documented
+//     precedence and a field that silently does nothing.
+//   - `session` — the Keychain refused, so the key works now and is gone at quit. The
+//     degrade is deliberate (chat must not break on a locked keychain) but it is not
+//     something to discover at the next launch.
+//
+// The field itself always paints empty: a password input that echoed its secret back would
+// be a worse idea than not showing it at all. Which is what makes an empty save mean
+// "keep", and leaves Remove as the only way back to a keyless configuration — without it a
+// key could never be removed, and repointing the endpoint would send the old provider's
+// token to the new one.
+function cloudKeyHtml(setup: ChatSetup | null): string {
+  const source = setup?.api_key_source ?? "none";
+  const placeholder =
+    source === "none"
+      ? "sk-…"
+      : source === "environment"
+        ? "•••••••• (from your environment)"
+        : source === "stored"
+          ? "•••••••• (saved in your Keychain)"
+          : "•••••••• (this session only)";
+  const where = {
+    none: "",
+    environment: `<p class="settings-detail"><code>B2_LLM_API_KEY</code> is set in your
+        environment, and that is the key in force — it overrides any key saved here.
+        Unset it in your shell to go back to the one B2 remembers.</p>`,
+    stored: `<p class="settings-detail">Saved in your macOS Keychain — encrypted at rest,
+        and here the next time you open B2.</p>`,
+    session: `<p class="settings-detail">Kept for this session only: B2 couldn’t save it to
+        your Keychain, so it will be gone when you quit. Saving again will retry.</p>`,
+  }[source];
+  // Offered whenever there is a key to remove. Under `environment` it still has work to
+  // do — it clears the one B2 remembers — but it cannot touch a variable the app doesn't
+  // own, so the label says which key it means.
+  const remove =
+    source === "none"
+      ? ""
+      : `<div class="settings-action"><button class="btn small" id="settings-chat-clear-key" data-chat-clear-key
+           title="Forget the key B2 has saved">Remove key</button>
+         <span class="muted">Removes the key B2 saved. A key set in <code>B2_LLM_API_KEY</code>
+         is your environment's, and stays.</span></div>`;
+  return `<label class="field">API key
+        <input id="settings-chat-key" type="password" autocomplete="off" spellcheck="false"
+          placeholder="${placeholder}" />
+      </label>
+      ${where}
+      ${remove}
+      <p class="settings-note">
+        <strong>Cloud models send your question and the retrieved note passages to the
+        configured provider.</strong> Nothing else leaves your machine, and B2 still writes
+        nothing to your notes. B2 saves the key in your macOS Keychain, never in a plain
+        file — set <code>B2_LLM_API_KEY</code> in your environment to override it.
+      </p>`;
 }
 
 // General — app-wide preferences that belong to no subsystem. Appearance is the only one

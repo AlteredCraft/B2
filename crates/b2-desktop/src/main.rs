@@ -31,6 +31,7 @@
 mod chat;
 mod commands;
 mod error;
+mod keychain;
 mod logging;
 mod menu;
 mod stats;
@@ -401,11 +402,14 @@ fn main() {
     // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
     // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
     let _guard = logging::init_logging();
-    // The chat endpoint/model the user last chose, if any (chat.rs). Adapter
-    // state like the remembered vault — never vault or index state — and
-    // best-effort: an absent or unreadable file is "nothing configured", which
-    // resolves to the same local default the CLI uses with no flags.
-    let state = AppState::with_chat(resolve_root(), chat::read_prefs());
+    // The chat endpoint/model the user last chose, if any, plus the API key out of
+    // the Keychain (chat.rs, keychain.rs). Adapter state like the remembered vault —
+    // never vault or index state — and best-effort throughout: an absent or
+    // unreadable file, or a store with nothing in it, is "nothing configured", which
+    // resolves to the same local default the CLI uses with no flags. A vault with no
+    // cloud model configured has no Keychain item, so this asks for nothing and
+    // prompts for nothing on the overwhelmingly common launch.
+    let state = AppState::with_chat(resolve_root(), chat::read_prefs(&keychain::Keychain));
     tauri::Builder::default()
         // The menu bar, declared (#119). Without this call Tauri installs
         // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate

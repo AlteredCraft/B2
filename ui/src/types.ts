@@ -110,12 +110,27 @@ export interface OllamaSetup {
 }
 
 /**
+ * Where the bearer token in force came from (`b2-llm`'s `ApiKeySource`) — a fact *about*
+ * the key, which is the only part of one that may cross this boundary.
+ *
+ * Each value is different copy, which is why this isn't a boolean (GH #176):
+ *
+ * - `"none"` — no key. The **Local** configuration, and the default.
+ * - `"environment"` — `B2_LLM_API_KEY`, which **overrides** anything B2 remembered. It is
+ *   the user's own configuration, so the app can neither replace nor remove it.
+ * - `"stored"` — remembered in the macOS Keychain: encrypted at rest, and there next launch.
+ * - `"session"` — held in memory for this run only, because the Keychain was unavailable or
+ *   refused. Chat works; the key is gone at quit.
+ */
+export type ApiKeySource = "none" | "environment" | "stored" | "session";
+
+/**
  * `chat_setup` / `set_chat_config` — everything the chat surface needs before a question
  * is asked (`b2-llm`'s `ChatSetup`). Adapter-level state, never vault or index state, so
  * changing it costs no reindex (contrast M2).
  *
- * `has_api_key` and never the key: the token does not cross this boundary in either
- * direction, and the host holds it for the session only (`b2-desktop/src/chat.rs`).
+ * `api_key_source` and never the key: the token does not cross this boundary in either
+ * direction (`b2-desktop/src/chat.rs`).
  */
 export interface ChatSetup {
   base_url: string;
@@ -123,7 +138,7 @@ export interface ChatSetup {
   /** `false` for **Local**, `true` for **Cloud models** — what the privacy copy hangs
    *  off (invariant M5). */
   cloud: boolean;
-  has_api_key: boolean;
+  api_key_source: ApiKeySource;
   state: ChatState;
   /** A generic, actionable sentence when `state` isn't `"ready"` (E4). */
   message: string | null;
