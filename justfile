@@ -130,9 +130,14 @@ check: && test-ui
 # desktop crate's `ui/dist` embed, so one clippy pass covers the whole workspace.
 # Stage order is failure order: the cheap mechanical checks first (`no-tokio`, then fmt, then
 # lint), the bulk of the code next, then the frontend suite, and `audit` last — it is the only
-# stage that touches the network, so a slow or unreachable registry can't delay a real failure
-# above it. `no-tokio` leads because it is a manifest-level check: it reads the lockfile and
-# never compiles anything, so it costs a fraction of a second and its failure is structural.
+# stage that *queries a remote service to do its job*, asking the npm advisory database on every
+# run, so a slow or unreachable registry can't delay a real failure above it. That is a narrower
+# claim than "the only stage that touches the network", which was never quite true and is less
+# so now: `ui-install` (upstream of `ui-build`) and `no-tokio` both reach for a registry when
+# their lockfile is out of date. The difference is that against a satisfied lockfile they are
+# offline no-ops, where `audit` goes out every time.
+# `no-tokio` leads because it is a manifest-level check: it reads the lockfile and never compiles
+# anything, so it costs a fraction of a second and its failure is structural.
 [group('gates')]
 [doc('Complete gate (~18s warm) — every mechanical check in one pass; exactly what CI runs.')]
 ci: no-tokio ui-build && test-ui audit
@@ -149,20 +154,32 @@ ci: no-tokio ui-build && test-ui audit
 # the result still builds and still passes — it just costs minutes of every cold build.
 # Scoped to `b2-cli` because that is the shipped binary; `b2-desktop` legitimately links tokio,
 # since **Tauri** does, and that is the host's runtime rather than one of ours.
-# `cargo tree -i` exits NON-ZERO when the package is absent from the graph, so the passing case
-# here is the command failing — hence the inverted test rather than a bare invocation. Inverting
-# an exit code turns *every* other failure into a pass (an unresolvable lockfile, an unreachable
-# registry, a typo in the package name would all read as "no tokio"), so the first line resolves
-# the tree on its own and fails loudly: after it succeeds, the only thing the second command can
-# be reporting is a missing package.
+# The obvious spelling of this check — `if cargo tree -i tokio; then fail; fi` — is wrong, and
+# instructively so. `cargo tree -i <spec>` exits non-zero when the package is *absent*, so the
+# passing case is the command failing, and inverting an exit code silently promotes every OTHER
+# failure to a pass. That is not hypothetical: `-i` resolves a package *specification*, which
+# also errors on an AMBIGUOUS one ("specification `windows-sys` is ambiguous", exit 101) — so the
+# day some crate drags in a tokio 0.x beside the 1.x, the check reporting on it would go green.
+# So detection doesn't use `-i` at all: line 1 resolves the tree and fails loudly if it can't,
+# and line 2 asks the same, already-proven command for a flat package list and greps it. The
+# formatting flags can't introduce a failure mode of their own, so nothing here can fail open.
+# `^tokio v` is anchored because this is now a text match — `tokio-util` must not trip it.
+# `--locked` is what keeps the recipe side-effect-free: `cargo tree` would otherwise rewrite
+# Cargo.lock to serve the query, and this is the first stage of `ci`, whose last CI step asserts
+# no stage edited a tracked file. Drift now fails here, naming itself, instead of surfacing later
+# as an unexplained dirty worktree.
+# Edges are cargo's default (normal + build + dev), deliberately WIDER than the shipped binary:
+# a dev-dependency dragging the stack back in wouldn't ship, but it would still be compiled by
+# `cargo test`, which is the cold-build cost this exists to protect. It costs nothing to be
+# strict here — the tree is clean under every edge kind *and* under `--target all`.
 [group('gates')]
 [doc("Fail if tokio is back in the `b2` binary's dependency tree (GH #174).")]
 no-tokio:
-    @cargo tree -p b2-cli > /dev/null
-    @if cargo tree -p b2-cli -i tokio > /dev/null 2>&1; then \
+    @cargo tree -p b2-cli --locked > /dev/null
+    @if cargo tree -p b2-cli --locked --prefix none --format '{p}' | grep -Eq '^tokio v'; then \
         echo "error: tokio is in b2-cli's dependency tree again (GH #174) —"; \
         echo "       a dependency is probably pulling an async HTTP stack via default features:"; \
-        cargo tree -p b2-cli -i tokio; \
+        cargo tree -p b2-cli --locked --invert tokio || true; \
         exit 1; \
     fi
 
