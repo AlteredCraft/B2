@@ -5,7 +5,8 @@
 //! Everything here is blocking. That is the design, not a limitation: the seam
 //! hands us a `FnMut` callback and asks us to stop when it says `Break`, which
 //! over a blocking reader is `return` — no runtime, no channel, no cancellation
-//! token, and no tokio in the workspace (GH #151).
+//! token (GH #151), and — since GH #174 trimmed `hf-hub`'s default features —
+//! no tokio in the `b2` binary's dependency tree either.
 
 use crate::sse;
 use crate::{LlmConfig, LlmError};

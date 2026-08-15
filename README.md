@@ -27,9 +27,9 @@ explained connections between them yourself.
 > **Grounded chat is live in the CLI** — **`b2 ask "…"`** and **`b2 chat`** answer questions *from your
 > notes*, streaming, with `[n]` citations back to the notes the answer came from
 > ([#151](https://github.com/AlteredCraft/B2/issues/151)). It talks to any **OpenAI-compatible** model
-> server (`crates/b2-llm`, a hand-rolled sync SSE client — no tokio anywhere); **Ollama** is the guided
-> default, a cloud model is explicit opt-in, and nothing about a chat is written to your notes or the
-> index. The chat pane in the desktop app is next.
+> server (`crates/b2-llm`, a hand-rolled sync SSE client — nothing in B2 is async, and the `b2` binary
+> links no tokio); **Ollama** is the guided default, a cloud model is explicit opt-in, and nothing
+> about a chat is written to your notes or the index. The chat pane in the desktop app is next.
 >
 > **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
 > the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri IPC. The
