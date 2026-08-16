@@ -240,13 +240,13 @@
     <code>chunks_ai/ad/au</code> triggers keep <code>chunks_fts</code> in lockstep — tokenized
     <b><code>porter unicode61</code></b> (stemmed; schema v5), a <em>measured verdict</em>, not a default:
     the stemmer A/B improved 7 BM25-only and 3 hybrid note ranks with every precision probe unmoved
-    (<span class="mono">docs/evals/runlog.md</span>, GH #157). So keyword search sees a chunk the moment it
+    (GH #157). So keyword search sees a chunk the moment it
     lands — before it is embedded.</p>
     <div class="ground"><b>Ground truth:</b> the config itself is <em>eval-validated</em> — GH #44's gate ran
     a seven-variant sweep (<span class="mono">just eval-sweep</span>: target sizes 250/350/600, overlaps
     0/0.30, the heading-path toggle) against the hand-labelled corpus and kept
     <span class="mono">ChunkConfig::default()</span> on the paired per-query win/loss readout
-    (<span class="mono">docs/evals/runlog.md</span>, 2026-08-11). The breadcrumb-prepend knob
+    (GH #44, 2026-08-11). The breadcrumb-prepend knob
     (<span class="mono">prepend_heading_path</span>) exists and measured rank-neutral twice, so it ships off.</div>
   </section>
 

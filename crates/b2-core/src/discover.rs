@@ -14,12 +14,12 @@
 //! nothing in the vault genuinely relates. The projection of that ruling is
 //! [`DiscoveryFloor`] (GH #150): a **per-anchor z-score** rule over the stage-1
 //! centroid-distance population, calibrated from the eval's labelled anchors
-//! (docs/evals/runlog.md, 2026-08-11). Z-scores are what make the floor
+//! (GH #150's calibration runs). Z-scores are what make the floor
 //! **model-relative by construction** — the rule compares each candidate against
 //! the anchor's own score distribution, never against an absolute cosine, so it
 //! survives a model or device swap with no recalibration (the measured failure
 //! of absolute floors: eval-calibrated cosines kept 99–100% of a dense
-//! real vault's candidates, runlog 2026-08-10). What it deliberately cannot
+//! real vault's candidates, GH #150). What it deliberately cannot
 //! catch is a *pair-level* miscalibration — a single stranger the model scores
 //! like a cluster-mate sits above any anchor-local statistic; that residue is
 //! measured (the eval's watercolor ↔ stain-removal pair) and belongs to a
@@ -84,7 +84,7 @@ const FLOOR_MIN_POPULATION: usize = 12;
 /// centroid distance, distances over unit centroids are affine in cosine
 /// (`d² = 2 − 2·cos`), so the z is free, and — because it is relative to the
 /// anchor's own distribution — identical in meaning across models, devices, and
-/// vault densities. Calibrated on the eval's labelled anchors (runlog 2026-08-11):
+/// vault densities. Calibrated on the eval's labelled anchors (GH #150):
 /// positive anchors put every labelled mate at z ≥ +1.90 while diffuse loners'
 /// best candidates sit ≤ +1.73, and the same member bar trims a 228-note
 /// single-author vault to 1–4 candidates. The default sits mid-window rather

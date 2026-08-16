@@ -8,7 +8,7 @@
 //! last test pins that). So these tests inject a **geometric** embedder whose
 //! vectors are hand-placed: notes carry `VEC:<tag>` markers, and the embedder maps
 //! each tag to a designed unit vector. The scenarios mirror the measured shapes the
-//! rule was calibrated on (docs/evals/runlog.md 2026-08-11): a cluster anchor whose
+//! rule was calibrated on (GH #150's calibration runs): a cluster anchor whose
 //! mate stands far above a tight noise cloud, and a diffuse anchor whose best
 //! candidate is just the least-far member of one undifferentiated cloud.
 

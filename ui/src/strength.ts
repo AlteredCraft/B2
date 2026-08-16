@@ -5,7 +5,7 @@
 // discovery floor judged it by. Everything shown has already cleared the floor
 // (z ≥ 1.85), so the bands grade *within* the shown, from "cleared the bar" to
 // "towers over the field"; the thresholds match the calibration's measured
-// landmarks (docs/evals/runlog.md 2026-08-11: labelled mates 1.9–3.0, dense-vault
+// landmarks (GH #150's calibration: labelled mates 1.9–3.0, dense-vault
 // leaders up to ~6). A candidate with no z (floor off or inert) gets no band —
 // no statistic was computed, so none is claimed.
 

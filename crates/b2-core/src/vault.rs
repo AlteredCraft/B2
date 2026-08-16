@@ -1102,7 +1102,7 @@ impl Vault {
     /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
     /// deduped, best first. **The eval harness's ablation instrument** (GH #158),
     /// not an adapter surface: scoring it beside bm25-only and hybrid is what
-    /// gives fusion a measured single-signal baseline, and the runlog's finding
+    /// gives fusion a measured single-signal baseline, and the eval's finding
     /// that RRF can demote a dense rank-1 hit is a standing measurement only
     /// because this stays callable. Same model-mismatch fail-fast as `search`; a
     /// projected-but-unembedded vault returns no hits (there is nothing to scan

@@ -291,7 +291,7 @@ shape is constrained on two sides:
   notes whose labelled answer is "nothing relates" — scoring *suppression* (does discovery say
   so?), and the eval records every surfaced score into two **cosine piles**: human-labelled
   related vs. everything else surfaced. Both cheap variants were judged against that data and
-  **both failed when measured** (runlog 2026-08-10/11): an absolute cosine floor does not transfer
+  **both failed when measured** ([GH #150](https://github.com/AlteredCraft/B2/issues/150)): an absolute cosine floor does not transfer
   across vault density (floors read off the labelled piles kept 99–100% of a 228-essay
   single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
   needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))
@@ -316,7 +316,7 @@ z is the *coarse* stage-1 centroid statistic, so a note whose single best passag
 than its centroid suggests now ranks below one with a nearer centroid and no such passage —
 stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
 The labelled corpus does not move on the change — but it was already at ceiling
-(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, runlog
+(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, measured
 2026-08-16), so it can only witness the absence of a regression, never confirm the ordering is
 right. It cannot see the trade at all: six anchors of short single-topic notes, where a
 centroid and its best chunk agree by construction. The cost is therefore pinned by a
@@ -372,7 +372,7 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
 - **A fused-score tie is broken by the dense signal, and that is a policy, not a detail.** RRF over
   integer ranks lands every fused score on a discrete lattice, so bit-identical ties between mirrored
   rank pairs — (1, 3) vs (3, 1) — are structural, and the eval corpus produced one
-  ([#156](https://github.com/AlteredCraft/B2/issues/156), the runlog's worked case: the semantic half
+  ([#156](https://github.com/AlteredCraft/B2/issues/156)'s worked case: the semantic half
   named the labelled answer, BM25 named the wrong one). The secondary sort key in `rrf_fuse` is
   therefore the candidate's rank in the **vector list** (absent ranks below present), with id last
   purely for determinism — a photo finish is decided on the signal measured to be right there, never
@@ -381,8 +381,8 @@ How it runs — an **exact, in-process scan**, no vector extension, no ANN:
   default (schema v5).** Unstemmed BM25 matched surface forms only — `pedalling` found nothing in a
   note that says "pedals", leaving the lexical half at rank 41–46 on queries the dense half ranked
   first, which RRF's consensus bias turned into hybrid demotions of correct dense hits. The A/B
-  that settled it ([#157](https://github.com/AlteredCraft/B2/issues/157);
-  docs/evals/runlog.md 2026-08-11): porter improved 7 BM25-only note ranks and 3 hybrid note ranks,
+  that settled it ([#157](https://github.com/AlteredCraft/B2/issues/157),
+  2026-08-11): porter improved 7 BM25-only note ranks and 3 hybrid note ranks,
   worsened none, and dissolved every standing fusion demotion (hybrid rejoined vector-only at 0.98
   hit@1 / 0.988 MRR on the eval corpus) — while the precision probes built to vote *against*
   stemming (the `universe`/`university` Porter-collision pair, the code-literal `git-cheatsheet.md`

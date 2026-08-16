@@ -159,11 +159,11 @@ fn rrf_ranks_a_doc_present_in_both_lists_above_single_list_winners() {
 /// RRF over integer ranks lands on a discrete lattice of reachable sums, so exact
 /// score ties are structural, not freak events — the eval corpus produced one on
 /// its second run (`photosynthesis.md` vs `houseplant-care.md`, bit-identical f64,
-/// docs/evals/runlog.md 2026-08-10). The old secondary key was ascending chunk id
+/// GH #156). The old secondary key was ascending chunk id
 /// — projection walk order, which is semantically arbitrary. The policy now: a
 /// photo finish is broken by the candidate's rank in the **last** list handed to
 /// `rrf_fuse` — the dense/vector list in hybrid search — because on the tie the
-/// runlog decomposed, the semantic signal named the labelled answer and BM25 named
+/// eval decomposed, the semantic signal named the labelled answer and BM25 named
 /// the wrong one. Id remains only as the final determinism key.
 #[test]
 fn rrf_breaks_symmetric_ties_by_the_dense_lists_rank() {

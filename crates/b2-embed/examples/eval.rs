@@ -41,7 +41,7 @@
 //!    ungated. Suppression is fully gated: every negative anchor must come back
 //!    clean. (The watercolor ↔ stain-removal pair that once blocked this was
 //!    resolved 2026-08-11 by replacing watercolor with a cleanly orthogonal
-//!    loner — an arguable negative label is corpus debt, not a target; runlog.)
+//!    loner — an arguable negative label is corpus debt, not a target.)
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -486,7 +486,8 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             );
             // The readout the A/B is actually judged on: at this n every aggregate
             // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
-            // per-query win/loss list is the data (docs/evals/runlog.md).
+            // per-query win/loss list is the data (docs/evals/README.md, the
+            // process rules).
             print_rank_moves(&set.queries, &hybrid, &pass);
             append_result(
                 &results_path,
@@ -526,7 +527,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // stranger where the label says "nothing" exits non-zero. This was a `>= 2`
     // ratchet while watercolor ↔ stain-removal — a pair the model scored the
     // corpus's strongest — sat in the negative set making its own label arguable;
-    // the 2026-08-11 resolution (runlog) replaced watercolor with a cleanly
+    // the 2026-08-11 resolution replaced watercolor with a cleanly
     // orthogonal loner (throat-singing) rather than argue, so every negative is
     // now unambiguous and the gate is the `==` the issue specified.
     if similar.neg_clean != similar.neg_n {
@@ -544,7 +545,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
 /// passage-labelled queries; `VectorOnly` is the dense ablation
 /// (`Vault::search_vector_only`, GH #158), note-level only — its chunk aggregate
 /// stays empty. The ablation column is what lets a run say whether fusion paid
-/// rent: the runlog's finding that RRF demotes dense rank-1 hits was established
+/// rent: the finding that RRF demotes dense rank-1 hits was established
 /// by hand-decomposing fused scores once; this makes it a standing measurement.
 #[derive(Clone, Copy, PartialEq)]
 enum Retrieval {
@@ -837,7 +838,7 @@ fn print_default_report(
         hybrid.note.mrr(),
         hybrid.note.hit1() - bm25.note.hit1(),
     );
-    // The standing form of the runlog's fusion finding (GH #158): every query
+    // The standing form of the fusion finding (GH #158): every query
     // where fusing the two signals ranked the labelled answer WORSE than the
     // dense signal alone would have. RRF's consensus bias makes some of this
     // inevitable; the point is that it is counted and named on every run instead
@@ -940,9 +941,9 @@ fn print_default_report(
 /// judged on. At this corpus's n, every aggregate delta is worth 1–2 queries, so
 /// "hit@1 +0.05" and "these two queries flipped, this one broke" are the same
 /// fact — but only the second form can be argued with, per-query, against the
-/// labels (docs/evals/runlog.md, the method notes). Prints nothing but a
+/// labels (docs/evals/README.md, the process rules). Prints nothing but a
 /// no-moves line when the variant reproduced the reference ranking exactly —
-/// which, per the same runlog entry, is itself a claim to verify against a
+/// which, per the same rules, is itself a claim to verify against a
 /// continuous quantity (the piles), never bare proof of "no effect".
 fn print_rank_moves(queries: &[Labelled], reference: &Pass, variant: &Pass) {
     let improved = |a: Option<usize>, b: Option<usize>| match (a, b) {

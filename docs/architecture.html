@@ -368,7 +368,7 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
     double-quoted so nothing is read as an operator, OR-joined for recall. (Punctuation is FTS5 syntax and would
     otherwise crash the parse — a real bug the eval surfaced.) The index it matches is <b>stemmed</b>
     (<code>porter unicode61</code>, schema v5) — a measured verdict: the #157 A/B improved 7 BM25-only and 3
-    hybrid note ranks with every precision probe unmoved (<span class="mono">docs/evals/runlog.md</span>).</li>
+    hybrid note ranks with every precision probe unmoved (GH #157).</li>
     <li>A <b>fused-score tie breaks on the dense signal's rank</b>, not on chunk id: RRF over integer ranks lands
     every score on a discrete lattice, so bit-identical ties are structural — and the secondary key is a policy
     about which signal to trust in a photo finish, decided by the eval (#156), never left to projection walk order.</li>
@@ -385,8 +385,8 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
   disconnected from the anchor. <b>Honest scope:</b> under the fake embedder the vector half isn't semantic, so
   these prove the <em>plumbing</em>, not model quality — that's the out-of-CI <b>eval harness</b>
   (<code>just eval</code>: hand-labelled retrieval + discovery corpus, BM25/vec-only/hybrid columns, suppression
-  gates; <span class="mono">docs/evals/README.md</span> is the overview, <span class="mono">docs/evals/runlog.md</span>
-  the decision log).</div>
+  gates; <span class="mono">docs/evals/README.md</span> is the overview, the git history and the
+  issue that drove each change are the decision log).</div>
 </section>
 
 <!-- ============ FLOW 3: DISCOVER ============ -->
@@ -729,8 +729,8 @@ b2_relations:
       note ranks, passage ranks, and discovery suppression (every negative anchor must come back clean under the
       quality floor, enforced in the exit code) — plus a model-free rank-stability probe (<code>just stability</code>)
       for what a small corpus is structurally blind to. Every shipped verdict — porter stemming (#157), the
-      chunker config (#44), the discovery floor (#150) — traces to a recorded run in its decision log,
-      <span class="mono">docs/evals/runlog.md</span>; <span class="mono">docs/evals/README.md</span> is the
+      chunker config (#44), the discovery floor (#150) — traces to a recorded run on the issue that
+      drove it and the commit that shipped it; <span class="mono">docs/evals/README.md</span> is the
       overview. Model quality never flakes CI.</li>
       <li><b>Cold-index scale, CLI side.</b> Incremental reindex is done, projection and embedding are decoupled
       (keyword-first: a cold vault is searchable before it's embedded), the desktop runs the embed pass as a

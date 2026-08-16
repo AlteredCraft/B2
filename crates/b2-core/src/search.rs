@@ -40,13 +40,13 @@ pub struct Hit {
 /// **Exact ties are structural here**, not freak events: integer ranks put every
 /// fused score on a discrete lattice of reachable sums, so two candidates with
 /// mirrored ranks — (1, 3) against (3, 1) — collide bit-identically. The eval
-/// corpus hit one on its second run (docs/evals/runlog.md, 2026-08-10). Breaking
+/// corpus hit one on its second run (GH #156). Breaking
 /// such a tie is a *policy choice about which signal to trust in a photo finish*:
 /// the old key (ascending id — projection walk order) answered it with the
 /// filesystem, which is deterministic and semantically arbitrary. The key now is
 /// the candidate's rank in the **last** list — callers put the signal they trust
 /// on ties last, which for [`hybrid_search`] is the dense/vector list: on the tie
-/// the runlog decomposed, the semantic half named the labelled answer and BM25
+/// the eval decomposed, the semantic half named the labelled answer and BM25
 /// named the wrong one (GH #156). A candidate absent from that list ranks below
 /// any candidate present in it; id remains as the final key, so the sort stays
 /// fully deterministic (single-list callers are unaffected — one list cannot
@@ -192,7 +192,7 @@ pub fn hybrid_search(
 ///
 /// **An ablation instrument, not a product surface** (GH #158): the eval harness
 /// scores it beside bm25-only and hybrid on every run, so fusion has a measured
-/// single-signal baseline to answer to — the runlog's finding that RRF can demote
+/// single-signal baseline to answer to — the eval's finding that RRF can demote
 /// a chunk the dense signal ranked first is only a standing measurement if this
 /// path stays callable. Scores are negated L2 distance (closer = higher), the
 /// same convention as [`graph_filtered_search`] and **not** commensurable with
