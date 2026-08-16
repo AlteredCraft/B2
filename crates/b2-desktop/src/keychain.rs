@@ -61,16 +61,28 @@ pub trait KeyStore {
     /// only** rather than to fail the save.
     fn save(&self, key: &str) -> bool;
 
-    /// Forget the remembered key. Best-effort and infallible by design: the
-    /// caller has already dropped the key from memory, so a store that refuses
-    /// leaves a stale item, not a live configuration.
-    fn clear(&self);
+    /// Forget the remembered key. `true` when the store no longer holds one —
+    /// including when it never did, which is the outcome this asks for and not a
+    /// failure.
+    ///
+    /// The return value is load-bearing, and an earlier draft of this trait got
+    /// it wrong by making removal infallible. A refused delete leaves the item in
+    /// the Keychain; if the caller drops the key from memory anyway, Settings
+    /// shows a keyless configuration, the user believes their credential is gone
+    /// — and the **next launch reads it straight back out of the store**. A
+    /// secret that returns from the dead after you deleted it is the worst
+    /// failure this module could have, so removal is all-or-nothing: `false` here
+    /// means the caller must keep the key exactly as it was and let the UI go on
+    /// showing it (`chat::apply_key`).
+    fn clear(&self) -> bool;
 }
 
 /// The macOS Keychain, and the only [`KeyStore`] the shipped app constructs.
 ///
 /// A unit struct: the item it addresses is a constant, so there is no state to
-/// hold and no handle to keep open.
+/// hold and no handle to keep open — which is also why `Debug` is safe to derive
+/// here and pointedly *not* on [`MemoryStore`] below.
+#[derive(Debug)]
 pub struct Keychain;
 
 /// The service half of the generic-password item's identity. The app's bundle
@@ -132,12 +144,15 @@ mod platform {
             }
         }
 
-        fn clear(&self) {
+        fn clear(&self) -> bool {
             match delete_generic_password(SERVICE, ACCOUNT) {
-                Ok(()) => {}
+                Ok(()) => true,
                 // Nothing stored is the outcome this asks for, not a failure.
-                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => {}
-                Err(e) => eprintln!("[b2] could not remove the API key from the Keychain: {e}"),
+                Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => true,
+                Err(e) => {
+                    eprintln!("[b2] could not remove the API key from the Keychain: {e}");
+                    false
+                }
             }
         }
     }
@@ -161,7 +176,11 @@ mod platform {
             false
         }
 
-        fn clear(&self) {}
+        /// Trivially true: a store that never remembers anything is always
+        /// already in the state `clear` asks for.
+        fn clear(&self) -> bool {
+            true
+        }
     }
 }
 
@@ -203,6 +222,15 @@ impl MemoryStore {
         }
     }
 
+    /// A store that already holds `key` *and* refuses to give it up — the
+    /// failed-removal case, which is the one that must never read as success.
+    pub fn refusing_holding(key: &str) -> Self {
+        Self {
+            key: std::sync::Mutex::new(Some(key.to_string())),
+            refuses: true,
+        }
+    }
+
     /// What the store is holding — the assertion a test actually wants to make.
     pub fn peek(&self) -> Option<String> {
         self.key.lock().expect("test store lock").clone()
@@ -223,7 +251,18 @@ impl KeyStore for MemoryStore {
         true
     }
 
-    fn clear(&self) {
-        *self.key.lock().expect("test store lock") = None;
+    fn clear(&self) -> bool {
+        let mut held = self.key.lock().expect("test store lock");
+        // Nothing to remove succeeds even under refusal — the real Keychain
+        // answers `errSecItemNotFound` here, which `Keychain::clear` reads as
+        // "already in the asked-for state".
+        if held.is_none() {
+            return true;
+        }
+        if self.refuses {
+            return false;
+        }
+        *held = None;
+        true
     }
 }

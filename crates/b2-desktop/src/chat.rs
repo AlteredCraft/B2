@@ -207,6 +207,14 @@ pub fn read_prefs_from(file: Option<&Path>, keys: &dyn KeyStore) -> ChatPrefs {
 ///   would return at the next launch and make Remove a lie.
 /// * `Some(key)` — **set**, and remembered for next time.
 ///
+/// **Removal is all-or-nothing**, and that asymmetry with the *set* path is the
+/// point. A refused save is survivable — the key still works, just for this run —
+/// so it degrades. A refused *delete* is not: dropping the key from memory while
+/// the store keeps it would show the user a keyless configuration and then hand
+/// the credential back at the next launch. So a store that won't let go leaves
+/// the key exactly where it was, and the panel goes on showing it, which is the
+/// truth ([`KeyStore::clear`]).
+///
 /// The returned pair is `(key, remembered)` — [`ChatPrefs`]'s two fields. A store
 /// that refuses is **not** an error: the key stays in force for this run and the
 /// configuration reads [`ApiKeySource::Session`], which is exactly the behavior
@@ -224,10 +232,11 @@ pub fn apply_key(
         return (prev.api_key.clone(), prev.key_remembered);
     };
     match typed.trim() {
-        "" => {
-            keys.clear();
-            (None, false)
-        }
+        "" if keys.clear() => (None, false),
+        // The store refused to let go. Keep the key precisely as it stood, so
+        // what the panel reports and what the next launch will find stay the
+        // same fact.
+        "" => (prev.api_key.clone(), prev.key_remembered),
         key => (Some(key.to_string()), keys.save(key)),
     }
 }
@@ -357,6 +366,63 @@ mod tests {
         assert_eq!(key, None);
         assert!(!remembered);
         assert_eq!(store.peek(), None);
+    }
+
+    /// The failure this module most owes a test: a store that **won't let go**.
+    ///
+    /// Dropping the key from memory while the Keychain keeps it would show a
+    /// keyless configuration and then resurrect the credential at the next
+    /// launch. So removal is all-or-nothing — and the proof is the second half,
+    /// where a fresh `read_prefs_from` over the same store finds exactly what the
+    /// panel was still claiming.
+    #[test]
+    fn a_removal_the_store_refuses_does_not_pretend_to_have_happened() {
+        let store = MemoryStore::refusing_holding("sk-wont-let-go");
+        let held = ChatPrefs {
+            api_key: Some("sk-wont-let-go".into()),
+            key_remembered: true,
+            ..ChatPrefs::default()
+        };
+
+        let (key, remembered) = apply_key(&held, Some(""), &store);
+        assert_eq!(
+            key.as_deref(),
+            Some("sk-wont-let-go"),
+            "a key the store still holds must stay in force, not vanish from the UI"
+        );
+        assert!(remembered);
+        assert_eq!(store.peek().as_deref(), Some("sk-wont-let-go"));
+
+        // The whole point, stated as the next launch: what the panel reports and
+        // what the store will hand back are the same fact.
+        let next_launch = read_prefs_from(None, &store);
+        assert_eq!(next_launch.api_key.as_deref(), Some("sk-wont-let-go"));
+        assert_eq!(
+            next_launch.api_key_source(),
+            ChatPrefs {
+                api_key: key,
+                key_remembered: remembered,
+                ..ChatPrefs::default()
+            }
+            .api_key_source(),
+            "no launch may disagree with what the user was last shown"
+        );
+    }
+
+    /// The other side of it: a *session-only* key sits in no store, so removing
+    /// it can't be refused — `clear` on an empty store is already the asked-for
+    /// state (the real Keychain's `errSecItemNotFound`).
+    #[test]
+    fn a_session_key_clears_even_against_a_refusing_store() {
+        let store = MemoryStore::refusing();
+        let session = ChatPrefs {
+            api_key: Some("sk-never-stored".into()),
+            key_remembered: false,
+            ..ChatPrefs::default()
+        };
+        let (key, remembered) = apply_key(&session, Some(""), &store);
+        assert_eq!(key, None);
+        assert!(!remembered);
     }
 
     /// A Keychain that says no must cost the convenience and nothing else: the

@@ -1616,6 +1616,18 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
     session: `<p class="settings-detail">Kept for this session only: B2 couldn’t save it to
         your Keychain, so it will be gone when you quit. Saving again will retry.</p>`,
   }[source];
+  // The closing sentence is where the key *lives*, and it has to agree with `where` above.
+  // Under `session` it cannot be the general "B2 saves it in your Keychain": this key is
+  // precisely the one B2 could not save, and a paragraph that says both is worse than
+  // either — a user reading "couldn't save it" and then "B2 saves the key" has no way to
+  // know which sentence is about them.
+  const storage =
+    source === "session"
+      ? `This key was <strong>not</strong> saved — B2 normally keeps it in your macOS Keychain,
+         never in a plain file. Set <code>B2_LLM_API_KEY</code> in your environment to have one
+         that persists regardless.`
+      : `B2 saves the key in your macOS Keychain, never in a plain file — set
+         <code>B2_LLM_API_KEY</code> in your environment to override it.`;
   // Offered whenever there is a key to remove. Under `environment` it still has work to
   // do — it clears the one B2 remembers — but it cannot touch a variable the app doesn't
   // own, so the label says which key it means.
@@ -1635,8 +1647,7 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
       <p class="settings-note">
         <strong>Cloud models send your question and the retrieved note passages to the
         configured provider.</strong> Nothing else leaves your machine, and B2 still writes
-        nothing to your notes. B2 saves the key in your macOS Keychain, never in a plain
-        file — set <code>B2_LLM_API_KEY</code> in your environment to override it.
+        nothing to your notes. ${storage}
       </p>`;
 }
 

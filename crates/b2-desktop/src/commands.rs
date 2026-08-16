@@ -676,19 +676,29 @@ pub fn set_chat_config(
     model: Option<String>,
     api_key: Option<String>,
 ) -> ChatSetup {
-    let prefs = set_chat_config_impl(
-        state.inner(),
-        base_url,
-        model,
-        api_key,
-        &crate::keychain::Keychain,
-    );
-    // Persisting lives in the command wrapper, not in the state transition, so the
-    // unit-tested core never writes to the real user data dir (`choose_vault`'s split).
-    // The Keychain is the exception and has to be: whether the store took the key
-    // decides how long it lasts, and the state transition is what records that — so the
-    // store crosses in as a parameter, and tests pass an in-memory one.
-    crate::chat::persist_prefs(&prefs);
+    {
+        // One save at a time. `(async)` means Tauri runs these handlers off the main
+        // thread and does not serialize them, so without this two overlapping saves
+        // could interleave and leave `chat.json` holding the *older* endpoint while
+        // memory holds the newer one (`AppState::chat_saving` spells out how). Scoped
+        // to the mutating part only — the probe below is a network round trip, and
+        // holding a lock across it would make every save wait out the previous one's
+        // timeout.
+        let _saving = state.begin_chat_save();
+        let prefs = set_chat_config_impl(
+            state.inner(),
+            base_url,
+            model,
+            api_key,
+            &crate::keychain::Keychain,
+        );
+        // Persisting lives in the command wrapper, not in the state transition, so the
+        // unit-tested core never writes to the real user data dir (`choose_vault`'s split).
+        // The Keychain is the exception and has to be: whether the store took the key
+        // decides how long it lasts, and the state transition is what records that — so the
+        // store crosses in as a parameter, and tests pass an in-memory one.
+        crate::chat::persist_prefs(&prefs);
+    }
     chat_setup_impl(state.inner())
 }
 

@@ -434,10 +434,23 @@ check("the cloud key field says which key is in force, and never shows one", () 
   assert(env.includes("B2_LLM_API_KEY"), "the overriding variable is named");
   assert(env.includes("overrides"), `the override is stated, not implied: ${env}`);
 
-  // The Keychain refused: chat works, and the key is gone at quit.
+  // The Keychain refused: chat works, and the key is gone at quit. The panel must not
+  // then close with the general "B2 saves the key in your Keychain" — this key is the
+  // one it could not save, and a paragraph asserting both leaves the reader unable to
+  // tell which sentence is about them.
   const session = chatTab({ api_key_source: "session" });
   assert(session.includes("this session only"), "a session-only key says so");
   assert(session.includes("couldn’t save it"), `and says why: ${session}`);
+  assert(
+    !session.includes("B2 saves the key in your macOS Keychain"),
+    `and never also claims it was saved: ${session}`,
+  );
+  assert(session.includes("not</strong> saved"), `it says the opposite, plainly: ${session}`);
+  // Where the claim *is* true, it stays.
+  assert(
+    stored.includes("B2 saves the key in your macOS Keychain"),
+    "a stored key still gets the Keychain sentence",
+  );
 
   // Nothing configured: nothing to remove, and no claim about a key that isn't there.
   const none = chatTab({ api_key_source: "none" });
