@@ -241,17 +241,24 @@ fn probing_refuses_a_url_that_answers_but_isnt_a_chat_api() {
     let err = provider(&url)
         .probe()
         .expect_err("a refused probe is not a connection");
-    match err {
+    match &err {
         b2_llm::LlmError::Refused {
             status, endpoint, ..
         } => {
-            assert_eq!(status, 404);
+            assert_eq!(*status, 404);
             // The endpoint rides along because the sentence names it, and by the
             // time an adapter prints one it no longer has the config in hand.
-            assert_eq!(endpoint, url, "the refusal names what was asked");
+            assert_eq!(endpoint, &url, "the refusal names what was asked");
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
+    // `Display` *is* the `B2_DEBUG` line (b2-cli's `user_message` prints
+    // `err.to_string()` and nothing else), so the server's own words have to be in
+    // it — the user-facing sentence deliberately drops them, and a field missing
+    // from the format is a field no adapter can reach.
+    let debug = err.to_string();
+    assert!(debug.contains("404 page not found"), "{debug}");
+    assert!(debug.contains(&url), "{debug}");
     server.join().expect("server thread");
 }
 

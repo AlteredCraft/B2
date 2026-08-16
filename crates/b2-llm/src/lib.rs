@@ -273,13 +273,17 @@ pub enum LlmError {
     /// to guess between them would give the wrong fix half the time, so the
     /// distinction is carried in the type — and turned into a sentence once, by
     /// [`crate::setup::refusal_message`].
-    #[error("the model server at {endpoint} refused a probe (HTTP {status})")]
+    #[error("the model server at {endpoint} refused a probe (HTTP {status}): {message}")]
     Refused {
         endpoint: String,
         status: u16,
-        /// The server's own explanation, when it sent one. Kept for `B2_DEBUG`
-        /// and the catch-all sentence; a 404 body ("404 page not found") says
-        /// nothing a human can act on, so the advice never leans on it.
+        /// The server's own explanation, when it sent one. It rides in `Display`
+        /// (as [`LlmError::Http`]'s does) because that *is* the `B2_DEBUG` line —
+        /// `user_message` prints `err.to_string()` and nothing else, so a field
+        /// left out of the format is a field no adapter can ever show. The
+        /// user-facing sentence is the one that omits it: a 404 body ("404 page
+        /// not found") says nothing a human can act on, so
+        /// [`crate::setup::refusal_message`] leans on the status instead.
         message: String,
     },
 

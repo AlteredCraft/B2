@@ -555,6 +555,21 @@ check("a configured model the daemon doesn't have still leads the picker", () =>
   assert(!html.includes("data-chat-use-model"), `no duplicate picker in Settings: ${html}`);
 });
 
+check("Cloud models never inherits the local daemon's picker", () => {
+  // Pressing *Cloud models* repaints immediately and nothing re-probes (the URL field is
+  // cleared — there is no default provider to probe), so `setup` is still the local one,
+  // inventory and all. Keying the picker off that would put this machine's models under
+  // an empty cloud endpoint, with a button press standing between the user and the field
+  // they opened the section to fill in.
+  const html = localChatTab(
+    { model: "llama3.2:latest" },
+    { installed: [model("llama3.2:latest")] },
+    { chatCloud: true },
+  );
+  assert(tagWith(html, 'id="settings-chat-model"').startsWith("<input"), "a box, not a picker");
+  assert(!html.includes("data-chat-model-pick"), "and no offer to go back to a local list");
+});
+
 check("the typed shape is a text box, and offers the way back", () => {
   const html = localChatTab(
     { model: "llama3.2:latest" },

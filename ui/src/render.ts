@@ -1599,7 +1599,15 @@ function chatPanelHtml(state: AppState): string {
  */
 function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
   const ollama = setup?.ollama;
-  const installed = ollama?.running ? ollama.installed : [];
+  // A **Local** control by definition: `/api/tags` is one daemon's inventory, which
+  // says nothing about what a cloud provider serves. `chatCloud` and not `setup.cloud`
+  // because the view flag turns over the instant *Cloud models* is pressed, while the
+  // setup is whatever the last probe found — and nothing re-probes on that press (the
+  // URL field is deliberately cleared, there being no default provider). Reading the
+  // stale answer would leave a picker of this machine's models under an empty cloud
+  // endpoint until Save and test, with *Type a model name* standing between the user
+  // and the field they came to fill in.
+  const installed = !state.chatCloud && ollama?.running ? ollama.installed : [];
   const current = setup?.model ?? "";
   if (state.chatModelTyped || installed.length === 0) {
     // The way back, offered only when there is something to go back *to*.
