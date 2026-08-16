@@ -207,7 +207,7 @@ const OWN_SHEET: readonly SheetGroup[] = [
       },
     ],
   },
-  // The settings dialog is a tabbed surface (settingstabs.ts), and a tab rail is exactly
+  // Settings is a tabbed surface (settingstabs.ts), and a tab rail is exactly
   // the kind of thing that ends up mouse-only if its moves aren't written down: the
   // sections are visibly *there*, so nobody thinks to look for a chord.
   {
@@ -220,7 +220,7 @@ const OWN_SHEET: readonly SheetGroup[] = [
       { ids: ["settings.tab.first", "settings.tab.last"], action: "First / last section" },
       {
         ids: ["settings.section.next", "settings.section.prev"],
-        action: "Next / previous section, from anywhere in the dialog",
+        action: "Next / previous section, from anywhere in Settings",
       },
       { ids: ["dismiss"], action: "Close Settings" },
     ],
