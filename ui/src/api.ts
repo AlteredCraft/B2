@@ -304,10 +304,11 @@ export const api = {
    * Save the chat configuration and re-probe it. Adapter state, never vault or index
    * state — a chat model swap costs no reindex (contrast M2).
    *
-   * `apiKey` is **session-only** host-side: it is held in memory for the run and never
-   * written to disk (`b2-desktop/src/chat.rs` says why), and it never comes back — the
-   * returned setup carries `has_api_key`, not the key. Passing `null` keeps whatever is
-   * already in force, so re-saving the endpoint can't silently sign you out.
+   * `apiKey` is held in memory for the run and, when the platform will take it, in the
+   * macOS Keychain — never in a plain file, and never in a way that comes back here: the
+   * returned setup carries `api_key_source`, not the key (`b2-desktop/src/keychain.rs`
+   * argues both halves). Passing `null` keeps whatever is already in force, so re-saving
+   * the endpoint can't silently sign you out; `""` is the explicit *clear*.
    */
   setChatConfig: (
     baseUrl: string | null,

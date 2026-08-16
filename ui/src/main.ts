@@ -2003,21 +2003,40 @@ async function useChatModel(model: string): Promise<void> {
 }
 
 /**
- * Forget the session's API key — the only way back to a keyless configuration, since the
- * field paints empty whether or not one is set (a password field that echoed its secret
- * back would be a worse idea than not having this button).
+ * Forget B2's API key — the only way back to a keyless configuration, since the field
+ * paints empty whether or not one is set (a password field that echoed its secret back
+ * would be a worse idea than not having this button).
  *
  * Sends `""`, which is the host's *clear* signal, as distinct from `null`'s *keep*. What
- * it clears is the key B2 is holding for this session; a `B2_LLM_API_KEY` in the
- * environment is the user's own configuration and outlives it — the copy says so.
+ * it clears is the key B2 is holding, in memory and in the Keychain both — a removal that
+ * left the stored copy behind would simply hand it back at the next launch. A
+ * `B2_LLM_API_KEY` in the environment is the user's own configuration and outlives it —
+ * the copy beside the button says so.
  */
 async function clearChatKey(): Promise<void> {
-  await applyChatConfig(
-    state.chatSetup?.base_url ?? null,
-    state.chatSetup?.model ?? null,
-    "",
-    "API key removed for this session.",
-  );
+  try {
+    state.chatSetup = await api.setChatConfig(
+      state.chatSetup?.base_url ?? null,
+      state.chatSetup?.model ?? null,
+      "",
+    );
+    state.chatCloud = state.chatSetup.cloud;
+    // Removal is all-or-nothing host-side, so the returned source *is* the
+    // outcome — no separate success flag to keep in step. A key still reported
+    // as stored/session means the Keychain refused to let go, and saying
+    // "removed" there would be the one lie this button must never tell: the key
+    // would be back at the next launch. (`environment` is neither outcome — B2
+    // never had standing over that key, and the panel's copy says so.)
+    const source = state.chatSetup.api_key_source;
+    flash(
+      source === "stored" || source === "session"
+        ? "Couldn’t remove the key — your Keychain refused. It is still saved."
+        : "API key removed.",
+    );
+  } catch (e) {
+    flash(errText(e));
+  }
+  render();
 }
 
 /** Save a chat configuration, re-probe, and say what happened — the shared tail of every

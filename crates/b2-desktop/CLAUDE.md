@@ -87,11 +87,16 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   host's Settings laid over it exactly as a CLI flag would be. Two differences from the embedder are
   deliberate. **Chat carries no index identity** (contrast M2): nothing it produces is stored, so changing
   the chat model costs no reindex, and the endpoint + model persist beside the remembered vault rather than
-  in the vault. And **the API key is session-only**: a **Cloud models** configuration (M5) needs a bearer
-  token, which this host holds in memory and never writes to disk — `B2_LLM_API_KEY` is how a user makes one
-  persist. A secret B2 stores is a secret B2 is responsible for; a plaintext file in Application Support is
-  not where that responsibility gets taken. It never crosses back to the webview either: the status view
-  carries `has_api_key`, never the key.
+  in the vault. And **the API key lives in the Keychain, under an env override** (GH #176, `src/keychain.rs`):
+  a **Cloud models** configuration (M5) needs a bearer token, and this host remembers one in the macOS
+  Keychain — encrypted at rest, ACL'd per application — rather than in a file. A secret B2 stores is a
+  secret B2 is responsible for; a plaintext file in Application Support is not where that responsibility
+  gets taken, and neither is `security add-generic-password -w`, which would put the token in `ps`. Three
+  rules follow, and each has a test. `B2_LLM_API_KEY` **wins** over the stored key, so a shell can point one
+  launch at another provider or decline to have B2 keep a secret at all. A store that refuses **must not
+  break chat**: the key stays in force for the run and the configuration reads `ApiKeySource::Session`, which
+  is the pre-#176 behavior as a fallback rather than a failure. And the key still never crosses back to the
+  webview: the status view carries `api_key_source`, never the key.
 - **Structured logging installed here, like the CLI.** `logging::init_logging` (called first in `main`)
   is the desktop's opt-in `B2_LOG`/`B2_DEBUG`/`B2_LOG_FILE` subscriber — the GUI sibling of the CLI's, same
   JSONL shape (b2-core only emits; the subscriber + clock live in the adapter, keeping the core

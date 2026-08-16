@@ -123,7 +123,7 @@ function chatSetup(over: Partial<ChatSetup> = {}): ChatSetup {
     base_url: "http://localhost:11434/v1",
     model: "llama3.2",
     cloud: false,
-    has_api_key: false,
+    api_key_source: "none",
     state: "ready",
     message: null,
     available: [],
@@ -401,6 +401,61 @@ check("the Index panel counts indexed and embedded separately", () => {
     app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", notesTotal: 0 }),
   );
   assert(fresh.includes("Nothing indexed yet"), "an unindexed vault is not a complete one");
+});
+
+// --- Settings → Chat: where the cloud API key lives ----------------------------------
+//
+// Not focus identity either, but the same "only this side is testable" argument: since
+// GH #176 the key has four resolutions and the app's honesty about which one is in force
+// exists *only* as copy. A user who exports `B2_LLM_API_KEY` and then types a key into
+// Settings has done something that does not do what it looks like, and a user whose
+// Keychain refused has a key that disappears at quit — both are things to be told before
+// they are discovered. The host has its own tests that the source is computed right; these
+// pin that each one reaches the screen as a different sentence.
+
+const chatTab = (over: Partial<ChatSetup>): string =>
+  modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "chat",
+      chatCloud: true,
+      chatSetup: chatSetup({ base_url: "https://api.example.com/v1", cloud: true, ...over }),
+    }),
+  );
+
+check("the cloud key field says which key is in force, and never shows one", () => {
+  const stored = chatTab({ api_key_source: "stored" });
+  assert(stored.includes("Keychain"), "a remembered key says where it is remembered");
+  assert(stored.includes("data-chat-clear-key"), "and can be removed");
+
+  // The environment wins, so a key typed here would be stored and not used. Saying so is
+  // the whole difference between a documented precedence and a field that does nothing.
+  const env = chatTab({ api_key_source: "environment" });
+  assert(env.includes("B2_LLM_API_KEY"), "the overriding variable is named");
+  assert(env.includes("overrides"), `the override is stated, not implied: ${env}`);
+
+  // The Keychain refused: chat works, and the key is gone at quit. The panel must not
+  // then close with the general "B2 saves the key in your Keychain" — this key is the
+  // one it could not save, and a paragraph asserting both leaves the reader unable to
+  // tell which sentence is about them.
+  const session = chatTab({ api_key_source: "session" });
+  assert(session.includes("this session only"), "a session-only key says so");
+  assert(session.includes("couldn’t save it"), `and says why: ${session}`);
+  assert(
+    !session.includes("B2 saves the key in your macOS Keychain"),
+    `and never also claims it was saved: ${session}`,
+  );
+  assert(session.includes("not</strong> saved"), `it says the opposite, plainly: ${session}`);
+  // Where the claim *is* true, it stays.
+  assert(
+    stored.includes("B2 saves the key in your macOS Keychain"),
+    "a stored key still gets the Keychain sentence",
+  );
+
+  // Nothing configured: nothing to remove, and no claim about a key that isn't there.
+  const none = chatTab({ api_key_source: "none" });
+  assert(!none.includes("data-chat-clear-key"), "no key, no Remove button");
+  assert(!none.includes("Keychain — encrypted"), "and no claim one is saved");
 });
 
 // --- the tree's context menu ---------------------------------------------------------

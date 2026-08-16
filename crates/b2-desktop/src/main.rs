@@ -31,6 +31,7 @@
 mod chat;
 mod commands;
 mod error;
+mod keychain;
 mod logging;
 mod menu;
 mod stats;
@@ -89,11 +90,24 @@ pub struct AppState {
     ask_cancel: AtomicBool,
     /// `true` while an answer is streaming — the single-in-flight guard.
     ask_running: AtomicBool,
-    /// The chat endpoint, model, and (session-only) key. Behind a `Mutex` for the
+    /// The chat endpoint, model, and the key in force. Behind a `Mutex` for the
     /// vault root's reason: Settings changes it at runtime and every later ask
     /// resolves a fresh provider from it. **Never vault or index state**
     /// (GH #151) — see `chat.rs`.
     chat: Mutex<ChatPrefs>,
+    /// Held for the whole of one Settings save, which the `chat` lock alone
+    /// cannot cover.
+    ///
+    /// A save is a read-modify-write spanning three places — the Keychain, the
+    /// `chat` mutex, and `chat.json` — and `chat_prefs()` deliberately drops its
+    /// lock between them (it must: a Keychain write can block on the OS access
+    /// prompt, and no ask should wait behind that). So two overlapping saves can
+    /// interleave, and the loser writes *its* preferences to disk after the
+    /// winner has already installed the newer ones in memory — a settings file
+    /// that disagrees with the running app until the next launch reads it back.
+    /// The window is small and needs two saves in flight, but the Keychain
+    /// prompt is exactly what makes one save long enough to be caught.
+    chat_saving: Mutex<()>,
 }
 
 impl AppState {
@@ -111,7 +125,17 @@ impl AppState {
             ask_cancel: AtomicBool::new(false),
             ask_running: AtomicBool::new(false),
             chat: Mutex::new(chat),
+            chat_saving: Mutex::new(()),
         }
+    }
+
+    /// Claim the Settings save for its whole read-modify-write — see
+    /// [`chat_saving`](Self::chat_saving). Blocks rather than refusing: a save is
+    /// short and a user who pressed Save twice meant both, so the second must
+    /// *follow* the first rather than be dropped (contrast `try_start_ask`,
+    /// where two answers at once is a genuine conflict).
+    pub fn begin_chat_save(&self) -> std::sync::MutexGuard<'_, ()> {
+        lock_recover(&self.chat_saving)
     }
 
     /// The chat preferences in force, cloned out so the lock is **not** held
@@ -401,11 +425,14 @@ fn main() {
     // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
     // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
     let _guard = logging::init_logging();
-    // The chat endpoint/model the user last chose, if any (chat.rs). Adapter
-    // state like the remembered vault — never vault or index state — and
-    // best-effort: an absent or unreadable file is "nothing configured", which
-    // resolves to the same local default the CLI uses with no flags.
-    let state = AppState::with_chat(resolve_root(), chat::read_prefs());
+    // The chat endpoint/model the user last chose, if any, plus the API key out of
+    // the Keychain (chat.rs, keychain.rs). Adapter state like the remembered vault —
+    // never vault or index state — and best-effort throughout: an absent or
+    // unreadable file, or a store with nothing in it, is "nothing configured", which
+    // resolves to the same local default the CLI uses with no flags. A vault with no
+    // cloud model configured has no Keychain item, so this asks for nothing and
+    // prompts for nothing on the overwhelmingly common launch.
+    let state = AppState::with_chat(resolve_root(), chat::read_prefs(&keychain::Keychain));
     tauri::Builder::default()
         // The menu bar, declared (#119). Without this call Tauri installs
         // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate

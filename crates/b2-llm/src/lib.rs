@@ -37,6 +37,8 @@ mod provider;
 pub mod setup;
 mod sse;
 
+use serde::Serialize;
+
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
     is_local, is_ollama, probe_setup, pull_command, ChatSetup, ChatState, ModelTier, OllamaModel,
@@ -60,9 +62,38 @@ pub const ENV_URL: &str = "B2_LLM_URL";
 /// Environment variable naming the chat model id.
 pub const ENV_MODEL: &str = "B2_LLM_MODEL";
 /// Environment variable carrying the bearer token for a **cloud** endpoint.
-/// Env-only, deliberately: a key passed as a CLI flag is a key in `ps` output
-/// and in shell history.
+/// Never a CLI flag: a key passed as a flag is a key in `ps` output and in shell
+/// history. It is also the **override** — see [`ApiKeySource::Environment`].
 pub const ENV_API_KEY: &str = "B2_LLM_API_KEY";
+
+/// Where the bearer token in force came from. A **fact about the key, never the
+/// key** — this is the half of a cloud configuration that may safely be shown,
+/// logged, and sent to a webview, which is why it exists at all rather than the
+/// bare "is one set?" boolean it replaces (GH #176).
+///
+/// The order below is the resolution order, and the one interesting rule is at
+/// the top of it: [`Environment`](Self::Environment) **wins**. An adapter that
+/// remembers a key for the user still yields to `B2_LLM_API_KEY`, so a shell
+/// that exports one gets the key it named — for a single run, for a scripted
+/// launch, or simply because the user would rather B2 kept no secret at all.
+/// [`LlmConfig::with_api_key`] enforces it in one place so no adapter has to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeySource {
+    /// No key at all — the **Local** configuration, and the default.
+    #[default]
+    None,
+    /// [`ENV_API_KEY`], and therefore the key in force whatever else is
+    /// configured. The CLI's only source; the desktop's override.
+    Environment,
+    /// Remembered by the adapter in the platform's own secret store — the
+    /// desktop's macOS Keychain (GH #176). Survives quit, encrypted at rest.
+    Stored,
+    /// Held in memory for this run only. What the desktop degrades to when the
+    /// Keychain is unavailable or refuses: chat still works with the key the
+    /// user typed, it just won't be there next launch.
+    Session,
+}
 
 /// Which model to chat with, and where it lives. **Adapter-level state, never
 /// vault or index state** (GH #151): nothing here is recorded anywhere in the
@@ -82,6 +113,11 @@ pub struct LlmConfig {
     /// Bearer token for a cloud endpoint; `None` for a local runtime, which
     /// wants no auth (and where sending one would be noise).
     pub api_key: Option<String>,
+    /// Where [`api_key`](Self::api_key) came from, and `None` when there is no
+    /// key. Kept beside the secret rather than derived from it because only the
+    /// *resolver* knows: an adapter that remembers keys has to be told which of
+    /// its own sources answered, and the environment's answer outranks it.
+    pub api_key_source: ApiKeySource,
 }
 
 /// Hand-written so the key **cannot** be logged. `Debug` is what an adapter
@@ -102,6 +138,9 @@ impl std::fmt::Debug for LlmConfig {
                     None => "None",
                 },
             )
+            // Safe, and the useful half: "a key is set, from the environment"
+            // is what turns a rejected cloud call into a diagnosis.
+            .field("api_key_source", &self.api_key_source)
             .finish()
     }
 }
@@ -114,6 +153,7 @@ impl Default for LlmConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             model: DEFAULT_MODEL.to_string(),
             api_key: None,
+            api_key_source: ApiKeySource::None,
         }
     }
 }
@@ -133,10 +173,15 @@ impl LlmConfig {
                 .filter(|v| !v.is_empty())
         };
         let base = Self::default();
+        let api_key = read(ENV_API_KEY);
         Self {
             base_url: read(ENV_URL).unwrap_or(base.base_url),
             model: read(ENV_MODEL).unwrap_or(base.model),
-            api_key: read(ENV_API_KEY),
+            api_key_source: match api_key {
+                Some(_) => ApiKeySource::Environment,
+                None => ApiKeySource::None,
+            },
+            api_key,
         }
     }
 
@@ -155,16 +200,33 @@ impl LlmConfig {
         self
     }
 
-    /// Lay an adapter's **explicit** bearer token over this config —
-    /// [`with_overrides`](Self::with_overrides)'s sibling, separate because a key
-    /// is not a setting like the other two: it is env-only for the CLI (a key in
-    /// a flag is a key in `ps`), and the desktop holds one for the session
-    /// without ever writing it down. `None` keeps whatever the environment
-    /// supplied, so "I didn't type a key" never *clears* `B2_LLM_API_KEY`.
+    /// Lay an adapter's own bearer token over this config —
+    /// [`with_overrides`](Self::with_overrides)'s sibling, and deliberately
+    /// **not** the same rule.
+    ///
+    /// For the URL and the model, an adapter's explicit choice beats the
+    /// environment (the `B2_VAULT_PATH` convention). A key inverts that:
+    /// `B2_LLM_API_KEY` wins, and a key an adapter merely *remembered* — the
+    /// desktop's Keychain item — yields to it (GH #176). Two reasons, and the
+    /// second is the load-bearing one. A shell that exports a key is making a
+    /// per-run statement, which is the only way to point one launch at a
+    /// different provider without disturbing what is stored; and a user who
+    /// would rather B2 kept no secret at all needs a way to say so that a
+    /// stored key cannot silently outrank. The rule lives here, in the one
+    /// resolver, so no adapter has to re-derive it.
+    ///
+    /// `source` is where the caller's key came from, recorded so the
+    /// configuration can *say* which one answered (see [`ApiKeySource`]).
+    /// `None` keeps whatever the environment supplied, so "I didn't type a key"
+    /// never *clears* `B2_LLM_API_KEY`.
     #[must_use]
-    pub fn with_api_key(mut self, api_key: Option<&str>) -> Self {
+    pub fn with_api_key(mut self, api_key: Option<&str>, source: ApiKeySource) -> Self {
+        if self.api_key_source == ApiKeySource::Environment {
+            return self;
+        }
         if let Some(key) = api_key {
             self.api_key = Some(key.to_string());
+            self.api_key_source = source;
         }
         self
     }
@@ -236,6 +298,7 @@ mod tests {
             base_url: "https://api.example.com/v1".into(),
             model: "some-model".into(),
             api_key: Some("sk-live-do-not-log-me".into()),
+            api_key_source: ApiKeySource::Stored,
         };
         let rendered = format!("{config:?}");
         assert!(
@@ -243,12 +306,57 @@ mod tests {
             "a bearer token must never reach a log: {rendered}"
         );
         // Presence still shows: "is a key configured at all" is the question a
-        // rejected cloud call actually needs answered.
+        // rejected cloud call actually needs answered — and now *which* key,
+        // which is the follow-up question when the answer is "yes, and it's
+        // being rejected".
         assert!(rendered.contains("redacted"), "{rendered}");
         assert!(rendered.contains("api.example.com"), "{rendered}");
+        assert!(rendered.contains("Stored"), "{rendered}");
         assert!(
             format!("{:?}", LlmConfig::default()).contains("api_key: \"None\""),
             "the local configuration says so plainly"
+        );
+    }
+
+    /// The one inversion of the layering rule (GH #176): an adapter's *remembered*
+    /// key yields to `B2_LLM_API_KEY`, so a shell that exports one gets the key it
+    /// named — the escape hatch a stored secret must never be able to shadow.
+    #[test]
+    fn the_environments_key_outranks_a_remembered_one() {
+        let from_env = LlmConfig {
+            api_key: Some("sk-from-the-environment".into()),
+            api_key_source: ApiKeySource::Environment,
+            ..LlmConfig::default()
+        };
+        let resolved = from_env.with_api_key(Some("sk-from-the-keychain"), ApiKeySource::Stored);
+        assert_eq!(resolved.api_key.as_deref(), Some("sk-from-the-environment"));
+        assert_eq!(resolved.api_key_source, ApiKeySource::Environment);
+    }
+
+    /// With no key in the environment, a remembered one is simply the key — and
+    /// it says where it came from, which is what the Settings copy reads.
+    #[test]
+    fn a_remembered_key_is_used_and_named_when_the_environment_is_silent() {
+        let keyless = LlmConfig::default();
+        assert_eq!(keyless.api_key_source, ApiKeySource::None);
+
+        let stored = keyless
+            .clone()
+            .with_api_key(Some("sk-from-the-keychain"), ApiKeySource::Stored);
+        assert_eq!(stored.api_key.as_deref(), Some("sk-from-the-keychain"));
+        assert_eq!(stored.api_key_source, ApiKeySource::Stored);
+
+        // The Keychain refused, so the same key is in force for this run only —
+        // chat works, and the configuration is honest about how long it lasts.
+        let session = keyless
+            .clone()
+            .with_api_key(Some("sk-typed-just-now"), ApiKeySource::Session);
+        assert_eq!(session.api_key_source, ApiKeySource::Session);
+
+        // And `None` is "I didn't type one", which must never *clear* a key.
+        assert_eq!(
+            stored.with_api_key(None, ApiKeySource::None).api_key_source,
+            ApiKeySource::Stored
         );
     }
 }

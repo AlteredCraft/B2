@@ -215,13 +215,19 @@ silently touch the wrong dir (`Cli::require_vault`).
 detail after the generic message.
 The chat seam has the same shape (GH #154): `B2_LLM_URL` / `B2_LLM_MODEL` name the OpenAI-compatible
 endpoint and model (defaults `http://localhost:11434/v1` + `llama3.2` — Ollama's), `B2_LLM_API_KEY`
-carries a **cloud** endpoint's bearer token (env-only, deliberately: a key in a flag is a key in `ps`),
+carries a **cloud** endpoint's bearer token (never a flag: a key in a flag is a key in `ps`),
 and `B2_LLM=fake` is `B2_EMBEDDER=fake`'s sibling — the deterministic `FakeLlm`, no server, what the
 CLI suite runs under. `ask`/`chat`'s `--llm-url` / `--llm-model` beat the env, which beats the default
 (the `B2_VAULT_PATH` rule); resolution itself lives once in `b2_llm::LlmConfig::from_env`, so the
 desktop layers its settings over the same base — Settings → Chat is that adapter's "flags", persisted
-beside the remembered vault in the app's data dir (GH #155), with the **key held for the session only**
-and never written down (`B2_LLM_API_KEY` is how one persists). Chat config is **adapter-level, never
+beside the remembered vault in the app's data dir (GH #155). The **key** is the one field that layers the
+other way (GH #176): the desktop remembers it in the **macOS Keychain** — encrypted at rest, never a
+plain file, and never in `chat.json`, which is structurally incapable of carrying one — and
+`B2_LLM_API_KEY` **overrides** whatever is stored, so a shell can point one launch elsewhere or tell B2
+to keep no secret at all. A Keychain that refuses costs the convenience and nothing else: the key stays
+in force for the run, and the app says so (`b2_llm::ApiKeySource` is what the Settings copy reads —
+`none` / `environment` / `stored` / `session`, four states because each is different copy). The key
+never crosses back to the webview in any of them. Chat config is otherwise **adapter-level, never
 vault or index state** — nothing about it is recorded, so a model swap costs no reindex (contrast M2).
 `B2_LOG` turns on structured debug logging: **JSON Lines** (stdout stays pure data), one flat object
 per event — pipe into jq/DuckDB/pandas for reporting/plotting. Sink is stderr by default;
@@ -364,8 +370,8 @@ if/when one lands — `index-engine.md` §5.)*
   the fs-watch `vault-changed` pulse, the OS folder dialog, the **declared menu bar** — `menu.rs`,
   GH #119 — and the streaming, cancellable `ask` that is its exact sibling for chat: tokens out on a
   `Channel`, a cooperative cancel flag read at every token, and the chat provider injected the way the
-  embedder is, with the endpoint remembered beside the vault and the API key held only for the session
-  (`chat.rs`, GH #155). Has its own `CLAUDE.md` with the
+  embedder is, with the endpoint remembered beside the vault and the API key in the macOS Keychain,
+  under `B2_LLM_API_KEY`'s override (`chat.rs` + `keychain.rs`, GH #155/#176). Has its own `CLAUDE.md` with the
   thin-adapter rules — read it before touching this crate.
 - **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
   toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Rendering a note is a

@@ -22,7 +22,7 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
   base_url: "http://localhost:11434/v1",
   model: "llama3.2",
   cloud: false,
-  has_api_key: false,
+  api_key_source: "none",
   state: "ready",
   message: null,
   available: [],

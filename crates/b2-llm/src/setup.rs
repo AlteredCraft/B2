@@ -17,7 +17,7 @@
 //! Adapter-level throughout (GH #151): nothing here is recorded in the vault or
 //! the index, so a model swap costs no reindex (contrast M2).
 
-use crate::{LlmConfig, LlmError, OpenAiCompatProvider};
+use crate::{ApiKeySource, LlmConfig, LlmError, OpenAiCompatProvider};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -224,10 +224,17 @@ pub struct ChatSetup {
     /// `false` for the **Local** configuration, `true` for **Cloud models** —
     /// which is the flag the privacy copy hangs off (M5).
     pub cloud: bool,
-    /// Whether a bearer token is configured. **Never the token itself**: the
-    /// key does not cross this boundary in either direction (the `LlmConfig`
-    /// `Debug` impl's rule, applied to the view).
-    pub has_api_key: bool,
+    /// Whether a bearer token is configured and, when one is, which of the
+    /// resolver's sources supplied it. **Never the token itself**: the key does
+    /// not cross this boundary in either direction (the `LlmConfig` `Debug`
+    /// impl's rule, applied to the view).
+    ///
+    /// Richer than the "is one set?" boolean it replaced because the Settings
+    /// copy is different in each case (GH #176) — a key the environment
+    /// supplies cannot be removed from inside the app, and a key the Keychain
+    /// refused to take is gone at quit. Both are things a user has to be told
+    /// *before* they wonder why.
+    pub api_key_source: ApiKeySource,
     pub state: ChatState,
     /// A generic, actionable sentence when `state` isn't `Ready` (E4), else
     /// `None`. Phrased here rather than in each adapter so the CLI's wording and
@@ -249,7 +256,7 @@ impl ChatSetup {
             base_url: config.base_url.clone(),
             model: config.model.clone(),
             cloud: false,
-            has_api_key: false,
+            api_key_source: ApiKeySource::None,
             state: ChatState::Fake,
             message: Some(
                 "The fake chat provider is in use (B2_LLM=fake) — answers are deterministic test \
@@ -290,7 +297,7 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
         base_url: config.base_url.clone(),
         model: config.model.clone(),
         cloud: !is_local(&config.base_url),
-        has_api_key: config.api_key.is_some(),
+        api_key_source: config.api_key_source,
         state,
         message,
         available,
@@ -575,12 +582,13 @@ mod tests {
             base_url: "https://api.example.com/v1".into(),
             model: "some-model".into(),
             api_key: Some("sk-live-do-not-serialize-me".into()),
+            api_key_source: ApiKeySource::Stored,
         };
         let setup = ChatSetup {
             base_url: config.base_url.clone(),
             model: config.model.clone(),
             cloud: !is_local(&config.base_url),
-            has_api_key: config.api_key.is_some(),
+            api_key_source: config.api_key_source,
             state: ChatState::Ready,
             message: None,
             available: Vec::new(),
@@ -588,8 +596,34 @@ mod tests {
         };
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-do-not-serialize-me"), "{json}");
-        assert!(json.contains("\"has_api_key\":true"), "{json}");
+        assert!(json.contains("\"api_key_source\":\"stored\""), "{json}");
         assert!(json.contains("\"cloud\":true"), "{json}");
+    }
+
+    /// The view's source is the **resolved** one, not a guess about it — which is
+    /// what lets the Settings copy tell a user that the key in force is their
+    /// shell's, and that the Remove button therefore cannot reach it (GH #176).
+    #[test]
+    fn the_setup_view_names_the_source_the_resolver_chose() {
+        // `.invalid` is reserved (RFC 2606): the probe fails immediately and this
+        // never meets a model server a developer happens to be running.
+        let stored_under_an_env_key = LlmConfig {
+            base_url: "http://b2-no-such-host.invalid:11434/v1".into(),
+            api_key: Some("sk-from-the-environment".into()),
+            api_key_source: ApiKeySource::Environment,
+            ..LlmConfig::default()
+        }
+        .with_api_key(Some("sk-from-the-keychain"), ApiKeySource::Stored);
+        assert_eq!(
+            probe_setup(&stored_under_an_env_key).api_key_source,
+            ApiKeySource::Environment
+        );
+        // A keyless configuration says so plainly — what hides the Remove button
+        // and the cloud privacy copy alike.
+        assert_eq!(
+            ChatSetup::fake(&LlmConfig::default()).api_key_source,
+            ApiKeySource::None
+        );
     }
 
     /// `B2_LLM=fake` is surfaced, not hidden: the CLI prints a note for the same
@@ -638,7 +672,7 @@ mod tests {
         let setup = probe_setup(&LlmConfig {
             base_url: "http://b2-no-such-host.invalid:11434/v1".into(),
             model: "llama3.2".into(),
-            api_key: None,
+            ..LlmConfig::default()
         });
         assert_eq!(setup.state, ChatState::Unreachable);
         assert!(setup.message.is_some_and(|m| m.contains("ollama serve")));

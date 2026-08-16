@@ -66,6 +66,18 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 serde_json = "1.0.150"
 
+# The macOS Keychain, where a cloud bearer token is remembered between launches (GH #176,
+# src/keychain.rs). Three notes on the choice. It is *this* crate rather than `keyring`
+# because B2 ships macOS-only, so the platform's own binding is the whole requirement and a
+# cross-platform store abstraction would be a dependency tree bought for one target. It is a
+# library rather than shelling out to `/usr/bin/security`, whose `add-generic-password -w
+# <key>` would put the token in that process's argv and so in `ps` — the exact argument #154
+# makes against a key in a CLI flag. And it is target-gated: everywhere else `keychain.rs`
+# compiles a stub that remembers nothing, which is the same degraded path a Keychain that
+# refuses already takes.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
 # Research build (GH #40, macOS-only): forward the Metal GPU embedder feature to b2-embed so
 # `cargo tauri dev --features metal` (or `just app-metal`) embeds on the GPU. Default is CPU.
 [features]
