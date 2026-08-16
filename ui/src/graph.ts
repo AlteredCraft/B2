@@ -11,6 +11,9 @@
 // a scene into SVG; `main.ts` wires the clicks.
 
 import type { NeighborView, ResourceLink, SimilarView, UnresolvedLink } from "./types";
+// Extension-ful: `npm test` runs off the source through node, where a value import
+// must resolve as a real path (the type-only import above is stripped, so it needn't).
+import { strengthBand } from "./strength.ts";
 
 /** The stance-trio core verbs (data-model.md §2) plus the tolerated tail —
  *  color = verb is the graph's first encoding. */
@@ -358,7 +361,11 @@ export function buildScene(input: GraphInput): GraphScene {
       y: at.y,
       label: truncate(name),
       full: name,
-      sub: g.score.toFixed(2),
+      // The strength figure the discovery card shows, or nothing — never the raw
+      // engine score. A ghost's ring position follows the candidate order, which is
+      // the z order wherever the floor computed one, so the label has to be the same
+      // number or it explains nothing about the ring (GH #150).
+      sub: strengthBand(g.z)?.value ?? null,
       path: g.path,
       title: g.title,
     });

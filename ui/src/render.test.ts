@@ -738,6 +738,48 @@ check("the folder-context menu offers no path to copy", () => {
   assert(html.includes("data-ctx-new-note"), "but the create pair is still there");
 });
 
+// --- discovery strength (GH #150) -------------------------------------------------------
+
+check("a graded card carries its σ figure, not only a hover tooltip", () => {
+  // The band's dots grade; the number behind them used to live only in `title=`, which
+  // a keyboard can't reach (K1). It ships in the markup now and the selected row
+  // reveals it, so focus — not just a pointer — gets the number.
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, similar: [ghost({ z: 2.53 })] }),
+  );
+  assert(html.includes("●●○"), "the band still grades at a glance");
+  assert(html.includes("2.5σ"), "and the figure is on the card, awaiting selection");
+});
+
+check("an ungraded list says so rather than implying a judgement B2 didn't make", () => {
+  // A vault too small for the floor's statistics returns candidates with no z at all
+  // (the starter-vault posture: gate inert, everything served). Without a word, those
+  // bare cards read exactly like graded ones that all scored low.
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, similar: [ghost(), ghost({ path: "b.md" })] }),
+  );
+  assert(html.includes("Ungraded"), "the pane admits it didn't grade these");
+  assert(!html.includes("●"), "and claims no band, since no statistic was computed");
+});
+
+check("a graded list carries no ungraded caveat", () => {
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, similar: [ghost({ z: 3.1 })] }),
+  );
+  assert(!html.includes("Ungraded"), "nothing to admit — the floor judged this list");
+});
+
+check("raw mode says raw, not ungraded — one caveat, not two", () => {
+  // `--no-floor`'s GUI sibling turns the floor off, so *of course* nothing carries a z.
+  // The honest caveat there is already "the quality floor is off"; adding "ungraded" on
+  // top would explain the same fact twice, in words that sound like a different problem.
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, rawDiscovery: true, similar: [ghost()] }),
+  );
+  assert(html.includes("quality floor is off"), "the raw banner is the caveat here");
+  assert(!html.includes("Ungraded"), "and it is the only one");
+});
+
 // --- chat (flow ④, GH #155) ------------------------------------------------------------
 
 check("a citation navigates in-app — a button with a path, never a link with an href", () => {

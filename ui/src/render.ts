@@ -736,9 +736,29 @@ function cardFold(key: string, collapsed: boolean): string {
 function strengthHtml(z: number | undefined): string {
   const band = strengthBand(z);
   if (!band) return "";
+  // The figure rides in the markup and CSS reveals it on the selected/hovered card, so
+  // the number is one keystroke away rather than pointer-only (`title=` alone was a hole
+  // in K1). `role="img"` + `aria-label` already names the band for AT, which is why the
+  // figure is `aria-hidden` — it would otherwise be announced twice, once as prose and
+  // once as "2.5 sigma".
   return `<span class="card-score" role="img" aria-label="${escapeHtml(
     band.label,
-  )}" title="${escapeHtml(band.title)}">${band.glyph}</span>`;
+  )}" title="${escapeHtml(band.title)}">${band.glyph}<span class="card-sigma" aria-hidden="true">${escapeHtml(
+    band.value,
+  )}</span></span>`;
+}
+
+/** The ungraded caveat: candidates exist, but none carries a z, so no band is shown on
+ *  any of them. Left silent that reads as "everything here scored low" rather than the
+ *  truth — that the floor's statistics were never computed (a candidate pool below
+ *  `FLOOR_MIN_POPULATION`, the starter-vault posture, or a space with no spread at all).
+ *  Deliberately says only what is observable rather than guessing which of those it was;
+ *  the tooltip carries the mechanism. Raw mode is excluded because its own banner already
+ *  explains the very same absence — see the case in render.test.ts. */
+function ungradedHtml(state: AppState): string {
+  if (state.rawDiscovery || state.similar.length === 0) return "";
+  if (state.similar.some((c) => strengthBand(c.z))) return "";
+  return `<p class="side-empty" title="Strength grading needs a wider pool of candidates than this note has; it appears on its own as the vault grows.">Ungraded — not enough to compare against here, so these are ranked by nearness rather than strength.</p>`;
 }
 
 function similarSectionHtml(state: AppState, roving: string | null): string {
@@ -814,7 +834,7 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         </div>`;
     })
     .join("");
-  return head + rawBanner + `<div class="cards" role="none">${items}</div>`;
+  return head + rawBanner + ungradedHtml(state) + `<div class="cards" role="none">${items}</div>`;
 }
 
 function connectionsSectionHtml(state: AppState, roving: string | null): string {
@@ -1254,7 +1274,12 @@ function nodeTitle(n: GraphNode): string {
     case "anchor":
       return `${n.full} — the open note. Click or ⏎ to return to reading.`;
     case "ghost":
-      return `${n.full} — similar but not linked (similarity ${n.sub ?? "?"}). Click or ⏎ to link it; right-click (or ⇧F10) for more.`;
+      // The strength figure when there is one; a bare "similar but not linked"
+      // otherwise. "similarity ?" claimed a measurement existed and was merely
+      // unavailable — an ungraded candidate was never measured at all.
+      return `${n.full} — similar but not linked${
+        n.sub ? ` (${n.sub} above this note's other candidates)` : ""
+      }. Click or ⏎ to link it; right-click (or ⇧F10) for more.`;
     case "dangling":
       return `${n.full} resolves to no note or file — fix the link in the note.`;
     case "resource":

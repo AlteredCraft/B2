@@ -110,7 +110,8 @@ impl Default for DiscoveryFloor {
 }
 
 /// One discovery candidate: a note near the anchor and not already connected, ranked
-/// by `score`. Owned, so the façade can resolve it to a [`SimilarView`](crate::vault::SimilarView)
+/// by `z` where the floor computed one and by `score` otherwise (see
+/// [`candidates`]). Owned, so the façade can resolve it to a [`SimilarView`](crate::vault::SimilarView)
 /// for `b2 similar` without threading a lifetime through generation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CandidateNote {
@@ -126,12 +127,16 @@ pub struct CandidateNote {
     /// how far it stands above the anchor's own noise floor, the number the
     /// [`DiscoveryFloor`] judged. `None` when the floor was off or inert (no
     /// statistics were computed). An adapter wanting to show *strength* shows a
-    /// band derived from this, never the raw score (GH #150).
+    /// band derived from this, never the raw score (GH #150) — and when it is
+    /// present it is also the list's own sort key, so the band descends with the
+    /// rows.
     pub z: Option<f64>,
 }
 
-/// Generate up to `limit` connection-discovery candidates for `anchor`, best score
-/// first (ties broken by `note_path` for determinism). `limit` is a cap, not a
+/// Generate up to `limit` connection-discovery candidates for `anchor`, strongest
+/// first: by `z` where the floor computed it — the same number an adapter bands the
+/// card by, so the order and the band can never disagree — and by `score` otherwise
+/// (ties break `z`, then `score`, then `note_path`, for determinism). `limit` is a cap, not a
 /// promise (index-engine.md §3): with a [`DiscoveryFloor`] the list ends where the
 /// anchor's own score distribution says the candidates stop being signal — possibly
 /// at zero — and without one it under-fills only for want of scorable notes (a
@@ -259,13 +264,31 @@ pub fn candidates(
         }
     }
 
-    // Best score first; ties broken by path so the ranking (and thus `limit`'s
-    // prefix) is deterministic.
+    // Rank by the number the human is shown. Where the floor computed z-scores the
+    // card's strength band *is* the z (GH #150), so ordering by anything else would
+    // let a weaker-banded card sit above a stronger one — band and position
+    // contradicting each other on the same row. z is uniform within one query
+    // (`zs` covers every index `coarse` still holds, so either all candidates carry
+    // one or none does), which is what makes this a single comparator rather than a
+    // mixed ranking; ungated, `None` compares equal throughout and the exact
+    // stage-2 score is the order, as it always was.
+    //
+    // The cost is deliberate and worth naming: z is the *coarse* stage-1 centroid
+    // statistic, so a note whose best passage is far nearer than its centroid
+    // suggests now ranks below one with a nearer centroid and no such passage
+    // (`tests/discover_floor.rs::ranks_by_z_not_by_score_when_the_floor_computed_it`
+    // constructs exactly that pair). Stage 2 keeps choosing the evidence chunk and
+    // still breaks z ties; it no longer drives the order. Ties fall through to
+    // `score` then path, so `limit`'s prefix stays deterministic.
     out.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
+        b.z.partial_cmp(&a.z)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.note_path.cmp(&b.note_path))
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.note_path.cmp(&b.note_path))
     });
     out.truncate(limit);
     Ok(out)

@@ -305,6 +305,28 @@ shape is constrained on two sides:
   a fake-embedded space (judged by the recorded model id), and is the adapters' explicit choice
   to disable (`b2 similar --no-floor`).
 
+**The z is also the surfaced list's order, and its absence is itself a thing to say.** An
+adapter grades a card from the z and never from the raw engine score (a negated L2 like
+`-0.734` is a unit nobody should have to learn), so ranking the same list by anything else
+puts a weaker-banded card above a stronger one — the badge and the position contradicting each
+other on one row. `discover::candidates` therefore sorts by `z` wherever the floor computed
+one, falling back to the exact stage-2 score (and then path) where it did not; z is uniform
+within a query, so this is one comparator, not a mixed ranking. The cost is real and accepted:
+z is the *coarse* stage-1 centroid statistic, so a note whose single best passage is far nearer
+than its centroid suggests now ranks below one with a nearer centroid and no such passage —
+stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
+The labelled corpus does not move on the change — but it was already at ceiling
+(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, runlog
+2026-08-16), so it can only witness the absence of a regression, never confirm the ordering is
+right. It cannot see the trade at all: six anchors of short single-topic notes, where a
+centroid and its best chunk agree by construction. The cost is therefore pinned by a
+constructed unit test, not measured — the corpus that could measure it is
+[#183](https://github.com/AlteredCraft/B2/issues/183), and what to do about the passage this
+ordering demotes is [#182](https://github.com/AlteredCraft/B2/issues/182). **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
+space with no spread, the fake regime — a surface must *say* the list is ungraded. Silence
+there is not neutral: a column of bandless cards reads as a set of candidates that were judged
+and all scored low, which is the opposite of what happened.
+
 What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
 stranger the model scores like a cluster-mate (the eval's watercolor ↔ stain-removal pair, junk by
 label at cosine 0.684, above every genuinely related pair). That residue keeps the last negative

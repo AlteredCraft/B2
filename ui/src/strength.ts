@@ -16,6 +16,10 @@ export interface StrengthBand {
   label: string;
   /** Tooltip prose: the z spelled out for whoever wants the number. */
   title: string;
+  /** The bare figure (`2.5σ`), which the *selected* card reveals beside the dots.
+   *  The tooltip says the same thing in prose, but a tooltip needs a pointer —
+   *  this is how the number reaches a keyboard (K1). */
+  value: string;
 }
 
 export function strengthBand(z: number | undefined | null): StrengthBand | null {
@@ -25,9 +29,11 @@ export function strengthBand(z: number | undefined | null): StrengthBand | null 
     : z >= 2.3
       ? ["●●○", "clear match"]
       : ["●○○", "near match"];
+  const value = `${z.toFixed(1)}σ`;
   return {
     glyph,
     label,
-    title: `${label} — stands ${z.toFixed(1)}σ above this note's other candidates`,
+    value,
+    title: `${label} — stands ${value} above this note's other candidates`,
   };
 }

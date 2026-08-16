@@ -1432,3 +1432,59 @@ direction 2 vacuous.
 claim is now legible in the notes' own text. The pair-scorer's standing evidence has narrowed to
 a 0.004-cosine photo finish; if dogfooding ever reopens that conversation, row 35 is the
 baseline it starts from.
+
+---
+
+## 2026-08-16 — Ranking `similar` by the number the card shows (and saying so when there isn't one)
+
+**Runs:** `just eval` · `results.jsonl` rows 36 (baseline) and 37 (after) · engine suite + `ui/` suite
+
+### What changed, and why it isn't an eval-driven change
+
+Sam, looking at the discovery pane: *"what sort of similar results score (confidence) do we
+currently have, and can we show it in the result cards (and sort by it)."* The band already
+shipped with #150 — `strength.ts` paints `●●○` from the candidate's z — but two things were
+off underneath it:
+
+1. **The list was ordered by `score` and banded by `z`.** Those are different stages: `score` is
+   stage-2 exact max-sim over chunk pairs, `z` is the stage-1 centroid statistic. Nothing
+   reconciled them, so a `●○○` card could sit above a `●●●` one — the badge contradicting the
+   position on the same row. `discover::candidates` now sorts by `z` where the floor computed
+   one, falling back to `score` (then path) where it did not.
+2. **A list with no z said nothing.** On a pool under `FLOOR_MIN_POPULATION` the floor goes
+   inert, every candidate comes back with `z: None`, and the pane painted bandless cards — which
+   reads as *judged and all weak* rather than *never judged*. The pane now says "Ungraded" and
+   the cards carry their σ figure for the selected/hovered row (it was `title=`-only, i.e.
+   pointer-only, a hole in K1).
+
+This is a **presentation-consistency** change, not a retrieval improvement, and the log should
+be honest that the eval did not motivate it and cannot bless it.
+
+### The readout (row 37 vs row 36)
+
+- **`similar` hit@1 = hit@3 = MRR@5 = 1.000, negatives 4/4 clean, 0 cards — identical.** Note
+  and chunk ranks are untouched by construction (`similar` never touches FTS, and nothing
+  upstream of the final sort moved).
+- **This is a ceiling, not a verdict.** The metric was 1.000 *before*; it could only have
+  regressed, and it didn't. The corpus cannot distinguish the two orderings, because its
+  positives are short single-topic notes where a note's centroid and its best chunk rank the
+  same way. `similar_detail`'s per-anchor lists are byte-identical between the rows — but that
+  pass is `similar_raw` (ungated, no z by definition), so it is *not* evidence about the new
+  sort key either. Two rows of agreement here are two rows of silence.
+- **The trade is real and is pinned in a unit test instead.**
+  `tests/discover_floor.rs::ranks_by_z_not_by_score_when_the_floor_computed_it` builds the case
+  the corpus lacks: `split.md` holds a passage almost parallel to the anchor but a second half
+  that drags its centroid away; `mid.md` has a nearer centroid and no passage anywhere near as
+  close. Under the new rule `mid.md` ranks **above** `split.md`. That is a genuine ranking
+  regression for that shape, accepted so that band and position agree.
+
+### What this owes the harness
+
+The corpus has no multi-topic note, so it cannot score this ruling at all — filed as
+[#183](https://github.com/AlteredCraft/B2/issues/183), with the shape it needs and the ceiling
+problem that comes with it. The product-side follow-up, what to do about the passage this
+ordering demotes, is [#182](https://github.com/AlteredCraft/B2/issues/182).
+
+**Status:** shipped, on a unit test rather than a measurement. Standing open: #158's
+characterization column; the phishing inversion as the pair-scorer's evidence (row 35's photo
+finish, unmoved); #183 for the corpus gap and #182 for the buried-passage UI.
