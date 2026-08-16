@@ -206,17 +206,69 @@ fn probing_a_dead_endpoint_reports_it_unreachable() {
     );
 }
 
-/// A server that answers `GET /models` with something other than a model list —
-/// a 404, an HTML page — is still a *reachable* server, and the probe must not
-/// refuse it: not every OpenAI-compatible endpoint implements that path.
+/// A **200** whose body isn't a model list — an HTML page, an empty object — is
+/// still a reachable chat endpoint: it answered on the right path, and there is
+/// simply nothing to check the model against. This is the whole of the probe's
+/// tolerance, and it is bounded by *evidence* (a 2xx) rather than by hope.
 #[test]
 fn probing_tolerates_a_server_that_serves_no_model_list() {
-    let (url, server) = serve(vec![Reply::Raw(
-        "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_string(),
-    )]);
+    let body = "<html>not a model list</html>";
+    let (url, server) = serve(vec![Reply::Raw(format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    ))]);
     provider(&url)
         .probe()
-        .expect("an HTTP answer means something is listening");
+        .expect("an answer on the right path is a reachable endpoint");
+    server.join().expect("server thread");
+}
+
+/// The bug this replaced a tolerance to catch: `…:11434/v1X` instead of `/v1`.
+///
+/// The old probe read *any* HTTP answer as "something is listening, it just may
+/// not implement `/models`", so a wrong base URL came back **Connected** and the
+/// configuration failed at the first question instead — the exact surprise the
+/// probe exists to prevent. A refusal cannot be told from an unimplemented route
+/// on this evidence, so the probe reports what it saw and lets
+/// [`b2_llm::refusal_message`] give the fix.
+#[test]
+fn probing_refuses_a_url_that_answers_but_isnt_a_chat_api() {
+    let body = "404 page not found";
+    let (url, server) = serve(vec![Reply::Raw(format!(
+        "HTTP/1.1 404 Not Found\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    ))]);
+    let err = provider(&url)
+        .probe()
+        .expect_err("a refused probe is not a connection");
+    match err {
+        b2_llm::LlmError::Refused {
+            status, endpoint, ..
+        } => {
+            assert_eq!(status, 404);
+            // The endpoint rides along because the sentence names it, and by the
+            // time an adapter prints one it no longer has the config in hand.
+            assert_eq!(endpoint, url, "the refusal names what was asked");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    server.join().expect("server thread");
+}
+
+/// A cloud endpoint with no key: the path is right, the credential isn't. Also
+/// previously *Connected*, and also a failure deferred to the first question.
+#[test]
+fn probing_catches_an_endpoint_that_refuses_the_key() {
+    let body = r#"{"error":{"message":"invalid api key"}}"#;
+    let (url, server) = serve(vec![Reply::Raw(format!(
+        "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    ))]);
+    let err = provider(&url).probe().expect_err("401 is not a connection");
+    assert!(
+        matches!(err, b2_llm::LlmError::Refused { status: 401, .. }),
+        "got {err:?}"
+    );
     server.join().expect("server thread");
 }
 

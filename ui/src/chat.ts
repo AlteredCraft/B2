@@ -217,6 +217,27 @@ export function pullCommand(model: string): string {
   return `ollama pull ${model}`;
 }
 
+/** The placeholder a human substitutes into `ollama pull` — the *shape* of the command,
+ *  shown where there is no particular model to name. Angle brackets, so it can never be
+ *  mistaken for a model that exists; it goes through `escapeHtml` like everything else. */
+export const PULL_PLACEHOLDER = "<model-name>";
+
+/**
+ * Where B2 sends someone who has to go and *do* something in Ollama.
+ *
+ * The quickstart, not the product page: a reader of either link has already been told
+ * that nothing is listening or that a model isn't there, so the page they need is the one
+ * carrying the install command and `ollama pull`. `b2-llm`'s `OLLAMA_INSTALL_URL` is the
+ * same link on the host side (it rides inside the probe's own sentence) — **change them
+ * together**, the way `pullCommand` mirrors `pull_command`.
+ */
+export const OLLAMA_QUICKSTART_URL = "https://docs.ollama.com/quickstart";
+
+/** Ollama's hosted models — the **Cloud models** configuration's one concrete example,
+ *  offered where that decision is made. Named rather than defaulted to: picking a
+ *  provider is the explicit act M5 is about, so this is a link, never a pre-filled URL. */
+export const OLLAMA_CLOUD_URL = "https://docs.ollama.com/cloud";
+
 /** A model's on-disk size, for the installed list. Whole GB past a gigabyte, one decimal
  *  below — an inventory line, not a measurement. */
 export function formatModelSize(bytes: number): string {

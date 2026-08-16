@@ -41,8 +41,8 @@ use serde::Serialize;
 
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
-    is_local, is_ollama, probe_setup, pull_command, ChatSetup, ChatState, ModelTier, OllamaModel,
-    OllamaSetup, MODEL_TIERS,
+    is_local, is_ollama, probe_setup, pull_command, refusal_message, ChatSetup, ChatState,
+    ModelTier, OllamaModel, OllamaSetup, MODEL_TIERS, OLLAMA_INSTALL_URL,
 };
 
 /// Where the Ollama daemon serves its OpenAI-compatible surface. The *guided*
@@ -263,6 +263,25 @@ pub enum LlmError {
     /// `error.message`), else the raw body, truncated.
     #[error("the model server rejected the request (HTTP {status}): {message}")]
     Http { status: u16, message: String },
+
+    /// A **probe** was refused: something is listening at `endpoint`, but it did
+    /// not serve the OpenAI-compatible `/models` route. Its own variant rather
+    /// than [`LlmError::Http`] because the *same status means different things in
+    /// the two places it can arrive*, and only the probe knows which it is in: a
+    /// 404 here is a base URL that isn't a chat API (the `…/v1X` typo), while a
+    /// 404 mid-answer is the server's own "model not found". An adapter that had
+    /// to guess between them would give the wrong fix half the time, so the
+    /// distinction is carried in the type — and turned into a sentence once, by
+    /// [`crate::setup::refusal_message`].
+    #[error("the model server at {endpoint} refused a probe (HTTP {status})")]
+    Refused {
+        endpoint: String,
+        status: u16,
+        /// The server's own explanation, when it sent one. Kept for `B2_DEBUG`
+        /// and the catch-all sentence; a 404 body ("404 page not found") says
+        /// nothing a human can act on, so the advice never leans on it.
+        message: String,
+    },
 
     /// The server is up but doesn't serve the configured model — the most
     /// common local-setup mistake (an un-pulled Ollama model), caught at probe

@@ -275,6 +275,16 @@ export interface AppState {
    * with nothing to keep in sync afterwards.
    */
   chatCloud: boolean;
+  /**
+   * Settings → Chat is showing the **Model** field as a text box rather than the picker.
+   *
+   * The picker exists only when there is an inventory to pick from (a local Ollama daemon
+   * that answered `/api/tags`), so this flag is what lets a user name a model that *isn't*
+   * installed yet — the one thing a list of installed models structurally cannot offer,
+   * and exactly what you do while a `ollama pull` is still running. A view flag like
+   * [`chatCloud`]: the configuration is just a model string either way.
+   */
+  chatModelTyped: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
   searchResults: SearchResult[];
@@ -384,6 +394,7 @@ export const state: AppState = {
   chatStreaming: null,
   chatSetup: null,
   chatCloud: false,
+  chatModelTyped: false,
   searchQuery: "",
   searchResults: [],
   linkTarget: null,

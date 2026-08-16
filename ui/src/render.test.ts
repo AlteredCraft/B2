@@ -19,6 +19,8 @@ import type {
   ChatSetup,
   NeighborView,
   NoteView,
+  OllamaModel,
+  OllamaSetup,
   ResourceLink,
   SearchResult,
   SimilarView,
@@ -456,6 +458,189 @@ check("the cloud key field says which key is in force, and never shows one", () 
   const none = chatTab({ api_key_source: "none" });
   assert(!none.includes("data-chat-clear-key"), "no key, no Remove button");
   assert(!none.includes("Keychain — encrypted"), "and no claim one is saved");
+});
+
+check("the cloud section says where an endpoint can come from, since B2 names none", () => {
+  // B2 ships no default cloud provider and never will — picking one is the explicit act
+  // M5 is about, so the empty URL field is deliberate. That makes "and where do I get
+  // one?" a question the panel has to answer in the only way it may: a link.
+  const html = chatTab({ api_key_source: "none" });
+  assert(html.includes("https://docs.ollama.com/cloud"), `the cloud docs are linked: ${html}`);
+  assert(
+    html.includes("Any OpenAI-compatible provider works"),
+    "and the link is an example, not a requirement",
+  );
+  // The **Local** copy must not carry it: a cloud pointer beside "nothing leaves this
+  // machine" is the one place that sentence would read as an invitation.
+  const local = modalHtml(
+    app({ settingsOpen: true, settingsTab: "chat", chatCloud: false, chatSetup: chatSetup() }),
+  );
+  assert(!local.includes("docs.ollama.com/cloud"), "the local section stays local");
+});
+
+// --- Settings → Chat: the Model field (a picker over what is actually installed) --------
+//
+// The commonest local-setup mistake is a model name the daemon doesn't have, and until the
+// daemon answers `/api/tags` there is nothing to do about that but let a human type and
+// find out. When it *has* answered, its inventory is what the field should offer — so the
+// field has two shapes, and these pin that each one can still express what the other can.
+
+/** Settings → Chat against the local (Ollama-shaped) endpoint. `ollama` is the daemon's
+ *  half — an answering daemon with an inventory unless a case says otherwise. */
+const localChatTab = (
+  over: Partial<ChatSetup>,
+  ollama: Partial<OllamaSetup> = {},
+  stateOver: Partial<AppState> = {},
+): string =>
+  modalHtml(
+    app({
+      settingsOpen: true,
+      settingsTab: "chat",
+      chatCloud: false,
+      chatSetup: chatSetup({
+        ollama: {
+          root: "http://localhost:11434",
+          running: true,
+          installed: [],
+          ram_gb: 16,
+          tiers: [{ min_ram_gb: 16, ram: "16 GB", size: "7–8B", model: "llama3.1:8b" }],
+          suggested: { min_ram_gb: 16, ram: "16 GB", size: "7–8B", model: "llama3.1:8b" },
+          ...ollama,
+        },
+        ...over,
+      }),
+      ...stateOver,
+    }),
+  );
+
+const model = (name: string, size = 2_019_393_189): OllamaModel => ({
+  name,
+  size,
+  parameters: "3.2B",
+});
+
+check("an answering daemon turns the Model field into a picker over what it has", () => {
+  const html = localChatTab(
+    { model: "llama3.2:latest" },
+    { installed: [model("llama3.2:latest"), model("gemma3:12b")] },
+  );
+  const tag = tagWith(html, 'id="settings-chat-model"');
+  assert(tag.startsWith("<select"), `the field is a picker, not ${tag}`);
+  // The id is the contract — saveChatConfig reads `.value` off it and captureModalFocus
+  // restores the keyboard by it, and both must keep working across the swap.
+  assert(html.includes('<option value="gemma3:12b"'), "every installed model is offered");
+  assert(
+    html.includes('<option value="llama3.2:latest" selected>'),
+    `and the configured one is what's selected: ${html}`,
+  );
+  // A way out, because a list of *installed* models cannot contain the one being pulled
+  // right now — which is exactly when you want to name it.
+  assert(html.includes("data-chat-model-custom"), "a typed name stays reachable");
+});
+
+check("a configured model the daemon doesn't have still leads the picker", () => {
+  // The failure this prevents is silent: drop the unknown model and the field shows
+  // whatever happens to be first, so merely *looking* at Settings re-points the
+  // configuration — and the status line below it would still name the old one.
+  const html = localChatTab(
+    { model: "gemma4:latest", state: "model_missing" },
+    { installed: [model("llama3.2:latest")] },
+  );
+  assert(
+    html.includes('<option value="gemma4:latest" selected>gemma4:latest — not installed'),
+    `the configured model is present and marked: ${html}`,
+  );
+  // And the card below doesn't repeat the same inventory as a second, click-to-apply
+  // control — two controls for one value is two things to keep in step.
+  assert(!html.includes("data-chat-use-model"), `no duplicate picker in Settings: ${html}`);
+});
+
+check("the typed shape is a text box, and offers the way back", () => {
+  const html = localChatTab(
+    { model: "llama3.2:latest" },
+    { installed: [model("llama3.2:latest")] },
+    { chatModelTyped: true },
+  );
+  const tag = tagWith(html, 'id="settings-chat-model"');
+  assert(tag.startsWith("<input"), `the field is a text box, not ${tag}`);
+  assert(tag.includes('value="llama3.2:latest"'), "carrying the configured model");
+  assert(html.includes("data-chat-model-pick"), "with the picker one press away");
+});
+
+check("no inventory means the text box, with nothing to go back to", () => {
+  // The daemon isn't running (or the endpoint isn't Ollama's): there is no list to offer,
+  // so the field is a box and the *return* button must not be painted — a control that
+  // swaps to an empty picker is a control that strands the keyboard.
+  const html = localChatTab({ state: "unreachable" }, { running: false });
+  assert(tagWith(html, 'id="settings-chat-model"').startsWith("<input"), "a box, not a picker");
+  assert(!html.includes("data-chat-model-pick"), "and no way to a list that doesn't exist");
+});
+
+check("the local section names the pull command and links the quickstart", () => {
+  const html = localChatTab(
+    { model: "llama3.2:latest" },
+    { installed: [model("llama3.2:latest")] },
+  );
+  assert(html.includes("ollama pull &lt;model-name&gt;"), `the command's shape, escaped: ${html}`);
+  assert(html.includes("ollama pull llama3.1:8b"), "made concrete by this machine's rung");
+  assert(html.includes("https://docs.ollama.com/quickstart"), "and the page that has both");
+});
+
+check("nothing listening is a card with a fix, not an error", () => {
+  // The question this answers: what does Settings do when there is no server at all? It
+  // stays a status — the probe cannot fail (b2-llm's setup.rs) — and the panel prints the
+  // sentence plus the two ways out: start the daemon, or install one.
+  const html = localChatTab(
+    {
+      state: "unreachable",
+      message:
+        "Can't reach the model server at http://localhost:11434/v1 — is Ollama running? " +
+        "(`ollama serve`, or install: https://docs.ollama.com/quickstart)",
+    },
+    { running: false },
+  );
+  assert(html.includes("is Ollama running?"), "the actionable sentence is on screen");
+  assert(html.includes("<code>ollama serve</code>"), "with the command that fixes the common case");
+  assert(
+    html.includes(`<a href="https://docs.ollama.com/quickstart"`),
+    `and an openable link for the other one: ${html}`,
+  );
+  // Still a settings panel, not a dead end: the fields and Save and test stay put, so the
+  // user can point the endpoint somewhere that *is* running.
+  assert(html.includes('id="settings-chat-save"'), "and Save and test is still there");
+  // Exactly once. The card and the Local section can each reach for the same suggested
+  // pull, and one command printed twice on one screen reads as two instructions — so the
+  // card yields it to the section in Settings (it keeps it in the pane, which has none).
+  assertEq(html.split("ollama pull llama3.1:8b").length - 1, 1, "the pull command is said once");
+});
+
+check("a running daemon behind a wrong path is never told to start itself", () => {
+  // The other half of the endpoint-typo fix (b2-llm's `refusal_message`): `…/v1X`
+  // answers 404, so chat isn't ready — but the daemon is up, and "Start it with
+  // `ollama serve`" is advice about a program that is already running. The card keys
+  // that paragraph off `running`, which is the evidence, so the host's sentence and
+  // the card's advice can't contradict each other.
+  const html = localChatTab(
+    {
+      state: "unreachable",
+      base_url: "http://localhost:11434/v1X",
+      message:
+        "Something is running at http://localhost:11434/v1X, but it isn't an " +
+        "OpenAI-compatible API (HTTP 404). Check the endpoint path — it usually ends in " +
+        "`/v1`. The Ollama daemon at http://localhost:11434 is running — try " +
+        "http://localhost:11434/v1.",
+    },
+    { installed: [model("llama3.2:latest")] },
+  );
+  assert(html.includes("isn’t an OpenAI-compatible API") || html.includes("HTTP 404"), "the fix");
+  assert(!html.includes("<code>ollama serve</code>"), `nothing to start: ${html}`);
+  // Nor the card's "if it isn't installed yet" paragraph. (The Local section's standing
+  // "add a model with `ollama pull …`" note keeps its quickstart link — that one is about
+  // adding a model, which is still true here, so it is not the same sentence.)
+  assert(!html.includes("isn’t installed yet"), `and nothing to install: ${html}`);
+  // The inventory still answered, so the picker is on screen — the endpoint is what's
+  // wrong, and everything known about the daemon stays usable.
+  assert(tagWith(html, 'id="settings-chat-model"').startsWith("<select"), "the picker stands");
 });
 
 // --- the tree's context menu ---------------------------------------------------------
