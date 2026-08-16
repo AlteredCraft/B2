@@ -13,6 +13,7 @@ import { JSDOM } from "jsdom";
 import { buildScene } from "./graph.ts";
 import { contextMenuHtml, modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
 import { chordProblems } from "./keymap.ts";
+import { STRENGTH_MIN_CANDIDATES } from "./strength.ts";
 import { PROBE_AFTER_MS, silenceHint } from "./recorder.ts";
 import { state, type AppState } from "./state.ts";
 import type {
@@ -751,6 +752,23 @@ check("a graded card carries its σ figure, not only a hover tooltip", () => {
   assert(html.includes("2.5σ"), "and the figure is on the card, awaiting selection");
 });
 
+check("the accessible name carries the figure too, not the band alone", () => {
+  // The dots and the σ are one reading for the eye; naming only the band would hand a
+  // screen reader "clear match" with no route to the number behind it, while the figure's
+  // own span stays aria-hidden so it is announced once rather than twice (PR #184 review).
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, similar: [ghost({ z: 2.53 })] }),
+  );
+  assert(
+    html.includes('aria-label="clear match, 2.5σ"'),
+    "the band and its figure reach AT together",
+  );
+  assert(
+    html.includes('class="card-sigma" aria-hidden="true"'),
+    "and the visible figure is not announced a second time",
+  );
+});
+
 check("an ungraded list says so rather than implying a judgement B2 didn't make", () => {
   // A vault too small for the floor's statistics returns candidates with no z at all
   // (the starter-vault posture: gate inert, everything served). Without a word, those
@@ -760,6 +778,14 @@ check("an ungraded list says so rather than implying a judgement B2 didn't make"
   );
   assert(html.includes("Ungraded"), "the pane admits it didn't grade these");
   assert(!html.includes("●"), "and claims no band, since no statistic was computed");
+  // "Not enough" leaves a reader with nothing to do; the bar is a number, so say it.
+  assert(
+    html.includes(`${STRENGTH_MIN_CANDIDATES} or more candidates`),
+    "and names what 'enough' is",
+  );
+  // A notice, not body prose and not a failure: the caveat gets the accent-toned box the
+  // install banner established, so it is seen rather than skimmed (PR #184 review).
+  assert(html.includes('class="side-note"'), "painted as a notice");
 });
 
 check("a graded list carries no ungraded caveat", () => {

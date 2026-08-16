@@ -9,6 +9,15 @@
 // leaders up to ~6). A candidate with no z (floor off or inert) gets no band —
 // no statistic was computed, so none is claimed.
 
+/** How many candidates a note needs before any of them can be graded — the UI-side
+ *  mirror of `discover.rs`'s `FLOOR_MIN_POPULATION`. A z over a handful of distances is
+ *  noise, so under this the floor stays inert and every candidate arrives with no z.
+ *  Duplicated across the language boundary on purpose: the number is *copy* here — the
+ *  one thing the ungraded caveat can tell a reader to act on — and the alternative is
+ *  widening the IPC contract to carry a constant that has moved once. If the Rust
+ *  constant moves, this line moves with it. */
+export const STRENGTH_MIN_CANDIDATES = 12;
+
 export interface StrengthBand {
   /** Three-dot glyph for the card (`●●○`). */
   glyph: string;

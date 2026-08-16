@@ -67,9 +67,11 @@ const MANIFEST: Record<string, readonly string[]> = {
   // side, so they have to come from the same family.
   toggles: ["code-slash", "diagram-3"],
 
-  // Status: the anomaly badge, the graph's dangling node, a broken link's card marker, and
-  // the "no model provisioned yet" banner.
-  status: ["exclamation-triangle", "stars"],
+  // Status: the anomaly badge, the graph's dangling node, a broken link's card marker, the
+  // "no model provisioned yet" banner, and the side pane's caveats about a list (ungraded
+  // discovery, raw mode) — `info-circle`, not the triangle, because those are notices
+  // rather than faults.
+  status: ["exclamation-triangle", "info-circle", "stars"],
 
   // A connection's direction, on the discovery card that names it.
   edges: ["arrow-left", "arrow-right"],

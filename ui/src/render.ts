@@ -21,7 +21,7 @@ import { sanitizeHtml } from "./sanitize.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
-import { strengthBand } from "./strength.ts";
+import { STRENGTH_MIN_CANDIDATES, strengthBand } from "./strength.ts";
 import { type ShortcutKey, shortcuts } from "./shortcuts.ts";
 import {
   DEFAULT_BINDINGS,
@@ -738,27 +738,47 @@ function strengthHtml(z: number | undefined): string {
   if (!band) return "";
   // The figure rides in the markup and CSS reveals it on the selected/hovered card, so
   // the number is one keystroke away rather than pointer-only (`title=` alone was a hole
-  // in K1). `role="img"` + `aria-label` already names the band for AT, which is why the
-  // figure is `aria-hidden` — it would otherwise be announced twice, once as prose and
-  // once as "2.5 sigma".
+  // in K1). The accessible name carries *both* halves the eye gets — the band and the
+  // figure — because naming only the band would leave a screen reader with "clear match"
+  // and no way to reach the 2.5σ behind it. The figure's own span stays `aria-hidden`, so
+  // it is announced once (as part of this name) rather than twice.
   return `<span class="card-score" role="img" aria-label="${escapeHtml(
-    band.label,
+    `${band.label}, ${band.value}`,
   )}" title="${escapeHtml(band.title)}">${band.glyph}<span class="card-sigma" aria-hidden="true">${escapeHtml(
     band.value,
   )}</span></span>`;
 }
 
+/** A caveat *about the list you are looking at* — not an empty state and not an error.
+ *  The install banner already settled the tone for this class of message: accent tones,
+ *  never `--danger`, because "B2 didn't grade these" is a nudge about what the numbers
+ *  mean, not a fault to fix. Muted body prose (`.side-empty`) was the opposite failure —
+ *  it read as chrome and got skimmed past, leaving the bare cards to imply a judgement.
+ *  Two callers, mutually exclusive by construction: the ungraded caveat and raw mode's
+ *  banner. */
+function sideNoteHtml(text: string, title: string): string {
+  return `<p class="side-note" title="${escapeHtml(title)}"><span class="side-note-icon" aria-hidden="true">${icon(
+    "info-circle",
+    { size: 14 },
+  )}</span><span>${escapeHtml(text)}</span></p>`;
+}
+
 /** The ungraded caveat: candidates exist, but none carries a z, so no band is shown on
  *  any of them. Left silent that reads as "everything here scored low" rather than the
- *  truth — that the floor's statistics were never computed (a candidate pool below
- *  `FLOOR_MIN_POPULATION`, the starter-vault posture, or a space with no spread at all).
- *  Deliberately says only what is observable rather than guessing which of those it was;
- *  the tooltip carries the mechanism. Raw mode is excluded because its own banner already
- *  explains the very same absence — see the case in render.test.ts. */
+ *  truth — that the floor's statistics were never computed. It states the *rule* rather
+ *  than diagnosing this vault, because two different conditions land here: a candidate
+ *  pool below `FLOOR_MIN_POPULATION` (the starter-vault posture) and a population with
+ *  no spread at all. "Not enough" without a number leaves the reader with nothing to do,
+ *  so the bar is named — [`STRENGTH_MIN_CANDIDATES`], which mirrors that Rust constant.
+ *  Raw mode is excluded because its own banner already explains the very same absence —
+ *  see the case in render.test.ts. */
 function ungradedHtml(state: AppState): string {
   if (state.rawDiscovery || state.similar.length === 0) return "";
   if (state.similar.some((c) => strengthBand(c.z))) return "";
-  return `<p class="side-empty" title="Strength grading needs a wider pool of candidates than this note has; it appears on its own as the vault grows.">Ungraded — not enough to compare against here, so these are ranked by nearness rather than strength.</p>`;
+  return sideNoteHtml(
+    `Ungraded — ranked by nearness, not strength. Grading needs ${STRENGTH_MIN_CANDIDATES} or more candidates to compare against.`,
+    `A strength band says how far a candidate stands above this note's other candidates. Under ${STRENGTH_MIN_CANDIDATES} of them — or with no spread between them — there is no distribution to measure against, so B2 claims no strength rather than guessing one.`,
+  );
 }
 
 function similarSectionHtml(state: AppState, roving: string | null): string {
@@ -796,9 +816,14 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
        <button class="side-raw" id="raw-similar" data-raw-similar>Show nearest anyway</button>`
     );
   }
-  // The raw list announces itself: these cards did NOT clear the quality floor.
+  // The raw list announces itself: these cards did NOT clear the quality floor. Same
+  // treatment as the ungraded caveat — the two are one kind of message (what the list
+  // you're reading does and doesn't claim), and they never appear together.
   const rawBanner = state.rawDiscovery
-    ? `<p class="side-empty">Raw nearest — the quality floor is off for this note.</p>`
+    ? sideNoteHtml(
+        "Raw nearest — the quality floor is off for this note.",
+        "These are the nearest candidates whatever their strength, including ones the floor would have suppressed. Nothing here is graded.",
+      )
     : "";
   const items = state.similar
     .map((c, i) => {
