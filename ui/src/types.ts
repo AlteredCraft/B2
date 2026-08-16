@@ -69,7 +69,11 @@ export interface Citation {
   excerpt: string;
 }
 
-/** How ready chat is right now (`b2-llm`'s `ChatState`) — the setup card's branch. */
+/** How ready chat is right now (`b2-llm`'s `ChatState`) — the setup card's branch.
+ *
+ *  `"unreachable"` covers both *nothing is listening* and *something answered and
+ *  refused* (a base URL that isn't a chat API, a rejected key): the card is the same,
+ *  and `message` is what parts them — never render advice of your own from this. */
 export type ChatState = "ready" | "unreachable" | "model_missing" | "fake";
 
 /** One model an Ollama daemon has installed, from its native `/api/tags`. */

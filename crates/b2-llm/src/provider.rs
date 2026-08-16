@@ -82,10 +82,19 @@ impl OpenAiCompatProvider {
     /// surprise mid-command" (index-engine.md §6). It answers two questions,
     /// and deliberately no others:
     ///
-    /// 1. **Is anything listening?** Only a *transport* failure counts as
-    ///    unreachable. Any HTTP answer — 404, 401, 405 — means a server is
-    ///    there, so an endpoint that simply doesn't implement `/models` (some
-    ///    compat servers don't) is never refused on that account.
+    /// 1. **Is this a chat endpoint?** A *transport* failure is unreachable;
+    ///    an **HTTP refusal is a refusal**, reported with its status. It used to
+    ///    be tolerated — any answer, 404 included, was read as "a server is
+    ///    there, it just doesn't implement `/models`" — and that is the one
+    ///    reading this probe may not take, because it cannot be told apart from
+    ///    the far commoner mistake it silently blessed: a **wrong path**. A base
+    ///    URL of `…:11434/v1X` made Ollama 404, which came back as *Connected*,
+    ///    and the configuration failed at the first question instead. A probe
+    ///    exists to prevent exactly that, so it now believes only what it can
+    ///    check. The tolerance survives where the evidence supports it — a **2xx**
+    ///    whose body isn't a model list answered *on the right path* — and
+    ///    [`crate::setup`] is where a refusal becomes advice, since a 401 and a
+    ///    404 are different mistakes with different fixes.
     /// 2. **Does it serve the configured model?** Checked only when the
     ///    response *parsed* as a non-empty model list, and leniently
     ///    ([`model_listed`]) — the check may only ever catch a real mistake,
@@ -93,7 +102,7 @@ impl OpenAiCompatProvider {
     ///    setup.
     ///
     /// The cost is one round trip per process (sub-millisecond on localhost),
-    /// paid to turn the most common two setup mistakes into sentences instead of
+    /// paid to turn the most common setup mistakes into sentences instead of
     /// a failed answer.
     pub fn probe(&self) -> Result<(), LlmError> {
         let url = self.config.endpoint("/models");
@@ -103,15 +112,15 @@ impl OpenAiCompatProvider {
             .call()
         {
             Ok(r) => r,
-            // The server answered — with a refusal, but it answered. Reachable.
-            Err(ureq::Error::Status(status, _)) => {
-                tracing::debug!(
-                    target: "b2::llm",
+            // Something answered, and said no. Which *no* it was is the caller's to
+            // interpret (`setup::probe_setup`): a 401 is a key, a 404 is a path.
+            Err(ureq::Error::Status(status, response)) => {
+                tracing::debug!(target: "b2::llm", status, url, "the model list was refused");
+                return Err(LlmError::Refused {
+                    endpoint: self.config.base_url.clone(),
                     status,
-                    url,
-                    "model list unavailable; skipping the model check"
-                );
-                return Ok(());
+                    message: error_detail(response),
+                });
             }
             Err(ureq::Error::Transport(t)) => return Err(self.unreachable(&t)),
         };
@@ -317,12 +326,21 @@ fn model_listed(model: &str, available: &[String]) -> bool {
 /// the errors that matter — "model not found, try pulling it first"), else a
 /// bounded slice of whatever it did send.
 fn http_error(status: u16, response: ureq::Response) -> LlmError {
+    LlmError::Http {
+        status,
+        message: error_detail(response),
+    }
+}
+
+/// The explanation half of a refusal, shared by the two errors that carry one
+/// ([`LlmError::Http`] mid-answer, [`LlmError::Refused`] at probe time) so a
+/// server's own words reach a human the same way from both.
+fn error_detail(response: ureq::Response) -> String {
     let body = response.into_string().unwrap_or_default();
-    let message = serde_json::from_str::<WireError>(&body)
+    serde_json::from_str::<WireError>(&body)
         .ok()
         .map(|e| e.error.message())
-        .unwrap_or_else(|| truncate(body.trim(), MAX_ERROR_BODY));
-    LlmError::Http { status, message }
+        .unwrap_or_else(|| truncate(body.trim(), MAX_ERROR_BODY))
 }
 
 /// Bound a diagnostic string at a char boundary, marking that it was cut.

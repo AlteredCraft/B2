@@ -354,7 +354,12 @@ if/when one lands — `index-engine.md` §5.)*
   and a garbled frame (an error, so a protocol mismatch can't pass as a short answer). Ollama is the
   guided default; any compatible URL works, and a cloud one only by explicit configuration (M5).
   `probe` is `b2 init`'s posture for chat — one `GET /models` before a human waits, turning "the daemon
-  isn't running" and "that model isn't pulled" into sentences rather than a failed answer. `setup` is the
+  isn't running", "that model isn't pulled" and "that URL isn't a chat API" into sentences rather than a
+  failed answer. It believes only what it can check: an **HTTP refusal is a refusal** (`LlmError::Refused`,
+  its own variant because a 404 at probe time is a wrong base URL while a 404 mid-answer is the server's
+  own "model not found"), and the tolerance is bounded to a **2xx** whose body isn't a model list. It used
+  to read *any* answer as reachable, which meant a mistyped `…/v1X` came back **Connected** and failed at
+  the first question. `setup` is the
   same question asked for a *card* instead of a command (GH #155): it never fails, and it is the one
   deliberately **Ollama-native** corner in a crate that is otherwise generic `/v1` — the daemon's own
   `GET /api/tags` for what is installed, plus a pull suggestion sized to the machine's memory

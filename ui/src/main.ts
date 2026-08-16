@@ -182,9 +182,21 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
   // rule for the overlay layer, and deliberately narrower than "restore every field":
   // only the focused one is carried, so a repaint that is *meant* to rewrite a field the
   // user is not in (picking an installed model rewrites the model field) still does.
+  //
+  // A `<select>` is the same promise about a different gesture: Settings → Chat's Model
+  // field is a picker over what the daemon has, and a choice made and not yet saved is
+  // exactly as uncommitted as a half-typed endpoint. Without this it reverts to the
+  // configured model on the next repaint and *Save and test* saves what was already
+  // there — a button that appears to do nothing.
   const typed =
-    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
-      ? { value: active.value, start: active.selectionStart, end: active.selectionEnd }
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    active instanceof HTMLSelectElement
+      ? {
+          value: active.value,
+          start: active instanceof HTMLSelectElement ? null : active.selectionStart,
+          end: active instanceof HTMLSelectElement ? null : active.selectionEnd,
+        }
       : null;
   return () => {
     const stops = overlayFocusables();
@@ -203,6 +215,15 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
         typed.start ?? typed.value.length,
         typed.end ?? typed.value.length,
       );
+    }
+    // Only a choice the repainted list still offers. Assigning an absent value to a
+    // `<select>` sets `selectedIndex` to -1 and its value to `""` — which would reach the
+    // save as "no model" and reset the configuration, a far worse outcome than the
+    // reversion this is preventing. So a model that vanished from the inventory between
+    // the two paints simply loses the pending choice, and the field shows what is true.
+    if (typed && target === back && target instanceof HTMLSelectElement) {
+      const offered = Array.from(target.options).some((o) => o.value === typed.value);
+      if (offered) target.value = typed.value;
     }
     target?.focus();
   };
@@ -1954,6 +1975,22 @@ function setChatMode(cloud: boolean): void {
     url.value = cloud ? "" : LOCAL_CHAT_ENDPOINT;
     url.focus();
   }
+}
+
+/**
+ * Swap the Settings → Chat **Model** field between the picker and the text box, and put
+ * the keyboard on whichever one just appeared.
+ *
+ * The focus move is the point, not a flourish: the button that swaps them is *replaced*
+ * by the repaint (each shape offers the other's), so `captureModalFocus` has no id to
+ * restore and the keyboard would land on `<body>` — the ejection the settings panel's
+ * "every control carries a stable id" rule exists to prevent. Focusing the field the
+ * press was *about* is both the fix and the right destination.
+ */
+function setChatModelTyped(typed: boolean): void {
+  state.chatModelTyped = typed;
+  render();
+  document.getElementById("settings-chat-model")?.focus();
 }
 
 /** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
@@ -4012,6 +4049,17 @@ function wireEvents(): void {
       }
       if (target.closest("#settings-chat-save")) {
         void saveChatConfig();
+        return;
+      }
+      // The Model field's two shapes (render.ts's `chatModelFieldHtml`). Neither saves:
+      // this only decides whether the field is a list of what the daemon has or a box for
+      // a name it doesn't have yet.
+      if (target.closest("[data-chat-model-custom]")) {
+        setChatModelTyped(true);
+        return;
+      }
+      if (target.closest("[data-chat-model-pick]")) {
+        setChatModelTyped(false);
         return;
       }
       const useModel = target.closest<HTMLElement>("[data-chat-use-model]");

@@ -25,6 +25,16 @@ use std::time::Duration;
 /// only for onboarding.
 const TAGS_PATH: &str = "/api/tags";
 
+/// Where a human who has *no* Ollama is sent. The quickstart rather than the
+/// product page: someone reading this message has already found out that nothing
+/// is listening, so the page they need is the one with the install command and
+/// `ollama pull` on it, not the one with the download button.
+///
+/// One constant because two adapters print it — `b2-cli`'s `user_message` and the
+/// desktop's setup card — and a link that drifts between them is a link one of
+/// them gets wrong.
+pub const OLLAMA_INSTALL_URL: &str = "https://docs.ollama.com/quickstart";
+
 /// The port Ollama serves on. Recognizing it is what decides whether Ollama's own
 /// commands (`ollama serve`, `ollama pull …`) belong in a message — advice about
 /// the wrong program is worse than no advice, and `B2_LLM_URL` also points at LM
@@ -101,9 +111,35 @@ fn host_of(url: &str) -> String {
 /// Ollama's **native** root, derived from the configured OpenAI-compat base URL:
 /// `http://localhost:11434/v1` → `http://localhost:11434`. The compat surface is
 /// mounted under `/v1`; `/api/tags` is not.
+///
+/// Two derivations, in order, because the input is a URL a human typed:
+///
+/// 1. Drop a trailing `/v1`. This is the one that must come first, since it is
+///    the only one that survives a **path-mounted** daemon — `https://gw/ollama/v1`
+///    keeps its `/ollama` prefix, which the authority alone would throw away.
+/// 2. Failing that, fall back to the **authority root**. What lands here is a base
+///    URL that isn't the compat surface at all — most often a typo (`…/v1X`) — and
+///    that is precisely when knowing whether the daemon is up is worth most: it is
+///    the difference between "is Ollama running?" and "Ollama is running, your path
+///    is wrong". Asking the wrong root would answer "not running" about a daemon
+///    plainly serving requests.
 fn ollama_root(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+    match trimmed.strip_suffix("/v1") {
+        Some(root) => root.to_string(),
+        None => origin_of(trimmed),
+    }
+}
+
+/// `scheme://authority` — the URL with every path segment dropped. A missing
+/// scheme reads as `http`, which is what an Ollama URL without one means.
+fn origin_of(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (s, r),
+        None => ("http", url),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    format!("{scheme}://{authority}")
 }
 
 /// How ready chat is, right now — the setup card's top-level branch.
@@ -112,7 +148,12 @@ fn ollama_root(base_url: &str) -> String {
 pub enum ChatState {
     /// A server answered and serves the configured model. Chat works.
     Ready,
-    /// Nothing is listening: the daemon isn't running, or the URL is wrong.
+    /// Nothing usable is at the endpoint: the daemon isn't running, or the URL
+    /// is wrong. Both readings live here because both are *the endpoint is not
+    /// serving chat*, and the card's copy is where they part — a refusal
+    /// ([`LlmError::Refused`]) never gets "is Ollama running?" advice about a
+    /// daemon that plainly answered. Which is to say: the **state** picks the
+    /// card, the **message** carries the fix.
     Unreachable,
     /// A server is there, but doesn't serve the configured model — the most
     /// common local-setup mistake (an un-pulled Ollama model).
@@ -287,6 +328,25 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
             Some(model_missing_message(&model, &config.base_url)),
             available,
         ),
+        // Something is listening and refused the probe. A different sentence from
+        // "nothing is listening", and the one place the Ollama half is *evidence*
+        // rather than onboarding: a daemon that answered `/api/tags` proves the
+        // server is up, which turns a 404 from a guess into a diagnosis.
+        Err(LlmError::Refused {
+            status, message, ..
+        }) => (
+            ChatState::Unreachable,
+            Some(refusal_message(
+                &config.base_url,
+                status,
+                &message,
+                ollama
+                    .as_ref()
+                    .filter(|o| o.running)
+                    .map(|o| o.root.as_str()),
+            )),
+            Vec::new(),
+        ),
         Err(e) => (
             ChatState::Unreachable,
             Some(unreachable_message(&config.base_url, &e)),
@@ -312,10 +372,63 @@ fn unreachable_message(base_url: &str, _detail: &LlmError) -> String {
     if is_ollama(base_url) {
         format!(
             "Can't reach the model server at {base_url} — is Ollama running? \
-             (`ollama serve`, or install: https://ollama.com)"
+             (`ollama serve`, or install: {OLLAMA_INSTALL_URL})"
         )
     } else {
         format!("Can't reach the model server at {base_url}. Check that it's running.")
+    }
+}
+
+/// What to tell a human when the endpoint **answered a probe with a refusal** —
+/// the sentence for [`LlmError::Refused`], phrased here so the CLI's wording and
+/// the app's stay one sentence (as [`unreachable_message`] is).
+///
+/// Split by status, because these are different mistakes with different fixes and
+/// a single "the server said no" would be true of all of them and useful for none:
+///
+/// - **401/403** — the path is right and the credential isn't. Previously this read
+///   as *Connected* and failed at the first question.
+/// - **404/405/410/501** — nothing serves `/models` here. Overwhelmingly a base URL
+///   that isn't the compat surface (`…/v1X`, `…:11434` with no `/v1`), which is why
+///   the fix names the path rather than the server.
+/// - anything else — a server that is there and failing (5xx, a rate limit). Its own
+///   words are the most useful thing available, so they are what gets shown.
+///
+/// `ollama_root` is `Some` only when the daemon **answered its native API**, which
+/// is proof the machine is serving requests: with it, the 404 branch stops
+/// speculating and names the URL that would work.
+pub fn refusal_message(
+    base_url: &str,
+    status: u16,
+    detail: &str,
+    ollama_root: Option<&str>,
+) -> String {
+    match status {
+        401 | 403 => format!(
+            "The model server at {base_url} refused the request (HTTP {status}). \
+             Check the API key for this endpoint."
+        ),
+        404 | 405 | 410 | 501 => {
+            let mut message = format!(
+                "Something is running at {base_url}, but it isn't an OpenAI-compatible API \
+                 (HTTP {status}). Check the endpoint path — it usually ends in `/v1`."
+            );
+            // Only when it would name something *other* than what the user already
+            // typed: echoing their own URL back as the fix is worse than silence.
+            if let Some(root) = ollama_root {
+                let suggestion = format!("{root}/v1");
+                if suggestion != base_url.trim_end_matches('/') {
+                    message.push_str(&format!(
+                        " The Ollama daemon at {root} is running — try {suggestion}."
+                    ));
+                }
+            }
+            message
+        }
+        _ if detail.is_empty() => {
+            format!("The model server at {base_url} answered with HTTP {status}.")
+        }
+        _ => format!("The model server at {base_url} answered with HTTP {status}: {detail}"),
     }
 }
 
@@ -530,6 +643,72 @@ mod tests {
         );
     }
 
+    /// The typo case, and why the fallback exists: `…/v1X` has no `/v1` to strip,
+    /// and the daemon it needs to ask about is at the authority root.
+    #[test]
+    fn a_root_that_isnt_the_compat_surface_falls_back_to_the_authority() {
+        assert_eq!(
+            ollama_root("http://localhost:11434/v1X"),
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            ollama_root("http://localhost:11434/api"),
+            "http://localhost:11434"
+        );
+        // A path-mounted daemon keeps its prefix — which is the whole reason the
+        // `/v1` strip comes first rather than always taking the authority.
+        assert_eq!(
+            ollama_root("https://gw.example.com/ollama/v1"),
+            "https://gw.example.com/ollama"
+        );
+    }
+
+    /// The reported bug, at the layer that phrases it: a base URL that answers but
+    /// isn't a chat API must produce a sentence about the **path**, never
+    /// "is Ollama running?" about a daemon that is plainly running.
+    #[test]
+    fn a_refusal_names_the_mistake_it_actually_is() {
+        let path = refusal_message(
+            "http://localhost:11434/v1X",
+            404,
+            "404 page not found",
+            Some("http://localhost:11434"),
+        );
+        assert!(path.contains("isn't an OpenAI-compatible API"), "{path}");
+        assert!(path.contains("HTTP 404"), "{path}");
+        // The daemon answered its native API, so the fix is a URL, not a guess.
+        assert!(path.contains("try http://localhost:11434/v1"), "{path}");
+        assert!(!path.contains("ollama serve"), "the daemon is up: {path}");
+
+        // A key is a different fix, and used to read as Connected.
+        let key = refusal_message("https://api.example.com/v1", 401, "invalid api key", None);
+        assert!(key.contains("API key"), "{key}");
+        assert!(!key.contains("endpoint path"), "one fix, not two: {key}");
+
+        // Nothing to suggest: no Ollama evidence, so no invented advice.
+        let bare = refusal_message("http://localhost:1234/v2", 404, "", None);
+        assert!(bare.contains("endpoint path"), "{bare}");
+        assert!(!bare.to_lowercase().contains("ollama"), "{bare}");
+
+        // Anything else is the server's own words, which are the useful part.
+        let busy = refusal_message("https://api.example.com/v1", 503, "at capacity", None);
+        assert!(busy.contains("HTTP 503"), "{busy}");
+        assert!(busy.contains("at capacity"), "{busy}");
+    }
+
+    /// The one sentence that would be silly: echoing back the URL the user typed
+    /// as the thing to try instead.
+    #[test]
+    fn a_refusal_never_suggests_the_url_it_was_given() {
+        let same = refusal_message(
+            "http://localhost:11434/v1",
+            404,
+            "",
+            Some("http://localhost:11434"),
+        );
+        assert!(!same.contains("try "), "{same}");
+    }
+
     #[test]
     fn tiers_pick_the_highest_rung_the_machine_meets() {
         assert_eq!(tier_for_ram(8).model, MODEL_TIERS[0].model);
@@ -645,6 +824,9 @@ mod tests {
             },
         );
         assert!(ollama.contains("ollama serve"), "{ollama}");
+        // The other half of "nothing is listening": the daemon may not be installed at
+        // all, and the fix for that is a page, not a command.
+        assert!(ollama.contains(OLLAMA_INSTALL_URL), "{ollama}");
         let other = unreachable_message(
             "http://localhost:1234/v1",
             &LlmError::Unreachable {

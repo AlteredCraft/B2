@@ -2420,6 +2420,17 @@ button.move-dest:hover {
   border-radius: 4px;
   padding: 0 4px;
 }
+/* Chrome copy carries the occasional outward link (the Ollama quickstart, Ollama cloud).
+   Styled here rather than left to the webview's default, which is a fixed blue that
+   ignores the theme and reads as a mis-styled page. The click itself is an OS handoff —
+   main.ts's anchor delegation — so this is the only thing these need. */
+.settings-detail a,
+.settings-note a,
+.chat-setup a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+}
 /* `.settings-action` is the same row shape under a second name (Settings → Index's
    Reindex): both are "a button, and the one line you should know before pressing it". */
 .settings-provision,

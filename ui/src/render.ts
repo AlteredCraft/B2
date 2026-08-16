@@ -59,6 +59,9 @@ import {
 } from "./sidenav.ts";
 import {
   type ChatMessage,
+  OLLAMA_CLOUD_URL,
+  OLLAMA_QUICKSTART_URL,
+  PULL_PLACEHOLDER,
   STREAMING_ROW_KEY,
   chatEmptyState,
   citationRowKey,
@@ -1092,8 +1095,12 @@ function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string
     : "";
   // What's installed, when the daemon answered — so "no model" can offer what *is* there
   // instead of only naming what isn't.
+  //
+  // The pane's card only. In Settings the same inventory *is* the Model field (a picker,
+  // `chatModelFieldHtml`), and two controls setting one value is two things to keep in
+  // step — the second of which would apply on click while the first waits for Save.
   const installed =
-    ollama && ollama.running && ollama.installed.length > 0
+    !inSettings && ollama && ollama.running && ollama.installed.length > 0
       ? `<div class="chat-setup-block">
           <div class="settings-subhead">Installed models</div>
           <ul class="chat-models">${ollama.installed
@@ -1108,8 +1115,11 @@ function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string
             .join("")}</ul>
         </div>`
       : "";
+  // Pane-only for the same reason as the inventory: in Settings the **Local** section's
+  // own copy already carries `ollama pull` sized to this machine (`localNoteHtml`), and
+  // one command printed twice on one screen reads as two different instructions.
   const suggestion =
-    ollama && ollama.suggested
+    !inSettings && ollama && ollama.suggested
       ? `<div class="chat-setup-block">
           <div class="settings-subhead">Suggested for this machine</div>
           <p class="settings-detail muted">${
@@ -1136,8 +1146,10 @@ function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string
   const install =
     ollama && !ollama.running
       ? `<p class="settings-note">B2 talks to any OpenAI-compatible model server; Ollama is the
-          one it can walk you through. Start it with <code>ollama serve</code>, or install it
-          from <a href="https://ollama.com">ollama.com</a>.</p>`
+          one it can walk you through. Start it with <code>ollama serve</code> — or, if it
+          isn’t installed yet, the
+          <a href="${OLLAMA_QUICKSTART_URL}">Ollama quickstart</a> is the install and the
+          first pull, in that order.</p>`
       : "";
   // A retry, in the pane only: the card's whole job is to be looked at while the user
   // goes and fixes something (starts the daemon, pulls a model), so it must be able to
@@ -1547,7 +1559,7 @@ function chatPanelHtml(state: AppState): string {
       return `<p class="settings-detail">${escapeHtml(setup.message ?? "")}</p>`;
     return chatSetupCardHtml(setup, true);
   })();
-  const key = cloud ? cloudKeyHtml(setup) : localNoteHtml();
+  const key = cloud ? cloudKeyHtml(setup) : localNoteHtml(setup);
   return `<div class="settings-subhead">Chat model</div>
       <p class="settings-detail muted">Grounded chat answers only from passages B2 retrieves
         from this vault. Changing the model costs no reindex — nothing about chat is stored.</p>
@@ -1559,10 +1571,7 @@ function chatPanelHtml(state: AppState): string {
         <input id="settings-chat-url" type="text" autocomplete="off" spellcheck="false"
           value="${escapeHtml(setup?.base_url ?? "")}" placeholder="http://localhost:11434/v1" />
       </label>
-      <label class="field">Model
-        <input id="settings-chat-model" type="text" autocomplete="off" spellcheck="false"
-          value="${escapeHtml(setup?.model ?? "")}" placeholder="llama3.2" />
-      </label>
+      ${chatModelFieldHtml(state, setup)}
       ${key}
       <div class="settings-action">
         <button class="btn small primary" id="settings-chat-save">Save and test</button>
@@ -1570,12 +1579,91 @@ function chatPanelHtml(state: AppState): string {
       ${status}`;
 }
 
+/**
+ * The **Model** field — a picker over what the daemon actually has, or a text box.
+ *
+ * Two shapes for one value, chosen by whether there is an inventory to pick from. A
+ * typed model name is the commonest local-setup mistake there is (the daemon is up, the
+ * name is just not one it has), and the fix was previously to read it off a card *after*
+ * getting it wrong. When `/api/tags` answered, the list of installed models is simply
+ * what the field offers.
+ *
+ * The text box stays reachable on purpose, and is not a fallback: a list of *installed*
+ * models structurally cannot contain the one you are pulling right now, and naming it
+ * before the pull finishes is a real thing to do. So the picker carries a way out
+ * (`chatModelTyped`), and the way back is beside the box.
+ *
+ * Both shapes carry the **same id**, because the id is the contract: `saveChatConfig`
+ * reads `.value` off it (a `<select>` and an `<input>` agree on that), and
+ * `captureModalFocus` puts the keyboard back on it by id after the repaint.
+ */
+function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
+  const ollama = setup?.ollama;
+  // A **Local** control by definition: `/api/tags` is one daemon's inventory, which
+  // says nothing about what a cloud provider serves. `chatCloud` and not `setup.cloud`
+  // because the view flag turns over the instant *Cloud models* is pressed, while the
+  // setup is whatever the last probe found — and nothing re-probes on that press (the
+  // URL field is deliberately cleared, there being no default provider). Reading the
+  // stale answer would leave a picker of this machine's models under an empty cloud
+  // endpoint until Save and test, with *Type a model name* standing between the user
+  // and the field they came to fill in.
+  const installed = !state.chatCloud && ollama?.running ? ollama.installed : [];
+  const current = setup?.model ?? "";
+  if (state.chatModelTyped || installed.length === 0) {
+    // The way back, offered only when there is something to go back *to*.
+    const pick =
+      installed.length > 0
+        ? `<div class="settings-action"><button type="button" class="btn small"
+             id="settings-chat-model-pick" data-chat-model-pick>Choose an installed model</button></div>`
+        : "";
+    return `<label class="field">Model
+        <input id="settings-chat-model" type="text" autocomplete="off" spellcheck="false"
+          value="${escapeHtml(current)}" placeholder="llama3.2" />
+      </label>
+      ${pick}`;
+  }
+  // The configured model leads the list when the daemon doesn't have it — dropping it
+  // would silently re-point the configuration at whatever happened to be first, as a side
+  // effect of *looking* at the field.
+  const missing =
+    current !== "" && !installed.some((m) => m.name === current)
+      ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(
+          current,
+        )} — not installed</option>`
+      : "";
+  const options = installed
+    .map((m) => {
+      const detail = [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(m.name)}"${
+        m.name === current ? " selected" : ""
+      }>${escapeHtml(m.name)}${detail ? ` — ${escapeHtml(detail)}` : ""}</option>`;
+    })
+    .join("");
+  return `<label class="field">Model
+      <select id="settings-chat-model">${missing}${options}</select>
+    </label>
+    <div class="settings-action"><button type="button" class="btn small"
+      id="settings-chat-model-custom" data-chat-model-custom>Type a model name</button>
+      <span class="muted">For one you haven’t pulled yet.</span></div>`;
+}
+
 // The **Local** configuration's whole note: nothing leaves, so there is no key field and
 // no privacy warning to give — only the fact that makes the difference legible.
-function localNoteHtml(): string {
+//
+// Plus the one command that changes what the picker above can offer. Spelled with the
+// suggested model when this machine's memory could be read and as a `<model-name>` shape
+// when it couldn't — either way beside the quickstart, which is the page carrying both
+// the install and the pull for someone who has neither.
+function localNoteHtml(setup: ChatSetup | null): string {
+  const suggested = setup?.ollama?.suggested?.model;
   return `<p class="settings-note">Local models keep everything on this machine — your
         question and the retrieved passages never leave it. B2 talks to any
-        OpenAI-compatible server; Ollama is the one it can walk you through.</p>`;
+        OpenAI-compatible server; Ollama is the one it can walk you through.</p>
+      <p class="settings-note">Add a model with
+        <code>${escapeHtml(pullCommand(PULL_PLACEHOLDER))}</code>${
+          suggested ? ` — e.g. <code>${escapeHtml(pullCommand(suggested))}</code>` : ""
+        }, then pick it above. The <a href="${OLLAMA_QUICKSTART_URL}">Ollama quickstart</a>
+        has the whole sequence.</p>`;
 }
 
 // The **Cloud models** key field, and the sentence saying where that key lives.
@@ -1638,7 +1726,16 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
            title="Forget the key B2 has saved">Remove key</button>
          <span class="muted">Removes the key B2 saved. A key set in <code>B2_LLM_API_KEY</code>
          is your environment's, and stays.</span></div>`;
-  return `<label class="field">API key
+  // Where to *get* an endpoint, since B2 ships no default cloud provider and never will
+  // (picking one is the explicit act M5 is about — see `setChatMode`). Ollama's hosted
+  // models are named because they are the one provider B2 already knows how to talk to
+  // without a second thought: the same `/v1` surface, the same model names as the local
+  // configuration. A link, though, not a pre-filled URL.
+  const whereToGet = `<p class="settings-detail muted">Any OpenAI-compatible provider works —
+        put its <code>/v1</code> URL above. Ollama’s hosted models are one:
+        <a href="${OLLAMA_CLOUD_URL}">Ollama cloud</a>.</p>`;
+  return `${whereToGet}
+      <label class="field">API key
         <input id="settings-chat-key" type="password" autocomplete="off" spellcheck="false"
           placeholder="${placeholder}" />
       </label>

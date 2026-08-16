@@ -15,7 +15,9 @@ use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
 use b2_core::resource::{doc_kind, DocKind};
 use b2_core::vault::{AnswerView, Vault};
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
-use b2_llm::{is_ollama, LlmConfig, LlmError, OpenAiCompatProvider};
+use b2_llm::{
+    is_ollama, refusal_message, LlmConfig, LlmError, OpenAiCompatProvider, OLLAMA_INSTALL_URL,
+};
 use clap::{Args, Parser, Subcommand};
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
@@ -1497,11 +1499,18 @@ fn user_message(err: &CliError) -> String {
         // Studio, llama.cpp, vLLM, or a cloud provider, all of which `--llm-url`
         // supports.
         CliError::Llm(LlmError::Unreachable { endpoint, .. }) if is_ollama(endpoint) => format!(
-            "Can't reach the model server at {endpoint} — is Ollama running? (`ollama serve`, or install: https://ollama.com)"
+            "Can't reach the model server at {endpoint} — is Ollama running? (`ollama serve`, or install: {OLLAMA_INSTALL_URL})"
         ),
         CliError::Llm(LlmError::Unreachable { endpoint, .. }) => format!(
             "Can't reach the model server at {endpoint}. Start it, or point --llm-url (or B2_LLM_URL) at one that's running."
         ),
+        // Something answered the probe and refused it — a *different* mistake from
+        // nothing listening, and one this used to report as success. The sentence is
+        // b2-llm's (`refusal_message`), so the CLI and the app say the same thing; the
+        // Ollama-root hint is the app's alone, since only its card has asked the daemon.
+        CliError::Llm(LlmError::Refused { endpoint, status, message }) => {
+            refusal_message(endpoint, *status, message, None)
+        }
         CliError::Llm(LlmError::ModelMissing { model, endpoint, available }) => format!(
             "Model '{model}' isn't available at {endpoint}. {}{}",
             if is_ollama(endpoint) {
