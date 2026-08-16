@@ -776,7 +776,7 @@ function ungradedHtml(state: AppState): string {
   if (state.rawDiscovery || state.similar.length === 0) return "";
   if (state.similar.some((c) => strengthBand(c.z))) return "";
   return sideNoteHtml(
-    `Ungraded — ranked by nearness, not strength. Grading needs ${STRENGTH_MIN_CANDIDATES} or more candidates to compare against.`,
+    `Ungraded — ranked by nearness, not strength. Grading needs ${STRENGTH_MIN_CANDIDATES} or more notes in the vault to compare against.`,
     `A strength band says how far a candidate stands above this note's other candidates. Under ${STRENGTH_MIN_CANDIDATES} of them — or with no spread between them — there is no distribution to measure against, so B2 claims no strength rather than guessing one.`,
   );
 }
