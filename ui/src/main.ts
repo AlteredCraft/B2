@@ -409,7 +409,13 @@ async function paintCodeHighlights(): Promise<void> {
 // Paint just the reindex affordance — the progress bar/label/Cancel, and the Reindex
 // button's state *if it is on screen*. Called on every full render AND on each streamed
 // progress batch, so progress updates never rebuild the panes (which would fight scrolling
-// and churn on a large vault). The progress element lives in the persistent shell.
+// and churn on a large vault).
+//
+// There are two meters and one painter. The shell's lives in the top bar; Settings →
+// Index paints a second while a run is live, because Settings took the whole window and a
+// meter behind an opaque surface is no meter (render.ts). So this walks *every*
+// `.reindex-progress` on screen and writes the same values into each — one computation,
+// so the two can't disagree about a run, and adding a third costs nothing here.
 //
 // The button does not: it is Settings → Index's now (render.ts `indexPanelHtml`), so it
 // exists only while that dialog is open on that section — hence the null-tolerant lookup
@@ -424,40 +430,41 @@ function paintReindex(): void {
     btn.textContent = reindexLabel(state);
   }
 
-  const wrap = document.getElementById("reindex-progress");
-  if (!wrap) return;
-  wrap.hidden = !state.reindexing;
+  const meters = [...document.querySelectorAll<HTMLElement>(".reindex-progress")];
+  for (const wrap of meters) wrap.hidden = !state.reindexing;
   if (!state.reindexing) return;
 
-  const fill = document.getElementById("reindex-fill");
-  const label = document.getElementById("reindex-label");
-  const cancelBtn = document.getElementById("cancel-reindex") as HTMLButtonElement | null;
-  if (cancelBtn) {
-    cancelBtn.disabled = state.reindexCancelling;
-    cancelBtn.textContent = state.reindexCancelling ? "Cancelling…" : "Cancel";
-  }
-
+  // Determinate only once embedding starts and the denominator is known; before that
+  // (the fast projection phase) the bar sweeps rather than showing a bogus fraction.
   const p = state.reindexProgress;
-  if (p && p.notes_to_embed > 0) {
-    // Determinate once embedding starts: fraction of the notes that (re)embed this run.
-    const pct = Math.min(100, Math.round((p.notes_embedded / p.notes_to_embed) * 100));
+  const embedding = p && p.notes_to_embed > 0 ? p : null;
+  const done = embedding ? `${embedding.notes_embedded}/${embedding.notes_to_embed}` : "";
+  const label = state.reindexCancelling
+    ? "Cancelling…"
+    : embedding
+      ? `Embedding ${done} · ${embedding.note_path.replace(/\.md$/, "")}`
+      : "Indexing…";
+
+  for (const wrap of meters) {
+    const fill = wrap.querySelector<HTMLElement>(".reindex-fill");
     if (fill) {
-      fill.classList.remove("is-indeterminate");
-      (fill as HTMLElement).style.width = `${pct}%`;
+      if (embedding) {
+        const ratio = embedding.notes_embedded / embedding.notes_to_embed;
+        const pct = Math.min(100, Math.round(ratio * 100));
+        fill.classList.remove("is-indeterminate");
+        fill.style.width = `${pct}%`;
+      } else {
+        fill.classList.add("is-indeterminate");
+        fill.style.width = "";
+      }
     }
-    if (label) {
-      const name = p.note_path.replace(/\.md$/, "");
-      label.textContent = state.reindexCancelling
-        ? "Cancelling…"
-        : `Embedding ${p.notes_embedded}/${p.notes_to_embed} · ${name}`;
+    const text = wrap.querySelector<HTMLElement>(".reindex-label");
+    if (text) text.textContent = label;
+    const cancelBtn = wrap.querySelector<HTMLButtonElement>("[data-cancel-reindex]");
+    if (cancelBtn) {
+      cancelBtn.disabled = state.reindexCancelling;
+      cancelBtn.textContent = state.reindexCancelling ? "Cancelling…" : "Cancel";
     }
-  } else {
-    // Before the first batch (fast projection phase): indeterminate.
-    if (fill) {
-      fill.classList.add("is-indeterminate");
-      (fill as HTMLElement).style.width = "";
-    }
-    if (label) label.textContent = state.reindexCancelling ? "Cancelling…" : "Indexing…";
   }
 }
 
@@ -877,7 +884,11 @@ const FOCUSABLE =
  *  whose first entry receives focus on open. Menu items are deliberately `tabindex=-1`
  *  (the menu is one stop, arrow-navigated), so they're collected by class instead. */
 function overlayFocusables(): HTMLElement[] {
-  const modal = document.querySelector<HTMLElement>("#modal-root .modal");
+  // `[role="dialog"]`, not a class: the overlay layer has two shapes now — the `.modal`
+  // box the link/move/delete dialogs paint into, and Settings' full-window
+  // `.settings-screen` (render.ts) — and what they have in common is the semantics the
+  // trap exists to serve, not the chrome.
+  const modal = document.querySelector<HTMLElement>('#modal-root [role="dialog"]');
   // The `tabIndex >= 0` filter is what makes a **roving tabstop inside a modal** work:
   // `button:not([disabled])` matches a `tabindex="-1"` button regardless of the last
   // clause, so without it Settings' rail would put every section in the Tab cycle —
@@ -3779,14 +3790,17 @@ function buildShell(): void {
              path almost all of the time. The Reindex button that used to stand here has
              moved into Settings → Index — indexing is automatic now, and permanent chrome
              for an exception trains the eye to skip the bar (render.ts, indexPanelHtml).
-             What stays is the half you can't put behind a modal: the live meter, and the
-             Cancel that belongs with it. -->
+             What stays is the live meter and the Cancel that belongs with it — visible
+             wherever you are in the app, except behind Settings, which covers the bar and
+             so paints a second meter of its own. -->
         <div class="vault-status">
           <span id="vault-root" class="vault-root" title="Active vault"></span>
-          <div id="reindex-progress" class="reindex-progress" hidden aria-live="polite">
-            <div class="reindex-track"><div id="reindex-fill" class="reindex-fill"></div></div>
-            <span id="reindex-label" class="reindex-label"></span>
-            <button id="cancel-reindex" class="btn ghost small">Cancel</button>
+          <!-- Classes, not ids: this is one of those two meters, and paintReindex writes
+               the same values into every one on screen. -->
+          <div class="reindex-progress" hidden aria-live="polite">
+            <div class="reindex-track"><div class="reindex-fill"></div></div>
+            <span class="reindex-label"></span>
+            <button class="btn ghost small" data-cancel-reindex>Cancel</button>
           </div>
         </div>
         <button id="open-chat" class="btn ghost icon-btn" title="Ask your notes (${escapeHtml(
@@ -4024,9 +4038,10 @@ function wireEvents(): void {
       dismissEmbedReminder(false);
       return;
     }
-    // Settings dialog: a rail tab, the Download button (in-app `b2 init`), else the Done
-    // button or a click on the backdrop itself closes it. Checked before the link-modal
-    // backdrop branch so settings wins when it's up.
+    // Settings: a rail tab, the Download button (in-app `b2 init`), else the Done button
+    // closes it. Checked before the link-modal backdrop branch so settings wins when it's
+    // up. There is no click-outside to close on any more — the surface is the whole window
+    // (render.ts) — so the ways out are Done and Escape.
     if (state.settingsOpen) {
       const tab = target.closest<HTMLElement>("[data-settings-tab]");
       if (tab) {
@@ -4080,6 +4095,12 @@ function wireEvents(): void {
         trackIndexing(doReindex());
         return;
       }
+      // …and the Cancel beside it while a run is live. It is the top bar's Cancel in a
+      // second place, not a second behaviour — the bar itself is behind this surface now.
+      if (target.closest("[data-cancel-reindex]")) {
+        void cancelReindex();
+        return;
+      }
       const themeBtn = target.closest<HTMLElement>("[data-theme-choice]");
       if (themeBtn) {
         const choice = themeBtn.dataset.themeChoice ?? null;
@@ -4111,13 +4132,8 @@ function wireEvents(): void {
         resetAllChords();
         return;
       }
-      if (
-        target.closest("[data-settings-close]") ||
-        target.classList.contains("modal-backdrop")
-      ) {
-        closeSettings();
-      }
-      return; // clicks inside the settings modal do nothing else
+      if (target.closest("[data-settings-close]")) closeSettings();
+      return; // clicks inside Settings do nothing else
     }
 
     const cancel = target.closest<HTMLElement>("[data-cancel]");
@@ -4298,9 +4314,10 @@ function wireEvents(): void {
       return;
     }
     // (Reindex itself is Settings → Index's button — wired in the `state.settingsOpen`
-    // branch above, which is the only place it can be clicked. Cancel stays here: its
-    // meter is shell chrome, live whether or not the dialog is up.)
-    if (target.closest("#cancel-reindex")) {
+    // branch above, which is the only place it can be clicked. This is the top bar's
+    // Cancel; the one in Settings' own meter is handled in that branch, since a click
+    // inside the surface never reaches here.)
+    if (target.closest("[data-cancel-reindex]")) {
       void cancelReindex();
       return;
     }

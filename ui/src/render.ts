@@ -1494,10 +1494,11 @@ function embedStatsHtml(state: AppState): string {
 
 // --- Settings (⌘,) --------------------------------------------------------------
 //
-// A tabbed dialog over a rail (settingstabs.ts) — General, Index, Embedding, Keyboard —
-// rather than the one scrolling column it grew out of. Reuses the link modal's `.modal-*`/
-// `.field` chrome; `.modal-settings` is the wider, fixed-height box, so switching
-// sections never resizes the dialog under the cursor.
+// A tabbed surface over a rail (settingstabs.ts) — General, Index, Embedding, Chat,
+// Keyboard — rather than the one scrolling column it grew out of, and since it outgrew a
+// floating box too it takes the whole window (`settingsScreenHtml` below). It keeps the
+// link modal's `.field` chrome, so a section is written as a form and nothing about the
+// surface it lands on is a section's business.
 //
 // **Every control in here carries a stable `id`**, and that is load-bearing, not tidy:
 // `#modal-root` is swapped wholesale on a repaint, so main.ts's `captureModalFocus` can
@@ -1787,10 +1788,12 @@ function generalPanelHtml(state: AppState): string {
 // next to the coverage numbers that say whether you need it.
 //
 // The *progress* meter stays in the top bar beside the vault it is indexing (main.ts
-// `buildShell`): a run is watchable — and cancellable — with this dialog shut, which is the
-// whole point of the app staying usable while it runs. Hence the "it's in the top bar" line
-// below rather than a second meter in here: two meters for one run is two things to keep in
-// step, and the one behind a modal is the one nobody is watching.
+// `buildShell`): a run is watchable — and cancellable — with Settings shut, which is the
+// whole point of the app staying usable while it runs. This panel paints a second one while
+// a run is live, which it did not need to when Settings was a box floating over that bar —
+// it takes the window now, so pointing at the top bar would be pointing at something the
+// human cannot see. Two meters, but not two truths: `paintReindex` writes the same values
+// into every meter on screen, and only one of them is ever visible.
 function indexPanelHtml(state: AppState): string {
   const disabled = reindexDisabled(state);
   // The same honesty as the search caveat (#26): "indexed" and "embedded" are two different
@@ -1806,10 +1809,19 @@ function indexPanelHtml(state: AppState): string {
       ? `${n} note${n === 1 ? "" : "s"} indexed, all embedded.`
       : `${n} note${n === 1 ? "" : "s"} indexed · ${state.notesEmbedded}/${n} embedded.`;
   })();
-  // While a run is live: say where its meter and its Cancel are, since this panel shows
-  // neither. Without the pointer, a disabled button is the only feedback in here.
+  // While a run is live the panel carries the meter itself. It used to point at the top
+  // bar's ("Progress and Cancel are in the top bar"), which was true while Settings was a
+  // box floating over the bar and became a lie the moment it took the window. Same markup
+  // and the same painter as the shell's (`paintReindex` walks every `.reindex-progress` on
+  // screen), so the two can't disagree about a run — only one of them is ever visible.
+  // The Cancel carries an id for the reason every control in here does: the surface
+  // repaints per progress batch, and focus is put back by id.
   const running = state.reindexing
-    ? `<span class="muted">Progress and Cancel are in the top bar.</span>`
+    ? `<div class="reindex-progress" aria-live="polite">
+         <div class="reindex-track"><div class="reindex-fill is-indeterminate"></div></div>
+         <span class="reindex-label"></span>
+         <button id="settings-cancel-reindex" class="btn ghost small" data-cancel-reindex>Cancel</button>
+       </div>`
     : `<span class="muted">Rarely needed — B2 indexes on open and as you save.</span>`;
   return `<div class="settings-subhead">Vault index</div>
       <p class="settings-detail muted">The index is a disposable projection of your Markdown — delete it and a reindex rebuilds it identically.</p>
@@ -2026,17 +2038,38 @@ function tabDomId(id: SettingsTabId): string {
 }
 
 /**
- * The dialog: a vertical rail of sections beside the active panel.
+ * Settings: a vertical rail of sections beside the active panel, taking **the whole
+ * window** rather than floating in a box.
+ *
+ * It was a floating dialog until it stopped fitting in one. Five sections, and the two
+ * ends of the range don't want the same rectangle: Chat is a provider configuration with
+ * a setup card and a page of privacy copy, Keyboard is forty rows of chord table, and
+ * General is a three-button theme switch. A fixed box sized for the long ones leaves the
+ * short ones mostly empty and *still* puts the rest below the fold. A surface that big
+ * has stopped being an interruption you dismiss and become a place you go, so it says
+ * so — it covers the app, and the panel gets the whole remaining rectangle.
+ *
+ * Modal semantics are unchanged (`role="dialog"` + `aria-modal`, the ⇥ trap, Escape, the
+ * focus return in main.ts): the app is still underneath, and Done is still where you came
+ * from. What goes with the box is the **backdrop** — there is no "outside" left to click,
+ * so the ways out are Done and Escape, and main.ts's click handler dropped that branch to
+ * match. The three rows are fixed header / scrolling panel / fixed footer, which is what
+ * keeps Done and the key hints on screen no matter how long a section runs.
+ *
+ * DOM order is load-bearing: rail, then panel, then Done. `focusIntoOverlay` opens
+ * Settings on `overlayFocusables()[0]` and documents that as "the selected tab", which is
+ * true only while nothing focusable precedes the rail — hence a header that carries the
+ * title alone and a Done button that stays in the footer.
  *
  * The rail is the ARIA `tabs` pattern (settingstabs.ts owns the moves): `role="tablist"`,
  * one `role="tab"` per section, and a **roving `tabindex`** so the whole rail is a single
- * Tab stop — a settings dialog whose Tab sequence starts with N section buttons is a
- * dialog you Tab *past*, not through. The panel carries `tabindex="0"` on purpose even
- * when it holds its own controls: it is the scroll container, and a region you can't focus
- * is a region you can't scroll without the mouse (the Keyboard section is a page of table
- * and nothing else, so this is the only way to read past the fold).
+ * Tab stop — a settings surface whose Tab sequence starts with N section buttons is one
+ * you Tab *past*, not through. The panel carries `tabindex="0"` on purpose even when it
+ * holds its own controls: it is the scroll container, and a region you can't focus is a
+ * region you can't scroll without the mouse (the Keyboard section is a page of table and
+ * nothing else, so this is the only way to read past the fold).
  */
-function settingsModalHtml(state: AppState): string {
+function settingsScreenHtml(state: AppState): string {
   const active = state.settingsTab;
   const tabs = SETTINGS_TABS.map((t) => {
     const on = t.id === active;
@@ -2044,19 +2077,26 @@ function settingsModalHtml(state: AppState): string {
               aria-selected="${on}" aria-controls="settings-panel" tabindex="${on ? "0" : "-1"}"
               data-settings-tab="${t.id}" title="${escapeHtml(t.hint)}">${escapeHtml(t.label)}</button>`;
   }).join("");
-  return `<div class="modal-backdrop" data-settings-backdrop>
-      <div class="modal modal-settings" role="dialog" aria-modal="true" aria-label="Settings">
-        <h3>Settings</h3>
-        <div class="settings-body">
-          <div class="settings-tabs" role="tablist" aria-orientation="vertical"
-               aria-label="Settings sections">${tabs}</div>
-          <div class="settings-panel" id="settings-panel" role="tabpanel" tabindex="0"
-               aria-labelledby="${tabDomId(active)}">${settingsPanelHtml(state)}</div>
+  // `.settings-measure` caps the line length inside a panel that is now as wide as the
+  // window: prose set across 1600px is prose nobody reads back to the start of. Keyboard
+  // is the one section that isn't prose — a two-column reference read in columns — so it
+  // takes the wider measure, and the choice is here rather than in the panel builder
+  // because it is a fact about the *surface*, not about what the section says.
+  const measure =
+    active === "keyboard" ? "settings-measure settings-measure-wide" : "settings-measure";
+  return `<div class="settings-screen" role="dialog" aria-modal="true" aria-label="Settings">
+      <header class="settings-head"><h3>Settings</h3></header>
+      <div class="settings-body">
+        <div class="settings-tabs" role="tablist" aria-orientation="vertical"
+             aria-label="Settings sections">${tabs}</div>
+        <div class="settings-panel" id="settings-panel" role="tabpanel" tabindex="0"
+             aria-labelledby="${tabDomId(active)}">
+          <div class="${measure}">${settingsPanelHtml(state)}</div>
         </div>
-        <div class="modal-actions">
-          <span class="modal-hint">↑↓ picks a section · ⌃Tab cycles · Esc closes</span>
-          <button class="btn primary" id="settings-done" data-settings-close>Done</button>
-        </div>
+      </div>
+      <div class="settings-foot">
+        <span class="modal-hint">↑↓ picks a section · ⌃Tab cycles · Esc closes</span>
+        <button class="btn primary" id="settings-done" data-settings-close>Done</button>
       </div>
     </div>`;
 }
@@ -2171,8 +2211,12 @@ function deleteModalHtml(state: AppState): string {
     </div>`;
 }
 
+// The overlay layer, in precedence order (main.ts's `currentOverlay` ranks them the same
+// way). Settings is the odd one out since it went full-window — same `role="dialog"` and
+// the same trap, no backdrop and no box — so it is first here for the reason it is first
+// there: it paints *over* a Move/Delete/Link target left set behind it.
 export function modalHtml(state: AppState): string {
-  if (state.settingsOpen) return settingsModalHtml(state);
+  if (state.settingsOpen) return settingsScreenHtml(state);
   if (state.moveTarget) return moveModalHtml(state);
   if (state.deleteTarget) return deleteModalHtml(state);
   const t = state.linkTarget;

@@ -256,13 +256,13 @@ export const DEFAULT_BINDINGS = [
   { id: "menu.item.prev", label: "Previous item in an open menu", keys: ["ArrowUp"], scope: "overlay:menu" },
   {
     id: "settings.section.next",
-    label: "Next Settings section, from anywhere in the dialog",
+    label: "Next Settings section, from anywhere in Settings",
     keys: ["Ctrl-Tab"],
     scope: "overlay:settings",
   },
   {
     id: "settings.section.prev",
-    label: "Previous Settings section, from anywhere in the dialog",
+    label: "Previous Settings section, from anywhere in Settings",
     keys: ["Ctrl-Shift-Tab"],
     scope: "overlay:settings",
   },

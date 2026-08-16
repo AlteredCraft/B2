@@ -338,6 +338,25 @@ check("the recorder says out loud when nothing has reached B2", () => {
   assert(html.includes("claimed it first"), "and saying why that might be");
 });
 
+// Settings is the overlay layer's odd member: same modal semantics, no box and no
+// backdrop, because it takes the whole window. Two of those facts are contracts main.ts
+// depends on and neither is visible from that side. `overlayFocusables` finds the trap's
+// scope by `[role="dialog"]` — so the surface must carry it, or ⇥ escapes into the app
+// behind it — and `focusIntoOverlay` opens Settings on the *first* focusable, documented
+// as "the selected tab", which holds only while nothing focusable precedes the rail.
+check("the Settings surface is a dialog whose first focusable is the selected tab", () => {
+  const html = modalHtml(app({ settingsOpen: true, settingsTab: "chat" }));
+  assert(tagWith(html, "settings-screen").includes('role="dialog"'), "the trap has a scope");
+  assert(tagWith(html, "settings-screen").includes('aria-modal="true"'), "and it is modal");
+  assert(!html.includes("modal-backdrop"), "no backdrop: there is no outside to click");
+  // Order, not just presence: the rail's selected tab is the only tab in the Tab cycle
+  // (the others are the roving tabstop's -1), so it is `overlayFocusables()[0]` exactly
+  // while Done and everything else in the panel comes after it in the markup.
+  const rail = html.indexOf('id="settings-tab-chat"');
+  assert(rail !== -1 && rail < html.indexOf('id="settings-panel"'), "rail before panel");
+  assert(html.indexOf('id="settings-panel"') < html.indexOf('id="settings-done"'), "Done last");
+});
+
 // Settings → Index is where the manual Reindex went when it left the top bar. Its `id` is
 // what main.ts's click delegation *and* `captureModalFocus` both go looking for, so a
 // panel that painted a nameless button would be a button that does nothing and drops the
@@ -348,9 +367,9 @@ check("the Index panel's Reindex button carries the id both halves restore by", 
 });
 
 // The button is refused while a run is live (`doReindex` single-in-flights anyway), and
-// says so rather than sitting there looking pressable — the panel shows no meter, so the
-// label is the only feedback it has. Both halves come from the exported predicates main.ts
-// repaints with, which is what keeps the two paints of this button in step.
+// says so rather than sitting there looking pressable. Both halves come from the exported
+// predicates main.ts repaints with, which is what keeps the two paints of this button in
+// step.
 check("Reindex is disabled and renamed while a run is live", () => {
   const idle = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v" }));
   assert(!tagWith(idle, ">Reindex<").includes("disabled"), "pressable with no run going");
@@ -358,9 +377,25 @@ check("Reindex is disabled and renamed while a run is live", () => {
     app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", reindexing: true }),
   );
   assert(tagWith(busy, ">Indexing…<").includes("disabled"), "refused mid-run, and says so");
-  assert(busy.includes("top bar"), "and points at where the meter and Cancel actually are");
   const novault = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: null }));
   assert(tagWith(novault, ">Reindex<").includes("disabled"), "nothing to reindex with no vault");
+});
+
+// The panel used to point at the top bar for the live meter and its Cancel. Settings takes
+// the whole window now, so the top bar is *behind* it: the pointer became a lie, and the
+// only way to stop a run became Escape-then-hunt. The panel carries its own meter instead
+// — the same classes `paintReindex` writes into, and a Cancel main.ts's delegation can see.
+check("the Index panel carries the live meter itself, since the top bar is behind it", () => {
+  const busy = modalHtml(
+    app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v", reindexing: true }),
+  );
+  assert(busy.includes('class="reindex-progress"'), "the meter is in the panel");
+  assert(busy.includes('class="reindex-label"'), "with the element paintReindex writes into");
+  const cancel = tagWith(busy, "data-cancel-reindex");
+  assert(cancel.includes('id="settings-cancel-reindex"'), "Cancel is identified for the repaint");
+  assert(!busy.includes("top bar"), "and nothing points at chrome this surface covers");
+  const idle = modalHtml(app({ settingsOpen: true, settingsTab: "index", vaultRoot: "/v" }));
+  assert(!idle.includes("reindex-progress"), "no run, no meter");
 });
 
 // The #26 honesty, in the one place a human comes to ask "is my index finished?": indexed

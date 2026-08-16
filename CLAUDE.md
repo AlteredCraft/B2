@@ -403,14 +403,18 @@ if/when one lands — `index-engine.md` §5.)*
   — every pane restores focus across its own repaint (`paintTree` by path; `capturePaneFocus` by row
   key, graph-node scene id, or a control's stable `id` for the other two; `captureModalFocus` by `id`
   for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
-  and the Settings dialog (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
+  and Settings (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
   `ui/src/settingstabs.ts` — General / Index / Embedding / **Chat** / **Keyboard**, the last being the
   whole chord table (`ui/src/shortcuts.ts`) that `?` jumps straight to, *Chat* being where the chat
   model lives (GH #155: the **Local** / **Cloud models** configurations, the privacy copy beside the
   cloud one — the consent moment is the configuration moment, M5 — and the Ollama-native setup card), and *Index* being where the manual Reindex
-  lives now that indexing is automatic (auto-index on open + the fs-watch pulse): the top bar keeps only
-  the live progress meter, beside the vault name it is in reference to, since a run must stay watchable
-  and cancellable with the dialog shut. The **chat pane** (⌘J, GH #155) is the right column's third mode,
+  lives now that indexing is automatic (auto-index on open + the fs-watch pulse). Settings takes the
+  **whole window** rather than floating in a box (five sections, one of them a page of chord table,
+  outgrew one), keeping modal semantics — `role="dialog"`, the ⇥ trap, Escape — but no backdrop, since
+  there is no outside left to click. The top bar keeps the live progress meter, beside the vault name
+  it is in reference to, since a run must stay watchable and cancellable with Settings shut; Settings →
+  Index paints a second meter of its own while a run is live, because the surface covers that bar
+  (one painter, `paintReindex`, writes every meter on screen). The **chat pane** (⌘J, GH #155) is the right column's third mode,
   beside discovery and search rather than in the centre: an answer's citations open their notes *in the
   centre pane*, so the conversation never has to leave the screen to be checked. Its transcript is
   `ui/src/chat.ts`, which emits `sidenav.ts`'s own rows — so the pane inherits that column's whole

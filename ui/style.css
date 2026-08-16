@@ -2065,7 +2065,7 @@ body.is-loading {
   color: var(--muted);
 }
 /* The first group opens the panel and has nothing above it to separate from — the same
-   exception `.settings-panel > .settings-subhead:first-child` makes. (Only the first
+   exception `.settings-measure > .settings-subhead:first-child` makes. (Only the first
    *group*, not the first in each column: the grid is CSS multi-column, so which group
    tops the second column is a layout outcome no selector can name.) */
 .keys-group:first-child h4 {
@@ -2288,39 +2288,72 @@ button.move-dest:hover {
   cursor: default;
 }
 
-/* --- settings: the tabbed dialog ------------------------------------------------
-   Settings outgrew a single scrolling column (appearance + the whole embedding story +
-   the whole keyboard reference), so it is a rail of sections beside one panel.
+/* --- settings: the full-window surface -------------------------------------------
+   Settings outgrew a single scrolling column, then it outgrew the box that replaced it
+   (render.ts's `settingsScreenHtml` argues the case), so it takes the window: the app is
+   *behind* it, not dimmed under it. No backdrop — there is no outside left to click —
+   which is what lets the surface be opaque and the panel be as tall as the screen.
 
-   The box is deliberately **fixed**, not content-sized — `height`, not `max-height`, which
-   would still let a two-line section shrink the dialog and a page of shortcuts grow it. It
-   must not resize under the cursor: the rail is the one thing you navigate *back* to, and
-   a rail that moves every time you pick a section is a rail you have to re-find. So the
-   box holds still, the body fills it, and only the panel scrolls. The `min()` is the short
-   window: the dialog gives up height before it gives up fitting on screen. */
-.modal-settings {
-  max-width: 880px;
-  height: min(600px, calc(100vh - 96px));
+   Three rows, and only the middle one scrolls: a header that names where you are, a
+   footer that keeps Done and the key hints on screen however long the section runs, and
+   the panel taking everything left over. The old fixed-height box existed so the dialog
+   couldn't resize under the cursor — the rail is the one thing you navigate *back* to,
+   and a rail that moves every time you pick a section is a rail you have to re-find. The
+   viewport is that guarantee for free: the rail is now pinned to the window, so no
+   section's height can move it at all.
+
+   The colours are the app's own raised/recessed pair, swapped end for end: the panel
+   keeps `--surface` so every control in it (`.field`'s inputs, `.segmented`) keeps the
+   `--bg`-on-`--surface` contrast it was drawn for, and the rail takes the recessed colour
+   — which is also what leaves `.stab:hover`'s `--surface-2` visible against it.
+
+   `z-index` matches `.modal-backdrop`'s: the overlay layer is one layer, and only one of
+   its members is ever painted (render.ts's `modalHtml`). */
+.settings-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
 }
+.settings-head {
+  flex: 0 0 auto;
+  padding: 15px 26px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.settings-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 26px;
+  border-top: 1px solid var(--border);
+}
 .settings-body {
   display: grid;
-  grid-template-columns: 156px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 196px minmax(0, 1fr);
   flex: 1;
   /* A grid item's default `min-height: auto` sizes it to its content, which would push the
-     panel's overflow out through the dialog instead of scrolling it. */
+     panel's overflow out through the surface instead of scrolling it. */
   min-height: 0;
-  margin: 4px 0 16px;
 }
 
+/* The rail is the surface's own sidebar now rather than a column of the box: it runs the
+   full height, carries the recessed colour to say so, and scrolls on its own if a short
+   window can't hold five sections. */
 .settings-tabs {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-right: 14px;
+  padding: 16px 12px;
+  overflow-y: auto;
   border-right: 1px solid var(--border);
+  background: var(--bg);
 }
 .stab {
   text-align: left;
@@ -2361,20 +2394,35 @@ button.move-dest:hover {
    computes `overflow-x` to `auto` as well, and anything drawn outside the padding box is
    cut. A focus ring is drawn outside — 2px of outline at 2px of offset — and the panel's
    own controls start at x=0, which is how the leftmost chord chip came to be ringed on
-   three sides. The left padding is that 4px plus daylight, so the ring reads as a ring
-   rather than as something pressed against the rail. */
+   three sides. Every side's padding clears that 4px with room to spare, so a ring reads
+   as a ring rather than as something pressed against the rail. */
 .settings-panel {
   min-width: 0;
   overflow-y: auto;
-  padding-right: 4px;
-  padding-left: 6px;
+  padding: 22px 26px 30px;
 }
 .settings-panel:focus {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent-soft);
   border-radius: 8px;
 }
-.settings-panel > :last-child {
+/* The panel is as wide as the window now, and a measure is not: prose set across 1600px
+   is prose nobody reads back to the start of. So the content sits in a column of its own,
+   left-aligned against the rail rather than centred in the leftover space — the rail is a
+   fixed anchor, and a gap between it and the text that changes with the window size makes
+   the anchor read as if it moved. */
+.settings-measure {
+  max-width: 720px;
+}
+/* One exception, and it is a different *kind* of content: the chord sheet is a reference
+   read in columns, not prose read in lines, and the width is the whole reason it packs
+   into two columns instead of scrolling as one. Set on the wrapper rather than the grid,
+   because a child cannot outgrow the measure that clips it (render.ts picks the class by
+   section). */
+.settings-measure-wide {
+  max-width: 1120px;
+}
+.settings-measure > :last-child {
   margin-bottom: 0;
 }
 /* A control's width is a claim about its content: the modal's `.field` stretches to a
@@ -2386,12 +2434,12 @@ button.move-dest:hover {
 }
 /* `.settings-subhead`'s rule above the heading separates *stacked* groups; the one that
    opens a panel has nothing to separate from. */
-.settings-panel > .settings-subhead:first-child {
+.settings-measure > .settings-subhead:first-child {
   border-top: none;
   padding-top: 0;
 }
-/* The reference packs into two columns in the note-pane-width panel, one when the window
-   is narrow enough that the dialog itself has shrunk. */
+/* The reference packs into two columns across the measure, one when the window is narrow
+   enough that two would leave neither room to breathe. */
 .settings-panel .keys-grid {
   margin: 12px 0 4px;
 }

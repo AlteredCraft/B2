@@ -245,8 +245,8 @@ Every new surface owes all four. They are cheap while you're building it and exp
   no file type and rendered at the system font's whim, and inline SVG pasted per call site
   with its own stroke width. `ui/scripts/gen-icons.ts` vendors the named subset into
   `icons.gen.ts` and, in `--check` mode, is the first thing `npm test` runs.
-- **`ui/src/settingstabs.ts`** — the Settings dialog's rail: the section list and its ARIA `tabs`
-  moves (↑↓ with wrap, Home/End; ⌃Tab cycles from anywhere in the dialog). Its own module for
+- **`ui/src/settingstabs.ts`** — the Settings surface's rail: the section list and its ARIA `tabs`
+  moves (↑↓ with wrap, Home/End; ⌃Tab cycles from anywhere in it). Its own module for
   treenav.ts's reason — the paint and the arrows must agree on order, so the order is defined once
   and both read it. Adding a section is a row there plus a panel in `render.ts`.
 - **`ui/src/main.ts`** — the wiring: the tree's and the side pane's own `keydown` (bound to each pane,
