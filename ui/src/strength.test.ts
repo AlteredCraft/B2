@@ -20,3 +20,10 @@ test("strength: the tooltip spells the z for whoever wants the number", () => {
   assert.ok(band && band.title.includes("2.5σ"));
   assert.ok(band && band.glyph === "●●○");
 });
+
+test("strength: the value is the bare figure, for the card that is selected", () => {
+  // The selected card reveals this beside the dots — the same number the tooltip
+  // spells out in prose, with none of the prose (hover is not the only way in).
+  assert.equal(strengthBand(2.53)?.value, "2.5σ");
+  assert.equal(strengthBand(6)?.value, "6.0σ");
+});

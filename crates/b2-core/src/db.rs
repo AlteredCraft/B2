@@ -57,7 +57,7 @@ use std::time::Duration;
 /// (unstemmed BM25 missed every inflection: `pedalling` found nothing in a note
 /// saying "pedals"; porter rescued 7 queries and regressed none, with the
 /// code-literal and universe/university precision probes standing guard —
-/// docs/evals/runlog.md 2026-08-11, index-engine.md §3).
+/// GH #157, index-engine.md §3).
 /// **6** re-keyed the whole index on the **vault-relative path** and made
 /// `embeddings` content-addressed (GH #170): `notes(path PK)`, children referencing
 /// it `ON DELETE CASCADE ON UPDATE CASCADE`, `edges(src_path, dst_path)`, and

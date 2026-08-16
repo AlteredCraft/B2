@@ -5,9 +5,18 @@
 // discovery floor judged it by. Everything shown has already cleared the floor
 // (z ≥ 1.85), so the bands grade *within* the shown, from "cleared the bar" to
 // "towers over the field"; the thresholds match the calibration's measured
-// landmarks (docs/evals/runlog.md 2026-08-11: labelled mates 1.9–3.0, dense-vault
+// landmarks (GH #150's calibration: labelled mates 1.9–3.0, dense-vault
 // leaders up to ~6). A candidate with no z (floor off or inert) gets no band —
 // no statistic was computed, so none is claimed.
+
+/** How many candidates a note needs before any of them can be graded — the UI-side
+ *  mirror of `discover.rs`'s `FLOOR_MIN_POPULATION`. A z over a handful of distances is
+ *  noise, so under this the floor stays inert and every candidate arrives with no z.
+ *  Duplicated across the language boundary on purpose: the number is *copy* here — the
+ *  one thing the ungraded caveat can tell a reader to act on — and the alternative is
+ *  widening the IPC contract to carry a constant that has moved once. If the Rust
+ *  constant moves, this line moves with it. */
+export const STRENGTH_MIN_CANDIDATES = 12;
 
 export interface StrengthBand {
   /** Three-dot glyph for the card (`●●○`). */
@@ -16,6 +25,10 @@ export interface StrengthBand {
   label: string;
   /** Tooltip prose: the z spelled out for whoever wants the number. */
   title: string;
+  /** The bare figure (`2.5σ`), which the *selected* card reveals beside the dots.
+   *  The tooltip says the same thing in prose, but a tooltip needs a pointer —
+   *  this is how the number reaches a keyboard (K1). */
+  value: string;
 }
 
 export function strengthBand(z: number | undefined | null): StrengthBand | null {
@@ -25,9 +38,11 @@ export function strengthBand(z: number | undefined | null): StrengthBand | null 
     : z >= 2.3
       ? ["●●○", "clear match"]
       : ["●○○", "near match"];
+  const value = `${z.toFixed(1)}σ`;
   return {
     glyph,
     label,
-    title: `${label} — stands ${z.toFixed(1)}σ above this note's other candidates`,
+    value,
+    title: `${label} — stands ${value} above this note's other candidates`,
   };
 }

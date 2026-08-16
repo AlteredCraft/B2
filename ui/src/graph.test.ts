@@ -113,9 +113,9 @@ check("anchor centered; authored on the inner orbit, ghosts on the outer halo", 
   assert(orbitR(ghosts[0], a) > r + 60, "the ghost halo sits clearly outside the authored orbit");
 });
 
-check("ghosts are capped, dashed-latent, and score-tagged", () => {
+check("ghosts are capped, dashed-latent, and strength-tagged", () => {
   const many = Array.from({ length: 10 }, (_, i) =>
-    ghost({ path: `notes/g${i}.md`, title: `g${i}`, score: 0.9 - i * 0.05 }),
+    ghost({ path: `notes/g${i}.md`, title: `g${i}`, score: 0.9 - i * 0.05, z: 3.24 - i * 0.1 }),
   );
   const s = buildScene(input({ ghosts: many }));
   const ghosts = s.nodes.filter((n) => n.kind === "ghost");
@@ -123,7 +123,18 @@ check("ghosts are capped, dashed-latent, and score-tagged", () => {
   const ghostEdges = s.edges.filter((e) => e.ghost);
   equal(ghostEdges.length, GHOST_LIMIT, "one latent edge per ghost");
   assert(ghostEdges.every((e) => !e.arrow), "latent edges carry no arrowhead");
-  equal(ghosts[0].sub, "0.90", "the score is the ghost's sub-label");
+  // The halo's *order* is the candidate order, which is the z order wherever the floor
+  // computed one — so labelling each spoke with the raw engine score would print a
+  // number that doesn't explain the ring it sits on. Same figure as the card's band.
+  equal(ghosts[0].sub, "3.2σ", "the ghost is tagged with the strength the pane shows");
+});
+
+check("an ungraded ghost is tagged with nothing rather than a raw engine score", () => {
+  // No z means no statistic was computed. `-0.73` is a negated L2 in bge's space: it
+  // would read as a *measurement* of this candidate when nothing measured it.
+  const s = buildScene(input({ ghosts: [ghost({ score: -0.73 })] }));
+  const g = s.nodes.find((n) => n.kind === "ghost");
+  equal(g!.sub, null, "no band, no sub-label");
 });
 
 check("a neighbor with two edges gets one node and two separated curves", () => {

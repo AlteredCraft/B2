@@ -8,7 +8,7 @@
 //! last test pins that). So these tests inject a **geometric** embedder whose
 //! vectors are hand-placed: notes carry `VEC:<tag>` markers, and the embedder maps
 //! each tag to a designed unit vector. The scenarios mirror the measured shapes the
-//! rule was calibrated on (docs/evals/runlog.md 2026-08-11): a cluster anchor whose
+//! rule was calibrated on (GH #150's calibration runs): a cluster anchor whose
 //! mate stands far above a tight noise cloud, and a diffuse anchor whose best
 //! candidate is just the least-far member of one undifferentiated cloud.
 
@@ -46,6 +46,13 @@ impl GeometricEmbedder {
             "MATE" => vec![0.995, 0.0998, 0.0, 0.0],
             // A diffuse anchor living inside the noise cloud itself.
             "DIFFUSE" => vec![0.0, 0.0, 1.0, 0.0],
+            // The order-disagreement pair (see `ranks_by_z_not_by_score`): `MID` is
+            // one middling chunk, nearer the anchor than a split note's *centroid*
+            // but further than that note's best *chunk* (`NEAR`, whose other half
+            // `FAR` drags the centroid away).
+            "MID" => vec![0.8, 0.6, 0.0, 0.0],
+            "NEAR" => vec![0.995, 0.0998, 0.0, 0.0],
+            "FAR" => vec![0.0, 0.0, 1.0, 0.0],
             // The noise cloud: all near axis 2, fanned evenly on axis 3 so the
             // diffuse anchor sees one smooth spread of distances (max-z ≈ 1.6 for
             // 13 evenly spaced values — below the 1.85 gate by construction).
@@ -149,6 +156,79 @@ fn no_floor_serves_the_raw_nearest_with_no_z() {
         cands.iter().all(|c| c.z.is_none()),
         "no statistics were computed, so no z is claimed"
     );
+}
+
+/// A note long enough to chunk in two, each half carrying its own `VEC:` tag.
+/// ~1400 chars per half against the 450-token (≈1800-char) target: short enough
+/// that the two halves don't make a third chunk, long enough that the H2 between
+/// them is inside the backscan and becomes the boundary. The 15% overlap re-shares
+/// only filler, leaving each chunk's *first* `VEC:` its own.
+fn write_split_note(vault: &Path, name: &str, first: &str, second: &str) {
+    let filler = "alpha beta gamma delta epsilon zeta eta theta iota kappa. ".repeat(24);
+    fs::write(
+        vault.join(name),
+        format!(
+            "---\ntype: note\ntitle: {name}\n---\nmarker VEC:{first} {filler}\n\n\
+             ## Second section\n\nmarker VEC:{second} {filler}\n"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn ranks_by_z_not_by_score_when_the_floor_computed_it() {
+    // The band a card shows IS its z (GH #150), so the list must be ordered by the
+    // same number — otherwise a weaker-banded card sits above a stronger one.
+    //
+    // This vault makes the two orders disagree *by construction*, which is the
+    // honest cost of the rule: `split.md` holds a passage almost parallel to the
+    // anchor (its stage-2 max-sim is far the best) but its second half drags its
+    // centroid away, so `mid.md` — one middling chunk, no best passage anywhere
+    // near as close — wins on stage-1 z and now ranks above it.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault = tmp.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    write_note(&vault, "anchor.md", "ANCHOR");
+    write_note(&vault, "mid.md", "MID");
+    write_split_note(&vault, "split.md", "NEAR", "FAR");
+    for i in 0..NOISE_NOTES {
+        write_note(&vault, &format!("noise{i}.md"), &format!("N{i}"));
+    }
+    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
+    ingest_vault(&conn, &vault, &GeometricEmbedder).unwrap();
+    assert_eq!(
+        b2_core::db::note_chunk_vectors(&conn, "split.md")
+            .unwrap()
+            .len(),
+        2,
+        "the fixture only bites if split.md really chunked in two"
+    );
+
+    let cands =
+        discover::candidates(&conn, "anchor.md", 10, Some(&DiscoveryFloor::default())).unwrap();
+    assert_eq!(
+        cands
+            .iter()
+            .map(|c| c.note_path.clone())
+            .collect::<Vec<_>>(),
+        vec!["mid.md".to_string(), "split.md".to_string()],
+        "ordered by z (the shown band), not by the stage-2 score"
+    );
+    // The disagreement is real, not an artifact of both orders happening to match.
+    assert!(
+        cands[0].score < cands[1].score,
+        "score order is the opposite: {} then {}",
+        cands[0].score,
+        cands[1].score
+    );
+    let (z0, z1) = (cands[0].z.unwrap(), cands[1].z.unwrap());
+    assert!(z0 > z1, "z is non-increasing down the list: {z0} then {z1}");
+
+    // Ungated, there is no z to rank by, so the exact stage-2 score is the order —
+    // and it puts the note with the near-parallel passage first again.
+    let raw = discover::candidates(&conn, "anchor.md", 10, None).unwrap();
+    assert_eq!(raw[0].note_path, "split.md");
+    assert_eq!(raw[1].note_path, "mid.md");
 }
 
 #[test]

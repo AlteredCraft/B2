@@ -1542,6 +1542,33 @@ body.is-resizing {
   margin: 4px 0 8px;
 }
 
+/* A caveat about the list below it — ungraded discovery, raw mode. Louder than
+   `.side-empty` (which reads as chrome and gets skimmed) and deliberately quieter than a
+   failure: accent tones and an info glyph, the same vocabulary as `.install-banner`, since
+   `--danger` here would say "broken" about a list that is working exactly as designed. */
+.side-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.side-note-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 18px; /* centres the glyph on the first line, whatever the text wraps to */
+  color: var(--accent);
+}
+
 /* Subtle inline spinner for an in-flight side-pane fetch (discovery's whole-vault
    `similar` scan) — better than static "Loading…" text, which can read as stuck. */
 .spinner {
@@ -1689,6 +1716,22 @@ body.is-resizing {
   /* The strength band's dots (●●○) read at a smaller optical size than digits;
      tracking them slightly apart keeps the three positions countable. */
   letter-spacing: 2px;
+}
+
+/* The σ figure behind the dots. Hidden at rest so a column of cards stays a column of
+   glyphs rather than a table of numbers, and revealed for the one card the human is
+   actually asking about. Both triggers matter: `:hover` is the pointer's ask, and
+   `:focus-within` is the keyboard's — the roving row *is* the focused element, so a
+   card reached by ↑/↓ shows its number without a mouse ever being present (K1). */
+.card-sigma {
+  display: none;
+  margin-left: 6px;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+.card:hover .card-sigma,
+.card:focus-within .card-sigma {
+  display: inline;
 }
 
 /* "Show nearest anyway" — the discovery floor's per-look escape hatch (GH #150).

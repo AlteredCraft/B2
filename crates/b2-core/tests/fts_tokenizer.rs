@@ -1,5 +1,5 @@
 //! The FTS tokenizer (GH #157): `porter unicode61` is the shipped default (schema
-//! v5 — the A/B's verdict, docs/evals/runlog.md 2026-08-11), and
+//! v5 — the A/B's verdict, GH #157), and
 //! [`Vault::rebuild_fts`] swaps `chunks_fts`'s tokenizer over the identical stored
 //! chunk text — the lever that lets the eval harness keep the unstemmed ablation
 //! measurable without re-chunking or re-embedding anything (the tokenizer only

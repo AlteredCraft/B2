@@ -512,9 +512,12 @@ pub struct SimilarView {
     /// evidence for *why* it surfaced.
     pub evidence: String,
     /// How far this candidate stands above the anchor's own candidate population
-    /// (its stage-1 z-score) — the number the discovery floor judged, and the one
-    /// honest input for a displayed *strength* band (GH #150). `None` when no
-    /// floor statistics were computed (floor off, tiny pool, or zero variance);
+    /// (its stage-1 z-score) — the number the discovery floor judged, the one
+    /// honest input for a displayed *strength* band (GH #150), and, when present,
+    /// this list's own sort key, so the band never contradicts the row order.
+    /// `None` when no floor statistics were computed (floor off, tiny pool, or
+    /// zero variance) — which is also the adapters' cue to say the list is
+    /// *ungraded* rather than let bare cards read as uniformly weak;
     /// serialized only when present so older JSON consumers see no change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub z: Option<f64>,
@@ -1099,7 +1102,7 @@ impl Vault {
     /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
     /// deduped, best first. **The eval harness's ablation instrument** (GH #158),
     /// not an adapter surface: scoring it beside bm25-only and hybrid is what
-    /// gives fusion a measured single-signal baseline, and the runlog's finding
+    /// gives fusion a measured single-signal baseline, and the eval's finding
     /// that RRF can demote a dense rank-1 hit is a standing measurement only
     /// because this stays callable. Same model-mismatch fail-fast as `search`; a
     /// projected-but-unembedded vault returns no hits (there is nothing to scan
@@ -1339,8 +1342,10 @@ impl Vault {
     /// Surface the notes most semantically similar to `note_ref` (a path, `.md` optional)
     /// that are **not already connected** to it — connection-discovery candidate
     /// generation ([`discover::candidates`]) exposed directly: vector KNN over the
-    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked by best
-    /// chunk-pair max-similarity. Each result carries the candidate's path + title and
+    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked strongest
+    /// first — by `z` wherever the floor computed one (so the order matches the
+    /// strength band an adapter paints from it) and by best chunk-pair max-similarity
+    /// otherwise. Each result carries the candidate's path + title and
     /// the passage that made it similar. A **pure read over stored vectors — no model
     /// call** (a prior `reindex` supplies them), like [`neighbors`](Self::neighbors);
     /// `limit` bounds the count. Errors with [`Error::NoteNotFound`] for an unknown

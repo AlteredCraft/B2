@@ -3,9 +3,11 @@
 How B2 measures the one thing `cargo test` cannot: whether retrieval and discovery are any
 *good*. A unit test can prove `reindex` is idempotent; only a human-labelled corpus can say that
 "how do leaves turn light into food" should rank `photosynthesis.md` first. This directory is the
-harness's home: this overview, and [`runlog.md`](runlog.md) — the **binding lab notebook** where
-every decision is recorded against the run that settled it. Read the runlog's Orientation before
-touching the corpus, the labels, or the metrics; its process rules are the harness's law.
+harness's home: this overview and the [process rules](#process-rules) below, which are the
+harness's law — read them before touching the corpus, the labels, or the metrics. **Decision
+history lives in git and in [GitHub Issues](https://github.com/AlteredCraft/B2/issues)**: every
+verdict below names the issue that drove it, and the commit that shipped it is the record of what
+changed and why.
 
 Everything here runs **out of CI, on demand** — the repo rule is that `cargo test` stays fast,
 deterministic, and model-free, so model quality can never flake CI
@@ -44,7 +46,6 @@ can say *different*, only labels can say *better*. Run both.
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | `crates/b2-embed/evals/results.jsonl` | append-only run log (gitignored, local) — every number ever cited traces to a row here |
 | [`../../justfile`](../../justfile) | the `model` group holds every recipe above |
-| [`runlog.md`](runlog.md) | the decision log — what changed, why, which rows settled it; **append-only, newest last** |
 
 ## What the exit code enforces
 
@@ -59,7 +60,7 @@ Exit `2` = a floor failed; `1` = the run itself broke. Two instrument checks pri
 score and gate everything after them: the model id (never average CPU and `@metal` rows) and
 `batch ≡ single` embedding faithfulness.
 
-## The verdicts this harness has ruled (all in the runlog, each traceable to a row)
+## The verdicts this harness has ruled (each traceable to its issue and its commit)
 
 - **`porter unicode61` FTS stemming** (schema v5, [#157](https://github.com/AlteredCraft/B2/issues/157)):
   7–0 BM25 / 3–0 hybrid on the paired win/loss readout, precision probes unmoved. The retired
@@ -94,7 +95,25 @@ just eval-sweep    # + the seven-variant chunker A/B
 just stability     # model-free, deterministic; `just stability-bless` only after an INTENDED change
 ```
 
-Editing anything here? The corpus is frozen except through a runlog entry, every content edit
-runs the two-direction token audit as a script, and a paired per-query win/loss list — never the
-aggregate — is the readout any A/B is judged on. The full rules: [`runlog.md`](runlog.md) →
-Orientation → Process rules.
+## Process rules
+
+Adopted 2026-08-10; each traces to a measured mistake or a named risk, and each is binding on
+anyone editing the corpus, the labels, or the metrics.
+
+1. **A paired per-query win/loss list is the primary readout of any A/B; the aggregate is a smoke
+   alarm.** At n≈40, every aggregate point is 1–2 queries — "hit@1 +0.05" and "these two flipped"
+   are the same fact, but only the second can be argued with against the labels. The sweep prints
+   the diff (`Δ vs default`) automatically.
+2. **A corpus edit is a change to the instrument, so it ships as its own commit** whose message
+   says what changed and why, and every edit runs the **two-direction token audit** before it
+   lands: no existing query's content tokens may newly land in the edited/added note, and no new
+   query's content tokens may split evenly toward a rival (the `insomnia.md` steal, and the
+   `recover`+`mistake` near-miss, are the precedents). The audit is a ten-line script; run it,
+   don't eyeball it.
+3. **The same person authoring notes, queries, and fixes is a ratchet toward measuring what the
+   engine already does.** Mitigations in order of cheapness: rule 2's audit; sourcing future
+   queries from outside the corpus author's head (from note titles alone, or another person);
+   dogfooding on a real vault before trusting any threshold.
+4. **A bit-identical or unmoved metric is a claim to verify, never proof of "no effect"** —
+   compare a continuous quantity (the piles) before believing a discrete one. (Standing rule from
+   the `prepend-heading-path` trace; the sweep diff prints its own reminder.)
