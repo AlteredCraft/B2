@@ -90,8 +90,9 @@ score and gate everything after them: the model id (never average CPU and `@meta
   (on-topic half second — chunk order provably doesn't matter), `tire-pressure-and-knots.md`
   (off-topic half ~3× the on-topic half — the centroid dragged furthest), and
   `running-and-aquarium.md`, a negative whose two halves are both unrelated to every anchor. The
-  positive family measurably worked: `tire-pressure-and-knots.md` raised the related-cosine pile's
-  floor down to 0.554 (from 0.580), the hardest mate in the corpus by construction. `similar`'s own
+  positive family measurably worked: `tire-pressure-and-knots.md` lowered the related-cosine pile's
+  floor to 0.554 (from 0.580) — not a quality regression but the intended one, a labelled mate
+  harder than any the corpus previously held. `similar`'s own
   hit@1/hit@3/MRR@5 stayed pinned at 1.000 exactly as the issue predicted — a hit only needs *one*
   of an anchor's mates, so a specific hard mate's placement is invisible to that aggregate — and per
   process rule 4 the piles are the readout that actually moved, which is standing evidence that a

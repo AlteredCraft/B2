@@ -316,7 +316,8 @@ z is the *coarse* stage-1 centroid statistic, so a note whose single best passag
 than its centroid suggests now ranks below one with a nearer centroid and no such passage —
 stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
 The labelled corpus did not move on the change — but it was already at ceiling
-(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, measured
+(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives then 4/4 clean across the four
+loners the corpus held at that date, measured
 2026-08-16), so it could only witness the absence of a regression, never confirm the ordering is
 right. It could not see the trade at all: six anchors of short single-topic notes, where a
 centroid and its best chunk agree by construction. [#183](https://github.com/AlteredCraft/B2/issues/183)
@@ -325,8 +326,9 @@ centroid away from its labelled mate — and the trade is real but small at this
 hardest case (`tire-pressure-and-knots.md`, off-topic half ~3× the on-topic one) still surfaces
 above every unrelated note, but at a visibly lower related-cosine (0.554, the new floor of that
 pile, vs 0.580 before the family existed) than a single-topic mate gets. `similar`'s own
-hit@1/hit@3/MRR@5 stayed at 1.00 even with the family in place — a hit needs only *one* mate, so a
-specific hard mate's demotion is invisible to that aggregate by construction, ceiling or not — so
+hit@1/hit@3/MRR@5 stayed at 1.00 even with the family in place, and its negatives are 5/5 clean
+against the family's added loner — a hit needs only *one* mate, so a specific hard mate's demotion
+is invisible to that aggregate by construction, ceiling or not — so
 the trade is still pinned by the piles (a continuous readout) rather than by the discrete metric.
 What to do about the passage this ordering demotes remains
 [#182](https://github.com/AlteredCraft/B2/issues/182), now with a corpus behind it. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a

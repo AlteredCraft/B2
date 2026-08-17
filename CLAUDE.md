@@ -29,9 +29,9 @@ eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + di
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar` ranks plus the discovery negatives —
 loner anchors whose labelled answer is "nothing relates" — and the related/junk score piles that
 calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log. A
-**multi-topic note family** (GH #183) — an on-topic half genuinely paired with an off-topic half,
-in both chunk orders and at both length ratios, plus a negative whose two halves are both
-unrelated — is the minimum shape that makes centroid-average discovery ranking (the shipped order)
+**multi-topic note family** (GH #183) — three positives pairing an on-topic half with a genuinely
+off-topic one (the on-topic half first, then second, then outweighed ~3:1), plus a negative whose
+two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking (the shipped order)
 and best-passage ranking disagree; every note before it was single-subject, where the two agree by
 construction. `similar`'s own hit@1/hit@3/MRR@5 stay pinned at ceiling even with the family in
 place — a hit only needs *one* of an anchor's now-larger mate set, so the aggregate still can't see
