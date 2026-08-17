@@ -296,9 +296,13 @@ shape is constrained on two sides:
   single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
   needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))
   is the **per-anchor z-score rule** (`DiscoveryFloor` in `discover.rs`): each candidate is judged
-  against the anchor's *own* stage-1 centroid-distance population — a leader gate suppresses the
+  against the anchor's *own* candidate population — a leader gate suppresses the
   whole list when even the best candidate stands too little above that distribution (one diffuse
-  cloud has no signal), and a member bar ends the list where candidates rejoin it. Z-scores make
+  cloud has no signal), and a member bar ends the list where candidates rejoin it. Since
+  [GH #192](https://github.com/AlteredCraft/B2/issues/192) that judgment happens **after stage 2,
+  on the exact best-passage distances** stage 2 computes anyway — the rule first shipped reading
+  the stage-1 centroid distances, and the paragraphs below record how the corpus measured that
+  unit failing in both directions on multi-topic notes and forced the move. Z-scores make
   the floor model-relative *by construction* — no recorded constant, so a model or device swap
   re-calibrates nothing — and the same defaults produce honest short lists at both measured
   density extremes. The floor is inert on pools too small to carry a statistic, never applies to
@@ -309,13 +313,15 @@ shape is constrained on two sides:
 adapter grades a card from the z and never from the raw engine score (a negated L2 like
 `-0.734` is a unit nobody should have to learn), so ranking the same list by anything else
 puts a weaker-banded card above a stronger one — the badge and the position contradicting each
-other on one row. `discover::candidates` therefore sorts by `z` wherever the floor computed
-one, falling back to the exact stage-2 score (and then path) where it did not; z is uniform
-within a query, so this is one comparator, not a mixed ranking. The cost is real and accepted:
-z is the *coarse* stage-1 centroid statistic, so a note whose single best passage is far nearer
-than its centroid suggests now ranks below one with a nearer centroid and no such passage —
-stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
-The labelled corpus did not move on the change — but it was already at ceiling
+other on one row. Since [#192](https://github.com/AlteredCraft/B2/issues/192) that coherence
+holds *by construction*: the judged z is strictly monotonic in the exact stage-2 score within one
+query (affine in the squared best-pair distance the score negates the root of), so
+the score order, the z order, and the band are one number, and the sort is nearest-best-passage
+(then path) whether the floor computed statistics or not. It was not always so: when the badge
+first became the sort key the z was the *coarse* stage-1 centroid statistic, and the accepted
+cost was that a note whose single best passage is far nearer than its centroid suggests ranked
+below one with a nearer centroid and no such passage.
+The labelled corpus did not move on that change — but it was already at ceiling
 (`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives then 4/4 clean across the four
 loners the corpus held at that date, measured
 2026-08-16), so it could only witness the absence of a regression, never confirm the ordering is
@@ -324,8 +330,8 @@ centroid and its best chunk agree by construction. [#183](https://github.com/Alt
 added the corpus that can see it — a multi-topic note family whose off-topic half drags the
 centroid away from its labelled mate — together with the **per-mate** metric that can score it
 (the old per-anchor one stops at an anchor's first mate, so a hard mate hiding behind an easy one
-was invisible to it whether it was demoted or gone). Measured, the cost is **larger than this
-section previously assumed**, and in a different way:
+was invisible to it whether it was demoted or gone). Measured against the pre-#192 surface, the
+cost was **larger than this section previously assumed**, and in a different way:
 
 - **Demotion, as predicted.** `pour-over-and-pottery.md` is `espresso.md`'s nearest mate by best
   passage (rank 1) and only its third by centroid z — the multi-topic note pushed behind two
@@ -404,6 +410,36 @@ z. And the **leader** gate, which does still have a window, has a narrow one —
 shipped constant. Neither constant was moved on this evidence; the point of measuring was to
 establish that no value of `member_z` is the fix, which is what makes a second signal — or the
 pair-scorer — the honest next option rather than a preference.
+
+**The resolution is the reorder** ([#192](https://github.com/AlteredCraft/B2/issues/192), shipped
+2026-08-17): the floor is judged **after stage 2, on the best-passage distances** stage 2 already
+computes — the leader gate reads the best pair's z, the member bar each candidate's own, and
+stage 1 is once again purely #38's recall device (the shortlist is truncated, scored, and only
+then gated; nothing judges the centroid). The same dump that measured the stage-1 inversion
+showed the stage-2 unit separating what the centroid could not: with `week-log.md` in the corpus,
+labelled mates read +1.253 … +2.866 against strangers-on-positives topping at +1.367, and the
+leader window is **open** at `(+1.919, +2.004]` where the stage-1 one had inverted outright. The
+re-derived defaults are the harness windows' midpoints — `leader_z 1.96`; `member_z 1.49`,
+midpoint of the widest bar range the trade curve prices at zero strangers, since the member
+window proper is empty by exactly one row — and at them discovery serves **14 of 15 labelled
+mates, 0 strangers, 5/5 negatives clean**. That lands the #189 journal note this section said no
+constant could carry: its lava-field gem is served to `volcano.md` at z +2.238 (second-strongest
+on the list) while the note is cut on both loner anchors it used to top, because its best passage
+*to them* is weak — the same signal read in both directions, which is what the centroid could
+never do. The ordering trade above is gone with the unit (badge, order, and gate are one number),
+and the human now sees the floor judge the same evidence the card shows. What remains is the
+**phishing pair-residue in the judge unit**: `encryption.md → phishing.md` at +1.253 sits under
+three strangers (the harness prices its rescue at exactly that), so the member window stays
+formally empty by that one pair — the standing pair-scorer evidence, now one row wide rather than
+eighteen deep. The reorder's cost is that a floored call runs stage 2 over the whole shortlist
+instead of the member prefix — the unfloored path always did — bounded by `SHORTLIST_MIN`/
+`SHORTLIST_PER_RESULT`, i.e. still O(shortlist), never O(vault). Measured on
+`fixtures/test-vault` (~200 notes, so the shortlist covers the vault; debug build, fake vectors):
+a floored call went from ~1.3 ms to ~7.5 ms per call — converging on the unfloored path's
+unchanged ~7 ms, the number any `--no-floor` user already paid. And the judged population is now
+the scored shortlist, which on any personal-scale vault is every unlinked note there is, and above
+`SHORTLIST_MIN` candidates is the anchor's centroid-nearest slice (process rule 3's dogfooding
+obligation names that bias).
 
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are

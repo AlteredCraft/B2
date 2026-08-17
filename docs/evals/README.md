@@ -45,7 +45,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 |---|---|
 | [`crates/b2-embed/examples/eval.rs`](../../crates/b2-embed/examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
-| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 30-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, and the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree) |
+| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
 | [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 queries; a verbatim `passage` adds chunk-level scoring (n=20) |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | `crates/b2-embed/evals/results.jsonl` | append-only run log (gitignored, local) — every number ever cited traces to a row here |
@@ -139,8 +139,8 @@ skimming.
   (best-passage cosine 0.762, above the strongest *labelled* pair at 0.667) because the
   first-person practice-log register is itself a topic to the model, so its "nothing relates"
   label would be arguable — the watercolor rule, applied before landing this time. Note text,
-  labels, and probe live in #189 for the day the floor can carry them; `just eval` stays green
-  because the edit was reverted, not because the engine passed it.
+  labels, and probe were preserved on #189 for the day the floor could carry them — which came
+  with [#192](https://github.com/AlteredCraft/B2/issues/192), below.
 - **There is no `member_z` — the inversion is already in the shipped corpus, not only under the
   journal shape** ([#187](https://github.com/AlteredCraft/B2/issues/187), measured 2026-08-17 by
   the `floor calibration` block this run added). #189 showed the member/stranger distributions
@@ -159,13 +159,37 @@ skimming.
   shipped 1.85 and would take that anchor's entire list with it. Nothing was tuned: the numbers
   say a constant cannot do this job, which is the measured case for the shape change (a floor
   that can see a candidate's best passage, not only its centroid) or the pair-scorer escalation.
+- **The floor is judged after stage 2, and the journal note landed**
+  ([#192](https://github.com/AlteredCraft/B2/issues/192), measured and shipped 2026-08-17). The
+  same ungated dump, read in the stage-2 best-passage unit, separates what the centroid unit
+  could not: with `week-log.md` in the corpus, labelled mates span **+1.253 … +2.866** against
+  strangers-on-positives topping at **+1.367**, and the leader window is **open** at
+  `(+1.919, +2.004]` where the stage-1 one had inverted outright (neg leaders to +2.447 vs pos
+  from +1.849). `discover::candidates` now truncates the shortlist, scores it, and judges the
+  floor on the best-passage z — both gates — with the defaults re-read as window midpoints
+  (`leader_z 1.96`; `member_z 1.49`, midpoint of the widest range the trade curve prices at zero
+  strangers, the member window proper being empty by exactly one row). At them: **14/15 labelled
+  mates, 0 strangers, 5/5 negatives clean** — `week-log.md` lands with its gem served to
+  `volcano.md` at z +2.238 and the note itself cut on both loner anchors it used to top (+1.655,
+  +1.919, both under the gate), the geometry read correctly in **both** directions at once. The
+  per-mate metric moved exactly as designed: 0.40/0.93/**0.633** shipped (n = 15), with the Δ to
+  the unfloored arm now pure suppression (−0.017 = the one suppressed mate) since the two orders
+  agree by construction. What remains suppressed is `phishing.md` at +1.253, under three
+  strangers — the pair-level residue in the judge unit, its rescue priced by the trade curve, the
+  pair-scorer's standing evidence. The instrument moved with the rule (the calibration block
+  reads the judge unit, keeps the engine replay check, and adds a statistic recheck — the dump's
+  z recomputed from the served scores; rows carry `"unit": "stage2-best-passage"`), and the
+  reorder was priced on `fixtures/test-vault`: a floored `similar` went ~1.3 ms → ~7.5 ms per
+  call (debug build), converging on the unfloored path's unchanged cost — still O(shortlist).
 
-The deliberately open threads: the **phishing inversion** — a real relation the model still
-ranks a hair under two strangers — and, since #189, the **journal-shape inversion** above are
-the standing evidence for the pair-scorer escalation named in
+The deliberately open thread: the **phishing inversion** — a real relation the model ranks
+under three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367), the
+one labelled mate #192's floor still cannot serve at an acceptable price. It is the standing
+evidence for the pair-scorer escalation named in
 [`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
-demands it — with the #189 result the first evidence that arrives from geometry rather than a
-single unlucky pair, and #187's window dump the first that needs no new corpus note at all.
+demands it. The journal-shape inversion that used to sit beside it was resolved by #192's
+reorder — geometry the centroid unit could never survive, carried by the passage unit — which
+also means the remaining residue really is pair-level, not shape-level.
 
 ## Running it
 

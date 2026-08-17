@@ -12,18 +12,23 @@
 //! link. *Surfacing* is not (index-engine.md §3, ruled 2026-08-05): **`limit` is a
 //! cap, not a promise** — zero candidates is a legitimate, honest answer when
 //! nothing in the vault genuinely relates. The projection of that ruling is
-//! [`DiscoveryFloor`] (GH #150): a **per-anchor z-score** rule over the stage-1
-//! centroid-distance population, calibrated from the eval's labelled anchors
-//! (GH #150's calibration runs). Z-scores are what make the floor
+//! [`DiscoveryFloor`] (GH #150): a **per-anchor z-score** rule, judged **after
+//! stage 2** on the exact best-passage distances (GH #192; it judged the stage-1
+//! centroid distances until the harness measured that no centroid bar separates
+//! labelled mates from strangers — the distributions invert on any multi-topic
+//! note, GH #187/#189 — while the best-passage unit separates cleanly on the
+//! same dump). Z-scores are what make the floor
 //! **model-relative by construction** — the rule compares each candidate against
 //! the anchor's own score distribution, never against an absolute cosine, so it
 //! survives a model or device swap with no recalibration (the measured failure
 //! of absolute floors: eval-calibrated cosines kept 99–100% of a dense
 //! real vault's candidates, GH #150). What it deliberately cannot
 //! catch is a *pair-level* miscalibration — a single stranger the model scores
-//! like a cluster-mate sits above any anchor-local statistic; that residue is
-//! measured (the eval's watercolor ↔ stain-removal pair) and belongs to a
-//! discovery-side pair-scorer if the data ever demands one.
+//! like a cluster-mate sits above any anchor-local statistic, and judging pair
+//! scores directly makes that the floor's one exposed flank; the residue is
+//! measured (the eval's watercolor ↔ stain-removal precedent, and the phishing
+//! mate still priced under one stranger pair in the stage-2 unit) and belongs to
+//! a discovery-side pair-scorer if the data ever demands one.
 //!
 //! Mechanics are **two-stage** (#38; index-engine.md):
 //!
@@ -71,30 +76,41 @@ const SHORTLIST_MIN: usize = 200;
 /// over the note's chunks); the exact stage re-ranks whatever survives.
 const SHORTLIST_PER_RESULT: usize = 20;
 
-/// Candidate pools smaller than this leave the floor inert: a z-score over a
+/// Scored pools smaller than this leave the floor inert: a z-score over a
 /// handful of distances is statistical noise, and in a vault this small the human
 /// can see everything anyway — serving every candidate is the honest posture for
-/// a starter vault, not a quality failure.
+/// a starter vault, not a quality failure. Judged against the stage-2 scored
+/// population, which is the same count stage 1 shortlisted on any vault small
+/// enough for this guard to matter.
 const FLOOR_MIN_POPULATION: usize = 12;
 
-/// The per-anchor discovery quality floor (index-engine.md §3's ruling, GH #150).
+/// The per-anchor discovery quality floor (index-engine.md §3's ruling, GH #150;
+/// judged after stage 2 since GH #192).
 ///
 /// Both thresholds are **z-scores against the anchor's own candidate population**
-/// in stage-1 centroid space: the coarse scan already computes every candidate's
-/// centroid distance, distances over unit centroids are affine in cosine
-/// (`d² = 2 − 2·cos`), so the z is free, and — because it is relative to the
-/// anchor's own distribution — identical in meaning across models, devices, and
-/// vault densities. Both were first calibrated on the eval's labelled anchors
-/// (GH #150) and both are re-derived on every `just eval` run, which prints the
-/// current admissible window for each and records it in `results.jsonl`
+/// in stage-2 best-passage space: stage 2 computes every shortlisted note's exact
+/// max-sim anyway, distances over unit vectors are affine in cosine
+/// (`d² = 2 − 2·cos`), so the z is nearly free, and — because it is relative to
+/// the anchor's own distribution — identical in meaning across models, devices,
+/// and vault densities. Judging the passage rather than the centroid is what the
+/// harness forced (GH #187/#189): a centroid averages a note's disagreeing
+/// sections, so a multi-topic note lands *under* a centroid bar for the anchor
+/// its one matching passage genuinely relates to, and *over* it for loner
+/// anchors it does not relate to at all — the same note, wrong in both
+/// directions, and no constant fixes a rule whose keep/cut populations invert.
+/// The best passage is also the evidence the card shows, so the bar and the
+/// human now read the same signal. Both bars were re-calibrated for the stage-2
+/// unit on the eval's labelled anchors — with the journal-shaped
+/// `week-log.md` in the corpus, the shape that killed the centroid rule — and
+/// both are re-derived on every `just eval` run, which prints the current
+/// admissible window for each and records it in `results.jsonl`
 /// (`discovery_z`); `docs/evals/README.md` reads that instrument.
 ///
 /// **The numbers live in the harness, not in this comment** (GH #187). Until
 /// then the #150 windows were quoted here as if timeless, and the corpus
 /// falsified them the first time it grew a note shape they were never measured
-/// against — a multi-topic note, whose centroid is the average of disagreeing
-/// sections and lands nowhere near where either bar was calibrated. A constant
-/// belongs in code; where it came from belongs where it can be re-measured.
+/// against. A constant belongs in code; where it came from belongs where it can
+/// be re-measured.
 ///
 /// The two bars answer to **different populations**, which is why they are two
 /// fields and not one:
@@ -114,17 +130,22 @@ pub struct DiscoveryFloor {
     /// while `member_z ≤ leader_z` a negative anchor is clean iff its leader is
     /// cut, so this bar can move without the negatives noticing either way. It
     /// is also the bar that decides *existence*: a candidate below it is not
-    /// demoted, it is never served, which makes it the machine acting as
-    /// precision gate on a surface whose stated stance is that the human is
-    /// (GH #187).
+    /// demoted, it is never served — but since GH #192 it judges the same
+    /// number the served card presents as evidence (the best passage), rather
+    /// than a centroid the evidence never shows, which is what lets a buried
+    /// gem exist at all.
     pub member_z: f64,
 }
 
 impl Default for DiscoveryFloor {
     fn default() -> Self {
+        // Midpoints of the admissible windows the harness re-derived for the
+        // stage-2 unit (GH #192) — equidistant from both measured edges, the
+        // placement that survives the most corpus drift. The windows themselves
+        // live in the harness (`just eval`'s floor-calibration block), not here.
         Self {
-            leader_z: 1.85,
-            member_z: 1.85,
+            leader_z: 1.96,
+            member_z: 1.49,
         }
     }
 }
@@ -143,20 +164,26 @@ pub struct CandidateNote {
     /// The candidate's chunk that achieved `score` — the passage that made this note
     /// similar, surfaced by `b2 similar` as the evidence for *why* it appeared.
     pub evidence_chunk_id: i64,
-    /// The candidate's stage-1 z-score against the anchor's candidate population —
-    /// how far it stands above the anchor's own noise floor, the number the
-    /// [`DiscoveryFloor`] judged. `None` when the floor was off or inert (no
-    /// statistics were computed). An adapter wanting to show *strength* shows a
-    /// band derived from this, never the raw score (GH #150) — and when it is
-    /// present it is also the list's own sort key, so the band descends with the
-    /// rows.
+    /// The candidate's stage-2 best-passage z-score against the anchor's scored
+    /// shortlist population — how far its best pair stands above the anchor's own
+    /// noise floor, the number the [`DiscoveryFloor`] judged (GH #192). `None`
+    /// when the floor was off or inert (no statistics were computed). An adapter
+    /// wanting to show *strength* shows a band derived from this, never the raw
+    /// score (GH #150) — and it is strictly monotonic in `score` within one
+    /// query (affine in the squared best-pair distance, which `score` negates
+    /// the root of), so the band, the row order, and the gate are one number by
+    /// construction.
     pub z: Option<f64>,
 }
 
 /// Generate up to `limit` connection-discovery candidates for `anchor`, strongest
-/// first: by `z` where the floor computed it — the same number an adapter bands the
-/// card by, so the order and the band can never disagree — and by `score` otherwise
-/// (ties break `z`, then `score`, then `note_path`, for determinism). `limit` is a cap, not a
+/// first: by best-passage distance (ties break on `note_path`, for determinism),
+/// which is one order with three names — the exact stage-2 `score`, the `z` the
+/// floor judged, and the strength band an adapter paints, each strictly
+/// monotonic in the others within one query, so none of them can disagree with
+/// the row order (GH #150's coherence, held by construction since the GH #192
+/// reorder).
+/// `limit` is a cap, not a
 /// promise (index-engine.md §3): with a [`DiscoveryFloor`] the list ends where the
 /// anchor's own score distribution says the candidates stop being signal — possibly
 /// at zero — and without one it under-fills only for want of scorable notes (a
@@ -215,56 +242,31 @@ pub fn candidates(
             .then(a.1.cmp(&b.1))
     });
 
-    // The floor, judged on the FULL stage-1 population before any truncation: the
-    // coarse scan just scored every candidate in the vault, which is exactly the
-    // distribution a per-anchor z is meaningful against (a truncated shortlist's
-    // mean/σ would be biased toward the top). z is oriented so nearer = higher
-    // (distance flipped), matching how the calibration was measured. When the
-    // statistics exist, every candidate's z travels to the output; the gate then
-    // ends the list at the member bar — or empties it at the leader gate, the
-    // "this whole pool is one diffuse cloud" verdict.
-    let mut zs: Option<Vec<f64>> = None;
-    if let Some(floor) = floor {
-        if coarse.len() >= FLOOR_MIN_POPULATION {
-            let n = coarse.len() as f64;
-            let mean = coarse.iter().map(|(d, _)| *d as f64).sum::<f64>() / n;
-            let var = coarse
-                .iter()
-                .map(|(d, _)| (*d as f64 - mean).powi(2))
-                .sum::<f64>()
-                / (n - 1.0);
-            let sd = var.sqrt();
-            if sd > 0.0 {
-                let mut z: Vec<f64> = coarse
-                    .iter()
-                    .map(|(d, _)| (mean - *d as f64) / sd)
-                    .collect();
-                // coarse is sorted nearest-first, so z[0] is the leader's.
-                if z[0] < floor.leader_z {
-                    return Ok(Vec::new());
-                }
-                let keep = z.partition_point(|&v| v >= floor.member_z);
-                coarse.truncate(keep);
-                z.truncate(keep);
-                zs = Some(z);
-            }
-        }
-    }
-
+    // Stage 1 ends here, and nothing judges it: the shortlist is a recall device,
+    // never a quality gate (GH #192). It used to be both — the floor cut the
+    // coarse list on centroid z before stage 2 ran, which meant max-sim could
+    // never rescue a candidate whose best passage is far nearer than its centroid
+    // suggests. A multi-topic note is exactly that shape, and the harness measured
+    // the consequence twice over: no centroid member bar separates labelled mates
+    // from strangers (the two distributions invert, GH #187), and a journal-shaped
+    // note defeats the centroid rule in both directions at once — its own gem
+    // suppressed while its diluted, hub-like centroid tops loner anchors' lists on
+    // content it does not contain (GH #189).
     coarse.truncate(
         limit
             .saturating_mul(SHORTLIST_PER_RESULT)
             .max(SHORTLIST_MIN),
     );
 
-    // Stage 2 — exact max-sim over the shortlist only: per note, the best (smallest
-    // squared-L2) pair across the anchor's chunks × its chunks. Squared L2 is the
-    // same ranking key as L2 without the per-comparison `sqrt` (monotonic); the
-    // `sqrt` is applied once per surfaced candidate below. Strictly-less keeps the
-    // earliest (lowest-`seq`) chunk on ties, deterministically. A shortlisted note
-    // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
-    let mut out: Vec<CandidateNote> = Vec::new();
-    for (i, (_, note_path)) in coarse.into_iter().enumerate() {
+    // Stage 2 — exact max-sim over the whole shortlist: per note, the best
+    // (smallest squared-L2) pair across the anchor's chunks × its chunks. Squared
+    // L2 is the same ranking key as L2 without the per-comparison `sqrt`
+    // (monotonic); the `sqrt` is applied once per surfaced candidate below.
+    // Strictly-less keeps the earliest (lowest-`seq`) chunk on ties,
+    // deterministically. A shortlisted note with no stored chunk vectors (possible
+    // mid-embed) scores nothing and drops out.
+    let mut scored: Vec<(f32, String, i64)> = Vec::new();
+    for (_, note_path) in coarse {
         let mut best: Option<(f32, i64)> = None;
         for (chunk_id, v) in db::note_chunk_vectors(conn, &note_path)? {
             for a in &anchor_vecs {
@@ -275,41 +277,73 @@ pub fn candidates(
             }
         }
         if let Some((dist_sq, evidence_chunk_id)) = best {
-            out.push(CandidateNote {
+            scored.push((dist_sq, note_path, evidence_chunk_id));
+        }
+    }
+    // Nearest-first, ties by path: the served order, and — because z below is
+    // affine in this squared distance — also descending z. One sort key serves the row
+    // order, the strength band, and the floor, so none of the three can disagree
+    // (the coherence GH #150 demanded, now by construction rather than by
+    // comparator).
+    scored.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    // The floor, judged AFTER stage 2 on the best-passage distances (GH #192): the
+    // population is every scored shortlist note — on a personal-scale vault,
+    // every unlinked note there is (the shortlist covers any vault at or below
+    // SHORTLIST_MIN candidates; above that it is the anchor's centroid-nearest
+    // slice, a bias process rule 3's dogfooding obligation owns). z is oriented so
+    // nearer = higher, the same arithmetic the stage-1 rule used, one stage later.
+    // When the statistics exist, every candidate's z travels to the output; the
+    // gate then ends the list at the member bar — or empties it at the leader
+    // gate, the "this whole pool is one diffuse cloud" verdict. Judging max-sim
+    // instead of the centroid is what lets a buried gem clear the bar (its best
+    // pair is the signal) while a diluted multi-topic centroid no longer tops a
+    // loner's list (its best pair to a stranger is weak — GH #189's inversion,
+    // measured in both units by the harness's `floor calibration` blocks).
+    let mut zs: Option<Vec<f64>> = None;
+    if let Some(floor) = floor {
+        if scored.len() >= FLOOR_MIN_POPULATION {
+            let n = scored.len() as f64;
+            let mean = scored.iter().map(|(d, _, _)| *d as f64).sum::<f64>() / n;
+            let var = scored
+                .iter()
+                .map(|(d, _, _)| (*d as f64 - mean).powi(2))
+                .sum::<f64>()
+                / (n - 1.0);
+            let sd = var.sqrt();
+            if sd > 0.0 {
+                let mut z: Vec<f64> = scored
+                    .iter()
+                    .map(|(d, _, _)| (mean - *d as f64) / sd)
+                    .collect();
+                // scored is sorted nearest-first, so z[0] is the leader's.
+                if z[0] < floor.leader_z {
+                    return Ok(Vec::new());
+                }
+                let keep = z.partition_point(|&v| v >= floor.member_z);
+                scored.truncate(keep);
+                z.truncate(keep);
+                zs = Some(z);
+            }
+        }
+    }
+
+    let out = scored
+        .into_iter()
+        .enumerate()
+        .take(limit)
+        .map(
+            |(i, (dist_sq, note_path, evidence_chunk_id))| CandidateNote {
                 note_path,
                 score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
                 evidence_chunk_id,
                 z: zs.as_ref().and_then(|z| z.get(i)).copied(),
-            });
-        }
-    }
-
-    // Rank by the number the human is shown. Where the floor computed z-scores the
-    // card's strength band *is* the z (GH #150), so ordering by anything else would
-    // let a weaker-banded card sit above a stronger one — band and position
-    // contradicting each other on the same row. z is uniform within one query
-    // (`zs` covers every index `coarse` still holds, so either all candidates carry
-    // one or none does), which is what makes this a single comparator rather than a
-    // mixed ranking; ungated, `None` compares equal throughout and the exact
-    // stage-2 score is the order, as it always was.
-    //
-    // The cost is deliberate and worth naming: z is the *coarse* stage-1 centroid
-    // statistic, so a note whose best passage is far nearer than its centroid
-    // suggests now ranks below one with a nearer centroid and no such passage
-    // (`tests/discover_floor.rs::ranks_by_z_not_by_score_when_the_floor_computed_it`
-    // constructs exactly that pair). Stage 2 keeps choosing the evidence chunk and
-    // still breaks z ties; it no longer drives the order. Ties fall through to
-    // `score` then path, so `limit`'s prefix stays deterministic.
-    out.sort_by(|a, b| {
-        b.z.partial_cmp(&a.z)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| a.note_path.cmp(&b.note_path))
-    });
-    out.truncate(limit);
+            },
+        )
+        .collect();
     Ok(out)
 }

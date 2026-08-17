@@ -48,15 +48,19 @@
 //!    resolved 2026-08-11 by replacing watercolor with a cleanly orthogonal
 //!    loner — an arguable negative label is corpus debt, not a target.)
 //! 5. **The floor's own calibration** (GH #187) — a third discovery pass dumps
-//!    every candidate's *stage-1 z*, the number `DiscoveryFloor`'s two constants
-//!    are compared against, split into the three populations that actually
-//!    calibrate them: labelled mates, strangers on positive anchors
-//!    (`member_z`'s comparison set), and negative anchors' leaders
-//!    (`leader_z`'s). From those it re-derives both admissible windows on the
-//!    **current** corpus and prints the member bar's trade curve. This exists
-//!    because the #150 windows were frozen into a rustdoc as if timeless and went
-//!    stale the first time the corpus grew a shape they were never measured
-//!    against: constants in code, measurements in the harness.
+//!    every candidate's z in the floor's judge unit (the *stage-2 best-passage
+//!    z* since GH #192; stage-1 centroid z before it, until that unit's keep/cut
+//!    populations were measured inverting), split into the populations that
+//!    actually calibrate the two constants: labelled mates, strangers on
+//!    positive anchors (`member_z`'s comparison set), and negative anchors'
+//!    leaders (`leader_z`'s). From those it re-derives both admissible windows
+//!    on the **current** corpus and prints the member bar's trade curve. This
+//!    exists because the #150 windows were frozen into a rustdoc as if timeless
+//!    and went stale the first time the corpus grew a shape they were never
+//!    measured against: constants in code, measurements in the harness. The
+//!    dump's z is also recomputed harness-side from the served scores, so a
+//!    drift in the engine's statistic — not only its rule — turns the block's
+//!    check line into a `[FAULT]`.
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -228,23 +232,16 @@ struct SimilarPass {
     /// variants failed when measured, so a floor here would be intuition
     /// wearing a number. It reports until a baseline exists to price it.
     mate: Agg,
-    /// [`Self::mate`] measured on the **unfloored** surface — which is the
-    /// *best-passage* ordering, making this half of a standing A/B against the
-    /// shipped centroid one.
+    /// [`Self::mate`] measured on the **unfloored** surface (`similar_raw`).
     ///
-    /// Why that works: `discover::candidates` sorts by `z` then `score`, and
-    /// `floor: None` leaves every `z` at `None`, so the comparator falls
-    /// straight through to `score` — the exact stage-2 best-passage number.
-    /// `similar` therefore orders by centroid and `similar_raw` by best
-    /// passage, and the gap between these two aggregates is the cost
-    /// index-engine.md §3 accepted when it made `z` the sort key, priced
-    /// rather than asserted.
-    ///
-    /// **Read with its caveat**: the unfloored surface is also *unsuppressed*,
-    /// so this is an ordering-plus-floor delta, not ordering in isolation. It
-    /// is a lower bound on sensitivity — enough to prove the metric is not
-    /// inert to the sort key, not a clean single-variable ablation.
-    /// [`Self::mate_suppressed`] separates the two contributions.
+    /// Until GH #192 the shipped list was centroid-z-ordered while the raw one
+    /// was best-passage-ordered, so this pair was a standing ordering A/B — the
+    /// instrument that priced the centroid-vs-passage trade index-engine.md §3
+    /// had only asserted. The reorder made the shipped order best-passage too,
+    /// so the orders now agree by construction and the remaining gap between
+    /// these two aggregates is the floor's *suppression* alone: what `limit`'s
+    /// cap and the member bar cost, with ordering out of the picture.
+    /// [`Self::mate_suppressed`] names the suppressed mates that gap comes from.
     mate_raw: Agg,
     /// Labelled mates the unfloored surface reaches but the **shipped** one does
     /// not serve at all — the floor suppressing a human-labelled relation
@@ -292,20 +289,43 @@ struct AnchorDetail {
     candidates: Vec<(String, f64, bool)>,
 }
 
-/// One anchor's **complete, ungated** stage-1 z reading — every candidate note in
-/// the corpus, in z order, with the human label attached (GH #187).
+/// One row of the ungated dump: a candidate in the floor's judge unit, with the
+/// human label attached.
+struct ZCand {
+    path: String,
+    /// The z the floor judges — stage-2 best-passage z since GH #192 (it was the
+    /// stage-1 centroid z until #187/#189 measured that unit's keep/cut
+    /// populations inverting) — straight from the engine's own statistics.
+    z: f64,
+    /// The same z recomputed harness-side from the served scores (z over squared
+    /// best-pair distance, nearer = higher). An instrument check, not a reading:
+    /// if this drifts from `z`, the engine's statistic moved and the harness's
+    /// model of it is stale. `None` only when the population had zero variance
+    /// and no z exists.
+    z_recheck: Option<f64>,
+    /// The stage-2 score as served (negated best chunk-pair L2) — kept so the
+    /// row also records the model-comparable cosine, not only the
+    /// anchor-relative z.
+    score: f64,
+    /// Labelled a mate of this anchor.
+    mate: bool,
+}
+
+/// One anchor's **complete, ungated** reading in the floor's judge unit — every
+/// candidate note in the corpus, in z order, with the human label attached
+/// (GH #187; stage-2 best-passage z since GH #192).
 ///
-/// The cosine piles above are the same idea one stage later and in a different
-/// unit; this is the unit the [`DiscoveryFloor`] actually judges in, which is why
-/// the piles could never re-derive its constants.
+/// The cosine piles above are the same numbers in a model-comparable unit; this
+/// is the anchor-relative unit the [`DiscoveryFloor`] actually judges in, which
+/// is why the piles could never re-derive its constants.
 struct AnchorZ {
     anchor: String,
     /// True for a negative anchor (empty `expected`) — its whole list is
     /// strangers by label, and its leader is what `leader_z` answers to.
     negative: bool,
-    /// (candidate path, stage-1 z, labelled a mate of this anchor) in served
-    /// order, which under an ungated floor *is* descending z.
-    candidates: Vec<(String, f64, bool)>,
+    /// Every candidate in served order, which under an ungated floor *is*
+    /// descending z.
+    candidates: Vec<ZCand>,
     /// What the **shipped** floor actually serves for this anchor, read from a
     /// second pass at the same depth. Ground truth for [`FloorZ::replay_faults`]:
     /// every window and trade-curve row below is a *replay* of the floor's rule
@@ -318,7 +338,7 @@ impl AnchorZ {
     /// The z the leader gate reads — the top candidate's. `None` only if the
     /// anchor produced no scorable candidate at all.
     fn leader(&self) -> Option<f64> {
-        self.candidates.first().map(|&(_, z, _)| z)
+        self.candidates.first().map(|c| c.z)
     }
     /// The paths a given floor would serve here, by replaying its rule over the
     /// ungated dump: the leader gate first (below it the anchor serves nothing
@@ -329,29 +349,33 @@ impl AnchorZ {
         }
         self.candidates
             .iter()
-            .filter(|&&(_, z, _)| z >= floor.member_z)
-            .map(|(path, _, _)| path.as_str())
+            .filter(|c| c.z >= floor.member_z)
+            .map(|c| c.path.as_str())
             .collect()
     }
     /// This anchor's labelled mates' z's (empty for a negative anchor).
     fn mates(&self) -> impl Iterator<Item = f64> + '_ {
-        self.candidates
-            .iter()
-            .filter(|&&(_, _, mate)| mate)
-            .map(|&(_, z, _)| z)
+        self.candidates.iter().filter(|c| c.mate).map(|c| c.z)
     }
     /// Everything on this anchor's list a human did *not* label — on a positive
     /// anchor, exactly the population `member_z` has to cut.
     fn strangers(&self) -> impl Iterator<Item = f64> + '_ {
+        self.candidates.iter().filter(|c| !c.mate).map(|c| c.z)
+    }
+    /// The worst disagreement between the engine's z and the harness's own
+    /// recomputation from the served scores, across this anchor's candidates —
+    /// the statistic-level drift check ([`ZCand::z_recheck`]).
+    fn recheck_delta(&self) -> f64 {
         self.candidates
             .iter()
-            .filter(|&&(_, _, mate)| !mate)
-            .map(|&(_, z, _)| z)
+            .filter_map(|c| c.z_recheck.map(|r| (c.z - r).abs()))
+            .fold(0.0, f64::max)
     }
 }
 
-/// The ungated stage-1 z dump across every discovery anchor, plus what it says
-/// about the two [`DiscoveryFloor`] constants (GH #187).
+/// The ungated judge-unit z dump across every discovery anchor, plus what it
+/// says about the two [`DiscoveryFloor`] constants (GH #187; the unit is the
+/// stage-2 best-passage z since GH #192).
 ///
 /// Three populations, because the two constants answer to different ones — the
 /// conflation is what made "the negatives gate would catch a bad `member_z`"
@@ -405,6 +429,18 @@ impl FloorZ {
             .collect()
     }
 
+    /// The worst engine-vs-recomputed z disagreement across every anchor — the
+    /// statistic-level instrument check (see [`ZCand::z_recheck`]). Small fp
+    /// noise is expected (the engine z-scores f32 squared distances; the
+    /// harness recomputes them from the f32-sqrt'd scores), so the printed
+    /// check tolerates 1e-3 z and reports the observed maximum.
+    fn recheck_delta(&self) -> f64 {
+        self.anchors
+            .iter()
+            .map(|a| a.recheck_delta())
+            .fold(0.0, f64::max)
+    }
+
     /// What a candidate floor would actually serve, replayed over this dump:
     /// (labelled mates served, mates labelled, strangers served on positive
     /// anchors, negative anchors left dirty). The leader gate is applied first,
@@ -415,11 +451,11 @@ impl FloorZ {
         for a in &self.anchors {
             let served = a.replay(floor);
             labelled += a.mates().count();
-            for &(ref path, _, mate) in &a.candidates {
-                if !served.contains(&path.as_str()) {
+            for c in &a.candidates {
+                if !served.contains(&c.path.as_str()) {
                     continue;
                 }
-                match (a.negative, mate) {
+                match (a.negative, c.mate) {
                     (true, _) => dirty += 1,
                     (false, true) => mates += 1,
                     (false, false) => strangers += 1,
@@ -962,9 +998,9 @@ fn score_similar(
     Ok(pass)
 }
 
-/// Dump every candidate's **stage-1 z**, ungated, on every discovery anchor —
-/// the third discovery pass (GH #187), and the only one that reads the floor's
-/// own unit.
+/// Dump every candidate's **judge-unit z** (stage-2 best-passage z, GH #192),
+/// ungated, on every discovery anchor — the third discovery pass (GH #187), and
+/// the only one that reads the floor's own unit.
 ///
 /// `similar_raw` cannot serve this: `floor: None` skips the statistics
 /// altogether, so an unfloored candidate's `z` is `None`. What produces a
@@ -1014,14 +1050,28 @@ fn collect_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn st
             dump.ungraded.push(label.anchor.clone());
             continue;
         };
+        // The judge z, recomputed harness-side over the same ungated population
+        // the engine just served: z over squared best-pair distance (score is
+        // negated L2, so d² = score²), oriented nearer = higher. Should equal
+        // the engine's own z to fp noise — the statistic-level drift check the
+        // block prints beside the replay check.
+        let d2: Vec<f64> = candidates.iter().map(|c| c.score * c.score).collect();
+        let recheck = passage_z(&d2);
         dump.anchors.push(AnchorZ {
             anchor: label.anchor.clone(),
             negative: label.expected.is_empty(),
             candidates: candidates
                 .iter()
-                .filter_map(|c| {
+                .enumerate()
+                .filter_map(|(i, c)| {
                     let mate = label.expected.iter().any(|e| paths_match(&c.path, e));
-                    c.z.map(|z| (c.path.clone(), z, mate))
+                    c.z.map(|z| ZCand {
+                        path: c.path.clone(),
+                        z,
+                        z_recheck: recheck.as_ref().map(|r| r[i]),
+                        score: c.score,
+                        mate,
+                    })
                 })
                 .collect(),
             served: Vec::new(), // filled on the shipped-floor pass, in score_floor_z
@@ -1036,6 +1086,23 @@ fn collect_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn st
 /// unit that survives a model swap comparison, so the piles are recorded in it.
 fn cosine_of(score: f64) -> f64 {
     1.0 - (score * score) / 2.0
+}
+
+/// Z-score a population of squared distances, oriented nearer = higher — the
+/// harness's own restatement of the arithmetic `discover::candidates` applies
+/// to the stage-2 best-pair distances (GH #192), kept so the engine's z can be
+/// cross-checked rather than merely trusted. `None` when no meaningful
+/// statistic exists (under two values, or zero variance), mirroring the
+/// engine's own inertness guard.
+fn passage_z(d2: &[f64]) -> Option<Vec<f64>> {
+    if d2.len() < 2 {
+        return None;
+    }
+    let n = d2.len() as f64;
+    let mean = d2.iter().sum::<f64>() / n;
+    let var = d2.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let sd = var.sqrt();
+    (sd > 0.0).then(|| d2.iter().map(|d| (mean - d) / sd).collect())
 }
 
 /// (min, median, max) of a pile, or None while it's empty.
@@ -1273,11 +1340,11 @@ fn print_default_report(
         similar.mate.mrr(),
         similar.mate.n
     );
-    // The ordering A/B: shipped centroid-z order vs. the unfloored best-passage
-    // order. A non-zero ΔMRR is the proof the per-mate metric is not inert to the
-    // sort key — the property GH #183 existed to obtain.
+    // The raw arm: same order as the shipped surface since GH #192 (both are
+    // best-passage), so the Δ is the floor's suppression cost in isolation —
+    // before the reorder this pair was the centroid-vs-passage ordering A/B.
     println!(
-        "   └ best-passage order  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}   ΔMRR(centroid−passage)={:+.3}",
+        "   └ unfloored   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}   ΔMRR(floored−raw)={:+.3}",
         similar.mate_raw.hit1(),
         similar.mate_raw.hit3(),
         similar.mate_raw.mrr(),
@@ -1329,8 +1396,8 @@ fn print_default_report(
             }
         );
     }
-    // The same question one stage earlier and in the floor's own unit, where an
-    // answer is actionable: the piles are stage-2 cosines, and no constant in
+    // The same question in the floor's own anchor-relative unit, where an
+    // answer is actionable: the piles are absolute cosines, and no constant in
     // the code is ever compared against one.
     print_floor_windows(floor_z);
 }
@@ -1348,11 +1415,14 @@ fn print_floor_windows(z: &FloorZ) {
     let (mates, strangers) = (z.mate_z(), z.stranger_z());
     let (neg_leaders, pos_leaders) = (z.neg_leader_z(), z.pos_leader_z());
     println!(
-        "  floor calibration (stage-1 z, ungated — the unit DiscoveryFloor judges in, GH #187)"
+        "  floor calibration (stage-2 best-passage z, ungated — the unit DiscoveryFloor judges in, \
+         GH #187/#192)"
     );
-    // Instrument check before the readings, the same posture as the dense
+    // Two instrument checks before the readings, the same posture as the dense
     // ablation's: every line below replays the floor's rule over the dump, so
-    // if the replay and the engine disagree the readings are fiction.
+    // if the replay and the engine disagree the readings are fiction — and the
+    // dump's z itself is recomputed from the served scores, so the *statistic*
+    // can't drift either (tolerance covers f32 sqrt/square round-trip noise).
     match z.replay_faults().as_slice() {
         [] => println!("    [check] replayed floor matches the engine on every anchor"),
         faults => println!(
@@ -1361,6 +1431,15 @@ fn print_floor_windows(z: &FloorZ) {
             faults.len(),
             faults.join(", ")
         ),
+    }
+    let recheck = z.recheck_delta();
+    if recheck <= 1e-3 {
+        println!("    [check] harness recomputation matches the engine z (max Δ {recheck:.1e})");
+    } else {
+        println!(
+            "    [FAULT] harness recomputation disagrees with the engine z by up to {recheck:.3} — \
+             the judged statistic moved; distrust every window and trade row below"
+        );
     }
     for (label, pile, role) in [
         ("mates", &mates, "member_z must KEEP"),
@@ -1437,6 +1516,16 @@ fn print_floor_windows(z: &FloorZ) {
             };
             let (m, n, s, d) = z.serve(&floor);
             println!("      member_z={bar:+.3}  mates {m}/{n}  strangers {s}  dirty negatives {d}");
+        }
+    }
+    // Every negative anchor's leader, named: the pairs the leader gate must
+    // cut, and — now that the judged unit is the best passage — the first place
+    // a pair-level miscalibration (the watercolor residue) would surface.
+    println!("    negative anchors' leaders (leader gate must cut each):");
+    for a in z.anchors.iter().filter(|a| a.negative) {
+        match a.candidates.first() {
+            Some(c) => println!("      {} → {}  {:+.3}", a.anchor, c.path, c.z),
+            None => println!("      {}  (no candidates)", a.anchor),
         }
     }
     if !z.ungraded.is_empty() {
@@ -1610,8 +1699,10 @@ fn result_row(
         })).collect::<Vec<_>>()),
         // NEW key (absent from rows before 2026-08-17): the floor's own
         // calibration data in the floor's own unit — every candidate's ungated
-        // stage-1 z, the three populations the two constants answer to, and both
-        // re-derived windows (GH #187). Same convention as every key above: new,
+        // judge z, the populations the two constants answer to, and both
+        // re-derived windows (GH #187; the unit changed from stage-1 centroid z
+        // to stage-2 best-passage z with GH #192 — the row's "unit" field is
+        // what tells the two apart). Same convention as every key above: new,
         // never a redefinition. This is the row the next recalibration reads, and
         // the reason no window belongs in a doc comment — `null` on the ablation
         // rows, which do not re-derive it.
@@ -1627,6 +1718,10 @@ fn result_row(
             let shipped = DiscoveryFloor::default();
             let (served, labelled, admitted, dirty) = z.serve(&shipped);
             serde_json::json!({
+                // The judge unit these piles/windows are measured in. Rows
+                // before GH #192 carried no key here and are stage-1 centroid
+                // z — a different unit; never compare across the flip.
+                "unit": "stage2-best-passage",
                 "piles": {
                     "mates": round(&mates),
                     "strangers_on_positives": round(&strangers),
@@ -1646,15 +1741,20 @@ fn result_row(
                 "ungraded_anchors": z.ungraded,
                 // Empty is the only trustworthy reading — see FloorZ::replay_faults.
                 "replay_faults": z.replay_faults(),
+                // ~0 is the only trustworthy reading — see FloorZ::recheck_delta.
+                "z_recheck_max_delta": z.recheck_delta(),
                 // Per-anchor and per-candidate, because a window edge is only
-                // arguable once you can name the pair that set it.
+                // arguable once you can name the pair that set it. `z` is the
+                // judged stage-2 best-passage z, `cos` the same pair's cosine
+                // (the model-comparable unit).
                 "detail": z.anchors.iter().map(|a| serde_json::json!({
                     "anchor": a.anchor,
                     "negative": a.negative,
-                    "candidates": a.candidates.iter().map(|(path, z, mate)| serde_json::json!({
-                        "path": path,
-                        "z": (z * 1e4).round() / 1e4,
-                        "mate": mate,
+                    "candidates": a.candidates.iter().map(|c| serde_json::json!({
+                        "path": c.path,
+                        "z": (c.z * 1e4).round() / 1e4,
+                        "cos": (cosine_of(c.score) * 1e4).round() / 1e4,
+                        "mate": c.mate,
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             })
