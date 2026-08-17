@@ -298,9 +298,9 @@ eval-sweep:
 eval-stemmer:
     cargo run -p b2-embed --example eval -- --stemmer
 
-# What `just eval` structurally cannot see (GH #141): its 29-chunk corpus is smaller than the
-# 150-candidate pool retrieval reaches, so neither signal is truncated and a candidate-width
-# change prints bit-identical scores. This probe asks the same queries at widening pools on a
+# What `just eval` mostly cannot see (GH #141): candidate-width. Since GH #183 its corpus
+# (63 chunks) does truncate the 60-chunk passage view by a hair, but the 150-candidate note
+# view is never cut there. This probe asks the same queries at widening pools on a
 # vault big enough for the pool to bind, and diffs the shipped top-10 against a blessed
 # snapshot. Deterministic (fake embedder), so it needs no `just init`. Takes the example's
 # flags: `just stability --verbose` (show the diverging rankings), `--model` (real bge
