@@ -315,14 +315,21 @@ within a query, so this is one comparator, not a mixed ranking. The cost is real
 z is the *coarse* stage-1 centroid statistic, so a note whose single best passage is far nearer
 than its centroid suggests now ranks below one with a nearer centroid and no such passage —
 stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
-The labelled corpus does not move on the change — but it was already at ceiling
+The labelled corpus did not move on the change — but it was already at ceiling
 (`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, measured
-2026-08-16), so it can only witness the absence of a regression, never confirm the ordering is
-right. It cannot see the trade at all: six anchors of short single-topic notes, where a
-centroid and its best chunk agree by construction. The cost is therefore pinned by a
-constructed unit test, not measured — the corpus that could measure it is
-[#183](https://github.com/AlteredCraft/B2/issues/183), and what to do about the passage this
-ordering demotes is [#182](https://github.com/AlteredCraft/B2/issues/182). **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
+2026-08-16), so it could only witness the absence of a regression, never confirm the ordering is
+right. It could not see the trade at all: six anchors of short single-topic notes, where a
+centroid and its best chunk agree by construction. [#183](https://github.com/AlteredCraft/B2/issues/183)
+added the corpus that can see it — a multi-topic note family whose off-topic half drags the
+centroid away from its labelled mate — and the trade is real but small at this corpus's scale: the
+hardest case (`tire-pressure-and-knots.md`, off-topic half ~3× the on-topic one) still surfaces
+above every unrelated note, but at a visibly lower related-cosine (0.554, the new floor of that
+pile, vs 0.580 before the family existed) than a single-topic mate gets. `similar`'s own
+hit@1/hit@3/MRR@5 stayed at 1.00 even with the family in place — a hit needs only *one* mate, so a
+specific hard mate's demotion is invisible to that aggregate by construction, ceiling or not — so
+the trade is still pinned by the piles (a continuous readout) rather than by the discrete metric.
+What to do about the passage this ordering demotes remains
+[#182](https://github.com/AlteredCraft/B2/issues/182), now with a corpus behind it. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
 space with no spread, the fake regime — a surface must *say* the list is ungraded. Silence
 there is not neutral: a column of bandless cards reads as a set of candidates that were judged
 and all scored low, which is the opposite of what happened.
