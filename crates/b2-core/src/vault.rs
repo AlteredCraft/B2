@@ -512,9 +512,13 @@ pub struct SimilarView {
     /// evidence for *why* it surfaced.
     pub evidence: String,
     /// How far this candidate stands above the anchor's own candidate population
-    /// (its stage-1 z-score) — the number the discovery floor judged, the one
+    /// — its **best-passage** z, the stage-2 statistic the discovery floor
+    /// judges (GH #192; the stage-1 centroid z until that reorder), the one
     /// honest input for a displayed *strength* band (GH #150), and, when present,
     /// this list's own sort key, so the band never contradicts the row order.
+    /// The unit is load-bearing for an adapter: a band calibrated in the retired
+    /// centroid unit grades every card down (GH #182), so a surface showing one
+    /// reads its landmarks off `just eval`'s floor-calibration block.
     /// `None` when no floor statistics were computed (floor off, tiny pool, or
     /// zero variance) — which is also the adapters' cue to say the list is
     /// *ungraded* rather than let bare cards read as uniformly weak;

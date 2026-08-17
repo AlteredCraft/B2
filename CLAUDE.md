@@ -42,7 +42,7 @@ key does.
 That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
 asserted, and the answer was worse than assumed: 3 of 14 labelled mates were **suppressed outright**
 by the centroid floor (reachable under best-passage order, never served), not merely demoted.
-The eval measures it; GH #182 is where surfacing decisions get made. GH #187 then measured *why*
+The eval measures it; GH #182 was where the surfacing decision got made. GH #187 then measured *why*
 no threshold fixes it, by dumping the number the floor actually judges — every candidate's ungated
 stage-1 z — and re-deriving both of `DiscoveryFloor`'s admissible windows from it on **every run**
 (the `floor calibration` block, and `discovery_z` in the row). The leader gate still had a window;
@@ -57,7 +57,18 @@ three cannot disagree, and stage 1 is recall only. Its defaults were re-read fro
 windows in the new unit (leader 1.96 / member 1.49), which serves 14 of 15 labelled mates at zero
 strangers, lands GH #189's journal-shaped `week-log.md` (gem served, loner anchors clean — the
 corpus is now 31 notes / 70 chunks), and leaves exactly one suppression: the phishing pair-residue,
-the pair-scorer escalation's standing evidence.
+the pair-scorer escalation's standing evidence. GH #182 closed on the half that reorder left
+behind — the desktop's strength band was still calibrated on the *centroid* z's landmarks, so in
+the new unit its top band was unreachable and the corpus's strongest confirmed relation graded as
+middling; the bands are now read off the floor's own bars and the labelled-mate population
+(`ui/src/strength.ts`), which is the standing rule: **a change to the judged statistic is a change
+to every surface that paints it**. GH #188 then put discovery in the exit gate — per-mate MRR@5
+and the suppressed-mate count are now assertions beside hit@1 and the negatives, each set a
+margin to the *safe* side of today's reading rather than at it — the MRR **floor** below 0.633,
+the suppression **ceiling** above today's 1 (five repeat runs are bit-identical, so the headroom is
+for corpus drift, not run noise), with a strangers-on-positive-anchors count reported but
+deliberately ungated, since the cheapest way to shrink it is to label the stranger. The saturating
+per-anchor line is retired from stdout and kept in the JSON row.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

@@ -53,28 +53,64 @@ the effect is unambiguous rather than a three-chunk edge case.
 
 ## What the exit code enforces
 
-`just eval` exits `0` only when the default config clears **both floors**
+`just eval` exits `0` only when the default config clears **all four assertions**
 ([`eval.rs`](../../crates/b2-embed/examples/eval.rs), the gate at the end of `run()`):
 
-- hybrid note hit@1 ≥ `FLOOR_HIT1` (0.75), and
-- **every negative anchor comes back clean** under the discovery floor (`neg_clean == neg_n`) —
-  one stranger served where a label says "nothing" is a regression.
+| Assertion | Constant | Watches |
+|---|---|---|
+| hybrid note hit@1 ≥ 0.75 | `FLOOR_HIT1` | retrieval |
+| every negative anchor comes back clean (`neg_clean == neg_n`) | — | the floor's `leader_z` |
+| per-mate discovery MRR@5 ≥ 0.50 | `FLOOR_MATE_MRR` | discovery **rank** |
+| labelled mates suppressed ≤ 2 | `MAX_MATES_SUPPRESSED` | discovery **existence** |
 
-Exit `2` = a floor failed; `1` = the run itself broke. Two instrument checks print before any
-score and gate everything after them: the model id (never average CPU and `@metal` rows) and
-`batch ≡ single` embedding faithfulness.
+One stranger served where a label says "nothing" is a regression; so is a labelled mate that stops
+being served at all. Exit `2` = an assertion failed; `1` = the run itself broke. Two instrument
+checks print before any score and gate everything after them: the model id (never average CPU and
+`@metal` rows) and `batch ≡ single` embedding faithfulness.
+
+The bottom two landed with [#188](https://github.com/AlteredCraft/B2/issues/188), and **how they
+are placed is the point**. Neither sits *at* the reading it was set from: one is a floor and one
+is a ceiling, so the slack runs in opposite directions — MRR@5 gated **below** today's 0.633,
+suppression gated **above** today's 1. A gate pinned to today's number fails on the first
+legitimate corpus edit, and the cheapest way to clear
+a red per-mate number is to **edit a label**, which is the one habit this harness must never
+train (process rule 2's concern, sharper here: per-mate is label-sensitive by construction —
+adding a mate to an anchor changes `n` and moves the aggregate whether or not the engine did
+anything). Sizing came from repeated runs rather than intuition, and the measurement was that
+there is nothing to size against: **five consecutive runs on an unchanged corpus, model and build
+produced bit-identical rows** — every rank, every z, every cosine — so the run-to-run noise floor
+that [#188](https://github.com/AlteredCraft/B2/issues/188) asked for is *zero*, and the headroom
+these floors need is for corpus drift, not for run noise. At n = 15 mates, one mate lost from
+rank 1 costs 1/15 ≈ 0.067 of MRR@5, and the floor sits about two such losses under the shipped
+0.633. Suppression is asserted separately because averaging hides the difference between a mate
+sliding 2 → 3 and a mate disappearing; its allowance is today's one named residue
+(`phishing.md`) plus a slot, so a *second* unexplained disappearance is what trips it.
+
+The **saturating per-anchor metric** (`similar` hit@1/hit@3/MRR@5 — first mate found, then stop)
+is no longer printed: it read 1.000 across every change it was meant to judge, and a line that
+cannot move trains skimming. It is still recorded — `results.jsonl`'s `"similar"` key is
+untouched, so rows stay comparable back to the first run — and the sweep's per-variant column now
+carries per-mate MRR@5 instead, for the same reason.
 
 **What the gate deliberately does *not* watch** is the discovery floor's `member_z`. While
 `member_z ≤ leader_z`, a negative anchor is clean **iff its leader is cut** — so the member bar
-cannot dirty (or clean) a negative anchor, and the one gated discovery number is blind to it by
+cannot dirty (or clean) a negative anchor, and the negatives assertion is blind to it by
 construction. What a loose member bar costs lands as *stranger tails on positive anchors' lists*,
 and what a tight one costs is labelled mates never served at all
-([#187](https://github.com/AlteredCraft/B2/issues/187)). Both are **reported, not gated**: every
-run prints a `floor calibration` block — the three z populations the two constants answer to, the
-re-derived admissible window for each, and the member bar's trade curve — and records it in the
-row as `discovery_z`. Reported rather than gated because the member window is currently *empty*
-(below), and a permanently-red gate is the advisory-but-exit-0 hole inverted: it trains the same
-skimming.
+([#187](https://github.com/AlteredCraft/B2/issues/187)). The second of those is now gated (the
+suppression assertion above). The first is **counted but deliberately not gated**: every run
+prints a `strangers` line — unlabelled notes served on positive anchors at the ranks' own depth,
+each named `anchor → path` — and records it as `similar_strangers`. It reads **0 cards** as of
+[#192](https://github.com/AlteredCraft/B2/issues/192), which is exactly why gating it would be a
+trap: a floor at today's value forbids the next corpus edit from surfacing anything unlabelled,
+and the cheapest way to shrink the count is to *label the stranger*, which moves the per-mate
+metric too. An unlabelled note served is not proof of junk — the labels are not exhaustive — so
+it is a smoke alarm shipped with the list you argue against it with (process rule 1's posture).
+The floor's two constants are reported the same way: every run prints a `floor calibration`
+block — the three z populations they answer to, the re-derived admissible window for each, and
+the member bar's trade curve — recorded in the row as `discovery_z`. Reported rather than gated
+because the member window is *empty* by one pair (below), and a permanently-red gate is the
+advisory-but-exit-0 hole inverted: it trains the same skimming.
 
 ## The verdicts this harness has ruled (each traceable to its issue and its commit)
 
@@ -182,6 +218,29 @@ skimming.
   reorder was priced on `fixtures/test-vault`: a floored `similar` went ~1.3 ms → ~7.5 ms per
   call (debug build), converging on the unfloored path's unchanged cost — still O(shortlist).
 
+- **The buried gem is served, and the badge was the last thing still reading the retired unit**
+  ([#182](https://github.com/AlteredCraft/B2/issues/182), closed 2026-08-17). The issue asked how
+  to surface a note whose one matching passage is hidden behind a whole-note gist that ranks it
+  down or cuts it; #192's reorder answered the engine half — of the four options the issue
+  listed, three assumed a *card* to mark or reorder, and the measured failure was that the card
+  did not exist. What the harness then caught was the half nobody had re-read: the desktop's
+  strength band (`ui/src/strength.ts`) still carried the **centroid** z's landmarks
+  (`●●● ≥ 3.0`, `●●○ ≥ 2.3`) after the unit under them changed. In the stage-2 unit nothing in
+  the corpus reaches 3.0, so the top band was dead and the strongest human-confirmed relation in
+  the vault (`bicycle.md ↔ bike-maintenance.md`, z +2.87) painted the same two dots as a middling
+  one — a buried gem, once surfaced, arriving pre-graded as unremarkable. The bands were re-read
+  in the judged unit off the floor's own bars and the labelled-mate population (`●○○` under the
+  leader gate; `●●○` at or above it; `●●●` at or above the mate population's upper quartile, +2.529 → a bar of 2.52),
+  and the comment now cites this harness rather than freezing the window — #187's lesson applied
+  to the UI side of the same number.
+- **Discovery rank is in the exit gate** ([#188](https://github.com/AlteredCraft/B2/issues/188),
+  2026-08-17) — the two new assertions above, the strangers instrument beside them, and the
+  saturating per-anchor line retired to JSON. The finding worth keeping: **this harness is
+  bit-reproducible run to run** (five runs, identical rows — ranks, z's and cosines alike), and
+  the figures #192 recorded came back unchanged on a different machine's CPU build, so "noise
+  floor" here means corpus and label drift rather than run variance. That is what both new
+  floors are sized for.
+
 The deliberately open thread: the **phishing inversion** — a real relation the model ranks
 under three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367), the
 one labelled mate #192's floor still cannot serve at an acceptable price. It is the standing
@@ -211,7 +270,10 @@ anyone editing the corpus, the labels, or the metrics.
    the diff (`Δ vs default`) automatically.
 2. **A corpus edit is a change to the instrument, so it ships as its own commit** whose message
    says what changed and why, and every edit runs the **two-direction token audit** before it
-   lands: no existing query's content tokens may newly land in the edited/added note, and no new
+   lands, and — since the gate reads discovery rank ([#188](https://github.com/AlteredCraft/B2/issues/188))
+   — **a red gate is never an argument for editing a label**: per-mate MRR@5 and the strangers
+   count both move when the labels move, so the only honest response to either going red is to
+   argue about the *notes*: no existing query's content tokens may newly land in the edited/added note, and no new
    query's content tokens may split evenly toward a rival (the `insomnia.md` steal, and the
    `recover`+`mistake` near-miss, are the precedents). The audit is a ten-line script; run it,
    don't eyeball it.

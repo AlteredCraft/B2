@@ -746,10 +746,10 @@ check("a graded card carries its σ figure, not only a hover tooltip", () => {
   // a keyboard can't reach (K1). It ships in the markup now and the selected row
   // reveals it, so focus — not just a pointer — gets the number.
   const html = sidePaneHtml(
-    app({ current: note(), semantic: true, similar: [ghost({ z: 2.53 })] }),
+    app({ current: note(), semantic: true, similar: [ghost({ z: 2.13 })] }),
   );
   assert(html.includes("●●○"), "the band still grades at a glance");
-  assert(html.includes("2.5σ"), "and the figure is on the card, awaiting selection");
+  assert(html.includes("2.1σ"), "and the figure is on the card, awaiting selection");
 });
 
 check("the accessible name carries the figure too, not the band alone", () => {
@@ -757,10 +757,10 @@ check("the accessible name carries the figure too, not the band alone", () => {
   // screen reader "clear match" with no route to the number behind it, while the figure's
   // own span stays aria-hidden so it is announced once rather than twice (PR #184 review).
   const html = sidePaneHtml(
-    app({ current: note(), semantic: true, similar: [ghost({ z: 2.53 })] }),
+    app({ current: note(), semantic: true, similar: [ghost({ z: 2.13 })] }),
   );
   assert(
-    html.includes('aria-label="clear match, 2.5σ"'),
+    html.includes('aria-label="clear match, 2.1σ"'),
     "the band and its figure reach AT together",
   );
   assert(
