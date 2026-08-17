@@ -59,7 +59,17 @@ import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "
 import { externalUrl, isInPageAnchor } from "./links";
 import { livePreview, wikilink } from "./livepreview";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
-import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
+import { noteTarget, wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
+import {
+  CARD_DRAG_MIME,
+  cardDrop,
+  type DraggedCard,
+  inCodeAt,
+  insertDrop,
+  planDrop,
+  setDropTarget,
+  withoutCard,
+} from "./droplink";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { indentList, outdentList, type ListEdit } from "./list";
 import {
@@ -1215,6 +1225,10 @@ function toggleCard(key: string): void {
 // viewport edge (a menu that opens off-screen is unusable).
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 76;
+/** …plus *Insert link at cursor*, which the card's menu grows while a note is being edited
+ *  (render.ts). Only the clamp reads these, and it must not *under*-read — a menu opened
+ *  near the bottom edge would lose its last item off-screen. */
+const CARD_EDIT_MENU_H = 108;
 const TREE_MENU_H = 132; // the context line + three items
 // + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
 // Only the clamp reads these, so an approximation is fine — but it must not *under*-read,
@@ -1228,7 +1242,7 @@ function clampMenu(clientX: number, clientY: number, height: number): { x: numbe
 }
 
 function openCardMenu(clientX: number, clientY: number, path: string, title: string): void {
-  const { x, y } = clampMenu(clientX, clientY, CARD_MENU_H);
+  const { x, y } = clampMenu(clientX, clientY, state.editing ? CARD_EDIT_MENU_H : CARD_MENU_H);
   state.contextMenu = { kind: "card", x, y, path, title: title || null };
   render();
 }
@@ -3039,13 +3053,11 @@ function runInsertTable(view: EditorView): boolean {
 //     `markdownForPaste` returns null) — pasting escaped Markdown there would be a loss.
 // The third way out is the ⌘⇧V chord below, which does its own plain paste.
 
-/** Is the cursor inside code — a fenced block, an indented block, or an inline span? */
+/** Is the cursor inside code — a fenced block, an indented block, or an inline span?
+ *  The read itself is droplink.ts's (by position, since a *drop* names a place the cursor
+ *  isn't); this is the cursor's spelling of the same question. */
 function inCodeContext(state: EditorState): boolean {
-  const at = syntaxTree(state).resolveInner(state.selection.main.from, -1);
-  for (let n: typeof at | null = at; n; n = n.parent) {
-    if (n.name.includes("Code")) return true; // FencedCode / CodeBlock / CodeText / InlineCode
-  }
-  return false;
+  return inCodeAt(state, state.selection.main.from);
 }
 
 function handlePaste(event: ClipboardEvent, view: EditorView): boolean {
@@ -3139,6 +3151,10 @@ function mountEditor(body: string): void {
       // Web-page formatting survives the clipboard (see `richPaste` above); an
       // unformatted paste still takes CodeMirror's own path.
       richPaste,
+      // A discovery card dragged in from the right column — the drop preview and the
+      // insertion (droplink.ts). Ordinary text drags inside the buffer are untouched: the
+      // handlers decline anything that isn't the card drag.
+      wikilinkDrop,
       // `[[` completion — always on, in both live-preview and source mode. Its
       // keymap (arrows/Enter/Escape while the menu is open) binds at higher
       // precedence than defaultKeymap, so Enter accepts rather than newlines.
@@ -3386,6 +3402,109 @@ async function closeEditor(): Promise<boolean> {
 
 async function exitEdit(): Promise<void> {
   if (await closeEditor()) render(); // shows the saved text — no re-read needed
+}
+
+// --- discovery card → wikilink (droplink.ts) ---------------------------------------
+//
+// Drag a "Similar & unlinked" card onto a line of the note you are editing and a
+// `[[wikilink]]` lands at the end of that line. The rules about *where* it lands, and the
+// drop preview, are droplink.ts's; what lives here is what only the running app can own:
+// the drag's payload, the save that makes the link real, and the pane refresh that is the
+// whole point — a card you have linked is no longer *un*linked, and the column must say so.
+//
+// The drag is withheld outside edit mode (render.ts sets `draggable` on that condition), so
+// this state is only ever set while there is a buffer to drop into. Its keyboard half is
+// the card menu's *Insert link at cursor* (K1) — a different gesture aimed at the caret,
+// exactly as *Import files…* is the Finder drop's picker-shaped twin.
+
+/** The candidate being dragged out of discovery, or null. A module-local for `treeDrag`'s
+ *  reason (same-window DnD needs no dataTransfer round-trip) — but the *authority* on
+ *  whether a drag is ours is the payload's MIME type, which survives a mid-drag repaint
+ *  destroying the card element and with it the `dragend` that would have cleared this. */
+let cardDrag: DraggedCard | null = null;
+
+/** Is this drag the discovery card's? Asked of the *payload* rather than of `cardDrag`,
+ *  which a mid-drag repaint can strand: destroying the dragged element takes the `dragend`
+ *  that would have cleared it, and a stale flag must never turn an ordinary text drag
+ *  inside the editor into a wikilink insertion. */
+function carriesCard(e: DragEvent): boolean {
+  return e.dataTransfer?.types.includes(CARD_DRAG_MIME) ?? false;
+}
+
+/** The editor extension, built once: it reads the drag through this closure rather than
+ *  being rebuilt per mount, so `mountEditor` stays a list of extensions. */
+const wikilinkDrop = cardDrop({
+  dragged: (e) => (carriesCard(e) ? cardDrag : null),
+  onDrop: (card) => void commitDroppedLink(card),
+});
+
+/** Clear the editor's drop preview — called as the pointer leaves the buffer, so the ghost
+ *  never lingers on a line the drag has wandered away from. */
+function clearDropPreview(): void {
+  editorView?.dispatch({ effects: setDropTarget.of(null) });
+}
+
+/** The discovery column as the drag's **cancel** target: let go here and nothing happens.
+ *  A dashed wash says the column will take the card back, and `dropEffect = "none"` (the
+ *  global dragover, below) is what makes AppKit refuse the drop rather than B2 having to. */
+function markSideCancel(on: boolean): void {
+  el("side-pane").classList.toggle("is-drag-cancel", on);
+}
+
+/**
+ * After the link is in the buffer: flush it to disk, then take the card out of Similar.
+ *
+ * The flush is what makes the gesture a *commit* rather than a keystroke — `commitLink`
+ * (the typed, frontmatter kind) has the same shape, and the right column can only tell the
+ * truth about a link the index has seen. The save chain does the rest of the work already:
+ * `refreshConnections` re-reads the graph, so the new edge appears under Connections within
+ * the round trip.
+ *
+ * Dropping the card from `state.similar` here is an **optimism with a receipt**: the write
+ * succeeded, so the note genuinely links it now, and discovery excludes 1-hop neighbours by
+ * construction (`discover::candidates`) — the eventual `refreshDiscovery` the trailing embed
+ * fires will reach the same list. Waiting for it instead would leave a linked note sitting
+ * in "unlinked" for the seconds the embed takes, or (worse) empty the whole section while
+ * the note's own vectors are being refilled.
+ */
+async function commitDroppedLink(card: DraggedCard): Promise<void> {
+  const src = state.current;
+  if (!src) return;
+  await saveNow();
+  // Not saved: a conflict (the bar is up, and it owns the decision) or a failed write
+  // (already toasted). The link stays in the buffer either way — it is the user's edit —
+  // but nothing may claim it landed, and the card stays where it is.
+  if (state.editConflict) return;
+  if (editorView && state.current && editorView.state.doc.toString() !== state.current.body)
+    return;
+  if (state.current?.path !== src.path) return; // navigated away while the save ran
+  // By the card, not by either of its strings: `withoutCard` is keyed on the path, and
+  // taking the pair is what stops the target being handed to a path comparison (the review
+  // note on PR #185 — it matched nothing, so a dropped card stayed in the list).
+  state.similar = withoutCard(state.similar, card);
+  render();
+  flash(`Linked [[${card.target}]].`);
+}
+
+/** The keyboard's half (K1): insert the same link at the caret's line, from the card menu.
+ *  One insertion path with the drop — both plan with `planDrop` and apply with
+ *  `insertDrop`, so the two gestures cannot drift into two behaviours. */
+function insertCardLink(path: string): void {
+  const view = editorView;
+  if (!state.editing || !view || !path) return;
+  // The same pair the drag carries, built here from the menu's note path — so both halves
+  // hand the commit one shape rather than two spellings (`DraggedCard`).
+  const card: DraggedCard = { path, target: noteTarget(path) };
+  const plan = planDrop(view.state, view.state.selection.main.head, card.target);
+  if (plan === null) {
+    // The same refusal the drop makes silently (no ghost, no-drop cursor) — said out loud,
+    // because a menu item that appeared to do nothing teaches nothing.
+    flash("The cursor is inside code — a wikilink there would stay literal. Move it out first.");
+    return;
+  }
+  insertDrop(view, plan);
+  view.focus();
+  void commitDroppedLink(card);
 }
 
 // --- find in note (⌘F) ------------------------------------------------------------
@@ -3938,6 +4057,12 @@ function wireEvents(): void {
         const p = menu.path;
         closeContextMenu();
         void openNote(p);
+        return;
+      }
+      if (target.closest("[data-ctx-insert]")) {
+        const p = menu.path;
+        closeContextMenu();
+        insertCardLink(p); // the drag's keyboard half — aimed at the caret's line
         return;
       }
       if (target.closest("[data-ctx-link]")) {
@@ -5008,6 +5133,23 @@ function wireEvents(): void {
 
   document.addEventListener("dragstart", (e) => {
     const target = e.target as HTMLElement;
+    // A discovery candidate on its way into the note (droplink.ts). It carries a private
+    // MIME rather than `text/plain`: CodeMirror drops plain text where it lands, so a
+    // plain flavor would give a missed interception a second, silent behaviour.
+    const card = target.closest<HTMLElement>("#side-pane .card.candidate");
+    if (card) {
+      const path = card.dataset.cardPath ?? "";
+      if (!state.editing || !path) {
+        e.preventDefault(); // nothing to drop into — don't start a drag that can't land
+        return;
+      }
+      cardDrag = { path, target: noteTarget(path) };
+      if (e.dataTransfer) {
+        e.dataTransfer.setData(CARD_DRAG_MIME, path);
+        e.dataTransfer.effectAllowed = "copy";
+      }
+      return;
+    }
     if (!target.closest("#tree-pane")) return;
     const dirRow = target.closest<HTMLElement>("[data-dir]");
     const noteRow = target.closest<HTMLElement>("[data-open]");
@@ -5033,6 +5175,10 @@ function wireEvents(): void {
   /** Is this drag carrying files from outside the app (as opposed to text, or a row)? */
   const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
 
+  /** Is the pointer over the editor's buffer — the one surface that accepts a card? */
+  const overBuffer = (e: DragEvent) =>
+    e.target instanceof Element && e.target.closest(".cm-content") !== null;
+
   /**
    * Would WebKit *navigate* if this drag were dropped unhandled? Files, and also a
    * dragged **link** — from a browser, a mail client, or a note's own anchor. Both
@@ -5055,6 +5201,21 @@ function wireEvents(): void {
   });
 
   document.addEventListener("dragover", (e) => {
+    // The card drag (droplink.ts). Over the buffer, the editor's own handler has already
+    // painted the preview and claimed the event — this is only about everywhere *else*:
+    // clear the ghost, and mark the discovery column as the cancel target it is. Nothing
+    // outside the buffer is preventDefaulted, so the OS refuses those drops for us and a
+    // release there is the "put it back" the gesture promises.
+    if (carriesCard(e)) {
+      if (overBuffer(e)) {
+        markSideCancel(false);
+        return;
+      }
+      clearDropPreview();
+      markSideCancel(e.target instanceof Element && e.target.closest("#side-pane") !== null);
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+      return;
+    }
     if (!treeDrag) {
       if (!navigatesWebview(e)) return; // plain text: the editor's business, not ours
       // Unconditional: cancelling dragover is what stops WebKit navigating the whole
@@ -5085,6 +5246,15 @@ function wireEvents(): void {
   });
 
   document.addEventListener("drop", (e) => {
+    // A card that landed in the buffer was handled by the editor before this bubbled here
+    // (the link is already in, and its save is running); a card released anywhere else was
+    // refused by the OS and is a cancel. Both end the same way — put the state back.
+    if (carriesCard(e)) {
+      cardDrag = null;
+      markSideCancel(false);
+      clearDropPreview();
+      return;
+    }
     const drag = treeDrag;
     treeDrag = null;
     clearDropHighlight();
@@ -5113,6 +5283,10 @@ function wireEvents(): void {
   document.addEventListener("dragend", () => {
     treeDrag = null;
     clearDropHighlight();
+    // Escape mid-drag, or a release the OS refused, ends here rather than at `drop`.
+    cardDrag = null;
+    markSideCancel(false);
+    clearDropPreview();
   });
 }
 
