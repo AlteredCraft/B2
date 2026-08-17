@@ -69,8 +69,10 @@ checks print before any score and gate everything after them: the model id (neve
 `@metal` rows) and `batch ≡ single` embedding faithfulness.
 
 The bottom two landed with [#188](https://github.com/AlteredCraft/B2/issues/188), and **how they
-are placed is the point**. Both sit *below* the reading they were set from, never at it — a gate
-pinned to today's number fails on the first legitimate corpus edit, and the cheapest way to clear
+are placed is the point**. Neither sits *at* the reading it was set from: one is a floor and one
+is a ceiling, so the slack runs in opposite directions — MRR@5 gated **below** today's 0.633,
+suppression gated **above** today's 1. A gate pinned to today's number fails on the first
+legitimate corpus edit, and the cheapest way to clear
 a red per-mate number is to **edit a label**, which is the one habit this harness must never
 train (process rule 2's concern, sharper here: per-mate is label-sensitive by construction —
 adding a mate to an anchor changes `n` and moves the aggregate whether or not the engine did

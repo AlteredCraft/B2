@@ -63,8 +63,9 @@ the new unit its top band was unreachable and the corpus's strongest confirmed r
 middling; the bands are now read off the floor's own bars and the labelled-mate population
 (`ui/src/strength.ts`), which is the standing rule: **a change to the judged statistic is a change
 to every surface that paints it**. GH #188 then put discovery in the exit gate — per-mate MRR@5
-and the suppressed-mate count are now assertions beside hit@1 and the negatives, both placed
-*below* today's reading rather than at it (five repeat runs are bit-identical, so the headroom is
+and the suppressed-mate count are now assertions beside hit@1 and the negatives, each set a
+margin to the *safe* side of today's reading rather than at it — the MRR **floor** below 0.633,
+the suppression **ceiling** above today's 1 (five repeat runs are bit-identical, so the headroom is
 for corpus drift, not run noise), with a strangers-on-positive-anchors count reported but
 deliberately ungated, since the cheapest way to shrink it is to label the stranger. The saturating
 per-anchor line is retired from stdout and kept in the JSON row.

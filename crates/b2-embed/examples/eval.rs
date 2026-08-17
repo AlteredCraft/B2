@@ -924,8 +924,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // measure-then-calibrate, and a threshold picked the day a metric is born
     // is intuition wearing a number — but "ungated pending a baseline" is only
     // honest while the baseline is still being taken. Both bars below are set
-    // from measured runs, both sit *below* today's reading rather than at it,
-    // and `docs/evals/README.md` carries the failure mode they must not train.
+    // from measured runs, and neither sits *at* its reading — one is a floor and
+    // one a ceiling, so the slack runs opposite ways: MRR@5 below today's, the
+    // suppression count above it. `docs/evals/README.md` carries the failure
+    // mode they must not train.
     if similar.mate.mrr() < FLOOR_MATE_MRR {
         eprintln!(
             "\n[warn] per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_MATE_MRR:.2} floor — discovery ranking regressed \
