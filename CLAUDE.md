@@ -31,25 +31,33 @@ loner anchors whose labelled answer is "nothing relates" — and the related/jun
 calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log. A
 **multi-topic note family** (GH #183) — three positives pairing an on-topic half with a genuinely
 off-topic one (the on-topic half first, then second, then outweighed ~3:1), plus a negative whose
-two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking (the shipped order)
-and best-passage ranking disagree; every note before it was single-subject, where the two agree by
+two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking
+(the order shipped until GH #192) and best-passage ranking disagree; every note before it was
+single-subject, where the two agree by
 construction. It ships with the metric that can read it: `similar`'s per-anchor hit@1/hit@3/MRR@5
 stay pinned at **1.000 even with the family in place** (a hit needs only *one* of an anchor's mate
 set, so an anchor's easy mate hides its hard one), so the eval also scores **per-mate** ranks —
-every labelled mate on its own — which reads 0.43/0.79/0.595 and moves when the sort key does.
+every labelled mate on its own — which read 0.43/0.79/0.595 at the time and moves when the sort
+key does.
 That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
-asserted, and the answer was worse than assumed: 3 of 14 labelled mates are **suppressed outright**
+asserted, and the answer was worse than assumed: 3 of 14 labelled mates were **suppressed outright**
 by the centroid floor (reachable under best-passage order, never served), not merely demoted.
-The eval measures it; GH #182 is where anything gets done about it. GH #187 then measured *why*
+The eval measures it; GH #182 is where surfacing decisions get made. GH #187 then measured *why*
 no threshold fixes it, by dumping the number the floor actually judges — every candidate's ungated
 stage-1 z — and re-deriving both of `DiscoveryFloor`'s admissible windows from it on **every run**
-(the `floor calibration` block, and `discovery_z` in the row). The leader gate still has a window
-and the shipped constant sits in it; the **member bar has none** — labelled mates run from +0.80
-while strangers on positive anchors reach +1.62, so the two populations overlap by 0.8 z and no
-constant separates them. Which is also why `DiscoveryFloor`'s docstring now cites the instrument
+(the `floor calibration` block, and `discovery_z` in the row). The leader gate still had a window;
+the **member bar had none** — labelled mates ran from +0.80
+while strangers on positive anchors reached +1.62, so the two populations overlapped by 0.8 z and no
+constant separates an inversion. Which is also why `DiscoveryFloor`'s docstring cites the instrument
 instead of quoting a window: the GH #150 numbers were frozen into that comment and went stale the
 first time the corpus grew a shape they were never measured against. Constants in code,
-measurements in the harness.
+measurements in the harness. GH #192 then acted on the measurement: the floor is **judged after
+stage 2, on the best-passage z** — the same number that orders the list and paints the band, so the
+three cannot disagree, and stage 1 is recall only. Its defaults were re-read from the harness's
+windows in the new unit (leader 1.96 / member 1.49), which serves 14 of 15 labelled mates at zero
+strangers, lands GH #189's journal-shaped `week-log.md` (gem served, loner anchors clean — the
+corpus is now 31 notes / 70 chunks), and leaves exactly one suppression: the phishing pair-residue,
+the pair-scorer escalation's standing evidence.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

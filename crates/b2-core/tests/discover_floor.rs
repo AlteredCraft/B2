@@ -1,7 +1,8 @@
 //! The discovery quality floor (index-engine.md §3's "limit is a cap, not a
-//! promise", GH #150): a per-anchor z-score rule over the stage-1 centroid
-//! population — [`DiscoveryFloor`] — that ends a candidate list where the anchor's
-//! own score distribution says the signal stops, possibly at zero.
+//! promise", GH #150): a per-anchor z-score rule — judged after stage 2 on the
+//! best-passage distances (GH #192) — [`DiscoveryFloor`], which ends a candidate
+//! list where the anchor's own score distribution says the signal stops,
+//! possibly at zero.
 //!
 //! The fake embedder can't exercise this (hash vectors have no semantic geometry —
 //! which is exactly why `Vault::similar` never floors a fake-embedded space; the
@@ -46,16 +47,16 @@ impl GeometricEmbedder {
             "MATE" => vec![0.995, 0.0998, 0.0, 0.0],
             // A diffuse anchor living inside the noise cloud itself.
             "DIFFUSE" => vec![0.0, 0.0, 1.0, 0.0],
-            // The order-disagreement pair (see `ranks_by_z_not_by_score`): `MID` is
-            // one middling chunk, nearer the anchor than a split note's *centroid*
-            // but further than that note's best *chunk* (`NEAR`, whose other half
-            // `FAR` drags the centroid away).
+            // The buried-gem pair (see `a_buried_gem_outranks_and_is_served`):
+            // `MID` is one middling chunk, nearer the anchor than a split note's
+            // *centroid* but further than that note's best *chunk* (`NEAR`, whose
+            // other half `FAR` drags the centroid away).
             "MID" => vec![0.8, 0.6, 0.0, 0.0],
             "NEAR" => vec![0.995, 0.0998, 0.0, 0.0],
             "FAR" => vec![0.0, 0.0, 1.0, 0.0],
             // The noise cloud: all near axis 2, fanned evenly on axis 3 so the
             // diffuse anchor sees one smooth spread of distances (max-z ≈ 1.6 for
-            // 13 evenly spaced values — below the 1.85 gate by construction).
+            // 13 evenly spaced values — below the leader gate by construction).
             t if t.starts_with('N') => {
                 let i: f32 = t[1..].parse().unwrap_or(0.0);
                 vec![0.0, 0.0, 1.0, 0.05 + i * 0.03]
@@ -127,8 +128,9 @@ fn floor_keeps_the_mate_and_cuts_the_noise_cloud() {
     );
     let z = cands[0].z.expect("floor statistics were computed");
     assert!(
-        z > 1.85,
-        "the kept candidate carries the z that kept it: {z}"
+        z >= floor.leader_z,
+        "the kept candidate carries the z that kept it — it led the list, so it \
+         cleared the leader gate: {z}"
     );
 }
 
@@ -176,15 +178,17 @@ fn write_split_note(vault: &Path, name: &str, first: &str, second: &str) {
 }
 
 #[test]
-fn ranks_by_z_not_by_score_when_the_floor_computed_it() {
-    // The band a card shows IS its z (GH #150), so the list must be ordered by the
-    // same number — otherwise a weaker-banded card sits above a stronger one.
-    //
-    // This vault makes the two orders disagree *by construction*, which is the
-    // honest cost of the rule: `split.md` holds a passage almost parallel to the
-    // anchor (its stage-2 max-sim is far the best) but its second half drags its
-    // centroid away, so `mid.md` — one middling chunk, no best passage anywhere
-    // near as close — wins on stage-1 z and now ranks above it.
+fn a_buried_gem_outranks_and_is_served() {
+    // The multi-topic shape the GH #192 reorder exists for: `split.md` holds a
+    // passage almost parallel to the anchor (its stage-2 max-sim is far the best)
+    // while its second half drags its *centroid* away. The retired stage-1 floor
+    // judged that centroid, so `mid.md` — one middling chunk, no best passage
+    // anywhere near as close — outranked the gem, and a corpus-measured version
+    // of the same shape was suppressed outright (GH #187) or served to loner
+    // anchors on content it did not contain (GH #189). Judged after stage 2, the
+    // gem's own best pair is the signal: it is served, it ranks first, and the
+    // band a card shows (its z) descends with the rows because z, score, and the
+    // order are one number by construction.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -211,21 +215,24 @@ fn ranks_by_z_not_by_score_when_the_floor_computed_it() {
             .iter()
             .map(|c| c.note_path.clone())
             .collect::<Vec<_>>(),
-        vec!["mid.md".to_string(), "split.md".to_string()],
-        "ordered by z (the shown band), not by the stage-2 score"
+        vec!["split.md".to_string(), "mid.md".to_string()],
+        "the buried gem exists and leads: its best passage is the judged signal"
     );
-    // The disagreement is real, not an artifact of both orders happening to match.
+    // One order, three names: score, z, and the rows may never disagree.
     assert!(
-        cands[0].score < cands[1].score,
-        "score order is the opposite: {} then {}",
+        cands[0].score > cands[1].score,
+        "score descends with the rows: {} then {}",
         cands[0].score,
         cands[1].score
     );
     let (z0, z1) = (cands[0].z.unwrap(), cands[1].z.unwrap());
-    assert!(z0 > z1, "z is non-increasing down the list: {z0} then {z1}");
+    assert!(
+        z0 > z1,
+        "z (the shown band) descends with the rows: {z0} then {z1}"
+    );
 
-    // Ungated, there is no z to rank by, so the exact stage-2 score is the order —
-    // and it puts the note with the near-parallel passage first again.
+    // Ungated, the exact stage-2 score is still the order — gating changes what
+    // exists, never how what exists is ranked.
     let raw = discover::candidates(&conn, "anchor.md", 10, None).unwrap();
     assert_eq!(raw[0].note_path, "split.md");
     assert_eq!(raw[1].note_path, "mid.md");
