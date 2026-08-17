@@ -478,6 +478,10 @@ adapters wire the real model.
   **`b2 link`** appends a typed `b2_relations:` entry to the source note's frontmatter
   (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
   active edge. No suggestion queue — a connection exists only once you author it.
+  The GUI adds the *other* authoring gesture over the same candidates (`ui/src/droplink.ts`): dragging a
+  Similar card onto a line of the note being edited types a `[[wikilink]]` at that line's end — the
+  untyped, body kind of link, landing in the editor's buffer exactly as `[[` completion does, so B2 still
+  authors nothing (W1) and the human is still the precision gate.
 - **Flow ④ grounded chat** (`chat.rs` + `Vault::ask`, GH #151/#153) — condense (multi-turn only; a
   provider call rewrites the follow-up into a standalone query, degrading to the raw question on
   failure — that step can never break chat) → retrieve (`search_chunks` at `chat::ASK_PASSAGES`,

@@ -1318,6 +1318,19 @@ body.is-resizing {
   caret-color: var(--accent);
 }
 
+/* The card drop's preview (droplink.ts): the line being aimed at takes an accent wash, and
+   a ghost of the exact text shows where it will enter — so what the release will write is
+   readable *before* the button comes up. Both are decorations over an unchanged document;
+   the ghost is a widget, so it is never part of the note's bytes. */
+.editor-host .cm-drop-line {
+  background: var(--accent-soft);
+  border-radius: 4px;
+}
+.editor-host .cm-drop-ghost {
+  color: var(--accent);
+  opacity: 0.7;
+}
+
 /* The `[[` wikilink completion menu (autocompletion in main.ts) — restyle CodeMirror's
    tooltip to the app's panel voice: two-line rows, title over a muted `dir/` line. */
 .cm-tooltip.cm-tooltip-autocomplete {
@@ -1754,6 +1767,27 @@ body.is-resizing {
 .card-body {
   /* indent under the title (6px pad + 20px chevron + 4px gap), not under the chevron */
   padding: 0 12px 10px 30px;
+}
+
+/* Dragging a candidate into the note (droplink.ts). The card is draggable only while the
+   note is being edited, so the affordance appears with the capability — and it is a
+   *visible* one, not the cursor: WKWebView doesn't reliably paint a CSS cursor (the
+   gutter's note above says the same), so the card lifts instead, and `grab` is a bonus
+   where it does. Releasing back over this column cancels the drag, which is what the
+   dashed wash announces while the pointer is over it. */
+.card.candidate[draggable="true"] {
+  cursor: grab;
+}
+.card.candidate[draggable="true"]:hover {
+  box-shadow: 0 1px 5px rgb(0 0 0 / 12%);
+}
+.card.candidate[draggable="true"]:active {
+  cursor: grabbing;
+}
+.side-pane.is-drag-cancel {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  border-radius: 8px;
 }
 
 .edge .edge-arrow {

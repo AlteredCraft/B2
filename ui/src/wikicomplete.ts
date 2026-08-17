@@ -44,6 +44,14 @@ function noteLabel(n: NoteSummary): string {
   return n.title ?? baseName(n.path).replace(/\.md$/, "");
 }
 
+/** The wikilink target that names a **note**: its vault-relative path minus `.md` (the
+ *  Obsidian habit — the module header's rule). Exported because the completion is no
+ *  longer the only thing that writes a `[[link]]`: dropping a discovery card onto a line
+ *  writes one too (droplink.ts), and one spelling of a target is one thing to get right. */
+export function noteTarget(path: string): string {
+  return path.replace(/\.md$/, "");
+}
+
 /** The `dir/` detail line under a label ("" for a root-level entry). */
 function dirDetail(path: string): string {
   const dir = parentDir(path);
@@ -79,7 +87,7 @@ export function wikiCandidates(
     if (tier === null) continue;
     ranked.push({
       tier,
-      c: { target: n.path.replace(/\.md$/, ""), label, detail: dirDetail(n.path) },
+      c: { target: noteTarget(n.path), label, detail: dirDetail(n.path) },
     });
   }
   for (const r of resources) {

@@ -840,9 +840,20 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
       // the whole card is the target now that the inline Link button is gone. The card is
       // also the keyboard's *row* (`data-side-row`), which is why the whole box — title,
       // path, and snippet — is what a screen reader reads and what the ring wraps.
+      //
+      // Draggable **only while the note is being edited** (droplink.ts): the drop lands a
+      // `[[wikilink]]` in the buffer, so with no buffer open there is nowhere for the drag
+      // to go, and an affordance that starts a drag nothing can accept is a lie the OS
+      // cursor has to walk back. The `title` says what the gesture does, since a drag is
+      // the one affordance with no visible label; the keyboard's half of it is the card
+      // menu's *Insert link at cursor* (⇧F10 — K1), below.
       return `<div class="card foldable candidate${
         folded ? " is-collapsed" : ""
-      }" role="treeitem" aria-level="2" aria-expanded="${!folded}"${sideTab(
+      }"${
+        state.editing
+          ? ` draggable="true" title="Drag onto a line of the note to link it there"`
+          : ""
+      } role="treeitem" aria-level="2" aria-expanded="${!folded}"${sideTab(
         rowKey,
         roving,
       )} data-side-row="${escapeHtml(rowKey)}" data-card-path="${escapeHtml(
@@ -2201,7 +2212,13 @@ export function contextMenuHtml(state: AppState): string {
         ${contextItemHtml("data-ctx-new-folder", "New folder", "⇧⌘N")}
         ${contextItemHtml("data-ctx-import", "Import files…")}`;
   } else {
+    // *Insert link at cursor* is the card drag's keyboard half (K1), the same shape
+    // *Import files…* is the Finder drop's: dragging a card onto a line is pointer-only,
+    // so the identical insertion runs from here — via ⇧F10 — aimed at the line the caret
+    // is already on. Only while editing, because that is the only time there is a buffer
+    // to insert into; the drag is withheld on the same condition (the card's `draggable`).
     items = `${contextItemHtml("data-ctx-open", "Open note", "⏎")}
+        ${state.editing ? contextItemHtml("data-ctx-insert", "Insert link at cursor") : ""}
         ${contextItemHtml("data-ctx-link", "Link…")}`;
   }
   // `tabindex="-1"` on the menu itself makes the container focusable-by-script but not

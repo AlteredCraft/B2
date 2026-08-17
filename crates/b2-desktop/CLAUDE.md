@@ -236,6 +236,12 @@ Every new surface owes all four. They are cheap while you're building it and exp
   markup, so the mouse and ⏎ share one path) and the streaming paint (`paintChatStream`, main.ts — a full
   render per token would swap the pane's `innerHTML` a hundred times an answer and eject the keyboard with
   every one).
+- **`ui/src/droplink.ts`** — the discovery card's drop into the note: where the link lands, where it
+  may not, and the CodeMirror preview that says so before the button comes up. Its own module for
+  livepreview.ts's reason — the decisions are pure functions of a line (or of an `EditorState` and a
+  position), so node runs them off the source, while main.ts keeps the `DragEvent` plumbing, the save,
+  and the pane refresh, which only the running app can own. The gesture's rules are in the drag-and-drop
+  section below.
 - **`ui/src/icons.ts`** — the icon registry, and the reason a fourth obligation didn't need
   adding above: an icon here is `aria-hidden` with no opt-out, so it is always *beside* an
   accessible name and never instead of one. It maps a **meaning** (`resourceIcon(class)`,
@@ -341,10 +347,12 @@ bodies) or from `escapeHtml` (every value B2 interpolates into chrome — titles
 no third option; a raw string built from vault data and assigned to `innerHTML` is the bug this invariant
 exists to prevent.
 
-## Drag and drop: one setting, two gestures, and a navigation the window can't survive
+## Drag and drop: one setting, three gestures, and a navigation the window can't survive
 
-`tauri.conf.json` sets **`dragDropEnabled: false`** on the window, and both drag gestures depend on it —
-in opposite directions, which is why the setting is worth its own section.
+`tauri.conf.json` sets **`dragDropEnabled: false`** on the window, and every drag gesture depends on it —
+the in-app ones because they need the DOM to see `dragover`/`drop` at all, the external one because
+turning the interception off is what makes an unhandled file drop *our* problem. That opposition is why
+the setting is worth its own section.
 
 With Tauri's native drag-drop interception **on** (the default), wry consumes drag events for its own
 file-drop channel and the DOM never sees `dragover`/`drop` on macOS: `dragstart` fires, but no drop zone
@@ -373,6 +381,34 @@ Two consequences fall out of the setting, both of which look like odd choices un
   *Import files…* in the tree's context menu (⇧F10 reaches it) opens an OS picker, and a picker yields
   **paths** — hence `import_path`, the same façade op from the other end, with no byte transport and no
   cap. Two commands for one gesture is not duplication; it is the two shapes the OS offers.
+
+The third gesture is the shortest path flow ③ has: **drag a "Similar & unlinked" card onto a line of the
+note you are editing, and a `[[wikilink]]` lands at the end of that line** (`ui/src/droplink.ts`). It is
+the drag the setting was turned off for, one surface over — and four things about it are load-bearing:
+
+- **It authors nothing on B2's behalf.** The drop inserts into the *editor buffer*, exactly as `[[`
+  completion does, and reaches disk through the same guarded `write_note` splice a keystroke does. W1 is
+  untouched: the human picked the target, the human picked the line.
+- **It writes the body kind of link, not the frontmatter kind.** The card menu's *Link…* writes a typed
+  `b2_relations:` entry; this writes the untyped inline `references` edge every `[[link]]` in prose is
+  (data-model.md §2). Two gestures because they are two different claims.
+- **The drop is a commit, so the column must tell the truth after it.** The insertion is flushed with
+  `saveNow()` — the save chain's `refreshConnections` then paints the new edge — and the card is dropped
+  from `state.similar` on the write's success, because a linked note is no longer an *un*linked one and
+  waiting for the trailing embed's `refreshDiscovery` would leave it sitting in the wrong section for
+  seconds. Optimism with a receipt: discovery excludes 1-hop neighbours by construction, so the eventual
+  refresh reaches the same list.
+- **Its keyboard half is the card menu's *Insert link at cursor*** — the import's shape again: a drag
+  aims at a line, so its ⇧F10 twin aims at the caret's, through the same `planDrop`/`insertDrop` pair so
+  the two can't drift. Both appear only in edit mode, the card's `draggable` included: an affordance for
+  a drop that has nowhere to land is a lie the OS cursor has to walk back.
+
+Two rules the module holds that are easy to get wrong when touching it. A drop lands at the **end of the
+line**, never at the character under the pointer — you aim at a line, so a release can't split
+`seman|tics` — and a line of **block** code refuses the drop outright (no ghost, no-drop cursor), because
+a wikilink in a fence is literal text that resolves to nothing. The refusal is asked at the line's first
+non-blank character: an indented code block's node starts *after* its indent, so a line-start read calls
+`    cargo test` prose.
 
 ## Transport
 
