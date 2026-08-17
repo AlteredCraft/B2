@@ -18,7 +18,7 @@
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
-import { inCodeAt, lineDrop, planDrop } from "./droplink.ts";
+import { inCodeAt, lineDrop, planDrop, withoutCard } from "./droplink.ts";
 import { wikilink } from "./livepreview.ts";
 import { noteTarget } from "./wikicomplete.ts";
 
@@ -148,6 +148,20 @@ check("the code check reads a position, not the selection", () => {
 });
 
 // --- the target's spelling -----------------------------------------------------------
+
+check("the linked card leaves the list by its path, not by the link it wrote", () => {
+  // The review note on PR #185, pinned. A note has two spellings — `notes/x.md` is the
+  // app's key (what `SimilarView.path` carries), `notes/x` is what a link to it says — and
+  // the drop used to hand the *target* back to a filter comparing *paths*. It matched
+  // nothing, so a card you had just linked sat on in "Similar & unlinked" until the next
+  // discovery read: the one behaviour the whole commit-on-drop design exists to provide.
+  const card = { path: "notes/x.md", target: "notes/x" };
+  const cards = [{ path: "notes/w.md" }, { path: "notes/x.md" }, { path: "notes/y.md" }];
+  assertEq(withoutCard(cards, card), [{ path: "notes/w.md" }, { path: "notes/y.md" }], "dropped");
+  // Taking the pair rather than a string is what makes the mix-up unsayable — this is the
+  // assertion the old signature could not have made, since both spellings were `string`.
+  assertEq(withoutCard(cards, { path: "notes/z.md", target: "notes/z" }), cards, "no false hit");
+});
 
 check("a note is linked by its path minus .md — the completion's spelling, once", () => {
   // Shared with wikicomplete.ts on purpose: two spellings of a target would be two ways to

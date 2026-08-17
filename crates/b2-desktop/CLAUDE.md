@@ -408,7 +408,7 @@ line**, never at the character under the pointer — you aim at a line, so a rel
 `seman|tics` — and a line of **block** code refuses the drop outright (no ghost, no-drop cursor), because
 a wikilink in a fence is literal text that resolves to nothing. The refusal is asked at the line's first
 non-blank character: an indented code block's node starts *after* its indent, so a line-start read calls
-`    cargo test` prose.
+an indented `cargo test` line prose.
 
 ## Transport
 

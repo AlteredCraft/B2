@@ -179,16 +179,48 @@ export function insertDrop(view: EditorView, plan: DropInsertion): void {
   });
 }
 
+/**
+ * The card being dragged, as the app describes it.
+ *
+ * Two fields because a note has two spellings and they are not interchangeable: `path` is
+ * the app's **key** for it (`notes/x.md` — what `SimilarView.path` carries, what the index
+ * is keyed by, invariant L1), and `target` is what a *link* to it says (`notes/x`, the
+ * extension dropped). This module reads only `target`; `path` is opaque here and rides
+ * along so the app gets its own key back on drop rather than reversing a target into one.
+ *
+ * That reversal is exactly the bug PR #185's review caught: the drop handed back the
+ * target, the app filtered `state.similar` with it, and `notes/x !== notes/x.md` matched
+ * nothing — so a dropped card sat in "Similar & unlinked" until the next discovery read.
+ * The pair travels together now, and [`withoutCard`] takes the pair rather than a string,
+ * so there is no longer a spelling to pick wrongly.
+ */
+export interface DraggedCard {
+  /** The note's vault-relative path, extension included — the app's key. */
+  path: string;
+  /** What a wikilink to it says: the text this module inserts. */
+  target: string;
+}
+
+/** The candidate list minus the one just linked. Keyed by the card's **path**, never by
+ *  its target — see [`DraggedCard`]. Generic over the caller's row type so it filters
+ *  `SimilarView`s without this module importing them. */
+export function withoutCard<T extends { path: string }>(
+  cards: readonly T[],
+  card: DraggedCard,
+): T[] {
+  return cards.filter((c) => c.path !== card.path);
+}
+
 /** What the extension needs from the app: the card currently being dragged (null when the
  *  drag isn't ours — a text drag inside the buffer is CodeMirror's business), and what to
  *  do once the link is in. */
 export interface CardDropOptions {
-  /** The wikilink target of the dragged candidate, or null for "not our drag" — asked per
-   *  event, so the answer can be read off the payload ([`CARD_DRAG_MIME`]) rather than off
-   *  app state a mid-drag repaint may have stranded. */
-  dragged: (e: DragEvent) => string | null;
-  /** Called after the insertion, with that same target — main.ts saves and refreshes. */
-  onDrop: (target: string) => void;
+  /** The dragged candidate, or null for "not our drag" — asked per event, so the answer
+   *  can be read off the payload ([`CARD_DRAG_MIME`]) rather than off app state a mid-drag
+   *  repaint may have stranded. */
+  dragged: (e: DragEvent) => DraggedCard | null;
+  /** Called after the insertion, with that same card — main.ts saves and refreshes. */
+  onDrop: (card: DraggedCard) => void;
 }
 
 /**
@@ -210,9 +242,9 @@ export function cardDrop(opts: CardDropOptions): Extension {
     planDrop(view.state, view.posAtCoords({ x: e.clientX, y: e.clientY }, false), target);
 
   const over = (e: DragEvent, view: EditorView): boolean => {
-    const target = opts.dragged(e);
-    if (target === null) return false;
-    const plan = planAt(e, view, target);
+    const card = opts.dragged(e);
+    if (card === null) return false;
+    const plan = planAt(e, view, card.target);
     show(view, plan);
     if (plan === null) return true; // over code: consumed, but not droppable
     e.preventDefault(); // this is what makes the line a drop zone
@@ -238,15 +270,17 @@ export function cardDrop(opts: CardDropOptions): Extension {
         return false;
       },
       drop(e, view) {
-        const target = opts.dragged(e);
-        if (target === null) return false;
-        const plan = planAt(e, view, target);
+        const card = opts.dragged(e);
+        if (card === null) return false;
+        const plan = planAt(e, view, card.target);
         show(view, null);
         if (plan === null) return true;
         e.preventDefault();
         insertDrop(view, plan);
         view.focus();
-        opts.onDrop(target);
+        // The whole card back, not the target it was planned from: the app's key is the
+        // path, and asking it to reverse one out of the other is the bug in `DraggedCard`.
+        opts.onDrop(card);
         return true;
       },
     }),

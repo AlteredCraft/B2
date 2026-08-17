@@ -63,10 +63,12 @@ import { noteTarget, wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikico
 import {
   CARD_DRAG_MIME,
   cardDrop,
+  type DraggedCard,
   inCodeAt,
   insertDrop,
   planDrop,
   setDropTarget,
+  withoutCard,
 } from "./droplink";
 import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
 import { indentList, outdentList, type ListEdit } from "./list";
@@ -3419,7 +3421,7 @@ async function exitEdit(): Promise<void> {
  *  reason (same-window DnD needs no dataTransfer round-trip) — but the *authority* on
  *  whether a drag is ours is the payload's MIME type, which survives a mid-drag repaint
  *  destroying the card element and with it the `dragend` that would have cleared this. */
-let cardDrag: { path: string; target: string } | null = null;
+let cardDrag: DraggedCard | null = null;
 
 /** Is this drag the discovery card's? Asked of the *payload* rather than of `cardDrag`,
  *  which a mid-drag repaint can strand: destroying the dragged element takes the `dragend`
@@ -3432,8 +3434,8 @@ function carriesCard(e: DragEvent): boolean {
 /** The editor extension, built once: it reads the drag through this closure rather than
  *  being rebuilt per mount, so `mountEditor` stays a list of extensions. */
 const wikilinkDrop = cardDrop({
-  dragged: (e) => (carriesCard(e) ? (cardDrag?.target ?? null) : null),
-  onDrop: (target) => void commitDroppedLink(target),
+  dragged: (e) => (carriesCard(e) ? cardDrag : null),
+  onDrop: (card) => void commitDroppedLink(card),
 });
 
 /** Clear the editor's drop preview — called as the pointer leaves the buffer, so the ghost
@@ -3465,7 +3467,7 @@ function markSideCancel(on: boolean): void {
  * in "unlinked" for the seconds the embed takes, or (worse) empty the whole section while
  * the note's own vectors are being refilled.
  */
-async function commitDroppedLink(path: string): Promise<void> {
+async function commitDroppedLink(card: DraggedCard): Promise<void> {
   const src = state.current;
   if (!src) return;
   await saveNow();
@@ -3476,9 +3478,12 @@ async function commitDroppedLink(path: string): Promise<void> {
   if (editorView && state.current && editorView.state.doc.toString() !== state.current.body)
     return;
   if (state.current?.path !== src.path) return; // navigated away while the save ran
-  state.similar = state.similar.filter((c) => c.path !== path);
+  // By the card, not by either of its strings: `withoutCard` is keyed on the path, and
+  // taking the pair is what stops the target being handed to a path comparison (the review
+  // note on PR #185 — it matched nothing, so a dropped card stayed in the list).
+  state.similar = withoutCard(state.similar, card);
   render();
-  flash(`Linked [[${noteTarget(path)}]].`);
+  flash(`Linked [[${card.target}]].`);
 }
 
 /** The keyboard's half (K1): insert the same link at the caret's line, from the card menu.
@@ -3487,7 +3492,10 @@ async function commitDroppedLink(path: string): Promise<void> {
 function insertCardLink(path: string): void {
   const view = editorView;
   if (!state.editing || !view || !path) return;
-  const plan = planDrop(view.state, view.state.selection.main.head, noteTarget(path));
+  // The same pair the drag carries, built here from the menu's note path — so both halves
+  // hand the commit one shape rather than two spellings (`DraggedCard`).
+  const card: DraggedCard = { path, target: noteTarget(path) };
+  const plan = planDrop(view.state, view.state.selection.main.head, card.target);
   if (plan === null) {
     // The same refusal the drop makes silently (no ghost, no-drop cursor) — said out loud,
     // because a menu item that appeared to do nothing teaches nothing.
@@ -3496,7 +3504,7 @@ function insertCardLink(path: string): void {
   }
   insertDrop(view, plan);
   view.focus();
-  void commitDroppedLink(path);
+  void commitDroppedLink(card);
 }
 
 // --- find in note (⌘F) ------------------------------------------------------------
