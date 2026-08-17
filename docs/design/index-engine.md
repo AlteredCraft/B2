@@ -378,8 +378,8 @@ z +2.00 and `throat-singing.md` at +2.45 — content it does not contain, above 
 mate's z anywhere in the corpus — while its own gem (best-passage rank 2 for `volcano.md`) fell
 under `member_z`, unserved. Both floor failures at once, in opposite directions, from one note.
 Wording is not the mechanism: a synthetic centroid averaging k of the corpus's *existing* chunk
-vectors — no prose at all — crosses a loner's bar from **k = 4** and tops most loners' lists by
-k = 6. So the #150 calibration window did not merely go stale
+vectors — no prose at all — crosses a loner's bar from **k = 4** and is every loner's top-z
+candidate from k = 5. So the #150 calibration window did not merely go stale
 ([#187](https://github.com/AlteredCraft/B2/issues/187)): on this shape the member/stranger
 distributions **invert** — strangers above the bar, labelled mates below it — and no constant
 fixes an inversion. The corpus edit was reverted rather than landed red (the note, its labels,
