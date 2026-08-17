@@ -33,10 +33,14 @@ calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and t
 off-topic one (the on-topic half first, then second, then outweighed ~3:1), plus a negative whose
 two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking (the shipped order)
 and best-passage ranking disagree; every note before it was single-subject, where the two agree by
-construction. `similar`'s own hit@1/hit@3/MRR@5 stay pinned at ceiling even with the family in
-place — a hit only needs *one* of an anchor's now-larger mate set, so the aggregate still can't see
-a specific hard mate miss — but the piles move: `related`-min and `junk`-max both shifted, which is
-the readout process rule 4 already prescribes for a ceilinged metric.
+construction. It ships with the metric that can read it: `similar`'s per-anchor hit@1/hit@3/MRR@5
+stay pinned at **1.000 even with the family in place** (a hit needs only *one* of an anchor's mate
+set, so an anchor's easy mate hides its hard one), so the eval also scores **per-mate** ranks —
+every labelled mate on its own — which reads 0.43/0.79/0.595 and moves when the sort key does.
+That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
+asserted, and the answer was worse than assumed: 3 of 14 labelled mates are **suppressed outright**
+by the centroid floor (reachable under best-passage order, never served), not merely demoted.
+The eval measures it; GH #182 is where anything gets done about it.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

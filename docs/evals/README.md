@@ -90,13 +90,19 @@ score and gate everything after them: the model id (never average CPU and `@meta
   (on-topic half second — chunk order provably doesn't matter), `tire-pressure-and-knots.md`
   (off-topic half ~3× the on-topic half — the centroid dragged furthest), and
   `running-and-aquarium.md`, a negative whose two halves are both unrelated to every anchor. The
-  positive family measurably worked: `tire-pressure-and-knots.md` lowered the related-cosine pile's
-  floor to 0.554 (from 0.580) — not a quality regression but the intended one, a labelled mate
-  harder than any the corpus previously held. `similar`'s own
-  hit@1/hit@3/MRR@5 stayed pinned at 1.000 exactly as the issue predicted — a hit only needs *one*
-  of an anchor's mates, so a specific hard mate's placement is invisible to that aggregate — and per
-  process rule 4 the piles are the readout that actually moved, which is standing evidence that a
-  ceilinged discrete metric here needs a continuous companion, not a replacement. First draft of
+  family came with the metric it needs — **per-mate ranks** (every labelled mate scored on its own,
+  not just an anchor's first hit), because the issue's "ceiling problem" was real: `similar`'s
+  per-anchor hit@1/hit@3/MRR@5 read **1.000 even with the family in place**, since each anchor's
+  easy mate still lands and hides whatever happened to the hard one. Per-mate reads
+  **hit@1 0.43 / hit@3 0.79 / MRR@5 0.595** on the same run — off the ceiling, with headroom in
+  both directions. What it then exposed is worse than the demotion this repo expected: of 14
+  labelled mates, **3 never surface on the shipped surface at all** — `tire-pressure-and-knots.md`
+  (best-passage rank 2 for `bicycle.md`), `radio-and-sleep-debt.md` (rank 3 for `insomnia.md`) and
+  the long-known `phishing.md` (rank 4 for `encryption.md`) all fall under the floor's `member_z`.
+  The one multi-topic mate that does survive, `pour-over-and-pottery.md`, is demoted from
+  best-passage rank 1 to centroid rank 3. Nothing was tuned in response — the eval measures, and
+  [#182](https://github.com/AlteredCraft/B2/issues/182) is where the response is decided; it now
+  has numbers rather than an eyeball. First draft of
   the negative used off-topic halves (furniture refinishing, then genealogy) that leaked past the
   discovery floor for `stain-removal.md` and `git-cheatsheet.md` respectively — caught by the
   two-direction audit and by hand-checking `b2 similar` against a real built vault, not by the
