@@ -109,11 +109,33 @@ score and gate everything after them: the model id (never average CPU and `@meta
   aggregate score, which cannot see a single dirty negative anchor either. Growing the corpus past
   63 chunks also ended its candidate-width blindness (GH #141) as a side effect — see this file's
   "two halves" section above.
+- **The journal-shaped note cannot land while the #150 floor ships**
+  ([#189](https://github.com/AlteredCraft/B2/issues/189), measured 2026-08-17, and the first
+  corpus edit this harness has *rejected*): the issue's ≥6-section journal positive
+  (`week-log.md` — seven hobby sections, one lava-field gem labelled the mate of `volcano.md`,
+  ~6:1 dilution) was built, measured, and **reverted**, not for any wording it contained but for
+  its geometry. Averaging that many mutually-unrelated sections collapses the normalized centroid
+  toward the corpus's shared direction, which makes it the top-z candidate for **loner anchors on
+  content it does not contain**: with the note in place `git-cheatsheet.md` served it at z +2.00
+  and `throat-singing.md` at +2.45 — above every labelled mate's z anywhere in the corpus — and
+  the negatives gate went red. Rewriting sections moved pair cosines, never the verdict; a
+  synthetic probe (averaging k of the corpus's *existing* chunk vectors — no prose at all)
+  crosses a loner's bar from **k = 4** and tops the loners' lists at k ≥ 5. The distributions
+  #187 asked about do not merely overlap on this shape — they **invert**, so no `member_z`
+  rescues the suppressed mates without serving strangers. The issue's optional negative sibling
+  fared no better: two journal-shaped notes were each other's strongest pair in the whole corpus
+  (best-passage cosine 0.762, above the strongest *labelled* pair at 0.667) because the
+  first-person practice-log register is itself a topic to the model, so its "nothing relates"
+  label would be arguable — the watercolor rule, applied before landing this time. Note text,
+  labels, and probe live in #189 for the day the floor can carry them; `just eval` stays green
+  because the edit was reverted, not because the engine passed it.
 
-The one deliberately open thread: the **phishing inversion** — a real relation the model still
-ranks a hair under two strangers — is the standing evidence for the pair-scorer escalation named
-in [`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
-demands it.
+The deliberately open threads: the **phishing inversion** — a real relation the model still
+ranks a hair under two strangers — and, since #189, the **journal-shape inversion** above are
+the standing evidence for the pair-scorer escalation named in
+[`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
+demands it — with the #189 result the first evidence that arrives from geometry rather than a
+single unlucky pair.
 
 ## Running it
 
