@@ -24,16 +24,20 @@ deterministic, and model-free, so model quality can never flake CI
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
-can only say *different*, but it sees what the labelled corpus is structurally blind to:
-candidate-width truncation applies to **chunk** candidate lists, and the corpus's 55 chunks
-(26 notes) fit inside even the narrower pool retrieval reaches
-(`chunk_candidate_pool(10) = 60`; the note view reaches 150), so a **candidate-width** change
-prints bit-identical numbers here while genuinely reordering a real vault. Blindness holds
-exactly while corpus chunks ≤ that pool, and every run that is blind that way says so
-(`pool_blind` in the row, a `[warn]` on stdout). The worked example is
+can only say *different*, but it sees what a labelled corpus can be structurally blind to:
+candidate-width truncation applies to **chunk** candidate lists, and while a corpus's chunks fit
+inside the narrower pool retrieval reaches (`chunk_candidate_pool(10) = 60`; the note view reaches
+150), a **candidate-width** change prints bit-identical numbers there while genuinely reordering a
+real vault. Blindness holds exactly while corpus chunks ≤ that pool, and every run that is blind
+that way says so (`pool_blind` in the row, a `[warn]` on stdout). The worked example is
 [#140](https://github.com/AlteredCraft/B2/issues/140)/[#142](https://github.com/AlteredCraft/B2/issues/142):
 the eval saw nothing, the probe saw 10 of 10 probes change, and the change was reverted — a probe
-can say *different*, only labels can say *better*. Run both.
+can say *different*, only labels can say *better*. Run both. The eval corpus is no longer inside
+that pool itself: [#183](https://github.com/AlteredCraft/B2/issues/183)'s multi-topic family
+brought it to 30 notes / 63 chunks, three past the 60-chunk threshold, so `just eval` now measures
+the shipped `K=10` default's own passage-view truncation too — `just stability` on
+`fixtures/test-vault` (~780 chunks) remains the instrument for candidate-width at a scale where
+the effect is unambiguous rather than a three-chunk edge case.
 
 ## The files (ground truth)
 
@@ -41,7 +45,7 @@ can say *different*, only labels can say *better*. Run both.
 |---|---|
 | [`crates/b2-embed/examples/eval.rs`](../../crates/b2-embed/examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
-| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 26-note vault: topic clusters, six long multi-chunk notes, four unambiguous loners, the stemmer-adversarial block |
+| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 30-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, and the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree) |
 | [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 queries; a verbatim `passage` adds chunk-level scoring (n=20) |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | `crates/b2-embed/evals/results.jsonl` | append-only run log (gitignored, local) — every number ever cited traces to a row here |
@@ -80,6 +84,31 @@ score and gate everything after them: the model id (never average CPU and `@meta
   (watercolor → throat-singing), and a claimed relation the notes never expressed was written
   into their text (the encryption pair). Principle on record: when a label and a note disagree,
   fix whichever one is lying.
+- **A multi-topic note family** ([#183](https://github.com/AlteredCraft/B2/issues/183)) closed the
+  gap left by every prior note being single-subject, where a centroid and its best chunk agree by
+  construction: `pour-over-and-pottery.md` (on-topic half first), `radio-and-sleep-debt.md`
+  (on-topic half second — chunk order provably doesn't matter), `tire-pressure-and-knots.md`
+  (off-topic half ~3× the on-topic half — the centroid dragged furthest), and
+  `running-and-aquarium.md`, a negative whose two halves are both unrelated to every anchor. The
+  family came with the metric it needs — **per-mate ranks** (every labelled mate scored on its own,
+  not just an anchor's first hit), because the issue's "ceiling problem" was real: `similar`'s
+  per-anchor hit@1/hit@3/MRR@5 read **1.000 even with the family in place**, since each anchor's
+  easy mate still lands and hides whatever happened to the hard one. Per-mate reads
+  **hit@1 0.43 / hit@3 0.79 / MRR@5 0.595** on the same run — off the ceiling, with headroom in
+  both directions. What it then exposed is worse than the demotion this repo expected: of 14
+  labelled mates, **3 never surface on the shipped surface at all** — `tire-pressure-and-knots.md`
+  (best-passage rank 2 for `bicycle.md`), `radio-and-sleep-debt.md` (rank 3 for `insomnia.md`) and
+  the long-known `phishing.md` (rank 4 for `encryption.md`) all fall under the floor's `member_z`.
+  The one multi-topic mate that does survive, `pour-over-and-pottery.md`, is demoted from
+  best-passage rank 1 to centroid rank 3. Nothing was tuned in response — the eval measures, and
+  [#182](https://github.com/AlteredCraft/B2/issues/182) is where the response is decided; it now
+  has numbers rather than an eyeball. First draft of
+  the negative used off-topic halves (furniture refinishing, then genealogy) that leaked past the
+  discovery floor for `stain-removal.md` and `git-cheatsheet.md` respectively — caught by the
+  two-direction audit and by hand-checking `b2 similar` against a real built vault, not by the
+  aggregate score, which cannot see a single dirty negative anchor either. Growing the corpus past
+  63 chunks also ended its candidate-width blindness (GH #141) as a side effect — see this file's
+  "two halves" section above.
 
 The one deliberately open thread: the **phishing inversion** — a real relation the model still
 ranks a hair under two strangers — is the standing evidence for the pair-scorer escalation named

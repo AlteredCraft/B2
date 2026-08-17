@@ -28,23 +28,43 @@ shipped build history lives in git. Model quality (the `Embedder` seam) is measu
 eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + discovery evals
 (BM25-vs-hybrid ablation, note & passage ranks, `b2 similar` ranks plus the discovery negatives —
 loner anchors whose labelled answer is "nothing relates" — and the related/junk score piles that
-calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log.
+calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log. A
+**multi-topic note family** (GH #183) — three positives pairing an on-topic half with a genuinely
+off-topic one (the on-topic half first, then second, then outweighed ~3:1), plus a negative whose
+two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking (the shipped order)
+and best-passage ranking disagree; every note before it was single-subject, where the two agree by
+construction. It ships with the metric that can read it: `similar`'s per-anchor hit@1/hit@3/MRR@5
+stay pinned at **1.000 even with the family in place** (a hit needs only *one* of an anchor's mate
+set, so an anchor's easy mate hides its hard one), so the eval also scores **per-mate** ranks —
+every labelled mate on its own — which reads 0.43/0.79/0.595 and moves when the sort key does.
+That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
+asserted, and the answer was worse than assumed: 3 of 14 labelled mates are **suppressed outright**
+by the centroid floor (reachable under best-passage order, never served), not merely demoted.
+The eval measures it; GH #182 is where anything gets done about it.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the
 metrics. Its **decision history is the GitHub Issue that drove each verdict plus the commit that
 shipped it**, the same rule as the rest of the repo; the numbers behind a claim live in
 `results.jsonl` (gitignored, local).
-That corpus scores *relevance* and is deliberately small, which makes it blind to one class of change:
-retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per signal (150 for the note
-view, `note_candidate_pool`), so on its 55 chunks neither signal is truncated and a **candidate-width** change
-(either hit pool, `pool_size`) prints bit-identical numbers
-(GH #141). The harness's other half measures that — `just stability`, a model-free rank probe on
-`fixtures/test-vault` — and `just eval` says out loud when its corpus fits inside the pool. The blindness
-is to candidates, not to fusion: `RRF_K` re-weights the same lists and *does* move scores on 55 chunks.
-The two halves rule together, and have: GH #140 widened the passage view to the note view's 3× as
-plumbing, the eval saw nothing, the probe saw 10 of 10 probes' top-4 passages change — and GH #142 put the
-width back, because a probe can say *different* but only a labelled corpus can say *better*.
+That corpus scores *relevance* and was, until GH #183, deliberately small enough to be blind to one
+class of change: retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per
+signal (150 for the note view, `note_candidate_pool`), and while a corpus has no more chunks than
+that, neither signal is truncated and a **candidate-width** change (either hit pool, `pool_size`)
+prints bit-identical numbers (GH #141). The harness's other half measures that regardless — `just
+stability`, a model-free rank probe on `fixtures/test-vault` — and `just eval` says out loud when its
+corpus fits inside the pool (`pool_blind` in the row, a `[warn]` on stdout). The blindness is to
+candidates, not to fusion: `RRF_K` re-weights the same lists and moves scores regardless of corpus
+size. The two halves rule together, and have: GH #140 widened the passage view to the note view's 3×
+as plumbing, the blind-at-the-time eval saw nothing, the probe saw 10 of 10 probes' top-4 passages
+change — and GH #142 put the width back, because a probe can say *different* but only a labelled
+corpus can say *better*. GH #183's multi-topic family pushed the corpus to 30 notes / 63 chunks —
+past the 60-chunk passage-view pool for the first time — so `just eval` no longer reports
+`pool_blind`: at the shipped `K=10` default, the passage view now genuinely truncates a few chunks
+per query, same as a real vault would. `just stability` remains the deliberate, purpose-built probe
+for candidate-width at a scale where it actually binds; the corpus crossing the threshold by three
+chunks is a side effect of the notes needing genuine multi-chunk halves, not a redesign of either
+instrument.
 
 ## Commands
 

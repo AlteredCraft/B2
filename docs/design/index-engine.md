@@ -315,22 +315,53 @@ within a query, so this is one comparator, not a mixed ranking. The cost is real
 z is the *coarse* stage-1 centroid statistic, so a note whose single best passage is far nearer
 than its centroid suggests now ranks below one with a nearer centroid and no such passage —
 stage 2 still chooses the evidence chunk and breaks z ties, but no longer drives the order.
-The labelled corpus does not move on the change — but it was already at ceiling
-(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives 4/4 clean, measured
-2026-08-16), so it can only witness the absence of a regression, never confirm the ordering is
-right. It cannot see the trade at all: six anchors of short single-topic notes, where a
-centroid and its best chunk agree by construction. The cost is therefore pinned by a
-constructed unit test, not measured — the corpus that could measure it is
-[#183](https://github.com/AlteredCraft/B2/issues/183), and what to do about the passage this
-ordering demotes is [#182](https://github.com/AlteredCraft/B2/issues/182). **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
+The labelled corpus did not move on the change — but it was already at ceiling
+(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives then 4/4 clean across the four
+loners the corpus held at that date, measured
+2026-08-16), so it could only witness the absence of a regression, never confirm the ordering is
+right. It could not see the trade at all: six anchors of short single-topic notes, where a
+centroid and its best chunk agree by construction. [#183](https://github.com/AlteredCraft/B2/issues/183)
+added the corpus that can see it — a multi-topic note family whose off-topic half drags the
+centroid away from its labelled mate — together with the **per-mate** metric that can score it
+(the old per-anchor one stops at an anchor's first mate, so a hard mate hiding behind an easy one
+was invisible to it whether it was demoted or gone). Measured, the cost is **larger than this
+section previously assumed**, and in a different way:
+
+- **Demotion, as predicted.** `pour-over-and-pottery.md` is `espresso.md`'s nearest mate by best
+  passage (rank 1) and only its third by centroid z — the multi-topic note pushed behind two
+  single-topic ones, exactly the trade named above.
+- **Suppression, not predicted.** For two anchors the centroid rule does not demote the
+  multi-topic mate, it **removes** it: `tire-pressure-and-knots.md` (best-passage rank 2 for
+  `bicycle.md`) and `radio-and-sleep-debt.md` (best-passage rank 3 for `insomnia.md`) fall under
+  the floor's `member_z` and are never served at all. A note's off-topic half can therefore cost
+  it not just position but the whole surface, and the same mechanism catches the standing
+  **phishing inversion** — `phishing.md` is likewise absent from the shipped list for
+  `encryption.md` (best-passage rank 4). Three of fourteen labelled mates, gone.
+- Per-mate MRR@5 is 0.595 shipped against 0.673 under the unfloored best-passage order
+  (hit@3 0.79 vs 0.93). Read as a *lower bound* on ordering sensitivity: the unfloored arm is also
+  unsuppressed, so that gap is floor-plus-ordering, which is why the suppressed count is reported
+  beside it rather than folded into it.
+
+The old aggregate hid all of this: `similar` hit@1/hit@3/MRR@5 read 1.00 with the family in place
+and the negatives 5/5 clean, because every anchor's *easy* mate still lands. That is the ceiling
+problem [#183](https://github.com/AlteredCraft/B2/issues/183) named, now demonstrated rather than
+argued. Nothing here is tuned in response — the eval measures and the engine is unchanged; what to
+do about a demoted or suppressed passage is
+[#182](https://github.com/AlteredCraft/B2/issues/182), which now has numbers instead of an
+eyeball. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
 space with no spread, the fake regime — a surface must *say* the list is ungraded. Silence
 there is not neutral: a column of bandless cards reads as a set of candidates that were judged
 and all scored low, which is the opposite of what happened.
 
 What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
-stranger the model scores like a cluster-mate (the eval's watercolor ↔ stain-removal pair, junk by
-label at cosine 0.684, above every genuinely related pair). That residue keeps the last negative
-anchors red in the eval, and it is the standing evidence for the escalation already named here: a
+stranger the model scores like a cluster-mate. The watercolor ↔ stain-removal pair that first
+showed this left the corpus with watercolor itself (2026-08-11), and the negative anchors have
+been clean since the floor shipped (5/5 as of GH #183), but the residue is still there in the
+piles and is now wider: the junk pile tops out at cosine 0.689
+(`running-and-aquarium.md` ↔ `houseplant-care.md`, unrelated by label) above the *best* genuinely
+related pair at 0.667, while the related pile's floor sits at 0.554. An anchor-local z cannot
+separate those, because the miscalibration is in the pair, not in the anchor's distribution. That
+is the standing evidence for the escalation already named here: a
 **discovery-side pair-scorer** — a second model seam, sibling of §5's reranker but a *new* issue,
 not an extension of #28 (that seam needs query text and `similar` has none) — which would still
 only filter what is surfaced, never author a link.

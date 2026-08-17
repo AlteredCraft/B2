@@ -29,7 +29,12 @@
 //! 4. **Discovery** — `evals/similar.json` anchors score `Vault::similar` (the
 //!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
 //!    does not exercise. Positive anchors score **rank** (did a labelled
-//!    cluster-mate surface, and how high). **Negative anchors** — deliberate loner
+//!    cluster-mate surface, and how high) two ways: the historical per-anchor
+//!    metric, which stops at the *first* mate it finds and therefore saturates —
+//!    it has read 1.000 across changes it was meant to judge — and the per-mate
+//!    companion added by GH #183, which scores every labelled mate separately so
+//!    a hard one demoted behind an easy one is visible. Read the second when
+//!    judging a ranking change. **Negative anchors** — deliberate loner
 //!    notes whose labelled answer is "nothing relates" — score **suppression**:
 //!    does discovery return zero candidates, or serve strangers? And every
 //!    surfaced candidate's score lands in one of two **cosine piles** — labelled
@@ -181,6 +186,61 @@ struct SimilarPass {
     /// Rank of the first `expected` hit per positive anchor — the pre-existing
     /// hit@1 / hit@3 / MRR discovery metrics, unchanged.
     rank: Agg,
+    /// **Per-mate** ranks: one entry per `(anchor, expected mate)` pair rather
+    /// than one per anchor (GH #183). [`Self::rank`] takes the *first* labelled
+    /// mate it finds and stops, so an anchor with several mates scores a hit on
+    /// its easiest one and every harder mate is invisible — which is exactly
+    /// how that metric sat pinned at hit@1 = hit@3 = MRR@5 = 1.000 across the
+    /// centroid-vs-best-passage ordering change it was supposed to judge
+    /// (index-engine.md §3). Worse, *adding* a hard mate to an existing anchor
+    /// makes `rank` strictly easier, never harder.
+    ///
+    /// Scoring each labelled mate on its own is the "rank-sensitive readout
+    /// that doesn't saturate" GH #183 asked for: a mate that drops out of the
+    /// top `SIM_K`, or merely slides from rank 2 to rank 4, moves this number
+    /// even while `rank` stays at ceiling. A `None` is honest here — it means
+    /// that specific labelled mate did not surface at all.
+    ///
+    /// Deliberately **not** in the exit gate yet. The repo's own precedent for
+    /// the discovery floor (GH #150) is measure-then-calibrate: both cheap
+    /// variants failed when measured, so a floor here would be intuition
+    /// wearing a number. It reports until a baseline exists to price it.
+    mate: Agg,
+    /// [`Self::mate`] measured on the **unfloored** surface — which is the
+    /// *best-passage* ordering, making this half of a standing A/B against the
+    /// shipped centroid one.
+    ///
+    /// Why that works: `discover::candidates` sorts by `z` then `score`, and
+    /// `floor: None` leaves every `z` at `None`, so the comparator falls
+    /// straight through to `score` — the exact stage-2 best-passage number.
+    /// `similar` therefore orders by centroid and `similar_raw` by best
+    /// passage, and the gap between these two aggregates is the cost
+    /// index-engine.md §3 accepted when it made `z` the sort key, priced
+    /// rather than asserted.
+    ///
+    /// **Read with its caveat**: the unfloored surface is also *unsuppressed*,
+    /// so this is an ordering-plus-floor delta, not ordering in isolation. It
+    /// is a lower bound on sensitivity — enough to prove the metric is not
+    /// inert to the sort key, not a clean single-variable ablation.
+    /// [`Self::mate_suppressed`] separates the two contributions.
+    mate_raw: Agg,
+    /// Labelled mates the unfloored surface reaches but the **shipped** one does
+    /// not serve at all — the floor suppressing a human-labelled relation
+    /// outright, as opposed to merely ranking it lower.
+    ///
+    /// This is the number that separates "demoted" from "gone", and it is the
+    /// one the old per-anchor metric could never show: an anchor whose easy mate
+    /// still hits scores 1.000 whether its hard mate is at rank 2 or absent
+    /// entirely. Recorded because a suppressed *labelled* mate is a different
+    /// (and worse) failure than a demoted one, and the two need separate
+    /// evidence before anything is done about either (that is
+    /// [#182](https://github.com/AlteredCraft/B2/issues/182)'s call, not this
+    /// harness's — the eval measures, it does not tune).
+    mate_suppressed: usize,
+    /// Floored per-mate ranks in label order, so pass 2 can pair each mate's
+    /// unfloored rank with its shipped one. Both passes walk `set.anchors` and
+    /// each `label.expected` in the same order, so the flat index lines up.
+    mate_floored: Vec<Option<usize>>,
     /// Negative anchors asked.
     neg_n: usize,
     /// Negative anchors that (correctly) surfaced zero candidates.
@@ -638,12 +698,37 @@ fn score_similar(
                 .position(|c| label.expected.iter().any(|e| paths_match(&c.path, e)))
                 .map(|p| p + 1);
             pass.rank.add(rank);
+            // …and again per labelled mate, so a hard one can't hide behind an
+            // easy one (GH #183 — see `SimilarPass::mate`).
+            for expected in &label.expected {
+                let mate_rank = candidates
+                    .iter()
+                    .position(|c| paths_match(&c.path, expected))
+                    .map(|p| p + 1);
+                pass.mate.add(mate_rank);
+                pass.mate_floored.push(mate_rank);
+            }
         }
     }
     // Pass 2 — the raw, unfloored surface: the calibration piles + detail.
     for label in &set.anchors {
         let candidates = vault.similar_raw(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
+        // The best-passage arm of the ordering A/B (see `SimilarPass::mate_raw`),
+        // and the demoted-vs-gone split against pass 1's floored ranks.
+        if !negative {
+            for expected in &label.expected {
+                let mate_rank = candidates
+                    .iter()
+                    .position(|c| paths_match(&c.path, expected))
+                    .map(|p| p + 1);
+                let floored = pass.mate_floored.get(pass.mate_raw.n).copied().flatten();
+                pass.mate_raw.add(mate_rank);
+                if mate_rank.is_some() && floored.is_none() {
+                    pass.mate_suppressed += 1;
+                }
+            }
+        }
         let mut ordered = Vec::with_capacity(candidates.len());
         for c in &candidates {
             let related = !negative && label.expected.iter().any(|e| paths_match(&c.path, e));
@@ -891,11 +976,38 @@ fn print_default_report(
         similar.rank.n, similar.neg_n
     );
     println!(
-        "  discovery  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}",
+        "  discovery  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (any mate — saturates)",
         similar.rank.hit1(),
         similar.rank.hit3(),
         similar.rank.mrr()
     );
+    // The non-saturating companion (GH #183): every labelled mate scored on its
+    // own, so a hard mate demoted behind an easy one is visible. This is the row
+    // to read when judging a *ranking* change; the one above can only go down.
+    println!(
+        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates, ungated)",
+        similar.mate.hit1(),
+        similar.mate.hit3(),
+        similar.mate.mrr(),
+        similar.mate.n
+    );
+    // The ordering A/B: shipped centroid-z order vs. the unfloored best-passage
+    // order. A non-zero ΔMRR is the proof the per-mate metric is not inert to the
+    // sort key — the property GH #183 existed to obtain.
+    println!(
+        "   └ best-passage order  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}   ΔMRR(centroid−passage)={:+.3}",
+        similar.mate_raw.hit1(),
+        similar.mate_raw.hit3(),
+        similar.mate_raw.mrr(),
+        similar.mate.mrr() - similar.mate_raw.mrr()
+    );
+    if similar.mate_suppressed > 0 {
+        println!(
+            "   └ {} of {} labelled mates are SUPPRESSED on the shipped surface (reachable unfloored,\n\
+             \x20    served never) — the floor dropping a human-labelled relation, not merely demoting it",
+            similar.mate_suppressed, similar.mate.n
+        );
+    }
     if similar.neg_n > 0 {
         // Suppression: a clean negative anchor surfaced zero candidates. Red by
         // design until the quality floor lands (index-engine.md §3, PR #145).
@@ -1064,6 +1176,13 @@ fn result_row(
         // the calibration piles are NEW keys, absent from older rows rather than
         // redefining an existing one — the same convention as pool_note/pool_chunk.
         "similar": similar.map(|s| agg(&s.rank)),
+        // NEW key (absent from rows before 2026-08-17): the per-mate,
+        // non-saturating companion to "similar" (GH #183). Same convention
+        // again — a new key, never a redefined one, so every older row stays
+        // comparable on "similar" itself.
+        "similar_per_mate": similar.map(|s| agg(&s.mate)),
+        "similar_per_mate_raw": similar.map(|s| agg(&s.mate_raw)),
+        "similar_mates_suppressed": similar.map(|s| s.mate_suppressed),
         "similar_negatives": similar.map(|s| serde_json::json!({
             "n": s.neg_n, "clean": s.neg_clean, "cards": s.neg_cards,
         })),
