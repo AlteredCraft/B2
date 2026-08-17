@@ -84,19 +84,39 @@ const FLOOR_MIN_POPULATION: usize = 12;
 /// centroid distance, distances over unit centroids are affine in cosine
 /// (`d² = 2 − 2·cos`), so the z is free, and — because it is relative to the
 /// anchor's own distribution — identical in meaning across models, devices, and
-/// vault densities. Calibrated on the eval's labelled anchors (GH #150):
-/// positive anchors put every labelled mate at z ≥ +1.90 while diffuse loners'
-/// best candidates sit ≤ +1.73, and the same member bar trims a 228-note
-/// single-author vault to 1–4 candidates. The default sits mid-window rather
-/// than on either measured edge.
+/// vault densities. Both were first calibrated on the eval's labelled anchors
+/// (GH #150) and both are re-derived on every `just eval` run, which prints the
+/// current admissible window for each and records it in `results.jsonl`
+/// (`discovery_z`); `docs/evals/README.md` reads that instrument.
+///
+/// **The numbers live in the harness, not in this comment** (GH #187). Until
+/// then the #150 windows were quoted here as if timeless, and the corpus
+/// falsified them the first time it grew a note shape they were never measured
+/// against — a multi-topic note, whose centroid is the average of disagreeing
+/// sections and lands nowhere near where either bar was calibrated. A constant
+/// belongs in code; where it came from belongs where it can be re-measured.
+///
+/// The two bars answer to **different populations**, which is why they are two
+/// fields and not one:
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveryFloor {
     /// Suppress the *entire* list when the best candidate's z falls below this —
     /// the whole pool is one diffuse cloud, and "nothing relates" is the honest
-    /// answer. Measured window on the labelled corpus: (1.74, 1.88].
+    /// answer. Calibrated against **leaders**: it must cut every negative
+    /// anchor's best candidate while keeping every positive anchor's. That is
+    /// the pair the eval's negatives gate watches, so a bad value here fails
+    /// the run.
     pub leader_z: f64,
     /// Keep only candidates at or above this z — the drop-off back into the
-    /// anchor's noise floor ends the list. Measured window: (1.16, 1.90].
+    /// anchor's noise floor ends the list. Calibrated against a **different**
+    /// pair: strangers on positive anchors (which it must cut) against labelled
+    /// mates (which it must keep). Nothing in the exit gate watches that pair —
+    /// while `member_z ≤ leader_z` a negative anchor is clean iff its leader is
+    /// cut, so this bar can move without the negatives noticing either way. It
+    /// is also the bar that decides *existence*: a candidate below it is not
+    /// demoted, it is never served, which makes it the machine acting as
+    /// precision gate on a surface whose stated stance is that the human is
+    /// (GH #187).
     pub member_z: f64,
 }
 
