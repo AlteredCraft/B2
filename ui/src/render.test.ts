@@ -780,7 +780,7 @@ check("an ungraded list says so rather than implying a judgement B2 didn't make"
   assert(!html.includes("●"), "and claims no band, since no statistic was computed");
   // "Not enough" leaves a reader with nothing to do; the bar is a number, so say it.
   assert(
-    html.includes(`${STRENGTH_MIN_CANDIDATES} or more candidates`),
+    html.includes(`${STRENGTH_MIN_CANDIDATES} or more notes`),
     "and names what 'enough' is",
   );
   // A notice, not body prose and not a failure: the caveat gets the accent-toned box the
@@ -884,6 +884,50 @@ check("no server: the pane shows the setup card instead of a composer that can't
   );
   const input = html.includes('id="chat-input"');
   assert(!input, "no composer until there is something to answer with");
+});
+
+// --- dragging a candidate into the note (droplink.ts) ---------------------------------
+//
+// The gesture's two halves are both markup: the card is what the pointer picks up, and the
+// card menu's *Insert link at cursor* is what the keyboard reaches instead (K1). Both are
+// conditional on edit mode, for the same reason — the drop writes into the editor's buffer,
+// so with no buffer there is nowhere for either to put a link. A card that offers the drag
+// anyway is an affordance the OS cursor has to walk back; a menu item that offers the
+// insertion is one that would do nothing.
+
+check("a candidate is draggable only while the note is being edited", () => {
+  const reading = sidePaneHtml(app({ current: note(), semantic: true, similar: [ghost()] }));
+  assert(!reading.includes("draggable"), "nothing to drop into from the reading view");
+  const editing = sidePaneHtml(
+    app({ current: note(), semantic: true, similar: [ghost()], editing: true }),
+  );
+  const card = tagWith(editing, "card foldable candidate");
+  assert(card.includes('draggable="true"'), `the card itself is the drag handle: ${card}`);
+  assert(card.includes("title="), "and says what the drag does — a drag has no visible label");
+});
+
+check("only the candidates are draggable — a connection is already linked", () => {
+  const html = sidePaneHtml(
+    app({ current: note(), semantic: true, connections: [neighbor()], editing: true }),
+  );
+  assert(!html.includes("draggable"), "there is no link left for the gesture to make");
+});
+
+check("the card menu carries the drag's keyboard half while editing, and not otherwise", () => {
+  const menu = (editing: boolean) =>
+    contextMenuHtml(
+      app({
+        editing,
+        contextMenu: { kind: "card", x: 10, y: 20, path: "notes/ghost.md", title: "ghost" },
+      }),
+    );
+  const tag = tagWith(menu(true), "data-ctx-insert");
+  assert(tag.includes("context-item"), "a menu item the focus trap collects");
+  assert(tag.includes('role="menuitem"'), "announcing itself as one");
+  assert(menu(true).includes("Insert link at cursor"), "named for where it puts the link");
+  assert(!menu(false).includes("data-ctx-insert"), "no buffer, no insertion offered");
+  // The typed, frontmatter-writing Link… is a different claim and stays either way.
+  assert(menu(false).includes("data-ctx-link"), "Link… is unaffected");
 });
 
 console.log(`render: ${passed} checks passed`);
