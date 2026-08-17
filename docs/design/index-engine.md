@@ -352,9 +352,11 @@ The old aggregate hid all of this: `similar` hit@1/hit@3/MRR@5 read 1.00 with th
 and the negatives 5/5 clean, because every anchor's *easy* mate still lands. That is the ceiling
 problem [#183](https://github.com/AlteredCraft/B2/issues/183) named, now demonstrated rather than
 argued. Nothing here is tuned in response — the eval measures and the engine is unchanged; what to
-do about a demoted or suppressed passage is
-[#182](https://github.com/AlteredCraft/B2/issues/182), which now has numbers instead of an
-eyeball. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
+do about a demoted or suppressed passage was
+[#182](https://github.com/AlteredCraft/B2/issues/182), and the answer, once it had numbers instead
+of an eyeball, was the reorder below rather than any of the four card-level treatments that issue
+first sketched: three of them assumed a card to mark, group, or re-sort, and the measurement said
+the card was not on the list at all. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
 space with no spread, the fake regime — a surface must *say* the list is ungraded. Silence
 there is not neutral: a column of bandless cards reads as a set of candidates that were judged
 and all scored low, which is the opposite of what happened.
@@ -440,6 +442,21 @@ unchanged ~7 ms, the number any `--no-floor` user already paid. And the judged p
 the scored shortlist, which on any personal-scale vault is every unlinked note there is, and above
 `SHORTLIST_MIN` candidates is the anchor's centroid-nearest slice (process rule 3's dogfooding
 obligation names that bias).
+
+**A displayed band is part of that unit, and it was the last thing still reading the old one**
+([#182](https://github.com/AlteredCraft/B2/issues/182), closed 2026-08-17). An adapter grades a
+card from the z (above), so changing what the z *is* changes what every band means — and the
+desktop's was still calibrated on the centroid z's landmarks after the reorder: `●●●` at z ≥ 3.0,
+which nothing in the labelled corpus reaches in the stage-2 unit, so the top band was unreachable
+and the corpus's strongest human-confirmed relation (`bicycle.md ↔ bike-maintenance.md`, +2.87)
+graded the same as a middling one. The gem #192 rescued arrived pre-labelled unremarkable. The
+bands were re-read in the judged unit against the floor's own bars and the labelled-mate
+population — `●○○` above the member bar but under the leader gate (on the list because a stronger
+sibling carried it), `●●○` at or above the leader gate (strong enough to have carried a list
+alone), `●●●` above the mate population's upper quartile — and, per #187's lesson, the comment
+carrying them cites `just eval`'s calibration block rather than quoting a window as timeless. The
+general rule this leaves: **a change to the judged statistic is a change to every surface that
+paints it**, and the harness is where the new landmarks come from.
 
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
