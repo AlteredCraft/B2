@@ -40,7 +40,16 @@ every labelled mate on its own — which reads 0.43/0.79/0.595 and moves when th
 That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
 asserted, and the answer was worse than assumed: 3 of 14 labelled mates are **suppressed outright**
 by the centroid floor (reachable under best-passage order, never served), not merely demoted.
-The eval measures it; GH #182 is where anything gets done about it.
+The eval measures it; GH #182 is where anything gets done about it. GH #187 then measured *why*
+no threshold fixes it, by dumping the number the floor actually judges — every candidate's ungated
+stage-1 z — and re-deriving both of `DiscoveryFloor`'s admissible windows from it on **every run**
+(the `floor calibration` block, and `discovery_z` in the row). The leader gate still has a window
+and the shipped constant sits in it; the **member bar has none** — labelled mates run from +0.80
+while strangers on positive anchors reach +1.62, so the two populations overlap by 0.8 z and no
+constant separates them. Which is also why `DiscoveryFloor`'s docstring now cites the instrument
+instead of quoting a window: the GH #150 numbers were frozen into that comment and went stale the
+first time the corpus grew a shape they were never measured against. Constants in code,
+measurements in the harness.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

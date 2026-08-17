@@ -64,6 +64,18 @@ Exit `2` = a floor failed; `1` = the run itself broke. Two instrument checks pri
 score and gate everything after them: the model id (never average CPU and `@metal` rows) and
 `batch ≡ single` embedding faithfulness.
 
+**What the gate deliberately does *not* watch** is the discovery floor's `member_z`. While
+`member_z ≤ leader_z`, a negative anchor is clean **iff its leader is cut** — so the member bar
+cannot dirty (or clean) a negative anchor, and the one gated discovery number is blind to it by
+construction. What a loose member bar costs lands as *stranger tails on positive anchors' lists*,
+and what a tight one costs is labelled mates never served at all
+([#187](https://github.com/AlteredCraft/B2/issues/187)). Both are **reported, not gated**: every
+run prints a `floor calibration` block — the three z populations the two constants answer to, the
+re-derived admissible window for each, and the member bar's trade curve — and records it in the
+row as `discovery_z`. Reported rather than gated because the member window is currently *empty*
+(below), and a permanently-red gate is the advisory-but-exit-0 hole inverted: it trains the same
+skimming.
+
 ## The verdicts this harness has ruled (each traceable to its issue and its commit)
 
 - **`porter unicode61` FTS stemming** (schema v5, [#157](https://github.com/AlteredCraft/B2/issues/157)):
@@ -129,13 +141,31 @@ score and gate everything after them: the model id (never average CPU and `@meta
   label would be arguable — the watercolor rule, applied before landing this time. Note text,
   labels, and probe live in #189 for the day the floor can carry them; `just eval` stays green
   because the edit was reverted, not because the engine passed it.
+- **There is no `member_z` — the inversion is already in the shipped corpus, not only under the
+  journal shape** ([#187](https://github.com/AlteredCraft/B2/issues/187), measured 2026-08-17 by
+  the `floor calibration` block this run added). #189 showed the member/stranger distributions
+  invert once a ≥6-section note exists; dumping every candidate's ungated stage-1 z on the corpus
+  **as it ships** shows they already do. Labelled mates run **+0.804 … +2.862**; strangers on
+  positive anchors reach **+1.618** — so the admissible member window `(max stranger, min mate]`
+  is **empty**, and the overlap is 0.8 z wide rather than marginal. The trade curve prices what
+  #150's window could only assert: at the shipped `member_z = 1.85` discovery serves **11 of 14**
+  labelled mates and **0** strangers; rescuing `radio-and-sleep-debt.md` (+1.547) or
+  `tire-pressure-and-knots.md` (+1.445) costs exactly **one** stranger
+  (`volcano.md → pour-over-and-pottery.md`, +1.618), while rescuing `phishing.md` (+0.804) costs
+  **18**. The leader gate, by contrast, still has a window — but a **narrow** one, `(+1.787,
+  +1.880]`, both edges set by multi-topic notes: its floor is `throat-singing.md`'s top candidate
+  `pour-over-and-pottery.md` (a #183 family note surfacing on a loner — the journal mechanism in
+  miniature) and its ceiling is `encryption.md`'s own leader, which sits **0.03** above the
+  shipped 1.85 and would take that anchor's entire list with it. Nothing was tuned: the numbers
+  say a constant cannot do this job, which is the measured case for the shape change (a floor
+  that can see a candidate's best passage, not only its centroid) or the pair-scorer escalation.
 
 The deliberately open threads: the **phishing inversion** — a real relation the model still
 ranks a hair under two strangers — and, since #189, the **journal-shape inversion** above are
 the standing evidence for the pair-scorer escalation named in
 [`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
 demands it — with the #189 result the first evidence that arrives from geometry rather than a
-single unlucky pair.
+single unlucky pair, and #187's window dump the first that needs no new corpus note at all.
 
 ## Running it
 

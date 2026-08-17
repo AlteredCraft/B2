@@ -387,6 +387,24 @@ and the probe wait in #189); a floor that survives the journal shape needs a sec
 best-passage-vs-centroid gap #187 names, or the pair-scorer above — and pricing that is #187's
 decision, not this section's.
 
+**And the member bar has no window on the corpus as it ships, journal note or not**
+([#187](https://github.com/AlteredCraft/B2/issues/187), measured 2026-08-17): the eval now dumps
+every candidate's *ungated* stage-1 z on every anchor and re-derives both admissible windows from
+it on each run, so the two constants are read off the harness instead of off a doc comment.
+Labelled mates span **+0.804 … +2.862** while strangers on positive anchors reach **+1.618**, so
+`(max stranger, min mate]` is empty by 0.8 z — the #189 inversion holds without #189's note. Two
+consequences the numbers make precise. The bar's cost is not uniform: at the shipped 1.85 the
+floor serves 11 of 14 labelled mates and no strangers, and two of the three suppressions
+(`radio-and-sleep-debt.md` at +1.547, `tire-pressure-and-knots.md` at +1.445) sit above every
+stranger but one (`volcano.md → pour-over-and-pottery.md`, +1.618) — while the third
+(`phishing.md` at +0.804) is buried 18 strangers deep, the pair-level residue above wearing its
+z. And the **leader** gate, which does still have a window, has a narrow one — `(+1.787, +1.880]`
+— with both edges set by the multi-topic shape: its floor is a #183 family note surfacing as
+`throat-singing.md`'s leader, and its ceiling is `encryption.md`'s own leader 0.03 above the
+shipped constant. Neither constant was moved on this evidence; the point of measuring was to
+establish that no value of `member_z` is the fix, which is what makes a second signal — or the
+pair-scorer — the honest next option rather than a preference.
+
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
 battle-tested at personal-vault scale.
