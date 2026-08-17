@@ -25,8 +25,12 @@
 //        because a stronger sibling carried it, not on its own account
 //   ●●○  at or above the leader bar — strong enough to have carried the list by
 //        itself, which is what the engine's leader gate means
-//   ●●●  above the labelled-mate population's upper quartile — the top of what
-//        a human-confirmed relation reads on the eval corpus
+//   ●●●  at or above the labelled-mate population's upper quartile — the top of
+//        what a human-confirmed relation reads on the eval corpus. Note the
+//        rounding direction: the quartile measured +2.529, so the bar rounds
+//        *down* to 2.52. Rounding up would put the bar past the very mate that
+//        set the landmark, which is an accident of decimals rather than a
+//        decision about strength.
 //
 // Which numbers those are today is a measurement, not a constant of nature:
 // `just eval`'s **floor calibration** block re-derives the bars and dumps the
@@ -62,7 +66,7 @@ export interface StrengthBand {
 
 export function strengthBand(z: number | undefined | null): StrengthBand | null {
   if (z === undefined || z === null || !Number.isFinite(z)) return null;
-  const [glyph, label] = z >= 2.53
+  const [glyph, label] = z >= 2.52
     ? ["●●●", "strong match"]
     : z >= 1.96
       ? ["●●○", "clear match"]

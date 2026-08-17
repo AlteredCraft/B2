@@ -228,7 +228,7 @@ advisory-but-exit-0 hole inverted: it trains the same skimming.
   the vault (`bicycle.md ↔ bike-maintenance.md`, z +2.87) painted the same two dots as a middling
   one — a buried gem, once surfaced, arriving pre-graded as unremarkable. The bands were re-read
   in the judged unit off the floor's own bars and the labelled-mate population (`●○○` under the
-  leader gate; `●●○` at or above it; `●●●` above the mate population's upper quartile, +2.53),
+  leader gate; `●●○` at or above it; `●●●` at or above the mate population's upper quartile, +2.529 → a bar of 2.52),
   and the comment now cites this harness rather than freezing the window — #187's lesson applied
   to the UI side of the same number.
 - **Discovery rank is in the exit gate** ([#188](https://github.com/AlteredCraft/B2/issues/188),

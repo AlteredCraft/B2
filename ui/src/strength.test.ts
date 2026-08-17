@@ -9,7 +9,7 @@ import { strengthBand } from "./strength.ts";
 test("strength: the three bands sit on the calibrated landmarks", () => {
   assert.equal(strengthBand(1.6)?.label, "near match"); // over the member bar, under the leader gate
   assert.equal(strengthBand(1.96)?.label, "clear match"); // the leader gate: could have carried the list
-  assert.equal(strengthBand(2.53)?.label, "strong match"); // mate population's upper quartile
+  assert.equal(strengthBand(2.529)?.label, "strong match"); // the mate population's upper quartile itself
   assert.equal(strengthBand(6.0)?.label, "strong match"); // dense-vault leaders cap out
 });
 
@@ -36,6 +36,6 @@ test("strength: the tooltip spells the z for whoever wants the number", () => {
 test("strength: the value is the bare figure, for the card that is selected", () => {
   // The selected card reveals this beside the dots — the same number the tooltip
   // spells out in prose, with none of the prose (hover is not the only way in).
-  assert.equal(strengthBand(2.53)?.value, "2.5σ");
+  assert.equal(strengthBand(2.529)?.value, "2.5σ");
   assert.equal(strengthBand(6)?.value, "6.0σ");
 });
