@@ -31,10 +31,15 @@
 //!    does not exercise. Positive anchors score **rank** (did a labelled
 //!    cluster-mate surface, and how high) two ways: the historical per-anchor
 //!    metric, which stops at the *first* mate it finds and therefore saturates —
-//!    it has read 1.000 across changes it was meant to judge — and the per-mate
+//!    it has read 1.000 across changes it was meant to judge, so since GH #188
+//!    it is recorded in the row but no longer printed — and the per-mate
 //!    companion added by GH #183, which scores every labelled mate separately so
-//!    a hard one demoted behind an easy one is visible. Read the second when
-//!    judging a ranking change. **Negative anchors** — deliberate loner
+//!    a hard one demoted behind an easy one is visible. That second one is what
+//!    the printed line and the exit gate now read. Beside it sits discovery's
+//!    **precision** side (GH #188): the *strangers* a positive anchor serves —
+//!    unlabelled notes on a list the labels do not claim — counted, named, and
+//!    deliberately left ungated, since the cheapest way to shrink that count is
+//!    to label the stranger. **Negative anchors** — deliberate loner
 //!    notes whose labelled answer is "nothing relates" — score **suppression**:
 //!    does discovery return zero candidates, or serve strangers? And every
 //!    surfaced candidate's score lands in one of two **cosine piles** — labelled
@@ -92,6 +97,13 @@
 //! so runs accumulate into a comparable dataset: "tune from numbers" needs the
 //! numbers kept.
 
+// `result_row`'s JSON literal is one `json!` expansion per key, and the row has
+// grown a key per instrument (GH #158, #141, #183, #187, #188). Raising the
+// limit keeps the row's shape legible in one place — the alternative is
+// scattering its subtrees across helper functions to satisfy a macro, which
+// costs the thing the row is for: a reader seeing every recorded field at once.
+#![recursion_limit = "256"]
+
 use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
 use b2_core::discover::DiscoveryFloor;
@@ -120,6 +132,36 @@ const UNGATED_FLOOR: DiscoveryFloor = DiscoveryFloor {
 };
 /// The soft reference floor on the default config's hybrid note hit@1.
 const FLOOR_HIT1: f64 = 0.75;
+/// The floor on **per-mate** discovery MRR@[`SIM_K`] (GH #188) — the
+/// non-saturating rank metric GH #183 added, gated once a baseline existed to
+/// price it.
+///
+/// Placed **below** the reading, never at it: a gate pinned to today's number
+/// fails on the first legitimate corpus edit, which trains the one habit this
+/// harness must never train — editing a *label* to get green (process rule 2's
+/// concern, stated for this metric in `docs/evals/README.md`). Per-mate is
+/// label-sensitive by construction: adding a mate to an anchor changes `n` and
+/// moves the aggregate whether or not the engine did anything.
+///
+/// Sizing, measured rather than guessed: repeated runs on an unchanged
+/// corpus/model/build reproduce the number **exactly** (the model is
+/// deterministic on one device, and every stage downstream of it is), so the
+/// run-to-run noise floor is 0 and the headroom exists for *corpus* drift
+/// instead. At n = 15 mates one mate lost from rank 1 costs 1/15 ≈ 0.067, and
+/// this floor sits ~2 such losses under the shipped reading — a real
+/// regression trips it, a corpus edit that legitimately adds a hard mate
+/// does not.
+const FLOOR_MATE_MRR: f64 = 0.50;
+/// How many labelled mates the shipped floor may suppress outright (GH #188).
+///
+/// Asserted apart from [`FLOOR_MATE_MRR`] because absence is not demotion: a
+/// mate the surface *never serves* is a different (and worse) failure than one
+/// that slid a rank, and an average over 15 mates cannot tell them apart. The
+/// standing reading is 1 — `phishing.md`, the pair-level residue GH #192 named
+/// and left to the pair-scorer escalation — so this permits that one plus a
+/// slot of headroom for a corpus edit that lands a genuinely hard mate. A
+/// second *unexplained* suppression is what it exists to catch.
+const MAX_MATES_SUPPRESSED: usize = 2;
 
 #[derive(Deserialize)]
 struct QuerySet {
@@ -227,10 +269,14 @@ struct SimilarPass {
     /// even while `rank` stays at ceiling. A `None` is honest here — it means
     /// that specific labelled mate did not surface at all.
     ///
-    /// Deliberately **not** in the exit gate yet. The repo's own precedent for
-    /// the discovery floor (GH #150) is measure-then-calibrate: both cheap
-    /// variants failed when measured, so a floor here would be intuition
-    /// wearing a number. It reports until a baseline exists to price it.
+    /// **In the exit gate** since GH #188, at [`FLOOR_MATE_MRR`]. It shipped
+    /// reporting-only for one issue's worth of time on the discovery floor's
+    /// own precedent (GH #150: measure, then calibrate — both cheap floor
+    /// variants failed when measured, so a threshold picked the day a metric
+    /// is born is intuition wearing a number), and that is where the baseline
+    /// came from: repeated runs on an unchanged corpus/model/build are
+    /// bit-identical, so the gate is sized for *corpus* drift and placed below
+    /// today's reading rather than at it.
     mate: Agg,
     /// [`Self::mate`] measured on the **unfloored** surface (`similar_raw`).
     ///
@@ -250,16 +296,40 @@ struct SimilarPass {
     /// This is the number that separates "demoted" from "gone", and it is the
     /// one the old per-anchor metric could never show: an anchor whose easy mate
     /// still hits scores 1.000 whether its hard mate is at rank 2 or absent
-    /// entirely. Recorded because a suppressed *labelled* mate is a different
-    /// (and worse) failure than a demoted one, and the two need separate
-    /// evidence before anything is done about either (that is
-    /// [#182](https://github.com/AlteredCraft/B2/issues/182)'s call, not this
-    /// harness's — the eval measures, it does not tune).
+    /// entirely. Recorded — and, since GH #188, **asserted on its own** at
+    /// [`MAX_MATES_SUPPRESSED`] rather than folded into [`Self::mate`] —
+    /// because a suppressed *labelled* mate is a different (and worse) failure
+    /// than a demoted one, and an average over the mates cannot tell the two
+    /// apart. What to *do* about either is still an issue's call, never this
+    /// harness's: the eval measures, it does not tune.
     mate_suppressed: usize,
     /// Floored per-mate ranks in label order, so pass 2 can pair each mate's
     /// unfloored rank with its shipped one. Both passes walk `set.anchors` and
     /// each `label.expected` in the same order, so the flat index lines up.
     mate_floored: Vec<Option<usize>>,
+    /// **Strangers**: unlabelled notes the shipped surface serves on a
+    /// *positive* anchor, within the same top-`SIM_K` the ranks are read at —
+    /// `(anchor, path)` per card, so the smoke alarm comes with the list you
+    /// argue against it with (process rule 1).
+    ///
+    /// This is discovery's **precision** side, and the harness had none: the
+    /// gated numbers watch mate ranks (recall) and negative anchors, and the
+    /// negatives gate is *structurally* blind to `member_z` — while
+    /// `member_z ≤ leader_z` a negative anchor is clean iff its leader is cut,
+    /// so a relaxed member bar spends its entire cost here, on positive
+    /// anchors' tails, where nothing was counting (GH #187/#188).
+    ///
+    /// Deliberately **reported, not gated**, and the reason is the gaming
+    /// direction rather than the noise: the cheapest way to shrink this count
+    /// is to *label the stranger*, which silently moves the per-mate metric
+    /// too. An unlabelled note served is not proof of junk — the labels are
+    /// not exhaustive — so it reads as a smoke alarm with names attached, and
+    /// the argument happens against the notes.
+    strangers: Vec<(String, String)>,
+    /// Positive anchors serving at least one stranger — the spread behind
+    /// [`Self::strangers`], since one anchor with a long tail and five anchors
+    /// with one card each are different failures at the same count.
+    stranger_anchors: usize,
     /// Negative anchors asked.
     neg_n: usize,
     /// Negative anchors that (correctly) surfaced zero candidates.
@@ -766,8 +836,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         ];
         println!("\n{}", "=".repeat(78));
         println!("chunker sweep (same model, same corpus; default row above for reference)");
+        // `mate MRR` rather than the per-anchor `similar h@3` this column used
+        // to carry: that number saturates (GH #183), so as a *comparison*
+        // column across variants it could only ever print 1.00 (GH #188).
         println!(
-            "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   similar h@3   neg clean",
+            "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   mate MRR   neg clean",
             "config", "chunks", "embed_s"
         );
         for (label, cfg) in variants {
@@ -778,7 +851,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
-                "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.2}          {}/{}",
+                "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.3}      {}/{}",
                 label,
                 chunks,
                 embed_secs,
@@ -788,7 +861,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                 vec_pass.note.mrr(),
                 pass.chunk.hit1(),
                 pass.chunk.mrr(),
-                sim.rank.hit3(),
+                sim.mate.mrr(),
                 sim.neg_clean,
                 sim.neg_n,
             );
@@ -843,6 +916,33 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         eprintln!(
             "\n[warn] {}/{} negative anchors clean under the discovery floor — the floor regressed.",
             similar.neg_clean, similar.neg_n
+        );
+        return Ok(false);
+    }
+    // Discovery **rank**, gated at last (GH #188). The per-mate metric shipped
+    // reporting-only on purpose — the floor's own precedent (GH #150) is
+    // measure-then-calibrate, and a threshold picked the day a metric is born
+    // is intuition wearing a number — but "ungated pending a baseline" is only
+    // honest while the baseline is still being taken. Both bars below are set
+    // from measured runs, both sit *below* today's reading rather than at it,
+    // and `docs/evals/README.md` carries the failure mode they must not train.
+    if similar.mate.mrr() < FLOOR_MATE_MRR {
+        eprintln!(
+            "\n[warn] per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_MATE_MRR:.2} floor — discovery ranking regressed \
+             (read the per-mate line's mates, not the aggregate; and do NOT relabel to clear this).",
+            similar.mate.mrr()
+        );
+        return Ok(false);
+    }
+    // Suppression is asserted separately rather than folded into the average
+    // above, because a mate going from rank 5 to *absent* is a categorically
+    // worse event than drifting 2 → 3, and a mean over 15 mates hides exactly
+    // that (GH #188).
+    if similar.mate_suppressed > MAX_MATES_SUPPRESSED {
+        eprintln!(
+            "\n[warn] {} of {} labelled mates suppressed, over the {MAX_MATES_SUPPRESSED} the floor is allowed — \
+             a human-labelled relation stopped being served at all.",
+            similar.mate_suppressed, similar.mate.n
         );
         return Ok(false);
     }
@@ -956,6 +1056,19 @@ fn score_similar(
                     .map(|p| p + 1);
                 pass.mate.add(mate_rank);
                 pass.mate_floored.push(mate_rank);
+            }
+            // The precision side of the same list (GH #188 — see
+            // `SimilarPass::strangers`): everything served here that no label
+            // claims. Scored on the shipped surface at the ranks' own depth,
+            // because that is the list a human is handed.
+            let before = pass.strangers.len();
+            for c in &candidates {
+                if !label.expected.iter().any(|e| paths_match(&c.path, e)) {
+                    pass.strangers.push((label.anchor.clone(), c.path.clone()));
+                }
+            }
+            if pass.strangers.len() > before {
+                pass.stranger_anchors += 1;
             }
         }
     }
@@ -1324,17 +1437,14 @@ fn print_default_report(
         "similar (n={} positive + {} negative, K={SIM_K}):",
         similar.rank.n, similar.neg_n
     );
+    // The per-anchor metric (first mate found, then stop) is **no longer
+    // printed** (GH #188): it read 1.000 across every change it was meant to
+    // judge, and a line that cannot move is a line that trains skimming. It is
+    // still recorded — `results.jsonl`'s `"similar"` key is unchanged, so rows
+    // stay comparable back to the first run — so retiring the line costs the
+    // dataset nothing.
     println!(
-        "  discovery  hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (any mate — saturates)",
-        similar.rank.hit1(),
-        similar.rank.hit3(),
-        similar.rank.mrr()
-    );
-    // The non-saturating companion (GH #183): every labelled mate scored on its
-    // own, so a hard mate demoted behind an easy one is visible. This is the row
-    // to read when judging a *ranking* change; the one above can only go down.
-    println!(
-        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates, ungated)",
+        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates, GATED at MRR@{SIM_K} ≥ {FLOOR_MATE_MRR:.2})",
         similar.mate.hit1(),
         similar.mate.hit3(),
         similar.mate.mrr(),
@@ -1353,9 +1463,23 @@ fn print_default_report(
     if similar.mate_suppressed > 0 {
         println!(
             "   └ {} of {} labelled mates are SUPPRESSED on the shipped surface (reachable unfloored,\n\
-             \x20    served never) — the floor dropping a human-labelled relation, not merely demoting it",
+             \x20    served never) — the floor dropping a human-labelled relation, not merely demoting it\n\
+             \x20    (GATED at ≤ {MAX_MATES_SUPPRESSED})",
             similar.mate_suppressed, similar.mate.n
         );
+    }
+    // Discovery's precision side (GH #188) — reported with names, never gated;
+    // see `SimilarPass::strangers` for why gating it would reward labelling.
+    println!(
+        "  strangers  {} card{} on {}/{} positive anchors (unlabelled notes served in the top-{SIM_K} — \
+         a smoke alarm, not a gate: labels aren't exhaustive)",
+        similar.strangers.len(),
+        if similar.strangers.len() == 1 { "" } else { "s" },
+        similar.stranger_anchors,
+        similar.rank.n
+    );
+    for (anchor, path) in &similar.strangers {
+        println!("             {anchor} → {path}");
     }
     if similar.neg_n > 0 {
         // Suppression: a clean negative anchor surfaced zero candidates. Red by
@@ -1673,6 +1797,27 @@ fn result_row(
         "similar_per_mate": similar.map(|s| agg(&s.mate)),
         "similar_per_mate_raw": similar.map(|s| agg(&s.mate_raw)),
         "similar_mates_suppressed": similar.map(|s| s.mate_suppressed),
+        // NEW key (absent from rows before 2026-08-17): discovery's precision
+        // side — unlabelled notes served on positive anchors at the ranks' own
+        // depth (GH #188). Same convention as every key above: new, never a
+        // redefinition. Recorded with the pairs, because the count alone is
+        // unarguable and the pairs are what a reader checks against the notes.
+        "similar_strangers": similar.map(|s| serde_json::json!({
+            "cards": s.strangers.len(),
+            "anchors": s.stranger_anchors,
+            "positives": s.rank.n,
+            // The depth the count is read at — the ranks' own top-K, so a
+            // future SIM_K change shows up in the row instead of silently
+            // redefining the number.
+            "depth": SIM_K,
+            // The pairs, because a bare count is unarguable: this metric is a
+            // smoke alarm whose correct answer is sometimes "that label is
+            // missing", and that argument needs the notes named.
+            "detail": s.strangers.iter().map(|(anchor, path)| serde_json::json!({
+                "anchor": anchor,
+                "path": path,
+            })).collect::<Vec<_>>(),
+        })),
         "similar_negatives": similar.map(|s| serde_json::json!({
             "n": s.neg_n, "clean": s.neg_clean, "cards": s.neg_cards,
         })),
