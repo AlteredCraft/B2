@@ -169,17 +169,20 @@ pub struct CandidateNote {
     /// noise floor, the number the [`DiscoveryFloor`] judged (GH #192). `None`
     /// when the floor was off or inert (no statistics were computed). An adapter
     /// wanting to show *strength* shows a band derived from this, never the raw
-    /// score (GH #150) — and it is affine in `score` within one query, so the
-    /// band, the row order, and the gate are one number by construction.
+    /// score (GH #150) — and it is strictly monotonic in `score` within one
+    /// query (affine in the squared best-pair distance, which `score` negates
+    /// the root of), so the band, the row order, and the gate are one number by
+    /// construction.
     pub z: Option<f64>,
 }
 
 /// Generate up to `limit` connection-discovery candidates for `anchor`, strongest
 /// first: by best-passage distance (ties break on `note_path`, for determinism),
 /// which is one order with three names — the exact stage-2 `score`, the `z` the
-/// floor judged, and the strength band an adapter paints, all affine in each
-/// other within one query, so none of them can disagree with the row order
-/// (GH #150's coherence, held by construction since the GH #192 reorder).
+/// floor judged, and the strength band an adapter paints, each strictly
+/// monotonic in the others within one query, so none of them can disagree with
+/// the row order (GH #150's coherence, held by construction since the GH #192
+/// reorder).
 /// `limit` is a cap, not a
 /// promise (index-engine.md §3): with a [`DiscoveryFloor`] the list ends where the
 /// anchor's own score distribution says the candidates stop being signal — possibly
@@ -278,7 +281,7 @@ pub fn candidates(
         }
     }
     // Nearest-first, ties by path: the served order, and — because z below is
-    // affine in this distance — also descending z. One sort key serves the row
+    // affine in this squared distance — also descending z. One sort key serves the row
     // order, the strength band, and the floor, so none of the three can disagree
     // (the coherence GH #150 demanded, now by construction rather than by
     // comparator).

@@ -314,7 +314,8 @@ adapter grades a card from the z and never from the raw engine score (a negated 
 `-0.734` is a unit nobody should have to learn), so ranking the same list by anything else
 puts a weaker-banded card above a stronger one — the badge and the position contradicting each
 other on one row. Since [#192](https://github.com/AlteredCraft/B2/issues/192) that coherence
-holds *by construction*: the judged z is affine in the exact stage-2 score within one query, so
+holds *by construction*: the judged z is strictly monotonic in the exact stage-2 score within one
+query (affine in the squared best-pair distance the score negates the root of), so
 the score order, the z order, and the band are one number, and the sort is nearest-best-passage
 (then path) whether the floor computed statistics or not. It was not always so: when the badge
 first became the sort key the z was the *coarse* stage-1 centroid statistic, and the accepted
