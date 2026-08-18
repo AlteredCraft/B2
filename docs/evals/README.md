@@ -72,7 +72,7 @@ re-derived by [#197](https://github.com/AlteredCraft/B2/issues/197) for the alwa
 | per-mate discovery MRR@5 ≥ 0.52 | `FLOOR_MATE_MRR` | floor, **below** the 0.650 reading | discovery **rank**, orthogonal corpus |
 | labelled mates suppressed = 0 | `MAX_MATES_SUPPRESSED` | ceiling, **at** the structural 0 | the **tripwire**: nonzero means an existence gate is back in the path |
 | dense fixture: zero empty panes | — | absolute | [#197](https://github.com/AlteredCraft/B2/issues/197)'s ruling made mechanical |
-| dense fixture: per-mate MRR@5 ≥ 0.35 | `FLOOR_DENSE_MATE_MRR` | floor, **below** the 0.502 reading | discovery **rank** on the single-domain geometry ([#196](https://github.com/AlteredCraft/B2/issues/196)) |
+| dense fixture: per-mate MRR@5 ≥ 0.32 | `FLOOR_DENSE_MATE_MRR` | floor, **below** the 0.467 reading | discovery **rank** on the single-domain geometry ([#196](https://github.com/AlteredCraft/B2/issues/196)) |
 
 Exit `2` = an assertion failed; `1` = the run itself broke. Two instrument checks print before
 any score and gate everything after them: the model id (never average CPU and `@metal` rows) and
@@ -89,9 +89,12 @@ model's order would *always* look plausible). Sizing is measured, per
 **five consecutive always-serve runs on an unchanged corpus, model and build produce
 bit-identical rows** — every rank, every z, every cosine, on both corpora — so the run-to-run
 noise floor is *zero* and the headroom is for corpus drift. Each MRR floor sits about two
-lost-from-rank-1 mates under its reading (orthogonal: 0.650 − 2/15 → 0.52; dense: 0.502 − 2/14 →
-0.35; the orthogonal reading moved 0.633 → 0.650 when the gate retired — exactly the returned
-phishing mate at rank 4 — and the floor moved with it, by the same method that set it). The two
+lost-from-rank-1 mates under its reading (orthogonal: 0.650 − 2/15 → 0.52; dense: 0.467 − 2/14 →
+0.32; the orthogonal reading moved 0.633 → 0.650 when the gate retired — exactly the returned
+phishing mate at rank 4 — and the floor moved with it, by the same method that set it; the dense
+reading moved 0.502 → 0.467 when a one-word grammar fix in `hive-inspection.md` slid one mate a
+rank — the worked example of the corpus drift these margins exist for, and of why a floor never
+sits at its reading). The two
 exceptions run the other way on purpose: **suppression is asserted at zero with no headroom**,
 because under always-serve both discovery passes read one surface and nothing can be
 reachable-but-unserved — the assertion is no longer a budget but a tripwire, and the only event

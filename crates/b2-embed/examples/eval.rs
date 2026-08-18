@@ -185,15 +185,18 @@ const MAX_MATES_SUPPRESSED: usize = 0;
 /// existed to price it (the same measure-then-calibrate order as
 /// [`FLOOR_MATE_MRR`]'s own history).
 ///
-/// The first measured reading is 0.502 (n = 14 mates): the model recovers the
-/// within-cluster labels and ranks the three cross-cluster claims lower —
-/// headroom in both directions, which is what a non-saturating instrument
-/// needs. Five repeat runs are bit-identical, so the margin is for corpus
-/// drift: at n = 14 one mate lost from rank 1 costs 1/14 ≈ 0.071, and this
-/// floor sits ~2 such losses under the reading. Process rule 2 binds hard
-/// here: in a corpus where everything relates, relabelling toward the model's
-/// order would *always* look plausible — a red reading argues about the notes.
-const FLOOR_DENSE_MATE_MRR: f64 = 0.35;
+/// The reading is 0.467 (n = 14 mates) on the corpus as it stands: the model
+/// recovers the within-cluster labels and ranks the three cross-cluster claims
+/// lower — headroom in both directions, which is what a non-saturating
+/// instrument needs. (The fixture's first reading was 0.502; a one-word
+/// grammar fix in `hive-inspection.md` moved one mate a rank, the worked
+/// example of why these floors carry corpus-drift margin at all.) Repeat runs
+/// are bit-identical, so the margin is for corpus drift: at n = 14 one mate
+/// lost from rank 1 costs 1/14 ≈ 0.071, and this floor sits ~2 such losses
+/// under the reading. Process rule 2 binds hard here: in a corpus where
+/// everything relates, relabelling toward the model's order would *always*
+/// look plausible — a red reading argues about the notes.
+const FLOOR_DENSE_MATE_MRR: f64 = 0.32;
 
 #[derive(Deserialize)]
 struct QuerySet {
