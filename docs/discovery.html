@@ -204,7 +204,8 @@
     keeping each note's best pair and its evidence chunk. The result sorts by score with a
     <span class="mono">path</span> tie-break and truncates to <span class="mono">limit</span>; on a graded
     space each row also carries its <b>z</b> (the strength band's input — it gates nothing). Returns empty
-    only when there's no embedding space, the anchor has no chunks, or <span class="mono">limit == 0</span>.
+    only when there's no embedding space, the anchor has no chunks, or <span class="mono">limit == 0</span>
+    (the degenerate ask — the "nothing to compare" reading below assumes you asked for at least one).
     Vector-only; re-embeds nothing.</div>
   </section>
 
@@ -224,12 +225,13 @@
     out" from anything) it darkened 16 of 17 notes while the ranking underneath was correct throughout
     (GH #196). An anchor-local statistic cannot distinguish <em>nothing is related</em> from
     <em>everything is related</em>, so B2 no longer lets one claim to. The empty state now says the one
-    thing it can know — <em>nothing unlinked has stored vectors to compare</em> — and any future
+    thing it can know — <em>nothing unlinked has stored vectors to compare</em> (at any nonzero ask;
+    <code>--limit 0</code> asks for nothing and claims nothing) — and any future
     "show nothing" signal must win an evidence-gated bake-off (on the standard corpus, a dense
     single-domain fixture, and real vaults via <code>just calibrate</code>) in which "no gate at all" is an
     admissible winner.</p>
     <p class="cap">The z survives as a <b>statistic</b>: computed per candidate against the anchor's own
-    candidate population, strictly in step with the row order, painted as the card's dots. On tiny pools
+    candidate population, in step with the row order (tied scores share a z), painted as the card's dots. On tiny pools
     (under a dozen candidates) and fake-embedded spaces no statistic exists, so the list is served
     <em>ungraded</em> and says so — banding changes at that threshold, membership never does.</p>
   </section>

@@ -310,11 +310,16 @@ fn tiny_pools_are_served_in_full_and_band_less() {
 
 #[test]
 fn crossing_the_stats_population_changes_banding_never_membership() {
-    // The continuity claim (A7) at the n = 12 threshold itself: one vault just
-    // under it and one just over serve their complete pools either side; the
-    // only difference is whether the rows carry a z.
+    // The continuity claim (A7) across the n = 12 threshold: a vault just
+    // under it, one exactly at it (the inclusive edge — an off-by-one on the
+    // `>=` would slip past the other two cases), and one over it all serve
+    // their complete pools; the only difference is whether the rows carry a z.
     let tmp = tempfile::TempDir::new().unwrap();
-    for (name, extra, expect_z) in [("under", 10usize, false), ("over", 13usize, true)] {
+    for (name, extra, expect_z) in [
+        ("under", 10usize, false), // pool 11 — one short of the threshold
+        ("at", 11usize, true),     // pool 12 — the threshold itself, inclusive
+        ("over", 13usize, true),   // pool 14 — comfortably past it
+    ] {
         let vault = tmp.path().join(name).join("vault");
         fs::create_dir_all(&vault).unwrap();
         write_note(&vault, "anchor.md", "ANCHOR");

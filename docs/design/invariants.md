@@ -168,8 +168,10 @@ tomorrow's model* — made mechanical.
   that under-fills only for want of scorable notes. **An empty pane never asserts "nothing
   relates" from anchor-local statistics** — an anchor-local existence test cannot distinguish
   *nothing is related* from *everything is related* (the same geometry read from opposite ends:
-  a single-domain vault went dark on 16 of 17 notes, GH #196), so an empty result may only state
-  what is checkable: the candidate set is genuinely empty. Any future existence signal is
+  a single-domain vault went dark on 16 of 17 notes, GH #196), so an empty result at a nonzero
+  ask may only state what is checkable: the candidate set is genuinely empty (a `limit` of 0 is
+  the degenerate ask that proves nothing, and its surfaces claim nothing). Any future existence
+  signal is
   **evidence-gated** — it must win a measured bake-off on the orthogonal corpus, the dense
   single-domain fixture, and real vaults via `just calibrate`, where "no gate at all" is an
   admissible winner — and **continuous in population size**: a statistics threshold may change

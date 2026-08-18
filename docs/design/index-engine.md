@@ -282,8 +282,9 @@ The standing rule (promoted to the register as **invariants.md D1**): discovery'
 answers it. `similar` serves the ranked top-N whenever candidates exist; `limit` stays a cap that
 under-fills only for want of scorable notes (a mid-embed vault, a vault with fewer unlinked notes
 than the ask), and **no statistical bar truncates the list**. The per-candidate z survives as a
-*statistic* — computed after stage 2 on the best-passage distances (the #192 unit), strictly
-monotonic in the row order, painted as the within-list strength band — but it **gates nothing**.
+*statistic* — computed after stage 2 on the best-passage distances (the #192 unit),
+non-increasing down the row order (strictly monotonic in the *score*; tied scores share a z and
+order by the path tie-break), painted as the within-list strength band — but it **gates nothing**.
 An empty pane states the one thing it can know: the candidate set is genuinely empty (no embedding
 space, or nothing unlinked with stored vectors). It never asserts "nothing relates" from
 anchor-local statistics, because that test cannot distinguish *nothing is related* from
@@ -385,7 +386,7 @@ minimum (`STATS_MIN_POPULATION` since #197; the same 12 was `FLOOR_MIN_POPULATIO
 shipped), a space with no spread, the fake regime — a surface must *say* the list is ungraded.
 Silence there is not neutral: a column of bandless cards reads as a set of candidates that were
 judged and all scored low, which is the opposite of what happened. (This obligation survives
-#197 unchanged; what changed at that threshold is that it now moves banding alone, never
+GH #197 unchanged; what changed at that threshold is that it now moves banding alone, never
 membership.)
 
 What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
@@ -513,7 +514,7 @@ adding four notes. The review that became #197 also relocated two pieces of reco
 the eval corpus is engineered orthogonal (process rule 2's token audit *minimizes* shared
 vocabulary), so it is a good instrument for ranks and a structurally incapable one for
 *distributions* — its strongest labelled pair sits below that real vault's background — and
-#150's rejection of absolute floors ("kept 99–100% of a 228-essay single-author vault") was the
+GH #150's rejection of absolute floors ("kept 99–100% of a 228-essay single-author vault") was the
 same finding read through the assumption it should have been testing: keeping nearly everything
 of a single-author vault was plausibly *correct*. Large vaults fail the same way eventually:
 above `SHORTLIST_MIN` the judged population is the anchor's centroid-nearest slice —

@@ -506,8 +506,9 @@ pub struct SimilarView {
     pub evidence: String,
     /// How far this candidate stands above the anchor's own candidate population
     /// — its **best-passage** z (the stage-2 statistic, GH #192), the one honest
-    /// input for a displayed *strength* band (GH #150), and strictly monotonic
-    /// in the row order, so the band never contradicts it. Since GH #197 it
+    /// input for a displayed *strength* band (GH #150), and non-increasing down
+    /// the row order (strictly monotonic in the score; tied scores share a z
+    /// and order by path), so the band never contradicts it. Since GH #197 it
     /// **gates nothing** — the list is served ranked whatever the z's read; the
     /// band is a within-list grading, relative to this note's other candidates,
     /// never a verdict on existence. The unit is load-bearing for an adapter: a

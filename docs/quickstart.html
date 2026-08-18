@@ -333,8 +333,9 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       quota — the list is the ranked nearest, and it under-fills only when the vault genuinely has fewer
       unlinked, embedded notes than you asked for. Similarity is relative to <em>your</em> vault: in a
       single-subject vault everything is somewhat related and the top of the list is still the right
-      answer, so B2 serves the ranking and leaves the judgment to you. An empty list means only that
-      there was nothing to compare — not that nothing relates.</div>
+      answer, so B2 serves the ranking and leaves the judgment to you. An empty list (at any nonzero
+      <code>--limit</code>) means only that there was nothing to compare — not that nothing
+      relates.</div>
       <div class="note tip"><span class="tag">You're the precision gate</span> B2 finds the candidates;
       <em>you</em> supply the judgment and the type. There's no review queue and nothing "inert until
       accepted" — a connection exists only once you author it. The intelligence is in the whole-vault
@@ -413,8 +414,9 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       <b>Settings → Index</b>; the top bar keeps the live progress meter and a Cancel, since a long run has
       to stay watchable with the dialog shut.</li>
     <li><b>Discovery sits next to what you're reading.</b> The similar-but-unlinked notes are a pane, not a
-      command you remember to run — always the ranked nearest, with a strength band per candidate grading
-      each within the list, and a one-click typed <b>Link</b> that writes
+      command you remember to run — always the ranked nearest, with a strength band grading each candidate
+      within the list where a statistic exists (a vault under a dozen candidates is served ungraded, and
+      says so), and a one-click typed <b>Link</b> that writes
       the same <code>b2_relations:</code> line <code>b2 link</code> does. There's also a <b>graph view</b> of
       the connections around the open note.</li>
     <li><b>An editor.</b> CodeMirror 6 with live-preview Markdown, autosave, syntax-highlighted code

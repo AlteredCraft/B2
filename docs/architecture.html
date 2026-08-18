@@ -641,7 +641,7 @@ b2_relations:
     <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault)</td><td>embedder</td></tr>
     <tr><td class="mono">neighbors</td><td>a note's neighbors, plus links that resolve to nothing</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every edge + its provenance and "why", with an orphan flag</td><td>— (pure graph)</td></tr>
-    <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes, ranked, always served (path/title/score/evidence/z)</td><td>— (stored vectors)</td></tr>
+    <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes, ranked, always served (path/title/score/evidence, plus z where graded — absent on tiny pools and fake spaces)</td><td>— (stored vectors)</td></tr>
     <tr><td class="mono">link</td><td>commit a chosen connection to frontmatter <code>b2_relations:</code>, re-project it</td><td>embedder</td></tr>
   </table>
   <div class="note"><b>Honest by construction.</b> A note ref <em>is</em> a <b>path</b>, with or without the

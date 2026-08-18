@@ -329,7 +329,7 @@ stability-bless:
 [group('model')]
 [doc('Discovery calibration on any built vault: pool cosines, leader z, gate-vs-always-serve, bands (GH #197).')]
 calibrate vault *args:
-    cargo run -p b2-embed --example calibrate -- {{vault}} {{args}}
+    cargo run -p b2-embed --example calibrate -- "{{vault}}" {{args}}
 
 # Compare its retrieval quality against `just eval` (CPU) — a device switch is a model swap
 # (the recorded model id gains an `@metal` tag), so the vault re-embeds.

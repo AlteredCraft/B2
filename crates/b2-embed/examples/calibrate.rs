@@ -144,6 +144,20 @@ impl AnchorReading {
             .filter_map(|((_, _, engine), ours)| engine.map(|e| (e - ours).abs()))
             .fold(0.0, f64::max)
     }
+
+    /// How many pool entries the drift check actually compared — both z's
+    /// present. Zero pairs must print as "nothing to cross-check", never as a
+    /// pass: a check that reports success without having run is the
+    /// advisory-but-exit-0 hole this repo's gates exist to close.
+    fn recheck_pairs(&self) -> usize {
+        if self.z.is_none() {
+            return 0;
+        }
+        self.pool
+            .iter()
+            .filter(|(_, _, engine)| engine.is_some())
+            .count()
+    }
 }
 
 /// `similar` scores are negated L2 over unit vectors: `cos = 1 − d²/2`.
@@ -342,13 +356,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "  bands at top-{limit}       {strong} ●●● / {clear} ●●○ / {near} ●○○ across graded anchors ({ungraded} ungraded)"
     );
+    let recheck_pairs: usize = readings.iter().map(|r| r.recheck_pairs()).sum();
     if worst_drift > 1e-3 {
         println!(
             "  [FAULT] engine z disagrees with the recomputation by up to {worst_drift:.3} — \
              the judged statistic moved; distrust the replay above"
         );
+    } else if recheck_pairs == 0 {
+        println!(
+            "  [note]  the engine shipped no z on this vault (ungraded space or tiny pools) — \
+             nothing to cross-check"
+        );
     } else {
-        println!("  [check] engine z (where shipped) matches the recomputation (max Δ {worst_drift:.1e})");
+        println!(
+            "  [check] engine z matches the recomputation over {recheck_pairs} candidates \
+             (max Δ {worst_drift:.1e})"
+        );
     }
     Ok(())
 }

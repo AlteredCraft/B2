@@ -882,11 +882,16 @@ fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
     let results = vault.similar(note, limit)?;
     if cli.json {
         print_json(&results)?;
+    } else if limit == 0 {
+        // An ask for nothing yields nothing, silently: the empty-state copy
+        // below reads the candidate set, and a zero limit proves nothing about
+        // it — printing "nothing to compare" here would be the one way this
+        // command could still make a claim it can't check (GH #197).
     } else if results.is_empty() {
         // Two honest empty states, and neither claims "nothing relates"
-        // (GH #197): an empty list means the candidate set is genuinely empty —
-        // nothing unlinked with stored vectors to compare — or the vault's
-        // similarity isn't semantic yet.
+        // (GH #197): at a nonzero ask, an empty list means the candidate set is
+        // genuinely empty — nothing unlinked with stored vectors to compare —
+        // or the vault's similarity isn't semantic yet.
         let status = vault.embed_status()?;
         if status.embedded > 0 {
             println!("Nothing unlinked has stored vectors to compare.");
