@@ -66,8 +66,9 @@ impl Default for FakeEmbedder {
 
 /// The fake embedder's recorded model id — `pub` because the identity is load-bearing
 /// beyond tests: a vault whose `meta.embed_model_id` equals this holds hash vectors
-/// with no semantic geometry, so `Vault::similar` never applies the discovery floor
-/// to it (a z-score over hash noise would suppress arbitrarily, GH #150).
+/// with no semantic geometry, so `Vault::similar` never grades it — the ranked list
+/// is served with no z, since a statistic over hash noise would be a band worth of
+/// noise (GH #150/#197).
 pub const FAKE_MODEL_ID: &str = "fake-deterministic-v1";
 
 impl Embedder for FakeEmbedder {

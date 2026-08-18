@@ -254,9 +254,10 @@ export interface SimilarView {
   title: string | null;
   score: number;
   evidence: string;
-  /** Stage-1 z-score against the anchor's candidate population — the number the
-   *  discovery floor judged, and the honest input for a strength band (GH #150).
-   *  Absent when no floor statistics were computed (floor off / tiny pool). */
+  /** Stage-2 best-passage z against the anchor's candidate population — the
+   *  honest input for a strength band (GH #150/#192), gating nothing since
+   *  GH #197. Absent when no statistic was computed (fake space / tiny pool /
+   *  no spread) — the pane's cue to say the list is ungraded. */
   z?: number;
 }
 
