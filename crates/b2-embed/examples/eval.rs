@@ -66,6 +66,20 @@
 //!    dump's z is also recomputed harness-side from the served scores, so a
 //!    drift in the engine's statistic — not only its rule — turns the block's
 //!    check line into a `[FAULT]`.
+//! 6. **The dense single-domain fixture** (GH #196/#197, Phase 0b) — a *second*
+//!    corpus (`evals/corpus-dense/`, labels `evals/similar-dense.json`) scored in
+//!    its **own throwaway vault** and recorded in its **own row** (corpus id
+//!    `dense`), never averaged with the orthogonal corpus's. Fifteen notes, all
+//!    genuinely inter-related, no loner: the vault-level geometry GH #196
+//!    measured breaking every anchor-local existence gate (no unrelated tail ⇒
+//!    every z compresses ⇒ every pane dark), which the orthogonal corpus is
+//!    structurally incapable of expressing — mixing it in would perturb every
+//!    existing anchor's population and dilute both instruments. Its labels are
+//!    **rankings only** (expected mates per anchor, per-mate scored) and its
+//!    assertions run the other way from the negatives the orthogonal corpus
+//!    carries: a per-mate MRR floor, and **zero empty panes** across every note
+//!    in the fixture — the mechanical form of GH #197's ruling that an empty
+//!    pane may never come from an anchor-local statistic.
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -609,6 +623,9 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("queries.json"))?)?;
     let sim_set: SimilarSet =
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("similar.json"))?)?;
+    let dense_set: SimilarSet = serde_json::from_str(&std::fs::read_to_string(
+        evals_dir.join("similar-dense.json"),
+    )?)?;
 
     // Ensure the model is available, then load it. (Provision is idempotent, so an
     // already-installed model is a no-op; a missing one is fetched here.)
@@ -701,6 +718,14 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             Some(&floor_z),
         ),
     )?;
+
+    // ---- Phase 3: the dense single-domain fixture (GH #196/#197, Phase 0b). --
+    // Its own throwaway vault, its own model load, its own results row (corpus
+    // id `dense`) — the fixture measures a *vault-level* geometry, so nothing
+    // about it may share state with the orthogonal corpus's run above.
+    let dense = score_dense(&evals_dir, &dense_set)?;
+    print_dense_report(&dense);
+    append_result(&results_path, dense_row(&git, &model_id, dim, &dense))?;
 
     // ---- Optional: the FTS tokenizer ablation (the #157 instrument). ---------
     // One lever, isolated: `rebuild_fts` swaps the tokenizer over the identical
@@ -948,7 +973,191 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
+    // The dense fixture's existence assertion (GH #196/#197): every note in a
+    // corpus where everything relates must serve candidates. An empty pane here
+    // can only come from an anchor-local statistic claiming "nothing relates"
+    // on a vault where that is false — the exact failure GH #196 measured.
+    if !dense.empty_panes.is_empty() {
+        eprintln!(
+            "\n[warn] {} of {} dense-fixture notes serve an EMPTY pane ({}) — an existence \
+             gate is refusing a vault whose every note genuinely relates (GH #196).",
+            dense.empty_panes.len(),
+            dense.notes,
+            dense.empty_panes.join(", ")
+        );
+        return Ok(false);
+    }
     Ok(true)
+}
+
+/// Score the dense single-domain fixture (GH #196/#197, Phase 0b) in a throwaway
+/// vault of its own: per-mate discovery ranks against `similar-dense.json`, and
+/// the empty-pane sweep across **every** note in the fixture — not only the
+/// labelled anchors, because the assertion is about the surface ("no pane in a
+/// dense vault is dark"), not about the labels.
+fn score_dense(
+    evals_dir: &Path,
+    set: &SimilarSet,
+) -> Result<DensePass, Box<dyn std::error::Error>> {
+    let corpus_dir = evals_dir.join("corpus-dense");
+    // A second model load rather than sharing the first vault's: the embedder was
+    // moved into that vault, and the fixture's whole point is an isolated run.
+    let config = EmbedConfig::load()?;
+    let embedder = LocalEmbedder::load(&config)?;
+    let tmp = tempfile::TempDir::new()?;
+    let vault_root = tmp.path().join("vault");
+    std::fs::create_dir_all(&vault_root)?;
+    for entry in std::fs::read_dir(&corpus_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
+        }
+    }
+    let vault = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
+    vault.project(false)?;
+    let (chunks, embed_secs) = timed_embed(&vault)?;
+
+    let mut pass = DensePass {
+        notes: 0,
+        chunks,
+        embed_secs,
+        mate: Agg::default(),
+        mate_ranks: Vec::new(),
+        empty_panes: Vec::new(),
+        detail: Vec::new(),
+    };
+    // The pane sweep: every note is an anchor, labelled or not.
+    for note in vault.list_notes()? {
+        pass.notes += 1;
+        if vault.similar(&note.path, SIM_K)?.is_empty() {
+            pass.empty_panes.push(note.path);
+        }
+    }
+    // Per-mate ranks on the labelled anchors, the orthogonal corpus's metric
+    // re-used verbatim (GH #183's non-saturating readout).
+    for label in &set.anchors {
+        let candidates = vault.similar(&label.anchor, SIM_K)?;
+        for expected in &label.expected {
+            let rank = candidates
+                .iter()
+                .position(|c| paths_match(&c.path, expected))
+                .map(|p| p + 1);
+            pass.mate.add(rank);
+            pass.mate_ranks
+                .push((label.anchor.clone(), expected.clone(), rank));
+        }
+        pass.detail.push(AnchorDetail {
+            anchor: label.anchor.clone(),
+            negative: false,
+            candidates: candidates
+                .iter()
+                .map(|c| {
+                    let related = label.expected.iter().any(|e| paths_match(&c.path, e));
+                    (c.path.clone(), cosine_of(c.score), related)
+                })
+                .collect(),
+        });
+    }
+    Ok(pass)
+}
+
+/// The dense fixture's reading (see [`score_dense`]).
+struct DensePass {
+    notes: usize,
+    chunks: usize,
+    embed_secs: f64,
+    /// Per-mate ranks at [`SIM_K`] — the fixture's rank metric.
+    mate: Agg,
+    /// (anchor, mate, rank) per labelled mate, for the printed lines and the row.
+    mate_ranks: Vec<(String, String, Option<usize>)>,
+    /// Notes whose discovery pane served nothing — asserted empty (GH #196/#197).
+    empty_panes: Vec<String>,
+    detail: Vec<AnchorDetail>,
+}
+
+fn print_dense_report(dense: &DensePass) {
+    println!("\n{}", "=".repeat(78));
+    println!(
+        "dense fixture — corpus-dense/ ({} notes / {} chunks, single-domain, no loner; GH #196/#197)",
+        dense.notes, dense.chunks
+    );
+    println!(
+        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates)",
+        dense.mate.hit1(),
+        dense.mate.hit3(),
+        dense.mate.mrr(),
+        dense.mate.n
+    );
+    for (anchor, mate, rank) in &dense.mate_ranks {
+        println!(
+            "             {:>5}  {anchor} → {mate}",
+            rank_str_at(*rank, SIM_K)
+        );
+    }
+    if dense.empty_panes.is_empty() {
+        println!(
+            "  panes      {}/{} notes serve candidates — zero empty panes (ASSERTED: a dense vault \
+             may never read as \"nothing relates\")",
+            dense.notes, dense.notes
+        );
+    } else {
+        println!(
+            "  panes      {} of {} notes serve an EMPTY pane: {}",
+            dense.empty_panes.len(),
+            dense.notes,
+            dense.empty_panes.join(", ")
+        );
+    }
+}
+
+/// The dense fixture's own JSONL row. Tagged `"corpus": "dense"` — the key that
+/// keeps rows from ever averaging across corpora (the orthogonal rows carry
+/// `"corpus": "orthogonal"`); a smaller shape than the main row on purpose,
+/// since the fixture scores discovery alone.
+fn dense_row(
+    git: &Option<String>,
+    model: &str,
+    dim: usize,
+    dense: &DensePass,
+) -> serde_json::Value {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    serde_json::json!({
+        "ts": ts,
+        "git": git,
+        "model": model,
+        "dim": dim,
+        "corpus": "dense",
+        "notes": dense.notes,
+        "chunks": dense.chunks,
+        "embed_secs": dense.embed_secs,
+        "similar_per_mate": { "n": dense.mate.n, "hit1": dense.mate.hit1(), "hit3": dense.mate.hit3(), "mrr": dense.mate.mrr() },
+        "mates": dense.mate_ranks.iter().map(|(anchor, mate, rank)| serde_json::json!({
+            "anchor": anchor, "mate": mate, "rank": rank,
+        })).collect::<Vec<_>>(),
+        "empty_panes": { "n": dense.notes, "empty": dense.empty_panes.len(), "detail": dense.empty_panes },
+        "similar_detail": dense.detail.iter().map(|d| serde_json::json!({
+            "anchor": d.anchor,
+            "negative": d.negative,
+            "candidates": d.candidates.iter().map(|(path, cos, related)| serde_json::json!({
+                "path": path,
+                "cos": (cos * 1e4).round() / 1e4,
+                "related": related,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// [`rank_str`] at a caller-named depth (the discovery metrics read at
+/// [`SIM_K`], not [`K`]).
+fn rank_str_at(rank: Option<usize>, depth: usize) -> String {
+    match rank {
+        Some(1) => "✓1".to_string(),
+        Some(r) => format!("·{r}"),
+        None => format!("✗>{depth}"),
+    }
 }
 
 /// Which retrieval a pass scores. `Fused` is the shipped path (`Vault::search` —
@@ -1747,6 +1956,11 @@ fn result_row(
         "git": git,
         "model": model,
         "dim": dim,
+        // NEW key (absent from rows before 2026-08-18): which corpus this row
+        // scored — the dense single-domain fixture appends its own `"dense"`
+        // rows (GH #196/#197), and rows must never average across corpora.
+        // Absent = this corpus, so every older row stays comparable unchanged.
+        "corpus": "orthogonal",
         "config": {
             "label": label,
             "target_tokens": cfg.target_tokens,
