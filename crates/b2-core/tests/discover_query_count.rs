@@ -109,7 +109,7 @@ fn candidates_issues_bounded_sql_never_o_chunks() {
         .with_ansi(false)
         .finish();
     let cands = tracing::subscriber::with_default(subscriber, || {
-        discover::candidates(&conn, &ids[0], 10, None).unwrap()
+        discover::candidates(&conn, &ids[0], 10, false).unwrap()
     });
     assert!(!cands.is_empty(), "unlinked notes are all candidates");
 

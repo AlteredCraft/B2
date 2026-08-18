@@ -317,6 +317,20 @@ stability *args:
 stability-bless:
     cargo run -p b2-embed --example stability -- --bless
 
+# GH #196's hand arithmetic, promoted into a command (GH #197, Phase 0a): run it against ANY
+# built vault — no labels needed, a pure read over stored vectors — and it prints per-anchor
+# pool distributions (cosine min/med/max, leader cosine + z), what a z existence gate would
+# serve vs what always-serve does, and the strength bands the pane would paint, plus a
+# vault-level summary. This is process rule 5's instrument: a constant derived from a corpus's
+# score *distribution* is invalid until transfer-checked on a real vault, and this is the
+# check. Flags: `--limit N` (pane depth), `--leader-z/--member-z` (replay a candidate gate;
+# defaults are the retired GH #192 constants, so GH #196's dark-vault reading reproduces),
+# `--json` (the whole reading as one object).
+[group('model')]
+[doc('Discovery calibration on any built vault: pool cosines, leader z, gate-vs-always-serve, bands (GH #197).')]
+calibrate vault *args:
+    cargo run -p b2-embed --example calibrate -- "{{vault}}" {{args}}
+
 # Compare its retrieval quality against `just eval` (CPU) — a device switch is a model swap
 # (the recorded model id gains an `@metal` tag), so the vault re-embeds.
 [group('model')]

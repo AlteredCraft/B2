@@ -159,13 +159,6 @@ pub struct Vault {
     // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
     // that overrides it, to A/B chunker levers in-process (the eval harness, crates/b2-embed/evals/).
     chunk_config: ChunkConfig,
-    // The discovery quality floor (GH #150) `similar` surfaces under. `Some(default)`
-    // from open; overridden only by the harness/tests (`set_discovery_floor`, the
-    // `set_chunk_config` posture) — an adapter's per-call raw ask is `similar_raw`,
-    // not a policy change here. Held on the vault so every `similar` call in a
-    // session judges by one policy. Independent of this setting, `similar` never
-    // floors a fake-embedded space (no semantic geometry to gate on).
-    discovery_floor: Option<discover::DiscoveryFloor>,
 }
 
 /// What `reindex` did: how many notes were projected and how many were actually
@@ -512,17 +505,20 @@ pub struct SimilarView {
     /// evidence for *why* it surfaced.
     pub evidence: String,
     /// How far this candidate stands above the anchor's own candidate population
-    /// — its **best-passage** z, the stage-2 statistic the discovery floor
-    /// judges (GH #192; the stage-1 centroid z until that reorder), the one
-    /// honest input for a displayed *strength* band (GH #150), and, when present,
-    /// this list's own sort key, so the band never contradicts the row order.
-    /// The unit is load-bearing for an adapter: a band calibrated in the retired
-    /// centroid unit grades every card down (GH #182), so a surface showing one
-    /// reads its landmarks off `just eval`'s floor-calibration block.
-    /// `None` when no floor statistics were computed (floor off, tiny pool, or
-    /// zero variance) — which is also the adapters' cue to say the list is
-    /// *ungraded* rather than let bare cards read as uniformly weak;
-    /// serialized only when present so older JSON consumers see no change.
+    /// — its **best-passage** z (the stage-2 statistic, GH #192), the one honest
+    /// input for a displayed *strength* band (GH #150), and non-increasing down
+    /// the row order (strictly monotonic in the score; tied scores share a z
+    /// and order by path), so the band never contradicts it. Since GH #197 it
+    /// **gates nothing** — the list is served ranked whatever the z's read; the
+    /// band is a within-list grading, relative to this note's other candidates,
+    /// never a verdict on existence. The unit is load-bearing for an adapter: a
+    /// band calibrated in the retired centroid unit grades every card down
+    /// (GH #182), so a surface showing one reads its landmarks off `just eval`'s
+    /// calibration block. `None` when no statistic was computed (a fake-embedded
+    /// space, a pool under the statistics minimum, or zero variance) — which is
+    /// also the adapters' cue to say the list is *ungraded* rather than let bare
+    /// cards read as uniformly weak; serialized only when present so older JSON
+    /// consumers see no change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub z: Option<f64>,
 }
@@ -578,7 +574,6 @@ impl Vault {
             conn,
             embedder,
             chunk_config: ChunkConfig::default(),
-            discovery_floor: Some(discover::DiscoveryFloor::default()),
         })
     }
 
@@ -606,20 +601,6 @@ impl Vault {
     /// config does **not** re-chunk by itself — pair it with `project(force)`.
     pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
         self.chunk_config = cfg;
-    }
-
-    /// Override the discovery quality floor [`similar`](Self::similar) surfaces
-    /// under (default: `Some(DiscoveryFloor::default())`, the calibrated rule).
-    /// Like [`set_chunk_config`](Self::set_chunk_config) this is a harness/test
-    /// lever, not an adapter surface — the shipped adapters never call it: the
-    /// per-call "show me the raw nearest" ask is [`similar_raw`](Self::similar_raw)
-    /// (GH #150). What this exists for is injecting a *non-default* floor — a
-    /// future constant sweep, and the test that proves the fake-regime guard beats
-    /// any setting. Regardless of this setting, a fake-embedded space is never
-    /// floored — hash vectors have no semantic geometry for a z-score to mean
-    /// anything against.
-    pub fn set_discovery_floor(&mut self, floor: Option<discover::DiscoveryFloor>) {
-        self.discovery_floor = floor;
     }
 
     /// Rebuild the FTS index over the **same stored chunk text** with a different
@@ -1346,49 +1327,32 @@ impl Vault {
     /// Surface the notes most semantically similar to `note_ref` (a path, `.md` optional)
     /// that are **not already connected** to it — connection-discovery candidate
     /// generation ([`discover::candidates`]) exposed directly: vector KNN over the
-    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked strongest
-    /// first — by `z` wherever the floor computed one (so the order matches the
-    /// strength band an adapter paints from it) and by best chunk-pair max-similarity
-    /// otherwise. Each result carries the candidate's path + title and
-    /// the passage that made it similar. A **pure read over stored vectors — no model
-    /// call** (a prior `reindex` supplies them), like [`neighbors`](Self::neighbors);
-    /// `limit` bounds the count. Errors with [`Error::NoteNotFound`] for an unknown
-    /// ref; returns an empty list for a known note with no vectors or no candidates.
+    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked
+    /// nearest-best-passage first. **The ranked list is what is served**
+    /// (GH #197): discovery answers a relative question — what in the vault
+    /// belongs next to this note — so no statistic gates the list, `limit` is a
+    /// cap that under-fills only for want of scorable notes, and an empty result
+    /// means the candidate set is genuinely empty (no embedding space, or no
+    /// unlinked note with stored vectors), never a verdict that nothing relates.
+    /// Each result carries the candidate's path + title, the passage that made
+    /// it similar, and — on a real-embedded space with a large enough population
+    /// — the `z` the strength band derives from. A **pure read over stored
+    /// vectors — no model call** (a prior `reindex` supplies them), like
+    /// [`neighbors`](Self::neighbors). Errors with [`Error::NoteNotFound`] for an
+    /// unknown ref; returns an empty list for a known note with no vectors or no
+    /// candidates.
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
-        // The floor never applies to a fake-embedded space: hash vectors have no
-        // semantic geometry, so its z-scores would be noise and the gate would
-        // suppress arbitrary anchors. Judged by the RECORDED identity — the space
-        // being searched — not the injected embedder.
-        let floor = match db::recorded_embedder(&self.conn)? {
-            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID => None,
-            _ => self.discovery_floor.as_ref(),
-        };
-        self.similar_with(note_ref, limit, floor)
-    }
-
-    /// [`similar`](Self::similar) with the quality floor off — the raw nearest,
-    /// however weak, up to `limit`. The adapters' explicit escape hatch (`b2
-    /// similar --no-floor`, the pane's *Show nearest anyway*) and how the eval
-    /// collects ungated score piles so the floor's own calibration data keeps
-    /// accruing (GH #150). One façade method rather than a mode the caller
-    /// configures, so an adapter's raw ask is one call and cannot drift.
-    pub fn similar_raw(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
-        let _op = tracing::debug_span!(target: "b2::vault", "similar_raw", note = note_ref, limit)
-            .entered();
-        self.similar_with(note_ref, limit, None)
-    }
-
-    /// The shared body of [`similar`](Self::similar) / [`similar_raw`](Self::similar_raw):
-    /// refuse a resource anchor, resolve the note, generate candidates under
-    /// `floor`, and dress each as a [`SimilarView`].
-    fn similar_with(
-        &self,
-        note_ref: &str,
-        limit: usize,
-        floor: Option<&discover::DiscoveryFloor>,
-    ) -> Result<Vec<SimilarView>> {
+        // No statistic is ever claimed over a fake-embedded space: hash vectors
+        // have no semantic geometry, so a z there would be noise wearing a band.
+        // Judged by the RECORDED identity — the space being searched — not the
+        // injected embedder. Grading changes what the rows carry, never which
+        // rows exist (GH #197).
+        let grade = !matches!(
+            db::recorded_embedder(&self.conn)?,
+            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID
+        );
         // A resource anchor is honest, not silent: resources become discoverable
         // when slice 3 gives them chunks + centroids (research §9b #7). Until
         // then an inventoried resource errs "not yet" — never an empty result —
@@ -1400,7 +1364,7 @@ impl Vault {
         }
         let anchor = self.resolve_ref(note_ref)?;
         let mut out = Vec::new();
-        for c in discover::candidates(&self.conn, &anchor, limit, floor)? {
+        for c in discover::candidates(&self.conn, &anchor, limit, grade)? {
             let title = db::note_title(&self.conn, &c.note_path)?;
             let evidence = db::chunk_text(&self.conn, c.evidence_chunk_id)?
                 .map(|t| snippet(&t))

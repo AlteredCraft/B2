@@ -238,13 +238,6 @@ export interface AppState {
   discoveringSimilar: boolean;
   discoveringConnections: boolean;
   /**
-   * The user asked to see the raw nearest for the open note — the discovery floor
-   * off for this look only (GH #150). Set by the empty state's "Show nearest
-   * anyway", reset on every note open: an escape hatch per look, never a sticky
-   * preference (a persistent off-switch would quietly undo the floor's honesty).
-   */
-  rawDiscovery: boolean;
-  /**
    * The right column is showing **chat** instead of discovery or search results
    * (GH #155). Chat lives there so a citation can open its note in the centre pane
    * *without the conversation leaving the screen* — see chat.ts's header. It owns the
@@ -388,7 +381,6 @@ export const state: AppState = {
   unresolved: [],
   discoveringSimilar: false,
   discoveringConnections: false,
-  rawDiscovery: false,
   chatOpen: false,
   chatMessages: [],
   chatStreaming: null,

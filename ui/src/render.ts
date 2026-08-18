@@ -754,8 +754,7 @@ function strengthHtml(z: number | undefined): string {
  *  never `--danger`, because "B2 didn't grade these" is a nudge about what the numbers
  *  mean, not a fault to fix. Muted body prose (`.side-empty`) was the opposite failure —
  *  it read as chrome and got skimmed past, leaving the bare cards to imply a judgement.
- *  Two callers, mutually exclusive by construction: the ungraded caveat and raw mode's
- *  banner. */
+ *  One caller since GH #197 retired raw mode's banner: the ungraded caveat. */
 function sideNoteHtml(text: string, title: string): string {
   return `<p class="side-note" title="${escapeHtml(title)}"><span class="side-note-icon" aria-hidden="true">${icon(
     "info-circle",
@@ -765,15 +764,13 @@ function sideNoteHtml(text: string, title: string): string {
 
 /** The ungraded caveat: candidates exist, but none carries a z, so no band is shown on
  *  any of them. Left silent that reads as "everything here scored low" rather than the
- *  truth — that the floor's statistics were never computed. It states the *rule* rather
- *  than diagnosing this vault, because two different conditions land here: a candidate
- *  pool below `FLOOR_MIN_POPULATION` (the starter-vault posture) and a population with
- *  no spread at all. "Not enough" without a number leaves the reader with nothing to do,
- *  so the bar is named — [`STRENGTH_MIN_CANDIDATES`], which mirrors that Rust constant.
- *  Raw mode is excluded because its own banner already explains the very same absence —
- *  see the case in render.test.ts. */
+ *  truth — that no statistic was computed. It states the *rule* rather than diagnosing
+ *  this vault, because two different conditions land here: a candidate pool below
+ *  `STATS_MIN_POPULATION` (the starter-vault posture) and a population with no spread
+ *  at all. "Not enough" without a number leaves the reader with nothing to do, so the
+ *  bar is named — [`STRENGTH_MIN_CANDIDATES`], which mirrors that Rust constant. */
 function ungradedHtml(state: AppState): string {
-  if (state.rawDiscovery || state.similar.length === 0) return "";
+  if (state.similar.length === 0) return "";
   if (state.similar.some((c) => strengthBand(c.z))) return "";
   return sideNoteHtml(
     `Ungraded — ranked by nearness, not strength. Grading needs ${STRENGTH_MIN_CANDIDATES} or more notes in the vault to compare against.`,
@@ -802,29 +799,14 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         head +
         `<p class="side-empty">Semantic similarity is off — run <code>b2 init</code> then Reindex.</p>`
       );
-    // The floor's honest empty state (GH #150): zero candidates is an answer, not
-    // a failure — and the escape hatch to the ungated list sits right where the
-    // question arises. Raw-and-still-empty means there was nothing to compare at all.
-    if (state.rawDiscovery)
-      return (
-        head +
-        `<p class="side-empty">Nothing unlinked has stored vectors to compare — Reindex may still be filling them.</p>`
-      );
+    // The honest empty state (GH #197): the ranked list is always served, so an
+    // empty pane can only mean the candidate set is genuinely empty — never a
+    // verdict that nothing relates.
     return (
       head +
-      `<p class="side-empty">No strong candidates — nothing unlinked stands out as related to this note.</p>
-       <button class="side-raw" id="raw-similar" data-raw-similar>Show nearest anyway</button>`
+      `<p class="side-empty">Nothing unlinked has stored vectors to compare — Reindex may still be filling them.</p>`
     );
   }
-  // The raw list announces itself: these cards did NOT clear the quality floor. Same
-  // treatment as the ungraded caveat — the two are one kind of message (what the list
-  // you're reading does and doesn't claim), and they never appear together.
-  const rawBanner = state.rawDiscovery
-    ? sideNoteHtml(
-        "Raw nearest — the quality floor is off for this note.",
-        "These are the nearest candidates whatever their strength, including ones the floor would have suppressed. Nothing here is graded.",
-      )
-    : "";
   const items = state.similar
     .map((c, i) => {
       const key = cardKey("similar", c.path);
@@ -870,7 +852,7 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         </div>`;
     })
     .join("");
-  return head + rawBanner + ungradedHtml(state) + `<div class="cards" role="none">${items}</div>`;
+  return head + ungradedHtml(state) + `<div class="cards" role="none">${items}</div>`;
 }
 
 function connectionsSectionHtml(state: AppState, roving: string | null): string {

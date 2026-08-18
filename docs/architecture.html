@@ -410,9 +410,8 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       <span class="box">anchor's stored chunk vectors</span><span class="arrow">→</span>
       <span class="box">centroid shortlist — O(notes)</span><span class="arrow">−</span>
       <span class="box" style="border-color:var(--green)">reachable_within(anchor, 1)</span><span class="arrow">→</span>
-      <span class="box" style="border-color:var(--amber)">quality floor — z vs the stage-1 field</span><span class="arrow">→</span>
       <span class="box">exact max-sim per shortlisted note</span><span class="arrow">→</span>
-      <span class="box">rank → cap(limit)</span>
+      <span class="box">rank → cap(limit) — the ranked list, always</span>
     </div>
     <ul class="tidy" style="font-size:13px;margin:12px 0 0">
       <li><b>No re-embedding, no model call.</b> Each anchor chunk's <em>already-stored</em> vector is the KNN query
@@ -423,12 +422,12 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       <li><b>Subtract the graph — the only graph read.</b> <code>reachable_within(anchor, 1)</code> (anchor + direct
       neighbors) is removed. Distance is exclusion-only: a 2-hop note (triadic closure — "you linked A–B and B–E but
       never A–E") <em>survives</em>, ranked purely by semantic score.</li>
-      <li><b>The quality floor — <code>limit</code> is a cap, not a promise</b> (index-engine.md §3, GH #150).
-      A per-anchor <b>z-score</b> rule judged against the anchor's own stage-1 population: a leader gate empties
-      the list when the whole pool is one diffuse cloud, a member bar ends it where candidates rejoin the noise.
-      Zero candidates is an honest answer; <code>--no-floor</code> (<span class="mono">Vault::similar_raw</span>)
-      shows the raw nearest anyway. Model-relative by construction — no recorded constant survives a model swap
-      wrongly.</li>
+      <li><b>The ranked list is always served — <code>limit</code> is a cap, not a promise</b>
+      (invariants.md D1, GH #196/#197). Discovery answers a relative question, so no statistic gates the
+      list: the per-anchor z existence gate that used to empty it was measured reading a coherent
+      single-domain vault — everything related, so nothing "stands out" — as "nothing relates", darkening
+      16 of 17 panes, and was retired rather than retuned. The z survives ungated as the strength band's
+      input, and an empty result means only that nothing unlinked has stored vectors to compare.</li>
     </ul>
     <p style="font-size:13px;color:var(--muted);margin:10px 0 0">In our fixture the two notes are directly linked,
     so each is excluded as the other's candidate — a correctly <em>empty</em> result, which is exactly the assertion
@@ -449,9 +448,10 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
 
   <div class="ground"><b>Ground truth:</b> <span class="mono">discover.rs</span> pins the complement — direct
   neighbor excluded, disconnected near note kept, 2-hop note survives, deterministic ranking (ties broken by
-  <code>path</code>), and an empty result when the anchor has no vector space yet; <span class="mono">discover_floor.rs</span>
-  pins the floor with a purpose-built geometric embedder — mate kept, diffuse anchor honestly empty, tiny pools
-  inert, fake spaces never floored.
+  <code>path</code>), and an empty result when the anchor has no vector space yet; <span class="mono">discover_surfacing.rs</span>
+  pins always-serve with a purpose-built geometric embedder — the ranked list served with its z on every row,
+  a diffuse anchor's pane served rather than darkened, tiny pools band-less but complete, fake spaces
+  statistic-less, and banding the only thing that changes at the statistics threshold.
   <span style="color:var(--muted)">(Removed 2026-07-04: the <code>Relator</code> seam, the <code>ClaudeRelator</code>,
   the <code>generate</code>/<code>suggest</code> pipeline, and their tests — the per-pair LLM cost didn't scale to a
   1000+ note vault. Candidate generation is all that remains, and it was always the free, deterministic stage.)</span>
@@ -641,7 +641,7 @@ b2_relations:
     <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault)</td><td>embedder</td></tr>
     <tr><td class="mono">neighbors</td><td>a note's neighbors, plus links that resolve to nothing</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every edge + its provenance and "why", with an orphan flag</td><td>— (pure graph)</td></tr>
-    <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes (path/title/score/evidence); <code>--no-floor</code></td><td>— (stored vectors)</td></tr>
+    <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes, ranked, always served (path/title/score/evidence, plus z where graded — absent on tiny pools and fake spaces)</td><td>— (stored vectors)</td></tr>
     <tr><td class="mono">link</td><td>commit a chosen connection to frontmatter <code>b2_relations:</code>, re-project it</td><td>embedder</td></tr>
   </table>
   <div class="note"><b>Honest by construction.</b> A note ref <em>is</em> a <b>path</b>, with or without the
@@ -692,7 +692,7 @@ b2_relations:
       <tr><td>Chunking (+FTS), the tokenizer, and the typed graph</td><td class="mono">chunks · fts_tokenizer · graph</td><td class="mono" style="text-align:right">27</td></tr>
       <tr><td>Vectors, the embedder seam &amp; the projection/embedding split (incl. cancel)</td><td class="mono">embed · project_embed · cancel · vector_pool_scale</td><td class="mono" style="text-align:right">28</td></tr>
       <tr><td>Hybrid retrieval — RRF + graph⨝vector join</td><td class="mono">search.rs</td><td class="mono" style="text-align:right">22</td></tr>
-      <tr><td>Discovery — candidates (near ∖ connected), the quality floor, its query budget</td><td class="mono">discover · discover_floor · discover_query_count</td><td class="mono" style="text-align:right">14</td></tr>
+      <tr><td>Discovery — candidates (near ∖ connected), always-serve surfacing, its query budget</td><td class="mono">discover · discover_surfacing · discover_query_count</td><td class="mono" style="text-align:right">16</td></tr>
       <tr><td>Committing a connection — <code>b2 link</code> → frontmatter</td><td class="mono">frontmatter.rs</td><td class="mono" style="text-align:right">8</td></tr>
       <tr><td>Explain (orphan flag) · dry-run previews (which now write nothing on either path)</td><td class="mono">explain · dry_run</td><td class="mono" style="text-align:right">11</td></tr>
       <tr><td>Note &amp; folder CRUD — add · mv · rm · dirs · import</td><td class="mono">add · mv · rm_delete · dirs · import</td><td class="mono" style="text-align:right">55</td></tr>
@@ -727,12 +727,13 @@ b2_relations:
       <li><b>Semantic quality in CI.</b> The engine suite runs on the deterministic fake embedder, so it proves
       plumbing, not ranking quality. The real model is measured by the out-of-CI <b>eval harness</b>
       (<code>just eval</code>): a hand-labelled retrieval + discovery corpus scoring BM25 / vector-only / hybrid
-      note ranks, passage ranks, and discovery suppression (every negative anchor must come back clean under the
-      quality floor, enforced in the exit code) — plus a model-free rank-stability probe (<code>just stability</code>)
-      for what a small corpus is structurally blind to. Every shipped verdict — porter stemming (#157), the
-      chunker config (#44), the discovery floor (#150) — traces to a recorded run on the issue that
-      drove it and the commit that shipped it; <span class="mono">docs/evals/README.md</span> is the
-      overview. Model quality never flakes CI.</li>
+      note ranks, passage ranks, and per-mate discovery ranks (with a zero-empty-panes assertion on a second,
+      deliberately single-domain fixture, enforced in the exit code) — plus a model-free rank-stability probe
+      (<code>just stability</code>) for what a small corpus is structurally blind to, and a real-vault
+      calibration command (<code>just calibrate</code>) for what no synthetic corpus can claim alone. Every
+      shipped verdict — porter stemming (#157), the chunker config (#44), the discovery floor in (#150) and
+      back out (#196/#197) — traces to a recorded run on the issue that drove it and the commit that shipped
+      it; <span class="mono">docs/evals/README.md</span> is the overview. Model quality never flakes CI.</li>
       <li><b>Cold-index scale, CLI side.</b> Incremental reindex is done, projection and embedding are decoupled
       (keyword-first: a cold vault is searchable before it's embedded), the desktop runs the embed pass as a
       cancellable background task, and the CLI's cross-process story is complete — <code>b2 reindex &amp;</code>

@@ -160,6 +160,25 @@ tomorrow's model* — made mechanical.
   configuration moment, informed in place (plain-language privacy copy beside the Cloud-models
   setting, never a later popup). (GH #151)
 
+## D — Discovery surfacing
+
+- **D1 — Discovery surfacing answers a relative question, and the ranked candidate list is
+  served.** "What in my vault belongs next to this note?" is relative, so `b2 similar` and the
+  discovery pane serve the ranked best-passage top-N whenever candidates exist; `limit` is a cap
+  that under-fills only for want of scorable notes. **An empty pane never asserts "nothing
+  relates" from anchor-local statistics** — an anchor-local existence test cannot distinguish
+  *nothing is related* from *everything is related* (the same geometry read from opposite ends:
+  a single-domain vault went dark on 16 of 17 notes, GH #196), so an empty result at a nonzero
+  ask may only state what is checkable: the candidate set is genuinely empty (a `limit` of 0 is
+  the degenerate ask that proves nothing, and its surfaces claim nothing). Any future existence
+  signal is
+  **evidence-gated** — it must win a measured bake-off on the orthogonal corpus, the dense
+  single-domain fixture, and real vaults via `just calibrate`, where "no gate at all" is an
+  admissible winner — and **continuous in population size**: a statistics threshold may change
+  what rows carry (banding), never which rows exist. Strength is a within-list grading painted
+  from the z, which gates nothing. ([index-engine.md](index-engine.md) §3, GH #196/#197; the
+  generation side's recall posture and 1-hop exclusion are unchanged)
+
 ## E — Engineering discipline (what keeps the above true)
 
 - **E1 — The core is deterministic.** No wall-clock and no randomness inside `b2-core`; timestamps

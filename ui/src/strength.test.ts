@@ -2,13 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { strengthBand } from "./strength.ts";
 
-// The landmarks are the discovery floor's own bars in the stage-2 best-passage
-// unit and the top quartile of the labelled-mate population (GH #182/#192) —
-// see strength.ts. Each case names the landmark it stands on, so a future
+// The landmarks are measured on the eval corpus's labelled populations in the
+// stage-2 best-passage unit (GH #182/#192; they began as the retired existence
+// gate's bars, kept as landmarks after GH #197 retired the gate) — see
+// strength.ts. Each case names the landmark it stands on, so a future
 // recalibration has to restate what it is claiming rather than nudge a number.
 test("strength: the three bands sit on the calibrated landmarks", () => {
-  assert.equal(strengthBand(1.6)?.label, "near match"); // over the member bar, under the leader gate
-  assert.equal(strengthBand(1.96)?.label, "clear match"); // the leader gate: could have carried the list
+  assert.equal(strengthBand(1.6)?.label, "near match"); // under the 1.96 landmark
+  assert.equal(strengthBand(1.96)?.label, "clear match"); // where the corpus's labelled leaders read
   assert.equal(strengthBand(2.529)?.label, "strong match"); // the mate population's upper quartile itself
   assert.equal(strengthBand(6.0)?.label, "strong match"); // dense-vault leaders cap out
 });

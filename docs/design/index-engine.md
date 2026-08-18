@@ -270,17 +270,41 @@ for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. 
 traversable graph is the value-add, not the search. The standing cost of carrying it is the
 move-repair write-amplification budgeted in §8.
 
-### Discovery surfacing is quality-gated — `limit` is a cap, not a promise
+### Discovery surfacing serves the ranked list — `limit` is a cap, not a promise
 
-**(Ruled 2026-08-05; the findings of [PR #145](https://github.com/AlteredCraft/B2/pull/145).)**
-Candidate *generation* stays recall-oriented: the two-stage scan (§4) over-produces, nothing
-auto-links, and the human commits every edge — W4 untouched, because filtering what is *surfaced*
-is not authoring. But the surfaced list owes the human candidates worth judging, not fullness:
-**zero candidates is a legitimate — and honest — answer** when nothing in the vault genuinely
-relates. `limit` bounds the list; it never obliges discovery to fill it (on a real vault ten notes
-are always *nearest*, even when nearest means nearest-of-nothing — that list is a cost, not a
-feature). What enforces the stance is a **quality floor** in `discover::candidates`, and its
-shape is constrained on two sides:
+**(Re-ruled 2026-08-18 by [GH #197](https://github.com/AlteredCraft/B2/issues/197), on
+[GH #196](https://github.com/AlteredCraft/B2/issues/196)'s measurement; the original ruling —
+2026-08-05, the findings of [PR #145](https://github.com/AlteredCraft/B2/pull/145) — and its whole
+recorded history follow below, because the narrative is how the re-ruling was earned.)**
+
+The standing rule (promoted to the register as **invariants.md D1**): discovery's question is
+**relative** — *what in my vault belongs next to this note?* — and the ranked best-passage order
+answers it. `similar` serves the ranked top-N whenever candidates exist; `limit` stays a cap that
+under-fills only for want of scorable notes (a mid-embed vault, a vault with fewer unlinked notes
+than the ask), and **no statistical bar truncates the list**. The per-candidate z survives as a
+*statistic* — computed after stage 2 on the best-passage distances (the #192 unit),
+non-increasing down the row order (strictly monotonic in the *score*; tied scores share a z and
+order by the path tie-break), painted as the within-list strength band — but it **gates nothing**.
+An empty pane states the one thing it can know: the candidate set is genuinely empty (no embedding
+space, or nothing unlinked with stored vectors). It never asserts "nothing relates" from
+anchor-local statistics, because that test cannot distinguish *nothing is related* from
+*everything is related* — the finding that decided this, below. Any replacement existence signal
+is **evidence-gated** (GH #197 Phase 2: mutual-kNN, a loose model-keyed sanity band, or nothing —
+judged on the orthogonal corpus, the dense single-domain fixture, and real vaults via
+`just calibrate`, with "no gate" an admissible winner) and must behave **continuously in
+population size**: a statistics threshold may change banding, never membership.
+
+Candidate *generation* is unchanged and stays recall-oriented: the two-stage scan (§4)
+over-produces, nothing auto-links, and the human commits every edge — W4 untouched. What follows
+is the recorded history of the retired rule, kept in place because five issues of measurement are
+the argument for the ruling above.
+
+---
+
+**The superseded ruling (2026-08-05, PR #145).** The surfaced list owes the human candidates
+worth judging, not fullness: **zero candidates is a legitimate — and honest — answer** when
+nothing in the vault genuinely relates. What enforced that stance was a **quality floor** in
+`discover::candidates`, its shape constrained on two sides:
 
 - **Model-relative, never a bare constant.** The vectors are L2-normalized, so the engine's score
   maps exactly to cosine (`cos = 1 − d²/2`) and a floor is well-defined — but bge-family models
@@ -295,19 +319,20 @@ shape is constrained on two sides:
   across vault density (floors read off the labelled piles kept 99–100% of a 228-essay
   single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
   needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))
-  is the **per-anchor z-score rule** (`DiscoveryFloor` in `discover.rs`): each candidate is judged
-  against the anchor's *own* candidate population — a leader gate suppresses the
-  whole list when even the best candidate stands too little above that distribution (one diffuse
-  cloud has no signal), and a member bar ends the list where candidates rejoin it. Since
-  [GH #192](https://github.com/AlteredCraft/B2/issues/192) that judgment happens **after stage 2,
+  was the **per-anchor z-score rule** (`DiscoveryFloor` in `discover.rs`, deleted by #197): each
+  candidate was judged against the anchor's *own* candidate population — a leader gate suppressed
+  the whole list when even the best candidate stood too little above that distribution (one diffuse
+  cloud has no signal), and a member bar ended the list where candidates rejoined it. Since
+  [GH #192](https://github.com/AlteredCraft/B2/issues/192) that judgment happened **after stage 2,
   on the exact best-passage distances** stage 2 computes anyway — the rule first shipped reading
   the stage-1 centroid distances, and the paragraphs below record how the corpus measured that
-  unit failing in both directions on multi-topic notes and forced the move. Z-scores make
+  unit failing in both directions on multi-topic notes and forced the move. Z-scores made
   the floor model-relative *by construction* — no recorded constant, so a model or device swap
-  re-calibrates nothing — and the same defaults produce honest short lists at both measured
-  density extremes. The floor is inert on pools too small to carry a statistic, never applies to
-  a fake-embedded space (judged by the recorded model id), and is the adapters' explicit choice
-  to disable (`b2 similar --no-floor`).
+  re-calibrated nothing — and the same defaults produced honest short lists at both measured
+  density extremes. The floor was inert on pools too small to carry a statistic, never applied to
+  a fake-embedded space (judged by the recorded model id), and was the adapters' explicit choice
+  to disable (`b2 similar --no-floor`). What "model-relative by construction" optimized for is
+  named in the closing chapter: invariance on the wrong axis.
 
 **The z is also the surfaced list's order, and its absence is itself a thing to say.** An
 adapter grades a card from the z and never from the raw engine score (a negated L2 like
@@ -356,10 +381,13 @@ do about a demoted or suppressed passage was
 [#182](https://github.com/AlteredCraft/B2/issues/182), and the answer, once it had numbers instead
 of an eyeball, was the reorder below rather than any of the four card-level treatments that issue
 first sketched: three of them assumed a card to mark, group, or re-sort, and the measurement said
-the card was not on the list at all. **Where no z exists at all** — the floor inert on a pool under `FLOOR_MIN_POPULATION`, a
-space with no spread, the fake regime — a surface must *say* the list is ungraded. Silence
-there is not neutral: a column of bandless cards reads as a set of candidates that were judged
-and all scored low, which is the opposite of what happened.
+the card was not on the list at all. **Where no z exists at all** — a pool under the statistics
+minimum (`STATS_MIN_POPULATION` since #197; the same 12 was `FLOOR_MIN_POPULATION` while the gate
+shipped), a space with no spread, the fake regime — a surface must *say* the list is ungraded.
+Silence there is not neutral: a column of bandless cards reads as a set of candidates that were
+judged and all scored low, which is the opposite of what happened. (This obligation survives
+GH #197 unchanged; what changed at that threshold is that it now moves banding alone, never
+membership.)
 
 What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
 stranger the model scores like a cluster-mate. The watercolor ↔ stain-removal pair that first
@@ -456,7 +484,53 @@ sibling carried it), `●●○` at or above the leader gate (strong enough to h
 alone), `●●●` above the mate population's upper quartile — and, per #187's lesson, the comment
 carrying them cites `just eval`'s calibration block rather than quoting a window as timeless. The
 general rule this leaves: **a change to the judged statistic is a change to every surface that
-paints it**, and the harness is where the new landmarks come from.
+paints it**, and the harness is where the new landmarks come from. (That rule bound #197's own
+change: retiring the gate re-derived the eval's exit-gate constants and re-anchored the band's
+copy and the empty states in the same PR.)
+
+**The existence gate itself was the defect, and it retired**
+([GH #196](https://github.com/AlteredCraft/B2/issues/196) measured,
+[GH #197](https://github.com/AlteredCraft/B2/issues/197) ruled, 2026-08-18 — the ruling at the
+head of this section). The first real vault dogfooded against the #192 constants was a
+single-domain one — 17 notes, three of them same-subject articles deliberately added as a related
+set — and the floor served candidates for exactly **one of 17 notes**. The ranking was correct
+throughout (`--no-floor` showed the three articles as each other's top candidates at cosine
+~0.79); it was the **leader gate** that emptied every list, at z +1.358…+1.529 against the 1.96
+bar. The mechanism is the z rule's own model: a z-score treats the anchor's population mean as a
+*noise floor*, which is valid only when related notes are rare outliers in a dominant unrelated
+tail — the standard score-distributional threshold literature models relevant and non-relevant
+scores as **two** distributions and thresholds at the crossover, where this rule modelled **one**
+and defined "related" as deviation from it. A vault whose notes all sit in one domain has no
+unrelated tail: the mean *is* "moderately related", a genuine mate has nothing to stand out
+against, and the gate reads *everything is related* as *nothing is*. "One diffuse cloud" and "a
+coherent single-subject vault" are the same geometry, and the empty-state copy asserted the first
+while the second was true. Three amplifiers, each measured on that vault: the leader sits inside
+the population it is judged against; **cluster self-dilution** — linked-worthy siblings lift the
+mean for each other, so investing in a topic made its notes progressively harder to surface,
+while linking them (the pane's own purpose) removes them from each other's pools via the 1-hop
+exclusion only *after* the pane has done the job it cannot do; and the
+`FLOOR_MIN_POPULATION = 12` cliff, a silent serve-everything/serve-nothing rule change crossed by
+adding four notes. The review that became #197 also relocated two pieces of recorded evidence:
+the eval corpus is engineered orthogonal (process rule 2's token audit *minimizes* shared
+vocabulary), so it is a good instrument for ranks and a structurally incapable one for
+*distributions* — its strongest labelled pair sits below that real vault's background — and
+GH #150's rejection of absolute floors ("kept 99–100% of a 228-essay single-author vault") was the
+same finding read through the assumption it should have been testing: keeping nearly everything
+of a single-author vault was plausibly *correct*. Large vaults fail the same way eventually:
+above `SHORTLIST_MIN` the judged population is the anchor's centroid-nearest slice —
+pre-selected related — so every big vault reproduces the single-domain geometry inside its own
+shortlist. Hence the ruling: the **member bar deleted** rather than re-tuned (its admissible
+window had been empty on the corpus's own numbers since #187, and it is what suppressed the
+phishing mate), the **leader gate retired** from the default path, the ranked list always served,
+and the empty state honest. What #197 left behind: the z as the band's ungated input; two new
+instruments (`just calibrate`, the real-vault transfer check every distributional constant now
+owes — process rule 5 — and the dense single-domain fixture, whose assertions are a per-mate MRR
+floor and **zero empty panes**); and Phase 2's evidence-gated bake-off for any replacement
+existence signal — the leading candidate being mutual-kNN/reciprocal-rank, the hubness-correction
+family, which is rank-based and therefore constant-free — where "nothing" is an admissible winner
+and continuity in population size is an entry requirement. The **pair-scorer escalation** stays
+the named long-term seam: under always-serve the phishing mate is *served* (best-passage rank 4),
+so that residue is now ordering quality, not existence.
 
 FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
 in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
@@ -545,8 +619,9 @@ query** — it is passage↔passage KNN, "near ∖ connected" (§3) — so this 
 does **not** apply to it; the discovery-side ranking levers are the qmd chunker upgrade
 ([#19](https://github.com/AlteredCraft/B2/issues/19)) and distance-weighting
 ([#20](https://github.com/AlteredCraft/B2/issues/20)), not this — and the discovery-side
-*precision* lever is §3's quality floor: #20 reorders candidates, it cannot make a bad list
-shorter.
+*precision* stance is §3's: the ranked list is served, the human is the precision gate, and any
+future existence signal is Phase 2's evidence-gated bake-off (#197). #20 reorders candidates; it
+cannot decide an empty pane.
 
 **Gate the decision on the eval, not intuition** (the eval harness under `crates/b2-embed/evals/`). RRF
 is a strong baseline; the reranker buys **top-k precision**, whose value *grows with vault size* (semantic

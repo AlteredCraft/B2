@@ -921,6 +921,23 @@ fn similar_unknown_note_fails_cleanly() {
     assert!(!err.contains("panicked"), "no stack trace: {err}");
 }
 
+/// `--limit 0` asks for nothing and prints nothing. The empty-state copy reads
+/// the *candidate set* ("nothing unlinked has stored vectors to compare"), and
+/// a zero ask proves nothing about it — this vault has four candidates — so
+/// printing that copy here would be the one way the command could still make
+/// a claim it can't check (GH #197's empty-state honesty, at the degenerate ask).
+#[test]
+fn similar_limit_zero_prints_nothing_rather_than_a_claim() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(&root, &["similar", "alpha.md", "--limit", "0"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "",
+        "an empty ask yields empty output, never the empty-state copy"
+    );
+}
+
 #[test]
 fn link_writes_frontmatter_and_shows_in_both_directions() {
     let (_g, root) = discovery_vault();
