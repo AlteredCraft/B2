@@ -26,6 +26,7 @@ deterministic, and model-free, so model quality can never flake CI
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
+| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a) | stored vectors (pure read) | yes, per vault |
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
@@ -50,6 +51,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 |---|---|
 | [`crates/b2-embed/examples/eval.rs`](../../crates/b2-embed/examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
+| [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; process rule 5's transfer check |
 | [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
 | [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 queries; a verbatim `passage` adds chunk-level scoring (n=20) |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
