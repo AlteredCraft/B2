@@ -133,14 +133,13 @@
     <div class="files">crates/b2-core/src/discover.rs — the <code>candidates</code> fn · crates/b2-cli/src/main.rs</div>
     <p class="sub">You name one note — the <b>anchor</b>. B2 reads its stored chunk vectors, subtracts the
     already-linked set <em>up front</em> (the anchor plus its 1-hop graph neighbours — the ones you've linked),
-    shortlists what's left by per-note <b>centroids</b> (one cheap O(notes) scan), judges the
-    <a href="#floor">quality floor</a> against that full centroid field, scores each surviving shortlisted
-    note by its best exact chunk-pair match, ranks, and lists up to N. Every step is vector
-    math and a graph read — no model, no network.</p>
+    shortlists what's left by per-note <b>centroids</b> (one cheap O(notes) scan), scores each shortlisted
+    note by its best exact chunk-pair match, ranks, and lists up to N — <a href="#floor">the ranked list,
+    always</a>. Every step is vector math and a graph read — no model, no network.</p>
 
     <div class="diagram">
-      <svg viewBox="0 0 1000 486" xmlns="http://www.w3.org/2000/svg" role="img"
-           aria-label="The b2 similar pipeline: anchor chunk vectors, centroid shortlist minus already-linked neighbours, quality floor, exact max-sim per note, rank, list top N">
+      <svg viewBox="0 0 1000 412" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="The b2 similar pipeline: anchor chunk vectors, centroid shortlist minus already-linked neighbours, exact max-sim per note, rank, list top N">
         <defs>
           <marker id="s-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
           <marker id="s-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
@@ -161,28 +160,23 @@
         <text class="title" x="500" y="117" text-anchor="middle">shortlist by note centroids ∖ already-linked — stage 1, O(notes)</text>
         <text class="sub mono-t" x="500" y="134" text-anchor="middle">for_each_note_centroid — anchor + 1-hop skipped up front, never take a slot · shortlist ≫ limit</text>
 
-        <rect class="node" style="stroke:var(--amber);fill:rgba(210,153,34,.05)" x="280" y="168" width="440" height="52" rx="10"/>
-        <text class="title" x="500" y="191" text-anchor="middle">quality floor — z-gate vs the anchor’s own field</text>
-        <text class="sub mono-t" x="500" y="208" text-anchor="middle">leader gate + member bar · judged on the full stage-1 population, before truncation</text>
+        <rect class="node" style="stroke:var(--t3)" x="280" y="168" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="192" text-anchor="middle">score each shortlisted note by best chunk-pair (max-sim)</text>
+        <text class="sub mono-t" x="500" y="210" text-anchor="middle">stage 2, shortlist only · anchor-chunk × note-chunk · keep the evidence · z computed, gating nothing</text>
 
-        <rect class="node" style="stroke:var(--t3)" x="280" y="242" width="440" height="56" rx="10"/>
-        <text class="title" x="500" y="266" text-anchor="middle">score each survivor by best chunk-pair (max-sim)</text>
-        <text class="sub mono-t" x="500" y="284" text-anchor="middle">stage 2, shortlist only · anchor-chunk × note-chunk · keep the evidence</text>
+        <rect class="node" style="stroke:var(--t1)" x="280" y="246" width="440" height="52" rx="10"/>
+        <text class="title" x="500" y="269" text-anchor="middle">rank · cap</text>
+        <text class="sub mono-t" x="500" y="286" text-anchor="middle">sort desc · tie-break path · truncate(limit)</text>
 
-        <rect class="node" style="stroke:var(--t1)" x="280" y="320" width="440" height="52" rx="10"/>
-        <text class="title" x="500" y="343" text-anchor="middle">rank · cap</text>
-        <text class="sub mono-t" x="500" y="360" text-anchor="middle">sort desc · tie-break path · truncate(limit)</text>
-
-        <rect class="node" style="stroke:var(--green)" x="280" y="394" width="440" height="56" rx="10"/>
-        <text class="title" x="500" y="418" text-anchor="middle">list candidates — path · title · score · evidence</text>
-        <text class="sub mono-t" x="500" y="436" text-anchor="middle">CandidateNote { note_path, score, evidence_chunk_id }</text>
+        <rect class="node" style="stroke:var(--green)" x="280" y="320" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="344" text-anchor="middle">list candidates — path · title · score · evidence</text>
+        <text class="sub mono-t" x="500" y="362" text-anchor="middle">CandidateNote { note_path, score, evidence_chunk_id, z }</text>
 
         <!-- spine edges -->
         <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,72 L500,92"/>
         <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,146 L500,166"/>
-        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,220 L500,240"/>
-        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,298 L500,318"/>
-        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-green)" d="M500,372 L500,392"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,224 L500,244"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-green)" d="M500,298 L500,318"/>
 
         <!-- graph exclusion feeds stage 1 -->
         <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M252,120 L278,120"/>
@@ -201,40 +195,43 @@
     <b>1-hop exclusion is the graph's only role</b> — graph-distant "bridge" notes ride along unboosted, so a
     transitively-related note two hops away still surfaces.</p>
 
-    <div class="ground"><b>Ground truth:</b> <span class="mono">discover::candidates(conn, anchor, limit, floor)</span>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">discover::candidates(conn, anchor, limit, grade)</span>
     (<span class="mono">crates/b2-core/src/discover.rs</span>) — <b>stage 1</b>: one
     <span class="mono">db::for_each_note_centroid</span> scan ranks every note by centroid distance to the
     anchor's centroid (computed in-process from its chunk vectors), with
     <span class="mono">graph::reachable_within(anchor, 1)</span> excluded up front and a shortlist many times
     <span class="mono">limit</span> kept; <b>stage 2</b>: exact max-sim over only the shortlist's chunk vectors,
-    keeping each note's best pair and its evidence chunk. The <b>quality floor</b> (below) is judged on the full
-    stage-1 population before any truncation; the result sorts by score with a <span class="mono">path</span>
-    tie-break and truncates to <span class="mono">limit</span>. Returns empty when there's no embedding space,
-    the anchor has no chunks, <span class="mono">limit == 0</span> — or when the floor says nothing genuinely
-    relates. Vector-only; re-embeds nothing.</div>
+    keeping each note's best pair and its evidence chunk. The result sorts by score with a
+    <span class="mono">path</span> tie-break and truncates to <span class="mono">limit</span>; on a graded
+    space each row also carries its <b>z</b> (the strength band's input — it gates nothing). Returns empty
+    only when there's no embedding space, the anchor has no chunks, or <span class="mono">limit == 0</span>.
+    Vector-only; re-embeds nothing.</div>
   </section>
 
   <!-- ========================================================= -->
   <section id="floor">
-    <h2><span class="num">2</span>The quality floor — zero is an honest answer</h2>
-    <div class="files">crates/b2-core/src/discover.rs — <code>DiscoveryFloor</code> · docs/design/index-engine.md §3 · GH #150</div>
-    <p class="sub"><b><code>limit</code> is a cap, not a promise.</b> On any real vault, ten notes are always
-    <em>nearest</em> — even when nearest means nearest-of-nothing. So surfacing is quality-gated: when nothing
-    in the vault genuinely relates to the anchor, <code>b2 similar</code> says so with an empty list instead of
-    serving ten weak cards.</p>
-    <p class="cap">The rule is a <b>per-anchor z-score</b>, judged against the anchor's <em>own</em> stage-1
-    centroid-distance population (which every call already computes, so it costs nothing): a <b>leader gate</b>
-    suppresses the whole list when even the best candidate stands too little above that field — one diffuse
-    cloud has no signal — and a <b>member bar</b> ends the list where candidates rejoin it. Because a z-score is
-    relative to the anchor's own distribution, the floor is <b>model-relative by construction</b>: no recorded
-    cosine constant, nothing to recalibrate on a model or device swap. It stays inert on tiny vaults (fewer than
-    a dozen candidates — you can see everything anyway) and never applies to a fake-embedded space. Calibrated
-    on the eval's hand-labelled anchors and transfer-checked at the opposite density extreme
-    (GH #150, 2026-08-11).</p>
-    <p class="cap">Escape hatch: <code>b2 similar --no-floor</code> (the desktop pane's <em>Show nearest
-    anyway</em>) shows the raw nearest, however weak — <span class="mono">Vault::similar_raw</span>, one call,
-    no configuration. Each surfaced candidate also carries its <b>z</b>, which is what the desktop's strength
-    band is derived from — never the raw score.</p>
+    <h2><span class="num">2</span>The ranked list, always — an empty pane only means "nothing to compare"</h2>
+    <div class="files">crates/b2-core/src/discover.rs · docs/design/invariants.md D1 · GH #196 / #197</div>
+    <p class="sub"><b><code>limit</code> is a cap, not a promise</b> — the list under-fills only when the
+    vault genuinely has fewer unlinked, embedded notes than you asked for. Discovery answers a
+    <em>relative</em> question ("what belongs next to this note?"), so <code>b2 similar</code> serves the
+    ranked nearest whenever candidates exist, and the <b>strength band</b> — derived from each candidate's
+    z, never the raw score — carries the quality signal within the list.</p>
+    <p class="cap">It was not always so: until GH #197 a <b>per-anchor z existence gate</b> (GH #150) could
+    empty the pane on the verdict "nothing here stands out from this note's own background". That rule was
+    retired by measurement, not preference — its model assumes related notes are rare outliers in a mostly
+    unrelated vault, and on a real single-domain vault (everything genuinely related, so nothing "stands
+    out" from anything) it darkened 16 of 17 notes while the ranking underneath was correct throughout
+    (GH #196). An anchor-local statistic cannot distinguish <em>nothing is related</em> from
+    <em>everything is related</em>, so B2 no longer lets one claim to. The empty state now says the one
+    thing it can know — <em>nothing unlinked has stored vectors to compare</em> — and any future
+    "show nothing" signal must win an evidence-gated bake-off (on the standard corpus, a dense
+    single-domain fixture, and real vaults via <code>just calibrate</code>) in which "no gate at all" is an
+    admissible winner.</p>
+    <p class="cap">The z survives as a <b>statistic</b>: computed per candidate against the anchor's own
+    candidate population, strictly in step with the row order, painted as the card's dots. On tiny pools
+    (under a dozen candidates) and fake-embedded spaces no statistic exists, so the list is served
+    <em>ungraded</em> and says so — banding changes at that threshold, membership never does.</p>
   </section>
 
   <!-- ========================================================= -->
@@ -255,10 +252,9 @@
       <div class="card tight">
         <div class="kickerlbl" style="color:var(--cyan)">Scale &amp; the tuning lever</div>
         <p style="font-size:13px;margin:6px 0 0">Cost scales with <b>note count</b> (the stage-1 centroid scan)
-        plus the shortlist's chunks — CPU-bound vector math, milliseconds on a personal vault. Two knobs:
-        <code>--limit</code> caps the list, and <code>--no-floor</code> shows the raw nearest the quality
-        floor would hold back. Both change what you read, never what you pay. No API key, no config table,
-        no rate limit.</p>
+        plus the shortlist's chunks — CPU-bound vector math, milliseconds on a personal vault. One knob:
+        <code>--limit</code> caps the list. It changes what you read, never what you pay. No API key, no
+        config table, no rate limit.</p>
       </div>
     </div>
 

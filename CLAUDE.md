@@ -48,27 +48,53 @@ stage-1 z — and re-deriving both of `DiscoveryFloor`'s admissible windows from
 (the `floor calibration` block, and `discovery_z` in the row). The leader gate still had a window;
 the **member bar had none** — labelled mates ran from +0.80
 while strangers on positive anchors reached +1.62, so the two populations overlapped by 0.8 z and no
-constant separates an inversion. Which is also why `DiscoveryFloor`'s docstring cites the instrument
+constant separates an inversion. Which is also why the floor's docstring cited the instrument
 instead of quoting a window: the GH #150 numbers were frozen into that comment and went stale the
 first time the corpus grew a shape they were never measured against. Constants in code,
-measurements in the harness. GH #192 then acted on the measurement: the floor is **judged after
-stage 2, on the best-passage z** — the same number that orders the list and paints the band, so the
-three cannot disagree, and stage 1 is recall only. Its defaults were re-read from the harness's
-windows in the new unit (leader 1.96 / member 1.49), which serves 14 of 15 labelled mates at zero
-strangers, lands GH #189's journal-shaped `week-log.md` (gem served, loner anchors clean — the
-corpus is now 31 notes / 70 chunks), and leaves exactly one suppression: the phishing pair-residue,
-the pair-scorer escalation's standing evidence. GH #182 closed on the half that reorder left
-behind — the desktop's strength band was still calibrated on the *centroid* z's landmarks, so in
-the new unit its top band was unreachable and the corpus's strongest confirmed relation graded as
-middling; the bands are now read off the floor's own bars and the labelled-mate population
+measurements in the harness. GH #192 then acted on the measurement: the floor moved to **judging
+after stage 2, on the best-passage z** — the same number that orders the list and paints the band,
+so the three cannot disagree, and stage 1 is recall only. Its defaults were re-read from the
+harness's windows in the new unit (leader 1.96 / member 1.49), which served 14 of 15 labelled
+mates at zero strangers, landed GH #189's journal-shaped `week-log.md` (gem served, loner anchors
+clean — the corpus is now 31 notes / 70 chunks), and left exactly one suppression: the phishing
+pair-residue, the pair-scorer escalation's standing evidence. GH #182 closed on the half that
+reorder left behind — the desktop's strength band was still calibrated on the *centroid* z's
+landmarks, so in the new unit its top band was unreachable and the corpus's strongest confirmed
+relation graded as middling; the bands were re-read off the measured landmarks and the
+labelled-mate population
 (`ui/src/strength.ts`), which is the standing rule: **a change to the judged statistic is a change
 to every surface that paints it**. GH #188 then put discovery in the exit gate — per-mate MRR@5
-and the suppressed-mate count are now assertions beside hit@1 and the negatives, each set a
-margin to the *safe* side of today's reading rather than at it — the MRR **floor** below 0.633,
-the suppression **ceiling** above today's 1 (five repeat runs are bit-identical, so the headroom is
-for corpus drift, not run noise), with a strangers-on-positive-anchors count reported but
+and the suppressed-mate count became assertions beside hit@1 and the negatives, each set a
+margin to the *safe* side of the day's reading rather than at it (five repeat runs are
+bit-identical, so the headroom is for corpus drift, not run noise), with a
+strangers-on-positive-anchors count reported but
 deliberately ungated, since the cheapest way to shrink it is to label the stranger. The saturating
 per-anchor line is retired from stdout and kept in the JSON row.
+The closing chapter is GH #196/#197: the first real vault dogfooded against the re-derived floor
+was a **single-domain** one — the geometry the orthogonal corpus is structurally incapable of
+expressing, since process rule 2's token audit deliberately minimizes shared vocabulary — and the
+z existence gate read it exactly backwards: with no unrelated tail, every leader's z compresses
+under the bar, and **16 of 17 panes went dark on a vault whose ranking was correct throughout**.
+The defect was the gate itself, not its calibration (a single-population outlier test cannot
+distinguish *nothing is related* from *everything is related*), so GH #197 retired it rather than
+re-tuned it: discovery **serves the ranked top-N always** (invariants.md D1 — the register's one
+discovery-surfacing entry), the member bar is deleted, the empty states say only "nothing to
+compare", and the z survives ungated as the strength band's input. The harness moved with the rule
+(the #192 precedent): the negatives' suppression assertion retired — a loner anchor now serves its
+ranked nearest, and what its cards *claim* is the readout (all five leaders paint the weakest band,
+`●○○`, on the corpus) — the per-mate MRR floor was re-derived from the measured always-serve
+reading (0.650 = the old 0.633 plus the returned phishing mate, served at rank 4 now: the
+pair-scorer's standing evidence is ordering quality, not existence), and the suppression assertion
+is a **structural-zero tripwire** that re-arms if a Phase-2 gate ever ships. Two instruments landed
+first, per the sequencing rule: **`just calibrate <vault>`** (GH #196's hand arithmetic as a
+command — per-anchor pool distributions, replayed-gate-vs-always-serve, band histograms, on any
+built vault; process rule 5 makes it the mandatory transfer check for any distributional constant)
+and the **dense single-domain fixture** (`evals/corpus-dense/`, 15 beekeeping notes, all
+inter-related, no loner; rankings-only labels, its own `"corpus": "dense"` rows, and the
+**zero-empty-panes** assertion — the ruling made mechanical). Whether any existence signal returns
+is Phase 2's evidence-gated bake-off, where "no gate at all" is an admissible winner; #182's
+standing rule — **a change to the judged statistic is a change to every surface that paints it** —
+bound this change too, and stays.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

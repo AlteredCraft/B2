@@ -329,10 +329,12 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       <p>Each row is a similarity score, the note's name and path, and the passage that made it similar.
       The note itself and anything already linked to it never appear. <code>--limit N</code> caps the list
       (ten by default).</p>
-      <div class="note"><span class="tag">Zero is an answer</span> <code>--limit</code> is a cap, not a
-      quota. When nothing in the vault stands out as genuinely related, <code>b2 similar</code> says so and
-      returns an empty list rather than padding it with ten weak matches. <code>--no-floor</code> shows the
-      raw nearest anyway, however weak.</div>
+      <div class="note"><span class="tag">Ranked, always</span> <code>--limit</code> is a cap, not a
+      quota — the list is the ranked nearest, and it under-fills only when the vault genuinely has fewer
+      unlinked, embedded notes than you asked for. Similarity is relative to <em>your</em> vault: in a
+      single-subject vault everything is somewhat related and the top of the list is still the right
+      answer, so B2 serves the ranking and leaves the judgment to you. An empty list means only that
+      there was nothing to compare — not that nothing relates.</div>
       <div class="note tip"><span class="tag">You're the precision gate</span> B2 finds the candidates;
       <em>you</em> supply the judgment and the type. There's no review queue and nothing "inert until
       accepted" — a connection exists only once you author it. The intelligence is in the whole-vault
@@ -411,8 +413,8 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       <b>Settings → Index</b>; the top bar keeps the live progress meter and a Cancel, since a long run has
       to stay watchable with the dialog shut.</li>
     <li><b>Discovery sits next to what you're reading.</b> The similar-but-unlinked notes are a pane, not a
-      command you remember to run — with a strength band per candidate, a <em>Show nearest anyway</em>
-      escape hatch when the quality floor suppresses the list, and a one-click typed <b>Link</b> that writes
+      command you remember to run — always the ranked nearest, with a strength band per candidate grading
+      each within the list, and a one-click typed <b>Link</b> that writes
       the same <code>b2_relations:</code> line <code>b2 link</code> does. There's also a <b>graph view</b> of
       the connections around the open note.</li>
     <li><b>An editor.</b> CodeMirror 6 with live-preview Markdown, autosave, syntax-highlighted code
@@ -451,7 +453,7 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
       <tr><td><code>b2 reindex</code></td><td class="d">Re-project the vault; incremental. <code>--dry-run</code>, <code>--force</code>, <code>--cancel</code> (stop a run backgrounded with <code>&amp;</code>; <code>b2 status</code> names its pid).</td><td class="d">embeds</td></tr>
       <tr><td><code>b2 status</code></td><td class="d">Embedding coverage (is semantic ranking live?) and whether a reindex is running.</td><td class="d">no</td></tr>
       <tr><td><code>b2 search &lt;query&gt;</code></td><td class="d">Hybrid keyword + semantic search. <code>--limit N</code>.</td><td class="d">embeds query</td></tr>
-      <tr><td><code>b2 similar &lt;note&gt;</code></td><td class="d">Surface the semantically nearest notes you haven't linked yet. <code>--limit N</code>, <code>--no-floor</code> (show the raw nearest even when nothing stands out).</td><td class="d">reads vectors</td></tr>
+      <tr><td><code>b2 similar &lt;note&gt;</code></td><td class="d">Surface the semantically nearest notes you haven't linked yet — the ranked list, always. <code>--limit N</code>.</td><td class="d">reads vectors</td></tr>
       <tr><td><code>b2 link &lt;src&gt; &lt;dst&gt;</code></td><td class="d">Commit a typed relation into the source note's frontmatter. <code>--type</code> (<code>references</code>/<code>supports</code>/<code>contradicts</code>), <code>--explanation</code>.</td><td class="d">re-embeds note</td></tr>
       <tr><td><code>b2 neighbors &lt;note&gt;</code></td><td class="d">List a note's links, in and out; flags ones that resolve to nothing.</td><td class="d">no</td></tr>
       <tr><td><code>b2 explain &lt;note&gt;</code></td><td class="d">Every connection with its provenance and "why"; flags orphans.</td><td class="d">no</td></tr>

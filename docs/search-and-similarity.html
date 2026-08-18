@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>B2 — Search &amp; similarity: how B2 decides what's related</title>
-<meta name="description" content="A plain-language explainer of everything B2 uses to find and relate your notes: chunks, embeddings, keyword search, hybrid fusion, the two-stage similarity engine, and the quality floor that decides when to show you nothing at all.">
+<meta name="description" content="A plain-language explainer of everything B2 uses to find and relate your notes: chunks, embeddings, keyword search, hybrid fusion, the two-stage similarity engine, and the always-served ranked list with its relative strength dots.">
 <style>
   :root{
     --bg:#fbfcfd; --panel:#ffffff; --panel2:#f6f8fa; --ink:#1f2328; --muted:#59636e;
@@ -118,7 +118,7 @@
       <li><a href="#meaning">Meaning as a map</a></li>
       <li><a href="#search">Search: two opinions, fused</a></li>
       <li><a href="#similar">Similarity: the two-stage engine</a></li>
-      <li><a href="#floor">The quality floor: when B2 shows nothing</a></li>
+      <li><a href="#floor">The list is always served — and graded, not gated</a></li>
       <li><a href="#bands">Reading the strength dots</a></li>
       <li><a href="#limits">Known limits &amp; honest caveats</a></li>
       <li><a href="#components">Every component &amp; knob</a></li>
@@ -262,7 +262,7 @@
     <div class="caveat"><b>Why raw closeness numbers are never shown to you.</b> "0.79" only means something
     relative to the rest of <em>your</em> vault. In a vault of tightly-related research notes, 0.79 might be
     unremarkable; in a scrapbook of unrelated topics it would be a standout. B2 therefore never grades a
-    relationship by its raw number — see <a href="#floor">the quality floor</a>.</div>
+    relationship by its raw number — see <a href="#floor">how the list is graded</a>.</div>
   </section>
 
   <!-- ================================================================= -->
@@ -430,69 +430,69 @@
 
   <!-- ================================================================= -->
   <section id="floor">
-    <h2><span class="num">5</span>The quality floor: when B2 shows you nothing</h2>
-    <p class="sub">Every note has a nearest neighbour, even when nothing in the vault genuinely relates to
-    it. Showing that nearest neighbour anyway would be dishonest — so B2 has a rule for staying quiet.</p>
+    <h2><span class="num">5</span>The list is always served — and graded, not gated</h2>
+    <p class="sub">"What in my vault belongs next to this note?" is a <em>relative</em> question, and the
+    ranked list answers it. B2 always shows you the nearest unlinked notes; the strength dots — not an
+    empty panel — carry the quality signal.</p>
 
-    <p>The naive approach — "only show pairs closer than 0.7" — was tried and fails badly, because as
-    section 2 explained, a raw closeness number means nothing on its own. A fixed bar tuned on one vault
-    kept <em>99–100%</em> of candidates on a denser one.</p>
-
-    <p>So B2 judges each candidate <b>against the anchor's own competition</b>. For the note you're looking
-    at, B2 takes all its candidates, works out the typical closeness and the normal spread, and asks of each
-    one: <em>how far above this note's own background does it stand?</em> A candidate that's barely above
-    average is background noise, whatever its raw number.</p>
-
-    <div class="term"><span class="lbl">the term</span> "How far above the background, measured in units of
-    the normal spread" is a <b>z-score</b>, written σ (sigma). The rule is B2's <b>discovery quality
-    floor</b>. Being relative rather than absolute is the point: it means the rule survives changing the
-    model, the hardware, or the size of your vault without retuning.</div>
+    <p>B2 used to have a statistical rule for staying quiet: a candidate had to "stand out from the
+    anchor's own background" or the panel showed nothing, on the theory that a nearest neighbour of an
+    unrelated crowd isn't worth your time. The rule did exactly what it was designed to do — and the
+    design was wrong. "Stands out from the background" quietly assumes most of your vault is unrelated to
+    any given note, and a vault where everything shares one subject — a research vault, a project vault, a
+    single-subject zettelkasten — breaks that assumption by construction: the background is <em>itself</em>
+    related, nothing can stand out from it, and the panel went dark on the very vaults with the most to
+    connect. Measured on a real 17-note single-domain vault, 16 of 17 notes showed nothing — including
+    three articles on the same narrow subject that were each other's top-ranked neighbours. The rule could
+    not tell <em>"nothing is related"</em> from <em>"everything is related"</em>, so it was retired rather
+    than retuned.</p>
 
     <figure>
-      <svg viewBox="0 0 840 240" role="img" aria-label="Candidates plotted along a z-score axis with two gates marked">
+      <svg viewBox="0 0 840 250" role="img" aria-label="Two vaults' candidates on one closeness axis: a mixed vault with a standout, and a single-domain vault where everything is close">
         <g font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5">
-          <line x1="60" y1="150" x2="800" y2="150" stroke="#d1d9e0" stroke-width="1.5"/>
-          <text x="60" y="176" fill="#6e7781" font-size="10" text-anchor="middle">average</text>
-          <text x="60" y="190" fill="#6e7781" font-size="10" text-anchor="middle">0σ</text>
-          <line x1="60" y1="142" x2="60" y2="158" stroke="#6e7781"/>
-          <text x="800" y="176" fill="#6e7781" font-size="10" text-anchor="middle">3σ</text>
-          <line x1="800" y1="142" x2="800" y2="158" stroke="#6e7781"/>
+          <line x1="60" y1="90" x2="800" y2="90" stroke="#d1d9e0" stroke-width="1.5"/>
+          <text x="52" y="94" fill="#6e7781" font-size="10" text-anchor="end">mixed vault</text>
+          <circle cx="140" cy="90" r="6" fill="#6e7781"/>
+          <circle cx="185" cy="90" r="6" fill="#6e7781"/>
+          <circle cx="238" cy="90" r="6" fill="#6e7781"/>
+          <circle cx="290" cy="90" r="6" fill="#6e7781"/>
+          <circle cx="350" cy="90" r="6" fill="#6e7781"/>
+          <circle cx="712" cy="90" r="8" fill="#1a7f37"/>
+          <text x="712" y="68" fill="#1a7f37" text-anchor="middle" font-size="10.5">an obvious standout</text>
 
-          <!-- member gate -->
-          <line x1="428" y1="60" x2="428" y2="162" stroke="#9a6700" stroke-width="1.6" stroke-dasharray="5 4"/>
-          <text x="428" y="52" fill="#9a6700" text-anchor="middle" font-size="10.5">keep-bar 1.49σ</text>
-          <!-- leader gate -->
-          <line x1="546" y1="40" x2="546" y2="162" stroke="#0969da" stroke-width="1.6" stroke-dasharray="5 4"/>
-          <text x="546" y="32" fill="#0969da" text-anchor="middle" font-size="10.5">show-anything-at-all bar 1.96σ</text>
+          <line x1="60" y1="180" x2="800" y2="180" stroke="#d1d9e0" stroke-width="1.5"/>
+          <text x="52" y="184" fill="#6e7781" font-size="10" text-anchor="end">research vault</text>
+          <circle cx="560" cy="180" r="6" fill="#1a7f37"/>
+          <circle cx="596" cy="180" r="6" fill="#1a7f37"/>
+          <circle cx="628" cy="180" r="6" fill="#1a7f37"/>
+          <circle cx="662" cy="180" r="6" fill="#1a7f37"/>
+          <circle cx="700" cy="180" r="7" fill="#1a7f37"/>
+          <circle cx="736" cy="180" r="8" fill="#1a7f37"/>
+          <text x="648" y="158" fill="#1a7f37" text-anchor="middle" font-size="10.5">everything genuinely related — no one thing "stands out"</text>
 
-          <!-- candidates -->
-          <circle cx="120" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="168" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="214" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="268" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="330" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="392" cy="150" r="6" fill="#6e7781"/>
-          <circle cx="470" cy="150" r="7" fill="#9a6700"/>
-          <circle cx="600" cy="150" r="8" fill="#1a7f37"/>
-          <circle cx="712" cy="150" r="8" fill="#1a7f37"/>
-          <text x="712" y="128" fill="#1a7f37" text-anchor="middle" font-size="10.5">bike-maintenance.md</text>
-          <text x="470" y="128" fill="#9a6700" text-anchor="middle" font-size="10.5">kept, weaker</text>
-
-          <text x="240" y="212" fill="#6e7781" text-anchor="middle" font-size="11">the anchor's ordinary background — cut</text>
-          <text x="656" y="212" fill="#1a7f37" text-anchor="middle" font-size="11">genuinely stands out — served</text>
+          <text x="60" y="232" fill="#6e7781" font-size="10" text-anchor="middle">far</text>
+          <text x="800" y="232" fill="#6e7781" font-size="10" text-anchor="middle">near</text>
+          <line x1="60" y1="222" x2="60" y2="238" stroke="#6e7781"/>
+          <line x1="800" y1="222" x2="800" y2="238" stroke="#6e7781"/>
         </g>
       </svg>
-      <figcaption><b>Two bars, doing different jobs.</b> The <span style="color:#0969da">blue bar</span>
-      asks "does the <em>best</em> candidate stand out at all?" — if not, the whole list is suppressed and
-      you see "nothing stands out". The <span style="color:#9a6700">amber bar</span> then decides where the
-      list stops: candidates below it are the anchor's noise floor, not results. The bars sit at
-      <b>1.96σ</b> and <b>1.49σ</b>, and both are re-derived from a hand-labelled test corpus rather than
-      guessed.</figcaption>
+      <figcaption><b>The geometry that decided it.</b> A "stand out from the background" test serves the
+      top row's standout and — reading the bottom row's tight cluster as one indistinct background —
+      serves <em>nothing</em> from the vault where every candidate is genuinely related. Both rows deserve
+      their ranked list; only the dots should differ.</figcaption>
     </figure>
 
-    <div class="ground"><b>On a small vault the rule switches itself off.</b> A z-score over a handful of
-    candidates is statistical noise, so with fewer than 12 candidates B2 shows everything it found. In a
-    vault that small you can see all your notes anyway.</div>
+    <p>So today the rule is simple: <b>the ranked list is served, and you are the judge.</b> The panel is
+    empty only when there is genuinely nothing to compare — no unlinked note with stored vectors yet — and
+    it says exactly that, never "nothing relates". The per-candidate statistic survives as the input to
+    the <a href="#bands">strength dots</a>: a within-list grading, so a research vault reads "here are
+    your nearest, all middling" instead of a dark panel.</p>
+
+    <div class="ground"><b>Could a smarter "show nothing" rule come back?</b> Only by earning it: any
+    replacement has to win a measured bake-off — on the standard test corpus, on a deliberately
+    single-domain one built for exactly this failure, and on real vaults via a calibration command — and
+    "no rule at all" is allowed to win it. That is also what every comparable tool ships: a ranked list,
+    with the score as a signal rather than a verdict.</div>
   </section>
 
   <!-- ================================================================= -->
@@ -503,20 +503,22 @@
     <div class="bands">
       <div class="band"><span class="g" style="color:var(--green)">●●●</span><b>strong match</b><br>
         <span style="font-size:12.5px">2.52σ and above — in the top quartile of relationships a human has
-        confirmed as real.</span></div>
+        confirmed as real on the test corpus.</span></div>
       <div class="band"><span class="g" style="color:var(--accent)">●●○</span><b>clear match</b><br>
-        <span style="font-size:12.5px">1.96σ and above — clears the bar that decides whether anything is
-        shown at all.</span></div>
+        <span style="font-size:12.5px">1.96σ and above — where the test corpus's confirmed relationships
+        typically lead their lists.</span></div>
       <div class="band"><span class="g" style="color:var(--muted)">●○○</span><b>near match</b><br>
-        <span style="font-size:12.5px">Below 1.96σ — real enough to keep in the list, worth a sceptical
+        <span style="font-size:12.5px">Below 1.96σ — near in this list's own terms; worth a sceptical
         look.</span></div>
     </div>
-    <p>Because the dots, the ordering of the list, and the decision to show the list at all are all read
-    from the same number, they can never disagree with each other. A card higher in the list never has fewer
-    dots than one below it.</p>
+    <p>Because the dots and the ordering of the list are read from the same number, they can never
+    disagree with each other. A card higher in the list never has fewer dots than one below it. The dots
+    grade; they never decide what appears — the list itself is always the ranked nearest.</p>
     <div class="caveat"><b>The dots are relative to the note you're on.</b> "●●●" means <em>strong compared
     with this note's other candidates</em>, not "95% similar". The same pair of notes can legitimately show
-    different dots from each side, because each side has different competition.</div>
+    different dots from each side, because each side has different competition. A known consequence: in a
+    tightly single-subject vault, where every candidate is close, the dots can read uniformly modest — see
+    the <a href="#limits">open questions</a>.</div>
   </section>
 
   <!-- ================================================================= -->
@@ -524,33 +526,34 @@
     <h2><span class="num">7</span>Known limits &amp; honest caveats</h2>
 
     <div class="warnbox">
-      <div class="hd"><span>▲</span><span class="tag">Open issue</span></div>
-      <b>If all your notes are about the same subject, the related-notes panel may show nothing at all.</b>
-      <p>The quality floor asks "does this candidate stand out from the note's <em>background</em>?" — which
-      quietly assumes most of your vault is unrelated to any given note. In a vault where everything is on
-      one topic (a research vault, a project vault, a single-subject zettelkasten) that assumption breaks:
-      the background is <em>itself</em> related, so nothing can stand out from it, and genuinely related
-      notes get suppressed. Measured on a real 17-note single-domain vault, 16 of 17 notes returned nothing
-      — including three articles on the same narrow subject that were each other's top-ranked neighbours.</p>
-      <p>There's a perverse edge to it: the <em>more</em> notes you write on a subject, the more they raise
-      each other's background, and the harder each one becomes to surface.</p>
-      <p><b>Workaround today:</b> use <em>Show nearest anyway</em> in the app, or
-      <code>b2 similar &lt;note&gt; --no-floor</code> on the command line — both bypass the floor and show
-      the raw ranking, which is unaffected by this and remains correct.
-      Tracked as <a href="https://github.com/AlteredCraft/B2/issues/196">issue #196</a>.</p>
+      <div class="hd"><span>▲</span><span class="tag">Open question</span></div>
+      <b>In a tightly single-subject vault, the strength dots can read uniformly modest.</b>
+      <p>The related-notes panel now always serves the ranked list — the "show nothing" rule that used to
+      darken single-subject vaults was retired after being measured doing exactly that
+      (<a href="https://github.com/AlteredCraft/B2/issues/196">#196</a>,
+      <a href="https://github.com/AlteredCraft/B2/issues/197">#197</a>). What remains open is the
+      <em>grading</em>: the dots compare each candidate with the note's other candidates, and in a vault
+      where every candidate is close, that comparison compresses — genuinely strong relationships can all
+      paint one or two dots. The list order is unaffected and correct; only the dots lose resolution.
+      Measuring that compression on real vaults (there's a calibration command for exactly this), and
+      deciding what the dots should reference instead, is the named next step.</p>
     </div>
 
     <ul class="tidy">
-      <li><b>A relation the model simply gets wrong can't be rescued by any of this.</b> The floor judges a
-      candidate against its competition; if the model scores one unrelated pair unusually highly, it sits
-      above that competition by definition. One such case is a known, tracked residue in B2's own test
-      corpus.</li>
+      <li><b>A relation the model simply gets wrong can't be rescued by ranking.</b> If the model scores
+      one unrelated pair unusually highly, that pair sits high in the list by definition. One such case is
+      a known, tracked residue in B2's own test corpus — now a mis-<em>ordering</em> (the real relation
+      appears, a few places lower than it should) rather than an absence.</li>
+      <li><b>Whether any "show nothing" rule ever returns is an open, evidence-gated question.</b> The
+      leading candidate is a mutual-nearest-neighbour check (serve or flag only candidates whose own top
+      list contains the anchor — a rank-based test with no tuned constant), judged against corpora and
+      real vaults where "no rule at all" is allowed to win.</li>
       <li><b>Quality depends on your reindex being current.</b> Discovery reads stored vectors and never
       re-embeds, so notes edited since the last index are compared on their old text. The desktop app
       re-indexes automatically on changes; the CLI does it when you run <code>b2 reindex</code>.</li>
       <li><b>An index built with the fake embedder is meaningless.</b> If <code>B2_EMBEDDER=fake</code> was
-      set (offline/dev mode), vectors are content hashes, not semantics — B2 detects this and switches the
-      quality floor off rather than pretending to grade noise.</li>
+      set (offline/dev mode), vectors are content hashes, not semantics — B2 detects this and serves the
+      list ungraded rather than pretending to measure strength over noise.</li>
       <li><b>Only Markdown is read for meaning.</b> Other files in your vault are tracked as resources but
       have no passages or vectors yet, so they never appear as similar notes.</li>
     </ul>
@@ -588,11 +591,14 @@
           <td><a href="discovery.html">Discovery</a></td></tr>
         <tr><td><b>Link exclusion</b></td><td>Which candidates are hidden as "already known"</td>
           <td>Anything 1 link away from the anchor</td><td><a href="discovery.html">Discovery</a></td></tr>
-        <tr><td><b>Quality floor</b></td><td>Whether to show a list at all, and where it stops</td>
-          <td>1.96σ to show anything; 1.49σ to stay in; off below 12 candidates</td>
+        <tr><td><b>Surfacing rule</b></td><td>What the related-notes panel shows</td>
+          <td>The ranked list, always — no statistical gate (the z existence gate was retired
+          by measurement)</td>
           <td><a href="#floor">Section 5</a></td></tr>
-        <tr><td><b>Strength bands</b></td><td>How many dots a card gets</td>
-          <td>●●● ≥ 2.52σ · ●●○ ≥ 1.96σ · ●○○ below</td><td><a href="#bands">Section 6</a></td></tr>
+        <tr><td><b>Strength bands</b></td><td>How many dots a card gets (grading only — never what
+          appears)</td>
+          <td>●●● ≥ 2.52σ · ●●○ ≥ 1.96σ · ●○○ below · ungraded under 12 candidates</td>
+          <td><a href="#bands">Section 6</a></td></tr>
         <tr><td><b>Grounded chat</b></td><td>Which passages an answer is allowed to cite</td>
           <td>Top 10 passages from the same hybrid search</td>
           <td><a href="architecture.html">Architecture</a></td></tr>
@@ -647,13 +653,15 @@
       <div class="gitem"><div class="gterm">Stemming</div><div class="gdef">Trimming words to a common root
         in the keyword index so "running" matches "run". Improves recall; occasionally over-merges
         (<em>universe</em> / <em>university</em>).</div></div>
-      <div class="gitem"><div class="gterm">Quality floor</div><div class="gdef">The rule that decides
-        whether the related-notes list is worth showing at all, and where it should stop — measured in
-        z-scores against the anchor's own candidates.</div></div>
+      <div class="gitem"><div class="gterm">Quality floor <span class="also">retired</span></div>
+        <div class="gdef">The retired rule that decided whether the related-notes list was worth showing
+        at all, measured in z-scores against the anchor's own candidates. Retired by measurement: it read
+        a single-subject vault — where everything is related — as "nothing relates". The ranked list is
+        now always served, and the z survives only as the strength dots' input.</div></div>
       <div class="gitem"><div class="gterm">z-score <span class="also">"σ", "sigma"</span></div>
         <div class="gdef">How far above the typical value something sits, measured in units of the normal
-        spread. "2.5σ" means "well above this note's ordinary candidates". Being relative is what lets the
-        same rule work on any vault, any model, any hardware.</div></div>
+        spread. "2.5σ" means "well above this note's ordinary candidates". In B2 it grades the strength
+        dots — within one note's list — and decides nothing about what appears.</div></div>
     </div>
   </section>
 
