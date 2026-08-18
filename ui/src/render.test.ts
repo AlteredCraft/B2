@@ -795,15 +795,18 @@ check("a graded list carries no ungraded caveat", () => {
   assert(!html.includes("Ungraded"), "nothing to admit — the floor judged this list");
 });
 
-check("raw mode says raw, not ungraded — one caveat, not two", () => {
-  // `--no-floor`'s GUI sibling turns the floor off, so *of course* nothing carries a z.
-  // The honest caveat there is already "the quality floor is off"; adding "ungraded" on
-  // top would explain the same fact twice, in words that sound like a different problem.
-  const html = sidePaneHtml(
-    app({ current: note(), semantic: true, rawDiscovery: true, similar: [ghost()] }),
+check("an empty pane never claims nothing relates — only that there was nothing to compare", () => {
+  // The ranked list is always served (GH #197), so an empty discovery pane has exactly
+  // one honest meaning: the candidate set is genuinely empty. The retired copy asserted
+  // a judgement ("nothing unlinked stands out") that an anchor-local statistic cannot
+  // make — on a single-domain vault it was wrong on 16 of 17 notes (GH #196).
+  const html = sidePaneHtml(app({ current: note(), semantic: true, similar: [] }));
+  assert(
+    html.includes("Nothing unlinked has stored vectors to compare"),
+    "the empty state states a fact about the candidate set",
   );
-  assert(html.includes("quality floor is off"), "the raw banner is the caveat here");
-  assert(!html.includes("Ungraded"), "and it is the only one");
+  assert(!html.includes("stands out"), "and claims no knowledge of what relates");
+  assert(!html.includes("Show nearest anyway"), "no escape hatch — there is no gate to escape");
 });
 
 // --- chat (flow ④, GH #155) ------------------------------------------------------------

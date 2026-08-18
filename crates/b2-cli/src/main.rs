@@ -161,18 +161,16 @@ enum Command {
         limit: usize,
     },
     /// Surface the notes most semantically similar to NOTE that you haven't linked
-    /// yet — connection discovery. NOTE is a vault-relative path. A local
-    /// read over stored vectors (run `b2 reindex` with the real model first).
+    /// yet — connection discovery, ranked nearest first. NOTE is a vault-relative
+    /// path. A local read over stored vectors (run `b2 reindex` with the real
+    /// model first). Similarity is relative to your vault: the list is always
+    /// the ranked nearest, and you are the judge of which are worth a link.
     Similar {
         /// The note to find similar notes for: a vault-relative path.
         note: String,
         /// Maximum number of similar notes to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
-        /// Show the raw nearest notes without the discovery quality floor —
-        /// every candidate up to --limit, however weak.
-        #[arg(long)]
-        no_floor: bool,
     },
     /// Commit a typed connection SRC → DST into SRC's frontmatter `b2_relations:`.
     /// SRC and DST are each a vault-relative path.
@@ -357,11 +355,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Mv { from, to } => cmd_mv(cli, from, to),
         Command::Rm { target, recursive } => cmd_rm(cli, target, *recursive),
         Command::Search { query, limit } => cmd_search(cli, query, *limit),
-        Command::Similar {
-            note,
-            limit,
-            no_floor,
-        } => cmd_similar(cli, note, *limit, *no_floor),
+        Command::Similar { note, limit } => cmd_similar(cli, note, *limit),
         Command::Link {
             src,
             dst,
@@ -878,34 +872,24 @@ fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
     Ok(())
 }
 
-fn cmd_similar(cli: &Cli, note: &str, limit: usize, no_floor: bool) -> Result<(), CliError> {
+fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
     // Candidate generation reads the *stored* vectors (no query embedding), so
     // like `neighbors` it needs no live model — a prior `reindex` supplies them.
-    // Open with the fake; it's a pure, instant local read. (The discovery floor
-    // keys on the vault's RECORDED model id, so opening with the fake for reading
-    // never disables it — only --no-floor, the explicit raw-nearest ask, does.)
+    // Open with the fake; it's a pure, instant local read. (The z grading keys
+    // on the vault's RECORDED model id, so opening with the fake for reading
+    // never turns it off.)
     let vault = open_vault(cli.vault_or_cwd(), false)?;
-    let results = if no_floor {
-        vault.similar_raw(note, limit)?
-    } else {
-        vault.similar(note, limit)?
-    };
+    let results = vault.similar(note, limit)?;
     if cli.json {
         print_json(&results)?;
-    } else if results.is_empty() && no_floor {
-        // Raw mode: no floor could have filtered anything, so an empty list means
-        // there was nothing to compare at all — and suggesting --no-floor here
-        // would recommend the flag already in effect.
-        println!("Nothing unlinked has stored vectors to compare.");
     } else if results.is_empty() {
-        // Two honest empty states (GH #150): a vault with vectors that has nothing
-        // strong enough to show, vs a vault whose similarity isn't semantic yet.
+        // Two honest empty states, and neither claims "nothing relates"
+        // (GH #197): an empty list means the candidate set is genuinely empty —
+        // nothing unlinked with stored vectors to compare — or the vault's
+        // similarity isn't semantic yet.
         let status = vault.embed_status()?;
         if status.embedded > 0 {
-            println!(
-                "No strong candidates — nothing unlinked stands out as related to this note. \
-                 (`--no-floor` shows the raw nearest anyway.)"
-            );
+            println!("Nothing unlinked has stored vectors to compare.");
         } else {
             println!(
                 "No similar notes. (If you haven't yet, run `b2 init` then `b2 reindex` so similarity is semantic.)"

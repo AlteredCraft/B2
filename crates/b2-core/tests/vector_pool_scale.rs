@@ -135,11 +135,11 @@ fn similar_returns_the_full_candidate_set_without_a_silent_cap() {
     // A limit below the candidate pool must come back *full* — no silent under-cap.
     // (49 candidates sit under the 200-note shortlist floor, so the two-stage scan is
     // exact, exactly as the old whole-space scan was.)
-    let forty = discover::candidates(&conn, &ids[0], 40, None).unwrap();
+    let forty = discover::candidates(&conn, &ids[0], 40, false).unwrap();
     assert_eq!(forty.len(), 40, "the scan honours the full requested limit");
 
     // A limit past the pool returns *every* unlinked note, and never the anchor.
-    let all = discover::candidates(&conn, &ids[0], 1000, None).unwrap();
+    let all = discover::candidates(&conn, &ids[0], 1000, false).unwrap();
     assert_eq!(
         all.len(),
         ids.len() - 1,

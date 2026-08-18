@@ -220,7 +220,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut readings: Vec<AnchorReading> = Vec::new();
     let mut poolless: Vec<String> = Vec::new();
     for note in &notes {
-        let cands = vault.similar_raw(&note.path, SCAN_LIMIT)?;
+        let cands = vault.similar(&note.path, SCAN_LIMIT)?;
         if cands.is_empty() {
             // No stored vectors on the anchor, or nothing unlinked with vectors
             // to compare against — a genuinely empty candidate set, named rather

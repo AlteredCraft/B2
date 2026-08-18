@@ -28,44 +28,43 @@
 //!    (index-engine.md, GH #44).
 //! 4. **Discovery** — `evals/similar.json` anchors score `Vault::similar` (the
 //!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
-//!    does not exercise. Positive anchors score **rank** (did a labelled
-//!    cluster-mate surface, and how high) two ways: the historical per-anchor
-//!    metric, which stops at the *first* mate it finds and therefore saturates —
-//!    it has read 1.000 across changes it was meant to judge, so since GH #188
-//!    it is recorded in the row but no longer printed — and the per-mate
-//!    companion added by GH #183, which scores every labelled mate separately so
-//!    a hard one demoted behind an easy one is visible. That second one is what
-//!    the printed line and the exit gate now read. Beside it sits discovery's
-//!    **precision** side (GH #188): the *strangers* a positive anchor serves —
-//!    unlabelled notes on a list the labels do not claim — counted, named, and
-//!    deliberately left ungated, since the cheapest way to shrink that count is
-//!    to label the stranger. **Negative anchors** — deliberate loner
-//!    notes whose labelled answer is "nothing relates" — score **suppression**:
-//!    does discovery return zero candidates, or serve strangers? And every
-//!    surfaced candidate's score lands in one of two **cosine piles** — labelled
-//!    related vs. everything else surfaced — the measured distributions the
-//!    quality floor is calibrated from (index-engine.md §3's ruling, PR #145).
-//!    The floor ships (GH #150, the per-anchor z rule in `discover::candidates`),
-//!    so ranks + suppression score the **floored** surface while the piles come
-//!    from a second, **unfloored** pass — the calibration data keeps accruing
-//!    ungated. Suppression is fully gated: every negative anchor must come back
-//!    clean. (The watercolor ↔ stain-removal pair that once blocked this was
-//!    resolved 2026-08-11 by replacing watercolor with a cleanly orthogonal
-//!    loner — an arguable negative label is corpus debt, not a target.)
-//! 5. **The floor's own calibration** (GH #187) — a third discovery pass dumps
-//!    every candidate's z in the floor's judge unit (the *stage-2 best-passage
-//!    z* since GH #192; stage-1 centroid z before it, until that unit's keep/cut
-//!    populations were measured inverting), split into the populations that
-//!    actually calibrate the two constants: labelled mates, strangers on
-//!    positive anchors (`member_z`'s comparison set), and negative anchors'
-//!    leaders (`leader_z`'s). From those it re-derives both admissible windows
-//!    on the **current** corpus and prints the member bar's trade curve. This
-//!    exists because the #150 windows were frozen into a rustdoc as if timeless
-//!    and went stale the first time the corpus grew a shape they were never
-//!    measured against: constants in code, measurements in the harness. The
-//!    dump's z is also recomputed harness-side from the served scores, so a
-//!    drift in the engine's statistic — not only its rule — turns the block's
-//!    check line into a `[FAULT]`.
+//!    does not exercise. The surface **always serves the ranked list** (GH #197 —
+//!    the per-anchor z existence gate is retired, so there is no floored/raw
+//!    split any more; the harness keeps its two-pass structure with both passes
+//!    on the one surface, as the tripwire that re-arms if a Phase-2 gate ever
+//!    ships). Positive anchors score **rank** two ways: the historical
+//!    per-anchor metric, which stops at the *first* mate it finds and therefore
+//!    saturates — it has read 1.000 across changes it was meant to judge, so
+//!    since GH #188 it is recorded in the row but no longer printed — and the
+//!    per-mate companion added by GH #183, which scores every labelled mate
+//!    separately so a hard one demoted behind an easy one is visible. That
+//!    second one is what the printed line and the exit gate read. Beside it sits
+//!    discovery's **precision** side (GH #188): the *strangers* a positive
+//!    anchor serves — unlabelled notes on a list the labels do not claim —
+//!    counted, named, and deliberately left ungated, since the cheapest way to
+//!    shrink that count is to label the stranger. **Negative anchors** —
+//!    deliberate loner notes whose labelled answer is "nothing relates" — are
+//!    served their ranked nearest like every anchor under always-serve; what
+//!    they measure now is *what those cards claim* (the bands, read in the
+//!    calibration block — assumption A2 of GH #197) rather than suppression,
+//!    and every surfaced candidate's score still lands in one of two **cosine
+//!    piles** — labelled related vs. everything else surfaced — the measured
+//!    distributions any future existence signal would be argued from.
+//! 5. **The discovery z calibration** (GH #187) — a deep discovery pass dumps
+//!    every candidate's stage-2 best-passage z (the strength band's input; it
+//!    gates nothing since GH #197), split into the populations an existence
+//!    bar would answer to: labelled mates, strangers on positive anchors, and
+//!    negative anchors' leaders. From those it re-derives the admissible
+//!    window a leader gate or member bar *would* have on the current corpus —
+//!    the record of why none ships (the member window has been empty since
+//!    #187 measured it; GH #196 showed the leader gate reading a dense vault
+//!    dark), and the reading any Phase-2 bake-off candidate is judged
+//!    against. This exists because the #150 windows were frozen into a rustdoc
+//!    as if timeless and went stale the first time the corpus grew a shape
+//!    they were never measured against: constants in code, measurements in the
+//!    harness. The dump's z is also recomputed harness-side from the served
+//!    scores, so a drift in the engine's statistic turns the block's check
+//!    line into a `[FAULT]`.
 //! 6. **The dense single-domain fixture** (GH #196/#197, Phase 0b) — a *second*
 //!    corpus (`evals/corpus-dense/`, labels `evals/similar-dense.json`) scored in
 //!    its **own throwaway vault** and recorded in its **own row** (corpus id
@@ -120,7 +119,6 @@
 
 use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
-use b2_core::discover::DiscoveryFloor;
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
@@ -137,13 +135,13 @@ const SIM_K: usize = 5;
 /// size, since a threshold is calibrated against the whole population it has to
 /// cut, not against the prefix a human-facing `limit` would show.
 const Z_SCAN_LIMIT: usize = 500;
-/// A [`DiscoveryFloor`] that gates nothing: both bars at `-∞`, so the shipped
-/// path computes every candidate's z and cuts none of them. The z dump's whole
-/// trick (see [`score_floor_z`]).
-const UNGATED_FLOOR: DiscoveryFloor = DiscoveryFloor {
-    leader_z: f64::NEG_INFINITY,
-    member_z: f64::NEG_INFINITY,
-};
+/// The strength-band landmarks the desktop paints (`ui/src/strength.ts`,
+/// GH #182), restated for the negatives' band readout (GH #197's A2): what a
+/// loner anchor's always-served cards *claim*. Restated rather than imported —
+/// the bands are UI copy, and this block is the instrument their values are
+/// re-measured by.
+const BAND_STRONG_Z: f64 = 2.52;
+const BAND_CLEAR_Z: f64 = 1.96;
 /// The soft reference floor on the default config's hybrid note hit@1.
 const FLOOR_HIT1: f64 = 0.75;
 /// The floor on **per-mate** discovery MRR@[`SIM_K`] (GH #188) — the
@@ -292,30 +290,27 @@ struct SimilarPass {
     /// bit-identical, so the gate is sized for *corpus* drift and placed below
     /// today's reading rather than at it.
     mate: Agg,
-    /// [`Self::mate`] measured on the **unfloored** surface (`similar_raw`).
+    /// [`Self::mate`] measured on the second pass — which since GH #197 reads
+    /// the **same always-serve surface** as the first (there is no unfloored
+    /// sibling to diff against: `similar` *is* the ranked list).
     ///
-    /// Until GH #192 the shipped list was centroid-z-ordered while the raw one
-    /// was best-passage-ordered, so this pair was a standing ordering A/B — the
-    /// instrument that priced the centroid-vs-passage trade index-engine.md §3
-    /// had only asserted. The reorder made the shipped order best-passage too,
-    /// so the orders now agree by construction and the remaining gap between
-    /// these two aggregates is the floor's *suppression* alone: what `limit`'s
-    /// cap and the member bar cost, with ordering out of the picture.
-    /// [`Self::mate_suppressed`] names the suppressed mates that gap comes from.
+    /// Kept, with [`Self::mate_suppressed`] beside it, as the **tripwire
+    /// structure**: while nothing gates, the two aggregates agree by
+    /// construction and suppression reads a structural 0. If a Phase-2
+    /// bake-off ever ships an existence signal, the passes diverge again and
+    /// the suppression assertion re-arms with no harness change. (Historically
+    /// this pair was first the centroid-vs-passage ordering A/B, then — after
+    /// GH #192 aligned the orders — the floor's isolated suppression cost.)
     mate_raw: Agg,
-    /// Labelled mates the unfloored surface reaches but the **shipped** one does
-    /// not serve at all — the floor suppressing a human-labelled relation
-    /// outright, as opposed to merely ranking it lower.
-    ///
-    /// This is the number that separates "demoted" from "gone", and it is the
-    /// one the old per-anchor metric could never show: an anchor whose easy mate
-    /// still hits scores 1.000 whether its hard mate is at rank 2 or absent
-    /// entirely. Recorded — and, since GH #188, **asserted on its own** at
-    /// [`MAX_MATES_SUPPRESSED`] rather than folded into [`Self::mate`] —
-    /// because a suppressed *labelled* mate is a different (and worse) failure
-    /// than a demoted one, and an average over the mates cannot tell the two
-    /// apart. What to *do* about either is still an issue's call, never this
-    /// harness's: the eval measures, it does not tune.
+    /// Labelled mates the second pass reaches that the first never serves —
+    /// a surface suppressing a human-labelled relation outright, as opposed to
+    /// merely ranking it lower. **Structurally 0 under always-serve**
+    /// (GH #197): both passes read one surface, so any nonzero value here
+    /// means an existence gate is back in the path — which is exactly what the
+    /// assertion at [`MAX_MATES_SUPPRESSED`] exists to catch, and why it stays
+    /// asserted apart from [`Self::mate`]: a suppressed *labelled* mate is a
+    /// different (and worse) failure than a demoted one, and an average over
+    /// the mates cannot tell the two apart.
     mate_suppressed: usize,
     /// Floored per-mate ranks in label order, so pass 2 can pair each mate's
     /// unfloored rank with its shipped one. Both passes walk `set.anchors` and
@@ -346,7 +341,12 @@ struct SimilarPass {
     stranger_anchors: usize,
     /// Negative anchors asked.
     neg_n: usize,
-    /// Negative anchors that (correctly) surfaced zero candidates.
+    /// Negative anchors that surfaced zero candidates. Under always-serve
+    /// (GH #197) an anchor with scorable candidates always serves, so this
+    /// reads 0 on this corpus — recorded for row comparability (the key's
+    /// meaning, "anchors serving nothing", is unchanged), no longer asserted:
+    /// the labels still say "nothing relates", and what the served cards
+    /// *claim* is measured by their bands (A2's readout, calibration block).
     neg_clean: usize,
     /// Candidates surfaced across all negative anchors — cards whose labelled
     /// answer was "nothing".
@@ -373,13 +373,13 @@ struct AnchorDetail {
     candidates: Vec<(String, f64, bool)>,
 }
 
-/// One row of the ungated dump: a candidate in the floor's judge unit, with the
-/// human label attached.
+/// One row of the z dump: a candidate in the band's unit, with the human label
+/// attached.
 struct ZCand {
     path: String,
-    /// The z the floor judges — stage-2 best-passage z since GH #192 (it was the
-    /// stage-1 centroid z until #187/#189 measured that unit's keep/cut
-    /// populations inverting) — straight from the engine's own statistics.
+    /// The stage-2 best-passage z (GH #192's unit; the strength band's input,
+    /// gating nothing since GH #197) — straight from the engine's own
+    /// statistics.
     z: f64,
     /// The same z recomputed harness-side from the served scores (z over squared
     /// best-pair distance, nearer = higher). An instrument check, not a reading:
@@ -395,54 +395,35 @@ struct ZCand {
     mate: bool,
 }
 
-/// One anchor's **complete, ungated** reading in the floor's judge unit — every
-/// candidate note in the corpus, in z order, with the human label attached
-/// (GH #187; stage-2 best-passage z since GH #192).
+/// One anchor's **complete** reading in the band's unit — every candidate note
+/// in the corpus, in z order, with the human label attached (GH #187; stage-2
+/// best-passage z since GH #192; the z travels ungated on the one shipped
+/// surface since GH #197, so the dump *is* the served list read deep).
 ///
 /// The cosine piles above are the same numbers in a model-comparable unit; this
-/// is the anchor-relative unit the [`DiscoveryFloor`] actually judges in, which
-/// is why the piles could never re-derive its constants.
+/// is the anchor-relative unit a z existence bar would judge in, which is why
+/// the piles could never re-derive one's constants.
 struct AnchorZ {
     anchor: String,
     /// True for a negative anchor (empty `expected`) — its whole list is
-    /// strangers by label, and its leader is what `leader_z` answers to.
+    /// strangers by label, and its leader is what a leader gate would answer to.
     negative: bool,
-    /// Every candidate in served order, which under an ungated floor *is*
-    /// descending z.
+    /// Every candidate in served order, which *is* descending z.
     candidates: Vec<ZCand>,
-    /// What the **shipped** floor actually serves for this anchor, read from a
-    /// second pass at the same depth. Ground truth for [`FloorZ::replay_faults`]:
-    /// every window and trade-curve row below is a *replay* of the floor's rule
-    /// over `candidates`, and a replay that has drifted from
-    /// `discover::candidates` would price a trade the engine does not make.
-    served: Vec<String>,
 }
 
 impl AnchorZ {
-    /// The z the leader gate reads — the top candidate's. `None` only if the
-    /// anchor produced no scorable candidate at all.
+    /// The top candidate's z — what a leader gate would read. `None` only if
+    /// the anchor produced no scorable candidate at all.
     fn leader(&self) -> Option<f64> {
         self.candidates.first().map(|c| c.z)
-    }
-    /// The paths a given floor would serve here, by replaying its rule over the
-    /// ungated dump: the leader gate first (below it the anchor serves nothing
-    /// at all), then the member bar.
-    fn replay(&self, floor: &DiscoveryFloor) -> Vec<&str> {
-        if !self.leader().is_some_and(|z| z >= floor.leader_z) {
-            return Vec::new();
-        }
-        self.candidates
-            .iter()
-            .filter(|c| c.z >= floor.member_z)
-            .map(|c| c.path.as_str())
-            .collect()
     }
     /// This anchor's labelled mates' z's (empty for a negative anchor).
     fn mates(&self) -> impl Iterator<Item = f64> + '_ {
         self.candidates.iter().filter(|c| c.mate).map(|c| c.z)
     }
     /// Everything on this anchor's list a human did *not* label — on a positive
-    /// anchor, exactly the population `member_z` has to cut.
+    /// anchor, exactly the population a member bar would have to cut.
     fn strangers(&self) -> impl Iterator<Item = f64> + '_ {
         self.candidates.iter().filter(|c| !c.mate).map(|c| c.z)
     }
@@ -457,22 +438,25 @@ impl AnchorZ {
     }
 }
 
-/// The ungated judge-unit z dump across every discovery anchor, plus what it
-/// says about the two [`DiscoveryFloor`] constants (GH #187; the unit is the
-/// stage-2 best-passage z since GH #192).
+/// The z dump across every discovery anchor, split into the populations an
+/// existence bar would answer to (GH #187; the unit is the stage-2 best-passage
+/// z since GH #192, and it gates nothing since GH #197).
 ///
-/// Three populations, because the two constants answer to different ones — the
-/// conflation is what made "the negatives gate would catch a bad `member_z`"
-/// look true when it is not: while `member_z ≤ leader_z`, a negative anchor is
-/// clean **iff its leader is cut**, so no member bar can dirty (or clean) it.
-/// `leader_z` is calibrated by negative-anchor leaders against positive-anchor
-/// leaders; `member_z` by strangers on positive anchors against labelled mates,
-/// and *nothing in the exit gate watches that second pair*.
+/// Three populations, because a two-bar rule's constants answer to different
+/// ones — the conflation is what made "the negatives gate would catch a bad
+/// `member_z`" look true when it was not: while `member_z ≤ leader_z`, a
+/// negative anchor is clean **iff its leader is cut**, so no member bar can
+/// dirty (or clean) it. A leader gate is calibrated by negative-anchor leaders
+/// against positive-anchor leaders; a member bar by strangers on positive
+/// anchors against labelled mates. Both windows are re-derived here on every
+/// run — the standing record of why no such rule ships (the member window has
+/// been empty since #187; GH #196 measured the leader gate darkening a dense
+/// vault), and the first reading any Phase-2 bake-off candidate answers to.
 #[derive(Default)]
 struct FloorZ {
-    /// Every anchor the floor could compute statistics for, in label order.
+    /// Every anchor with computed statistics, in label order.
     anchors: Vec<AnchorZ>,
-    /// Anchors whose candidate pool was under `FLOOR_MIN_POPULATION` or had zero
+    /// Anchors whose candidate pool was under `STATS_MIN_POPULATION` or had zero
     /// variance, so no z exists to calibrate from. Named rather than silently
     /// dropped: on a corpus small enough for this to happen, every window below
     /// is measured on fewer anchors than the labels suggest.
@@ -480,14 +464,14 @@ struct FloorZ {
 }
 
 impl FloorZ {
-    /// (a) Labelled mates' z's — what `member_z` must keep.
+    /// (a) Labelled mates' z's — what a member bar would have to keep.
     fn mate_z(&self) -> Vec<f64> {
         self.anchors.iter().flat_map(|a| a.mates()).collect()
     }
-    /// (b) Strangers on **positive** anchors — what `member_z` must cut. The
-    /// negative anchors' own candidates are deliberately excluded: they are
-    /// `leader_z`'s business, and folding them in here is what would let a
-    /// member window look wider than it is.
+    /// (b) Strangers on **positive** anchors — what a member bar would have to
+    /// cut. The negative anchors' own candidates are deliberately excluded:
+    /// they are the leader pair's business, and folding them in here is what
+    /// would let a member window look wider than it is.
     fn stranger_z(&self) -> Vec<f64> {
         self.anchors
             .iter()
@@ -495,7 +479,7 @@ impl FloorZ {
             .flat_map(|a| a.strangers())
             .collect()
     }
-    /// (c) Negative anchors' leaders — what `leader_z` must cut.
+    /// (c) Negative anchors' leaders — what a leader gate would have to cut.
     fn neg_leader_z(&self) -> Vec<f64> {
         self.anchors
             .iter()
@@ -503,8 +487,8 @@ impl FloorZ {
             .filter_map(|a| a.leader())
             .collect()
     }
-    /// Positive anchors' leaders — what `leader_z` must keep, or it empties a
-    /// list that has a real mate on it.
+    /// Positive anchors' leaders — what a leader gate would have to keep, or it
+    /// empties a list that has a real mate on it.
     fn pos_leader_z(&self) -> Vec<f64> {
         self.anchors
             .iter()
@@ -523,51 +507,6 @@ impl FloorZ {
             .iter()
             .map(|a| a.recheck_delta())
             .fold(0.0, f64::max)
-    }
-
-    /// What a candidate floor would actually serve, replayed over this dump:
-    /// (labelled mates served, mates labelled, strangers served on positive
-    /// anchors, negative anchors left dirty). The leader gate is applied first,
-    /// exactly as `discover::candidates` does — an anchor whose leader falls
-    /// below `leader_z` serves nothing at all, mates included.
-    fn serve(&self, floor: &DiscoveryFloor) -> (usize, usize, usize, usize) {
-        let (mut mates, mut labelled, mut strangers, mut dirty) = (0, 0, 0, 0);
-        for a in &self.anchors {
-            let served = a.replay(floor);
-            labelled += a.mates().count();
-            for c in &a.candidates {
-                if !served.contains(&c.path.as_str()) {
-                    continue;
-                }
-                match (a.negative, c.mate) {
-                    (true, _) => dirty += 1,
-                    (false, true) => mates += 1,
-                    (false, false) => strangers += 1,
-                }
-            }
-        }
-        (mates, labelled, strangers, dirty)
-    }
-
-    /// Anchors where replaying the **shipped** floor over the dump disagrees
-    /// with what the engine actually served — the instrument check that keeps
-    /// every window and trade-curve row above honest. Empty is the only
-    /// acceptable reading: the replay is a re-statement of `DiscoveryFloor`'s
-    /// rule, so a disagreement means the rule moved and this block is now
-    /// pricing a floor that no longer ships.
-    fn replay_faults(&self) -> Vec<&str> {
-        let shipped = DiscoveryFloor::default();
-        self.anchors
-            .iter()
-            .filter(|a| {
-                let mut predicted = a.replay(&shipped);
-                let mut actual: Vec<&str> = a.served.iter().map(String::as_str).collect();
-                predicted.sort_unstable();
-                actual.sort_unstable();
-                predicted != actual
-            })
-            .map(|a| a.anchor.as_str())
-            .collect()
     }
 }
 
@@ -683,10 +622,9 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let vector = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
     let hybrid = score_pass(&vault, &set.queries, Retrieval::Fused)?;
     let similar = score_similar(&vault, &sim_set)?;
-    // The floor's own calibration data, in the floor's own unit (GH #187). Runs
-    // after `score_similar` and restores the shipped floor, so every metric above
-    // is scored on the surface that ships.
-    let floor_z = score_floor_z(&mut vault, &sim_set)?;
+    // The z calibration dump (GH #187) — the same shipped surface read deep,
+    // since the z travels ungated on it (GH #197).
+    let floor_z = score_floor_z(&vault, &sim_set)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
          {} for the passage view)\n",
@@ -864,8 +802,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         // `mate MRR` rather than the per-anchor `similar h@3` this column used
         // to carry: that number saturates (GH #183), so as a *comparison*
         // column across variants it could only ever print 1.00 (GH #188).
+        // `strangers` replaced `neg clean` when GH #197 retired the existence
+        // gate: under always-serve a negative anchor always serves, so that
+        // column could only ever print 0/5 — the same cannot-move failure.
         println!(
-            "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   mate MRR   neg clean",
+            "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   mate MRR   strangers",
             "config", "chunks", "embed_s"
         );
         for (label, cfg) in variants {
@@ -876,7 +817,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
-                "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.3}      {}/{}",
+                "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.3}      {}",
                 label,
                 chunks,
                 embed_secs,
@@ -887,8 +828,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                 pass.chunk.hit1(),
                 pass.chunk.mrr(),
                 sim.mate.mrr(),
-                sim.neg_clean,
-                sim.neg_n,
+                sim.strangers.len(),
             );
             // The readout the A/B is actually judged on: at this n every aggregate
             // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
@@ -1225,24 +1165,21 @@ fn score_pass(
     })
 }
 
-/// Score the discovery labels — **two passes over two surfaces** (GH #150).
+/// Score the discovery labels — **two passes, one surface** (GH #197).
 ///
-/// The ranks and the suppression tally are scored against the **shipped surface**
-/// (the discovery floor as `Vault::open` configures it): positive anchors score
-/// the 1-based rank of the first `expected` note among the top `SIM_K` floored
-/// candidates, and a clean negative anchor is one the floor suppressed to zero.
-/// The cosine piles and per-anchor detail come from a second, **unfloored** pass
-/// (`Vault::similar_raw`): they are the floor's own calibration data, and letting
-/// the floor filter them would blind every future recalibration to exactly the
-/// distribution it needs (the piles' meaning is unchanged from pre-floor rows;
-/// the negatives metric is the one that now measures the floor instead of raw
-/// truncation).
+/// Both passes read `Vault::similar`, the always-served ranked list. Pass 1
+/// scores the ranks, the strangers, and the negatives' card tally; pass 2
+/// re-reads the same surface for the cosine piles, the per-anchor detail, and
+/// the pass-vs-pass suppression diff — which is structurally 0 while nothing
+/// gates, and is *kept* as the tripwire that re-arms the suppression assertion
+/// the moment a Phase-2 existence signal puts a second surface back
+/// (see [`SimilarPass::mate_raw`]).
 fn score_similar(
     vault: &Vault,
     set: &SimilarSet,
 ) -> Result<SimilarPass, Box<dyn std::error::Error>> {
     let mut pass = SimilarPass::default();
-    // Pass 1 — the shipped, floored surface: ranks + suppression.
+    // Pass 1 — the shipped surface: ranks, strangers, and the negatives' tally.
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
@@ -1283,12 +1220,11 @@ fn score_similar(
             }
         }
     }
-    // Pass 2 — the raw, unfloored surface: the calibration piles + detail.
+    // Pass 2 — the same surface, re-read: the calibration piles + detail, and
+    // the suppression tripwire against pass 1 (see `SimilarPass::mate_raw`).
     for label in &set.anchors {
-        let candidates = vault.similar_raw(&label.anchor, SIM_K)?;
+        let candidates = vault.similar(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
-        // The best-passage arm of the ordering A/B (see `SimilarPass::mate_raw`),
-        // and the demoted-vs-gone split against pass 1's floored ranks.
         if !negative {
             for expected in &label.expected {
                 let mate_rank = candidates
@@ -1322,47 +1258,16 @@ fn score_similar(
     Ok(pass)
 }
 
-/// Dump every candidate's **judge-unit z** (stage-2 best-passage z, GH #192),
-/// ungated, on every discovery anchor — the third discovery pass (GH #187), and
-/// the only one that reads the floor's own unit.
+/// Dump every candidate's **band-unit z** (stage-2 best-passage z, GH #192) on
+/// every discovery anchor — the deep discovery pass (GH #187).
 ///
-/// `similar_raw` cannot serve this: `floor: None` skips the statistics
-/// altogether, so an unfloored candidate's `z` is `None`. What produces a
-/// complete reading is a floor whose bars are `-∞` — every z computed, nothing
-/// cut, the list still in z order — so the dump is the shipped code path with
-/// its two constants moved out of the way, not a reimplementation of it that
-/// could drift from what ships.
-///
-/// The limit is [`Z_SCAN_LIMIT`] rather than `SIM_K` for the same reason: a bar
-/// is calibrated against the population it has to cut, and the strangers just
-/// under a served list are precisely the ones a lower bar would admit.
-///
-/// The vault's floor is restored before returning, so this instrument leaves no
-/// trace on the passes around it (the sweep re-scores `similar` after).
-fn score_floor_z(
-    vault: &mut Vault,
-    set: &SimilarSet,
-) -> Result<FloorZ, Box<dyn std::error::Error>> {
-    vault.set_discovery_floor(Some(UNGATED_FLOOR));
-    let dump = collect_floor_z(vault, set);
-    vault.set_discovery_floor(Some(DiscoveryFloor::default()));
-    // …and once more on the restored, shipped floor at the same depth: what the
-    // engine really serves, which is what the replay behind every window and
-    // trade-curve row is checked against (`FloorZ::replay_faults`).
-    let mut dump = dump?;
-    for anchor in &mut dump.anchors {
-        anchor.served = vault
-            .similar(&anchor.anchor, Z_SCAN_LIMIT)?
-            .into_iter()
-            .map(|c| c.path)
-            .collect();
-    }
-    Ok(dump)
-}
-
-/// [`score_floor_z`]'s body, split out so the floor is restored even when a
-/// query fails.
-fn collect_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn std::error::Error>> {
+/// Since GH #197 the z travels ungated on the one shipped surface, so the dump
+/// is simply `similar` read at [`Z_SCAN_LIMIT`] rather than `SIM_K`: a bar is
+/// calibrated against the population it has to cut, and the strangers just
+/// under a served prefix are precisely the ones a lower bar would admit. (This
+/// used to need the engine's floor moved out of the way with `-∞` bars; the
+/// machinery went with the gate.)
+fn score_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn std::error::Error>> {
     let mut dump = FloorZ::default();
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, Z_SCAN_LIMIT)?;
@@ -1374,11 +1279,10 @@ fn collect_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn st
             dump.ungraded.push(label.anchor.clone());
             continue;
         };
-        // The judge z, recomputed harness-side over the same ungated population
-        // the engine just served: z over squared best-pair distance (score is
+        // The band z, recomputed harness-side over the same population the
+        // engine just served: z over squared best-pair distance (score is
         // negated L2, so d² = score²), oriented nearer = higher. Should equal
-        // the engine's own z to fp noise — the statistic-level drift check the
-        // block prints beside the replay check.
+        // the engine's own z to fp noise — the statistic-level drift check.
         let d2: Vec<f64> = candidates.iter().map(|c| c.score * c.score).collect();
         let recheck = passage_z(&d2);
         dump.anchors.push(AnchorZ {
@@ -1398,7 +1302,6 @@ fn collect_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn st
                     })
                 })
                 .collect(),
-            served: Vec::new(), // filled on the shipped-floor pass, in score_floor_z
         });
     }
     Ok(dump)
@@ -1661,21 +1564,15 @@ fn print_default_report(
         similar.mate.mrr(),
         similar.mate.n
     );
-    // The raw arm: same order as the shipped surface since GH #192 (both are
-    // best-passage), so the Δ is the floor's suppression cost in isolation —
-    // before the reorder this pair was the centroid-vs-passage ordering A/B.
-    println!(
-        "   └ unfloored   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}   ΔMRR(floored−raw)={:+.3}",
-        similar.mate_raw.hit1(),
-        similar.mate_raw.hit3(),
-        similar.mate_raw.mrr(),
-        similar.mate.mrr() - similar.mate_raw.mrr()
-    );
+    // The pass-vs-pass suppression tripwire (see `SimilarPass::mate_raw`):
+    // silent at its structural 0, loud the day an existence gate is back in
+    // the path. No "unfloored" comparison line any more — both passes read the
+    // one always-serve surface, and a line that cannot move trains skimming.
     if similar.mate_suppressed > 0 {
         println!(
-            "   └ {} of {} labelled mates are SUPPRESSED on the shipped surface (reachable unfloored,\n\
-             \x20    served never) — the floor dropping a human-labelled relation, not merely demoting it\n\
-             \x20    (GATED at ≤ {MAX_MATES_SUPPRESSED})",
+            "   └ {} of {} labelled mates are SUPPRESSED — pass 2 reaches a mate pass 1 never\n\
+             \x20    serves, which under always-serve (GH #197) means an existence gate is back in\n\
+             \x20    the path (GATED at ≤ {MAX_MATES_SUPPRESSED})",
             similar.mate_suppressed, similar.mate.n
         );
     }
@@ -1693,11 +1590,14 @@ fn print_default_report(
         println!("             {anchor} → {path}");
     }
     if similar.neg_n > 0 {
-        // Suppression: a clean negative anchor surfaced zero candidates. Red by
-        // design until the quality floor lands (index-engine.md §3, PR #145).
+        // Under always-serve (GH #197) a negative anchor serves its ranked
+        // nearest like any other — that is the ruling, not a regression. What
+        // these anchors measure now is what the served cards *claim*: their
+        // bands (A2's readout, printed per leader in the calibration block).
         println!(
-            "  negatives  {}/{} anchors clean under the floor — {} cards surfaced where the label says \"nothing\"",
-            similar.neg_clean, similar.neg_n, similar.neg_cards
+            "  negatives  {} loner anchors serve {} cards under always-serve (labels still say \
+             \"nothing relates\"; the bands carry the honesty — leaders below)",
+            similar.neg_n, similar.neg_cards
         );
     }
     // The two calibration piles. If they separate, the gap IS the floor, read
@@ -1737,54 +1637,51 @@ fn print_default_report(
     print_floor_windows(floor_z);
 }
 
-/// Re-derive both [`DiscoveryFloor`] windows on the corpus as it stands today,
-/// and price what the member bar costs where no window exists (GH #187).
+/// Re-derive the admissible windows a z existence rule *would* have on the
+/// corpus as it stands today (GH #187) — the standing record of why none ships
+/// (GH #197), and the first reading any Phase-2 bake-off candidate answers to.
 ///
 /// Printed every run, and recorded in the row, precisely so no number here ever
 /// gets copied into a doc comment again: the #150 windows were measured once,
-/// frozen into `DiscoveryFloor`'s rustdoc, and silently falsified the first time
-/// the corpus grew a note shape they were never derived from. The instrument is
-/// the citable thing; the constants stay in the code.
+/// frozen into a rustdoc, and silently falsified the first time the corpus grew
+/// a note shape they were never derived from. The instrument is the citable
+/// thing; any constant stays in the code it governs.
 fn print_floor_windows(z: &FloorZ) {
-    let shipped = DiscoveryFloor::default();
     let (mates, strangers) = (z.mate_z(), z.stranger_z());
     let (neg_leaders, pos_leaders) = (z.neg_leader_z(), z.pos_leader_z());
     println!(
-        "  floor calibration (stage-2 best-passage z, ungated — the unit DiscoveryFloor judges in, \
-         GH #187/#192)"
+        "  discovery z calibration (stage-2 best-passage z — the band's input; gates NOTHING \
+         since GH #197)"
     );
-    // Two instrument checks before the readings, the same posture as the dense
-    // ablation's: every line below replays the floor's rule over the dump, so
-    // if the replay and the engine disagree the readings are fiction — and the
-    // dump's z itself is recomputed from the served scores, so the *statistic*
-    // can't drift either (tolerance covers f32 sqrt/square round-trip noise).
-    match z.replay_faults().as_slice() {
-        [] => println!("    [check] replayed floor matches the engine on every anchor"),
-        faults => println!(
-            "    [FAULT] replayed floor disagrees with the engine on {} anchor(s) ({}) — \
-             DiscoveryFloor's rule moved; distrust every window and trade row below",
-            faults.len(),
-            faults.join(", ")
-        ),
-    }
+    // The statistic-level instrument check: the dump's z is recomputed from the
+    // served scores, so a drift in the engine's statistic can't pass silently
+    // (tolerance covers f32 sqrt/square round-trip noise).
     let recheck = z.recheck_delta();
     if recheck <= 1e-3 {
         println!("    [check] harness recomputation matches the engine z (max Δ {recheck:.1e})");
     } else {
         println!(
             "    [FAULT] harness recomputation disagrees with the engine z by up to {recheck:.3} — \
-             the judged statistic moved; distrust every window and trade row below"
+             the statistic moved; distrust every reading below"
         );
     }
     for (label, pile, role) in [
-        ("mates", &mates, "member_z must KEEP"),
+        ("mates", &mates, "a member bar would have to KEEP"),
         (
             "strangers",
             &strangers,
-            "member_z must CUT (positive anchors)",
+            "a member bar would have to CUT (positive anchors)",
         ),
-        ("neg leaders", &neg_leaders, "leader_z must CUT"),
-        ("pos leaders", &pos_leaders, "leader_z must KEEP"),
+        (
+            "neg leaders",
+            &neg_leaders,
+            "a leader gate would have to CUT",
+        ),
+        (
+            "pos leaders",
+            &pos_leaders,
+            "a leader gate would have to KEEP",
+        ),
     ] {
         match pile_stats(pile) {
             Some((min, med, max)) => println!(
@@ -1794,82 +1691,62 @@ fn print_floor_windows(z: &FloorZ) {
             None => println!("    {label:<12} n=0    (nothing labelled — no reading)"),
         }
     }
-    for (name, shipped_at, win) in [
-        (
-            "leader",
-            shipped.leader_z,
-            Window::read(&neg_leaders, &pos_leaders),
-        ),
-        ("member", shipped.member_z, Window::read(&strangers, &mates)),
+    for (name, win) in [
+        ("leader", Window::read(&neg_leaders, &pos_leaders)),
+        ("member", Window::read(&strangers, &mates)),
     ] {
         match win {
             None => println!("    {name} window  no reading (a population was empty)"),
             Some(w) if w.open() => println!(
-                "    {name} window  ({:+.3}, {:+.3}]  — shipped {name}_z={shipped_at:.2} {}",
-                w.cut_max,
-                w.keep_min,
-                if shipped_at > w.cut_max && shipped_at <= w.keep_min {
-                    "sits inside"
-                } else {
-                    "sits OUTSIDE its own measured window"
-                }
+                "    {name} window  ({:+.3}, {:+.3}]  — open on THIS corpus; a real vault is the \
+                 other half of any such claim (process rule 5, `just calibrate`)",
+                w.cut_max, w.keep_min
             ),
             Some(w) => println!(
                 "    {name} window  EMPTY — the population it must cut reaches {:+.3} while the one \n\
                  \x20                 it must keep starts at {:+.3}; the two INVERT, and no constant \n\
-                 \x20                 separates an inversion (shipped {name}_z={shipped_at:.2})",
+                 \x20                 separates an inversion",
                 w.cut_max, w.keep_min
             ),
         }
     }
-    // What the shipped bar actually serves, and what each rescue would cost —
-    // the trade the issue refused to guess at, replayed over the dump rather
-    // than argued from the aggregates.
-    let (served, labelled, admitted, dirty) = z.serve(&shipped);
+    // Every negative anchor's leader with the band it paints — A2's readout:
+    // under always-serve these cards ARE served, and the band is what they
+    // claim to the human whose labels say "nothing relates".
     println!(
-        "    shipped floor serves {served}/{labelled} labelled mates, {admitted} strangers on \
-         positive anchors, {dirty} dirty negatives"
+        "    negative anchors' leaders (served under always-serve; the band carries the honesty):"
     );
-    let mut rescues: Vec<f64> = z
-        .anchors
-        .iter()
-        .filter(|a| !a.negative)
-        .flat_map(|a| a.mates())
-        .filter(|&m| m < shipped.member_z)
-        .collect();
-    rescues.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    rescues.dedup();
-    if !rescues.is_empty() {
-        println!(
-            "    member_z trade curve (leader_z held at {:.2}) — every row a suppressed mate's own z:",
-            shipped.leader_z
-        );
-        for bar in rescues.iter().rev() {
-            let floor = DiscoveryFloor {
-                member_z: *bar,
-                ..shipped.clone()
-            };
-            let (m, n, s, d) = z.serve(&floor);
-            println!("      member_z={bar:+.3}  mates {m}/{n}  strangers {s}  dirty negatives {d}");
-        }
-    }
-    // Every negative anchor's leader, named: the pairs the leader gate must
-    // cut, and — now that the judged unit is the best passage — the first place
-    // a pair-level miscalibration (the watercolor residue) would surface.
-    println!("    negative anchors' leaders (leader gate must cut each):");
     for a in z.anchors.iter().filter(|a| a.negative) {
         match a.candidates.first() {
-            Some(c) => println!("      {} → {}  {:+.3}", a.anchor, c.path, c.z),
+            Some(c) => println!(
+                "      {} → {}  {:+.3}  {}",
+                a.anchor,
+                c.path,
+                c.z,
+                band_glyph(c.z)
+            ),
             None => println!("      {}  (no candidates)", a.anchor),
         }
     }
     if !z.ungraded.is_empty() {
         println!(
-            "    [warn] no z statistics for {} anchor(s) ({}) — pool under FLOOR_MIN_POPULATION or \
+            "    [warn] no z statistics for {} anchor(s) ({}) — pool under STATS_MIN_POPULATION or \
              zero variance; the windows above are measured without them",
             z.ungraded.len(),
             z.ungraded.join(", ")
         );
+    }
+}
+
+/// The strength band a z paints (`ui/src/strength.ts`'s landmarks, restated —
+/// see [`BAND_STRONG_Z`]).
+fn band_glyph(z: f64) -> &'static str {
+    if z >= BAND_STRONG_Z {
+        "●●●"
+    } else if z >= BAND_CLEAR_Z {
+        "●●○"
+    } else {
+        "●○○"
     }
 }
 
@@ -2076,12 +1953,13 @@ fn result_row(
                 "open": w.open(),
             }));
             let round = |v: &[f64]| v.iter().map(|z| (z * 1e4).round() / 1e4).collect::<Vec<_>>();
-            let shipped = DiscoveryFloor::default();
-            let (served, labelled, admitted, dirty) = z.serve(&shipped);
             serde_json::json!({
-                // The judge unit these piles/windows are measured in. Rows
-                // before GH #192 carried no key here and are stage-1 centroid
-                // z — a different unit; never compare across the flip.
+                // The unit these piles/windows are measured in. Rows before
+                // GH #192 carried no key here and are stage-1 centroid z — a
+                // different unit; never compare across the flip. Since GH #197
+                // the z gates nothing (the "shipped" and "replay_faults" keys
+                // of earlier rows retired with the gate — absent, per the
+                // convention, rather than redefined).
                 "unit": "stage2-best-passage",
                 "piles": {
                     "mates": round(&mates),
@@ -2091,23 +1969,13 @@ fn result_row(
                 },
                 "window_leader": win(&neg_leaders, &pos_leaders),
                 "window_member": win(&strangers, &mates),
-                "shipped": {
-                    "leader_z": shipped.leader_z,
-                    "member_z": shipped.member_z,
-                    "mates_served": served,
-                    "mates_labelled": labelled,
-                    "strangers_served": admitted,
-                    "negatives_dirty": dirty,
-                },
                 "ungraded_anchors": z.ungraded,
-                // Empty is the only trustworthy reading — see FloorZ::replay_faults.
-                "replay_faults": z.replay_faults(),
                 // ~0 is the only trustworthy reading — see FloorZ::recheck_delta.
                 "z_recheck_max_delta": z.recheck_delta(),
                 // Per-anchor and per-candidate, because a window edge is only
                 // arguable once you can name the pair that set it. `z` is the
-                // judged stage-2 best-passage z, `cos` the same pair's cosine
-                // (the model-comparable unit).
+                // stage-2 best-passage z, `cos` the same pair's cosine (the
+                // model-comparable unit).
                 "detail": z.anchors.iter().map(|a| serde_json::json!({
                     "anchor": a.anchor,
                     "negative": a.negative,

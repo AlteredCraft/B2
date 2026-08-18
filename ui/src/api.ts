@@ -123,9 +123,10 @@ export const api = {
    */
   clipboardText: (): Promise<string> => invoke("clipboard_text"),
 
-  /** Semantically-near, not-yet-linked candidates for a note. */
-  similar: (note: string, limit = 10, noFloor = false): Promise<SimilarView[]> =>
-    invoke("similar", { note, limit, noFloor }),
+  /** Semantically-near, not-yet-linked candidates for a note — the ranked
+   *  nearest, always served (GH #197). */
+  similar: (note: string, limit = 10): Promise<SimilarView[]> =>
+    invoke("similar", { note, limit }),
 
   /** Hybrid keyword+semantic search across the vault. */
   search: (query: string, limit = 20): Promise<SearchResult[]> =>
