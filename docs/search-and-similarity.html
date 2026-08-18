@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B2 — Search &amp; similarity: how B2 decides what's related</title>
+<meta name="description" content="A plain-language explainer of everything B2 uses to find and relate your notes: chunks, embeddings, keyword search, hybrid fusion, the two-stage similarity engine, and the quality floor that decides when to show you nothing at all.">
+<style>
+  :root{
+    --bg:#fbfcfd; --panel:#ffffff; --panel2:#f6f8fa; --ink:#1f2328; --muted:#59636e;
+    --line:#d1d9e0; --accent:#0969da; --green:#1a7f37; --amber:#9a6700; --purple:#8250df;
+    --pink:#bf3989; --cyan:#0f7a86; --danger:#cf222e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  .wrap{max-width:880px;margin:0 auto;padding:0 24px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:10px}
+  .topbar .brand{font-weight:700;letter-spacing:.3px}
+  .topbar .brand span{color:var(--muted);font-weight:400}
+  .topbar .links{display:flex;gap:18px;font-size:13.5px;flex-wrap:wrap}
+  .topbar .links a{color:var(--muted)}
+  header.hero{padding:44px 0 6px}
+  .kicker{font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin-bottom:10px}
+  h1.title{font-size:34px;line-height:1.1;margin:0 0 14px;letter-spacing:-.5px}
+  p.lead{font-size:17px;color:var(--muted);max-width:780px;margin:0}
+  p.lead b{color:var(--ink)}
+  section{margin:44px 0;scroll-margin-top:20px}
+  section h2{font-size:22px;margin:0 0 4px;letter-spacing:-.2px}
+  section h2 .num{font-family:var(--mono);font-size:14px;color:var(--muted);margin-right:8px}
+  section h3{font-size:16px;margin:26px 0 4px;letter-spacing:-.1px}
+  section p.sub{color:var(--muted);margin:2px 0 16px;max-width:820px}
+  p{max-width:820px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}h1.title{font-size:27px}}
+  .kickerlbl{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);margin-bottom:6px}
+  ul.tidy{margin:8px 0;padding-left:20px;max-width:820px} ul.tidy li{margin:6px 0}
+  pre{background:#f6f8fa;border:1px solid var(--line);border-radius:10px;padding:13px 15px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#424a53;margin:12px 0}
+  pre .c{color:#6e7781} pre .n{color:#0550ae} pre .g{color:#116329}
+  /* callouts */
+  .term{margin:14px 0;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--purple);border-radius:8px;padding:11px 14px;font-size:13.5px;color:var(--muted)}
+  .term b{color:var(--ink)}
+  .term .lbl{display:inline-block;font:700 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--purple);border:1px solid rgba(130,80,223,.45);border-radius:5px;padding:3px 6px;margin-right:8px}
+  .ground{margin:14px 0;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--green);border-radius:8px;padding:11px 14px;font-size:13.5px;color:var(--muted)}
+  .ground b{color:var(--ink)}
+  .caveat{margin:14px 0;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;padding:11px 14px;font-size:13.5px;color:var(--muted)}
+  .caveat b{color:var(--ink)}
+  .warnbox{margin:22px 0;background:rgba(207,34,46,.06);border:1px solid rgba(207,34,46,.35);border-left:4px solid var(--danger);border-radius:10px;padding:15px 18px;font-size:14px;line-height:1.6;color:var(--muted)}
+  .warnbox .hd{display:flex;align-items:center;gap:9px;font-weight:700;color:var(--ink);font-size:14.5px;margin-bottom:7px}
+  .warnbox b{color:var(--ink)} .warnbox p{margin:8px 0 0}
+  .warnbox .tag{display:inline-block;font:700 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--danger);border:1px solid rgba(207,34,46,.45);border-radius:5px;padding:3px 6px}
+  /* figures */
+  figure{margin:20px 0;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px 12px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:12.5px;margin-top:10px;line-height:1.55}
+  figcaption b{color:var(--ink)}
+  /* tables */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.7px}
+  td b{color:var(--ink)} td{color:var(--muted)}
+  td code,th code{color:var(--cyan)}
+  .tblwrap{overflow-x:auto}
+  /* glossary */
+  .gloss{display:grid;grid-template-columns:1fr;gap:0}
+  .gitem{border-bottom:1px solid var(--line);padding:13px 0}
+  .gitem:last-child{border-bottom:none}
+  .gterm{font-weight:600;color:var(--ink);font-size:14.5px}
+  .gterm .also{color:var(--muted);font-weight:400;font-size:12.5px;margin-left:8px}
+  .gdef{color:var(--muted);font-size:13.5px;margin-top:4px;max-width:820px}
+  .gdef b{color:var(--ink)}
+  /* band chips */
+  .bands{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+  .band{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 14px;font-size:13px;color:var(--muted);flex:1;min-width:210px}
+  .band .g{font-size:15px;letter-spacing:2px;margin-right:8px}
+  .band b{color:var(--ink)}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:26px 0}
+  .toc ol{margin:8px 0 0;padding-left:22px;columns:2;column-gap:26px}
+  .toc li{margin:5px 0;font-size:13.5px;break-inside:avoid}
+  @media(max-width:640px){.toc ol{columns:1}}
+  .more{display:flex;flex-wrap:wrap;gap:22px;margin:30px 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:14px}
+  footer{color:var(--muted);font-size:12.5px;padding:26px 0 60px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">B2 <span>· docs</span></div>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="indexing.html">Indexing</a>
+      <a href="discovery.html">Discovery</a>
+      <a href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
+    </div>
+  </div>
+
+  <header class="hero">
+    <div class="kicker">Explainer · for everyone who uses B2</div>
+    <h1 class="title">How B2 decides what's related</h1>
+    <p class="lead">B2 does two things with meaning: it <b>finds</b> notes when you search, and it
+    <b>relates</b> notes to each other so you can link them. This page explains every moving part of both —
+    in plain language first, with the real name for each idea beside it, and a link to the deep dive when you
+    want the machinery. <b>No maths background assumed.</b></p>
+  </header>
+
+  <div class="toc">
+    <div class="kickerlbl">On this page</div>
+    <ol>
+      <li><a href="#reading">How B2 reads a note</a></li>
+      <li><a href="#meaning">Meaning as a map</a></li>
+      <li><a href="#search">Search: two opinions, fused</a></li>
+      <li><a href="#similar">Similarity: the two-stage engine</a></li>
+      <li><a href="#floor">The quality floor: when B2 shows nothing</a></li>
+      <li><a href="#bands">Reading the strength dots</a></li>
+      <li><a href="#limits">Known limits &amp; honest caveats</a></li>
+      <li><a href="#components">Every component &amp; knob</a></li>
+      <li><a href="#glossary">Glossary</a></li>
+      <li><a href="#deeper">Deeper dives</a></li>
+    </ol>
+  </div>
+
+  <div class="ground"><b>Everything here runs on your machine.</b> Finding and relating notes uses no network,
+  no API key, and costs nothing per note or per search. The only heavy step is the one-time
+  <code>b2 reindex</code> that reads your vault. Your notes stay plain Markdown files that you own — B2
+  writes nothing to them unless you ask it to.</div>
+
+  <!-- ================================================================= -->
+  <section id="reading">
+    <h2><span class="num">1</span>How B2 reads a note</h2>
+    <p class="sub">Before anything can be found or related, every note gets turned into something a computer
+    can compare. That happens in two steps.</p>
+
+    <h3>Step one — your note is cut into passages</h3>
+    <p>A long note isn't one idea, it's many. If B2 treated a 4,000-word article as a single lump, a
+    paragraph deep inside it about one narrow thing would be drowned out by everything around it. So B2 cuts
+    each note into <b>passages of roughly 450 words' worth of text</b>, preferring to cut at headings, then
+    at paragraph breaks — never in the middle of a code block or a table. Consecutive passages overlap by
+    about 15%, so an idea that straddles a boundary isn't sliced in half.</p>
+    <div class="term"><span class="lbl">the term</span> A passage is called a <b>chunk</b>. The rules for
+    where to cut are the <b>chunker</b>. Deep dive: <a href="indexing.html">the indexing pipeline</a>.</div>
+
+    <h3>Step two — each passage becomes a list of numbers</h3>
+    <p>B2 feeds every passage to a small language model that runs locally on your machine. The model reads
+    the passage and outputs <b>768 numbers</b>. That list of numbers is the passage's position on a map of
+    meaning — passages about similar things land near each other, passages about different things land far
+    apart. The numbers themselves are meaningless to a human; only the <em>distances between them</em>
+    matter.</p>
+    <div class="term"><span class="lbl">the term</span> The list of numbers is an <b>embedding</b>, or a
+    <b>vector</b>. The model is <code>bge-base-en-v1.5</code> — it runs entirely offline, downloaded once by
+    <code>b2 init</code>. "768 numbers" is its <b>dimension</b>.</div>
+
+    <figure>
+      <svg viewBox="0 0 840 200" role="img" aria-label="A note is split into chunks, each chunk becomes a vector, vectors are stored in the index">
+        <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="11">
+          <!-- note -->
+          <rect x="8" y="34" width="120" height="130" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+          <text x="68" y="24" fill="#59636e" text-anchor="middle" font-size="10.5">YOUR NOTE</text>
+          <text x="20" y="56" fill="#1f2328" font-size="10">## Roasting</text>
+          <text x="20" y="72" fill="#6e7781" font-size="10">Green beans are…</text>
+          <text x="20" y="88" fill="#6e7781" font-size="10">…rotating drum…</text>
+          <text x="20" y="110" fill="#1f2328" font-size="10">## Grinding</text>
+          <text x="20" y="126" fill="#6e7781" font-size="10">Burr size sets…</text>
+          <text x="20" y="142" fill="#6e7781" font-size="10">…extraction time.</text>
+          <path d="M136 99 L172 99" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar)"/>
+          <!-- chunks -->
+          <text x="240" y="24" fill="#59636e" text-anchor="middle" font-size="10.5">CHUNKS</text>
+          <rect x="180" y="40" width="120" height="46" rx="6" fill="#ffffff" stroke="#0f7a86"/>
+          <text x="240" y="62" fill="#0f7a86" text-anchor="middle" font-size="10">chunk 1</text>
+          <text x="240" y="76" fill="#6e7781" text-anchor="middle" font-size="9.5">"## Roasting …"</text>
+          <rect x="180" y="112" width="120" height="46" rx="6" fill="#ffffff" stroke="#0f7a86"/>
+          <text x="240" y="134" fill="#0f7a86" text-anchor="middle" font-size="10">chunk 2</text>
+          <text x="240" y="148" fill="#6e7781" text-anchor="middle" font-size="9.5">"## Grinding …"</text>
+          <path d="M308 99 L344 99" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar)"/>
+          <text x="326" y="90" fill="#59636e" text-anchor="middle" font-size="9">model</text>
+          <!-- vectors -->
+          <text x="412" y="24" fill="#59636e" text-anchor="middle" font-size="10.5">EMBEDDINGS</text>
+          <rect x="352" y="40" width="120" height="46" rx="6" fill="#ffffff" stroke="#8250df"/>
+          <text x="412" y="62" fill="#8250df" text-anchor="middle" font-size="10">[0.02, −0.11, …]</text>
+          <text x="412" y="76" fill="#6e7781" text-anchor="middle" font-size="9.5">768 numbers</text>
+          <rect x="352" y="112" width="120" height="46" rx="6" fill="#ffffff" stroke="#8250df"/>
+          <text x="412" y="134" fill="#8250df" text-anchor="middle" font-size="10">[0.31, 0.07, …]</text>
+          <text x="412" y="148" fill="#6e7781" text-anchor="middle" font-size="9.5">768 numbers</text>
+          <path d="M480 99 L516 99" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar)"/>
+          <!-- index -->
+          <rect x="524" y="34" width="150" height="130" rx="8" fill="#f6f8fa" stroke="#d1d9e0"/>
+          <text x="599" y="24" fill="#59636e" text-anchor="middle" font-size="10.5">THE INDEX</text>
+          <text x="599" y="60" fill="#1a7f37" text-anchor="middle" font-size="10">keyword index</text>
+          <text x="599" y="76" fill="#6e7781" text-anchor="middle" font-size="9.5">(exact words)</text>
+          <text x="599" y="104" fill="#8250df" text-anchor="middle" font-size="10">vectors</text>
+          <text x="599" y="120" fill="#6e7781" text-anchor="middle" font-size="9.5">(meaning)</text>
+          <text x="599" y="146" fill="#bf3989" text-anchor="middle" font-size="10">your links</text>
+          <path d="M682 99 L718 99" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar)"/>
+          <text x="784" y="88" fill="#1f2328" text-anchor="middle" font-size="11">search</text>
+          <text x="784" y="112" fill="#1f2328" text-anchor="middle" font-size="11">similar</text>
+        </g>
+        <defs><marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#0969da"/></marker></defs>
+      </svg>
+      <figcaption><b>One pass, done once.</b> <code>b2 reindex</code> walks your vault, cuts each note into
+      chunks, embeds each chunk, and files the results three ways. Everything afterwards — every search,
+      every "related notes" panel — just reads that index back. The index is disposable: delete it and
+      rebuild, and you get the same thing back.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="meaning">
+    <h2><span class="num">2</span>Meaning as a map</h2>
+    <p class="sub">This is the one idea worth internalising. Everything else in B2 is built on it.</p>
+
+    <p>Picture every passage in your vault as a pin on a map. The model places the pins: passages about
+    espresso end up in one neighbourhood, passages about volcanoes in another. B2 never "understands" your
+    notes — it only measures <b>how far apart the pins are</b>. Close pins mean the model thinks the
+    passages are about similar things.</p>
+
+    <p>The real map has 768 directions instead of two, which nobody can picture — but nothing about how it
+    works depends on that. Distance is distance.</p>
+
+    <figure>
+      <svg viewBox="0 0 840 300" role="img" aria-label="A scatter map showing clustered notes and an isolated note">
+        <rect x="8" y="8" width="824" height="284" rx="10" fill="#f6f8fa" stroke="#d1d9e0"/>
+        <g font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5">
+          <!-- coffee cluster -->
+          <circle cx="180" cy="95" r="66" fill="rgba(15,122,134,.07)" stroke="rgba(15,122,134,.35)" stroke-dasharray="4 4"/>
+          <circle cx="150" cy="78" r="6" fill="#0f7a86"/><text x="162" y="82" fill="#424a53">espresso</text>
+          <circle cx="196" cy="108" r="6" fill="#0f7a86"/><text x="208" y="112" fill="#424a53">french press</text>
+          <circle cx="158" cy="126" r="6" fill="#0f7a86"/><text x="170" y="130" fill="#424a53">roasting</text>
+          <text x="180" y="42" fill="#0f7a86" text-anchor="middle" font-size="10.5" letter-spacing="1">COFFEE</text>
+          <!-- geology cluster -->
+          <circle cx="560" cy="105" r="62" fill="rgba(154,103,0,.07)" stroke="rgba(154,103,0,.35)" stroke-dasharray="4 4"/>
+          <circle cx="532" cy="90" r="6" fill="#9a6700"/><text x="544" y="94" fill="#424a53">volcano</text>
+          <circle cx="578" cy="118" r="6" fill="#9a6700"/><text x="590" y="122" fill="#424a53">glaciers</text>
+          <circle cx="540" cy="134" r="6" fill="#9a6700"/><text x="552" y="138" fill="#424a53">earthquakes</text>
+          <text x="560" y="52" fill="#9a6700" text-anchor="middle" font-size="10.5" letter-spacing="1">GEOLOGY</text>
+          <!-- loner -->
+          <circle cx="700" cy="242" r="6" fill="#59636e"/><text x="712" y="246" fill="#59636e">laundry stains</text>
+          <text x="700" y="222" fill="#6e7781" text-anchor="middle" font-size="10">unrelated to everything</text>
+          <!-- near pair line -->
+          <path d="M150 78 L196 108" stroke="#1a7f37" stroke-width="1.6"/>
+          <text x="146" y="160" fill="#1a7f37" font-size="10.5">short distance = related</text>
+          <!-- far line -->
+          <path d="M196 108 L532 90" stroke="#cf222e" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="330" y="86" fill="#cf222e" font-size="10.5">long distance = unrelated</text>
+        </g>
+      </svg>
+      <figcaption><b>A flattened sketch of the real map.</b> B2 measures the closeness of two pins as a
+      number between −1 and 1, where 1 means "pointing the same way". Two notes at <b>0.79</b> are strongly
+      alike; two at <b>0.35</b> have little to do with each other. That number is the raw material for
+      everything below.</figcaption>
+    </figure>
+    <div class="term"><span class="lbl">the term</span> The closeness number is <b>cosine similarity</b>.
+    B2 stores and compares it internally as a distance; you'll see it in the app only indirectly, as the
+    strength dots on a card.</div>
+
+    <div class="caveat"><b>Why raw closeness numbers are never shown to you.</b> "0.79" only means something
+    relative to the rest of <em>your</em> vault. In a vault of tightly-related research notes, 0.79 might be
+    unremarkable; in a scrapbook of unrelated topics it would be a standout. B2 therefore never grades a
+    relationship by its raw number — see <a href="#floor">the quality floor</a>.</div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="search">
+    <h2><span class="num">3</span>Search: two opinions, fused</h2>
+    <p class="sub">When you type a query, B2 asks two completely different systems the same question, then
+    merges their answers.</p>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="kickerlbl" style="color:var(--green)">Opinion 1 — the words</div>
+        <p style="margin:0;color:var(--muted);font-size:13.5px">A classic keyword search: which passages
+        actually contain your search words? It rewards <b>rare</b> words heavily — if you search "moleskin",
+        the one note containing it wins outright. It understands nothing; it counts.</p>
+        <div class="term" style="margin-bottom:0"><span class="lbl">term</span> <b>BM25</b>, the standard
+        keyword-ranking formula, running on SQLite's full-text index.</div>
+      </div>
+      <div class="card">
+        <div class="kickerlbl" style="color:var(--purple)">Opinion 2 — the meaning</div>
+        <p style="margin:0;color:var(--muted);font-size:13.5px">Your query is turned into a pin on the same
+        map as your passages, and B2 finds the nearest ones. It never needs to share a single word with the
+        note it finds — it matches ideas.</p>
+        <div class="term" style="margin-bottom:0"><span class="lbl">term</span> <b>vector search</b>, or
+        semantic search / <b>KNN</b> ("k nearest neighbours").</div>
+      </div>
+    </div>
+
+    <h3>Why you need both</h3>
+    <p>Each is blind where the other sees. Search <em>"how do leaves turn light into food"</em> and keyword
+    search returns nothing useful — your note says "photosynthesis" and shares almost no words with the
+    question. Meaning-search nails it. Now search for an exact error code or a person's surname: meaning
+    search returns a vague neighbourhood, while keyword search lands on the one note that literally contains
+    it.</p>
+
+    <figure>
+      <svg viewBox="0 0 840 260" role="img" aria-label="Two ranked lists merging into one fused list">
+        <g font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5">
+          <text x="130" y="22" fill="#1a7f37" text-anchor="middle" font-size="11" letter-spacing="1">KEYWORD (BM25)</text>
+          <rect x="30" y="34" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="42" y="51" fill="#59636e">1. garden-notes.md</text>
+          <rect x="30" y="66" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="42" y="83" fill="#59636e">2. houseplant-care.md</text>
+          <rect x="30" y="98" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="42" y="115" fill="#59636e">3. plant-roots.md</text>
+          <rect x="30" y="130" width="200" height="26" rx="5" fill="rgba(26,127,55,.10)" stroke="#1a7f37"/><text x="42" y="147" fill="#1a7f37">7. photosynthesis.md</text>
+
+          <text x="130" y="196" fill="#6e7781" text-anchor="middle" font-size="10.5">shares no words with</text>
+          <text x="130" y="211" fill="#6e7781" text-anchor="middle" font-size="10.5">"leaves turn light into food"</text>
+
+          <text x="420" y="22" fill="#8250df" text-anchor="middle" font-size="11" letter-spacing="1">MEANING (VECTOR)</text>
+          <rect x="320" y="34" width="200" height="26" rx="5" fill="rgba(130,80,223,.10)" stroke="#8250df"/><text x="332" y="51" fill="#8250df">1. photosynthesis.md</text>
+          <rect x="320" y="66" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="332" y="83" fill="#59636e">2. plant-roots.md</text>
+          <rect x="320" y="98" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="332" y="115" fill="#59636e">3. houseplant-care.md</text>
+          <rect x="320" y="130" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="332" y="147" fill="#59636e">4. garden-notes.md</text>
+
+          <path d="M236 92 C 268 92, 268 92, 300 92" stroke="#d1d9e0" stroke-width="1"/>
+          <path d="M526 92 C 560 92, 566 110, 596 110" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar2)"/>
+          <path d="M236 143 C 300 143, 540 130, 596 118" stroke="#0969da" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+          <text x="720" y="22" fill="#0969da" text-anchor="middle" font-size="11" letter-spacing="1">FUSED (RRF)</text>
+          <rect x="620" y="34" width="200" height="26" rx="5" fill="rgba(9,105,218,.10)" stroke="#0969da"/><text x="632" y="51" fill="#0969da">1. photosynthesis.md</text>
+          <rect x="620" y="66" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="632" y="83" fill="#59636e">2. plant-roots.md</text>
+          <rect x="620" y="98" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="632" y="115" fill="#59636e">3. houseplant-care.md</text>
+          <rect x="620" y="130" width="200" height="26" rx="5" fill="#ffffff" stroke="#d1d9e0"/><text x="632" y="147" fill="#59636e">4. garden-notes.md</text>
+          <text x="720" y="196" fill="#6e7781" text-anchor="middle" font-size="10.5">a note ranked well by</text>
+          <text x="720" y="211" fill="#6e7781" text-anchor="middle" font-size="10.5">either system rises</text>
+        </g>
+        <defs><marker id="ar2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 z" fill="#0969da"/></marker></defs>
+      </svg>
+      <figcaption><b>The merge uses positions, not scores.</b> The two systems produce numbers on
+      incomparable scales, so B2 ignores the scores entirely and merges by <em>rank</em>: each list awards a
+      note points based on where it placed, and the points are added. A note that both systems like beats a
+      note only one of them loves.</figcaption>
+    </figure>
+
+    <div class="term"><span class="lbl">the term</span> The merge is <b>Reciprocal Rank Fusion (RRF)</b>.
+    A note at position <em>r</em> in a list scores <code>1 / (60 + r)</code>. The <code>60</code> is a
+    deliberate damper — without it, a first place would dominate everything else. Searching both ways and
+    merging is called <b>hybrid search</b>.</div>
+
+    <h3>Three smaller heuristics you may notice</h3>
+    <ul class="tidy">
+      <li><b>Word endings are trimmed.</b> The keyword index reduces "running", "runs" and "ran" to a common
+      root so they match each other. The term is <b>stemming</b> (B2 uses the <em>Porter</em> stemmer). The
+      cost is occasional over-merging — <em>universe</em> and <em>university</em> collapse to the same root,
+      which is why B2's test suite deliberately includes that trap.</li>
+      <li><b>Punctuation in your query is neutralised.</b> Search syntax characters are stripped before your
+      words reach the keyword index, so typing a question with apostrophes and quotes can't break it.</li>
+      <li><b>Only a working set is ranked.</b> Each system returns a bounded pool of candidates (60 passages
+      or 150 notes for a normal ten-result search) rather than the entire vault. On a large vault this is
+      what keeps search instant; it also means a note far outside both pools can't be rescued by fusion.</li>
+    </ul>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="similar">
+    <h2><span class="num">4</span>Similarity: the two-stage engine</h2>
+    <p class="sub">The "related notes" panel answers a different question from search. Search asks
+    <em>"what matches this query?"</em> Similarity asks <em>"what in my vault belongs next to this note —
+    that I haven't already connected?"</em></p>
+
+    <p>Running it on a note (the <b>anchor</b>) happens in two passes, for speed:</p>
+    <ul class="tidy">
+      <li><b>Pass one — a fast shortlist.</b> Comparing every passage against every other passage would be
+      slow on a big vault. So B2 first gives each note a single average position — the middle of all its
+      passages — and uses that to shortlist a few hundred plausible notes. This pass is about
+      <em>recall</em>: it's deliberately generous, and exists only to avoid scoring the whole vault.</li>
+      <li><b>Pass two — the real comparison.</b> For each shortlisted note, B2 compares <em>every</em>
+      passage of the anchor against <em>every</em> passage of the candidate and keeps <b>the single best
+      matching pair</b>. That best pair is the note's score, and the passage that achieved it is shown to
+      you on the card as the evidence for <em>why</em> this note appeared.</li>
+    </ul>
+    <div class="term"><span class="lbl">the term</span> The note's average position is its <b>centroid</b>.
+    The best-pair comparison is <b>max-sim</b>, or <b>best-passage</b> scoring. Deep dive:
+    <a href="discovery.html">Inside <code>b2 similar</code></a>.</div>
+
+    <h3>Why the second pass matters: the buried gem</h3>
+    <p>An average is a lie about any note that covers more than one subject. Consider a weekly journal with
+    seven unrelated sections — one of them a genuinely excellent account of a lava field. Its average
+    position sits in the middle of nowhere, near nothing. But <em>one passage</em> of it is an outstanding
+    match for your volcano note.</p>
+
+    <figure>
+      <svg viewBox="0 0 840 250" role="img" aria-label="A multi-section note whose average sits far from an anchor while one passage sits very close">
+        <rect x="8" y="8" width="824" height="234" rx="10" fill="#f6f8fa" stroke="#d1d9e0"/>
+        <g font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5">
+          <!-- anchor -->
+          <circle cx="150" cy="125" r="9" fill="#0969da"/>
+          <text x="150" y="103" fill="#0969da" text-anchor="middle" font-size="12">volcano.md</text>
+          <text x="150" y="152" fill="#6e7781" text-anchor="middle" font-size="10">the anchor</text>
+
+          <!-- journal passages scattered -->
+          <text x="560" y="34" fill="#59636e" text-anchor="middle" font-size="11" letter-spacing="1">week-log.md — its seven passages</text>
+          <circle cx="470" cy="70" r="5.5" fill="#6e7781"/><text x="482" y="74" fill="#6e7781" font-size="10">sourdough</text>
+          <circle cx="620" cy="62" r="5.5" fill="#6e7781"/><text x="632" y="66" fill="#6e7781" font-size="10">tax filing</text>
+          <circle cx="700" cy="118" r="5.5" fill="#6e7781"/><text x="712" y="122" fill="#6e7781" font-size="10">guitar</text>
+          <circle cx="640" cy="182" r="5.5" fill="#6e7781"/><text x="652" y="186" fill="#6e7781" font-size="10">bike ride</text>
+          <circle cx="500" cy="200" r="5.5" fill="#6e7781"/><text x="512" y="204" fill="#6e7781" font-size="10">book club</text>
+          <circle cx="398" cy="206" r="5.5" fill="#6e7781"/><text x="410" y="210" fill="#6e7781" font-size="10">dentist</text>
+          <circle cx="300" cy="112" r="7" fill="#1a7f37"/><text x="286" y="96" fill="#1a7f37" text-anchor="middle" font-size="10.5">lava field</text>
+
+          <!-- centroid -->
+          <circle cx="545" cy="127" r="8" fill="none" stroke="#cf222e" stroke-width="2" stroke-dasharray="3 3"/>
+          <text x="545" y="150" fill="#cf222e" text-anchor="middle" font-size="10.5">its average (centroid)</text>
+
+          <path d="M161 122 L292 114" stroke="#1a7f37" stroke-width="2"/>
+          <text x="224" y="108" fill="#1a7f37" text-anchor="middle" font-size="10.5">very close</text>
+          <path d="M160 126 L534 127" stroke="#cf222e" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="360" y="140" fill="#cf222e" text-anchor="middle" font-size="10.5">far — the average of seven unrelated things</text>
+        </g>
+      </svg>
+      <figcaption><b>Judge the average and you lose the gem.</b> B2 ranks and grades this note on its
+      <em>best passage</em> (the green link), not its average (the red one) — so a strong section inside a
+      messy note can still surface, with that section quoted on the card. This is also why the same journal
+      doesn't get wrongly suggested for your unrelated notes: its average may drift near them, but no single
+      passage of it actually matches, so it's cut.</figcaption>
+    </figure>
+
+    <div class="ground"><b>Notes you've already linked are removed.</b> Discovery shows you what you
+    <em>haven't</em> connected — anything one link away from the anchor is excluded, because you already know
+    about it. Notes two links away stay in, since a related-but-not-directly-linked note is exactly the
+    connection worth finding.</div>
+
+    <div class="caveat"><b>B2 suggests; you decide.</b> Nothing in this panel changes your notes. A
+    connection exists only when you author it — with <code>b2 link</code>, or by dragging a card into your
+    note in the app. There is no suggestion queue and no pending state: you are the precision gate.</div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="floor">
+    <h2><span class="num">5</span>The quality floor: when B2 shows you nothing</h2>
+    <p class="sub">Every note has a nearest neighbour, even when nothing in the vault genuinely relates to
+    it. Showing that nearest neighbour anyway would be dishonest — so B2 has a rule for staying quiet.</p>
+
+    <p>The naive approach — "only show pairs closer than 0.7" — was tried and fails badly, because as
+    section 2 explained, a raw closeness number means nothing on its own. A fixed bar tuned on one vault
+    kept <em>99–100%</em> of candidates on a denser one.</p>
+
+    <p>So B2 judges each candidate <b>against the anchor's own competition</b>. For the note you're looking
+    at, B2 takes all its candidates, works out the typical closeness and the normal spread, and asks of each
+    one: <em>how far above this note's own background does it stand?</em> A candidate that's barely above
+    average is background noise, whatever its raw number.</p>
+
+    <div class="term"><span class="lbl">the term</span> "How far above the background, measured in units of
+    the normal spread" is a <b>z-score</b>, written σ (sigma). The rule is B2's <b>discovery quality
+    floor</b>. Being relative rather than absolute is the point: it means the rule survives changing the
+    model, the hardware, or the size of your vault without retuning.</div>
+
+    <figure>
+      <svg viewBox="0 0 840 240" role="img" aria-label="Candidates plotted along a z-score axis with two gates marked">
+        <g font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5">
+          <line x1="60" y1="150" x2="800" y2="150" stroke="#d1d9e0" stroke-width="1.5"/>
+          <text x="60" y="176" fill="#6e7781" font-size="10" text-anchor="middle">average</text>
+          <text x="60" y="190" fill="#6e7781" font-size="10" text-anchor="middle">0σ</text>
+          <line x1="60" y1="142" x2="60" y2="158" stroke="#6e7781"/>
+          <text x="800" y="176" fill="#6e7781" font-size="10" text-anchor="middle">3σ</text>
+          <line x1="800" y1="142" x2="800" y2="158" stroke="#6e7781"/>
+
+          <!-- member gate -->
+          <line x1="428" y1="60" x2="428" y2="162" stroke="#9a6700" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="428" y="52" fill="#9a6700" text-anchor="middle" font-size="10.5">keep-bar 1.49σ</text>
+          <!-- leader gate -->
+          <line x1="546" y1="40" x2="546" y2="162" stroke="#0969da" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="546" y="32" fill="#0969da" text-anchor="middle" font-size="10.5">show-anything-at-all bar 1.96σ</text>
+
+          <!-- candidates -->
+          <circle cx="120" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="168" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="214" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="268" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="330" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="392" cy="150" r="6" fill="#6e7781"/>
+          <circle cx="470" cy="150" r="7" fill="#9a6700"/>
+          <circle cx="600" cy="150" r="8" fill="#1a7f37"/>
+          <circle cx="712" cy="150" r="8" fill="#1a7f37"/>
+          <text x="712" y="128" fill="#1a7f37" text-anchor="middle" font-size="10.5">bike-maintenance.md</text>
+          <text x="470" y="128" fill="#9a6700" text-anchor="middle" font-size="10.5">kept, weaker</text>
+
+          <text x="240" y="212" fill="#6e7781" text-anchor="middle" font-size="11">the anchor's ordinary background — cut</text>
+          <text x="656" y="212" fill="#1a7f37" text-anchor="middle" font-size="11">genuinely stands out — served</text>
+        </g>
+      </svg>
+      <figcaption><b>Two bars, doing different jobs.</b> The <span style="color:#0969da">blue bar</span>
+      asks "does the <em>best</em> candidate stand out at all?" — if not, the whole list is suppressed and
+      you see "nothing stands out". The <span style="color:#9a6700">amber bar</span> then decides where the
+      list stops: candidates below it are the anchor's noise floor, not results. The bars sit at
+      <b>1.96σ</b> and <b>1.49σ</b>, and both are re-derived from a hand-labelled test corpus rather than
+      guessed.</figcaption>
+    </figure>
+
+    <div class="ground"><b>On a small vault the rule switches itself off.</b> A z-score over a handful of
+    candidates is statistical noise, so with fewer than 12 candidates B2 shows everything it found. In a
+    vault that small you can see all your notes anyway.</div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="bands">
+    <h2><span class="num">6</span>Reading the strength dots</h2>
+    <p class="sub">Each card in the app carries three dots. They are that candidate's z-score, banded — not
+    a raw similarity, and not a percentage.</p>
+    <div class="bands">
+      <div class="band"><span class="g" style="color:var(--green)">●●●</span><b>strong match</b><br>
+        <span style="font-size:12.5px">2.52σ and above — in the top quartile of relationships a human has
+        confirmed as real.</span></div>
+      <div class="band"><span class="g" style="color:var(--accent)">●●○</span><b>clear match</b><br>
+        <span style="font-size:12.5px">1.96σ and above — clears the bar that decides whether anything is
+        shown at all.</span></div>
+      <div class="band"><span class="g" style="color:var(--muted)">●○○</span><b>near match</b><br>
+        <span style="font-size:12.5px">Below 1.96σ — real enough to keep in the list, worth a sceptical
+        look.</span></div>
+    </div>
+    <p>Because the dots, the ordering of the list, and the decision to show the list at all are all read
+    from the same number, they can never disagree with each other. A card higher in the list never has fewer
+    dots than one below it.</p>
+    <div class="caveat"><b>The dots are relative to the note you're on.</b> "●●●" means <em>strong compared
+    with this note's other candidates</em>, not "95% similar". The same pair of notes can legitimately show
+    different dots from each side, because each side has different competition.</div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="limits">
+    <h2><span class="num">7</span>Known limits &amp; honest caveats</h2>
+
+    <div class="warnbox">
+      <div class="hd"><span>▲</span><span class="tag">Open issue</span></div>
+      <b>If all your notes are about the same subject, the related-notes panel may show nothing at all.</b>
+      <p>The quality floor asks "does this candidate stand out from the note's <em>background</em>?" — which
+      quietly assumes most of your vault is unrelated to any given note. In a vault where everything is on
+      one topic (a research vault, a project vault, a single-subject zettelkasten) that assumption breaks:
+      the background is <em>itself</em> related, so nothing can stand out from it, and genuinely related
+      notes get suppressed. Measured on a real 17-note single-domain vault, 16 of 17 notes returned nothing
+      — including three articles on the same narrow subject that were each other's top-ranked neighbours.</p>
+      <p>There's a perverse edge to it: the <em>more</em> notes you write on a subject, the more they raise
+      each other's background, and the harder each one becomes to surface.</p>
+      <p><b>Workaround today:</b> use <em>Show nearest anyway</em> in the app, or
+      <code>b2 similar &lt;note&gt; --no-floor</code> on the command line — both bypass the floor and show
+      the raw ranking, which is unaffected by this and remains correct.
+      Tracked as <a href="https://github.com/AlteredCraft/B2/issues/196">issue #196</a>.</p>
+    </div>
+
+    <ul class="tidy">
+      <li><b>A relation the model simply gets wrong can't be rescued by any of this.</b> The floor judges a
+      candidate against its competition; if the model scores one unrelated pair unusually highly, it sits
+      above that competition by definition. One such case is a known, tracked residue in B2's own test
+      corpus.</li>
+      <li><b>Quality depends on your reindex being current.</b> Discovery reads stored vectors and never
+      re-embeds, so notes edited since the last index are compared on their old text. The desktop app
+      re-indexes automatically on changes; the CLI does it when you run <code>b2 reindex</code>.</li>
+      <li><b>An index built with the fake embedder is meaningless.</b> If <code>B2_EMBEDDER=fake</code> was
+      set (offline/dev mode), vectors are content hashes, not semantics — B2 detects this and switches the
+      quality floor off rather than pretending to grade noise.</li>
+      <li><b>Only Markdown is read for meaning.</b> Other files in your vault are tracked as resources but
+      have no passages or vectors yet, so they never appear as similar notes.</li>
+    </ul>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="components">
+    <h2><span class="num">8</span>Every component &amp; knob, in one table</h2>
+    <p class="sub">What's actually in the pipeline, what each part decides, and the value it ships with.</p>
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th>Component</th><th>What it decides</th><th>Ships as</th><th>Deeper dive</th></tr></thead>
+      <tbody>
+        <tr><td><b>Chunker</b></td><td>Where a note is cut into passages; prefers headings, then paragraph
+          breaks; never splits code or tables</td><td>~450 tokens, 15% overlap</td>
+          <td><a href="indexing.html">Indexing</a></td></tr>
+        <tr><td><b>Embedding model</b></td><td>Turns a passage into its position on the meaning map</td>
+          <td><code>bge-base-en-v1.5</code>, 768 dimensions, local</td>
+          <td><a href="architecture.html">Architecture</a></td></tr>
+        <tr><td><b>Keyword index</b></td><td>Which passages contain your words; rare words count for more</td>
+          <td>SQLite FTS5, BM25, Porter stemming</td><td><a href="indexing.html">Indexing</a></td></tr>
+        <tr><td><b>Vector scan</b></td><td>Which passages are nearest in meaning</td>
+          <td>Exact comparison, in-process, no extension</td>
+          <td><a href="architecture.html">Architecture</a></td></tr>
+        <tr><td><b>Fusion</b></td><td>How the two rankings become one</td><td>RRF with a damping constant of
+          60; ties break toward the meaning signal</td><td><a href="architecture.html">Architecture</a></td></tr>
+        <tr><td><b>Candidate pools</b></td><td>How deep each signal looks before fusing</td>
+          <td>60 passages / 150 notes for a 10-result search</td>
+          <td><a href="architecture.html">Architecture</a></td></tr>
+        <tr><td><b>Shortlist (pass 1)</b></td><td>Which notes are worth comparing properly</td>
+          <td>20× the requested count, at least 200 notes</td>
+          <td><a href="discovery.html">Discovery</a></td></tr>
+        <tr><td><b>Best-passage score (pass 2)</b></td><td>How related two notes actually are, and which
+          passage proves it</td><td>Best pair across all passages of both</td>
+          <td><a href="discovery.html">Discovery</a></td></tr>
+        <tr><td><b>Link exclusion</b></td><td>Which candidates are hidden as "already known"</td>
+          <td>Anything 1 link away from the anchor</td><td><a href="discovery.html">Discovery</a></td></tr>
+        <tr><td><b>Quality floor</b></td><td>Whether to show a list at all, and where it stops</td>
+          <td>1.96σ to show anything; 1.49σ to stay in; off below 12 candidates</td>
+          <td><a href="#floor">Section 5</a></td></tr>
+        <tr><td><b>Strength bands</b></td><td>How many dots a card gets</td>
+          <td>●●● ≥ 2.52σ · ●●○ ≥ 1.96σ · ●○○ below</td><td><a href="#bands">Section 6</a></td></tr>
+        <tr><td><b>Grounded chat</b></td><td>Which passages an answer is allowed to cite</td>
+          <td>Top 10 passages from the same hybrid search</td>
+          <td><a href="architecture.html">Architecture</a></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="ground"><b>None of these are guesses.</b> Every value above was chosen by measuring it
+    against a hand-labelled corpus of notes and expected answers, and several were chosen by
+    <em>rejecting</em> a change that looked better on paper. That test harness, its rules, and the record of
+    every verdict live in
+    <a href="https://github.com/AlteredCraft/B2/blob/main/docs/evals/README.md">docs/evals/</a>.</div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="glossary">
+    <h2><span class="num">9</span>Glossary</h2>
+    <p class="sub">Every term on this page, in one place.</p>
+    <div class="gloss">
+      <div class="gitem"><div class="gterm">Anchor</div><div class="gdef">The note you're currently looking
+        at — the one whose related notes are being found.</div></div>
+      <div class="gitem"><div class="gterm">BM25</div><div class="gdef">The standard formula for keyword
+        ranking. Scores a passage on how many of your search words it contains, weighting
+        <b>rare</b> words far more heavily than common ones. Knows nothing about meaning.</div></div>
+      <div class="gitem"><div class="gterm">Centroid <span class="also">"the note's average position"</span></div>
+        <div class="gdef">One position representing a whole note, made by averaging all its passages. Fast
+        to compare, but misleading for a note covering several subjects — which is why B2 uses it only to
+        build a shortlist, never to grade a result.</div></div>
+      <div class="gitem"><div class="gterm">Chunk <span class="also">"passage"</span></div>
+        <div class="gdef">A slice of a note, roughly 450 tokens, cut at a heading or paragraph break.
+        Everything B2 compares is a chunk, not a whole note.</div></div>
+      <div class="gitem"><div class="gterm">Cosine similarity</div><div class="gdef">The closeness of two
+        positions on the meaning map, from −1 to 1. 1 means "identical direction". B2 computes it but never
+        shows it to you raw, because its meaning depends entirely on the vault around it.</div></div>
+      <div class="gitem"><div class="gterm">Embedding <span class="also">"vector"</span></div>
+        <div class="gdef">The list of 768 numbers a model produces for a passage — its position on the map
+        of meaning. Passages about similar things get nearby positions.</div></div>
+      <div class="gitem"><div class="gterm">Embedding model</div><div class="gdef">The local AI model that
+        produces embeddings. B2 ships with <code>bge-base-en-v1.5</code>, downloaded once by
+        <code>b2 init</code> and run on your own machine.</div></div>
+      <div class="gitem"><div class="gterm">Hybrid search</div><div class="gdef">Running keyword and meaning
+        search together and merging the results — B2's default, because each covers the other's blind
+        spot.</div></div>
+      <div class="gitem"><div class="gterm">KNN <span class="also">"k nearest neighbours"</span></div>
+        <div class="gdef">Finding the k closest positions to a given one. What "search by meaning" and
+        "related notes" both do underneath.</div></div>
+      <div class="gitem"><div class="gterm">Max-sim <span class="also">"best-passage scoring"</span></div>
+        <div class="gdef">Scoring two notes by their single best-matching pair of passages, rather than by
+        their averages. Lets one strong section inside a messy note count for something.</div></div>
+      <div class="gitem"><div class="gterm">Reciprocal Rank Fusion (RRF)</div><div class="gdef">The method
+        for merging two ranked lists using each item's <em>position</em> rather than its score — necessary
+        because keyword scores and distance scores aren't on comparable scales.</div></div>
+      <div class="gitem"><div class="gterm">Stemming</div><div class="gdef">Trimming words to a common root
+        in the keyword index so "running" matches "run". Improves recall; occasionally over-merges
+        (<em>universe</em> / <em>university</em>).</div></div>
+      <div class="gitem"><div class="gterm">Quality floor</div><div class="gdef">The rule that decides
+        whether the related-notes list is worth showing at all, and where it should stop — measured in
+        z-scores against the anchor's own candidates.</div></div>
+      <div class="gitem"><div class="gterm">z-score <span class="also">"σ", "sigma"</span></div>
+        <div class="gdef">How far above the typical value something sits, measured in units of the normal
+        spread. "2.5σ" means "well above this note's ordinary candidates". Being relative is what lets the
+        same rule work on any vault, any model, any hardware.</div></div>
+    </div>
+  </section>
+
+  <!-- ================================================================= -->
+  <section id="deeper">
+    <h2><span class="num">10</span>Deeper dives</h2>
+    <div class="grid3">
+      <div class="card"><div class="kickerlbl">Mechanics</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="indexing.html">The indexing
+        pipeline</a> — chunking, embedding, and what <code>reindex</code> actually writes.</p></div>
+      <div class="card"><div class="kickerlbl">Mechanics</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="discovery.html">Inside
+        <code>b2 similar</code></a> — the discovery run, step by step, with the real data structures.</p></div>
+      <div class="card"><div class="kickerlbl">Mechanics</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="architecture.html">System
+        architecture</a> — the whole engine, the seams, and where each flow lives.</p></div>
+      <div class="card"><div class="kickerlbl">Evidence</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/docs/evals/README.md">The
+        eval harness</a> — how every number on this page was measured, and the verdicts it has ruled.</p></div>
+      <div class="card"><div class="kickerlbl">Specification</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/tree/main/docs/design">Design
+        docs</a> — the normative spec the code is a projection of.</p></div>
+      <div class="card"><div class="kickerlbl">Getting started</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="quickstart.html">Quick start</a> —
+        install, index a vault, and run your first search.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    B2 · search &amp; similarity explainer · the design docs in <code>docs/design/</code> are the source of
+    truth and the code is a projection of the spec. Back to the <a href="index.html">overview</a>, the
+    <a href="architecture.html">architecture</a>, or <a href="discovery.html">the discovery deep dive</a>.
+  </footer>
+
+</div>
+</body>
+</html>

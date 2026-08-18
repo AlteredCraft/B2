@@ -13,6 +13,11 @@ Everything here runs **out of CI, on demand** — the repo rule is that `cargo t
 deterministic, and model-free, so model quality can never flake CI
 ([`CLAUDE.md`](../../CLAUDE.md), Conventions).
 
+> **Not the audience for this page?** [**Search & similarity — the explainer**](../search-and-similarity.html)
+> is the plain-language tour of everything these metrics score — chunks, embeddings, hybrid search, the
+> two-stage discovery engine, and the quality floor — written for people *using* B2 rather than measuring
+> it, with a glossary and diagrams.
+
 ## The two halves, and why neither is enough alone
 
 | Command | What it measures | Model | Deterministic |
