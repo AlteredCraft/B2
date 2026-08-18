@@ -143,10 +143,15 @@ const Z_SCAN_LIMIT: usize = 500;
 const BAND_STRONG_Z: f64 = 2.52;
 const BAND_CLEAR_Z: f64 = 1.96;
 /// The soft reference floor on the default config's hybrid note hit@1.
+/// Untouched by the GH #197 re-derivation: retrieval never had a gate to
+/// retire.
 const FLOOR_HIT1: f64 = 0.75;
 /// The floor on **per-mate** discovery MRR@[`SIM_K`] (GH #188) — the
 /// non-saturating rank metric GH #183 added, gated once a baseline existed to
-/// price it.
+/// price it. **Re-derived for always-serve** (GH #197): the shipped reading
+/// moved from 0.633 to 0.650 when the existence gate retired — exactly the
+/// returned phishing mate, served at rank 4 (+1/(4·15)) — so the floor moved
+/// with it, by the same method that set it.
 ///
 /// Placed **below** the reading, never at it: a gate pinned to today's number
 /// fails on the first legitimate corpus edit, which trains the one habit this
@@ -155,25 +160,40 @@ const FLOOR_HIT1: f64 = 0.75;
 /// label-sensitive by construction: adding a mate to an anchor changes `n` and
 /// moves the aggregate whether or not the engine did anything.
 ///
-/// Sizing, measured rather than guessed: repeated runs on an unchanged
-/// corpus/model/build reproduce the number **exactly** (the model is
-/// deterministic on one device, and every stage downstream of it is), so the
+/// Sizing, measured rather than guessed (GH #188's method, re-run for the
+/// GH #197 reading): five consecutive always-serve runs on an unchanged
+/// corpus/model/build reproduce every rank, z, and cosine **exactly**, so the
 /// run-to-run noise floor is 0 and the headroom exists for *corpus* drift
 /// instead. At n = 15 mates one mate lost from rank 1 costs 1/15 ≈ 0.067, and
-/// this floor sits ~2 such losses under the shipped reading — a real
-/// regression trips it, a corpus edit that legitimately adds a hard mate
-/// does not.
-const FLOOR_MATE_MRR: f64 = 0.50;
-/// How many labelled mates the shipped floor may suppress outright (GH #188).
+/// this floor sits ~2 such losses under the shipped 0.650 — a real regression
+/// trips it, a corpus edit that legitimately adds a hard mate does not.
+const FLOOR_MATE_MRR: f64 = 0.52;
+/// How many labelled mates the shipped surface may fail to serve at all.
 ///
-/// Asserted apart from [`FLOOR_MATE_MRR`] because absence is not demotion: a
-/// mate the surface *never serves* is a different (and worse) failure than one
-/// that slid a rank, and an average over 15 mates cannot tell them apart. The
-/// standing reading is 1 — `phishing.md`, the pair-level residue GH #192 named
-/// and left to the pair-scorer escalation — so this permits that one plus a
-/// slot of headroom for a corpus edit that lands a genuinely hard mate. A
-/// second *unexplained* suppression is what it exists to catch.
-const MAX_MATES_SUPPRESSED: usize = 2;
+/// **Structurally 0 under always-serve** (GH #197): both discovery passes read
+/// the one ranked surface, so nothing can be reachable in one and unserved in
+/// the other — the pre-#197 reading of 1 (`phishing.md`, under the retired
+/// member bar) went to 0 with the gate that caused it. Kept as an assertion —
+/// at zero, with no headroom, deliberately — because it is the **tripwire**
+/// that re-arms the moment any Phase-2 existence signal puts a second surface
+/// back in the path: a nonzero value here can only mean a gate is suppressing
+/// a human-labelled relation again, which is exactly the event that must never
+/// ship unmeasured twice.
+const MAX_MATES_SUPPRESSED: usize = 0;
+/// The floor on the **dense fixture's** per-mate MRR@[`SIM_K`] (GH #197,
+/// Phase 0b) — the single-domain corpus's rank metric, gated once its baseline
+/// existed to price it (the same measure-then-calibrate order as
+/// [`FLOOR_MATE_MRR`]'s own history).
+///
+/// The first measured reading is 0.502 (n = 14 mates): the model recovers the
+/// within-cluster labels and ranks the three cross-cluster claims lower —
+/// headroom in both directions, which is what a non-saturating instrument
+/// needs. Five repeat runs are bit-identical, so the margin is for corpus
+/// drift: at n = 14 one mate lost from rank 1 costs 1/14 ≈ 0.071, and this
+/// floor sits ~2 such losses under the reading. Process rule 2 binds hard
+/// here: in a corpus where everything relates, relabelling toward the model's
+/// order would *always* look plausible — a red reading argues about the notes.
+const FLOOR_DENSE_MATE_MRR: f64 = 0.35;
 
 #[derive(Deserialize)]
 struct QuerySet {
@@ -869,30 +889,21 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
-    // The suppression gate (GH #150, complete): EVERY negative anchor must come
-    // back clean under the shipped discovery floor — a run that serves a single
-    // stranger where the label says "nothing" exits non-zero. This was a `>= 2`
-    // ratchet while watercolor ↔ stain-removal — a pair the model scored the
-    // corpus's strongest — sat in the negative set making its own label arguable;
-    // the 2026-08-11 resolution replaced watercolor with a cleanly
-    // orthogonal loner (throat-singing) rather than argue, so every negative is
-    // now unambiguous and the gate is the `==` the issue specified.
-    if similar.neg_clean != similar.neg_n {
-        eprintln!(
-            "\n[warn] {}/{} negative anchors clean under the discovery floor — the floor regressed.",
-            similar.neg_clean, similar.neg_n
-        );
-        return Ok(false);
-    }
-    // Discovery **rank**, gated at last (GH #188). The per-mate metric shipped
-    // reporting-only on purpose — the floor's own precedent (GH #150) is
-    // measure-then-calibrate, and a threshold picked the day a metric is born
-    // is intuition wearing a number — but "ungated pending a baseline" is only
-    // honest while the baseline is still being taken. Both bars below are set
-    // from measured runs, and neither sits *at* its reading — one is a floor and
-    // one a ceiling, so the slack runs opposite ways: MRR@5 below today's, the
-    // suppression count above it. `docs/evals/README.md` carries the failure
-    // mode they must not train.
+    // The negatives' suppression assertion (GH #150) RETIRED with the gate it
+    // watched (GH #197): under always-serve a loner anchor serves its ranked
+    // nearest — that is the ruling, not a regression, so `neg_clean == neg_n`
+    // would now assert the retired behavior. The anchors stay labelled, the
+    // strangers instrument keeps counting, and what the served cards *claim*
+    // is the calibration block's band readout (every leader paints `●○○` on
+    // the corpus today).
+    // Discovery **rank** (GH #188; re-derived for always-serve by GH #197).
+    // The per-mate metric shipped reporting-only on purpose — the precedent
+    // (GH #150) is measure-then-calibrate, and a threshold picked the day a
+    // metric is born is intuition wearing a number. The rank floor sits below
+    // its measured reading (corpus-drift headroom, run noise being zero);
+    // suppression, next, sits AT its structural zero — a tripwire, not a
+    // budget. `docs/evals/README.md` carries the failure mode neither may
+    // train.
     if similar.mate.mrr() < FLOOR_MATE_MRR {
         eprintln!(
             "\n[warn] per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_MATE_MRR:.2} floor — discovery ranking regressed \
@@ -904,11 +915,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // Suppression is asserted separately rather than folded into the average
     // above, because a mate going from rank 5 to *absent* is a categorically
     // worse event than drifting 2 → 3, and a mean over 15 mates hides exactly
-    // that (GH #188).
+    // that (GH #188). At zero since GH #197 — see MAX_MATES_SUPPRESSED.
     if similar.mate_suppressed > MAX_MATES_SUPPRESSED {
         eprintln!(
-            "\n[warn] {} of {} labelled mates suppressed, over the {MAX_MATES_SUPPRESSED} the floor is allowed — \
-             a human-labelled relation stopped being served at all.",
+            "\n[warn] {} of {} labelled mates suppressed where always-serve permits none — \
+             an existence gate is back in the path (GH #197's tripwire).",
             similar.mate_suppressed, similar.mate.n
         );
         return Ok(false);
@@ -924,6 +935,15 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             dense.empty_panes.len(),
             dense.notes,
             dense.empty_panes.join(", ")
+        );
+        return Ok(false);
+    }
+    // …and its rank floor, the dense sibling of FLOOR_MATE_MRR.
+    if dense.mate.mrr() < FLOOR_DENSE_MATE_MRR {
+        eprintln!(
+            "\n[warn] dense per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_DENSE_MATE_MRR:.2} floor — \
+             single-domain discovery ranking regressed (argue with the notes, not the labels).",
+            dense.mate.mrr()
         );
         return Ok(false);
     }
@@ -1022,7 +1042,7 @@ fn print_dense_report(dense: &DensePass) {
         dense.notes, dense.chunks
     );
     println!(
-        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates)",
+        "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates, GATED at MRR@{SIM_K} ≥ {FLOOR_DENSE_MATE_MRR:.2})",
         dense.mate.hit1(),
         dense.mate.hit3(),
         dense.mate.mrr(),
