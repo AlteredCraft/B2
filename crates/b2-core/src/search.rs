@@ -272,21 +272,37 @@ impl LexicalEvidence {
 /// One `count(*)` per distinct term — the probe FTS5 has no cheaper form of
 /// without an `fts5vocab` shadow table, which would be schema surface bought for
 /// a handful of counts per query.
+///
+/// **Distinct means distinct to FTS5, not to `str::eq`** (PR #205 review).
+/// `chunks_fts` is tokenized, so `Memory`, `memory` and `memories` are one token
+/// under the shipped `porter unicode61` and match the same chunks. Counting them
+/// as separate terms would let a query weigh one piece of evidence two or three
+/// times, and that changes verdicts rather than just numbers: on a 100-chunk
+/// vault where `memory` sits in 44, "Memory memory shjfasd" reads coverage 0.259
+/// deduped by spelling and 0.149 deduped by token — across the shipped 0.20 bar.
+/// So the fold is onto [`fts_tokens`]' reading, which is the index's own.
 pub fn lexical_evidence(conn: &rusqlite::Connection, query: &str) -> Result<LexicalEvidence> {
     let chunk_total: usize = conn
         .query_row("SELECT count(*) FROM chunks", [], |r| r.get::<_, i64>(0))?
         .try_into()
         .unwrap_or(0);
+    let raw = query_terms(query);
+    let tokens = fts_tokens(conn, &raw)?;
     let mut terms: Vec<TermEvidence> = Vec::new();
-    for term in query_terms(query) {
-        if terms.iter().any(|t| t.term == term) {
-            continue; // a repeated term is one piece of evidence, not two
+    let mut seen: Vec<String> = Vec::new();
+    for (term, token) in raw.into_iter().zip(tokens) {
+        // A repeated term is one piece of evidence, not two — and the first
+        // spelling is the one shown, since the token is an index-internal form
+        // ("memori") that no reader typed.
+        if seen.contains(&token) {
+            continue;
         }
         let df: i64 = conn.query_row(
             "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?1",
             [&quoted(&term)],
             |r| r.get(0),
         )?;
+        seen.push(token);
         terms.push(TermEvidence {
             term,
             df: usize::try_from(df).unwrap_or(0),
@@ -295,7 +311,73 @@ pub fn lexical_evidence(conn: &rusqlite::Connection, query: &str) -> Result<Lexi
     Ok(LexicalEvidence { chunk_total, terms })
 }
 
-/// The per-model evidence bar D2 judges a query against: what counts as a
+/// Fold each of `terms` onto the token `chunks_fts` would index it as — the only
+/// identity under which two query words are "the same word" here.
+///
+/// FTS5 exposes no tokenizing function, so this borrows the tokenizer: a scratch
+/// table in the connection's **temp** schema, created with the tokenizer the
+/// index is actually using ([`db::index_tokenizer`], read rather than assumed
+/// because the GH #157 ablation swaps it), one row per term, and `fts5vocab` in
+/// `instance` mode to read back what each row tokenized to. Nothing touches the
+/// vault database, so a reader stays a reader (C1).
+///
+/// Each term is its own row rather than one row of many, because a term is not
+/// guaranteed to be exactly one token — `query_terms` splits on Rust's notion of
+/// alphanumeric and FTS5 has its own — and per-row grouping stays correct when
+/// the two disagree. A term that tokenizes to nothing keeps its own spelling as
+/// its identity, so it is never folded onto another term's.
+fn fts_tokens(conn: &rusqlite::Connection, terms: &[String]) -> Result<Vec<String>> {
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Named for the tokenizer it was built with, so a mid-session `rebuild_fts`
+    // swap lands on a different table instead of reusing a stale one.
+    let tokenizer = db::index_tokenizer(conn)?;
+    let table = format!("b2_qtok_{}", tokenizer.sql().replace(' ', "_"));
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{table} USING fts5(
+           t, tokenize = '{}'
+         );
+         CREATE VIRTUAL TABLE IF NOT EXISTS temp.{table}_v USING fts5vocab(
+           temp, {table}, instance
+         );
+         DELETE FROM temp.{table};",
+        tokenizer.sql()
+    ))?;
+    {
+        let mut insert = conn.prepare(&format!(
+            "INSERT INTO temp.{table}(rowid, t) VALUES (?1, ?2)"
+        ))?;
+        for (i, term) in terms.iter().enumerate() {
+            insert.execute(rusqlite::params![i as i64, term])?;
+        }
+    }
+    // Start from each term's own spelling: a row that produced no token keeps it,
+    // which makes such a term distinct from every other rather than equal to it.
+    let mut out: Vec<String> = terms.to_vec();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT doc, term FROM temp.{table}_v ORDER BY doc, offset"
+    ))?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut tokenized: Vec<bool> = vec![false; terms.len()];
+    for row in rows {
+        let (doc, token) = row?;
+        let Ok(i) = usize::try_from(doc) else {
+            continue;
+        };
+        let Some(slot) = out.get_mut(i) else { continue };
+        if tokenized[i] {
+            slot.push('\u{1f}'); // a term that split: join its tokens, in order
+            slot.push_str(&token);
+        } else {
+            *slot = token;
+            tokenized[i] = true;
+        }
+    }
+    Ok(out)
+}
+
+/// The per-model evidence bar D2 judges a query against/// The per-model evidence bar D2 judges a query against: what counts as a
 /// lexical anchor, and how near the dense half must be to stand in for one.
 ///
 /// **A distributional constant, so it is keyed to the model** (M2 — a swap

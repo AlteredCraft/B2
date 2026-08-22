@@ -940,3 +940,56 @@ fn a_zero_limit_evidence_read_still_reads_the_evidence() {
     );
     assert!(view.terms.iter().any(|t| t.term == "memory"));
 }
+
+/// Terms are deduped by the identity **FTS5** uses, not by spelling (PR #205
+/// review). `chunks_fts` is tokenized, so `Memory` / `memory` / `memories` are
+/// one token and match the same chunks; counting them separately would let a
+/// query weigh one piece of evidence three times.
+#[test]
+fn repeated_terms_are_deduped_by_fts_token_not_spelling() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let ev = search::lexical_evidence(&conn, "Memory memory memories").unwrap();
+    assert_eq!(
+        ev.terms.len(),
+        1,
+        "one token, so one term: {:?}",
+        ev.terms.iter().map(|t| &t.term).collect::<Vec<_>>()
+    );
+    // The *first spelling* survives, not the index-internal stem ("memori"),
+    // which no reader typed.
+    assert_eq!(ev.terms[0].term, "Memory");
+
+    // Words the tokenizer keeps apart stay apart — including two it has never
+    // seen, which share a `df` of 0 but are not the same evidence.
+    let distinct = search::lexical_evidence(&conn, "vrelqip zonktar memory").unwrap();
+    assert_eq!(distinct.terms.len(), 3);
+}
+
+/// The dedup is not cosmetic: spelling-based dedup double-counts a present term
+/// against an absent one, and at the shipped bar that flips the verdict.
+///
+/// The arithmetic, at `chunk_total = 100` with a term in 44 chunks: two copies
+/// of it against one absent word read `2·0.808 / (2·0.808 + 4.615) = 0.259`,
+/// one copy reads `0.808 / (0.808 + 4.615) = 0.149` — across the shipped 0.20
+/// coverage bar. Asserted on the arithmetic rather than a fixture so the case
+/// stays legible when the corpus moves.
+#[test]
+fn double_counting_a_present_term_would_cross_the_shipped_bar() {
+    let bar = search::EvidenceBar::for_model("BAAI/bge-base-en-v1.5").unwrap();
+    let term = |t: &str, df| search::TermEvidence { term: t.into(), df };
+    let deduped = search::LexicalEvidence {
+        chunk_total: 100,
+        terms: vec![term("Memory", 44), term("shjfasd", 0)],
+    };
+    let doubled = search::LexicalEvidence {
+        chunk_total: 100,
+        terms: vec![term("Memory", 44), term("memory", 44), term("shjfasd", 0)],
+    };
+    assert!(!deduped.anchored(bar.min_term_coverage));
+    assert!(
+        doubled.anchored(bar.min_term_coverage),
+        "the bug this dedup exists to prevent"
+    );
+}
