@@ -290,6 +290,19 @@ sibling of §5's reranker but distinct from it (that seam needs query text and `
 would still only filter what is surfaced, never author a link. Under always-serve that residue is
 **ordering quality, not existence**.
 
+**Phase 2 is open, and its question is disclosure, not existence** (D1 as redrafted, 2026-08-22).
+Real-vault dogfooding measured always-serve's cost from the other side: a pane that fills to `limit`
+regardless of quality trains distrust of every card — count read as a claim when it was only layout.
+The redrafted D1 splits the axes the retired gate conflated: the *ranked list* stays fully reachable
+(the #196 guarantee, unweakened), while a quality signal may set the *default disclosure boundary* —
+a prefix fold, the remainder collapsed one gesture away, so a misjudged fold costs a keystroke where
+the gate cost the feature. The bake-off defined above now has its opening evidence and two entry
+requirements beside continuity: prefix form (a signal that would admit rank 5 while folding rank 2
+cannot ship — row order, band, and fold must never visibly disagree), and on the dense fixture a
+non-empty default view is absolute. If a fold ships, the retired negatives assertion returns on this
+axis: a loner anchor's correct default view is empty-above-the-fold — the labelled "nothing relates"
+made assertable again without re-darkening the vault where everything does.
+
 ## 4. Retrieval — semantic search, fusion, and discovery
 
 The engine-gated decision was *"if the index engine provides vector/semantic search, it's in v1."* It
@@ -307,6 +320,11 @@ does. Therefore **semantic search is in v1** — exact, in-process, no vector ex
   sanitized into a safe FTS5 `MATCH` expression — punctuation is FTS5 syntax and would otherwise crash
   the parse. On a projected-but-unembedded vault the vector half is simply absent and the same fusion
   runs over the single BM25 list, so scores stay on one scale.
+  One honesty debt is on record (invariants.md **D2**, 2026-08-22): KNN always has k nearest and RRF
+  keeps only ranks, so this flow cannot yet answer *zero* — a nonsense query serves `limit`
+  confident-looking results. The fix owes the harness first: labelled negative queries, a per-model
+  evidence bar for the vector half (a distributional constant, so process rule 5's transfer check),
+  and hit provenance carried through fusion so a fold can judge what RRF currently discards.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph
@@ -363,8 +381,9 @@ vector-store choice simplifies or blocks it. Tracked in
 text*, and `b2 similar` has none — it is passage↔passage KNN, "near ∖ connected" (§3). The
 discovery-side levers are distance-weighting ([GH #20](https://github.com/AlteredCraft/B2/issues/20))
 and the pair-scorer seam (§3), not this; and the discovery-side *precision* stance is D1's — the
-ranked list is served, the human is the precision gate, and any future existence signal is Phase 2's
-evidence-gated bake-off. #20 reorders candidates; it cannot decide an empty pane.
+ranked list stays reachable, any fold of the default view must win Phase 2's evidence-gated
+bake-off, and the human is the precision gate. #20 reorders candidates; it cannot decide an empty
+default view.
 
 **Gate the decision on the eval, not intuition.** RRF is a strong baseline; the reranker buys
 **top-k precision**, whose value *grows with vault size* (semantic near-misses crowd the top past ~1k
