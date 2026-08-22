@@ -1,71 +1,63 @@
 ---
-title: "B2 — Index Engine: rebuild qmd on SQLite"
+title: "B2 — Index Engine"
 type: note
-tags: [b2, index-engine, sqlite, fts5, vectors, search, reranker, architecture]
+tags: [b2, index-engine, sqlite, fts5, vectors, search, discovery, chat, architecture]
 created: 2026-06-29
-status: draft
+status: active
 ---
 
-# B2 — Index Engine: rebuild qmd on SQLite
+# B2 — Index Engine
 
-> **The engine design — the *how*.** Evaluates rebuilding [tobi/qmd](https://github.com/tobi/qmd) on
-> our own SQLite store (FTS5 + an in-process vector scan, reranker as a fast follow) instead of
-> adopting qmd as a dependency, and specifies the result. Companion design docs:
-> [invariants.md](invariants.md) (the *why*) and [data-model.md](data-model.md) (the *what*); semantic
-> search is **engine-gated**, single-binary, local-first.
+> **The engine design — the *how*.** Specifies the disposable SQLite index (FTS5 + an in-process
+> vector scan + the typed graph) and the flows over it, and records why B2 rebuilt
+> [tobi/qmd](https://github.com/tobi/qmd)'s pipeline rather than depending on it. Companion docs:
+> [invariants.md](invariants.md) (the *why*, cited by id) and [data-model.md](data-model.md) (the
+> *what*).
 
-## TL;DR / recommendation
+## TL;DR
 
 **Build our own SQLite-backed index engine; take qmd as a design reference, not a dependency.**
 
 - qmd is an excellent *blueprint* for hybrid retrieval (BM25 + vector + RRF + LLM rerank) and proves
-  the whole pipeline runs locally. But it is a **search engine**, and B2 is not — B2 is a **typed graph
-  with hybrid retrieval over it**. qmd has no notion of typed edges or backlinks, which are the
-  reasons B2 exists ([invariants.md](invariants.md)).
+  the pipeline runs locally. But it is a **search engine**, and B2 is a **typed graph with hybrid
+  retrieval over it**. qmd has no notion of typed edges or backlinks, which are the reasons B2 exists.
 - SQLite gives us **one embedded store for every *queryable* concern at once** — full-text (FTS5),
-  vectors (plain tables scored in-process), and the typed graph — with transactional consistency across them, so
-  `b2 similar` candidate generation joins all three in a single query. That single-store property is
-  worth more to B2 than anything we'd inherit by depending on qmd. The index is a pure **disposable
-  cache**: `index = projection of (the vault directory)` — drop it, reindex, get it back identical,
-  with **no durable B2-derived state outside your notes** (two tiers, [data-model.md](data-model.md)).
-- Because the engine **does** provide vector search, the locked **engine-gated** decision resolves in
-  favour of **semantic search in v1**, not as a fast follow ([invariants.md](invariants.md)).
-- The **reranker is a clean fast-follow**: a swappable seam after RRF fusion, exactly as the testability
-  stack wants the AI parts isolated. Retrieval quality is good without it; it's pure upside later.
+  vectors (plain tables scored in-process), and the typed graph — with transactional consistency
+  across them, so `b2 similar` candidate generation joins all three in a single query. That
+  single-store property is worth more than anything we'd inherit from qmd. The index is a pure
+  disposable cache (S1, S2).
+- Because the engine **does** provide vector search, the engine-gated decision resolves in favour of
+  **semantic search in v1** (§4).
+- The **reranker is a clean fast-follow** — a swappable seam after RRF fusion (§5). Retrieval quality
+  is good without it.
 - The one genuinely hard part is **not the engine** — it's **producing embeddings inside a single
-  binary** ([invariants.md](invariants.md)). qmd solves this with
-  `node-llama-cpp` + GGUF + Node 22, a heavy stack that fights the single-binary goal. This is the real
-  decision to make, and it is **orthogonal to choosing SQLite** (see §7).
+  binary**, and it is orthogonal to choosing SQLite (§6).
 
 ---
 
-## 1. What qmd actually is (the reference)
+## 1. qmd, the reference
 
-A local CLI search engine for Markdown, all on-device. The shape worth stealing:
-
-- **Storage:** SQLite at `~/.cache/qmd/index.sqlite` with FTS5 + `sqlite-vec`. Tables: `collections`,
-  `path_contexts`, `documents`, `documents_fts` (FTS5/BM25), `content_vectors` (chunk metadata),
-  `vectors_vec` (`sqlite-vec` index), `llm_cache`.
-- **Chunking:** ~900-token chunks, ~15% overlap, Markdown-aware break-point scoring (H1=100, H2=90,
-  code-fence=80, … blank-line=20, list-item=5), with a 200-token backward scan and quadratic distance
-  decay to pick the cleanest boundary. Optional tree-sitter AST chunking for code files.
-  **Implemented in B2** (`chunk.rs`, #19, 2026-07-13),
-  with four model-free adaptations: a **~450**-token target (headroom under bge's 512 truncation), a
-  `chars/4` proxy for token sizing (the core stays tokenizer-free), an unconditional `heading_path`
-  breadcrumb, and every lever on a `ChunkConfig`. Tree-sitter code chunking stays deferred (#41 / spec §8).
-- **Three search modes:** `search` (BM25 only), `vsearch` (vector only), `query` (hybrid).
-- **Hybrid pipeline (`query`):** LLM query expansion (1–2 variants, original weighted 2×) → parallel
-  BM25 + vector retrieval per variant → **RRF fusion** (`Σ 1/(k+rank+1)`, k=60) + small top-rank
-  bonuses → keep top 30 → **LLM rerank** (cross-encoder, 0–1) → **position-aware blend** (top ranks
-  trust retrieval more, deep ranks trust the reranker more).
-- **Models (local GGUF via `node-llama-cpp`):** EmbeddingGemma-300M (embed, ~300 MB),
-  Qwen3-Reranker-0.6B (rerank, ~640 MB), a fine-tuned 1.7B (query expansion, ~1.1 GB). ~2–3 GB VRAM
-  with all three loaded.
-- **Surfaces:** rich CLI, JSON/CSV/files output for agents, an **MCP server** (stdio + HTTP daemon),
-  and a TypeScript SDK (`createStore`).
-- **Stack:** TypeScript on Node 22+/Bun; MIT licensed.
+A local CLI search engine for Markdown, all on-device: SQLite + FTS5 + `sqlite-vec`; ~900-token chunks
+with ~15% overlap and Markdown-aware break-point scoring; three search modes (BM25, vector, hybrid);
+a hybrid pipeline of LLM query expansion → parallel retrieval → **RRF fusion** (`Σ 1/(k+rank+1)`,
+k=60) → LLM cross-encoder rerank → position-aware blend; local GGUF models via `node-llama-cpp`
+(~2–3 GB VRAM with all three loaded); a rich CLI plus an MCP server. TypeScript on Node 22+/Bun, MIT.
 
 It's a clean, well-thought-out design. The disagreement is **scope**, not quality.
+
+**What we borrow wholesale:** the chunking heuristic, the RRF formula and k, the position-aware blend,
+the asymmetric query/document prompt discipline (each model brings its own prefix — B2 ships bge's,
+§6), the JSON/`--explain` agent-output discipline, and the MCP surface idea.
+
+**What we discard:** the npm/Node packaging and the "DB is the product" framing.
+
+**Chunking as adapted** (`chunk.rs`, [GH #19](https://github.com/AlteredCraft/B2/issues/19)) — four
+model-free changes to qmd's heuristic: a **450**-token target (headroom under bge's 512-token
+truncation), a `chars/4` proxy for token sizing (the core stays tokenizer-free, E1), an unconditional
+stored `heading_path` breadcrumb, and every lever on a `ChunkConfig` (overlap 0.15, backscan 200, the
+H1=100 … list=5 break weights). A forced cut is pushed past a fenced code block or Markdown table
+rather than bisecting it ([GH #41](https://github.com/AlteredCraft/B2/issues/41)). Tree-sitter AST
+chunking for code stays deferred ([GH #104](https://github.com/AlteredCraft/B2/issues/104)).
 
 ## 2. Why we rebuild instead of depend on qmd
 
@@ -74,729 +66,452 @@ It's a clean, well-thought-out design. The disagreement is **scope**, not qualit
 | Full-text search | ✅ FTS5/BM25 | ✅ same |
 | Semantic search | ✅ `sqlite-vec` | ✅ in-process scan |
 | Rerank | ✅ cross-encoder | ✅ fast-follow |
-| **Typed graph** (path→path edges with a relation type) | ❌ none | ⭐ core (areas 3, 5) |
-| **Backlinks** (who points at X, typed, over the whole vault) | ❌ none | ⭐ core (area 5) |
-| **Move-safe links** (a B2-performed move repairs every backlink) | ❌ nothing rewrites links | ⭐ core (invariants L1) |
-| **Markdown as source of truth** (index is rebuildable/derived) | ~ index *is* the artifact | ⭐ non-negotiable (principle #1) |
-| Distribution | npm package, Node runtime | ⭐ single binary (principle #5) |
+| **Typed graph** (path→path edges with a relation type) | ❌ none | ⭐ core (G1–G6) |
+| **Backlinks** (who points at X, typed, vault-wide) | ❌ none | ⭐ core (G6) |
+| **Move-safe links** (a B2-performed move repairs every backlink) | ❌ nothing rewrites links | ⭐ core (L1) |
+| **Markdown as source of truth** (index rebuildable/derived) | ~ index *is* the artifact | ⭐ non-negotiable (S1, S2) |
+| Distribution | npm package, Node runtime | ⭐ single binary |
 
 The decisive point: B2's index is a **derived projection of the vault** that holds the **typed graph**
-*next to* the search indexes, so retrieval and connection discovery share one transactional store —
-`index = projection of (the vault directory)`, drop-and-rebuild at any time ([data-model.md](data-model.md)). qmd
-models none of the graph layer — wrapping it would mean maintaining a second store for everything that
-makes B2 *B2*, and reconciling two sources of truth. Rebuilding the ~300 lines of retrieval glue that we
-actually want is cheaper than that integration tax — and qmd's MIT license + public design make the
+*next to* the search indexes, so retrieval and connection discovery share one transactional store.
+qmd models none of the graph layer — wrapping it would mean maintaining a second store for everything
+that makes B2 *B2*, and reconciling two sources of truth. Rebuilding the ~300 lines of retrieval glue
+we actually want is cheaper than that integration tax, and qmd's MIT license + public design make the
 rebuild low-risk.
-
-**What we borrow wholesale:** the chunking heuristic, the RRF formula and k, the position-aware blend,
-the asymmetric query/document prompt discipline (each model brings its own prefix — B2 ships bge's, §6;
-not EmbeddingGemma's `task:…|query:` / `title:…|text:`), the JSON/`--explain`
-agent-output discipline, and the MCP surface idea. **What we discard:** the npm/Node packaging and the
-"DB is the product" framing.
 
 ## 3. The storage architecture (one disposable SQLite index)
 
-One artifact, per the two-tier model ([data-model.md](data-model.md)) and realizing the **"volatile vault
-over a disposable index"** tenet ([invariants.md](invariants.md)): a
-**disposable** SQLite index holding every queryable concern transactionally. The whole index is
-**rebuildable from the vault** — drop `b2.sqlite`, re-scan the vault, get back an identical index (the
-locked `full-reindex ≡ incremental-update` invariant). The vault is the single source of truth (with
-Markdown its sole authored subset — notes + every committed edge); the index is a cache of it, with
-**no durable B2-derived state outside your notes**.
+One artifact, per S1/S2: a **disposable** SQLite index holding every queryable concern
+transactionally, rebuildable from the vault at any time (S3). The vault is the single source of truth,
+with Markdown its sole authored subset; the index is a cache of it, with no durable B2-derived state
+outside your notes (S4).
 
-> The precise DDL, the relations between these tables, the read/write data flows, and the build order
-> are realized in the code (`crates/b2-core/src/db.rs` schema + `ingest.rs` flows). The sketch below is
-> the orientation; the code is the buildable contract.
+> The precise DDL and the build order are realized in `crates/b2-core/src/db.rs` (schema) and
+> `ingest.rs` (flows). The sketch below is the orientation; the code is the buildable contract.
 
 ```
-b2.sqlite — DISPOSABLE CACHE  (= projection of Markdown; drop & rebuild any time)
-├── MIRROR OF MARKDOWN (source of truth for *knowledge*; lets us diff vs. disk)
-│   └── notes(path PK, title, type, body_hash, mtime, …)   -- the path IS the identity (L1)
+b2.sqlite — DISPOSABLE CACHE  (= projection of the vault directory; drop & rebuild any time)
+├── MIRROR OF THE VAULT (lets us diff vs. disk)
+│   ├── meta(key, value)                          -- schema_version, embed_model_id, embed_dim
+│   ├── notes(path PK, type, title, description,  -- the path IS the identity (L1)
+│   │         created, updated, body_hash, mtime, indexed_at)
+│   ├── note_aliases(note_path, alias)            -- frontmatter `aliases:`
+│   └── resources(path PK, class, size, mtime,    -- non-.md peers; class by extension (§10 dm)
+│                 content_hash, indexed_at)
 │
-├── DERIVED FROM MARKDOWN: SEARCH
-│   ├── chunks(id, note_path, seq, char_start, char_end, token_count, text, text_hash)
-│   ├── chunks_fts                                -- FTS5 over chunk text (BM25)
+├── DERIVED: SEARCH
+│   ├── chunks(id, note_path, seq, char_start, char_end, token_count, heading_path, text, text_hash)
+│   ├── chunks_fts                                -- FTS5 over chunk text, `porter unicode61` (BM25)
 │   ├── embeddings(text_hash PK, vector)          -- CONTENT-ADDRESSED plain BLOB vectors (768-dim)
 │   └── note_centroids(note_path, centroid)       -- per-note centroid (discovery's coarse stage)
 │
-├── DERIVED FROM MARKDOWN: TYPED GRAPH
-│   └── edges(id, src_path, dst_path, type,       -- every row ← Markdown (body links + FM b2_relations:)
-│             origin, explanation, …)             -- origin ∈ {inline, frontmatter}; every edge active
-│
-└── CACHES (disposable)
-    └── llm_cache(key, value, created)            -- reserved for a future reranker (fast-follow, §5)
+└── DERIVED: TYPED GRAPH
+    └── edges(id PK, src_path, dst_path, dst_resource_path, dst_path_raw,
+              type, origin, explanation, caption, embed, occurrence_index)
 ```
 
-Every table is derived from the vault; there is no third home.
-*(The projection is built in two separately-invokable passes —
-model-free `project` (notes/chunks/FTS/edges) then `embed` (vectors), with `reindex` their
-composition — so keyword search + graph are usable before embedding completes;
-the `project`/`embed` split ([#15](https://github.com/AlteredCraft/B2/issues/15)). The invariant is untouched:
-a projected-but-unembedded index is a smaller projection, never a wrong one.)*
+Every table is derived from the vault; there is no third home. The two **vector** tables are created
+at *embed* time rather than in the base migration — their existence *is* the "this vault has an
+embedding space" signal the BM25-only fallbacks key on (M4).
 
-**Resources widen the projection.** A real vault also holds non-`.md` files, and the walk inventories
-them. The locked
-design ([data-model.md](data-model.md) §10, [#66](https://github.com/AlteredCraft/B2/issues/66))
-adds them as **path-keyed peers** without disturbing any statement above — the source *tier* is the
-whole vault directory, so **`index = projection of (the vault directory)`**:
-
-- **A `resources` table** — `(path PK, class, size, mtime, content_hash, indexed_at)` — a **separate**
-  table from `notes`, not a `kind` column on it (two tables, two contracts, zero "unless it's a resource"
-  clauses). Class is by **extension only** (deterministic; misclassification degrades, never mis-executes):
-  `note` · `text` · `html` · `pdf` · `image` · `media` · `binary` (the total fallback), each answering the
-  same three questions — what index text, can it be a graph endpoint, how does it render.
-- **`chunks` generalizes** from `note_path` to a **document reference** (a note path *or* a resource
-  path — as one-of nullable FKs on the single table, CASCADE intact for both parents; locked,
-  [#66](https://github.com/AlteredCraft/B2/issues/66)); search resolves hits up to the
-  owning document and results carry a `kind`. **Centroids follow** — two-stage discovery's coarse stage
-  scans only centroids (#38, §4 update), so a resource with chunks but no centroid would be searchable yet
-  invisible to `b2 similar`; a sibling `resource_centroids` table (same locked call) is maintained through
-  the existing lifecycle (embed-pass refresh, re-chunk drop) and the coarse stage scans both. Every
-  class funnels to *text* — native, extracted (`html` strip / `pdf` text layer), or, for an `image`,
-  aggregated inbound alt-text — embedded through the **existing** bge space: one embedding space in v1,
-  the multimodal seam documented for later (§6 posture, [data-model.md](data-model.md) §10).
-- **`edges.dst` may be a resource** — a body `![[photo.png]]` / `[[papers/x.pdf]]` resolves against
-  `resources` and records a `dst_resource_path` rather than a `dst_path`; `src` stays a note (resources
-  author no outbound edges in
-  v1). The existing `dst_path_raw` + dangling-edge index (`db.rs`) is already half of this; the `link.rs`
-  parser learns the two Markdown-native forms `![alt](path)` / `[text](path)` (relative paths only) and the
-  `![[file.ext]]` embed, capturing the alt/caption text on the edge (it becomes the image's index text).
-- **No migration, ever.** Because the index is disposable this is a `schema_version` bump + rebuild — the
-  disposable-index tenet paying rent. The `resources` DDL lands in the **slice-1 build spec**
-  ([#65](https://github.com/AlteredCraft/B2/issues/65)); the chunk/centroid generalization and the per-class extraction step land in
-  slice 3's; the PDF text-extraction *dependency* (which crate, and its home) is deferred to slice 4 by
-  design.
+*(The projection runs as two separately-invokable passes — model-free `project` (notes/resources/
+chunks/FTS/edges) then `embed` (vectors), with `reindex` their composition — so keyword search and the
+graph are usable before embedding completes
+([GH #15](https://github.com/AlteredCraft/B2/issues/15)). S2 is untouched: a
+projected-but-unembedded index is a smaller projection, never a wrong one.)*
 
 Why this shape fits B2 specifically:
 
-- **Everything keys on the vault-relative path** — directly implements the link-identity decision
-  ([data-model.md](data-model.md) §1, [invariants.md](invariants.md) L1, GH #170). `notes.path` is the
-  primary key; `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path` and
-  `edges.src_path` are `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`, which is what
-  makes a B2-performed move a **path re-key rather than a rebuild**: `UPDATE notes SET path = …`
-  cascades through every child in one transaction, alongside the inbound `[[path|title]]` text rewrite
-  and a re-projection of the inbound sources (whose `edges.dst_path` is deliberately *not* an FK — it
-  must be allowed to be NULL, the dangling case, G5). "Rename keeps every backlink resolving" is
-  therefore a property of the **move operation**, not of the key; the price of the pivot is that a
-  move made *outside* B2 is a delete plus a create.
+- **Everything keys on the vault-relative path** (L1). `notes.path` is the primary key;
+  `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path` and `edges.src_path` are
+  `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`, which makes a B2-performed move a
+  **path re-key rather than a rebuild**: `UPDATE notes SET path = …` cascades through every child in
+  one transaction, alongside the inbound link-text rewrite and a re-projection of the inbound sources.
+  `edges.dst_path` is deliberately *not* an FK — it must be allowed to be NULL, the dangling case
+  (G5). "Rename keeps every backlink resolving" is therefore a property of the **move operation**, not
+  of the key; the price is that a move made *outside* B2 is a delete plus a create (§8).
 - **Vectors are content-addressed, and that is what makes the price small** (M4). `embeddings` is
   keyed by `text_hash` — blake3 of the chunk text, which *is* the embed input, verbatim — so a note
-  that moves (in band or out) re-embeds nothing at all: its chunks hash identically, find their
-  vectors already stored, and only chunk/FTS/edge rows re-project. The store needs no invalidation
-  rule beyond "a hash no chunk references is garbage", pruned by the whole-vault pass on the same
-  derived-data lifecycle as centroids. Identical text anywhere in the vault shares one vector, which
-  is a correctness statement before it is a saving: the same input has the same embedding.
-- **Every `edges` row derives from Markdown** — body links (`origin=inline`, all untyped `references`) ∪
-  frontmatter `b2_relations:` (`origin=frontmatter`, the sole typed home), deduped frontmatter-wins on
-  same-`(target, type)` overlap. There is **no `status` column and no suggestion queue**: an edge exists
-  iff it is authored in the Markdown. Committing with **`b2 link`** appends a typed-link
-  string to the source note's frontmatter `b2_relations:` (Markdown first; never the body —
-  [data-model.md](data-model.md) §0), then re-projects that note — a projection of an authored line, not
-  an in-place index write.
-- **Hybrid retrieval and graph queries compose in one query** — e.g. "semantic-nearest chunks whose
-  note is within 2 typed hops of note X" is a join across `embeddings`, `chunks`, and `edges`. This is
-  the substrate **`b2 similar`** (connection-discovery candidate generation) runs on, and it's the thing a
-  qmd-as-dependency design could never give us cleanly.
-- **Deterministic seams for tests** — a fake embedder (deterministic vectors) writes to `embeddings`, so
-  the whole pipeline is assertable with no live model (testability stack, points 4–5). The embedder is the
-  one AI seam.
+  that moves (in band or out) re-embeds nothing: its chunks hash identically and find their vectors
+  already stored. The store needs no invalidation rule beyond "a hash no chunk references is garbage",
+  pruned by the whole-vault pass on the same derived-data lifecycle as centroids. Identical text
+  anywhere in the vault shares one vector, which is a correctness statement before it is a saving.
+- **Every `edges` row derives from Markdown** (G1, G2), deduped frontmatter-wins. There is **no
+  `status` column and no suggestion queue**. Committing with `b2 link` appends a typed-link string to
+  the source note's frontmatter and re-projects that note — a projection of an authored line, not an
+  in-place index write.
+- **Hybrid retrieval and graph queries compose in one query** — "semantic-nearest chunks whose note is
+  within 2 typed hops of note X" is a join across `embeddings`, `chunks`, and `edges`. This is the
+  substrate `b2 similar` runs on, and the thing a qmd-as-dependency design could never give us cleanly.
+- **Deterministic seams for tests** — a fake embedder writes to `embeddings`, so the whole pipeline is
+  assertable with no live model (E2).
+
+**Resources widen the projection without disturbing any statement above** — they are path-keyed peers,
+so `index = projection of (the vault directory)`. `resources` is a **separate** table from `notes`,
+not a `kind` column on it (two tables, two contracts, zero "unless it's a resource" clauses), and
+`edges.dst_resource_path` lets a body `![[photo.png]]` or `[[papers/x.pdf]]` resolve against it while
+`src` stays a note (G6). What is built is inventory + graph; making resource *content* searchable
+(extraction, chunks, `resource_centroids`) is designed and tracked, not shipped — see
+[data-model.md](data-model.md) §10 and [GH #108](https://github.com/AlteredCraft/B2/issues/108). Either
+way there is **no migration**: a schema change is a `schema_version` bump + rebuild (S5), the
+disposable-index tenet paying rent.
 
 ### Opening the index concurrently — many readers, one builder
 
 Nothing in B2 opens the index exclusively, and several things open it at once: `b2 reindex &` racing a
 `b2 status`, the desktop app launching while a CLI reindex runs, the desktop host's own threads. The
-locked stance is **C1** ([invariants.md](invariants.md)) — unrestricted readers, a serialized builder —
-and `db::open` is where it is enforced, in three layers that each answer a different failure:
+locked stance is **C1**, and `db::open` is where it is enforced, in three layers that each answer a
+different failure:
 
-- **The `WAL` flip is retried** ([#111](https://github.com/AlteredCraft/B2/issues/111)). Setting
+- **The `WAL` flip is retried** ([GH #111](https://github.com/AlteredCraft/B2/issues/111)). Setting
   `journal_mode = WAL` is the one statement in `open` that takes a write lock, and the one
-  `busy_timeout` cannot cover (SQLite skips the busy handler for a write lock upgraded from an already-open
-  read transaction), so a second opener took an immediate `SQLITE_BUSY`. The wait is ours to do.
+  `busy_timeout` cannot cover (SQLite skips the busy handler for a write lock upgraded from an
+  already-open read transaction), so a second opener took an immediate `SQLITE_BUSY`. The wait is ours
+  to do.
 - **The schema migration is one `BEGIN IMMEDIATE` transaction, entered only when there is work**
-  ([#114](https://github.com/AlteredCraft/B2/issues/114)). It is a read-then-decide-then-write sequence,
-  and its rebuild is ~30 DDL statements; unserialized, two openers that both read a stale
-  `schema_version` interleave — one's `DROP TABLE resources` landing after the other's `CREATE`, and the
-  current version stamped over a half-demolished schema. `busy_timeout` was irrelevant: nothing contended
-  for a lock, every statement succeeded, in the wrong order. Serializing on SQLite's own write lock makes
-  the loser wait and then find the work done; wrapping it makes a rebuild all-or-nothing, which is what
-  lets the stamp be trusted. The check that decides whether to enter is a **read** — so the common open,
-  against a current schema, takes no write lock and can never be refused by a writer.
+  ([GH #114](https://github.com/AlteredCraft/B2/issues/114)). It is a read-then-decide-then-write
+  sequence whose rebuild is ~30 DDL statements; unserialized, two openers that both read a stale
+  `schema_version` interleave — one's `DROP TABLE resources` landing after the other's `CREATE`, and
+  the current version stamped over a half-demolished schema. `busy_timeout` was irrelevant: nothing
+  contended for a lock, every statement succeeded, in the wrong order. Serializing on SQLite's own
+  write lock makes the loser wait and then find the work done; wrapping it makes a rebuild
+  all-or-nothing, which is what lets the stamp be trusted. The check that decides whether to enter is
+  a **read**, so the common open against a current schema takes no write lock and can never be refused
+  by a writer.
 - **Completeness is checked, not assumed.** A stamp is believed only alongside the tables it vouches
-  for; a current stamp over missing tables (the wreckage a pre-#114 `b2` could leave) is treated as stale
-  and rebuilt from empty. Recreating just the missing tables would be worse than useless: an incremental
-  reindex skips notes whose `body_hash` matches, so the recreated tables would stay empty and `S3`
-  (`full-reindex ≡ incremental-update`) would quietly fail.
+  for; a current stamp over missing tables is treated as stale and rebuilt from empty. Recreating just
+  the missing tables would be worse than useless: an incremental reindex skips notes whose `body_hash`
+  matches, so the recreated tables would stay empty and S3 would quietly fail.
 
-The vector tables (created at embed time, §4/M4) are the same drop-and-rebuild shape and get the same
-treatment — two embed passes can genuinely overlap, since the `reindex` advisory lock
-([#55](https://github.com/AlteredCraft/B2/issues/55)) is taken by `b2-cli` alone and never by the desktop
-host or by readers.
+The vector tables are the same drop-and-rebuild shape and get the same treatment — two embed passes
+can genuinely overlap, since the `reindex` advisory lock
+([GH #55](https://github.com/AlteredCraft/B2/issues/55)) is taken by `b2-cli` alone and never by the
+desktop host or by readers.
 
-**Why not an advisory lock file for this**, given B2 already has one for `reindex`? Because it would be a
-*third* concurrency mechanism guarding state the database already knows how to guard, and the weaker one
-where it counts: a vault on a network share or a synced folder — a plausible home for a personal vault —
-is exactly where `flock` quietly stops meaning anything. The `reindex` lock answers a question SQLite
-cannot (*is another **process** already doing this expensive work?*); schema atomicity is not that
-question.
+**Why not an advisory lock file for this**, given B2 already has one for `reindex`? It would be a
+*third* concurrency mechanism guarding state the database already knows how to guard, and the weaker
+one where it counts: a vault on a network share or a synced folder — a plausible home for a personal
+vault — is exactly where `flock` quietly stops meaning anything. The `reindex` lock answers a question
+SQLite cannot (*is another **process** already doing this expensive work?*); schema atomicity is not
+that question.
 
 ### Why materialize the graph at all — vs. resolving links at runtime
 
-A note's *outbound* links (and their type + explanation) are parseable from that one file on demand, so
-it's fair to ask why the index carries an `edges` table at all rather than resolving links at read time.
-The answer separates two things the question tends to bundle. **Edge metadata is *not* the reason:** a
-`b2_relations:` entry `"supports [[path|title]] — because X"` yields its verb and explanation to a
-runtime parse just as well, *for that note's outbound edges*. **Inversion and composition are the reason.** Materializing
-edges is what turns the following from full-vault scans (or impossibilities) into indexed lookups:
+A note's *outbound* links (and their type + explanation) are parseable from that one file on demand,
+so it's fair to ask why the index carries an `edges` table. **Edge metadata is not the reason** — a
+runtime parse yields the verb and explanation just as well, *for that note's outbound edges*.
+**Inversion and composition are the reason.** Materializing edges turns three things from full-vault
+scans (or impossibilities) into indexed lookups:
 
 - **Backlinks / inversion.** "Who points at X" cannot be read from X — only from every *other* note.
   The runtime answer is O(vault) per query; the table makes it one lookup. This is also what services
-  *"rename keeps every backlink resolving"* ([invariants.md](invariants.md) L1): the edges name
-  the exact N inbound files to rewrite on a move instead of scanning the vault to find them (§8).
-- **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`contradicts`" is a scan *per hop*
-  at runtime; over `edges` it is one SQL traversal.
-- **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a single
-  join `embeddings ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a **scoped-traversal**
-  primitive (search *within* an already-related neighborhood). **`b2 similar`'s candidate generation is its
-  *complement*, not this join:** notes semantically near an anchor but *not* within 1 hop — the links you
-  *haven't* made (resolved 2026-07-01, §3) — where the materialized graph supplies
-  the "∖ already-connected" exclusion. Both stand on the same reason the graph and search indexes must live
-  in **one** store (§2): area-5 discovery is the substrate this enables.
+  L1: the edges name the exact N inbound files to rewrite on a move instead of scanning the vault to
+  find them (§8).
+- **Typed multi-hop traversal.** "notes within 2 hops of X via `supports`/`contradicts`" is a scan
+  *per hop* at runtime; over `edges` it is one SQL traversal.
+- **The graph⨝vector join.** "semantic-nearest chunks whose note is within k typed hops of X" is a
+  single join `embeddings ⨝ chunks ⨝ edges`, not expressible as a per-note parse. It is a
+  **scoped-traversal** primitive (search *within* an already-related neighborhood).
+  **`b2 similar`'s candidate generation is its *complement*:** notes semantically near an anchor but
+  *not* within 1 hop — the links you *haven't* made — where the materialized graph supplies the
+  "∖ already-connected" exclusion.
 
-The reframe that keeps this cheap: **runtime outbound-parsing is the correctness *definition*
-(`index = projection of Markdown`); the `edges` table is its *cache*, kept so the inverse and compositional
-queries are fast.** It is therefore not a third subsystem beside FTS5 and the vector tables — it is one more
-**disposable** table in the same store, populated by the **same parse pass** that already walks each body
-for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. qmd (§2); the typed,
-traversable graph is the value-add, not the search. The standing cost of carrying it is the
-move-repair write-amplification budgeted in §8.
+The reframe that keeps this cheap is **G6**: runtime outbound-parsing is the correctness *definition*;
+the `edges` table is its *cache*. It is not a third subsystem beside FTS5 and the vector tables — it is
+one more **disposable** table in the same store, populated by the **same parse pass** that already
+walks each body for chunking. Strip it and B2 is vector + keyword search over Markdown — i.e. qmd (§2).
+The standing cost of carrying it is the move-repair write-amplification budgeted in §8.
 
 ### Discovery surfacing serves the ranked list — `limit` is a cap, not a promise
 
-**(Re-ruled 2026-08-18 by [GH #197](https://github.com/AlteredCraft/B2/issues/197), on
-[GH #196](https://github.com/AlteredCraft/B2/issues/196)'s measurement; the original ruling —
-2026-08-05, the findings of [PR #145](https://github.com/AlteredCraft/B2/pull/145) — and its whole
-recorded history follow below, because the narrative is how the re-ruling was earned.)**
-
-The standing rule (promoted to the register as **invariants.md D1**): discovery's question is
+The standing rule is **invariants.md D1**, ruled by
+[GH #197](https://github.com/AlteredCraft/B2/issues/197) (2026-08-18) on
+[GH #196](https://github.com/AlteredCraft/B2/issues/196)'s measurement. Discovery's question is
 **relative** — *what in my vault belongs next to this note?* — and the ranked best-passage order
-answers it. `similar` serves the ranked top-N whenever candidates exist; `limit` stays a cap that
-under-fills only for want of scorable notes (a mid-embed vault, a vault with fewer unlinked notes
-than the ask), and **no statistical bar truncates the list**. The per-candidate z survives as a
-*statistic* — computed after stage 2 on the best-passage distances (the #192 unit),
-non-increasing down the row order (strictly monotonic in the *score*; tied scores share a z and
-order by the path tie-break), painted as the within-list strength band — but it **gates nothing**.
-An empty pane states the one thing it can know: the candidate set is genuinely empty (no embedding
-space, or nothing unlinked with stored vectors). It never asserts "nothing relates" from
-anchor-local statistics, because that test cannot distinguish *nothing is related* from
-*everything is related* — the finding that decided this, below. Any replacement existence signal
-is **evidence-gated** (GH #197 Phase 2: mutual-kNN, a loose model-keyed sanity band, or nothing —
-judged on the orthogonal corpus, the dense single-domain fixture, and real vaults via
-`just calibrate`, with "no gate" an admissible winner) and must behave **continuously in
-population size**: a statistics threshold may change banding, never membership.
+answers it. `similar` serves the ranked top-N whenever candidates exist; `limit` under-fills only for
+want of scorable notes, and **no statistical bar truncates the list**.
 
-Candidate *generation* is unchanged and stays recall-oriented: the two-stage scan (§4)
-over-produces, nothing auto-links, and the human commits every edge — W4 untouched. What follows
-is the recorded history of the retired rule, kept in place because five issues of measurement are
-the argument for the ruling above.
+The per-candidate z survives as a *statistic* — computed after stage 2 on the best-passage distances,
+non-increasing down the row order (strictly monotonic in the *score*; tied scores share a z and order
+by the path tie-break), painted as the within-list strength band — but it **gates nothing**. Because
+the judged z is affine in the squared best-pair distance the score negates the root of, **score order,
+z order, and band are one number**: a card can never show a weaker band above a stronger one. Below
+`STATS_MIN_POPULATION` (12), in a space with no spread, or under the fake embedder, **no z exists at
+all**, and a surface must *say* the list is ungraded — silence there reads as "all judged, all scored
+low", the opposite of what happened. Candidate *generation* is unchanged and stays recall-oriented:
+the two-stage scan (§4) over-produces, nothing auto-links, and the human commits every edge (W4).
 
----
+**How this was earned.** Seven issues of measurement, in order — kept as citations rather than
+narrative, per the repo's rule that the decision history is the issue plus the commit:
 
-**The superseded ruling (2026-08-05, PR #145).** The surfaced list owes the human candidates
-worth judging, not fullness: **zero candidates is a legitimate — and honest — answer** when
-nothing in the vault genuinely relates. What enforced that stance was a **quality floor** in
-`discover::candidates`, its shape constrained on two sides:
+| Issue | What it measured | Verdict |
+|---|---|---|
+| [#150](https://github.com/AlteredCraft/B2/issues/150) | absolute cosine floors vs. drop-off-from-top-1, against labelled score piles | both fail; shipped a per-anchor **z-score floor** (leader gate + member bar) instead |
+| [#183](https://github.com/AlteredCraft/B2/issues/183) | a **multi-topic note family** + a **per-mate** metric (the per-anchor one saturates at an anchor's easiest mate) | the centroid-z order both **demoted** and **suppressed** labelled mates — 3 of 14 never served |
+| [#187](https://github.com/AlteredCraft/B2/issues/187) | dumped every candidate's ungated z and re-derived both admissible windows each run | the **member bar has no window**: mates from +0.80, strangers to +1.62 — no constant separates an inversion |
+| [#189](https://github.com/AlteredCraft/B2/issues/189) | the journal/daily-note archetype (N≥6 unrelated sections) | averaging disagreeing chunk vectors collapses the centroid toward the corpus mean — the note tops *loner* anchors while its own gem is suppressed; both failures at once |
+| [#192](https://github.com/AlteredCraft/B2/issues/192) | judging **after stage 2, on the best-passage z** — the same number that orders the list | the unit separates what the centroid could not; stage 1 is recall only again; 14/15 mates, 0 strangers |
+| [#182](https://github.com/AlteredCraft/B2/issues/182) | the desktop band, still calibrated on the *centroid* z's landmarks after the reorder | bands re-read in the judged unit; **a change to the judged statistic is a change to every surface that paints it** — the standing rule |
+| [#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) | the first real vault dogfooded: single-domain, 17 notes | **16 of 17 panes dark on correct rankings** — the gate retired |
 
-- **Model-relative, never a bare constant.** The vectors are L2-normalized, so the engine's score
-  maps exactly to cosine (`cos = 1 − d²/2`) and a floor is well-defined — but bge-family models
-  compress cosines into a narrow high band another model won't share, and the fake embedder's
-  hash-derived vectors are no band at all. The number keys alongside `meta.embed_model_id` (M2's
-  identity, device tag included), with the fake regime handled explicitly.
-- **Eval-calibrated, never intuition.** The labelled corpus carries **negative anchors** — loner
-  notes whose labelled answer is "nothing relates" — scoring *suppression* (does discovery say
-  so?), and the eval records every surfaced score into two **cosine piles**: human-labelled
-  related vs. everything else surfaced. Both cheap variants were judged against that data and
-  **both failed when measured** ([GH #150](https://github.com/AlteredCraft/B2/issues/150)): an absolute cosine floor does not transfer
-  across vault density (floors read off the labelled piles kept 99–100% of a 228-essay
-  single-author vault's candidates), and a fixed drop-off-from-top-1 can never return *zero* and
-  needs a per-vault width. The floor that shipped ([GH #150](https://github.com/AlteredCraft/B2/issues/150))
-  was the **per-anchor z-score rule** (`DiscoveryFloor` in `discover.rs`, deleted by #197): each
-  candidate was judged against the anchor's *own* candidate population — a leader gate suppressed
-  the whole list when even the best candidate stood too little above that distribution (one diffuse
-  cloud has no signal), and a member bar ended the list where candidates rejoined it. Since
-  [GH #192](https://github.com/AlteredCraft/B2/issues/192) that judgment happened **after stage 2,
-  on the exact best-passage distances** stage 2 computes anyway — the rule first shipped reading
-  the stage-1 centroid distances, and the paragraphs below record how the corpus measured that
-  unit failing in both directions on multi-topic notes and forced the move. Z-scores made
-  the floor model-relative *by construction* — no recorded constant, so a model or device swap
-  re-calibrated nothing — and the same defaults produced honest short lists at both measured
-  density extremes. The floor was inert on pools too small to carry a statistic, never applied to
-  a fake-embedded space (judged by the recorded model id), and was the adapters' explicit choice
-  to disable (`b2 similar --no-floor`). What "model-relative by construction" optimized for is
-  named in the closing chapter: invariance on the wrong axis.
+The closing finding is the one that generalizes. A z-score treats the anchor's population mean as a
+*noise floor*, valid only when related notes are rare outliers in a dominant unrelated tail; the
+threshold literature models relevant and non-relevant scores as **two** distributions and thresholds
+at the crossover. A vault whose notes all sit in one domain has no unrelated tail — the mean *is*
+"moderately related" — so a single-population outlier test reads *everything is related* as *nothing
+is*. "One diffuse cloud" and "a coherent single-subject vault" are the same geometry from opposite
+ends. Three amplifiers were measured on that vault: the leader sits inside the population it is judged
+against; **cluster self-dilution** (link-worthy siblings lift the mean for each other, so investing in
+a topic makes its notes progressively harder to surface, and the 1-hop exclusion only relieves it
+*after* the pane has done a job it cannot do); and a population-size cliff crossed by adding four
+notes. Large vaults fail the same way eventually — above `SHORTLIST_MIN` the judged population is the
+anchor's centroid-nearest slice, pre-selected related, so every big vault reproduces the single-domain
+geometry inside its own shortlist.
 
-**The z is also the surfaced list's order, and its absence is itself a thing to say.** An
-adapter grades a card from the z and never from the raw engine score (a negated L2 like
-`-0.734` is a unit nobody should have to learn), so ranking the same list by anything else
-puts a weaker-banded card above a stronger one — the badge and the position contradicting each
-other on one row. Since [#192](https://github.com/AlteredCraft/B2/issues/192) that coherence
-holds *by construction*: the judged z is strictly monotonic in the exact stage-2 score within one
-query (affine in the squared best-pair distance the score negates the root of), so
-the score order, the z order, and the band are one number, and the sort is nearest-best-passage
-(then path) whether the floor computed statistics or not. It was not always so: when the badge
-first became the sort key the z was the *coarse* stage-1 centroid statistic, and the accepted
-cost was that a note whose single best passage is far nearer than its centroid suggests ranked
-below one with a nearer centroid and no such passage.
-The labelled corpus did not move on that change — but it was already at ceiling
-(`similar` hit@1 = hit@3 = MRR@5 = 1.00 before and after, negatives then 4/4 clean across the four
-loners the corpus held at that date, measured
-2026-08-16), so it could only witness the absence of a regression, never confirm the ordering is
-right. It could not see the trade at all: six anchors of short single-topic notes, where a
-centroid and its best chunk agree by construction. [#183](https://github.com/AlteredCraft/B2/issues/183)
-added the corpus that can see it — a multi-topic note family whose off-topic half drags the
-centroid away from its labelled mate — together with the **per-mate** metric that can score it
-(the old per-anchor one stops at an anchor's first mate, so a hard mate hiding behind an easy one
-was invisible to it whether it was demoted or gone). Measured against the pre-#192 surface, the
-cost was **larger than this section previously assumed**, and in a different way:
+The review also relocated two pieces of standing evidence. The eval corpus is engineered *orthogonal*
+(its token audit deliberately minimizes shared vocabulary), which makes it a good instrument for
+**ranks** and a structurally incapable one for **distributions** — its strongest labelled pair sits
+below a real vault's background. And #150's rejection of absolute floors ("kept 99–100% of a
+228-essay single-author vault's candidates") was the same finding read through the assumption it
+should have been testing: keeping nearly everything of a single-author vault was plausibly *correct*.
 
-- **Demotion, as predicted.** `pour-over-and-pottery.md` is `espresso.md`'s nearest mate by best
-  passage (rank 1) and only its third by centroid z — the multi-topic note pushed behind two
-  single-topic ones, exactly the trade named above.
-- **Suppression, not predicted.** For two anchors the centroid rule does not demote the
-  multi-topic mate, it **removes** it: `tire-pressure-and-knots.md` (best-passage rank 2 for
-  `bicycle.md`) and `radio-and-sleep-debt.md` (best-passage rank 3 for `insomnia.md`) fall under
-  the floor's `member_z` and are never served at all. A note's off-topic half can therefore cost
-  it not just position but the whole surface, and the same mechanism catches the standing
-  **phishing inversion** — `phishing.md` is likewise absent from the shipped list for
-  `encryption.md` (best-passage rank 4). Three of fourteen labelled mates, gone.
-- Per-mate MRR@5 is 0.595 shipped against 0.673 under the unfloored best-passage order
-  (hit@3 0.79 vs 0.93). Read as a *lower bound* on ordering sensitivity: the unfloored arm is also
-  unsuppressed, so that gap is floor-plus-ordering, which is why the suppressed count is reported
-  beside it rather than folded into it.
+What #197 left standing: the z as the band's ungated input; two instruments —
+**`just calibrate <vault>`** (per-anchor pool distributions on any built vault; the real-vault transfer
+check every distributional constant now owes) and the **dense single-domain fixture**
+(`evals/corpus-dense/`, whose assertions are a per-mate MRR floor and **zero empty panes**); a
+suppression assertion kept as a **structural-zero tripwire** that re-arms if a gate ever returns; and
+a Phase-2 **evidence-gated bake-off** for any replacement existence signal — the leading candidate
+being mutual-kNN/reciprocal-rank (rank-based, therefore constant-free), with "no gate at all" an
+admissible winner and continuity in population size an entry requirement. The **pair-scorer
+escalation** stays the named long-term seam: an anchor-local rule cannot catch a *pair-level*
+miscalibration (a single stranger the model scores like a cluster-mate — the standing
+`encryption ↔ phishing` residue), and a discovery-side pair-scorer would be a second model seam,
+sibling of §5's reranker but distinct from it (that seam needs query text and `similar` has none). It
+would still only filter what is surfaced, never author a link. Under always-serve that residue is
+**ordering quality, not existence**.
 
-The old aggregate hid all of this: `similar` hit@1/hit@3/MRR@5 read 1.00 with the family in place
-and the negatives 5/5 clean, because every anchor's *easy* mate still lands. That is the ceiling
-problem [#183](https://github.com/AlteredCraft/B2/issues/183) named, now demonstrated rather than
-argued. Nothing here is tuned in response — the eval measures and the engine is unchanged; what to
-do about a demoted or suppressed passage was
-[#182](https://github.com/AlteredCraft/B2/issues/182), and the answer, once it had numbers instead
-of an eyeball, was the reorder below rather than any of the four card-level treatments that issue
-first sketched: three of them assumed a card to mark, group, or re-sort, and the measurement said
-the card was not on the list at all. **Where no z exists at all** — a pool under the statistics
-minimum (`STATS_MIN_POPULATION` since #197; the same 12 was `FLOOR_MIN_POPULATION` while the gate
-shipped), a space with no spread, the fake regime — a surface must *say* the list is ungraded.
-Silence there is not neutral: a column of bandless cards reads as a set of candidates that were
-judged and all scored low, which is the opposite of what happened. (This obligation survives
-GH #197 unchanged; what changed at that threshold is that it now moves banding alone, never
-membership.)
+## 4. Retrieval — semantic search, fusion, and discovery
 
-What the anchor-local rule measurably cannot catch is a **pair-level miscalibration** — a single
-stranger the model scores like a cluster-mate. The watercolor ↔ stain-removal pair that first
-showed this left the corpus with watercolor itself (2026-08-11), and the negative anchors have
-been clean since the floor shipped (5/5 as of GH #183), but the residue is still there in the
-piles and is now wider: the junk pile tops out at cosine 0.689
-(`running-and-aquarium.md` ↔ `houseplant-care.md`, unrelated by label) above the *best* genuinely
-related pair at 0.667, while the related pile's floor sits at 0.554. An anchor-local z cannot
-separate those, because the miscalibration is in the pair, not in the anchor's distribution. That
-is the standing evidence for the escalation already named here: a
-**discovery-side pair-scorer** — a second model seam, sibling of §5's reranker but a *new* issue,
-not an extension of #28 (that seam needs query text and `similar` has none) — which would still
-only filter what is surfaced, never author a link.
+The engine-gated decision was *"if the index engine provides vector/semantic search, it's in v1."* It
+does. Therefore **semantic search is in v1** — exact, in-process, no vector extension, no ANN.
 
-**The shape the anchor-local rule cannot survive at all is a *many-topic* note** — measured by
-[#189](https://github.com/AlteredCraft/B2/issues/189)'s attempt to add one to the corpus
-(2026-08-17), the journal/daily-note archetype: N ≥ 6 mutually-unrelated sections, exactly one of
-them a close mate of an anchor. Averaging that many disagreeing chunk vectors cancels their
-topic-specific components, so the normalized centroid collapses toward the corpus's shared
-direction — moderately near *everything*, and nearest of all to the **loner anchors**, whose own
-diffuse populations make the journal stand out as their one high-z candidate. The built note
-(`week-log.md`, seven hobby sections, one lava-field gem) was served to `git-cheatsheet.md` at
-z +2.00 and `throat-singing.md` at +2.45 — content it does not contain, above every labelled
-mate's z anywhere in the corpus — while its own gem (best-passage rank 2 for `volcano.md`) fell
-under `member_z`, unserved. Both floor failures at once, in opposite directions, from one note.
-Wording is not the mechanism: a synthetic centroid averaging k of the corpus's *existing* chunk
-vectors — no prose at all — crosses a loner's bar from **k = 4** and is every loner's top-z
-candidate from k = 5. So the #150 calibration window did not merely go stale
-([#187](https://github.com/AlteredCraft/B2/issues/187)): on this shape the member/stranger
-distributions **invert** — strangers above the bar, labelled mates below it — and no constant
-fixes an inversion. The corpus edit was reverted rather than landed red (the note, its labels,
-and the probe wait in #189); a floor that survives the journal shape needs a second signal — the
-best-passage-vs-centroid gap #187 names, or the pair-scorer above — and pricing that is #187's
-decision, not this section's.
-
-**And the member bar has no window on the corpus as it ships, journal note or not**
-([#187](https://github.com/AlteredCraft/B2/issues/187), measured 2026-08-17): the eval now dumps
-every candidate's *ungated* stage-1 z on every anchor and re-derives both admissible windows from
-it on each run, so the two constants are read off the harness instead of off a doc comment.
-Labelled mates span **+0.804 … +2.862** while strangers on positive anchors reach **+1.618**, so
-`(max stranger, min mate]` is empty by 0.8 z — the #189 inversion holds without #189's note. Two
-consequences the numbers make precise. The bar's cost is not uniform: at the shipped 1.85 the
-floor serves 11 of 14 labelled mates and no strangers, and two of the three suppressions
-(`radio-and-sleep-debt.md` at +1.547, `tire-pressure-and-knots.md` at +1.445) sit above every
-stranger but one (`volcano.md → pour-over-and-pottery.md`, +1.618) — while the third
-(`phishing.md` at +0.804) is buried 18 strangers deep, the pair-level residue above wearing its
-z. And the **leader** gate, which does still have a window, has a narrow one — `(+1.787, +1.880]`
-— with both edges set by the multi-topic shape: its floor is a #183 family note surfacing as
-`throat-singing.md`'s leader, and its ceiling is `encryption.md`'s own leader 0.03 above the
-shipped constant. Neither constant was moved on this evidence; the point of measuring was to
-establish that no value of `member_z` is the fix, which is what makes a second signal — or the
-pair-scorer — the honest next option rather than a preference.
-
-**The resolution is the reorder** ([#192](https://github.com/AlteredCraft/B2/issues/192), shipped
-2026-08-17): the floor is judged **after stage 2, on the best-passage distances** stage 2 already
-computes — the leader gate reads the best pair's z, the member bar each candidate's own, and
-stage 1 is once again purely #38's recall device (the shortlist is truncated, scored, and only
-then gated; nothing judges the centroid). The same dump that measured the stage-1 inversion
-showed the stage-2 unit separating what the centroid could not: with `week-log.md` in the corpus,
-labelled mates read +1.253 … +2.866 against strangers-on-positives topping at +1.367, and the
-leader window is **open** at `(+1.919, +2.004]` where the stage-1 one had inverted outright. The
-re-derived defaults are the harness windows' midpoints — `leader_z 1.96`; `member_z 1.49`,
-midpoint of the widest bar range the trade curve prices at zero strangers, since the member
-window proper is empty by exactly one row — and at them discovery serves **14 of 15 labelled
-mates, 0 strangers, 5/5 negatives clean**. That lands the #189 journal note this section said no
-constant could carry: its lava-field gem is served to `volcano.md` at z +2.238 (second-strongest
-on the list) while the note is cut on both loner anchors it used to top, because its best passage
-*to them* is weak — the same signal read in both directions, which is what the centroid could
-never do. The ordering trade above is gone with the unit (badge, order, and gate are one number),
-and the human now sees the floor judge the same evidence the card shows. What remains is the
-**phishing pair-residue in the judge unit**: `encryption.md → phishing.md` at +1.253 sits under
-three strangers (the harness prices its rescue at exactly that), so the member window stays
-formally empty by that one pair — the standing pair-scorer evidence, now one row wide rather than
-eighteen deep. The reorder's cost is that a floored call runs stage 2 over the whole shortlist
-instead of the member prefix — the unfloored path always did — bounded by `SHORTLIST_MIN`/
-`SHORTLIST_PER_RESULT`, i.e. still O(shortlist), never O(vault). Measured on
-`fixtures/test-vault` (~200 notes, so the shortlist covers the vault; debug build, fake vectors):
-a floored call went from ~1.3 ms to ~7.5 ms per call — converging on the unfloored path's
-unchanged ~7 ms, the number any `--no-floor` user already paid. And the judged population is now
-the scored shortlist, which on any personal-scale vault is every unlinked note there is, and above
-`SHORTLIST_MIN` candidates is the anchor's centroid-nearest slice (process rule 3's dogfooding
-obligation names that bias).
-
-**A displayed band is part of that unit, and it was the last thing still reading the old one**
-([#182](https://github.com/AlteredCraft/B2/issues/182), closed 2026-08-17). An adapter grades a
-card from the z (above), so changing what the z *is* changes what every band means — and the
-desktop's was still calibrated on the centroid z's landmarks after the reorder: `●●●` at z ≥ 3.0,
-which nothing in the labelled corpus reaches in the stage-2 unit, so the top band was unreachable
-and the corpus's strongest human-confirmed relation (`bicycle.md ↔ bike-maintenance.md`, +2.87)
-graded the same as a middling one. The gem #192 rescued arrived pre-labelled unremarkable. The
-bands were re-read in the judged unit against the floor's own bars and the labelled-mate
-population — `●○○` above the member bar but under the leader gate (on the list because a stronger
-sibling carried it), `●●○` at or above the leader gate (strong enough to have carried a list
-alone), `●●●` above the mate population's upper quartile — and, per #187's lesson, the comment
-carrying them cites `just eval`'s calibration block rather than quoting a window as timeless. The
-general rule this leaves: **a change to the judged statistic is a change to every surface that
-paints it**, and the harness is where the new landmarks come from. (That rule bound #197's own
-change: retiring the gate re-derived the eval's exit-gate constants and re-anchored the band's
-copy and the empty states in the same PR.)
-
-**The existence gate itself was the defect, and it retired**
-([GH #196](https://github.com/AlteredCraft/B2/issues/196) measured,
-[GH #197](https://github.com/AlteredCraft/B2/issues/197) ruled, 2026-08-18 — the ruling at the
-head of this section). The first real vault dogfooded against the #192 constants was a
-single-domain one — 17 notes, three of them same-subject articles deliberately added as a related
-set — and the floor served candidates for exactly **one of 17 notes**. The ranking was correct
-throughout (`--no-floor` showed the three articles as each other's top candidates at cosine
-~0.79); it was the **leader gate** that emptied every list, at z +1.358…+1.529 against the 1.96
-bar. The mechanism is the z rule's own model: a z-score treats the anchor's population mean as a
-*noise floor*, which is valid only when related notes are rare outliers in a dominant unrelated
-tail — the standard score-distributional threshold literature models relevant and non-relevant
-scores as **two** distributions and thresholds at the crossover, where this rule modelled **one**
-and defined "related" as deviation from it. A vault whose notes all sit in one domain has no
-unrelated tail: the mean *is* "moderately related", a genuine mate has nothing to stand out
-against, and the gate reads *everything is related* as *nothing is*. "One diffuse cloud" and "a
-coherent single-subject vault" are the same geometry, and the empty-state copy asserted the first
-while the second was true. Three amplifiers, each measured on that vault: the leader sits inside
-the population it is judged against; **cluster self-dilution** — linked-worthy siblings lift the
-mean for each other, so investing in a topic made its notes progressively harder to surface,
-while linking them (the pane's own purpose) removes them from each other's pools via the 1-hop
-exclusion only *after* the pane has done the job it cannot do; and the
-`FLOOR_MIN_POPULATION = 12` cliff, a silent serve-everything/serve-nothing rule change crossed by
-adding four notes. The review that became #197 also relocated two pieces of recorded evidence:
-the eval corpus is engineered orthogonal (process rule 2's token audit *minimizes* shared
-vocabulary), so it is a good instrument for ranks and a structurally incapable one for
-*distributions* — its strongest labelled pair sits below that real vault's background — and
-GH #150's rejection of absolute floors ("kept 99–100% of a 228-essay single-author vault") was the
-same finding read through the assumption it should have been testing: keeping nearly everything
-of a single-author vault was plausibly *correct*. Large vaults fail the same way eventually:
-above `SHORTLIST_MIN` the judged population is the anchor's centroid-nearest slice —
-pre-selected related — so every big vault reproduces the single-domain geometry inside its own
-shortlist. Hence the ruling: the **member bar deleted** rather than re-tuned (its admissible
-window had been empty on the corpus's own numbers since #187, and it is what suppressed the
-phishing mate), the **leader gate retired** from the default path, the ranked list always served,
-and the empty state honest. What #197 left behind: the z as the band's ungated input; two new
-instruments (`just calibrate`, the real-vault transfer check every distributional constant now
-owes — process rule 5 — and the dense single-domain fixture, whose assertions are a per-mate MRR
-floor and **zero empty panes**); and Phase 2's evidence-gated bake-off for any replacement
-existence signal — the leading candidate being mutual-kNN/reciprocal-rank, the hubness-correction
-family, which is rank-based and therefore constant-free — where "nothing" is an admissible winner
-and continuity in population size is an entry requirement. The **pair-scorer escalation** stays
-the named long-term seam: under always-serve the phishing mate is *served* (best-passage rank 4),
-so that residue is now ordering quality, not existence.
-
-FTS5 is built into SQLite (BM25 ranking included); vectors need no extension — plain tables scored
-in-process ([#38](https://github.com/AlteredCraft/B2/issues/38)). Both are
-battle-tested at personal-vault scale.
-
-## 4. Semantic search & the engine-gated decision → verdict
-
-The locked decision: *"if the index engine provides vector/semantic search, it's in v1."*
-
-The engine provides it. Therefore **semantic search is in v1.**
-
-How it runs — an **exact, in-process scan**, no vector extension, no ANN:
-
-- **Storage & scoring:** vectors live in plain tables — `embeddings(text_hash, vector)` plus per-note
-  `note_centroids` — read with one statement and scored in-process (`embed::l2_sq`). Content-addressing
-  (M4) costs the scan one indexed join back to `chunks` to recover which chunk each vector ranks for;
-  it buys a vault-wide "identical text, one vector" store where a move re-embeds nothing. A
-  `vec0`-style virtual table charges a per-row shadow-table probe on every scan, which dominates at
-  real-vault scale; the plain-table scan does not. Full analysis + options:
-  [#38](https://github.com/AlteredCraft/B2/issues/38).
-- **Discovery is two-stage:** an O(notes) coarse scan over centroids shortlists candidates, then an
-  exact max-sim rescore over only the shortlist's chunk vectors.
-- **Candidate width is per view, and it is a quality knob, not plumbing.** Retrieval widens twice: each
-  façade read asks for a hit pool over its `limit`, and each signal (`search::pool_size`) pulls 5× *that*
-  before RRF fuses the two lists. The two reads need headroom for different reasons, so they get
-  different pools ([#142](https://github.com/AlteredCraft/B2/issues/142)). Note-level `Vault::search`
-  keeps **3×**: dedup collapses every chunk that shares a note onto that note's best one, so a pool of
-  exactly `limit` would under-fill `limit` distinct notes on an ordinary query. Passage-level
-  `Vault::search_chunks` has no dedup and keeps a **small constant** (`limit + 2`) — enough to backfill
-  the one hit it can drop, a lookup that missed on the C1 torn read (§3), and no more. Giving it the 3×
-  too is not a free tidy-up: the 5× multiplies every hit of headroom into candidates (150 per signal
-  against 60, at a 10-result ask), and RRF over a wider candidate set returns *different* answers — at
-  k = 60 a chunk ranked ~60th in **both** lists outscores one ranked first in a single list
-  (`2/121 > 1/61`). Width therefore moves only on measured relevance; the labelled corpus cannot measure
-  it yet, so the conservative setting holds — see §5.
-- **A fused-score tie is broken by the dense signal, and that is a policy, not a detail.** RRF over
-  integer ranks lands every fused score on a discrete lattice, so bit-identical ties between mirrored
-  rank pairs — (1, 3) vs (3, 1) — are structural, and the eval corpus produced one
-  ([#156](https://github.com/AlteredCraft/B2/issues/156)'s worked case: the semantic half
-  named the labelled answer, BM25 named the wrong one). The secondary sort key in `rrf_fuse` is
-  therefore the candidate's rank in the **vector list** (absent ranks below present), with id last
-  purely for determinism — a photo finish is decided on the signal measured to be right there, never
-  on projection walk order.
+- **Storage & scoring.** Vectors live in plain tables — `embeddings(text_hash, vector)` plus per-note
+  `note_centroids` — read with one statement and scored in-process (`embed::l2_sq`).
+  Content-addressing (M4) costs the scan one indexed join back to `chunks` to recover which chunk each
+  vector ranks for; it buys a vault-wide "identical text, one vector" store where a move re-embeds
+  nothing. A `vec0`-style virtual table charges a per-row shadow-table probe on every scan, which
+  dominates at real-vault scale; the plain-table scan does not
+  ([GH #38](https://github.com/AlteredCraft/B2/issues/38)).
+- **Flow ② hybrid search** (`search.rs`). BM25 over `chunks_fts` ⊕ vector KNN, fused with Reciprocal
+  Rank Fusion (`Σ 1/(k+rank+1)`, `RRF_K = 60`), resolved from chunks up to notes. Raw NL queries are
+  sanitized into a safe FTS5 `MATCH` expression — punctuation is FTS5 syntax and would otherwise crash
+  the parse. On a projected-but-unembedded vault the vector half is simply absent and the same fusion
+  runs over the single BM25 list, so scores stay on one scale.
+- **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
+  candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
+  exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph
+  neighbors. No model call at surface time — `b2 similar` surfaces, `b2 link` commits, and the human
+  is the precision gate.
+- **Candidate width is per view, and it is a quality knob, not plumbing.** Retrieval widens twice:
+  each façade read asks for a hit pool over its `limit`, and each signal (`search::pool_size`) pulls
+  5× *that* (minimum 30) before RRF fuses the two lists. The two reads need headroom for different
+  reasons, so they get different pools
+  ([GH #142](https://github.com/AlteredCraft/B2/issues/142)). Note-level `Vault::search` keeps **3×**:
+  dedup collapses every chunk sharing a note onto that note's best one, so a pool of exactly `limit`
+  would under-fill `limit` distinct notes. Passage-level `Vault::search_chunks` has no dedup and keeps
+  a **small constant** (`limit + 2`) — enough to backfill the one hit it can drop to a C1 torn read,
+  and no more. Giving it the 3× too is not a free tidy-up: the 5× multiplies every hit of headroom
+  into candidates (150 per signal against 60, at a 10-result ask), and RRF over a wider candidate set
+  returns *different* answers — at k = 60 a chunk ranked ~60th in **both** lists outscores one ranked
+  first in a single list (`2/121 > 1/61`). Width moves only on measured relevance (§5).
+- **A fused-score tie is broken by the dense signal, and that is a policy.** RRF over integer ranks
+  lands every fused score on a discrete lattice, so bit-identical ties between mirrored rank pairs —
+  (1, 3) vs (3, 1) — are structural, and the eval corpus produced one
+  ([GH #156](https://github.com/AlteredCraft/B2/issues/156): the semantic half named the labelled
+  answer, BM25 named the wrong one). The secondary sort key in `rrf_fuse` is therefore the candidate's
+  rank in the **vector list** (absent ranks below present), with id last purely for determinism — a
+  photo finish is decided on the signal measured to be right there, never on projection walk order.
 - **The FTS tokenizer is `porter unicode61` — stemmed, and that is a *measured verdict*, not a
-  default (schema v5).** Unstemmed BM25 matched surface forms only — `pedalling` found nothing in a
-  note that says "pedals", leaving the lexical half at rank 41–46 on queries the dense half ranked
-  first, which RRF's consensus bias turned into hybrid demotions of correct dense hits. The A/B
-  that settled it ([#157](https://github.com/AlteredCraft/B2/issues/157),
-  2026-08-11): porter improved 7 BM25-only note ranks and 3 hybrid note ranks,
-  worsened none, and dissolved every standing fusion demotion (hybrid rejoined vector-only at 0.98
-  hit@1 / 0.988 MRR on the eval corpus) — while the precision probes built to vote *against*
-  stemming (the `universe`/`university` Porter-collision pair, the code-literal `git-cheatsheet.md`
-  queries) did not move. Stemming remains a real trade — Porter is English-only, and a vault holds
-  code, identifiers, and proper nouns — so the retired arm stays measurable: `Vault::rebuild_fts`
-  swaps `chunks_fts`'s tokenizer over identical chunk rows and vectors (nothing re-chunks or
-  re-embeds), and `just eval-stemmer` scores the unstemmed ablation beside every default run. The
-  fusion interaction is [#158](https://github.com/AlteredCraft/B2/issues/158), where the stemmed
-  input is what emptied the demotions line.
-- **Does brute force scale to B2?** Yes, comfortably. A personal vault of, say, 10k notes → ~50–100k
-  chunks. Brute-force cosine over ~100k × 768-dim float32 vectors is on the order of **single-digit to
-  low-tens of milliseconds** — well within an interactive budget. We're nowhere near the regime
-  where ANN matters; if a vault ever is (multi-hundred-k chunks), int8/binary quantization and ANN
-  hold a standby order behind the centroid stage.
+  default.** Unstemmed BM25 matched surface forms only — `pedalling` found nothing in a note that says
+  "pedals", leaving the lexical half at rank 41–46 on queries the dense half ranked first, which RRF's
+  consensus bias turned into hybrid demotions of correct dense hits. The A/B that settled it
+  ([GH #157](https://github.com/AlteredCraft/B2/issues/157), 2026-08-11): porter improved 7 BM25-only
+  and 3 hybrid note ranks, worsened none, and dissolved every standing fusion demotion — while the
+  precision probes built to vote *against* stemming (the `universe`/`university` Porter collision, the
+  code-literal queries) did not move. Stemming remains a real trade — Porter is English-only, and a
+  vault holds code, identifiers, and proper nouns — so the retired arm stays measurable:
+  `Vault::rebuild_fts` swaps the tokenizer over identical chunk rows and vectors (nothing re-chunks or
+  re-embeds), and `just eval-stemmer` scores the unstemmed ablation beside every default run.
+- **Does brute force scale to B2?** Comfortably. A personal vault of 10k notes → ~50–100k chunks;
+  brute-force cosine over ~100k × 768-dim float32 vectors is single-digit to low-tens of milliseconds.
+  We are nowhere near the regime where ANN matters; if a vault ever is, int8/binary quantization and
+  ANN hold a standby order behind the centroid stage
+  ([GH #106](https://github.com/AlteredCraft/B2/issues/106)).
 
-So: **semantic search ships in v1**, exact KNN, 768-dim float vectors, with quantization in our
-back pocket. This is the headline consequence of choosing SQLite.
+## 5. Deferred model machinery — the reranker & query expansion
 
-## 5. The reranker as a fast follow
+**The reranker is a fast follow.** Slot it exactly where qmd puts it: **after RRF fusion, before final
+ranking**, behind a swappable seam. v1 is retrieve → fuse → return top-N, which is already a strong
+hybrid baseline; the fast follow inserts a cross-encoder rerank over the top ~30 candidates plus a
+position-aware blend. It is a pure function `(query, candidates) → scores`, so it changes *ordering*,
+not the store, the schema, or the candidate set — "eventually add a reranker" is a one-stage
+insertion, not a redesign. It is also **store-agnostic**: a model-side seam above the index, so no
+vector-store choice simplifies or blocks it. Tracked in
+[GH #28](https://github.com/AlteredCraft/B2/issues/28).
 
-Slot it exactly where qmd puts it: **after RRF fusion, before final ranking**, behind a swappable seam.
+**Scope — this reranks `b2 search`, not `b2 similar`.** The signature is the tell: it needs *query
+text*, and `b2 similar` has none — it is passage↔passage KNN, "near ∖ connected" (§3). The
+discovery-side levers are distance-weighting ([GH #20](https://github.com/AlteredCraft/B2/issues/20))
+and the pair-scorer seam (§3), not this; and the discovery-side *precision* stance is D1's — the
+ranked list is served, the human is the precision gate, and any future existence signal is Phase 2's
+evidence-gated bake-off. #20 reorders candidates; it cannot decide an empty pane.
 
-- v1: retrieve (BM25 + vector) → **RRF fusion** → return top-N. This is already good; RRF alone is a
-  strong hybrid baseline.
-- Fast follow: insert a **cross-encoder rerank** over the top ~30 candidates → position-aware blend.
-  The reranker is a pure function `(query, candidates) → scores`; the seam is the same one the
-  testability stack wants for AI parts (replay recorded scores as fixtures; quality measured in a
-  separate eval suite, never in CI).
-- This is why the reranker is genuinely deferrable with no architectural debt: it changes *ordering*,
-  not the store, the schema, or the candidate set. "Eventually add a reranker" is a one-stage insertion,
-  not a redesign. It is also **store-agnostic** — a model-side seam above the index, not a property of it,
-  so no vector-store choice simplifies or blocks it ([#67](https://github.com/AlteredCraft/B2/issues/67)).
+**Gate the decision on the eval, not intuition.** RRF is a strong baseline; the reranker buys
+**top-k precision**, whose value *grows with vault size* (semantic near-misses crowd the top past ~1k
+notes) and is *highest when an agent consumes top-1/top-3 with no human eye* (the `serve` adapter,
+[GH #24](https://github.com/AlteredCraft/B2/issues/24)). Vault size changes whether the precision is
+*worth* it, not the reranker's cost — that is fixed at the top-N it rescores.
 
-**Scope — this reranks `b2 search`, not `b2 similar`.** The seam signature `(query, candidates) → scores`
-is the tell: it needs *query text*, so it reorders **query search** (`b2 search`). **`b2 similar` has no
-query** — it is passage↔passage KNN, "near ∖ connected" (§3) — so this reranker
-does **not** apply to it; the discovery-side ranking levers are the qmd chunker upgrade
-([#19](https://github.com/AlteredCraft/B2/issues/19)) and distance-weighting
-([#20](https://github.com/AlteredCraft/B2/issues/20)), not this — and the discovery-side
-*precision* stance is §3's: the ranked list is served, the human is the precision gate, and any
-future existence signal is Phase 2's evidence-gated bake-off (#197). #20 reorders candidates; it
-cannot decide an empty pane.
+**…and check the instrument can see the change you are gating.** Retrieval reaches at least
+`chunk_candidate_pool(10) = 60` candidates per signal (150 for the note view). While a corpus has no
+more chunks than that, **neither signal is truncated** and a candidate-width change prints
+bit-identical numbers while genuinely reordering a real vault
+([GH #141](https://github.com/AlteredCraft/B2/issues/141)). So: score *relevance* on the labelled
+corpus, but measure a width change with the rank-stability probe over a vault big enough for the pool
+to bind (`just stability` on `fixtures/test-vault`); `just eval` prints its own blindness
+(`pool_blind`) when the corpus fits inside the narrower pool. That gate has already ruled once —
+[#140](https://github.com/AlteredCraft/B2/pull/140) widened the passage view to 3× as plumbing, the
+eval printed bit-identical numbers, the probe found 10 of 10 top-4 passage lists changed, and with no
+labelled evidence that the wider set ranked *better*,
+[#142](https://github.com/AlteredCraft/B2/issues/142) returned it to the constant. **The instrument
+that can say "different" is not the one that can say "better"** — shipping a width change needs both.
+The blindness is to *candidates*, not to fusion: `RRF_K` re-weights the same two lists, so it reorders
+results on a corpus of any size and is gated on the labelled eval like any other quality change.
 
-**Gate the decision on the eval, not intuition** (the eval harness under `crates/b2-embed/evals/`). RRF
-is a strong baseline; the reranker buys **top-k precision**, whose value *grows with vault size* (semantic
-near-misses crowd the top past ~1k notes) and is *highest when an agent consumes top-1/top-3 without a
-human eye* (the `serve` adapter, [#24](https://github.com/AlteredCraft/B2/issues/24)). Vault size changes
-whether the precision is *worth* it, not the reranker's cost — that is fixed at the top-N it rescores. So
-measure RRF precision@k / MRR on a representative set first and ship the reranker only on a measured gap;
-this is the deferral §5 is built to allow. Tracked in [#28](https://github.com/AlteredCraft/B2/issues/28).
+**Query expansion** (qmd's third model) is **optional and lowest priority** — the heaviest model for
+the smallest, most variable win. A later, off-by-default flag
+([GH #105](https://github.com/AlteredCraft/B2/issues/105) covers the adjacent fusion tuning).
 
-**…and check the instrument can see the change you are gating.** The labelled eval corpus is *no bigger
-than the candidate pool retrieval reaches* — 29 chunks against `vault::chunk_candidate_pool(10) = 60` per
-signal, and 150 for the note view — so neither half of the hybrid is truncated there: BM25 returns every
-matching chunk, the vector scan every stored vector, and widening the pool cannot add a candidate.
-Relevance scores on that corpus are therefore **invariant under candidate width**: a change to either
-façade hit pool or to `search::pool_size` prints "no change" while genuinely reordering a real vault.
-Score *relevance* on the labelled corpus, but measure a width change with the rank-stability probe over a
-vault big enough for the pool to bind (`--example stability`, `fixtures/test-vault`); the eval prints its
-own blindness when the corpus fits inside the narrower of the two pools
-([#141](https://github.com/AlteredCraft/B2/issues/141)).
+The harness itself — corpora, labels, metrics, exit gates, and its process rules — is
+[docs/evals/README.md](../evals/README.md); read it before touching any of them.
 
-That gate has already ruled once. [#140](https://github.com/AlteredCraft/B2/pull/140) widened the passage
-view to 3× as plumbing; the eval printed bit-identical numbers, the probe found 10 of 10 top-4 passage
-lists changed, and with no labelled evidence that the wider set ranked *better*,
-[#142](https://github.com/AlteredCraft/B2/issues/142) returned it to the constant (§4). The instrument
-that can say "different" is not the one that can say "better" — shipping a width change needs both.
+## 6. The AI seams — the embedder in a single binary, and grounded chat
 
-The blindness is to *candidates*, not to fusion. `RRF_K` re-weights the **same** two lists
-(`Σ 1/(k+rank+1)`), so it reorders results on a corpus of any size — measured on this one: k = 60 → 10
-moves note ranks across the query set. A k change is gated on the labelled eval like any other quality
-change; only candidate width needs the larger vault.
+Two seams, both enumerated by M1 and both injected by the adapters.
 
-Query expansion (qmd's third model, the fine-tuned 1.7B) is **optional and lowest priority** — it's the
-heaviest model for the smallest, most variable win. Treat it as a later, off-by-default flag.
+### `Embedder` — and the real hard part, embeddings in a single binary
 
-## 6. The real hard part: embeddings in a single binary
+This is the only place the architecture meets real friction, and it is **independent of the SQLite
+decision**: any engine that does semantic search needs vectors from somewhere. qmd's answer
+(`node-llama-cpp` + auto-downloaded GGUF + a JS runtime) tensions B2's single-binary,
+no-install-ritual goal directly. The resolution, in three steps:
 
-This is the only place the architecture meets real friction, and it's worth being honest that **it is
-independent of the SQLite decision** — any engine that does semantic search needs vectors from
-somewhere.
+**Decided (2026-06-30).** Runtime = **`candle` + `hf-hub`** — pure-Rust inference compiled into the
+binary, no external ONNX Runtime to ship, with `hf-hub` as the download seam. **Not bundled** — an
+explicit **`b2 init`** downloads and verifies the model into a shared XDG cache, never a surprise
+mid-command download; `reindex`/`search` fail fast with "run `b2 init`" if it is absent. **The model
+source is configurable** (default an HF repo id; overridable to a mirror, another repo, or a local
+path for offline installs) via a global TOML at `$XDG_CONFIG_HOME/b2/config.toml`.
 
-qmd's answer is `node-llama-cpp` + auto-downloaded GGUF models + Node 22/Bun, needing ~300 MB–3 GB of
-model files and a JS runtime. That directly tensions B2's single-binary, no-install-ritual goal
-([invariants.md](invariants.md)). Options, roughly in order of single-binary
-friendliness:
+**Built (2026-07-01),** in the `b2-embed` crate: `LocalEmbedder` behind the `b2-core` `Embedder` seam;
+CLS-pool + L2-normalize; asymmetric query prefix. **Model default `BAAI/bge-base-en-v1.5`**
+(BERT-family, **768-dim**, ungated). EmbeddingGemma-300M was the first choice and lost on friction —
+it is *gated* on Hugging Face (HTTP 401 without a token + license acceptance), which defeats a
+friction-free `b2 init`; it remains selectable via config for anyone who provides a token. The dim is
+read authoritatively from the model's own `config.json` (`hidden_size`), so config can't lie about it.
 
-1. **Bundle a small embedding model + a `llama.cpp`/GGUF runtime, statically linked.** Self-contained,
-   fully offline, but the binary carries a few-hundred-MB model (or downloads it on first run — a
-   one-time ritual, not a per-use one). EmbeddingGemma-300M or Qwen3-Embedding-0.6B are the candidates.
-2. **`fastembed` / ONNX Runtime** with a small embedding model — mature, embeddable, good language
-   bindings (Rust/Go/Python); similar size tradeoff, arguably cleaner than carrying a full LLM runtime
-   just to embed.
-3. **Pluggable embedder behind a seam, default local + optional remote API.** B2 already wants the
-   embedder swappable (deterministic fake for tests). Ship local-by-default; allow an API embedder for
-   users who opt in. Keeps the binary tiny; preserves local-first as the default.
+**Consequences that are invariants.** The embedding space has exactly one recorded identity —
+`meta.(embed_model_id, embed_dim)` — and the compute **device folds into it**: a `--features metal`
+GPU build tags the id `@metal`, because a device/precision change that alters vectors *is* a model
+swap ([GH #40](https://github.com/AlteredCraft/B2/issues/40)). A swap drops both vector tables and
+re-embeds on `reindex`; `search` **fails fast** rather than mixing spaces; `open` never mutates the
+vector space, so changing the configured model cannot wipe vectors on the next command (M2). The fake
+embedder stays the CI default, so model quality never enters the fast suite (E2).
 
-**Recommendation:** make the **embedder a seam** (we need it for tests regardless — and a swappable
-model seam *is* the **"build for tomorrow's model"** tenet in practice,
-[invariants.md](invariants.md)), ship a **local model as the default**
-(option 1 or 2), and decide model-download-on-first-run vs. bundled-in-binary as a packaging detail
-later. Crucially, **none of this blocks the engine work**: build the SQLite store +
-FTS5 + the vector tables + the typed graph now against the deterministic fake embedder; drop the real
-embedder into the seam when the packaging path is chosen.
+### `LlmProvider` — flow ④, grounded chat
 
-**Decided (2026-06-30).** Runtime = **`candle` + `hf-hub`** (pure-Rust inference compiled into the
-binary — no external ONNX Runtime to ship; `hf-hub` is the download seam). Model =
-**EmbeddingGemma-300M @ dim 768** (fallback to a known-good candle embedding model if it proves fiddly).
-**Not bundled** — an explicit **`b2 init`** downloads + verifies the model into a shared **XDG cache**
-(`~/.local/share/b2/models/`), never a surprise mid-command download; `reindex`/`search` fail fast with
-"run `b2 init`" if it's absent. **The model source is configurable** (default = an HF repo id;
-overridable to a mirror, another repo, or a local path for offline installs) via a global TOML at
-`$XDG_CONFIG_HOME/b2/config.toml`. Build/execution plan tracked in [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
+Chat is a **reader** of this index and adds nothing to it (M1): no table, no cached response, no
+`meta` row, session-only history (S4). That is the deliberate contrast with the embedder — swapping
+chat models never touches the index, so a provider swap is a URL/config change.
 
-**Built (2026-07-01).** Shipped in the **`b2-embed`** crate (`LocalEmbedder` behind the `b2-core`
-`Embedder` seam; candle + `hf-hub`; CLS-pool + L2-normalize; asymmetric query prefix). **Model default
-changed to `BAAI/bge-base-en-v1.5`** (BERT-family, **768-dim**, ungated): EmbeddingGemma-300M is *gated*
-on Hugging Face (HTTP 401 without a token + license acceptance), which defeats a friction-free `b2 init`
-— so B2 ships the pre-authorized bge fallback by default, validated in the spike (cat↔feline 0.83; NL
-queries retrieve by meaning, not keyword). EmbeddingGemma remains selectable via config for anyone who
-provides a token. The dim is read authoritatively from the model's own `config.json` (`hidden_size`), so
-config can't lie about it. `open()` no longer shapes/drops the vector space (the mismatch fails fast on
-`search`, re-embeds on `reindex`); the fake embedder stays the CI default so model quality never enters
-the fast suite. Eval is a `cargo run -p b2-embed --example eval` pass (precision/MRR), out of CI.
+`Vault::ask` (`chat.rs`) is five steps: **condense** (multi-turn only — a provider call rewrites the
+follow-up into a standalone query, degrading to the raw question on failure, so that step can never
+break chat) → **retrieve** (`search_chunks` at `ASK_PASSAGES = 10`, the §4 pipeline unchanged,
+BM25-only fallback included) → **assemble** (the grounded system prompt + numbered passages — prompt
+assembly is core logic, not an adapter's) → **stream** (tokens up through the caller's callback, whose
+return value cancels at token granularity — sync, no runtime) → **cite** (`[n]` markers resolve to
+`(path, excerpt)` in the returned `AnswerView`; a hallucinated marker resolves to nothing and the
+answer text is **never rewritten**).
+
+Two properties follow from the seam's shape. Cancellation is returning early from a blocking read
+loop, so **no B2 crate starts an async runtime** — a cut stream is marked cancelled and what already
+arrived is rendered, never discarded, because a truncated answer is not an error. And model output is
+untrusted content like any note (E5), enforced at the render surface rather than in the core.
 
 ## 7. Tech-stack implications — resolved: Rust
 
-- **SQLite + FTS5 are language-agnostic** (strong embedded bindings for Rust, Go, Python, Node), so
-  the engine didn't pick the language; the **single-binary goal** did — it favours a compiled
-  language, and B2 is a **Rust Cargo workspace** (`rusqlite` with bundled SQLite; `candle` for the
-  embedder).
-- qmd's TypeScript/Node path is the *least* aligned with principle #5, which is another reason not to
-  inherit qmd's runtime by depending on it.
+SQLite + FTS5 are language-agnostic, so the engine didn't pick the
+language; the **single-binary goal** did. B2 is a Rust Cargo workspace (`rusqlite` with bundled
+SQLite; `candle` for the embedder). qmd's TypeScript/Node path is the least aligned with that goal,
+which is another reason not to inherit its runtime by depending on it.
+## 8. Risks & operational burden
 
-## 8. Risks, open questions & operational burden
+**Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
+`chunks.note_path` is the join, and search hits resolve up to notes for graph operations (§3).
 
-### Engine risks & open questions
+### The bill for a path-keyed graph under `[[path|title]]` links
 
-- **Embedding model size vs. single binary** (§6) — **resolved:** not bundled; an explicit
-  `b2 init` downloads a configurable model (candle + hf-hub) into a shared XDG cache. The binary stays small.
-- **Embedding dimension & model lock-in.** Changing the embed model means re-embedding the whole vault.
-  **Locked:** the embedding space is **dim 768** — the default **`BAAI/bge-base-en-v1.5`** and the
-  config-selectable EmbeddingGemma-300M are both 768-dim (§6); a model/dim change is a
-  full re-embed, detected via `meta` — fail fast on read, re-embed on `reindex`.
-- **Chunk vs. note granularity for the graph.** Search is chunk-level; the typed graph is note-level.
-  Keep `chunks.note_path` as the join and resolve search hits up to notes for graph operations — already
-  reflected in §3.
+Keying the graph by the vault-relative path (L1) makes the stored key *the same thing the human
+authored*, which removes a whole class of state the old stamped-id design had to reconcile — and
+leaves one standing cost in its place. These are *the trade working as designed*, not defects; they
+must be budgeted, tested, and watched.
 
-### Operational burden — the bill for a path-keyed graph under `[[path|title]]` links
-
-The graph buys B2 its reason to exist (typed, traversable edges — §2). Keying it by the
-vault-relative path ([data-model.md](data-model.md) §9, GH #170) makes the stored key *the same thing*
-the human authored, which removes a whole class of state the old stamped-id design had to reconcile —
-and leaves exactly one standing cost in its place. These are *the trade working as designed*, not
-defects; they must be budgeted, tested, and watched.
-
-- **Write amplification on move.** The inline `path` is the link, so moving one note rewrites the
-  inbound link text in **every** file that points at it — an N-file write, not a one-file write. It's
-  bounded and mechanical (the materialized edges name exactly which files/links to touch,
-  Markdown-first then index), but moving a heavily-linked note is proportional to its backlink count,
-  not O(1). Watch the cost on hub notes; keep the rewrite transactional so a partial move never
-  half-updates the vault. The index side of that move is now wider than it was — the moved note's
-  rows re-key rather than staying put under a stable id — but it is one cascading `UPDATE` plus the
-  re-projection of the inbound sources, both bounded by the same backlink count the file writes are.
+- **Write amplification on move.** The link *is* the path, so moving one note rewrites the inbound
+  link text in **every** file that points at it — an N-file write. It is bounded and mechanical (the
+  materialized edges name exactly which files and links to touch, Markdown-first then index), but
+  moving a heavily-linked note is proportional to its backlink count, not O(1). Keep the rewrite
+  transactional so a partial move never half-updates the vault. The index side is one cascading
+  `UPDATE` plus the re-projection of the inbound sources, bounded by the same count.
 - **Out-of-band moves are identified, not repaired — and that is the scope decision.** A `git mv` or
   Finder move is, to a path-keyed index, a delete plus a create: the old path's rows prune, the new
   path projects fresh, and every inbound `[[oldpath]]` becomes a **surfaced dangling edge** (G5) —
-  authored text kept, `dst` NULL, healing by itself on the next pass if the target ever comes back.
-  Nothing is silently dropped and nothing is guessed at. This is the failure surface of moving files
-  with Obsidian closed, with B2 telling you which links broke instead of leaving you to find out by
-  clicking. **Content-addressed vectors (M4) make it cheap as well as honest**: the re-created note's
-  chunk text hashes identically, so the "delete plus create" re-embeds nothing — the cost is
-  chunk/FTS/edge re-projection only. Two repairs were considered and left out of GH #170 as future
-  investigation: a *proposed* hash-match repair (`notes.body_hash` and the resource `content_hash`
-  are already stored, so the data is there — but a proposal must stay the human's to accept, W4), and
-  a `b2 watch` daemon observing renames live, rejected as a lifecycle and coordination surface that
-  shrinks the gap rather than closing it.
+  authored text kept, `dst` NULL, healing by itself on the next pass if the target comes back. Nothing
+  is silently dropped and nothing is guessed at. **Content-addressed vectors (M4) make it cheap as
+  well as honest**: the re-created note's chunk text hashes identically, so the delete-plus-create
+  re-embeds nothing. Two repairs were considered and left as future investigation in GH #170: a
+  *proposed* hash-match repair (`notes.body_hash` and the resource `content_hash` are already stored,
+  but a proposal must stay the human's to accept, W4), and a `b2 watch` daemon observing renames live,
+  rejected as a lifecycle and coordination surface that shrinks the gap rather than closing it.
 - **Path ownership follows the filesystem, so there is nothing to reconcile.** A path names at most
-  one file — that is the filesystem's guarantee, not B2's — so the states the old design had to
-  arbitrate simply do not arise: a note deleted and recreated at the same path is that path's note, a
-  Finder-duplicated note is two notes at two paths, and `db::upsert_note`'s `ON CONFLICT(path)` is the
-  whole of the reconciliation. A note file *deleted with no replacement* is reconciled by the
-  whole-vault projection pass ([#31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault`
-  prunes every `notes` row whose path the walk did not see this run (`db::prune_notes_except` —
-  aliases/chunks/FTS/centroid/outgoing edges cascade; inbound links re-dangle when phase 2 re-derives
-  edges against the pruned resolver), **except** rows whose file was skipped as unreadable — the walk
-  *saw* that file, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note
-  and never prunes. Orphaned vectors — hashes no chunk references after that pruning — are collected
-  by the same pass, the only bookkeeping content-addressing adds. *(Resources churn more than notes —
-  images/PDFs get added and deleted freely — and their inventory pass has always pruned this way;
-  [#66](https://github.com/AlteredCraft/B2/issues/66).)*
-- **What this section used to budget, and no longer has to.** The stamped `b2id` made "two files, one
-  identity" representable, and everything that followed was the bill for it: a claim pre-scan and
-  incumbent-wins collision resolution ([#81](https://github.com/AlteredCraft/B2/issues/81)), the
-  shadowed-copy review panel ([#88](https://github.com/AlteredCraft/B2/issues/88)), identity-restamp
-  notices, a malformed-YAML re-stamp guard ([#75](https://github.com/AlteredCraft/B2/issues/75)), a
-  frontmatter write guard ([#79](https://github.com/AlteredCraft/B2/issues/79)), and a carve-out on S3.
-  All of it is deleted with the stamp (GH #170). `reindex --dry-run` correspondingly shrinks to what a
-  read-only preview can still honestly say: which notes would (re)embed. Nothing anomaly-shaped was
-  ever stored, so nothing had to be migrated away — each notice re-derived from vault + index every
-  pass (S2), and the ones that no longer exist simply stop being derived.
+  one file — the filesystem's guarantee, not B2's — so the states the old design had to arbitrate do
+  not arise: a note deleted and recreated at the same path is that path's note, a Finder-duplicated
+  note is two notes at two paths, and `db::upsert_note`'s `ON CONFLICT(path)` is the whole of the
+  reconciliation. A note file *deleted with no replacement* is reconciled by the whole-vault pass
+  ([GH #31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault` prunes every `notes` row
+  whose path the walk did not see this run (aliases/chunks/FTS/centroid/outgoing edges cascade;
+  inbound links re-dangle when phase 2 re-derives edges against the pruned resolver), **except** rows
+  whose file was skipped as unreadable — the walk *saw* that file, so evicting it would lie.
+  Single-note ingest (`add`/`mv`/`write`) touches one note and never prunes. Orphaned vectors — hashes
+  no chunk references after that pruning — are collected by the same pass, the only bookkeeping
+  content-addressing adds. Resources churn more than notes and their inventory pass has always pruned
+  this way.
+- **What this section no longer has to budget.** The stamped `b2id` made "two files, one identity"
+  representable, and a collision subsystem, a shadowed-copy review panel, restamp notices, a
+  malformed-YAML re-stamp guard, a frontmatter write guard, and a carve-out on S3 were the bill for
+  it. All of it is deleted with the stamp (GH #170), and `reindex --dry-run` correspondingly shrinks
+  to what a read-only preview can honestly say: which notes would (re)embed. Nothing anomaly-shaped
+  was ever *stored*, so nothing had to be migrated away — each notice was re-derived from vault +
+  index every pass (S2), and the ones that no longer exist simply stop being derived.
 - **A single unreadable file never fails the whole index.** A real vault holds the odd non-UTF-8 or
   permission-denied `.md`; projection **skips** it (reported as a `skipped` entry carrying a short,
-  file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than aborting
-  the reindex on one file it cannot read.
-- **Derived-index consistency is a permanent invariant, not a one-time build.** The index is a derived
-  projection of `Markdown` and must never drift from it. Three locked invariants are the tripwires
-  (the full register: [invariants.md](invariants.md)):
-  round-trip losslessness (`parse → serialize → parse`),
-  `full-reindex ≡ incremental-update`, and `rename keeps every backlink resolving`. Every edit path
-  (kernel `b2 mv`, link delete, out-of-band reindex) has to preserve all three or the graph silently
-  diverges from the source of truth.
-- **Committed edges are only ever authored, never inferred.** B2 writes an edge only on your command
-  (`b2 link`, or a body link you write) — there is no agent proposing edges and no review queue to keep
-  consistent. Editing the vault can strand a connection — e.g. deleting an authored `A→B` link
-  ([invariants.md](invariants.md) W4) — but B2 only ever *surfaces* the consequence (an orphan
-  flag in `b2 explain`), never silently rewrites an inbound file or an edge. Files are touched only when asked.
+  file-level reason, surfaced by the CLI and the desktop) and indexes everything else, rather than
+  aborting on one file it cannot read.
+- **Derived-index consistency is a permanent invariant, not a one-time build.** W5, S3, and L1 are the
+  tripwires; every edit path (`b2 mv`, link delete, out-of-band reindex) has to preserve all three or
+  the graph silently diverges from the source of truth.
+- **Committed edges are only ever authored, never inferred** (G1). Editing the vault can strand a
+  connection — deleting an authored `A→B` link — but B2 only ever *surfaces* the consequence, never
+  silently rewrites an inbound file or an edge (W4).
 
 ## 9. Recommendation
 
@@ -806,12 +521,12 @@ defects; they must be budgeted, tested, and watched.
 2. **The engine-gated outcome:** semantic search is **in v1** (exact in-process KNN; quantization
    reserved for scale).
 3. **Reranker = explicit fast-follow** behind a post-fusion seam; query expansion = later/optional.
-4. **The embedder is a seam**; the store + indexes + typed graph are built and tested against the
-   **deterministic fake embedder**, with the golden-vault fixtures as the yardstick
+4. **The seams are the AI surface** (M1): the store, indexes, and typed graph are built and tested
+   against the **deterministic fake embedder**, with the golden-vault fixtures as the yardstick
    ([data-model.md](data-model.md) §8).
 
 > Net: qmd answers "can a great hybrid search engine run locally on Markdown?" — yes, and here's how.
 > B2's question is one layer up: "can that retrieval live inside a typed, traversable, agent-operated
-> graph I fully own, in a single binary?" SQLite is the substrate that makes every queryable concern one
-> disposable store, a pure projection of your Markdown. We take qmd's pipeline and build the graph it was
-> never trying to be.
+> graph I fully own, in a single binary?" SQLite is the substrate that makes every queryable concern
+> one disposable store, a pure projection of your Markdown. We take qmd's pipeline and build the graph
+> it was never trying to be.

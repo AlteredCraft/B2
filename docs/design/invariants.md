@@ -8,11 +8,10 @@ status: active
 
 # B2 — Invariants
 
-> The normative register of what must always be true of B2. Each entry is one testable/reviewable
-> claim; the linked doc holds the elaboration and rationale. This page is the top of the design set —
-> the *why* — with the *what* in [data-model.md](data-model.md) and the *how* in
-> [index-engine.md](index-engine.md); product non-negotiables (local-first, zero lock-in,
-> single-binary) are captured as invariants here.
+> The normative register of what must always be true of B2. Each entry is one testable claim; the
+> linked doc holds the elaboration. This page is the top of the design set — the *why* — with the
+> *what* in [data-model.md](data-model.md) and the *how* in [index-engine.md](index-engine.md).
+> Product non-negotiables (local-first, zero lock-in, single-binary) are captured as invariants here.
 >
 > **On conflict, this page wins and the other doc gets fixed.** Changing this page is a deliberate
 > decision, never a drive-by edit. Cite entries by id (S2, G2, …).
@@ -31,15 +30,15 @@ tomorrow's model* — made mechanical.
   never projected at all (read live off disk). The projected *domain* is the vault's **managed
   subtree**: a dot-prefixed name is not vault material of any kind — folder, resource, or `.md` alike
   — so it is skipped by every walk before routing, and refused as an authoring destination (B2 never
-  creates a member it would then never see). The files stay on disk untouched; they are simply outside
-  the projection. ([data-model.md](data-model.md) §1 "Hidden means hidden", §10,
+  creates a member it would then never see). Such files stay on disk untouched, simply outside the
+  projection. ([data-model.md](data-model.md) §1, §10,
   [index-engine.md](index-engine.md) §3, [GH #136](https://github.com/AlteredCraft/B2/issues/136))
 - **S3 — `full-reindex ≡ incremental-update`, unconditionally.** Re-deriving one changed note
   converges on exactly the state a from-scratch rebuild would produce — including pruning rows for
   deleted files on a whole-vault pass. There is no carve-out: with identity **path-keyed** (L1), the
   filesystem itself guarantees one member per path, so the "two files presenting one identity" state
-  that once needed one (a Finder-duplicated note, GH #81) cannot arise — a copy is simply another
-  note at another path. ([index-engine.md](index-engine.md) §8, [GH #170](https://github.com/AlteredCraft/B2/issues/170))
+  that once needed one (GH #81) cannot arise — a copy is simply another note at another path.
+  ([index-engine.md](index-engine.md) §8, [GH #170](https://github.com/AlteredCraft/B2/issues/170))
 - **S4 — No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
   index-only authored facts. Scope: *B2-derived* data — the human's own directory tree is vault
   material, for which the **filesystem is authoritative** (folders are never projected; the tree
@@ -64,8 +63,9 @@ tomorrow's model* — made mechanical.
   `b2 link` (frontmatter, never the body); the move-repair of W2; the editor save (`Vault::write` — a
   byte-honest splice of the *human's own* body bytes, guarded by a content-hash revision); the
   frontmatter save (`Vault::write_frontmatter` — the same-guard splice of the *human's own*
-  frontmatter bytes, body untouched, and otherwise unjudged: B2 owns no line in that block);
-  and create/move/delete of notes, resources, and folders on explicit command.
+  frontmatter bytes, body untouched, and otherwise unjudged: B2 owns no line in that block); import
+  (`Vault::import_file`/`import_path` — the handed bytes copied verbatim, then projected); and
+  create/move/delete of notes, resources, and folders on explicit command.
 - **W4 — B2 never deletes, moves, or archives vault files of its own accord.** Consequences of human
   edits (orphans, dangling links, hash-matched move candidates) are *surfaced*, flagged, or proposed —
   never silently applied. ([index-engine.md](index-engine.md) §8)
@@ -74,7 +74,7 @@ tomorrow's model* — made mechanical.
   (`b2_relations`) so it can never collide; a generic `relations:` key is *not* read. A `b2id:` line
   left by an older B2 is now exactly an unknown key — never read, never rewritten, never removed;
   nothing needs migrating, and deleting `.b2/` is the whole upgrade (GH #170).
-  ([data-model.md](data-model.md) §6, §1)
+  ([data-model.md](data-model.md) §1, §6)
 
 ## L — Identity & links
 
@@ -85,11 +85,11 @@ tomorrow's model* — made mechanical.
   Consequence: **rename keeps every backlink resolving *when B2 does the move*** — a move rewrites
   the inbound path *text* and re-keys the moved note's rows in one transaction. A move made
   **outside** B2 is a delete plus a create: the inbound links surface as dangling (G5) — identified,
-  never silently dropped — which is exactly the durability a path handle has in Obsidian, and one
-  notch better in that B2 says so. ([data-model.md](data-model.md) §1, §3)
+  never silently dropped — the durability a path handle has in Obsidian, one notch better in that B2
+  says so. ([data-model.md](data-model.md) §1, §3)
 - **L2 — A note's title is its filename.** The frontmatter `title:` key is recognized but inert —
   round-tripped, never driving display, aliases, or search. `b2 link` therefore writes a bare
-  `[[path]]`, no alias. ([data-model.md](data-model.md) §1, §9)
+  `[[path]]`, no alias. ([data-model.md](data-model.md) §1)
 - **L3 — Notes and resources share one identity model: the vault-relative path, index-only, with no
   sidecar files ever.** Since GH #170 the remaining asymmetry is **authoring surface alone**, not
   status and no longer identity: a note has frontmatter and authored edges because Markdown is the
@@ -140,20 +140,20 @@ tomorrow's model* — made mechanical.
 - **M2 — The embedding space has one recorded identity: `meta.(embed_model_id, embed_dim)` — and the
   compute device folds into it** (a Metal build tags the id `@metal`). Any identity change is a model
   swap: `search` **fails fast** rather than mixing spaces, `reindex` drops and re-embeds, and `open`
-  **never** mutates the vector space. ([CLAUDE.md](../../CLAUDE.md) "Embedding-space discipline", GH #40)
+  **never** mutates the vector space. ([index-engine.md](index-engine.md) §6, GH #40)
 - **M3 — One embedding space in v1.** Every vault member funnels to *text* through the same model;
-  multimodal spaces and describers are documented future seams, default-off.
+  multimodal spaces and describers are documented future seams, default-off
+  ([GH #110](https://github.com/AlteredCraft/B2/issues/110)).
   ([data-model.md](data-model.md) §10)
 - **M4 — Vectors live in plain tables, scored in-process; their existence *is* the signal; and they
   are keyed by the hash of what was embedded.** The vector tables are created at embed time, so
   "tables exist" = "this vault has an embedding space" — the fallbacks (BM25-only search on a
   projected-but-unembedded vault) key on it. `embeddings` is **content-addressed**
   (`text_hash → vector`, GH #170): the embed input is exactly the chunk's stored text, so identical
-  text has one vector, a renamed or moved note re-embeds nothing, and the store needs no
-  invalidation rule beyond "a hash no chunk references is garbage" — pruned by the whole-vault pass.
-  Centroids are the same derived data keyed by note path — refreshed by the embed pass, dropped on
-  re-chunk. Model identity is not part of the key because it does not have to be: a swap drops the
-  whole table (M2). ([CLAUDE.md](../../CLAUDE.md), #38)
+  text has one vector, a renamed or moved note re-embeds nothing, and the only invalidation rule is
+  "a hash no chunk references is garbage" — pruned by the whole-vault pass. Centroids are the same
+  derived data keyed by note path — refreshed by the embed pass, dropped on re-chunk. Model identity
+  is not part of the key because it need not be: a swap drops the whole table (M2). ([index-engine.md](index-engine.md) §3–§4, GH #38)
 - **M5 — Note content is never sent off-machine unbidden.** A cloud model endpoint exists only by
   explicit user configuration: the default chat configuration is a local endpoint, and a chat
   request carries the question *and* retrieved note passages — so the consent moment is the
@@ -162,22 +162,20 @@ tomorrow's model* — made mechanical.
 
 ## D — Discovery surfacing
 
-- **D1 — Discovery surfacing answers a relative question, and the ranked candidate list is
-  served.** "What in my vault belongs next to this note?" is relative, so `b2 similar` and the
-  discovery pane serve the ranked best-passage top-N whenever candidates exist; `limit` is a cap
-  that under-fills only for want of scorable notes. **An empty pane never asserts "nothing
-  relates" from anchor-local statistics** — an anchor-local existence test cannot distinguish
-  *nothing is related* from *everything is related* (the same geometry read from opposite ends:
-  a single-domain vault went dark on 16 of 17 notes, GH #196), so an empty result at a nonzero
-  ask may only state what is checkable: the candidate set is genuinely empty (a `limit` of 0 is
-  the degenerate ask that proves nothing, and its surfaces claim nothing). Any future existence
-  signal is
-  **evidence-gated** — it must win a measured bake-off on the orthogonal corpus, the dense
-  single-domain fixture, and real vaults via `just calibrate`, where "no gate at all" is an
-  admissible winner — and **continuous in population size**: a statistics threshold may change
-  what rows carry (banding), never which rows exist. Strength is a within-list grading painted
-  from the z, which gates nothing. ([index-engine.md](index-engine.md) §3, GH #196/#197; the
-  generation side's recall posture and 1-hop exclusion are unchanged)
+- **D1 — Discovery surfacing answers a relative question, and the ranked candidate list is served.**
+  "What in my vault belongs next to this note?" is relative, so `b2 similar` and the discovery pane
+  serve the ranked best-passage top-N whenever candidates exist; `limit` is a cap that under-fills
+  only for want of scorable notes. **An empty pane never asserts "nothing relates" from anchor-local
+  statistics** — such a test cannot distinguish *nothing is related* from *everything is related*
+  (the same geometry from opposite ends: a single-domain vault went dark on 16 of 17 notes, GH #196)
+  — so an empty result at a nonzero ask may state only what is checkable: the candidate set is
+  genuinely empty. Any future existence signal is **evidence-gated** (it must win a measured bake-off
+  on the orthogonal corpus, the dense single-domain fixture, and real vaults via `just calibrate`,
+  where "no gate at all" is an admissible winner) and **continuous in population size**: a threshold
+  may change what rows carry (banding), never which rows exist. Strength is a within-list grading
+  painted from the z, which gates nothing.
+  ([index-engine.md](index-engine.md) §3, GH #196/#197; the generation side's recall posture and
+  1-hop exclusion are unchanged)
 
 ## E — Engineering discipline (what keeps the above true)
 
@@ -187,9 +185,9 @@ tomorrow's model* — made mechanical.
   injected. Clocks and log subscribers live in the adapters.
   ([CLAUDE.md](../../CLAUDE.md) Conventions)
 - **E2 — `cargo test` is fast, deterministic, and model-free; model quality never enters CI.**
-  Real-model work lives behind `b2 init` / the out-of-CI eval. `#[ignore]` is forbidden — a
+  Real-model work lives behind `b2 init` / the out-of-CI eval harness. `#[ignore]` is forbidden — a
   hard-to-write test is a signal to re-anchor on the invariant or fix the system.
-  ([CLAUDE.md](../../CLAUDE.md), the eval harness under `crates/b2-embed/evals/`)
+  ([docs/evals/README.md](../evals/README.md), the harness under `crates/b2-embed/evals/`)
 - **E3 — The `Vault` façade is the one typed API, and every adapter is dumb.** CLI and desktop
   commands are deserialize → one façade call → serialize; logic that wants to live in an adapter
   belongs behind the façade. Dependencies point one way (adapters → core, never back); façade ops are
@@ -198,16 +196,15 @@ tomorrow's model* — made mechanical.
   to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../../CLAUDE.md) Conventions)
 - **E5 — Note content is untrusted input; rendering is a trust boundary.** Authorship is not trust: a
   `.md` can come from anyone (a shared vault, a downloaded or web-clipped note), so B2 treats rendered
-  note content as hostile. Two rules hold together — B2 HTML-escapes every value *it* interpolates into
-  UI chrome, and the **single** Markdown→HTML render seam (`renderMarkdown`) sanitizes its output before
-  it reaches the DOM, so no note can inject executable markup at any call site (reading view, table
-  widget, any future one). The webview CSP (`default-src 'self'`, no inline scripts) is a second,
-  independent layer — defense-in-depth, never the sole guard. The same posture governs a note's
-  **links**: the webview *is* the application, so following one in place would replace B2 with a web
-  page in a window with no way back — a note's link therefore never navigates the webview. A web link
-  (`http`, `https`, `mailto`) is an **OS handoff** performed host-side, behind a scheme allow-list,
-  exactly as *Open in system default* is for a resource; every other scheme is refused rather than
-  handed to an OS that would launch whatever app claims it.
+  note content — and model output, which is the same class of input (M1) — as hostile. Two rules hold
+  together: B2 HTML-escapes every value *it* interpolates into UI chrome, and the **single**
+  Markdown→HTML render seam (`renderMarkdown`) sanitizes its output before it reaches the DOM, so no
+  note can inject executable markup at any call site. The webview CSP (`default-src 'self'`, no inline
+  scripts) is a second, independent layer — defense-in-depth, never the sole guard. The same posture
+  governs a note's **links**: the webview *is* the application, so a note's link never navigates it —
+  a web link (`http`, `https`, `mailto`) is an **OS handoff** performed host-side behind a scheme
+  allow-list, and every other scheme is refused rather than handed to an OS that would launch whatever
+  app claims it.
   ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
 
 ## C — Concurrency: many readers, one builder
@@ -217,36 +214,35 @@ tomorrow's model* — made mechanical.
   refused** — opening an index already at the current `schema_version` takes no write lock at
   all, so a running reindex cannot turn a `search` into an error. Creating and rebuilding that
   projection is the one step that must be **atomic and serialized**: an `open` observes a complete
-  schema at the current `schema_version`, or waits out a bounded budget for the opener that is
-  building one — **never a partial schema**, and never one another opener is still rebuilding. The
-  no-partial half is absolute; the waiting half is not, and deliberately: past the budget a stuck
-  writer is reported rather than hung on. "Complete" is checked, not assumed:
-  a current stamp over missing tables is treated as stale and rebuilt from empty, since surviving
-  rows would look up-to-date to an incremental reindex and break S3. The same holds for the
-  index's *other* drop-and-rebuild, the vector tables (M4). Concurrent *writers* remain
-  single-in-flight by the `reindex` advisory lock — which readers never take, and so cannot cover
-  this. ([index-engine.md](index-engine.md) §3, GH #111, #114)
+  schema at the current `schema_version`, or waits out a bounded budget for the opener building one —
+  **never a partial schema**. The no-partial half is absolute; the waiting half is deliberately not —
+  past the budget a stuck writer is reported rather than hung on. "Complete" is checked, not assumed:
+  a current stamp over missing tables is stale and rebuilt from empty, since surviving rows would look
+  up-to-date to an incremental reindex and break S3. The same holds for the index's *other*
+  drop-and-rebuild, the vector tables (M4). Concurrent *writers* stay single-in-flight by the
+  `reindex` advisory lock — which readers never take, and so cannot cover this.
+  ([index-engine.md](index-engine.md) §3, GH #111, #114)
 
 ## K — Interaction: keyboard-first
 
 - **K1 — B2 is fully operable from the keyboard; the mouse is an accelerator, never a requirement.**
-  Every action a human can take with the mouse has a keyboard path — a focusable control in a sensible
-  tab order, or a documented shortcut — across the whole desktop surface: file-tree navigation and
-  open/create/rename/move/delete, global search and find-in-note, entering/leaving edit mode (⌘E) and
-  every in-editor formatting chord, connection discovery and linking, the graph, and each menu/modal
-  (`Escape` dismisses, `Enter` confirms, focus is trapped while an overlay is open and restored on
-  close). Focus is always visible and follows platform/ARIA conventions. **A chord that is live in the
-  app is B2's to document, whoever authored it**: the macOS menu bar's accelerators are declared rather
-  than inherited from Tauri's default (`b2-desktop/src/menu.rs`), so the reference sheet can list them
-  and the conflict gate can see them — a chord nothing enumerates cannot be found, and the app cannot
-  warn about landing on it. **The chords are the user's, not B2's**: every chord B2 itself dispatches
-  can be re-recorded from Settings → Keyboard and is stored as a UI preference (`localStorage`, like
-  the theme — never vault state, never the index). The exception is narrow and stated per row
-  (`Binding.fixed`): what a text field does with ⏎ and Esc, what a dialog's default button does, what a
-  `<button>` does with ⏎/Space. Those are the platform's reflexes, and handing them out would be
-  offering to break what every other app on the machine does. A rebinding is judged before it is
-  accepted — refused if another command already answers to that keystroke in the same scope, or if the
-  menu bar takes it first; advised, and allowed, when an inner surface or the editor also binds it.
-  The `b2` CLI satisfies this by
-  nature; K1 governs the GUI adapter. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md),
-  GH #78, #119, #121)
+  Every action the mouse can take has a keyboard path — a focusable control in a sensible tab order, or
+  a documented shortcut — across the whole desktop surface: the file tree and open/create/rename/move/
+  delete, search and find-in-note, edit mode (⌘E) and every in-editor chord, discovery and linking,
+  chat (⌘J), the graph, and each menu/modal (`Escape` dismisses, `Enter` confirms, focus is trapped
+  while an overlay is open and restored on close). Focus is always visible and follows platform/ARIA
+  conventions. Three corollaries:
+  - **A chord live in the app is B2's to document, whoever authored it.** The macOS menu bar's
+    accelerators are *declared* rather than inherited from Tauri's default (`b2-desktop/src/menu.rs`),
+    so the reference sheet can list them and the conflict gate can see them — a chord nothing
+    enumerates cannot be found, and the app cannot warn about landing on it.
+  - **The chords are the user's, not B2's.** Every chord B2 dispatches is re-recordable from
+    Settings → Keyboard and stored as a UI preference (`localStorage`, like the theme — never vault
+    state, never the index). The exception is narrow and stated per row (`Binding.fixed`): the
+    platform's own reflexes — ⏎/Esc in a text field, a dialog's default button, ⏎/Space on a
+    `<button>` — which handing out would offer to break what every other app on the machine does.
+  - **A rebinding is judged before it is accepted** — refused on a same-scope clash or a menu-bar
+    chord; advised, and allowed, when an inner surface or the editor also binds it.
+
+  The `b2` CLI satisfies this by nature; K1 governs the GUI adapter.
+  ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #78, #119, #121)
