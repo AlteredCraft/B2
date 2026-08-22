@@ -328,9 +328,17 @@ stability-bless:
 # score *distribution* is invalid until transfer-checked on a real vault, and this is the
 # check. Flags: `--limit N` (pane depth), `--leader-z/--member-z` (replay a candidate gate;
 # defaults are the retired GH #192 constants, so GH #196's dark-vault reading reproduces),
+# `--mutual-k N` (replay GH #200's reciprocity fold at another depth),
 # `--json` (the whole reading as one object).
+#
+# `--search` adds the **search-side** transfer check (GH #201): where this vault's function
+# words land against the evidence bar's df fraction, then the bar replayed over every note's
+# own title as a query (the positives — no labels needed, and nothing to relabel) and over
+# built-in nonsense strings (the negatives). It is the one part of this instrument that is
+# not a pure read — judging the cosine half means embedding a query, so it loads the real
+# model on a real-embedded vault; a fake-embedded one still gets the model-free lexical half.
 [group('model')]
-[doc('Discovery calibration on any built vault: pool cosines, leader z, gate-vs-always-serve, bands (GH #197).')]
+[doc('Calibration on any built vault: discovery pools/bands (GH #197) and, with --search, the evidence bar (GH #201).')]
 calibrate vault *args:
     cargo run -p b2-embed --example calibrate -- "{{vault}}" {{args}}
 

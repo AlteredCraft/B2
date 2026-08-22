@@ -73,6 +73,7 @@
 //! Phase-2 one, via the flags) is exactly what this instrument is for.
 
 use b2_core::vault::{SimilarView, Vault};
+use b2_embed::{EmbedConfig, LocalEmbedder};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -323,6 +324,239 @@ impl EdgeBar {
     }
 }
 
+/// English function words, probed for **where they weigh** against a query's
+/// content (GH #201). The lexical-anchor rule weighs each term by its IDF, so
+/// its whole premise is that a vault's function words weigh near nothing beside
+/// its subject words. That is a claim about a vault, not about English, and this
+/// is where it is checked.
+const FUNCTION_WORDS: [&str; 12] = [
+    "the", "and", "of", "to", "a", "in", "is", "it", "that", "for", "with", "on",
+];
+
+/// Built-in nonsense queries — the **strict** half of D2's negative pile, and
+/// the only half that can be built in: an off-topic *phrase* is off-topic
+/// relative to a particular vault ("choreographing a ballroom waltz" is a
+/// labelled negative on the eval corpus and would be a positive in a dancer's
+/// vault), so the eval corpus is where those live. These are strings no vault
+/// holds, which makes them vault-independent.
+const NONSENSE: [&str; 4] = [
+    "shjfasd",
+    "vrelqip zonktar wembleforth",
+    "qwolbex frunstip",
+    "zzzyqx",
+];
+
+/// How many notes contribute a title-as-query positive. A cap rather than a
+/// sample: the walk takes them in `list_notes` order, which is deterministic, so
+/// a re-run on an unchanged vault reads the same queries.
+const MAX_TITLE_QUERIES: usize = 400;
+
+/// One query's transfer reading — the same two absolute signals `just eval`'s
+/// bake-off judges, read on a real vault instead of a labelled corpus.
+struct SearchProbe {
+    query: String,
+    /// Share of the query's term IDF this vault carries. `None` when nothing in
+    /// the query carries weight here.
+    coverage: Option<f64>,
+    /// Dense top-1 cosine; `None` on a vault with no embedding space.
+    best_cos: Option<f64>,
+    /// What the shipped bar would say — `true` = the default view vouches.
+    vouched: bool,
+}
+
+/// The **search evidence transfer check** (invariants.md D2; GH #201) — process
+/// rule 5's bench for the query-level bar, which is a distributional constant
+/// and therefore invalid until a real vault has answered for it.
+///
+/// It needs no labels, and that is the point: the positives are each note's own
+/// **title**, a query the vault demonstrably holds material for by construction,
+/// and the negatives are [`NONSENSE`], strings no vault holds. Neither side is a
+/// hand-label, so running this on someone's notes costs them nothing and the
+/// reading cannot be tuned by relabelling — process rule 2's standing worry,
+/// answered by there being nothing here to relabel.
+///
+/// What it can and cannot see is worth stating plainly. It **can** see the
+/// tripwire direction — a bar that cuts queries a real vault holds material for
+/// is the failure GH #196 punished, and title queries are the cheapest honest
+/// probe of it. It **cannot** see the paraphrase case (a user's words for a note
+/// they wrote in other words); generating those needs judgement, which is what
+/// the labelled corpus is for. Read the two benches together, never either
+/// alone.
+fn print_search_transfer(
+    vault: &Vault,
+    conn: &Connection,
+    model_id: &str,
+    limit: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!("search evidence transfer check (D2 — process rule 5's bench for GH #201's bar)");
+    let Some(bar) = b2_core::search::EvidenceBar::for_model(model_id) else {
+        println!("  no calibrated bar for '{model_id}' — nothing to transfer-check");
+        println!("  (M2: a bar read off one model's distances says nothing about another's)");
+        return Ok(());
+    };
+    println!(
+        "  bar under test: coverage ≥ {:.2}, cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos
+    );
+
+    // Where this vault's function words weigh. One `lexical_evidence` call over
+    // the joined list, so the dfs come back through exactly the path a query's
+    // would.
+    let probe = b2_core::search::lexical_evidence(conn, &FUNCTION_WORDS.join(" "))?;
+    let heaviest = probe
+        .terms
+        .iter()
+        .map(|t| probe.idf(t.df))
+        .fold(0.0_f64, f64::max);
+    // The weight a word the vault has never seen would carry — the scale every
+    // function word above is read against, since that is the weight an absent
+    // *content* word contributes to the same sum.
+    let absent = probe.idf(0);
+    println!("  chunks {}", probe.chunk_total);
+    print!("  function-word weight (vs {absent:.2} for a word the vault lacks) ");
+    for t in &probe.terms {
+        print!("{} {:.2}  ", t.term, probe.idf(t.df));
+    }
+    println!();
+    let share = 100.0 * heaviest / absent.max(f64::EPSILON);
+    if absent > 0.0 && heaviest / absent <= 0.25 {
+        println!("    → heaviest function word carries {share:.0}% of an absent word's weight —");
+        println!("      the anchor test is reading subject words here, which is what it is for");
+    } else {
+        println!("    → [warn] heaviest function word carries {share:.0}% of an absent word's");
+        println!("      weight — on this vault function words are not cheap, so every coverage");
+        println!("      reading below is diluted by them");
+    }
+
+    let read = |query: &str| -> Result<SearchProbe, Box<dyn std::error::Error>> {
+        let view = vault.search_evidence(query, limit)?;
+        let idf = |df: usize| ((view.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln();
+        let total: f64 = view.terms.iter().map(|t| idf(t.df)).sum();
+        let coverage = (total > f64::EPSILON).then(|| {
+            view.terms
+                .iter()
+                .filter(|t| t.df >= 1)
+                .map(|t| idf(t.df))
+                .fold(0.0, |a, b| a + b)
+                / total
+        });
+        Ok(SearchProbe {
+            query: query.to_string(),
+            coverage,
+            best_cos: view.best_cos,
+            // The engine's own verdict, not a restatement of it: this bench
+            // prices what would actually ship.
+            vouched: view.vouched.unwrap_or(true),
+        })
+    };
+
+    let mut titles: Vec<String> = Vec::new();
+    for note in vault.list_notes()? {
+        if titles.len() == MAX_TITLE_QUERIES {
+            break;
+        }
+        let title = note.title.clone().unwrap_or_else(|| {
+            std::path::Path::new(&note.path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
+                .unwrap_or_default()
+        });
+        if !title.trim().is_empty() {
+            titles.push(title);
+        }
+    }
+    let positives: Vec<SearchProbe> = titles.iter().map(|t| read(t)).collect::<Result<_, _>>()?;
+    let cut: Vec<&SearchProbe> = positives.iter().filter(|p| !p.vouched).collect();
+    let covs: Vec<f64> = positives.iter().filter_map(|p| p.coverage).collect();
+    let coss: Vec<f64> = positives.iter().filter_map(|p| p.best_cos).collect();
+    println!(
+        "  title-as-query positives (n={}, each note's own title)",
+        positives.len()
+    );
+    match pile_stats(&covs) {
+        Some((min, med, max)) => {
+            println!("    coverage  min/med/max {min:.2}/{med:.2}/{max:.2}")
+        }
+        None => println!("    coverage  no reading (no note contributed a query)"),
+    }
+    match pile_stats(&coss) {
+        Some((min, med, max)) => {
+            println!("    best-cos  min/med/max {min:.3}/{med:.3}/{max:.3}")
+        }
+        None => println!(
+            "    best-cos  no reading — no embedding space here, so only the bar's \
+             model-free lexical half is being checked"
+        ),
+    }
+    println!(
+        "    the bar would cut {}/{}   ← the search-side TRIPWIRE direction (D2: zero, no headroom)",
+        cut.len(),
+        positives.len()
+    );
+    for p in cut.iter().take(10) {
+        println!(
+            "      cut: {:<44} cov {:>5}  cos {:>6}",
+            truncate(&p.query, 44),
+            p.coverage
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            p.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+        );
+    }
+    if cut.len() > 10 {
+        println!("      … and {} more", cut.len() - 10);
+    }
+    // The closest calls, not a sample: a bar is placed against the queries that
+    // nearly miss, and on a vault of any size those are the ten weakest — the
+    // same reason the eval prints piles rather than means.
+    let mut weakest: Vec<&SearchProbe> = positives.iter().collect();
+    weakest.sort_by(|a, b| {
+        a.best_cos
+            .unwrap_or(f64::INFINITY)
+            .partial_cmp(&b.best_cos.unwrap_or(f64::INFINITY))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    println!("    closest calls (lowest-cosine positives — where a bar placement bites first):");
+    for p in weakest.iter().take(10) {
+        println!(
+            "      {:<44} cov {:>5}  cos {:>6}  → {}",
+            truncate(&p.query, 44),
+            p.coverage
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            p.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+            if p.vouched { "served" } else { "CUT" },
+        );
+    }
+
+    let negatives: Vec<SearchProbe> = NONSENSE.iter().map(|q| read(q)).collect::<Result<_, _>>()?;
+    let served = negatives.iter().filter(|p| p.vouched).count();
+    println!(
+        "  nonsense negatives (n={}, built-in — the vault-independent half of the pile)",
+        negatives.len()
+    );
+    for p in &negatives {
+        println!(
+            "      {:<44} cov {:>5}  cos {:>6}  → {}",
+            truncate(&p.query, 44),
+            p.coverage
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            p.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+            if p.vouched { "SERVED" } else { "no matches" },
+        );
+    }
+    println!("    the bar serves {served}/{}", negatives.len());
+    Ok(())
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("calibrate failed: {e}");
@@ -340,6 +574,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut mutual_k_flag: Option<usize> = None;
     let mut json = false;
+    let mut search = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -350,6 +585,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 mutual_k_flag = Some(it.next().ok_or("--mutual-k needs a value")?.parse()?)
             }
             "--json" => json = true,
+            "--search" => search = true,
             other if vault_path.is_none() && !other.starts_with('-') => {
                 vault_path = Some(PathBuf::from(other));
             }
@@ -357,7 +593,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let vault_root = vault_path.ok_or(
-        "usage: calibrate <vault> [--limit N] [--leader-z Z] [--member-z Z] [--mutual-k N] [--json]",
+        "usage: calibrate <vault> [--limit N] [--leader-z Z] [--member-z Z] [--mutual-k N] \
+         [--search] [--json]",
     )?;
     // The reciprocity depth defaults to the simulated pane size, resolved after
     // parsing so flag order can't matter.
@@ -626,6 +863,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "  [check] engine z matches the recomputation over {recheck_pairs} candidates \
              (max Δ {worst_drift:.1e})"
         );
+    }
+
+    // The search-side bench (GH #201), opt-in because it is the one part of this
+    // instrument that is **not** a pure read: judging the cosine half means
+    // embedding a query, which means loading the real model. The lexical half
+    // needs no model at all, so a fake-embedded vault still gets that much.
+    if search {
+        if model == b2_core::embed::FAKE_MODEL_ID {
+            print_search_transfer(&vault, &conn, &model, limit)?;
+        } else {
+            let config = EmbedConfig::load()?;
+            let embedder = LocalEmbedder::load(&config)?;
+            let real = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
+            print_search_transfer(&real, &conn, &model, limit)?;
+        }
     }
     Ok(())
 }
