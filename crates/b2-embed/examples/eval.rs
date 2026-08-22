@@ -2495,11 +2495,13 @@ fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_id: &
     }
     let admissible: Vec<&EvidenceCell> = cells.iter().filter(|c| c.admissible()).collect();
     if admissible.is_empty() {
-        println!(
-            "    → NO admissible cell on this corpus: every lexical rule either vouches for a \
-             \x20   labelled negative or leaves a cosine window that is empty. D2's bar is\n\
-             \x20   not earned, and no rule ships (the GH #200 outcome, on search's side)."
-        );
+        for line in [
+            "→ NO admissible cell on this corpus: every lexical rule either vouches for a",
+            "  labelled negative or leaves an empty cosine window. D2's bar is not earned,",
+            "  and no rule ships (the GH #200 outcome, on search's side).",
+        ] {
+            println!("    {line}");
+        }
     } else {
         println!(
             "    → {} of {} cells admissible; the widest cosine window belongs to {}",
@@ -2509,17 +2511,20 @@ fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_id: &
         );
     }
     print_shipped_bar(ev, model_id);
+    let dense_only = |rows: &[QueryEvidence]| {
+        (
+            rows.iter().map(|r| r.dense_only).sum::<usize>(),
+            rows.iter().map(|r| r.served).sum::<usize>(),
+        )
+    };
+    let (pos_only, pos_served) = dense_only(&ev.positives);
+    let (neg_only, neg_served) = dense_only(&ev.negatives);
+    println!("    tail reading (GH #201 Step 2, unshipped): served rows the lexical half never");
     println!(
-        "    tail reading (GH #201 Step 2, unshipped): served rows the lexical half never \
-         ranked —\n\
-         \x20     positives {}/{}, negatives {}/{}. A per-hit fold is argued from these, \
-and needs\n\
-         \x20     per-hit labels the corpus does not yet carry (process rule 2 applies).",
-        ev.positives.iter().map(|r| r.dense_only).sum::<usize>(),
-        ev.positives.iter().map(|r| r.served).sum::<usize>(),
-        ev.negatives.iter().map(|r| r.dense_only).sum::<usize>(),
-        ev.negatives.iter().map(|r| r.served).sum::<usize>(),
+        "      ranked — positives {pos_only}/{pos_served}, negatives {neg_only}/{neg_served}."
     );
+    println!("      A per-hit fold is argued from these, and needs per-hit labels the corpus");
+    println!("      does not yet carry (process rule 2 applies).");
 }
 
 /// Name the admissible cells with the most cosine headroom, and within that band
@@ -2590,15 +2595,17 @@ fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
     let pos_cut = ev.positives.iter().filter(|r| !vouches(r)).count();
     let neg_served = ev.negatives.iter().filter(|r| vouches(r)).count();
     println!(
-        "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}\n\
-         \x20     positives it would cut  {pos_cut}/{}   ← the search-side TRIPWIRE \
-(D2: zero, no headroom)\n\
-         \x20     negatives it still serves {neg_served}/{}   ← the reported defect, \
-as a number",
-        bar.min_term_coverage,
-        bar.min_cos,
-        ev.positives.len(),
-        ev.negatives.len(),
+        "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos
+    );
+    println!(
+        "      positives it would cut  {pos_cut}/{}   ← the search-side TRIPWIRE (D2: zero, no \
+         headroom)",
+        ev.positives.len()
+    );
+    println!(
+        "      negatives it still serves {neg_served}/{}   ← the reported defect, as a number",
+        ev.negatives.len()
     );
     for r in ev.positives.iter().filter(|r| !vouches(r)) {
         println!(

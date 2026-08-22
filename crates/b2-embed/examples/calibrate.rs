@@ -679,6 +679,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // by construction, so the rule has no population there).
     let edge_bar = EdgeBar::read(&vault, &conn)?;
 
+    // No silent drop: the search block is a text reading with no JSON form yet,
+    // and a `--search --json` run that quietly omitted it would look like a vault
+    // with nothing to report.
+    if json && search {
+        return Err("--search has no JSON form yet; run it without --json".into());
+    }
     if json {
         print_json(
             &vault_root,

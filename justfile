@@ -331,9 +331,10 @@ stability-bless:
 # `--mutual-k N` (replay GH #200's reciprocity fold at another depth),
 # `--json` (the whole reading as one object).
 #
-# `--search` adds the **search-side** transfer check (GH #201): where this vault's function
-# words land against the evidence bar's df fraction, then the bar replayed over every note's
-# own title as a query (the positives — no labels needed, and nothing to relabel) and over
+# `--search` adds the **search-side** transfer check (GH #201): how much this vault's function
+# words weigh beside a word it has never seen (the lexical anchor's whole premise, checked per
+# vault rather than assumed of English), then the evidence bar replayed over every note's own
+# title as a query (the positives — no labels needed, and nothing to relabel) and over
 # built-in nonsense strings (the negatives). It is the one part of this instrument that is
 # not a pure read — judging the cosine half means embedding a query, so it loads the real
 # model on a real-embedded vault; a fake-embedded one still gets the model-free lexical half.

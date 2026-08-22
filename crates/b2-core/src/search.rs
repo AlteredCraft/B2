@@ -219,7 +219,7 @@ impl LexicalEvidence {
     /// and `comb` (df 7) were classed stopwords in a vault about beekeeping, the
     /// lexical half went inert, and the bar cut 3 of 15 queries naming notes the
     /// vault holds. The same geometry that broke every anchor-local z gate in GH
-    /// #196, met again on the lexical axis. Weighting has no bin to put them in
+    /// #196, met again on the lexical axis. Weighting has no bin to put them on
     /// the wrong side of.
     pub fn idf(&self, df: usize) -> f64 {
         ((self.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln()
