@@ -107,7 +107,7 @@ negative queries (empty `relevant` = "no matches") + the `search evidence calibr
 (`search_evidence` in the row) in `just eval`, and `just calibrate`'s **mutual-k reciprocity fold
 replay** (`fold_serves` per anchor, `reciprocal` per candidate, `--mutual-k`). Nothing gates yet:
 GH #200 was the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
-#202 lands the winners on every surface and moves the exit-gate assertions in the same change —
+GH #202 lands the winners on every surface and moves the exit-gate assertions in the same change —
 the #182 rule applied in advance for once.
 **GH #200 then ran, and "no fold at all" won**: `just eval`'s new `discovery fold bake-off` block
 judges every candidate rule on the *same* served lists over both corpora, sweeps mutual-k's depth

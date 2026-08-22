@@ -1373,6 +1373,9 @@ enum FoldRule {
 }
 
 impl FoldRule {
+    /// The rule's name in every table, row and window line — one spelling, so a
+    /// printed verdict and a recorded row can never name the same rule
+    /// differently.
     fn label(self) -> String {
         match self {
             FoldRule::NoFold => "no fold".to_string(),
@@ -1407,6 +1410,10 @@ struct FoldRow {
 }
 
 impl FoldRow {
+    /// Whether this candidate is *reciprocal* at depth `k` — i.e. the anchor
+    /// sits in its own top `k`. Reciprocity is necessary but not sufficient for
+    /// being above the fold: the fold is the longest reciprocal **prefix**, so a
+    /// reciprocal candidate ranked after a non-reciprocal one is below it too.
     fn reciprocal_at(&self, k: usize) -> bool {
         self.recip_rank.is_some_and(|r| r <= k)
     }
@@ -1506,6 +1513,10 @@ struct FoldWindow {
 }
 
 impl FoldWindow {
+    /// Whether some swept `k` satisfies both bounds at once. A bench with no
+    /// labelled loner has no upper bound to satisfy and so can never report an
+    /// open window on its own — it contributes the lower bound to the
+    /// bake-off's joint window, which is what the printed verdict says.
     fn open(&self) -> bool {
         matches!((self.keep_min, self.loner_max), (Some(a), Some(b)) if a <= b)
     }

@@ -182,10 +182,11 @@ tomorrow's model* — made mechanical.
   size**: a threshold may move banding or the fold, never which rows exist or can be reached.
   Strength stays a within-list grading painted from the z, which gates nothing. **The first
   bake-off found no admissible fold** (GH #200, 2026-08-22): mutual-kNN reciprocity's window is
-  empty on both corpora — the depth that stops hiding labelled mates is past the depth that still
-  empties a loner's view, and the two corpora's safe depths are the same *fraction* of their
-  candidate pools rather than the same constant — so the default view is still the whole served
-  prefix. The permission above stands unchanged for the next candidate; what the measurement
+  empty — on the orthogonal corpus the depth that stops hiding labelled mates is past the depth
+  that still empties a loner's view, while the dense fixture carries no loner and so supplies only
+  the lower bound and the absolute; and the two corpora's safe depths are the same *fraction* of
+  their candidate pools rather than the same constant — so the default view is still the whole
+  served prefix. The permission above stands unchanged for the next candidate; what the measurement
   retires is one rule, not the axis.
   ([index-engine.md](index-engine.md) §3, GH #196/#197/#200; surfaces and gate moves GH #202; the
   generation side's recall posture and 1-hop exclusion are unchanged)

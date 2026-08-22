@@ -327,8 +327,9 @@ process rule 5's transfer check like any distributional constant.
   query-level bar); #202 lands the winners on every surface and moves the exit-gate assertions
   in the same change.
 
-- **The discovery fold bake-off ran, and no fold ships — mutual-k's admissible window is empty on
-  both corpora** ([#200](https://github.com/AlteredCraft/B2/issues/200), measured and ruled
+- **The discovery fold bake-off ran, and no fold ships — mutual-k's admissible window is empty,
+  and its safe depth does not transfer**
+  ([#200](https://github.com/AlteredCraft/B2/issues/200), measured and ruled
   2026-08-22; invariants.md **D1**). The run added a `discovery fold bake-off` block to both
   corpora's reports: every candidate disclosure rule judged on the *same* served lists, `k` swept
   1..15, and — the #187 idiom moved onto the disclosure axis — the rule's admissible window
