@@ -19,9 +19,12 @@
 //!
 //! Beside the retired z gate, the instrument replays the **mutual-k reciprocity
 //! fold** (GH #200, Phase A — the leading candidate for D1's *default disclosure
-//! boundary*): candidate B sits above anchor A's fold iff A ranks within B's own
-//! top `mutual_k` candidates (default: `--limit`), and the replayed default view
-//! is the ranked list's **longest reciprocal prefix**. A fold, not a gate —
+//! boundary*): candidate B is *reciprocal* for anchor A iff A ranks within B's
+//! own top `mutual_k` candidates (default: `--limit`), and the replayed default
+//! view is the ranked list's **longest reciprocal prefix** — it ends at the
+//! first non-reciprocal candidate, so a reciprocal one ranked after that sits
+//! below the fold too (prefix form: the fold is a cut in the served order,
+//! never a filter that skips rows). A fold, not a gate —
 //! under D1 everything below it stays served and reachable, so the replay prices
 //! what the default view *would* show, never what exists. Rank-based, so it
 //! carries no distributional constant to transfer-check; running this replay on
