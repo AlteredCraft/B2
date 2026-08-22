@@ -78,7 +78,11 @@
 //!    assertions run the other way from the negatives the orthogonal corpus
 //!    carries: a per-mate MRR floor, and **zero empty panes** across every note
 //!    in the fixture — the mechanical form of GH #197's ruling that an empty
-//!    pane may never come from an anchor-local statistic.
+//!    pane may never come from an anchor-local statistic. It carries the
+//!    **search** bar's hardest bench for the same reason (GH #201): topical
+//!    concentration is what killed the rule that lost, so the shipped bar is
+//!    replayed here every run over each note's own title plus nonsense
+//!    (`score_dense_search`), reported beside the discovery fold bench.
 //! 7. **The search evidence calibration** (invariants.md D2; GH #201, Phase A
 //!    of the disclosure work) — search's sibling of the z dump. Flow ② cannot
 //!    currently answer *zero*: the vector half always has k nearest and RRF
@@ -1023,6 +1027,7 @@ fn score_dense(
     // moved into that vault, and the fixture's whole point is an isolated run.
     let config = EmbedConfig::load()?;
     let embedder = LocalEmbedder::load(&config)?;
+    let model_id = embedder.model_id().to_string();
     let tmp = tempfile::TempDir::new()?;
     let vault_root = tmp.path().join("vault");
     std::fs::create_dir_all(&vault_root)?;
@@ -1049,6 +1054,9 @@ fn score_dense(
         // everything relates may never default to "nothing relates" — and the
         // labels cover only a few of these notes.
         fold: score_fold(&vault, set, "dense", true)?,
+        // The bar's hardest bench, for the same reason the fold's is: this is the
+        // geometry that disqualified the rule that lost (GH #201).
+        search: score_dense_search(&vault, &model_id)?,
     };
     // The pane sweep: every note is an anchor, labelled or not.
     for note in vault.list_notes()? {
@@ -1101,6 +1109,209 @@ struct DensePass {
     /// which is where the candidates' hardest bench is: a rule whose default
     /// view goes dark on a single-domain vault is disqualified, not re-tuned.
     fold: FoldBench,
+    /// D2's shipped bar replayed on this fixture (GH #201) — see
+    /// [`score_dense_search`].
+    search: DenseSearch,
+}
+
+/// The shipped search evidence bar's reading **on the single-domain fixture**
+/// (invariants.md D2, GH #201; added in the PR #205 review sweep).
+///
+/// This exists because the bar's first form died here and nowhere else. A hard
+/// `df ≤ 10%` content ceiling read 0 cut / 0 served on the labelled orthogonal
+/// corpus — clean by every number that bench can produce — and then classed
+/// `drone` (df 3) and `comb` (df 7) as stopwords in a vault about beekeeping,
+/// cutting 3 of 15 queries naming notes the vault holds. The lexical rule's
+/// hazard is **topical concentration**, which the orthogonal corpus is
+/// structurally incapable of expressing (process rule 2's token audit minimizes
+/// shared vocabulary by construction), so a run that judges the bar only there
+/// is judging it on the geometry it survives.
+///
+/// The reading was taken once by hand through `just calibrate --search` when the
+/// rule was chosen. Taking it *once* is the thing GH #187 named: a constant whose
+/// justification is not recomputed goes stale the first time the corpus grows a
+/// shape it was never read against. So it is re-derived every run, here, beside
+/// the discovery fold bench that already sweeps this fixture.
+///
+/// **Reports, gates nothing** — moving the exit gate is GH #202's, in the same
+/// change as the surfaces, per #182's rule.
+struct DenseSearch {
+    /// Every note's own title replayed as a query — the **tripwire direction**
+    /// (D2: a labelled-relevant query cut is zero with no headroom). Titles need
+    /// no labels and so nothing here can be relabelled to clear a reading.
+    titles: Vec<SearchProbe>,
+    /// Nonsense, the defect direction. See [`DENSE_NONSENSE`].
+    nonsense: Vec<SearchProbe>,
+    /// `None` when the active model has no calibrated bar (M2) — the coverage
+    /// readings still print, the verdicts do not exist to print.
+    bar: Option<b2_core::search::EvidenceBar>,
+}
+
+/// One query's reading on the dense fixture: the two absolute signals D2 judges,
+/// and the engine's own verdict rather than a restatement of it.
+struct SearchProbe {
+    query: String,
+    /// IDF-weighted term coverage; `None` when no term carries any weight (the
+    /// lexical half abstaining, not scoring zero).
+    coverage: Option<f64>,
+    best_cos: Option<f64>,
+    /// `Vault::search_evidence`'s verdict — what would actually ship. `None`
+    /// mirrors [`DenseSearch::bar`].
+    vouched: Option<bool>,
+}
+
+/// The negatives replayed on the dense fixture: **nonsense only**.
+///
+/// The labelled negatives in `queries.json` are the *orthogonal* corpus's, and
+/// process rule 2's token audit is what makes them negatives — an audit that
+/// says nothing about a different corpus. Running it against `corpus-dense`
+/// disqualifies the phrase-shaped ones on their merits: "why parrots mimic
+/// speech" shares `mimic` with `robbing-behavior.md`, so on this fixture it is a
+/// query the vault has a rare-ish word for, which is a thing D2's rule
+/// deliberately serves. Nonsense needs no audit in any vault, which is exactly
+/// why it is the part that transfers.
+const DENSE_NONSENSE: [&str; 2] = ["shjfasd", "vrelqip zonktar wembleforth"];
+
+/// Replay the shipped bar over the dense fixture (see [`DenseSearch`]).
+///
+/// Coverage is read off [`b2_core::vault::QueryTermView::idf`] — the view's own
+/// weights, not a second copy of the formula. The orthogonal corpus's bake-off
+/// re-derives its arithmetic deliberately, as a drift check against the engine;
+/// one such check is the check, and a second would only be two places to fix.
+fn score_dense_search(
+    vault: &Vault,
+    model_id: &str,
+) -> Result<DenseSearch, Box<dyn std::error::Error>> {
+    let read = |query: &str| -> Result<SearchProbe, Box<dyn std::error::Error>> {
+        let view = vault.search_evidence(query, K)?;
+        let total: f64 = view.terms.iter().map(|t| t.idf).sum();
+        Ok(SearchProbe {
+            query: query.to_string(),
+            coverage: (total > f64::EPSILON).then(|| {
+                view.terms
+                    .iter()
+                    .filter(|t| t.df >= 1)
+                    .map(|t| t.idf)
+                    .fold(0.0, |a, b| a + b)
+                    / total
+            }),
+            best_cos: view.best_cos,
+            vouched: view.vouched,
+        })
+    };
+    let mut titles = Vec::new();
+    for note in vault.list_notes()? {
+        // The fixture's notes carry no frontmatter title, so the slug is the
+        // query — `drone-comb` → "drone comb", which is the pair of words the
+        // retired ceiling called stopwords.
+        let title = note.title.clone().unwrap_or_else(|| {
+            std::path::Path::new(&note.path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
+                .unwrap_or_default()
+        });
+        if !title.trim().is_empty() {
+            titles.push(read(&title)?);
+        }
+    }
+    Ok(DenseSearch {
+        titles,
+        nonsense: DENSE_NONSENSE
+            .iter()
+            .map(|q| read(q))
+            .collect::<Result<_, _>>()?,
+        bar: b2_core::search::EvidenceBar::for_model(model_id),
+    })
+}
+
+/// Print the dense fixture's search-evidence reading (see [`DenseSearch`]).
+fn print_dense_search(search: &DenseSearch) {
+    println!(
+        "  search bar  D2's shipped bar replayed on this geometry (GH #201; reported, not gated)"
+    );
+    // The coverage reading comes FIRST, and above the bar, because it is
+    // **model-free**: a fact about this vault's vocabulary, and the lexical
+    // half's whole premise. Gating it behind a calibrated bar would print
+    // nothing at all on a vault the harness can still say something true about —
+    // the defect PR #205's review already fixed in `calibrate.rs` (c03f8cd), met
+    // again here (PR #207 review).
+    let covs: Vec<f64> = search.titles.iter().filter_map(|p| p.coverage).collect();
+    let cov_line = match pile_stats(&covs) {
+        Some((min, med, max)) => format!("{min:.2}/{med:.2}/{max:.2}"),
+        None => "— (no query carried weight)".to_string(),
+    };
+    println!("              title-as-query coverage min/med/max {cov_line}");
+
+    // Only the *verdicts* below need a bar, so only they stop here.
+    let Some(bar) = search.bar else {
+        println!("              no calibrated bar for this model — no verdict is offered (M2)");
+        return;
+    };
+    let cut: Vec<&SearchProbe> = search
+        .titles
+        .iter()
+        .filter(|p| p.vouched == Some(false))
+        .collect();
+    let served: Vec<&SearchProbe> = search
+        .nonsense
+        .iter()
+        .filter(|p| p.vouched == Some(true))
+        .collect();
+    println!(
+        "              bar under test: coverage ≥ {:.2} or cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos,
+    );
+    println!(
+        "              cuts {}/{} title queries   ← the TRIPWIRE direction; the retired df ceiling \
+         cut 3 here",
+        cut.len(),
+        search.titles.len()
+    );
+    for p in &cut {
+        println!(
+            "                [CUT] {:<32} cov {:>5}  cos {:>6}",
+            truncate(&p.query, 32),
+            p.coverage
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            p.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+        );
+    }
+    println!(
+        "              serves {}/{} nonsense queries   ← the reported defect, on this corpus",
+        served.len(),
+        search.nonsense.len()
+    );
+}
+
+/// The dense fixture's search reading as JSON (`search_transfer` in the dense
+/// row) — every probe, so any bar is re-derivable from a row without re-running
+/// the model, the `discovery_fold` convention.
+fn dense_search_json(search: &DenseSearch) -> serde_json::Value {
+    let probes = |pile: &[SearchProbe]| {
+        pile.iter()
+            .map(|p| {
+                serde_json::json!({
+                    "query": p.query,
+                    "coverage": p.coverage.map(|c| (c * 1e4).round() / 1e4),
+                    "best_cos": p.best_cos.map(|c| (c * 1e4).round() / 1e4),
+                    "vouched": p.vouched,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    serde_json::json!({
+        "bar": search.bar.map(|b| serde_json::json!({
+            "min_term_coverage": b.min_term_coverage,
+            "min_cos": b.min_cos,
+        })),
+        "titles_cut": search.titles.iter().filter(|p| p.vouched == Some(false)).count(),
+        "nonsense_served": search.nonsense.iter().filter(|p| p.vouched == Some(true)).count(),
+        "titles": probes(&search.titles),
+        "nonsense": probes(&search.nonsense),
+    })
 }
 
 fn print_dense_report(dense: &DensePass) {
@@ -1136,6 +1347,7 @@ fn print_dense_report(dense: &DensePass) {
             dense.empty_panes.join(", ")
         );
     }
+    print_dense_search(&dense.search);
 }
 
 /// The dense fixture's own JSONL row. Tagged `"corpus": "dense"` — the key that
@@ -1167,6 +1379,14 @@ fn dense_row(
         })).collect::<Vec<_>>(),
         "empty_panes": { "n": dense.notes, "empty": dense.empty_panes.len(), "detail": dense.empty_panes },
         "discovery_fold": fold_json(&dense.fold),
+        // NEW key (absent from rows before 2026-08-22): the shipped search bar
+        // replayed on this fixture (GH #201). Deliberately NOT the orthogonal
+        // row's `search_evidence`: that key holds the *labelled* bake-off, and
+        // this is the label-free transfer reading — a different measurement, so
+        // it takes a different name. Same convention as every key above: new,
+        // never a redefinition, so no reader has to branch on `corpus` to learn
+        // which shape it is holding (PR #207 review).
+        "search_transfer": dense_search_json(&dense.search),
         "similar_detail": dense.detail.iter().map(|d| serde_json::json!({
             "anchor": d.anchor,
             "negative": d.negative,
@@ -1603,9 +1823,18 @@ fn score_fold(
         }
     }
 
+    // Outbound only. `neighbors` answers "what is 1 hop from here" and so returns
+    // an edge from *both* of its endpoints; summing the raw counts over every
+    // note would census edge **endpoints** and report candidate 2's population at
+    // twice its size (PR #204 review). Counting each edge once from its source is
+    // the number the rule would calibrate from.
     let mut authored_edges = 0;
     for note in vault.list_notes()? {
-        authored_edges += vault.neighbors(&note.path)?.len();
+        authored_edges += vault
+            .neighbors(&note.path)?
+            .iter()
+            .filter(|n| n.direction == "outbound")
+            .count();
     }
 
     let mut rows_by_anchor: Vec<FoldAnchor> = Vec::new();

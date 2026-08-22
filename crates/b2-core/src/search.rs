@@ -377,7 +377,7 @@ fn fts_tokens(conn: &rusqlite::Connection, terms: &[String]) -> Result<Vec<Strin
     Ok(out)
 }
 
-/// The per-model evidence bar D2 judges a query against/// The per-model evidence bar D2 judges a query against: what counts as a
+/// The per-model evidence bar D2 judges a query against: what counts as a
 /// lexical anchor, and how near the dense half must be to stand in for one.
 ///
 /// **A distributional constant, so it is keyed to the model** (M2 — a swap
