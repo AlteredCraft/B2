@@ -1397,6 +1397,8 @@ struct SearchEvidence {
     negatives: Vec<QueryEvidence>,
 }
 
+/// One side's best-cos pile — the population the query-window derivation and
+/// the printed pile lines both read (queries with no dense reading drop out).
 fn best_cos_pile(rows: &[QueryEvidence]) -> Vec<f64> {
     rows.iter().filter_map(|r| r.best_cos).collect()
 }
