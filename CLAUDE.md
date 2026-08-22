@@ -154,7 +154,8 @@ concentration — #196's geometry met a third time, now on the lexical axis — 
 to change the **rule**, not re-tune the number: weighting has no bin to put a saturated subject
 word on the wrong side of. The shipped bar (`min_term_coverage` OR `min_cos`, keyed to
 `embed_model_id`, device suffix shared and re-checked by `just eval-metal`) reads 0 cut / 0
-negatives served on all three benches — the labelled corpus, the dense fixture, and a 200-note
+negatives served on all three benches (the dense one re-read every `just eval` run, since topical
+concentration is the geometry that disqualified the rule that lost) — the labelled corpus, the dense fixture, and a 200-note
 vault, where its weakest positive (cos 0.475) sits *below* that vault's own nonsense and is
 served on the lexical half alone, which is the two-signal argument made at scale, and its *justification* is re-derived on every run by the
 new `search evidence bake-off` block rather than quoted in a comment — #187's lesson, applied in

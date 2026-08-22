@@ -22,7 +22,7 @@ deterministic, and model-free, so model quality can never flake CI
 
 | Command | What it measures | Model | Deterministic |
 |---|---|---|---|
-| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, and the query-level evidence rule's admissible window re-derived per run ([#201](https://github.com/AlteredCraft/B2/issues/201)) | real bge | no |
+| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, the query-level evidence rule's admissible window re-derived per run, and the shipped bar replayed on the dense fixture ([#201](https://github.com/AlteredCraft/B2/issues/201)) | real bge | no |
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
@@ -159,7 +159,17 @@ undecided. Last it prints where the **shipped** constants stand against this run
 positives the bar would cut (D2's tripwire, zero with no headroom) and labelled negatives it still
 serves. Recorded as `search_evidence` in the row — now carrying each query's terms with their
 document frequencies and the whole grid, so any cell is re-derivable from a row without re-running
-the model, the `discovery_fold` convention. **Gating nothing**: moving the exit gate is
+the model, the `discovery_fold` convention.
+
+The bake-off runs on the **orthogonal** corpus, which is where the labels are — and that is
+precisely the geometry the lexical rule survives, so the dense fixture carries a second reading of
+its own (`search_evidence` in the dense row, added in the PR #205 review sweep): the shipped bar
+replayed over every note's own title as a query, plus nonsense. Titles need no labels, so nothing
+there can be relabelled to clear a number, and the reading is the tripwire direction — the retired
+`df` ceiling cut 3 of these 15. The nonsense strings are the only negatives that transfer between
+corpora: `queries.json`'s phrase-shaped ones are the orthogonal corpus's, audited against *it*, and
+the audit does not carry (on `corpus-dense`, "why parrots mimic speech" shares `mimic` with
+`robbing-behavior.md`). **Gating nothing**: moving the exit gate is
 [#202](https://github.com/AlteredCraft/B2/issues/202)'s, in the same change as the surfaces,
 per #182's rule. The block's job here is the #187 one — the constants live in code and their
 *justification* is recomputed every run, so a bar that drifts out of the window it was read from
@@ -442,6 +452,13 @@ says so instead of going quietly stale.
   | orthogonal corpus | 70 | 0/31 | 0/31 | 0/4 |
   | dense fixture (single-domain) | 15 | **3/15** | 0/15 | 0/4 |
   | `fixtures/test-vault` (200 notes) | 780 | 0/200 | 0/200 | 0/4 |
+
+  The middle row is now **re-read on every `just eval` run** rather than taken once (PR #205
+  review): the dense fixture's throwaway vault replays the shipped bar over its own titles and
+  nonsense, and records it as `search_evidence` in the dense row. Taking a transfer reading once is
+  the failure [#187](https://github.com/AlteredCraft/B2/issues/187) named — the reading that
+  disqualifies a rule is worth nothing frozen in a comment, and the geometry in question is the one
+  the labelled bench cannot express.
 
   On a 15-chunk single-domain vault the ceiling comes to **1.5 chunks**, so `drone` (df 3) and
   `comb` (df 7) are stopwords *in a vault about beekeeping*: the lexical half goes inert, every
