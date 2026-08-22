@@ -106,9 +106,36 @@ a quota nowhere. Phase A shipped instruments only, per the #196 sequencing rule:
 negative queries (empty `relevant` = "no matches") + the `search evidence calibration` block
 (`search_evidence` in the row) in `just eval`, and `just calibrate`'s **mutual-k reciprocity fold
 replay** (`fold_serves` per anchor, `reciprocal` per candidate, `--mutual-k`). Nothing gates yet:
-GH #200 is the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
+GH #200 was the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
 #202 lands the winners on every surface and moves the exit-gate assertions in the same change —
 the #182 rule applied in advance for once.
+**GH #200 then ran, and "no fold at all" won**: `just eval`'s new `discovery fold bake-off` block
+judges every candidate rule on the *same* served lists over both corpora, sweeps mutual-k's depth
+`1..15`, and — the #187 idiom on the disclosure axis — re-derives the rule's admissible window
+each run instead of quoting one. It is empty in both directions at once: the depth that hides no
+labelled mate (`k = 14` orthogonal, `k = 7` dense) is past the depth that still folds a loner's
+default view to empty (`k ≤ 11`, and never all five), and every `k ≤ 5` darkens 1–3 of the dense
+fixture's 15 panes — D1's absolute. The general finding is the *pair* of safe depths: 14 and 7 are
+the same **fraction** of their candidate pools and different constants, so a reciprocity depth is
+a rank *in a population* and transfers no better than the cosine and z constants #150/#196
+retired — while the fraction cannot ship in its place, since a candidate's own list is truncated
+at `SHORTLIST_MIN`. `just calibrate` replaying the fold at 200-note scale is the third reading
+that settles it: **one constant, three vaults, three different rules** — `k = 10` discloses 36% of
+the cards on the orthogonal corpus, 91% on the dense fixture and 98% on `fixtures/test-vault`
+(vacuous), while `k = 5` darkens 7 of that vault's 200 panes. Candidate 2, the authored-edge bar, is **undecided rather than rejected**:
+both corpora carry zero authored edges by construction (measured per run as `authored_edges`), so
+its bench is a real vault with human-authored edges judged by its owner — the bake-off's fourth
+bench, and the one this ruling could not run — and as a distributional constant it owes process
+rule 5's transfer check. Its only available *mechanism* reading (`just calibrate` on the synthetic
+`fixtures/test-vault`, whose links are generated rather than judged) says the quantile is the whole
+rule: authored cosines 0.475 / 0.628 / 0.901 / 0.979 against a pane's top-5 above 0.94, so a
+lower-quartile bar folds nothing and a median one cuts deep. So `discover::candidates` is unchanged — one
+undivided ranked list, no per-row disclosure flag — the block stays in `just eval` reporting-only
+to price the next candidate, and the dogfood complaint that opened #200 stays **unpaid**: with no
+fold, the honesty rides on the strength band and the empty-state copy. What reciprocity *did*
+prove is kept as evidence for the pair-scorer escalation: at `k ≤ 11` four of five loners fold to
+empty while from `k ≥ 7` every dense pane stays lit — the loner-versus-dense discrimination #196
+proved no *anchor-local* statistic can make.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

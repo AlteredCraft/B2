@@ -290,7 +290,7 @@ sibling of §5's reranker but distinct from it (that seam needs query text and `
 would still only filter what is surfaced, never author a link. Under always-serve that residue is
 **ordering quality, not existence**.
 
-**Phase 2 is open, and its question is disclosure, not existence** (D1 as redrafted, 2026-08-22;
+**Phase 2's question was disclosure, not existence** (D1 as redrafted, 2026-08-22;
 the bake-off is [GH #200](https://github.com/AlteredCraft/B2/issues/200), search's sibling
 [GH #201](https://github.com/AlteredCraft/B2/issues/201), the surfaces and exit-gate moves
 [GH #202](https://github.com/AlteredCraft/B2/issues/202)).
@@ -299,12 +299,40 @@ regardless of quality trains distrust of every card — count read as a claim wh
 The redrafted D1 splits the axes the retired gate conflated: the *ranked list* stays fully reachable
 (the #196 guarantee, unweakened), while a quality signal may set the *default disclosure boundary* —
 a prefix fold, the remainder collapsed one gesture away, so a misjudged fold costs a keystroke where
-the gate cost the feature. The bake-off defined above now has its opening evidence and two entry
-requirements beside continuity: prefix form (a signal that would admit rank 5 while folding rank 2
-cannot ship — row order, band, and fold must never visibly disagree), and on the dense fixture a
-non-empty default view is absolute. If a fold ships, the retired negatives assertion returns on this
-axis: a loner anchor's correct default view is empty-above-the-fold — the labelled "nothing relates"
-made assertable again without re-darkening the vault where everything does.
+the gate cost the feature. The bake-off ran with two entry requirements beside continuity: prefix
+form (a signal that would admit rank 5 while folding rank 2 cannot ship — row order, band, and fold
+must never visibly disagree), and on the dense fixture a non-empty default view is absolute.
+
+**It found no admissible fold, so nothing folds: the default view is still the whole served prefix**
+(#200, measured and ruled 2026-08-22 — "no fold at all" was an admissible winner and it won).
+Mutual-kNN reciprocity, the leading candidate, was swept `k = 1..15` on both corpora with its
+admissible window re-derived from each run rather than quoted. The window is **empty in both
+directions at once**: the smallest depth that hides no labelled mate and darkens no pane is `k = 14`
+on the orthogonal corpus and `k = 7` on the dense fixture, while the loner claim the fold exists to
+make — a labelled loner's default view folding to empty — is at its best (4 of 5) only at `k ≤ 11`
+and never reaches 5 of 5 at any depth. Every `k ≤ 5` darkens 1–3 of the dense fixture's 15 panes,
+which is D1's absolute. And the two safe depths are the same *fraction* of their candidate pools
+(14/30, 7/14) rather than the same number, which is the general finding: a reciprocity depth is a
+rank **in a population**, so it transfers no better than the cosine and z constants #150 and #196
+retired — and the fraction cannot ship in its place, because a candidate's own list is truncated at
+`SHORTLIST_MIN` by the recall stage, so "the anchor is in this candidate's nearer half" stops being
+computable a few hundred notes in. `just calibrate` replaying the same fold at 200-note scale
+settles it: one constant, three vaults, three different rules — `k = 10` discloses 36% of the cards
+on the orthogonal corpus, 91% on the dense fixture, and 98% on `fixtures/test-vault` (vacuous, 189
+of 200 anchors showing their whole view), while `k = 5` darkens 7 of its 200 panes. What the sweep *did* establish is kept: at `k ≤ 11` the loners
+fold empty 4 of 5 while from `k ≥ 7` every dense pane stays lit — the loner-versus-dense
+discrimination #196 proved no anchor-local statistic can make, made here by a **pair-level** one.
+That is evidence for the pair-scorer escalation, not for this rule. The **authored-edge reference
+bar** (candidate 2) is undecided rather than rejected: its calibration population is the human's own
+committed edges, both eval corpora carry zero of them by construction, and as a distributional
+constant it owes process rule 5's transfer check — its bench is a real vault with authored edges,
+judged by its owner, which is also the bake-off's fourth bench and the one this ruling could not
+run. The mechanism reading it *can* have says the rule is its quantile: on `fixtures/test-vault`
+the authored population runs 0.475 / 0.628 / 0.901 / 0.979 (min / q1 / median / max) against a
+pane whose top-5 sit above 0.94, so a lower-quartile bar folds nothing and a median one cuts deep. The retired negatives assertion therefore stays retired, and the dogfood
+complaint that opened #200 stays unpaid: with no fold, the honesty rides on the strength band and
+the empty-state copy, as D1 says. The instrument stays in `just eval` (the `discovery fold bake-off`
+block, both corpora) so the next candidate is priced the same way; nothing gates until one ships.
 
 ## 4. Retrieval — semantic search, fusion, and discovery
 

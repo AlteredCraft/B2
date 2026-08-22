@@ -38,6 +38,28 @@
 //! quality now rather than existence) and belongs to a discovery-side
 //! pair-scorer if the data ever demands one.
 //!
+//! **The first bake-off ran and nothing won** (GH #200, 2026-08-22), so the
+//! code below is unchanged by it — which is the outcome being recorded. Its
+//! question was narrower than existence: D1 as redrafted permits only a
+//! *default disclosure* fold, a prefix of the list with everything below it
+//! still served. The leading candidate — mutual-kNN reciprocity — was swept and
+//! priced by `just eval`'s `discovery fold bake-off` block on both corpora, and
+//! its admissible window is empty in both directions at once: the depth that
+//! hides no labelled mate (`k = 14` on the orthogonal corpus, `k = 7` on the
+//! dense fixture) sits past the depth that still folds a loner's view to empty
+//! (`k ≤ 11`, and never all five of them), while every `k ≤ 5` darkens panes on
+//! a vault where everything relates. The two safe depths are the same
+//! *fraction* of their candidate pools rather than the same constant, which is
+//! the reason to stop rather than re-tune: a reciprocity depth is a rank **in a
+//! population**, so it transfers no better than the cosine and z constants
+//! before it, and the fraction is not computable past `SHORTLIST_MIN` anyway.
+//! `candidates` therefore returns what it always did — one undivided ranked
+//! list, no per-row disclosure flag. What the sweep *did* establish is kept as
+//! evidence for the pair-scorer above: reciprocity can tell a loner from a
+//! dense-vault note (four of five loners folded to empty while every dense pane
+//! stayed lit), the discrimination GH #196 proved no anchor-local statistic can
+//! make.
+//!
 //! Mechanics are **two-stage** (#38; index-engine.md):
 //!
 //! 1. **Coarse, O(notes):** rank every note by the distance of its stored *centroid*
