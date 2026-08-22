@@ -390,19 +390,12 @@ fn print_search_transfer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("search evidence transfer check (D2 — process rule 5's bench for GH #201's bar)");
-    let Some(bar) = b2_core::search::EvidenceBar::for_model(model_id) else {
-        println!("  no calibrated bar for '{model_id}' — nothing to transfer-check");
-        println!("  (M2: a bar read off one model's distances says nothing about another's)");
-        return Ok(());
-    };
-    println!(
-        "  bar under test: coverage ≥ {:.2}, cos ≥ {:.3}",
-        bar.min_term_coverage, bar.min_cos
-    );
 
-    // Where this vault's function words weigh. One `lexical_evidence` call over
-    // the joined list, so the dfs come back through exactly the path a query's
-    // would.
+    // The function-word reading comes FIRST, and above the bar lookup, because it
+    // is **model-free**: it is a fact about this vault's vocabulary, and it is
+    // the lexical anchor's whole premise. Gating it behind a calibrated bar (as
+    // this did until the PR #205 review) left a fake-embedded vault printing
+    // nothing at all, which the recipe's own help text promised it would not.
     let probe = b2_core::search::lexical_evidence(conn, &FUNCTION_WORDS.join(" "))?;
     let heaviest = probe
         .terms
@@ -428,6 +421,17 @@ fn print_search_transfer(
         println!("      weight — on this vault function words are not cheap, so every coverage");
         println!("      reading below is diluted by them");
     }
+
+    // Only the *verdicts* below need a bar, so only they stop here.
+    let Some(bar) = b2_core::search::EvidenceBar::for_model(model_id) else {
+        println!("  no calibrated bar for '{model_id}' — the piles below need one to be judged");
+        println!("  (M2: a bar read off one model's distances says nothing about another's)");
+        return Ok(());
+    };
+    println!(
+        "  bar under test: coverage ≥ {:.2}, cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos
+    );
 
     let read = |query: &str| -> Result<SearchProbe, Box<dyn std::error::Error>> {
         let view = vault.search_evidence(query, limit)?;

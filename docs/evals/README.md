@@ -160,8 +160,8 @@ positives the bar would cut (D2's tripwire, zero with no headroom) and labelled 
 serves. Recorded as `search_evidence` in the row — now carrying each query's terms with their
 document frequencies and the whole grid, so any cell is re-derivable from a row without re-running
 the model, the `discovery_fold` convention. **Gating nothing**: moving the exit gate is
-[#202](https://github.com/AlteredCraft/B2/issues/202)'s, in the same change as the surfaces, per
-#182's rule. The block's job here is the #187 one — the constants live in code and their
+[#202](https://github.com/AlteredCraft/B2/issues/202)'s, in the same change as the surfaces,
+per #182's rule. The block's job here is the #187 one — the constants live in code and their
 *justification* is recomputed every run, so a bar that drifts out of the window it was read from
 says so instead of going quietly stale.
 
