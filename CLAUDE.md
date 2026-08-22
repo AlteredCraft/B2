@@ -95,6 +95,20 @@ inter-related, no loner; rankings-only labels, its own `"corpus": "dense"` rows,
 is Phase 2's evidence-gated bake-off, where "no gate at all" is an admissible winner; #182's
 standing rule — **a change to the judged statistic is a change to every surface that paints it** —
 bound this change too, and stays.
+The 2026-08-22 dogfood report then reopened the question on the **disclosure** axis (GH
+#200/#201/#202): always-serve's cost measured as trust — a pane that always fills to `limit`, and
+ten confident-looking search results for a nonsense query, zero being unrepresentable in Flow ② as
+built (the vector half always has k nearest; RRF keeps only ranks). **D1 was redrafted** to split
+ranking / reachability / default disclosure — an evidence-gated *prefix fold* may set what the
+default view vouches for, everything below it stays served and one gesture away, reachability
+untouchable — and **D2 is new**: a served search result is a claim of evidence, `limit` a cap and
+a quota nowhere. Phase A shipped instruments only, per the #196 sequencing rule: five labelled
+negative queries (empty `relevant` = "no matches") + the `search evidence calibration` block
+(`search_evidence` in the row) in `just eval`, and `just calibrate`'s **mutual-k reciprocity fold
+replay** (`fold_serves` per anchor, `reciprocal` per candidate, `--mutual-k`). Nothing gates yet:
+GH #200 is the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
+#202 lands the winners on every surface and moves the exit-gate assertions in the same change —
+the #182 rule applied in advance for once.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

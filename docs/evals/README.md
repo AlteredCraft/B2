@@ -22,11 +22,11 @@ deterministic, and model-free, so model quality can never flake CI
 
 | Command | What it measures | Model | Deterministic |
 |---|---|---|---|
-| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump | real bge | no |
+| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration** — negative queries' BM25/cosine/served readings ([#201](https://github.com/AlteredCraft/B2/issues/201), Phase A) | real bge | no |
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
-| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a) | stored vectors (pure read) | yes, per vault |
+| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a), and the replayed **mutual-k reciprocity fold** — the leading disclosure-boundary candidate, priced per anchor before anything ships ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase A; `--mutual-k`) | stored vectors (pure read) | yes, per vault |
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
@@ -53,7 +53,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
 | [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; process rule 5's transfer check |
 | [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
-| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 queries; a verbatim `passage` adds chunk-level scoring (n=20) |
+| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 positive queries (a verbatim `passage` adds chunk-level scoring, n=20) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | [`crates/b2-embed/evals/corpus-dense/`](../../crates/b2-embed/evals/corpus-dense/) | the **dense single-domain fixture** ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0b): fifteen beekeeping notes, all genuinely inter-related, **no loner** — the vault-level geometry the orthogonal corpus is structurally incapable of expressing; scored in its own throwaway vault, its own `results.jsonl` row (`"corpus": "dense"`), never averaged with the orthogonal rows |
 | [`crates/b2-embed/evals/similar-dense.json`](../../crates/b2-embed/evals/similar-dense.json) | the dense fixture's labels — **rankings only** (expected mates per anchor, per-mate scored); no negative anchors, because in this corpus "nothing relates" is false of every note |
@@ -134,6 +134,14 @@ and was measured failing on a real vault, [#196](https://github.com/AlteredCraft
 which is why openness on one corpus proves nothing without process rule 5's transfer check), and
 the negatives' band readout — recorded in the row as `discovery_z`. That block is the first
 reading any Phase-2 bake-off candidate answers to; `just calibrate` on real vaults is the second.
+
+The **search evidence calibration** ([#201](https://github.com/AlteredCraft/B2/issues/201),
+Phase A) is reported the same way — per labelled query, the OR-sanitized BM25 hit count and best
+score, the dense top-1 cosine, and what always-serve serves today, positives and negatives apart,
+with the would-be pure-cosine query window re-derived each run (its caveat printed with it: D2's
+rule is lexical OR semantic evidence, so that window overstates the keep set) — recorded as
+`search_evidence` in the row, gating nothing: the query-level bar is #201's to earn, and it owes
+process rule 5's transfer check like any distributional constant.
 
 ## The verdicts this harness has ruled (each traceable to its issue and its commit)
 
@@ -289,6 +297,23 @@ reading any Phase-2 bake-off candidate answers to; `just calibrate` on real vaul
   returns is Phase 2's evidence-gated bake-off — mutual-kNN/reciprocal-rank leading, "no gate at
   all" admissible — with continuity in population size an entry requirement (the n = 12
   statistics threshold now moves banding only, never membership).
+
+- **Result count is evidence, not layout — the disclosure work opened, instruments first**
+  ([#200](https://github.com/AlteredCraft/B2/issues/200)/[#201](https://github.com/AlteredCraft/B2/issues/201)/[#202](https://github.com/AlteredCraft/B2/issues/202),
+  2026-08-22; invariants.md **D1 redrafted, D2 added**). Real-vault dogfooding measured
+  always-serve's cost: a pane that always fills to `limit` trains distrust of every card, and a
+  nonsense search query serves 10 confident-looking results — zero being unrepresentable in
+  Flow ② as built (the vector half always has k nearest; RRF keeps only ranks). D1 now splits
+  ranking / reachability / **default disclosure**: an evidence-gated *prefix fold* may set what
+  the default view vouches for, everything below it stays served and one gesture away, and
+  reachability is untouchable; D2 makes a served search result a claim of evidence (`limit` is a
+  quota nowhere). Phase A landed the instruments before any rule, per the #196/#197 sequencing
+  precedent: five negative queries + the search evidence calibration in `just eval`, and the
+  mutual-k reciprocity fold replay in `just calibrate` (per-anchor `fold_serves` beside the
+  replayed gate and always-serve, per-candidate `reciprocal` in the JSON). Nothing gates yet —
+  the bake-offs are #200 (discovery fold; "no fold at all" admissible) and #201 (search's
+  query-level bar); #202 lands the winners on every surface and moves the exit-gate assertions
+  in the same change.
 
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under

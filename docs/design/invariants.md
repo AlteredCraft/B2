@@ -181,8 +181,8 @@ tomorrow's model* — made mechanical.
   `just calibrate`, with "no fold at all" an admissible winner) and **continuous in population
   size**: a threshold may move banding or the fold, never which rows exist or can be reached.
   Strength stays a within-list grading painted from the z, which gates nothing.
-  ([index-engine.md](index-engine.md) §3, GH #196/#197 and the Phase-2 bake-off #197 defined; the
-  generation side's recall posture and 1-hop exclusion are unchanged)
+  ([index-engine.md](index-engine.md) §3, GH #196/#197; the bake-off is GH #200, its surfaces and
+  gate moves GH #202; the generation side's recall posture and 1-hop exclusion are unchanged)
 - **D2 — A served search result is a claim of evidence, and `limit` is a quota nowhere in B2.**
   Flow ②'s vector half always has k nearest — *nearest* is a fact about the vault, never evidence
   about the query — and RRF fuses ranks, discarding the absolute signals that could tell the
@@ -195,7 +195,7 @@ tomorrow's model* — made mechanical.
   distributional constant (process rule 5's `just calibrate` transfer check), earned against
   labelled negative queries in the eval corpus before it ships, folding only in prefix form — and
   **a labelled relevant note below the fold is the search-side tripwire, asserted at zero with no
-  headroom**. ([index-engine.md](index-engine.md) §4,
+  headroom**. ([index-engine.md](index-engine.md) §4, GH #201, surfaces GH #202,
   [docs/evals/README.md](../evals/README.md) process rules)
 
 ## E — Engineering discipline (what keeps the above true)

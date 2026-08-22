@@ -290,7 +290,10 @@ sibling of §5's reranker but distinct from it (that seam needs query text and `
 would still only filter what is surfaced, never author a link. Under always-serve that residue is
 **ordering quality, not existence**.
 
-**Phase 2 is open, and its question is disclosure, not existence** (D1 as redrafted, 2026-08-22).
+**Phase 2 is open, and its question is disclosure, not existence** (D1 as redrafted, 2026-08-22;
+the bake-off is [GH #200](https://github.com/AlteredCraft/B2/issues/200), search's sibling
+[GH #201](https://github.com/AlteredCraft/B2/issues/201), the surfaces and exit-gate moves
+[GH #202](https://github.com/AlteredCraft/B2/issues/202)).
 Real-vault dogfooding measured always-serve's cost from the other side: a pane that fills to `limit`
 regardless of quality trains distrust of every card — count read as a claim when it was only layout.
 The redrafted D1 splits the axes the retired gate conflated: the *ranked list* stays fully reachable
@@ -320,11 +323,13 @@ does. Therefore **semantic search is in v1** — exact, in-process, no vector ex
   sanitized into a safe FTS5 `MATCH` expression — punctuation is FTS5 syntax and would otherwise crash
   the parse. On a projected-but-unembedded vault the vector half is simply absent and the same fusion
   runs over the single BM25 list, so scores stay on one scale.
-  One honesty debt is on record (invariants.md **D2**, 2026-08-22): KNN always has k nearest and RRF
+  One honesty debt is on record (invariants.md **D2**, 2026-08-22;
+  [GH #201](https://github.com/AlteredCraft/B2/issues/201)): KNN always has k nearest and RRF
   keeps only ranks, so this flow cannot yet answer *zero* — a nonsense query serves `limit`
   confident-looking results. The fix owes the harness first: labelled negative queries, a per-model
   evidence bar for the vector half (a distributional constant, so process rule 5's transfer check),
-  and hit provenance carried through fusion so a fold can judge what RRF currently discards.
+  and hit provenance carried through fusion so a fold can judge what RRF currently discards —
+  the negative queries and the evidence dump are landed (Phase A); the bar and the fold are #201's.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph
