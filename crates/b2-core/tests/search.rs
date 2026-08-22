@@ -887,7 +887,7 @@ fn the_keyword_only_fallback_reports_no_dense_evidence() {
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
     let retrieval = search::keyword_only_search(&conn, "memory", 5).unwrap();
-    assert!(retrieval.evidence.best_cos.is_none());
+    assert!(retrieval.best_cos.is_none());
     assert!(retrieval
         .hits
         .iter()

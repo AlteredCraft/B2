@@ -368,17 +368,15 @@ pub const BGE_BASE_EVIDENCE_BAR: EvidenceBar = EvidenceBar {
     min_cos: 0.54,
 };
 
-/// The query-level evidence reading Flow ② carries beside its order
-/// (invariants.md D2): the two absolute signals a surface needs to say whether
-/// it vouches for anything at all.
+/// The query-level evidence reading behind a search (invariants.md D2): the two
+/// absolute signals a surface needs to say whether it vouches for anything at
+/// all. Assembled by a caller that wants a verdict, from a [`Retrieval`]'s
+/// `best_cos` and a [`lexical_evidence`] read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryEvidence {
     /// The lexical half's reading — see [`LexicalEvidence`].
     pub lexical: LexicalEvidence,
-    /// Best cosine between the query vector and any scanned chunk vector: the
-    /// dense half's strongest absolute claim about *this* query, as opposed to
-    /// the rank it always has. `None` on a projected-but-unembedded vault, where
-    /// there is no dense half and BM25's own emptiness is already honest.
+    /// The dense half's — see [`Retrieval::best_cos`].
     pub best_cos: Option<f64>,
 }
 
@@ -398,13 +396,24 @@ impl QueryEvidence {
     }
 }
 
-/// A retrieval's two halves: the fused order, and the query-level evidence
-/// behind it. One call, because the evidence is a by-product of the same two
-/// list reads — asking for it separately would re-embed the query.
+/// A retrieval's fused order plus the one absolute signal that comes free with
+/// it: the dense half's best cosine, which is the head of a list the call has
+/// already produced (invariants.md D2).
+///
+/// The **lexical** half of the evidence is deliberately not here. It costs a
+/// `count(*)` per distinct term, and it is read by
+/// [`lexical_evidence`] only where a caller actually wants a verdict — every
+/// search would otherwise pay for a reading nothing consumes, and worst on the
+/// keyword-only fallback, whose whole point is that it does no vector scan to
+/// hide the cost behind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Retrieval {
     pub hits: Vec<Hit>,
-    pub evidence: QueryEvidence,
+    /// Best cosine between the query vector and any scanned chunk vector: the
+    /// dense half's strongest absolute claim about *this* query, as opposed to
+    /// the rank it always has. `None` on a projected-but-unembedded vault, where
+    /// there is no dense half and BM25's own emptiness is already honest.
+    pub best_cos: Option<f64>,
 }
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
@@ -435,8 +444,8 @@ pub(crate) fn pool_size(limit: usize) -> usize {
 /// sort the same way) as [`hybrid_search`]'s fused scores.
 ///
 /// This path was already honest about zero — no lexical match, no results — and
-/// the [`QueryEvidence`] it returns says so with `best_cos: None`: there is no
-/// dense half here to overrule the lexical half's silence (invariants.md D2).
+/// the [`Retrieval`] says so with `best_cos: None`: there is no dense half here
+/// to overrule the lexical half's silence (invariants.md D2).
 pub fn keyword_only_search(
     conn: &rusqlite::Connection,
     query: &str,
@@ -445,10 +454,7 @@ pub fn keyword_only_search(
     if limit == 0 {
         return Ok(Retrieval {
             hits: Vec::new(),
-            evidence: QueryEvidence {
-                lexical: lexical_evidence(conn, query)?,
-                best_cos: None,
-            },
+            best_cos: None,
         });
     }
     let pool = pool_size(limit);
@@ -460,13 +466,9 @@ pub fn keyword_only_search(
         "keyword-only retrieval (no embedding space yet)"
     );
     let provenance = provenance_of(&bm25, &[]);
-    let hits = resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), &provenance, limit)?;
     Ok(Retrieval {
-        hits,
-        evidence: QueryEvidence {
-            lexical: lexical_evidence(conn, query)?,
-            best_cos: None,
-        },
+        hits: resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), &provenance, limit)?,
+        best_cos: None,
     })
 }
 
@@ -485,10 +487,7 @@ pub fn hybrid_search(
     if limit == 0 {
         return Ok(Retrieval {
             hits: Vec::new(),
-            evidence: QueryEvidence {
-                lexical: lexical_evidence(conn, query)?,
-                best_cos: None,
-            },
+            best_cos: None,
         });
     }
     let pool = pool_size(limit);
@@ -508,16 +507,9 @@ pub fn hybrid_search(
     );
 
     let provenance = provenance_of(&bm25, &dense);
-    let hits = resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), &provenance, limit)?;
     Ok(Retrieval {
-        hits,
-        evidence: QueryEvidence {
-            // Two `count(*)` probes per distinct term, run beside a call that
-            // has already scanned every stored vector in the vault — the
-            // lexical reading is noise against the dense scan it rides on.
-            lexical: lexical_evidence(conn, query)?,
-            best_cos,
-        },
+        hits: resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), &provenance, limit)?,
+        best_cos,
     })
 }
 

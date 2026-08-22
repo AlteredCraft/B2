@@ -1205,7 +1205,13 @@ impl Vault {
         // `best_cos: None` — which reads as "no embedding space" — so a verdict
         // taken from it would be the lexical half wearing both halves' name.
         let retrieval = self.retrieve(query, note_hit_pool(limit.max(1)))?;
-        let evidence = retrieval.evidence;
+        // The lexical half is read here rather than inside retrieval: it costs a
+        // `count(*)` per distinct query term, and only a caller that wants a
+        // verdict should pay for it (see `search::Retrieval`).
+        let evidence = search::QueryEvidence {
+            lexical: search::lexical_evidence(&self.conn, query)?,
+            best_cos: retrieval.best_cos,
+        };
         let bar = search::EvidenceBar::for_model(self.embedder.model_id());
         Ok(SearchEvidenceView {
             results: self
