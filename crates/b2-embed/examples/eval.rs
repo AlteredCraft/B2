@@ -79,6 +79,19 @@
 //!    carries: a per-mate MRR floor, and **zero empty panes** across every note
 //!    in the fixture — the mechanical form of GH #197's ruling that an empty
 //!    pane may never come from an anchor-local statistic.
+//! 7. **The search evidence calibration** (invariants.md D2; GH #201, Phase A
+//!    of the disclosure work) — search's sibling of the z dump. Flow ② cannot
+//!    currently answer *zero*: the vector half always has k nearest and RRF
+//!    keeps only ranks, so a nonsense query serves `limit` confident-looking
+//!    results. Before any evidence bar ships (GH #201's to earn), this block
+//!    dumps the signals a query-level rule would judge, for every labelled
+//!    query: the OR-sanitized BM25 match count and best BM25 score, the dense
+//!    top-1 cosine, and what the shipped always-serve surface serves today —
+//!    split into the positive/negative piles, with the would-be pure-cosine
+//!    window re-derived each run (the GH #187 pattern, applied to search).
+//!    **Negative queries** (empty `relevant` — the query-side siblings of the
+//!    loner anchors) are excluded from every rank aggregate, so labelling them
+//!    moved no pre-existing number.
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -206,6 +219,13 @@ struct QuerySet {
 #[derive(Deserialize)]
 struct Labelled {
     query: String,
+    /// The vault-relative path(s) that should rank first. **Empty = a negative
+    /// query** (invariants.md D2, GH #201): the labelled answer is "no
+    /// matches" — the vault holds no evidence for the query, so everything
+    /// served is junk by label, the query-side sibling of similar.json's
+    /// negative anchors. Negative queries are excluded from every rank
+    /// aggregate (adding one moves no pre-existing number) and are scored only
+    /// by the search evidence calibration.
     relevant: Vec<String>,
     /// A short verbatim phrase from the target passage; when present the query is
     /// also scored at chunk level (does a top-K chunk of a relevant note contain
@@ -580,9 +600,14 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let corpus_dir = evals_dir.join("corpus");
     let results_path = evals_dir.join("results.jsonl");
 
-    // Load the labelled sets.
+    // Load the labelled sets. Queries split on their labels: positives carry
+    // rank labels; an empty `relevant` is a negative query (invariants.md D2,
+    // GH #201), scored only by the search evidence calibration so its presence
+    // moves no rank aggregate.
     let set: QuerySet =
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("queries.json"))?)?;
+    let (negatives, positives): (Vec<Labelled>, Vec<Labelled>) =
+        set.queries.into_iter().partition(|q| q.relevant.is_empty());
     let sim_set: SimilarSet =
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("similar.json"))?)?;
     let dense_set: SimilarSet = serde_json::from_str(&std::fs::read_to_string(
@@ -621,7 +646,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // keyword-only (index-engine.md) — the ablation costs nothing
     // extra: it is the same vault, paused between the two passes.
     let report = vault.project(false)?;
-    let bm25 = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+    let bm25 = score_pass(&vault, &positives, Retrieval::Fused)?;
     eprintln!(
         "[eval] projected {} notes; BM25-only baseline scored\n",
         report.indexed
@@ -633,7 +658,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // anything embeds.
     let bm25_unstemmed = if stemmer {
         vault.rebuild_fts(FtsTokenizer::Unicode61)?;
-        let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+        let pass = score_pass(&vault, &positives, Retrieval::Fused)?;
         vault.rebuild_fts(FtsTokenizer::PorterUnicode61)?;
         Some(pass)
     } else {
@@ -642,12 +667,15 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
 
     // ---- Phase 2: embed → vector-only ablation + hybrid + discovery. ---------
     let (chunks, embed_secs) = timed_embed(&vault)?;
-    let vector = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
-    let hybrid = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+    let vector = score_pass(&vault, &positives, Retrieval::VectorOnly)?;
+    let hybrid = score_pass(&vault, &positives, Retrieval::Fused)?;
     let similar = score_similar(&vault, &sim_set)?;
     // The z calibration dump (GH #187) — the same shipped surface read deep,
     // since the z travels ungated on it (GH #197).
     let floor_z = score_floor_z(&vault, &sim_set)?;
+    // The search evidence dump (invariants.md D2, GH #201) — the query-side
+    // sibling of the z calibration, read over the same built vault.
+    let evidence = score_search_evidence(&vault_root, &vault, &positives, &negatives)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
          {} for the passage view)\n",
@@ -656,7 +684,8 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     );
     warn_if_pool_blind(chunks);
 
-    print_default_report(&set.queries, &bm25, &vector, &hybrid, &similar, &floor_z);
+    print_default_report(&positives, &bm25, &vector, &hybrid, &similar, &floor_z);
+    print_search_evidence(&evidence);
 
     let git = git_short_sha();
     append_result(
@@ -671,12 +700,13 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             report.indexed,
             chunks,
             embed_secs,
-            &set.queries,
+            &positives,
             Some(&bm25),
             Some(&vector),
             &hybrid,
             Some(&similar),
             Some(&floor_z),
+            Some(&evidence),
         ),
     )?;
 
@@ -702,14 +732,14 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             .as_ref()
             .expect("scored while unembedded above");
         vault.rebuild_fts(FtsTokenizer::Unicode61)?;
-        let vec_unstemmed = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
-        let hybrid_unstemmed = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+        let vec_unstemmed = score_pass(&vault, &positives, Retrieval::VectorOnly)?;
+        let hybrid_unstemmed = score_pass(&vault, &positives, Retrieval::Fused)?;
 
         println!("\n{}", "=".repeat(78));
         println!(
             "stemmer ablation — chunks_fts rebuilt `unicode61` (unstemmed) over identical chunks + vectors (GH #157)"
         );
-        let dense_moved = (0..set.queries.len())
+        let dense_moved = (0..positives.len())
             .filter(|&i| vec_unstemmed.scores[i].note != vector.scores[i].note)
             .count();
         if dense_moved == 0 {
@@ -721,9 +751,9 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             );
         }
         println!("  bm25-only, unstemmed vs shipped porter:");
-        print_rank_moves(&set.queries, &bm25, bm25_unstemmed);
+        print_rank_moves(&positives, &bm25, bm25_unstemmed);
         println!("  hybrid, unstemmed vs shipped porter:");
-        print_rank_moves(&set.queries, &hybrid, &hybrid_unstemmed);
+        print_rank_moves(&positives, &hybrid, &hybrid_unstemmed);
         println!(
             "  unstemmed aggregates: bm25 note {:.2} / {:.3}   hybrid note {:.2} / {:.3}   chunk {:.2} / {:.3}",
             bm25_unstemmed.note.hit1(),
@@ -745,10 +775,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                 report.indexed,
                 chunks,
                 embed_secs,
-                &set.queries,
+                &positives,
                 Some(bm25_unstemmed),
                 Some(&vec_unstemmed),
                 &hybrid_unstemmed,
+                None,
                 None,
                 None,
             ),
@@ -836,8 +867,8 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             vault.set_chunk_config(cfg.clone());
             vault.project(true)?; // force: re-chunk everything, clearing vectors
             let (chunks, embed_secs) = timed_embed(&vault)?;
-            let vec_pass = score_pass(&vault, &set.queries, Retrieval::VectorOnly)?;
-            let pass = score_pass(&vault, &set.queries, Retrieval::Fused)?;
+            let vec_pass = score_pass(&vault, &positives, Retrieval::VectorOnly)?;
+            let pass = score_pass(&vault, &positives, Retrieval::Fused)?;
             let sim = score_similar(&vault, &sim_set)?;
             println!(
                 "{:<24} {:>7} {:>8.1}   {:.2} / {:.3}    {:.2} / {:.3}    {:.2} / {:.3}    {:.3}      {}",
@@ -857,7 +888,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
             // per-query win/loss list is the data (docs/evals/README.md, the
             // process rules).
-            print_rank_moves(&set.queries, &hybrid, &pass);
+            print_rank_moves(&positives, &hybrid, &pass);
             append_result(
                 &results_path,
                 result_row(
@@ -870,11 +901,12 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
                     report.indexed,
                     chunks,
                     embed_secs,
-                    &set.queries,
+                    &positives,
                     None,
                     Some(&vec_pass),
                     &pass,
                     Some(&sim),
+                    None,
                     None,
                 ),
             )?;
@@ -1328,6 +1360,204 @@ fn score_floor_z(vault: &Vault, set: &SimilarSet) -> Result<FloorZ, Box<dyn std:
         });
     }
     Ok(dump)
+}
+
+/// One labelled query's evidence reading (invariants.md D2; GH #201, Phase A of
+/// the disclosure work): the signals a query-level evidence rule would judge,
+/// dumped before any rule exists so GH #201 derives its rule from measurement
+/// rather than assumption. Nothing here gates anything.
+struct QueryEvidence {
+    query: String,
+    /// Chunks the OR-sanitized FTS5 expression matches at all. **Not** a
+    /// lexical-anchor test on phrase queries — `fts5_query` ORs every
+    /// alphanumeric term, so stopwords saturate this count; recorded precisely
+    /// so that saturation stays measured instead of assumed away.
+    bm25_hits: usize,
+    /// Best BM25 score over those matches, sign-flipped so higher = better
+    /// (FTS5's `rank` is more-negative-is-better). `None` when nothing matches
+    /// — the honest zero the fused surface currently cannot say.
+    bm25_best: Option<f64>,
+    /// Best cosine between the embedded query and any stored chunk vector (the
+    /// dense top-1) — the strongest semantic evidence the vault holds for this
+    /// query, which RRF discards before the surface sees it.
+    best_cos: Option<f64>,
+    /// The note that dense top-1 belongs to, naming what the number points at.
+    top: String,
+    /// What the shipped surface serves at [`K`] today. For a negative query
+    /// this is the measured D2 defect: `limit` confident-looking results for a
+    /// query the vault holds nothing for.
+    served: usize,
+}
+
+/// The search evidence dump (GH #201): every labelled query's reading, split
+/// into the piles a query-level evidence bar answers to — positives it must
+/// keep reachable, negatives it must answer "no matches".
+struct SearchEvidence {
+    positives: Vec<QueryEvidence>,
+    negatives: Vec<QueryEvidence>,
+}
+
+fn best_cos_pile(rows: &[QueryEvidence]) -> Vec<f64> {
+    rows.iter().filter_map(|r| r.best_cos).collect()
+}
+
+/// Score the search evidence calibration (invariants.md D2; GH #201) — a pure
+/// read over the already-built vault. Per labelled query: the lexical half's
+/// reading via a direct `chunks_fts` probe (the engine's own sanitized
+/// expression — the absolute signals RRF discards), the dense top-1 via the
+/// vector-only ablation path, and the shipped surface's served count.
+fn score_search_evidence(
+    vault_root: &Path,
+    vault: &Vault,
+    positives: &[Labelled],
+    negatives: &[Labelled],
+) -> Result<SearchEvidence, Box<dyn std::error::Error>> {
+    // A second read connection beside the Vault's own — C1: readers are
+    // unrestricted, and the probe wants FTS5's `rank`, which no façade read
+    // exposes (deliberately: bm25 units are engine internals everywhere but
+    // this instrument).
+    let conn = b2_core::open(&vault_root.join(".b2").join("b2.sqlite"))?;
+    let rows = |queries: &[Labelled]| -> Result<Vec<QueryEvidence>, Box<dyn std::error::Error>> {
+        queries
+            .iter()
+            .map(|q| {
+                let (bm25_hits, bm25_best) = bm25_probe(&conn, &q.query)?;
+                let dense = vault.search_vector_only(&q.query, 1)?;
+                let best_cos = dense.first().map(|h| cosine_of(h.score));
+                let top = dense
+                    .first()
+                    .map(|h| h.path.clone())
+                    .unwrap_or_else(|| "—".to_string());
+                let served = vault.search(&q.query, K)?.len();
+                Ok(QueryEvidence {
+                    query: q.query.clone(),
+                    bm25_hits,
+                    bm25_best,
+                    best_cos,
+                    top,
+                    served,
+                })
+            })
+            .collect()
+    };
+    Ok(SearchEvidence {
+        positives: rows(positives)?,
+        negatives: rows(negatives)?,
+    })
+}
+
+/// The lexical half's reading for one raw query, probed directly over
+/// `chunks_fts` with the engine's own sanitized expression
+/// ([`b2_core::search::fts5_query`]): how many chunks match at all, and the
+/// best BM25 score among them (FTS5 `rank`, sign-flipped so higher = better).
+/// These are exactly the absolute signals the fused path computes and then
+/// discards at RRF — which is why the instrument reads them raw.
+fn bm25_probe(
+    conn: &rusqlite::Connection,
+    query: &str,
+) -> Result<(usize, Option<f64>), Box<dyn std::error::Error>> {
+    let expr = b2_core::search::fts5_query(query);
+    if expr.is_empty() {
+        return Ok((0, None));
+    }
+    let hits: i64 = conn.query_row(
+        "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?1",
+        [&expr],
+        |r| r.get(0),
+    )?;
+    let hits = usize::try_from(hits).unwrap_or(0);
+    if hits == 0 {
+        return Ok((0, None));
+    }
+    let best: f64 = conn.query_row(
+        "SELECT rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT 1",
+        [&expr],
+        |r| r.get(0),
+    )?;
+    Ok((hits, Some(-best)))
+}
+
+/// Print the search evidence calibration (invariants.md D2; GH #201) — the
+/// query-side sibling of [`print_floor_windows`]. Reported, nothing gates: the
+/// piles are what GH #201's query-level bar is argued from, and any constant
+/// read off them owes process rule 5's real-vault transfer check before it
+/// ships. The window's caveat is structural: D2's rule is lexical OR semantic
+/// evidence, so a *pure-cosine* window overstates what a real bar must keep —
+/// a positive query with a lexical anchor never needs its cosine kept.
+fn print_search_evidence(ev: &SearchEvidence) {
+    println!(
+        "  search evidence calibration (D2 — reported, nothing gates; the query bar is GH #201's \
+         to earn)"
+    );
+    let pos_cos = best_cos_pile(&ev.positives);
+    let neg_cos = best_cos_pile(&ev.negatives);
+    for (label, pile, role) in [
+        (
+            "pos best-cos",
+            &pos_cos,
+            "a pure-cosine bar would have to KEEP",
+        ),
+        ("neg best-cos", &neg_cos, "any query bar would have to CUT"),
+    ] {
+        match pile_stats(pile) {
+            Some((min, med, max)) => println!(
+                "    {label:<12} n={:<4} min/med/max {min:.3}/{med:.3}/{max:.3}   ← {role}",
+                pile.len()
+            ),
+            None => println!("    {label:<12} n=0    (nothing labelled — no reading)"),
+        }
+    }
+    let hits: Vec<f64> = ev.positives.iter().map(|r| r.bm25_hits as f64).collect();
+    if let Some((min, med, max)) = pile_stats(&hits) {
+        println!(
+            "    pos bm25     hits min/med/max {min:.0}/{med:.0}/{max:.0}   (OR-saturated: stopwords \
+             match too, so a raw count is not a lexical anchor — GH #201 derives one from this dump)"
+        );
+    }
+    match Window::read(&neg_cos, &pos_cos) {
+        None => println!(
+            "    cos window   no reading (a pile is empty — label negative queries to give GH #201 \
+             its CUT side)"
+        ),
+        Some(w) if w.open() => println!(
+            "    cos window   ({:.3}, {:.3}]  — open on THIS corpus for a pure-cosine query bar; \
+             the real keep-set is smaller (lexical evidence keeps its own), and a real vault is the \
+             other half of any such claim (process rule 5, `just calibrate`)",
+            w.cut_max, w.keep_min
+        ),
+        Some(w) => println!(
+            "    cos window   EMPTY for a pure-cosine bar — negatives reach {:.3} while positives \
+             start at {:.3}; D2's two-signal rule (lexical OR semantic) is argued from the per-query \
+             lines, not this window",
+            w.cut_max, w.keep_min
+        ),
+    }
+    if ev.negatives.is_empty() {
+        println!(
+            "    negatives    n=0   (none labelled — queries.json takes empty `relevant` as \
+             \"no matches\")"
+        );
+    } else {
+        println!(
+            "    negatives (labelled answer: NO MATCHES — what the shipped surface serves instead):"
+        );
+        for r in &ev.negatives {
+            println!(
+                "      {:<40} bm25 {:>3} hit{}  best {:>6}  cos {:>6}  served {:>2}/{K}  top {}",
+                truncate(&r.query, 40),
+                r.bm25_hits,
+                if r.bm25_hits == 1 { " " } else { "s" },
+                r.bm25_best
+                    .map(|b| format!("{b:.2}"))
+                    .unwrap_or_else(|| "—".to_string()),
+                r.best_cos
+                    .map(|c| format!("{c:.3}"))
+                    .unwrap_or_else(|| "—".to_string()),
+                r.served,
+                r.top,
+            );
+        }
+    }
 }
 
 /// A `similar` score is negated L2 distance between L2-normalized vectors
@@ -1845,6 +2075,7 @@ fn result_row(
     hybrid: &Pass,
     similar: Option<&SimilarPass>,
     floor_z: Option<&FloorZ>,
+    evidence: Option<&SearchEvidence>,
 ) -> serde_json::Value {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2009,6 +2240,36 @@ fn result_row(
                         "mate": c.mate,
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
+            })
+        }),
+        // NEW key (absent from rows before 2026-08-22): the search evidence
+        // dump (invariants.md D2, GH #201) — per labelled query, the absolute
+        // signals RRF discards (BM25 hit count + best score, dense top-1
+        // cosine) and the shipped surface's served count, positives and
+        // negatives apart, with the would-be pure-cosine query window. Same
+        // convention as every key above: new, never a redefinition. `null` on
+        // ablation/sweep rows, which do not re-derive it.
+        "search_evidence": evidence.map(|e| {
+            let row = |r: &QueryEvidence| serde_json::json!({
+                "q": r.query,
+                "bm25_hits": r.bm25_hits,
+                "bm25_best": r.bm25_best.map(|b| (b * 1e4).round() / 1e4),
+                "best_cos": r.best_cos.map(|c| (c * 1e4).round() / 1e4),
+                "top": r.top,
+                "served": r.served,
+            });
+            let (pos_cos, neg_cos) = (best_cos_pile(&e.positives), best_cos_pile(&e.negatives));
+            serde_json::json!({
+                // The depth `served` is read at, so a future K change shows up
+                // in the row instead of silently redefining the number.
+                "k": K,
+                "positives": e.positives.iter().map(row).collect::<Vec<_>>(),
+                "negatives": e.negatives.iter().map(row).collect::<Vec<_>>(),
+                "window_best_cos": Window::read(&neg_cos, &pos_cos).map(|w| serde_json::json!({
+                    "cut_max": (w.cut_max * 1e4).round() / 1e4,
+                    "keep_min": (w.keep_min * 1e4).round() / 1e4,
+                    "open": w.open(),
+                })),
             })
         }),
         "queries": queries.iter().enumerate().map(|(i, q)| serde_json::json!({

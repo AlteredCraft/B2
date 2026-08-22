@@ -395,6 +395,7 @@ dependencies = [
  "candle-transformers",
  "dirs",
  "hf-hub",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
