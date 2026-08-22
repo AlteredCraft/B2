@@ -1229,6 +1229,20 @@ fn print_dense_search(search: &DenseSearch) {
     println!(
         "  search bar  D2's shipped bar replayed on this geometry (GH #201; reported, not gated)"
     );
+    // The coverage reading comes FIRST, and above the bar, because it is
+    // **model-free**: a fact about this vault's vocabulary, and the lexical
+    // half's whole premise. Gating it behind a calibrated bar would print
+    // nothing at all on a vault the harness can still say something true about —
+    // the defect PR #205's review already fixed in `calibrate.rs` (c03f8cd), met
+    // again here (PR #207 review).
+    let covs: Vec<f64> = search.titles.iter().filter_map(|p| p.coverage).collect();
+    let cov_line = match pile_stats(&covs) {
+        Some((min, med, max)) => format!("{min:.2}/{med:.2}/{max:.2}"),
+        None => "— (no query carried weight)".to_string(),
+    };
+    println!("              title-as-query coverage min/med/max {cov_line}");
+
+    // Only the *verdicts* below need a bar, so only they stop here.
     let Some(bar) = search.bar else {
         println!("              no calibrated bar for this model — no verdict is offered (M2)");
         return;
@@ -1243,15 +1257,9 @@ fn print_dense_search(search: &DenseSearch) {
         .iter()
         .filter(|p| p.vouched == Some(true))
         .collect();
-    let covs: Vec<f64> = search.titles.iter().filter_map(|p| p.coverage).collect();
     println!(
-        "              bar coverage ≥ {:.2} or cos ≥ {:.3}; title-as-query coverage min/med/max {}",
-        bar.min_term_coverage,
-        bar.min_cos,
-        match pile_stats(&covs) {
-            Some((min, med, max)) => format!("{min:.2}/{med:.2}/{max:.2}"),
-            None => "— (no query carried weight)".to_string(),
-        }
+        "              bar under test: coverage ≥ {:.2} or cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos,
     );
     println!(
         "              cuts {}/{} title queries   ← the TRIPWIRE direction; the retired df ceiling \
@@ -1278,7 +1286,7 @@ fn print_dense_search(search: &DenseSearch) {
     );
 }
 
-/// The dense fixture's search reading as JSON (`search_evidence` in the dense
+/// The dense fixture's search reading as JSON (`search_transfer` in the dense
 /// row) — every probe, so any bar is re-derivable from a row without re-running
 /// the model, the `discovery_fold` convention.
 fn dense_search_json(search: &DenseSearch) -> serde_json::Value {
@@ -1371,7 +1379,14 @@ fn dense_row(
         })).collect::<Vec<_>>(),
         "empty_panes": { "n": dense.notes, "empty": dense.empty_panes.len(), "detail": dense.empty_panes },
         "discovery_fold": fold_json(&dense.fold),
-        "search_evidence": dense_search_json(&dense.search),
+        // NEW key (absent from rows before 2026-08-22): the shipped search bar
+        // replayed on this fixture (GH #201). Deliberately NOT the orthogonal
+        // row's `search_evidence`: that key holds the *labelled* bake-off, and
+        // this is the label-free transfer reading — a different measurement, so
+        // it takes a different name. Same convention as every key above: new,
+        // never a redefinition, so no reader has to branch on `corpus` to learn
+        // which shape it is holding (PR #207 review).
+        "search_transfer": dense_search_json(&dense.search),
         "similar_detail": dense.detail.iter().map(|d| serde_json::json!({
             "anchor": d.anchor,
             "negative": d.negative,

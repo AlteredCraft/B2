@@ -163,7 +163,7 @@ the model, the `discovery_fold` convention.
 
 The bake-off runs on the **orthogonal** corpus, which is where the labels are — and that is
 precisely the geometry the lexical rule survives, so the dense fixture carries a second reading of
-its own (`search_evidence` in the dense row, added in the PR #205 review sweep): the shipped bar
+its own (`search_transfer` in the dense row, added in the PR #205 review sweep — its own key, not the orthogonal row's `search_evidence`, since a label-free transfer reading is a different measurement from the labelled bake-off): the shipped bar
 replayed over every note's own title as a query, plus nonsense. Titles need no labels, so nothing
 there can be relabelled to clear a number, and the reading is the tripwire direction — the retired
 `df` ceiling cut 3 of these 15. The nonsense strings are the only negatives that transfer between
@@ -455,7 +455,7 @@ says so instead of going quietly stale.
 
   The middle row is now **re-read on every `just eval` run** rather than taken once (PR #205
   review): the dense fixture's throwaway vault replays the shipped bar over its own titles and
-  nonsense, and records it as `search_evidence` in the dense row. Taking a transfer reading once is
+  nonsense, and records it as `search_transfer` in the dense row. Taking a transfer reading once is
   the failure [#187](https://github.com/AlteredCraft/B2/issues/187) named — the reading that
   disqualifies a rule is worth nothing frozen in a comment, and the geometry in question is the one
   the labelled bench cannot express.
