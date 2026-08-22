@@ -135,6 +135,18 @@ which is why openness on one corpus proves nothing without process rule 5's tran
 the negatives' band readout — recorded in the row as `discovery_z`. That block is the first
 reading any Phase-2 bake-off candidate answers to; `just calibrate` on real vaults is the second.
 
+The **fold bake-off** ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase B) is
+reported the same way, and for the standing reason: nothing folds today, so the exit gate has
+nothing to watch. Its judged quantity — **labelled mates served within `limit` but below the
+fold** — reads a structural 0 under always-serve exactly as suppression does, and it is kept
+printed rather than gated because the block's job is to price the *next* candidate rule, not to
+re-assert the incumbent. If a fold ever ships, that number and the swept window are what the
+gate takes ([#202](https://github.com/AlteredCraft/B2/issues/202) moves the assertions in the
+same change as the surfaces, per #182's rule). Recorded as `discovery_fold` in both corpora's
+rows, carrying the per-anchor folds, the whole `k` sweep, and each candidate's `recip_rank` —
+the anchor's rank in *its* list — so any depth is re-derivable from a row without re-running the
+model.
+
 The **search evidence calibration** ([#201](https://github.com/AlteredCraft/B2/issues/201),
 Phase A) is reported the same way — per labelled query, the OR-sanitized BM25 hit count and best
 score, the dense top-1 cosine, and what always-serve serves today, positives and negatives apart,
@@ -315,6 +327,63 @@ process rule 5's transfer check like any distributional constant.
   query-level bar); #202 lands the winners on every surface and moves the exit-gate assertions
   in the same change.
 
+- **The discovery fold bake-off ran, and no fold ships — mutual-k's admissible window is empty,
+  and its safe depth does not transfer**
+  ([#200](https://github.com/AlteredCraft/B2/issues/200), measured and ruled
+  2026-08-22; invariants.md **D1**). The run added a `discovery fold bake-off` block to both
+  corpora's reports: every candidate disclosure rule judged on the *same* served lists, `k` swept
+  1..15, and — the #187 idiom moved onto the disclosure axis — the rule's admissible window
+  **re-derived each run** rather than quoted. What it reads:
+
+  | | orthogonal (31 notes, median 30-candidate pool) | dense (15 notes, median 14-candidate pool) |
+  |---|---|---|
+  | smallest `k` folding **no** labelled mate, darkening **no** pane | **14** (= 0.47 of the pool) | **7** (= 0.50 of the pool) |
+  | largest `k` emptying **every** loner's default view | **none at any depth** (4 of 5 at `k ≤ 11`) | — (no loner by construction) |
+  | `k` at which the fold equals always-serve | — | **13** |
+
+  So the two ends of the one knob never meet. At the depths where the fold still buys what it
+  exists to buy — `k ≤ 11`, four of five loners folding to an honest empty — it hides between
+  **1 and 13** of the corpus's 15 labelled mates, each named in the block: one even at its most
+  generous (`k = 11`), three at `k = 9–10` (`insomnia → radio-and-sleep-debt`,
+  `photosynthesis → houseplant-care`, `bicycle → tire-pressure-and-knots`), eleven at the pane's
+  own depth `k = 5`. And on the dense fixture every `k ≤ 5` darkens 1–3 of 15 panes, which is
+  D1's absolute and disqualification rather than a tuning note. **The decisive finding is the
+  pair of safe depths**: 14 and 7 are the same *fraction* of their pools and different
+  *constants*, so no constant `k` transfers between two corpora sixteen notes apart, let alone to
+  a 10k-note vault — and a *fraction* cannot ship either, because a candidate's own list is
+  itself truncated by the recall shortlist (`discover::SHORTLIST_MIN = 200`), so "the anchor is
+  in this candidate's nearer half" stops being computable past a few hundred notes. Rank-based
+  bought exactly what it promised (no cosine or z constant to transfer-check) and not the thing
+  that mattered: the constant is a rank *in a population*, and the population is what changes.
+  A third reading nails it — `just calibrate` replaying the same fold at 200-note scale
+  (`fixtures/test-vault`, a median 180-candidate pool; a **geometry** bench, not a quality one,
+  since its notes and links are procedurally generated): **`k = 10` discloses 36% of the cards on
+  the orthogonal corpus, 91% on the dense fixture, and 98% here** (189 of 200 anchors showing
+  their whole view — the rule gone vacuous), while `k = 5` darkens 7 of 200 panes on a vault where
+  every note has nineteen same-topic siblings. One constant, three vaults, three different rules.
+  What the candidate **did** prove is kept as evidence rather than thrown away — at `k ≤ 11` the
+  loners fold empty 4 of 5 while (from `k ≥ 7`) every dense pane stays lit, which is the
+  loner-versus-dense discrimination [#196](https://github.com/AlteredCraft/B2/issues/196) proved
+  no *anchor-local* statistic can make. A pair-level signal can see it; this particular one
+  cannot be aimed. Candidate 2, the **authored-edge reference bar**, is *unpriceable here and
+  undecided*: its calibration population is the human's own committed edges and both corpora
+  carry **zero** (measured and recorded per run as `authored_edges`, not assumed — the
+  process-rule-2 token audit that keeps them orthogonal leaves nothing to link), and being a
+  distributional constant it owes process rule 5's transfer check anyway. Its bench is a real
+  vault with human-authored edges, judged by its owner. The one *mechanism* reading available —
+  `just calibrate` on `fixtures/test-vault`, whose 1748 generated links are a shape, not a
+  judgement — says the quantile choice is the whole rule: the authored population's cosines run
+  0.475 / **0.628** / 0.901 / 0.979 (min / q1 / median / max) while the pane's top-5 sit at 0.94+,
+  so a lower-quartile bar folds **nothing at all** (1000 of 1000 cards above it) and a median one
+  would cut deep. That is the transfer question in one line, and no honest population in this
+  repository can answer it. **The fourth bench — two or more real vaults, each judged against
+  named per-anchor lists by the person whose vault it is — was not run**: this ruling therefore
+  disqualifies candidate 1 on the benches that *can* disqualify it (a rule that darkens a dense
+  vault's panes is inadmissible wherever it is measured) and leaves candidate 2 open rather than
+  claiming it lost. The incumbent — **no fold** — clears
+  every bench it can be judged on, and stays; the dogfood complaint that opened #200 is
+  therefore still unpaid, and the honesty still rides on the band and the copy.
+
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
 always-serve it is *served*, at best-passage rank 4, so the residue is **ordering quality rather
@@ -327,7 +396,10 @@ within-list z compresses and the dots lose resolution — first reading taken on
 build of the dense fixture itself (`just calibrate` on a vault built from `corpus-dense/`):
 **0 ●●● / 6 ●●○ / 144 ●○○** across fifteen top-10 lists, leaders +1.16 … +2.43, with the
 replayed retired gate darkening 9 of 15 anchors and serving 7 of 150 candidates on the same
-vault. The re-reference decision is deferred to Phase 2.
+vault. #200 was to decide the re-reference *if reciprocity shipped* (#182's rule: a change to the
+judged statistic is a change to every surface that paints it) — it did not, so the judged
+statistic did not move and the bands are correct as they stand. The compression itself is
+unfixed and now has no mechanism riding on it: it stays open on its own.
 
 ## Running it
 

@@ -180,9 +180,16 @@ tomorrow's model* — made mechanical.
   dense single-domain fixture — where a non-empty default view is absolute — and real vaults via
   `just calibrate`, with "no fold at all" an admissible winner) and **continuous in population
   size**: a threshold may move banding or the fold, never which rows exist or can be reached.
-  Strength stays a within-list grading painted from the z, which gates nothing.
-  ([index-engine.md](index-engine.md) §3, GH #196/#197; the bake-off is GH #200, its surfaces and
-  gate moves GH #202; the generation side's recall posture and 1-hop exclusion are unchanged)
+  Strength stays a within-list grading painted from the z, which gates nothing. **The first
+  bake-off found no admissible fold** (GH #200, 2026-08-22): mutual-kNN reciprocity's window is
+  empty — on the orthogonal corpus the depth that stops hiding labelled mates is past the depth
+  that still empties a loner's view, while the dense fixture carries no loner and so supplies only
+  the lower bound and the absolute; and the two corpora's safe depths are the same *fraction* of
+  their candidate pools rather than the same constant — so the default view is still the whole
+  served prefix. The permission above stands unchanged for the next candidate; what the measurement
+  retires is one rule, not the axis.
+  ([index-engine.md](index-engine.md) §3, GH #196/#197/#200; surfaces and gate moves GH #202; the
+  generation side's recall posture and 1-hop exclusion are unchanged)
 - **D2 — A served search result is a claim of evidence, and `limit` is a quota nowhere in B2.**
   Flow ②'s vector half always has k nearest — *nearest* is a fact about the vault, never evidence
   about the query — and RRF fuses ranks, discarding the absolute signals that could tell the

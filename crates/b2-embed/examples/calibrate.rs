@@ -31,6 +31,28 @@
 //! real vaults **is** its bake-off bench (GH #200's fourth row), beside the
 //! orthogonal corpus, the dense fixture, and the labelled negatives.
 //!
+//! That bake-off has since **ruled, and no fold ships** (GH #200, 2026-08-22):
+//! mutual-k's admissible window is empty on both eval corpora, and this
+//! instrument supplied the reading that generalized the finding — the same `k`
+//! is a different rule on every vault (`k = 10` discloses 36% of the cards on
+//! the orthogonal corpus, 91% on the dense fixture, 98% on `fixtures/test-vault`,
+//! where `k = 5` darkens 7 of 200 panes). The replay stays because the *next*
+//! candidate is priced the same way, and because a real vault is still the
+//! bench neither corpus can be.
+//!
+//! The **authored-edge reference bar** (GH #200's candidate 2) is replayed beside
+//! it, and this is the only instrument that *can* replay it: the rule calibrates
+//! "what related looks like in this vault" from the score distribution of the
+//! human's own committed edges, and both eval corpora are link-free by
+//! construction — engineered orthogonality leaves nothing to link — so the rule
+//! has no population there. Here it has one. The bar is the population's lower
+//! quartile (the whole distribution prints beside it, because a quantile is a
+//! choice and a choice printed as one number is an assumption), and the replayed
+//! default view is the longest prefix at or above it. Unlike reciprocity this is
+//! a **distributional constant**, so process rule 5's transfer check binds it —
+//! which is to say: this instrument is not an aside for candidate 2, it is the
+//! whole of its evidence.
+//!
 //! **It is a pure read** — stored vectors only, no model call, no write beyond the
 //! `.b2/` directory every read command ensures — so it runs in seconds on a vault
 //! of any personal scale and never perturbs what it measures.
@@ -51,6 +73,7 @@
 //! Phase-2 one, via the flags) is exactly what this instrument is for.
 
 use b2_core::vault::{SimilarView, Vault};
+use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -196,6 +219,110 @@ fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
     Some((sorted[0], median, sorted[sorted.len() - 1]))
 }
 
+/// **Candidate 2** of GH #200's bake-off, replayed: an *authored-edge reference
+/// bar*. The idea is to calibrate "what related looks like **in this vault**"
+/// from the one labelled population every real vault carries — the score
+/// distribution of the human's own committed edges — and fold the default view
+/// at the longest prefix scoring at or above it.
+///
+/// Priceable only where that population exists, which is why it lives here
+/// rather than in `just eval`: **both eval corpora are link-free by
+/// construction** (the token audit that keeps them orthogonal leaves nothing to
+/// link), so the rule has nothing to calibrate from there. Its pair score is the
+/// same statistic discovery ranks on — the best chunk pair across the two notes'
+/// stored vectors — computed here over the *linked* pairs discovery never scores
+/// (the 1-hop exclusion removes exactly them).
+///
+/// The bar is the population's **lower quartile**: the default view vouches for
+/// a candidate that looks at least as related as the weaker quarter of what this
+/// human has already been willing to link. The whole distribution prints beside
+/// it, because the quantile is a choice and a choice printed as one number is an
+/// assumption.
+struct EdgeBar {
+    /// Authored edges whose pair could be scored (both notes embedded).
+    n: usize,
+    min: f64,
+    q1: f64,
+    median: f64,
+    max: f64,
+}
+
+impl EdgeBar {
+    /// The bar itself — the lower quartile of the authored-edge cosines.
+    fn bar(&self) -> f64 {
+        self.q1
+    }
+
+    /// This vault's authored-edge pair cosines. Undirected and de-duplicated: an
+    /// edge read from both endpoints is one relation, and counting it twice
+    /// would weight the reciprocally-visible pairs double. `None` when the vault
+    /// has no scorable authored edge — the rule has no population, which is a
+    /// reading about the vault, not a failure of the instrument.
+    fn read(vault: &Vault, conn: &Connection) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let mut cos: Vec<f64> = Vec::new();
+        for note in vault.list_notes()? {
+            let neighbors = vault.neighbors(&note.path)?;
+            if neighbors.is_empty() {
+                continue;
+            }
+            // Loaded once per source note and dropped with it: the population is
+            // read edge by edge rather than by caching the whole vault's
+            // vectors, so a large vault costs time here, never memory.
+            let src: Vec<Vec<f32>> = b2_core::db::note_chunk_vectors(conn, &note.path)?
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect();
+            for n in neighbors {
+                let pair = if note.path <= n.path {
+                    (note.path.clone(), n.path.clone())
+                } else {
+                    (n.path.clone(), note.path.clone())
+                };
+                if !seen.insert(pair) {
+                    continue;
+                }
+                let dst: Vec<Vec<f32>> = b2_core::db::note_chunk_vectors(conn, &n.path)?
+                    .into_iter()
+                    .map(|(_, v)| v)
+                    .collect();
+                // Best-passage, the same statistic `similar` ranks on: the
+                // nearest chunk pair across the two notes. A pair with an
+                // unembedded side (or a dangling/resource target) scores nothing
+                // and drops out rather than entering the population as a zero.
+                let best = src
+                    .iter()
+                    .flat_map(|x| dst.iter().map(move |y| b2_core::embed::l2_sq(x, y)))
+                    .fold(f32::INFINITY, f32::min);
+                if best.is_finite() {
+                    cos.push(1.0 - (best as f64) / 2.0);
+                }
+            }
+        }
+        if cos.is_empty() {
+            return Ok(None);
+        }
+        cos.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let at = |q: f64| cos[(((cos.len() - 1) as f64) * q).round() as usize];
+        Ok(Some(Self {
+            n: cos.len(),
+            min: cos[0],
+            q1: at(0.25),
+            median: at(0.5),
+            max: cos[cos.len() - 1],
+        }))
+    }
+
+    /// How many of `pool`'s leading candidates clear the bar — candidate 2's
+    /// fold, in the same prefix form candidate 1 takes.
+    fn fold(&self, pool: &[(String, f64, Option<f64>)], limit: usize) -> usize {
+        pool.iter()
+            .take(limit)
+            .take_while(|(_, cos, _)| *cos >= self.bar())
+            .count()
+    }
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("calibrate failed: {e}");
@@ -309,6 +436,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
+    // Candidate 2 of the same bake-off (GH #200): the authored-edge reference
+    // bar, priceable only where the human has committed edges — which is why it
+    // is measured here and not in `just eval` (both eval corpora are link-free
+    // by construction, so the rule has no population there).
+    let edge_bar = EdgeBar::read(&vault, &conn)?;
+
     if json {
         print_json(
             &vault_root,
@@ -319,6 +452,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mutual_k,
             &readings,
             &folds,
+            &edge_bar,
             &poolless,
         );
         return Ok(());
@@ -339,8 +473,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!(
-        "{:<44} {:>4}  {:^23}  {:^17}  {:>11}  {:>5}  {:>9}",
-        "anchor", "n", "cos min/med/max", "leader cos / z", "gate serves", "fold", "bands"
+        "{:<44} {:>4}  {:^23}  {:^17}  {:>11}  {:>5}  {:>5}  {:>9}",
+        "anchor", "n", "cos min/med/max", "leader cos / z", "gate serves", "fold", "e-bar", "bands"
     );
     println!("{}", "-".repeat(120));
     let mut dark = 0usize;
@@ -383,7 +517,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         worst_drift = worst_drift.max(r.recheck_delta());
         println!(
-            "{:<44} {:>4}  {:>6.3}/{:>6.3}/{:>6.3}   {:>6.3} / {:>6}  {:>7}/{:<3}  {:>4}  {}",
+            "{:<44} {:>4}  {:>6.3}/{:>6.3}/{:>6.3}   {:>6.3} / {:>6}  {:>7}/{:<3}  {:>4}  {:>5}  {}",
             truncate(&r.path, 44),
             r.pool.len(),
             min,
@@ -400,6 +534,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             },
             always,
             fold,
+            edge_bar
+                .as_ref()
+                .map(|b| b.fold(&r.pool, limit).to_string())
+                .unwrap_or_else(|| "—".into()),
             match bands {
                 Some((s, c, n)) => format!("{s}●●● {c}●●○ {n}●○○"),
                 None => "ungraded".to_string(),
@@ -441,6 +579,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "  always-serve (top-{limit})  0/{} anchors dark, {always_served_total} candidates served",
         readings.len()
     );
+    match &edge_bar {
+        Some(bar) => {
+            let (mut above, mut empty) = (0usize, 0usize);
+            for r in &readings {
+                let fold = bar.fold(&r.pool, limit);
+                above += fold;
+                if fold == 0 {
+                    empty += 1;
+                }
+            }
+            println!(
+                "  authored-edge bar     {empty}/{} anchors fold to an empty default view, \
+                 {above} candidates above the bar {:.3} (n={} edges, cos min/q1/med/max \
+                 {:.3}/{:.3}/{:.3}/{:.3})",
+                readings.len(),
+                bar.bar(),
+                bar.n,
+                bar.min,
+                bar.q1,
+                bar.median,
+                bar.max
+            );
+        }
+        None => println!(
+            "  authored-edge bar     UNPRICEABLE on this vault — no scorable authored edge, so \
+             candidate 2 has no population to calibrate from"
+        ),
+    }
     println!(
         "  bands at top-{limit}       {strong} ●●● / {clear} ●●○ / {near} ●○○ across graded anchors ({ungraded} ungraded)"
     );
@@ -476,6 +642,7 @@ fn print_json(
     mutual_k: usize,
     readings: &[AnchorReading],
     folds: &[(usize, Vec<bool>)],
+    edge_bar: &Option<EdgeBar>,
     poolless: &[String],
 ) {
     let row = serde_json::json!({
@@ -488,11 +655,22 @@ fn print_json(
         // the anchor sits in B's own top `mutual_k`; `fold_serves` below is the
         // ranked list's longest reciprocal prefix, capped at `limit`.
         "mutual_k": mutual_k,
+        // Candidate 2's population and the bar read off it (GH #200) — `null`
+        // on a link-free vault, which is the rule's own reading there.
+        "edge_bar": edge_bar.as_ref().map(|b| serde_json::json!({
+            "n": b.n,
+            "bar": (b.bar() * 1e4).round() / 1e4,
+            "min": (b.min * 1e4).round() / 1e4,
+            "q1": (b.q1 * 1e4).round() / 1e4,
+            "median": (b.median * 1e4).round() / 1e4,
+            "max": (b.max * 1e4).round() / 1e4,
+        })),
         "anchors": readings.iter().zip(folds).map(|(r, (fold, recip))| serde_json::json!({
             "anchor": r.path,
             "n": r.pool.len(),
             "gate_serves": r.gate_serves(gate, limit),
             "fold_serves": fold,
+            "edge_bar_serves": edge_bar.as_ref().map(|b| b.fold(&r.pool, limit)),
             "always_serves": r.pool.len().min(limit),
             "bands": r.bands(limit).map(|(s, c, n)| serde_json::json!({ "strong": s, "clear": c, "near": n })),
             "pool": r.pool.iter().enumerate().map(|(i, (path, cos, engine_z))| serde_json::json!({
