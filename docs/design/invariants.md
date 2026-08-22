@@ -202,7 +202,27 @@ tomorrow's model* — made mechanical.
   distributional constant (process rule 5's `just calibrate` transfer check), earned against
   labelled negative queries in the eval corpus before it ships, folding only in prefix form — and
   **a labelled relevant note below the fold is the search-side tripwire, asserted at zero with no
-  headroom**. ([index-engine.md](index-engine.md) §4, GH #201, surfaces GH #202,
+  headroom**.
+  **The engine now answers it** (GH #201, 2026-08-22): `hybrid_search` carries the discarded
+  signals beside the untouched fused order — per hit its rank in each list and its own distance,
+  per query the lexical reading and the best cosine — and the rule over them is *lexical OR
+  semantic*, two independent signals so the test can tell "nothing matches" from "everything
+  matches" where a one-signal one could not (D1's own reason, GH #196). The lexical half is
+  **IDF-weighted term coverage**: how much of the query's own weight the vault carries, a word in
+  most chunks weighing ~nothing and a word in none weighing the most — so a stopword is a
+  measurement, not a word-list, and a query sharing only a *function* word with the vault carries
+  almost none of its own weight and so is not anchored. Its first form was a hard
+  df ceiling and that form **failed process rule 5 on the dense fixture** (a 1.5-chunk ceiling
+  called `drone` and `comb` stopwords in a beekeeping vault, cutting 3 of 15 queries naming notes
+  the vault holds) — the register keeps that, because it is the same lesson twice: a constant read
+  off one corpus's distribution describes that corpus, and the fix was to change the *rule* rather
+  than re-tune the number. The verdict reaches an adapter through `Vault::search_evidence`, which
+  serves exactly the rows `search` does in the same order; **what a surface does with it — the
+  empty state, whether the nearest list is offered behind the fold, the exit-gate moves — is GH
+  #202's**, landed together per #182's rule. The per-hit **tail** fold is unshipped and
+  deliberately so: it needs labels naming the irrelevance of ranks 5–10, which the corpus does not
+  carry, so the provenance is measured and reported rather than ruled on.
+  ([index-engine.md](index-engine.md) §4, GH #201, surfaces GH #202,
   [docs/evals/README.md](../evals/README.md) process rules)
 
 ## E — Engineering discipline (what keeps the above true)

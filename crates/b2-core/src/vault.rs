@@ -433,6 +433,61 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
+/// A search's evidence reading — [`Vault::search_evidence`]'s return, and the
+/// input a surface needs to decide what it vouches for (invariants.md D2).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SearchEvidenceView {
+    /// The served results, whole and in fused order — evidence never reorders or
+    /// removes a row (D1: reachability is untouchable).
+    pub results: Vec<EvidencedResult>,
+    /// Does the vault hold positive evidence for this query at the active
+    /// model's bar? `None` = no calibrated bar for this embedder, so no verdict
+    /// is offered rather than one guessed.
+    pub vouched: Option<bool>,
+    /// Chunks in the index — the scale every term's weight is read against.
+    pub chunk_total: usize,
+    /// Every query term with its document frequency, in query order.
+    pub terms: Vec<QueryTermView>,
+    /// Best cosine between the query and any chunk vector — the dense half's
+    /// absolute claim. `None` on a projected-but-unembedded vault.
+    pub best_cos: Option<f64>,
+}
+
+/// One served result with the provenance RRF discarded — which lists ranked its
+/// chunk, and how near its vector actually was.
+///
+/// The per-hit half of the evidence reading. The query-level verdict on
+/// [`SearchEvidenceView`] is what D2's "no matches" rests on; **this** is what a
+/// per-hit tail rule would be argued from (GH #201 Step 2, unshipped and
+/// deliberately so — the corpus does not yet label the irrelevance of ranks
+/// 5–10). Until then it is an instrument reading: a served row with
+/// `bm25_rank: None` is a hit the lexical half never saw at all.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EvidencedResult {
+    #[serde(flatten)]
+    pub result: SearchResult,
+    /// 0-based rank in the BM25 list; `None` = the lexical half never ranked it.
+    pub bm25_rank: Option<usize>,
+    /// 0-based rank in the dense list; `None` = the vector half never ranked it,
+    /// or never ran.
+    pub vector_rank: Option<usize>,
+    /// This chunk's cosine to the query; `None` whenever `vector_rank` is.
+    pub cos: Option<f64>,
+}
+
+/// One query term's lexical reading (see [`SearchEvidenceView`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct QueryTermView {
+    pub term: String,
+    /// Chunks matching this term alone; `0` = the vault has never seen the word.
+    pub df: usize,
+    /// This term's weight in the coverage reading — `ln((chunks+1)/(df+1))`.
+    /// Near zero for a word in most chunks, largest for one the vault has never
+    /// seen; the anchor is the share of the query's total weight the vault
+    /// carries (see [`b2_core::search::LexicalEvidence::term_coverage`]).
+    pub idf: f64,
+}
+
 /// One **chunk-level** search hit — the sub-note view of [`search`](Vault::search).
 /// Same retrieval (BM25 ⊕ vector → RRF, keyword-only fallback), but ranked chunks
 /// are returned as-is instead of deduped up to notes, so a caller can see *which
@@ -1080,8 +1135,12 @@ impl Vault {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let hits = self.retrieve(query, note_hit_pool(limit))?;
-        self.resolve_note_hits(hits, query, limit)
+        let hits = self.retrieve(query, note_hit_pool(limit))?.hits;
+        Ok(self
+            .resolve_note_hits(hits, query, limit)?
+            .into_iter()
+            .map(|(result, _)| result)
+            .collect())
     }
 
     /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
@@ -1109,7 +1168,76 @@ impl Vault {
             query,
             note_hit_pool(limit),
         )?;
-        self.resolve_note_hits(hits, query, limit)
+        Ok(self
+            .resolve_note_hits(hits, query, limit)?
+            .into_iter()
+            .map(|(result, _)| result)
+            .collect())
+    }
+
+    /// [`search`](Self::search) with the **evidence behind it** — D2's query-level
+    /// reading (invariants.md D2, GH #201): the same served results, plus the two
+    /// absolute signals RRF discards and the verdict they produce.
+    ///
+    /// Flow ② could not answer *zero* as first shipped: the dense half always has
+    /// k nearest, *nearest* is a fact about the vault rather than evidence about
+    /// the query, and RRF keeps only ranks — so a nonsense query served `limit`
+    /// confident-looking results. This read is what a surface consults to say
+    /// **"no matches"** honestly. It judges nothing itself: the results come back
+    /// whole and in order (D1 — reachability is untouchable), and what a surface
+    /// *vouches for* is the surface's decision to make from `vouched`.
+    ///
+    /// `limit` caps the rows returned and nothing else: the evidence is read at
+    /// full strength even at zero, since it is a fact about the query and the
+    /// vault rather than about how many results were asked for.
+    ///
+    /// `vouched` is `None` when the active embedder has no calibrated bar — a
+    /// fake-embedded space has no semantic geometry to hold a cosine bar over,
+    /// and an uncalibrated model's bar would be another model's constant (M2).
+    /// A caller that gets `None` shows the list as it always did; it never
+    /// guesses a bar.
+    pub fn search_evidence(&self, query: &str, limit: usize) -> Result<SearchEvidenceView> {
+        let _op =
+            tracing::debug_span!(target: "b2::vault", "search_evidence", query, limit).entered();
+        // `limit.max(1)` where `search` would short-circuit: a zero limit caps the
+        // *rows*, and the question this read answers is about the evidence. Going
+        // through `retrieve(0)` would skip the dense scan and hand back
+        // `best_cos: None` — which reads as "no embedding space" — so a verdict
+        // taken from it would be the lexical half wearing both halves' name.
+        let retrieval = self.retrieve(query, note_hit_pool(limit.max(1)))?;
+        // The lexical half is read here rather than inside retrieval: it costs a
+        // `count(*)` per distinct query term, and only a caller that wants a
+        // verdict should pay for it (see `search::Retrieval`).
+        let evidence = search::QueryEvidence {
+            lexical: search::lexical_evidence(&self.conn, query)?,
+            best_cos: retrieval.best_cos,
+        };
+        let bar = search::EvidenceBar::for_model(self.embedder.model_id());
+        Ok(SearchEvidenceView {
+            results: self
+                .resolve_note_hits(retrieval.hits, query, limit)?
+                .into_iter()
+                .map(|(result, p)| EvidencedResult {
+                    result,
+                    bm25_rank: p.bm25_rank,
+                    vector_rank: p.vector_rank,
+                    cos: p.distance.map(search::cosine_of_distance),
+                })
+                .collect(),
+            vouched: bar.map(|b| evidence.vouched(b)),
+            chunk_total: evidence.lexical.chunk_total,
+            terms: evidence
+                .lexical
+                .terms
+                .iter()
+                .map(|t| QueryTermView {
+                    term: t.term.clone(),
+                    df: t.df,
+                    idf: evidence.lexical.idf(t.df),
+                })
+                .collect(),
+            best_cos: evidence.best_cos,
+        })
     }
 
     /// The note-resolution tail shared by [`search`](Self::search) and
@@ -1121,13 +1249,13 @@ impl Vault {
         hits: Vec<search::Hit>,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        let mut out: Vec<SearchResult> = Vec::new();
+    ) -> Result<Vec<(SearchResult, search::HitProvenance)>> {
+        let mut out: Vec<(SearchResult, search::HitProvenance)> = Vec::new();
         for hit in hits {
             if out.len() == limit {
                 break;
             }
-            if out.iter().any(|r| r.path == hit.note_path) {
+            if out.iter().any(|(r, _)| r.path == hit.note_path) {
                 continue; // note already represented by a higher-scoring chunk
             }
             // The note row can only be missing on a torn read (its chunk resolved a
@@ -1141,12 +1269,15 @@ impl Vault {
             let snippet = db::chunk_text(&self.conn, hit.chunk_id)?
                 .map(|t| query_snippet(&t, query))
                 .unwrap_or_default();
-            out.push(SearchResult {
-                path: hit.note_path,
-                title,
-                score: hit.score,
-                snippet,
-            });
+            out.push((
+                SearchResult {
+                    path: hit.note_path,
+                    title,
+                    score: hit.score,
+                    snippet,
+                },
+                hit.provenance,
+            ));
         }
         Ok(out)
     }
@@ -1167,7 +1298,7 @@ impl Vault {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for hit in self.retrieve(query, chunk_hit_pool(limit))? {
+        for hit in self.retrieve(query, chunk_hit_pool(limit))?.hits {
             if out.len() == limit {
                 break;
             }
@@ -1286,7 +1417,7 @@ impl Vault {
     /// exists (failing fast on a model mismatch — the stored vectors would be
     /// incomparable with the query vector, so results would be silently wrong; the
     /// fix is a `reindex`), BM25-only on a projected-but-unembedded vault.
-    fn retrieve(&self, query: &str, pool: usize) -> Result<Vec<search::Hit>> {
+    fn retrieve(&self, query: &str, pool: usize) -> Result<search::Retrieval> {
         if db::embedding_space_exists(&self.conn)? {
             self.ensure_query_space_matches()?;
             search::hybrid_search(&self.conn, self.embedder.as_ref(), query, pool)

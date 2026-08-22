@@ -133,6 +133,7 @@
 use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
 use b2_core::embed::Embedder;
+use b2_core::search::EvidenceBar;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use serde::Deserialize;
@@ -704,6 +705,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     print_default_report(&positives, &bm25, &vector, &hybrid, &similar, &floor_z);
     print_fold_bench(&fold);
     print_search_evidence(&evidence);
+    print_search_bakeoff(&evidence, &bake_off(&evidence), &model_id);
 
     let git = git_short_sha();
     append_result(
@@ -2105,6 +2107,144 @@ struct QueryEvidence {
     /// this is the measured D2 defect: `limit` confident-looking results for a
     /// query the vault holds nothing for.
     served: usize,
+    /// Of those served rows, how many the **lexical half never ranked at all**
+    /// (`bm25_rank: None`) — the per-hit shape of the same defect, and the
+    /// reading GH #201's deferred Step 2 (a tail fold) would be argued from.
+    dense_only: usize,
+    /// Chunks in the index — the denominator every `df` below is judged against.
+    chunk_total: usize,
+    /// Every query term with its document frequency, in query order. The
+    /// population the lexical-anchor rule is swept over: raw hit count and raw
+    /// best-BM25 both failed to separate the piles (Phase A), so the anchor is
+    /// derived from *these* rather than from either of those.
+    terms: Vec<(String, usize)>,
+}
+
+impl QueryEvidence {
+    /// The share of this query's term IDF the vault carries — the harness's own
+    /// restatement of [`b2_core::search::LexicalEvidence::term_coverage`], kept
+    /// separate so a drift in the engine's rule shows up as the two disagreeing
+    /// rather than as silence. `None` when nothing in the query carries weight.
+    fn coverage(&self) -> Option<f64> {
+        let idf = |df: usize| ((self.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln();
+        let total: f64 = self.terms.iter().map(|(_, df)| idf(*df)).sum();
+        if total <= f64::EPSILON {
+            return None;
+        }
+        let present: f64 = self
+            .terms
+            .iter()
+            .filter(|(_, df)| *df >= 1)
+            .map(|(_, df)| idf(*df))
+            .fold(0.0, |a, b| a + b);
+        Some(present / total)
+    }
+
+    /// Whether this query has a lexical anchor at `min_coverage`.
+    fn anchored(&self, min_coverage: f64) -> bool {
+        self.coverage().is_some_and(|c| c >= min_coverage)
+    }
+}
+
+/// The `min_term_coverage` grid the bake-off sweeps: how much of a query's own
+/// weight the vault must carry for the lexical half to vouch for it. Spans "a
+/// twentieth" to "all of it", so the printed rows show the rule's whole
+/// behaviour rather than a neighbourhood of the shipped constant.
+const COVERAGES: [f64; 10] = [0.05, 0.10, 0.15, 0.20, 0.25, 0.34, 0.50, 0.67, 0.85, 1.00];
+
+/// One coverage-bar cell of the bake-off: how the lexical half alone splits the
+/// labelled piles there, and what the cosine half would then have to do for the
+/// queries it leaves undecided.
+struct EvidenceCell {
+    coverage: f64,
+    /// Positives the lexical half already vouches for.
+    pos_anchored: usize,
+    /// Negatives the lexical half wrongly vouches for. **Any nonzero value
+    /// disqualifies the cell**: an anchored negative is served whatever the
+    /// cosine bar says, so no `min_cos` can rescue it.
+    neg_anchored: usize,
+    /// Cosines of the positives the lexical half left undecided — the pile a
+    /// `min_cos` must KEEP.
+    undecided_pos: Vec<f64>,
+    /// Cosines of the negatives left undecided — the pile it must CUT.
+    undecided_neg: Vec<f64>,
+}
+
+impl EvidenceCell {
+    /// The cosine window this cell leaves for `min_cos`, over **only** the
+    /// queries the lexical half did not already decide — which is the whole
+    /// point of reading it here rather than over every query: D2's rule is
+    /// lexical OR semantic, so a positive with an anchor never needs its cosine
+    /// kept, and a pure-cosine window (Phase A's) overstates the keep set.
+    fn window(&self) -> Option<Window> {
+        Window::read(&self.undecided_neg, &self.undecided_pos)
+    }
+
+    /// Whether some `min_cos` completes this cell into a rule that keeps every
+    /// positive and cuts every negative.
+    ///
+    /// Three ways to be admissible, and the two degenerate ones are real
+    /// readings rather than edge-case bookkeeping: with no undecided negatives
+    /// the cosine half is inert (the lexical rule did the whole job), and with
+    /// no undecided positives any bar above the negatives' best cosine works.
+    fn admissible(&self) -> bool {
+        if self.neg_anchored > 0 {
+            return false;
+        }
+        match self.window() {
+            Some(w) => w.open(),
+            None => true,
+        }
+    }
+
+    /// The lowest `min_cos` that cuts every undecided negative — the bar's
+    /// measured floor. `None` when nothing is left to cut.
+    fn cut_floor(&self) -> Option<f64> {
+        let max = self
+            .undecided_neg
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        max.is_finite().then_some(max)
+    }
+
+    /// The highest `min_cos` that still keeps every undecided positive — the
+    /// bar's measured ceiling. `None` when nothing is left to keep.
+    fn keep_ceiling(&self) -> Option<f64> {
+        let min = self
+            .undecided_pos
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        min.is_finite().then_some(min)
+    }
+}
+
+/// Sweep the lexical rule over [`COVERAGES`], reading each cell's piles from the
+/// labelled queries (GH #201, Phase C).
+fn bake_off(ev: &SearchEvidence) -> Vec<EvidenceCell> {
+    let mut cells = Vec::new();
+    for coverage in COVERAGES {
+        let split = |rows: &[QueryEvidence]| -> (usize, Vec<f64>) {
+            let anchored = rows.iter().filter(|r| r.anchored(coverage)).count();
+            let undecided = rows
+                .iter()
+                .filter(|r| !r.anchored(coverage))
+                .filter_map(|r| r.best_cos)
+                .collect();
+            (anchored, undecided)
+        };
+        let (pos_anchored, undecided_pos) = split(&ev.positives);
+        let (neg_anchored, undecided_neg) = split(&ev.negatives);
+        cells.push(EvidenceCell {
+            coverage,
+            pos_anchored,
+            neg_anchored,
+            undecided_pos,
+            undecided_neg,
+        });
+    }
+    cells
 }
 
 /// The search evidence dump (GH #201): every labelled query's reading, split
@@ -2148,14 +2288,24 @@ fn score_search_evidence(
                     .first()
                     .map(|h| h.path.clone())
                     .unwrap_or_else(|| "—".to_string());
-                let served = vault.search(&q.query, K)?.len();
+                // The façade's own evidence read (GH #201) — the term dfs, the
+                // per-hit provenance, and the served list in one call, so the
+                // sweep judges exactly what the engine would.
+                let view = vault.search_evidence(&q.query, K)?;
                 Ok(QueryEvidence {
                     query: q.query.clone(),
                     bm25_hits,
                     bm25_best,
                     best_cos,
                     top,
-                    served,
+                    served: view.results.len(),
+                    dense_only: view
+                        .results
+                        .iter()
+                        .filter(|r| r.bm25_rank.is_none())
+                        .count(),
+                    chunk_total: view.chunk_total,
+                    terms: view.terms.iter().map(|t| (t.term.clone(), t.df)).collect(),
                 })
             })
             .collect()
@@ -2277,6 +2427,210 @@ fn print_search_evidence(ev: &SearchEvidence) {
                 r.top,
             );
         }
+    }
+}
+
+/// Print the **search evidence bake-off** (invariants.md D2; GH #201, Phase C)
+/// — the query-level rule's window, re-derived from the labelled piles on every
+/// run rather than quoted from the day it was read.
+///
+/// This is the GH #187 idiom on search's side of the disclosure axis, and it
+/// exists for the reason #187 named: the GH #150 cosine floor shipped as numbers
+/// frozen into a docstring, and they went stale the first time the corpus grew a
+/// shape they were never measured against. So the constant lives in
+/// [`b2_core::search::BGE_BASE_EVIDENCE_BAR`] and its *justification* is
+/// recomputed here — including, last, whether the shipped bar still sits inside
+/// the window it was read from.
+fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_id: &str) {
+    println!(
+        "  search evidence bake-off (D2 — the query-level rule, re-derived every run; GH #201)"
+    );
+    for line in [
+        "the rule: serve iff the query has a LEXICAL ANCHOR (the vault carries ≥ coverage of the",
+        "          query's term IDF — a word in most chunks weighs ~0, a word in none weighs the",
+        "          most) OR its dense top-1 clears a cosine bar. Two signals on purpose: a",
+        "          one-signal test cannot tell \"nothing matches\" from \"everything matches\" (#196).",
+        "`cos need` reads over ONLY the queries the lexical half left undecided — a positive with",
+        "          an anchor never needs its cosine kept, so a pure-cosine window overstates.",
+    ] {
+        println!("    {line}");
+    }
+    println!(
+        "    n = {} positives / {} negatives labelled",
+        ev.positives.len(),
+        ev.negatives.len()
+    );
+    println!(
+        "    {:>5}  {:>9} {:>9}  {:>15}  verdict",
+        "cov", "pos anch", "neg anch", "cos need"
+    );
+    for cell in cells {
+        let need = match (cell.cut_floor(), cell.keep_ceiling()) {
+            (Some(cut), Some(keep)) => format!("({cut:.3},{keep:.3}]"),
+            (Some(cut), None) => format!("> {cut:.3}"),
+            (None, Some(keep)) => format!("≤ {keep:.3} (inert)"),
+            (None, None) => "inert".to_string(),
+        };
+        let verdict = if cell.neg_anchored > 0 {
+            format!(
+                "✗ {} negative{} anchored — no cosine bar can rescue them",
+                cell.neg_anchored,
+                if cell.neg_anchored == 1 { "" } else { "s" }
+            )
+        } else if cell.admissible() {
+            "✓ admissible".to_string()
+        } else {
+            "✗ cosine window empty".to_string()
+        };
+        println!(
+            "    {:>5.2}  {:>4}/{:<4} {:>4}/{:<4}  {:>15}  {}",
+            cell.coverage,
+            cell.pos_anchored,
+            ev.positives.len(),
+            cell.neg_anchored,
+            ev.negatives.len(),
+            need,
+            verdict,
+        );
+    }
+    let admissible: Vec<&EvidenceCell> = cells.iter().filter(|c| c.admissible()).collect();
+    if admissible.is_empty() {
+        for line in [
+            "→ NO admissible cell on this corpus: every lexical rule either vouches for a",
+            "  labelled negative or leaves an empty cosine window. D2's bar is not earned,",
+            "  and no rule ships (the GH #200 outcome, on search's side).",
+        ] {
+            println!("    {line}");
+        }
+    } else {
+        println!(
+            "    → {} of {} cells admissible; the widest cosine window belongs to {}",
+            admissible.len(),
+            cells.len(),
+            widest(&admissible),
+        );
+    }
+    print_shipped_bar(ev, model_id);
+    let dense_only = |rows: &[QueryEvidence]| {
+        (
+            rows.iter().map(|r| r.dense_only).sum::<usize>(),
+            rows.iter().map(|r| r.served).sum::<usize>(),
+        )
+    };
+    let (pos_only, pos_served) = dense_only(&ev.positives);
+    let (neg_only, neg_served) = dense_only(&ev.negatives);
+    println!("    tail reading (GH #201 Step 2, unshipped): served rows the lexical half never");
+    println!(
+        "      ranked — positives {pos_only}/{pos_served}, negatives {neg_only}/{neg_served}."
+    );
+    println!("      A per-hit fold is argued from these, and needs per-hit labels the corpus");
+    println!("      does not yet carry (process rule 2 applies).");
+}
+
+/// Name the admissible cells with the most cosine headroom, and within that band
+/// the **most conservative corner** — the tightest `df` fraction and the
+/// strictest coverage that still buy the widest window.
+///
+/// The tie matters more than the maximum does, and printing only a winner would
+/// hide it: the grid's cells are not distinct rules but a plateau, and the
+/// reading to carry into process rule 5's transfer check is "anywhere in this
+/// band", not "at this point". A constant placed at a lone maximum would be
+/// fitted to the grid's resolution.
+fn widest(cells: &[&EvidenceCell]) -> String {
+    let best = cells
+        .iter()
+        .map(|c| headroom(c))
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !best.is_finite() {
+        let inert = cells.iter().filter(|c| !headroom(c).is_finite()).count();
+        return format!(
+            "{inert} cell(s) where the cosine half is INERT — the lexical rule alone decides \
+             every labelled query, so no `min_cos` is constrained there"
+        );
+    }
+    let band: Vec<&&EvidenceCell> = cells
+        .iter()
+        .filter(|c| (headroom(c) - best).abs() < 1e-9)
+        .collect();
+    match band.iter().max_by(|a, b| {
+        a.coverage
+            .partial_cmp(&b.coverage)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
+        None => "—".to_string(),
+        Some(c) => format!(
+            "a plateau of {} cells at headroom {best:.3}; its strictest is coverage ≥ {:.2}",
+            band.len(),
+            c.coverage,
+        ),
+    }
+}
+
+/// A cell's cosine headroom: how much room a `min_cos` has between the
+/// negatives it must cut and the positives it must keep. An inert cosine half
+/// (nothing left undecided on one side) has unbounded room and is reported as
+/// such rather than scored against bounded cells.
+fn headroom(cell: &EvidenceCell) -> f64 {
+    match (cell.cut_floor(), cell.keep_ceiling()) {
+        (Some(cut), Some(keep)) => keep - cut,
+        _ => f64::INFINITY,
+    }
+}
+
+/// Where the **shipped** constant stands against this run's piles: the tripwire
+/// (a labelled positive the bar would cut — D2 asserts zero, no headroom) and
+/// the defect it exists to fix (a labelled negative it still serves).
+///
+/// Printed rather than gated here: moving the exit gate is GH #202's, in the
+/// same change as the surfaces, per GH #182's rule that a change to the judged
+/// statistic is a change to every surface that paints it.
+fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
+    let Some(bar) = EvidenceBar::for_model(model_id) else {
+        println!("    shipped bar: none for this model — no verdict is offered (M2)");
+        return;
+    };
+    let vouches = |r: &QueryEvidence| {
+        r.anchored(bar.min_term_coverage) || r.best_cos.is_some_and(|c| c >= bar.min_cos)
+    };
+    let pos_cut = ev.positives.iter().filter(|r| !vouches(r)).count();
+    let neg_served = ev.negatives.iter().filter(|r| vouches(r)).count();
+    println!(
+        "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}",
+        bar.min_term_coverage, bar.min_cos
+    );
+    println!(
+        "      positives it would cut  {pos_cut}/{}   ← the search-side TRIPWIRE (D2: zero, no \
+         headroom)",
+        ev.positives.len()
+    );
+    println!(
+        "      negatives it still serves {neg_served}/{}   ← the reported defect, as a number",
+        ev.negatives.len()
+    );
+    for r in ev.positives.iter().filter(|r| !vouches(r)) {
+        println!(
+            "      [CUT] {:<40} cov {:>5}  cos {:>6}",
+            truncate(&r.query, 40),
+            r.coverage()
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            r.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+        );
+    }
+    for r in &ev.negatives {
+        println!(
+            "      {:<40} cov {:>5}  cos {:>6}  → {}",
+            truncate(&r.query, 40),
+            r.coverage()
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "—".to_string()),
+            r.best_cos
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "—".to_string()),
+            if vouches(r) { "SERVED" } else { "no matches" },
+        );
     }
 }
 
@@ -2971,6 +3325,7 @@ fn result_row(
         // convention as every key above: new, never a redefinition. `null` on
         // ablation/sweep rows, which do not re-derive it.
         "search_evidence": evidence.map(|e| {
+            let bar = EvidenceBar::for_model(model);
             let row = |r: &QueryEvidence| serde_json::json!({
                 "q": r.query,
                 "bm25_hits": r.bm25_hits,
@@ -2978,6 +3333,16 @@ fn result_row(
                 "best_cos": r.best_cos.map(|c| (c * 1e4).round() / 1e4),
                 "top": r.top,
                 "served": r.served,
+                // NEW keys (absent from rows before 2026-08-22, GH #201 Phase C):
+                // the per-query evidence the bake-off is swept over, recorded raw
+                // so any (fraction, coverage, cos) cell is re-derivable from a row
+                // without re-running the model — the `discovery_fold` convention.
+                "dense_only": r.dense_only,
+                "chunk_total": r.chunk_total,
+                "terms": r.terms.iter().map(|(t, df)| serde_json::json!([t, df]))
+                    .collect::<Vec<_>>(),
+                "vouched": bar.map(|b| r.anchored(b.min_term_coverage)
+                    || r.best_cos.is_some_and(|c| c >= b.min_cos)),
             });
             let (pos_cos, neg_cos) = (best_cos_pile(&e.positives), best_cos_pile(&e.negatives));
             serde_json::json!({
@@ -2991,6 +3356,23 @@ fn result_row(
                     "keep_min": (w.keep_min * 1e4).round() / 1e4,
                     "open": w.open(),
                 })),
+                // NEW key (GH #201, Phase C): the whole bake-off grid, so the
+                // admissible window is re-derivable from the row — including the
+                // shipped bar's own three constants, which is what makes a later
+                // reader able to see that a bar has drifted out of the window it
+                // was read from.
+                "bar": bar.map(|b| serde_json::json!({
+                    "min_term_coverage": b.min_term_coverage,
+                    "min_cos": b.min_cos,
+                })),
+                "bakeoff": bake_off(e).iter().map(|c| serde_json::json!({
+                    "min_term_coverage": c.coverage,
+                    "pos_anchored": c.pos_anchored,
+                    "neg_anchored": c.neg_anchored,
+                    "cos_cut_floor": c.cut_floor().map(|v| (v * 1e4).round() / 1e4),
+                    "cos_keep_ceiling": c.keep_ceiling().map(|v| (v * 1e4).round() / 1e4),
+                    "admissible": c.admissible(),
+                })).collect::<Vec<_>>(),
             })
         }),
         // The fold bake-off (GH #200, Phase B) — every candidate rule's reading

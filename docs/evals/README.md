@@ -22,11 +22,11 @@ deterministic, and model-free, so model quality can never flake CI
 
 | Command | What it measures | Model | Deterministic |
 |---|---|---|---|
-| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration** — negative queries' BM25/cosine/served readings ([#201](https://github.com/AlteredCraft/B2/issues/201), Phase A) | real bge | no |
+| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, and the query-level evidence rule's admissible window re-derived per run ([#201](https://github.com/AlteredCraft/B2/issues/201)) | real bge | no |
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
-| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a), and the replayed **mutual-k reciprocity fold** — the leading disclosure-boundary candidate, priced per anchor before anything ships ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase A; `--mutual-k`) | stored vectors (pure read) | yes, per vault |
+| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a), and the replayed **mutual-k reciprocity fold** — the leading disclosure-boundary candidate, priced per anchor before anything ships ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase A; `--mutual-k`); with `--search`, the **search evidence bar** replayed over title-as-query positives and built-in nonsense ([#201](https://github.com/AlteredCraft/B2/issues/201)) | stored vectors (pure read; `--search` loads the model) | yes, per vault |
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
@@ -51,7 +51,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 |---|---|
 | [`crates/b2-embed/examples/eval.rs`](../../crates/b2-embed/examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
-| [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; process rule 5's transfer check |
+| [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; and with `--search`, the **search evidence transfer check** ([#201](https://github.com/AlteredCraft/B2/issues/201)) — every note's own title replayed as a query against the shipped bar, plus built-in nonsense. Process rule 5's transfer check for both axes |
 | [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
 | [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 positive queries (a verbatim `passage` adds chunk-level scoring, n=20) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
@@ -147,13 +147,23 @@ rows, carrying the per-anchor folds, the whole `k` sweep, and each candidate's `
 the anchor's rank in *its* list — so any depth is re-derivable from a row without re-running the
 model.
 
-The **search evidence calibration** ([#201](https://github.com/AlteredCraft/B2/issues/201),
-Phase A) is reported the same way — per labelled query, the OR-sanitized BM25 hit count and best
-score, the dense top-1 cosine, and what always-serve serves today, positives and negatives apart,
-with the would-be pure-cosine query window re-derived each run (its caveat printed with it: D2's
-rule is lexical OR semantic evidence, so that window overstates the keep set) — recorded as
-`search_evidence` in the row, gating nothing: the query-level bar is #201's to earn, and it owes
-process rule 5's transfer check like any distributional constant.
+The **search evidence calibration and bake-off** ([#201](https://github.com/AlteredCraft/B2/issues/201))
+are reported the same way. The calibration prints, per labelled query, the OR-sanitized BM25 hit
+count and best score, the dense top-1 cosine, and what always-serve serves today, positives and
+negatives apart, with the would-be *pure-cosine* window re-derived each run (its caveat printed
+with it: D2's rule is lexical OR semantic evidence, so that window overstates the keep set). The
+bake-off then sweeps the rule that ships — IDF-weighted term coverage OR a cosine bar — over the
+whole coverage grid, and for each cell reads the **conditional** cosine window: the pile a
+`min_cos` must keep and the pile it must cut, over only the queries the lexical half left
+undecided. Last it prints where the **shipped** constants stand against this run's piles: labelled
+positives the bar would cut (D2's tripwire, zero with no headroom) and labelled negatives it still
+serves. Recorded as `search_evidence` in the row — now carrying each query's terms with their
+document frequencies and the whole grid, so any cell is re-derivable from a row without re-running
+the model, the `discovery_fold` convention. **Gating nothing**: moving the exit gate is
+[#202](https://github.com/AlteredCraft/B2/issues/202)'s, in the same change as the surfaces,
+per #182's rule. The block's job here is the #187 one — the constants live in code and their
+*justification* is recomputed every run, so a bar that drifts out of the window it was read from
+says so instead of going quietly stale.
 
 ## The verdicts this harness has ruled (each traceable to its issue and its commit)
 
@@ -384,6 +394,81 @@ process rule 5's transfer check like any distributional constant.
   every bench it can be judged on, and stays; the dogfood complaint that opened #200 is
   therefore still unpaid, and the honesty still rides on the band and the copy.
 
+- **Search's evidence bar was earned — and its first form failed the transfer check, so the rule
+  changed rather than the number** ([#201](https://github.com/AlteredCraft/B2/issues/201),
+  measured and ruled 2026-08-22; invariants.md **D2**). Unlike #200, search's side of the
+  disclosure axis found a rule. The run adds a `search evidence bake-off` block beside the Phase A
+  calibration: the shipped rule — *lexical anchor OR cosine* — swept over the whole coverage grid,
+  each cell's **conditional** cosine window (read over only the queries the lexical half left
+  undecided, which is the correction to Phase A's pure-cosine window), and the shipped constants
+  judged against this run's piles. The reading, at 31 notes / 70 chunks:
+
+  | coverage bar | positives anchored | negatives anchored | cosine still needed | verdict |
+  |---|---|---|---|---|
+  | 0.05 | 41/41 | **1**/5 | — | ✗ an anchored negative no `min_cos` can rescue |
+  | 0.10 – 0.20 | 41/41 | 0/5 | `> 0.510` | ✓ the cosine half is **inert** — the lexical rule decides every labelled query |
+  | 0.25 – 0.34 | 40/41 | 0/5 | (0.510, 0.633] | ✓ |
+  | 0.50 | 39/41 | 0/5 | (0.510, 0.549] | ✓ |
+  | 0.67 – 1.00 | 31→16/41 | 0/5 | (0.510, 0.516] | ✓, but the window is 0.006 wide |
+
+  So the band is bounded **below** by the strongest negative's own coverage (0.08 — "why parrots
+  mimic speech", almost all of it the `why`) and **above** by how much work you are willing to
+  hand the cosine half: ask the lexical half for more and the window collapses, because the
+  queries it then drops are the ones with the weakest semantic evidence too. The two constants are
+  therefore placed **jointly**, both toward the serving side, since the errors are not symmetric —
+  serving a thin result costs a little trust and cutting a real one is D2's tripwire. Shipped:
+  `min_term_coverage 0.20` / `min_cos 0.54`, reading **0 of 41 positives cut, 0 of 5 negatives
+  served**, and `shjfasd` — the dogfood report as a number — answered.
+
+  **Both halves earn their place, and the bench shows each rescuing what the other would cut.**
+  `cosmos` and `volcano` are notes whose own body never says their slug, so they carry no lexical
+  anchor at all and are served on cosine alone (0.565, 0.577). `french-press` is the reverse: its
+  dense top-1 reads **0.484**, below the labelled negative "why parrots mimic speech" at 0.510, and
+  it is served because the vault holds `press`. That second case also retires Phase A's
+  pure-cosine window as a candidate rather than merely qualifying it: 0.006 wide against the
+  labelled positives, it is **inverted by 0.026** the moment the transfer bench's title queries
+  join the keep pile. A single-signal cosine bar was never placeable; it only looked placeable
+  because the positives it was read against were all easy.
+
+  **The finding worth keeping is the rule that lost.** The lexical anchor's first form was a hard
+  ceiling ("a term in ≤ `df_max_fraction` of the vault's chunks is content, then count the share
+  present"), and at `df ≤ 0.10 / coverage ≥ 0.50` it read 0 cut / 0 served on this corpus — clean
+  by every number the labelled bench can produce. Process rule 5 then ran it on the two vaults the
+  corpus cannot be, via the new `just calibrate --search` (every note's own title replayed as a
+  query — no labels, and so nothing to relabel — plus built-in nonsense):
+
+  | bench | chunks | positives cut by the ceiling rule | by the shipped weighted rule | nonsense served |
+  |---|---|---|---|---|
+  | orthogonal corpus | 70 | 0/31 | 0/31 | 0/4 |
+  | dense fixture (single-domain) | 15 | **3/15** | 0/15 | 0/4 |
+  | `fixtures/test-vault` (200 notes) | 780 | 0/200 | 0/200 | 0/4 |
+
+  On a 15-chunk single-domain vault the ceiling comes to **1.5 chunks**, so `drone` (df 3) and
+  `comb` (df 7) are stopwords *in a vault about beekeeping*: the lexical half goes inert, every
+  query falls to the cosine half, and three queries naming notes the vault holds are cut
+  (`package-vs-nuc` 0.507, `drone-comb` 0.518, `winter-prep` 0.519 — under a bar the orthogonal
+  corpus's own negatives push to 0.510, so **no `min_cos` reconciles the two benches**: the
+  cross-bench window is inverted by 0.003). A fraction of chunks is scale-free in a vault's *size*
+  but not in its *topical concentration* — [#196](https://github.com/AlteredCraft/B2/issues/196)'s
+  geometry met a third time, now on the lexical axis, and the same shape as
+  [#200](https://github.com/AlteredCraft/B2/issues/200)'s non-transferable depth. The response was
+  to change the **rule**: document frequency as a **weight** (`ln((chunks+1)/(df+1))`) rather than
+  a bin, so a saturated subject word still carries most of its query's weight and there is no
+  side of a line to be on. Under it `drone-comb` reads coverage 1.00 on the fixture where the
+  ceiling read *no content at all*. All three benches then clear at 0 cut / 0 negatives served,
+  and the instrument prints the premise it rests on per vault — the heaviest function word's
+  weight as a share of an absent word's (8% at 200 notes, 10% orthogonal, 25% on the 15-chunk
+  fixture, the trend being exactly what it should be), warning where function words stop being
+  cheap. The 200-note bench also re-makes the two-signal case at scale, and harder: its weakest
+  positive (`131-the-two-generals`, cos **0.475**) sits *below* the vault's own nonsense negatives
+  (to 0.470), so the pure-cosine window there is 0.005 wide — closed for practical purposes —
+  while the query's coverage is 1.00 and the lexical half serves it without hesitation. Two things are deliberately unshipped: the **surfaces and the exit-gate moves** are
+  [#202](https://github.com/AlteredCraft/B2/issues/202)'s (per #182's rule, the same change), so
+  this block reports and gates nothing; and the **per-hit tail** fold, because the corpus labels
+  name the relevant note and not the irrelevance of ranks 5–10 — the provenance is measured
+  (`dense_only`: 0 of 410 served positive rows are dense-only, against 20 of 50 negative ones)
+  and no rule is drawn from it.
+
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
 always-serve it is *served*, at best-passage rank 4, so the residue is **ordering quality rather
@@ -409,6 +494,7 @@ just eval             # ~1min warm (both corpora); appends rows, exits non-zero 
 just eval-sweep       # + the seven-variant chunker A/B
 just stability        # model-free, deterministic; `just stability-bless` only after an INTENDED change
 just calibrate ~/notes   # the real-vault transfer check (process rule 5) — any built vault, no labels
+just calibrate ~/notes --search   # ...and the search evidence bar's half of it (loads the real model)
 ```
 
 ## Process rules

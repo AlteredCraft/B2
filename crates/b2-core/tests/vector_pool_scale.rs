@@ -192,7 +192,9 @@ fn hybrid_search_honours_an_oversized_limit_without_truncating() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (conn, _) = big_vault(tmp.path(), 5, 5);
 
-    let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "shared topic", 1000).unwrap();
+    let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "shared topic", 1000)
+        .unwrap()
+        .hits;
     // Every chunk matches the query, so an un-truncated pool returns them all
     // (hybrid_search is chunk-level; note dedup happens above it, in the façade).
     assert_eq!(

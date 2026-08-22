@@ -136,6 +136,35 @@ fold, the honesty rides on the strength band and the empty-state copy. What reci
 prove is kept as evidence for the pair-scorer escalation: at `k ≤ 11` four of five loners fold to
 empty while from `k ≥ 7` every dense pane stays lit — the loner-versus-dense discrimination #196
 proved no *anchor-local* statistic can make.
+**GH #201 then ran search's half of the same axis, and unlike #200 it found a rule.** The defect
+was structural rather than a loose threshold: the dense half always has k nearest, and RRF reduces
+both lists to integer ranks, so by the time anything could look, the two absolute signals that
+proved the query's own emptiness were gone — `shjfasd` served ten confident-looking results.
+`hybrid_search` now returns a `Retrieval`: the **same fused order**, each hit naming its rank in
+each list and its own distance, plus a query-level reading — and D2's rule over it is *lexical OR
+semantic*, two independent signals precisely so it can tell "nothing matches" from "everything
+matches", which #196 proved a one-signal test cannot. The lexical half is **IDF-weighted term
+coverage** — how much of the query's own weight the vault carries — and its first form, a hard
+`df ≤ 10% of chunks` content ceiling, is the chapter's real finding: it cleared the labelled
+corpus at 0 cut / 0 served and then **failed process rule 5 on the dense fixture**, where a
+1.5-chunk ceiling classed `drone` (df 3) and `comb` (df 7) as stopwords in a vault about
+beekeeping, the lexical half went inert, and the bar cut 3 of 15 queries naming notes the vault
+holds. A *fraction of chunks* is scale-free in a vault's size but not in its topical
+concentration — #196's geometry met a third time, now on the lexical axis — and the response was
+to change the **rule**, not re-tune the number: weighting has no bin to put a saturated subject
+word on the wrong side of. The shipped bar (`min_term_coverage` OR `min_cos`, keyed to
+`embed_model_id`, device suffix shared and re-checked by `just eval-metal`) reads 0 cut / 0
+negatives served on all three benches — the labelled corpus, the dense fixture, and a 200-note
+vault, where its weakest positive (cos 0.475) sits *below* that vault's own nonsense and is
+served on the lexical half alone, which is the two-signal argument made at scale, and its *justification* is re-derived on every run by the
+new `search evidence bake-off` block rather than quoted in a comment — #187's lesson, applied in
+advance this time. `just calibrate --search` is the transfer bench that caught the ceiling: any
+built vault, no labels, every note's own title replayed as a query plus built-in nonsense. Two
+things are deliberately not in #201: the **surfaces** (the empty state, whether the nearest list
+is offered behind the fold, the exit-gate moves) are #202's, landed together per #182's rule, so
+nothing user-visible changes yet; and the **per-hit tail** fold is unshipped because the corpus
+labels name the relevant note, not the irrelevance of ranks 5–10 — the provenance is measured and
+reported (`dense_only` per query) and no rule is drawn from it.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

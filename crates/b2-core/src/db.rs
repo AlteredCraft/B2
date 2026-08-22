@@ -935,6 +935,41 @@ impl FtsTokenizer {
     }
 }
 
+/// The tokenizer `chunks_fts` was actually created with, read back from the
+/// schema rather than assumed.
+///
+/// It is read rather than assumed because it *moves*: [`rebuild_fts`] swaps it
+/// under the GH #157 ablation, so a caller that needs to tokenize a query the
+/// way the index does (see
+/// [`search::lexical_evidence`](crate::search::lexical_evidence)) must ask which
+/// one is in force rather than name the shipped default.
+///
+/// The recorded value is matched against the closed [`FtsTokenizer`] set, never
+/// spliced onward as text — the same discipline as [`rebuild_fts`]'s DDL. An
+/// unreadable or unrecognised schema degrades to the shipped default, which is
+/// the one `migrate` creates.
+pub fn index_tokenizer(conn: &Connection) -> Result<FtsTokenizer> {
+    const DEFAULT: FtsTokenizer = FtsTokenizer::PorterUnicode61;
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(sql) = sql else {
+        return Ok(DEFAULT);
+    };
+    // Longest spelling first: "unicode61" is a substring of "porter unicode61",
+    // so a shortest-first scan would read every stemmed index as unstemmed.
+    let mut known = [FtsTokenizer::Unicode61, FtsTokenizer::PorterUnicode61];
+    known.sort_by_key(|t| std::cmp::Reverse(t.sql().len()));
+    Ok(known
+        .into_iter()
+        .find(|t| sql.contains(t.sql()))
+        .unwrap_or(DEFAULT))
+}
+
 /// Drop and recreate `chunks_fts` with `tokenizer`, repopulated from the untouched
 /// `chunks` content table (FTS5's external-content `'rebuild'` command). The chunk
 /// rows, vectors, and centroids are untouched — the tokenizer only changes how the

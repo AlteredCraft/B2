@@ -351,13 +351,56 @@ does. Therefore **semantic search is in v1** — exact, in-process, no vector ex
   sanitized into a safe FTS5 `MATCH` expression — punctuation is FTS5 syntax and would otherwise crash
   the parse. On a projected-but-unembedded vault the vector half is simply absent and the same fusion
   runs over the single BM25 list, so scores stay on one scale.
-  One honesty debt is on record (invariants.md **D2**, 2026-08-22;
-  [GH #201](https://github.com/AlteredCraft/B2/issues/201)): KNN always has k nearest and RRF
-  keeps only ranks, so this flow cannot yet answer *zero* — a nonsense query serves `limit`
-  confident-looking results. The fix owes the harness first: labelled negative queries, a per-model
-  evidence bar for the vector half (a distributional constant, so process rule 5's transfer check),
-  and hit provenance carried through fusion so a fold can judge what RRF currently discards —
-  the negative queries and the evidence dump are landed (Phase A); the bar and the fold are #201's.
+  **The flow can answer zero, and the evidence for it rides beside the order** (invariants.md
+  **D2**, 2026-08-22; [GH #201](https://github.com/AlteredCraft/B2/issues/201)). The debt it pays
+  off was structural rather than a threshold set too loose: KNN always has k nearest, *nearest* is
+  a fact about the vault rather than evidence about the query, and RRF reduces both lists to
+  integer ranks — so the two absolute signals that could tell a real query from a nonsense one were
+  gone by the time anything could look at them, and `shjfasd` served ten confident-looking results.
+  `hybrid_search` now returns a `Retrieval`: the same fused order (untouched — provenance is
+  carried, never folded in), each hit naming the lists that ranked it and its own distance, plus a
+  **query-level `QueryEvidence`**. The rule that reads it is *lexical OR semantic*, two independent
+  signals so that "everything matches" and "nothing matches" are not one reading (the
+  single-population trap [GH #196](https://github.com/AlteredCraft/B2/issues/196) measured):
+  - **The lexical anchor is weighted coverage, not presence.** Matching at all proves nothing —
+    `fts5_query` ORs every term, and the labelled phrase negatives match 68 of 70 chunks through
+    `a`/`to`/`my` alone, one of them reading a *better* best-BM25 than several positives off
+    nothing but function words. So neither a hit count nor a raw BM25 score is a lexical-anchor
+    test. What is: **document frequency as a weight** — each term is worth `ln((chunks+1)/(df+1))`,
+    so a word in most chunks weighs ~nothing and a word in none weighs the most there is — and the
+    anchor is the share of the query's total weight the vault actually carries
+    (`min_term_coverage`). Stopwords are therefore a *measurement*, never a shipped word-list, and
+    they neither grant coverage nor dilute it. Presence alone would be too weak: an off-topic query
+    shares *some* word with almost any vault — the labelled negative "why parrots mimic speech"
+    shares `why` with the corpus and nothing else, and reads 0.08.
+    A hard **ceiling** ("a term in ≤ 10% of chunks is content") was the first rule tried and
+    **failed its transfer check**, which is why the shipped one is a weight. A fraction of chunks
+    is scale-free in a vault's *size* but not in its *topical concentration*: on the 15-note dense
+    fixture the ceiling came to 1.5 chunks, so `drone` (df 3) and `comb` (df 7) were classed
+    stopwords in a vault about beekeeping, the lexical half went inert, and the bar cut 3 of 15
+    queries naming notes the vault holds — GH #196's geometry met again on the lexical axis. A
+    weight has no bin to put them on the wrong side of.
+  - **The cosine bar is the backstop**, judged only on queries the lexical half leaves undecided —
+    and it is thin by construction: ask the lexical half for more and the window collapses, because
+    the queries it then has to rescue are the ones with the weakest semantic evidence too. The two
+    constants are placed inside a **joint** band, never tuned one at a time.
+  - The constants are **distributional**, so they are keyed to `embed_model_id` (M2 — a swap
+    invalidates them; the device suffix shares the reading and `just eval-metal` is where that
+    assumption is re-checked rather than asserted), earned against the labelled negatives, and
+    transfer-checked on real vaults (process rule 5, `just calibrate --search`). They live in
+    `search::BGE_BASE_EVIDENCE_BAR` and their *justification* is re-derived on every `just eval`
+    run — the `search evidence bake-off` block — never frozen into a comment
+    ([GH #187](https://github.com/AlteredCraft/B2/issues/187)'s lesson).
+  The verdict reaches an adapter through `Vault::search_evidence`, which serves **exactly** the
+  rows `search` does, in the same order: a bar may set what the default view *vouches for*, never
+  what exists or can be reached (D1). Two things are deliberately not here. **The surfaces** — the
+  CLI's and the desktop's empty state, whether the nearest-by-meaning list is offered behind the
+  fold, and the exit-gate assertions — are
+  [#202](https://github.com/AlteredCraft/B2/issues/202)'s, landed together per
+  [#182](https://github.com/AlteredCraft/B2/issues/182)'s rule. And **the tail** — folding where a
+  *real* query's per-hit evidence runs out — is unshipped: it needs per-hit labels the corpus does
+  not carry (the labels name the relevant note, not the irrelevance of ranks 5–10), so the
+  provenance is measured and reported (`dense_only` per query) and no rule is drawn from it yet.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph
