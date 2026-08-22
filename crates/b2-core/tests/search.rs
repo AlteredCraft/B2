@@ -249,7 +249,9 @@ fn hybrid_search_combines_signals_and_resolves_to_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
-    let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
+    let hits = search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5)
+        .unwrap()
+        .hits;
     assert!(!hits.is_empty());
     // every hit resolves to a real note, and SRS (the only keyword match) is present
     assert!(hits.iter().all(|h| !h.note_path.is_empty()));
@@ -485,7 +487,9 @@ fn a_ranked_chunk_that_no_longer_resolves_costs_no_hit_slot() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
 
-    let healthy = search::keyword_only_search(&conn, "capybara", 2).unwrap();
+    let healthy = search::keyword_only_search(&conn, "capybara", 2)
+        .unwrap()
+        .hits;
     assert_eq!(healthy.len(), 2, "the fixture must have room to under-fill");
 
     conn.execute(
@@ -503,7 +507,9 @@ fn a_ranked_chunk_that_no_longer_resolves_costs_no_hit_slot() {
     // The same live chunks come back, in the same order, still `limit`-many. Their
     // RRF *scores* do shift down a notch — the dead chunk really did occupy rank 0
     // of the BM25 list, which is the whole point — so identity is what's compared.
-    let after = search::keyword_only_search(&conn, "capybara", 2).unwrap();
+    let after = search::keyword_only_search(&conn, "capybara", 2)
+        .unwrap()
+        .hits;
     assert_eq!(
         after.iter().map(|h| h.chunk_id).collect::<Vec<_>>(),
         healthy.iter().map(|h| h.chunk_id).collect::<Vec<_>>(),
@@ -551,10 +557,12 @@ fn a_zero_limit_returns_no_hits() {
 
     assert!(search::keyword_only_search(&conn, "memory", 0)
         .unwrap()
+        .hits
         .is_empty());
     assert!(
         search::hybrid_search(&conn, &FakeEmbedder::new(64), "memory", 0)
             .unwrap()
+            .hits
             .is_empty()
     );
     assert!(search::graph_filtered_search(
@@ -620,4 +628,315 @@ fn graph_filter_with_zero_hops_is_just_the_anchor() {
         search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_PATH, 0, 10)
             .unwrap();
     assert!(hits.iter().all(|h| h.note_path == MEMORY_PATH));
+}
+
+// ---------------------------------------------------------------------------
+// Query evidence — the absolute signals RRF discards (invariants.md D2, GH #201)
+// ---------------------------------------------------------------------------
+
+/// Document frequency is read over the same sanitized terms the `MATCH`
+/// expression searches for, and a word the vault has never seen reads `df == 0`
+/// — the honest zero the fused surface could not say.
+#[test]
+fn lexical_evidence_reads_document_frequency_per_term() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let ev = search::lexical_evidence(&conn, "memory shjfasd").unwrap();
+    assert!(ev.chunk_total > 0, "the golden vault projects chunks");
+    let df = |t: &str| ev.terms.iter().find(|e| e.term == t).map(|e| e.df);
+    assert!(df("memory").is_some_and(|n| n > 0), "the vault holds it");
+    assert_eq!(df("shjfasd"), Some(0), "the vault has never seen it");
+}
+
+/// A repeated term is one piece of evidence, not two — otherwise a query could
+/// talk its own coverage up by saying the same word twice.
+#[test]
+fn lexical_evidence_counts_a_repeated_term_once() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let ev = search::lexical_evidence(&conn, "memory memory memory").unwrap();
+    assert_eq!(ev.terms.len(), 1);
+}
+
+/// Absent words carry the **most** weight, which is what makes a query of pure
+/// nonsense read as coverage zero rather than as having no content at all.
+#[test]
+fn absent_words_weigh_most_and_drive_coverage_to_zero() {
+    let ev = search::LexicalEvidence {
+        chunk_total: 100,
+        terms: vec![
+            search::TermEvidence {
+                term: "the".into(),
+                df: 95,
+            },
+            search::TermEvidence {
+                term: "parrots".into(),
+                df: 0,
+            },
+            search::TermEvidence {
+                term: "mimic".into(),
+                df: 0,
+            },
+        ],
+    };
+    assert!(
+        ev.idf(0) > ev.idf(95),
+        "a word the vault lacks outweighs one it repeats"
+    );
+    // Only "the" is present, and it weighs almost nothing beside the two it is
+    // measured against.
+    assert!(ev.term_coverage().is_some_and(|c| c < 0.02));
+    assert!(!ev.anchored(0.20));
+}
+
+/// The off-topic query's shape, and why weighting is what catches it: the vault
+/// shares only a **function word** with it, and a function word carries almost
+/// none of the query's weight. This is the labelled negative "why parrots mimic
+/// speech" on the eval corpus, where it reads about 0.08.
+///
+/// Note what the rule does *not* claim: three equally rare words, one of them
+/// present, is about a third of the query's weight and **is** an anchor at the
+/// shipped bar. That is deliberate — a vault that holds one of a query's rare
+/// words has something to say about it, and D2's tripwire is cutting a real
+/// query, not serving a thin one.
+#[test]
+fn a_shared_function_word_is_not_a_lexical_anchor() {
+    let ev = search::LexicalEvidence {
+        chunk_total: 70,
+        terms: vec![
+            search::TermEvidence {
+                term: "why".into(),
+                df: 21,
+            },
+            search::TermEvidence {
+                term: "parrots".into(),
+                df: 0,
+            },
+            search::TermEvidence {
+                term: "mimic".into(),
+                df: 0,
+            },
+            search::TermEvidence {
+                term: "speech".into(),
+                df: 0,
+            },
+        ],
+    };
+    assert!(ev.term_coverage().is_some_and(|c| c < 0.15));
+    assert!(!ev.anchored(0.20));
+
+    // The same vault, asked about what it actually holds: every term present.
+    let held = search::LexicalEvidence {
+        chunk_total: 70,
+        terms: vec![
+            search::TermEvidence {
+                term: "throat".into(),
+                df: 3,
+            },
+            search::TermEvidence {
+                term: "singing".into(),
+                df: 6,
+            },
+        ],
+    };
+    assert_eq!(held.term_coverage(), Some(1.0));
+    assert!(held.anchored(0.20));
+}
+
+/// The rule survives a **single-domain** vault, where a subject word is in most
+/// chunks — the geometry that broke the hard-ceiling rule this one replaced (GH
+/// #201's transfer check; GH #196's finding on the lexical axis). A word in 7 of
+/// 15 chunks is common, but it is not a stopword, and weighting is what tells
+/// the difference.
+#[test]
+fn a_saturated_subject_word_still_anchors() {
+    let ev = search::LexicalEvidence {
+        chunk_total: 15,
+        terms: vec![
+            search::TermEvidence {
+                term: "drone".into(),
+                df: 3,
+            },
+            search::TermEvidence {
+                term: "comb".into(),
+                df: 7,
+            },
+        ],
+    };
+    assert_eq!(ev.term_coverage(), Some(1.0));
+    assert!(ev.anchored(0.20));
+}
+
+/// An all-stopword query has **no reading**, not a coverage of zero: nothing
+/// content-bearing was found or missed, so the lexical half abstains and the
+/// cosine half decides alone.
+#[test]
+fn an_all_stopword_query_has_no_coverage_reading() {
+    let ev = search::LexicalEvidence {
+        chunk_total: 100,
+        terms: vec![search::TermEvidence {
+            term: "the".into(),
+            df: 100,
+        }],
+    };
+    assert_eq!(ev.term_coverage(), None);
+    assert!(!ev.anchored(0.0), "abstention is never an anchor");
+}
+
+/// D2's verdict is lexical **OR** semantic: either signal alone vouches, and
+/// only their joint absence answers "no matches".
+#[test]
+fn the_verdict_takes_either_signal() {
+    let bar = search::EvidenceBar {
+        min_term_coverage: 0.20,
+        min_cos: 0.55,
+    };
+    let lexical = |df: usize| search::LexicalEvidence {
+        chunk_total: 100,
+        terms: vec![search::TermEvidence {
+            term: "photosynthesis".into(),
+            df,
+        }],
+    };
+    // Lexical alone, with the dense half far away.
+    let anchored = search::QueryEvidence {
+        lexical: lexical(4),
+        best_cos: Some(0.20),
+    };
+    assert!(anchored.vouched(bar));
+    // Semantic alone, with nothing lexical to stand on.
+    let near = search::QueryEvidence {
+        lexical: lexical(0),
+        best_cos: Some(0.80),
+    };
+    assert!(near.vouched(bar));
+    // Neither — the reported defect, answered.
+    let nothing = search::QueryEvidence {
+        lexical: lexical(0),
+        best_cos: Some(0.44),
+    };
+    assert!(!nothing.vouched(bar));
+    // A projected-but-unembedded vault has no dense half to appeal to.
+    let unembedded = search::QueryEvidence {
+        lexical: lexical(0),
+        best_cos: None,
+    };
+    assert!(!unembedded.vouched(bar));
+}
+
+/// The bar is keyed to the model (M2) and **absent** for anything uncalibrated —
+/// no verdict rather than a borrowed one. The device suffix is stripped, so a
+/// Metal build answers to the same reading (GH #40).
+#[test]
+fn the_bar_is_per_model_and_device_suffixes_share_it() {
+    assert!(search::EvidenceBar::for_model("BAAI/bge-base-en-v1.5").is_some());
+    assert_eq!(
+        search::EvidenceBar::for_model("BAAI/bge-base-en-v1.5@metal"),
+        search::EvidenceBar::for_model("BAAI/bge-base-en-v1.5"),
+    );
+    assert!(search::EvidenceBar::for_model(b2_core::embed::FAKE_MODEL_ID).is_none());
+    assert!(search::EvidenceBar::for_model("some/other-model").is_none());
+}
+
+/// Provenance rides beside the fused order without touching it: the same hits in
+/// the same order, each now naming the lists that ranked it. A hit BM25 never saw
+/// carries `bm25_rank: None` — the per-hit shape of D2's defect.
+#[test]
+fn fusion_carries_each_hit_s_provenance() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let retrieval =
+        search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
+    assert!(!retrieval.hits.is_empty());
+    for hit in &retrieval.hits {
+        assert!(
+            hit.provenance.bm25_rank.is_some() || hit.provenance.vector_rank.is_some(),
+            "a fused hit came from at least one list"
+        );
+        // The dense half scans every stored vector, so every chunk has a distance
+        // exactly when it has a dense rank.
+        assert_eq!(
+            hit.provenance.distance.is_some(),
+            hit.provenance.vector_rank.is_some()
+        );
+    }
+    // The order is the fused order, unchanged by carrying the provenance.
+    assert_eq!(
+        retrieval
+            .hits
+            .iter()
+            .map(|h| h.chunk_id)
+            .collect::<Vec<_>>(),
+        search::hybrid_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5)
+            .unwrap()
+            .hits
+            .iter()
+            .map(|h| h.chunk_id)
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// The keyword-only fallback was already honest about zero, and says so: no dense
+/// half means no `best_cos` to overrule the lexical half's silence.
+#[test]
+fn the_keyword_only_fallback_reports_no_dense_evidence() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
+
+    let retrieval = search::keyword_only_search(&conn, "memory", 5).unwrap();
+    assert!(retrieval.evidence.best_cos.is_none());
+    assert!(retrieval
+        .hits
+        .iter()
+        .all(|h| h.provenance.vector_rank.is_none()));
+}
+
+/// The façade's evidence read serves the same rows `search` does, in the same
+/// order — a verdict is something a surface acts on, never something that
+/// quietly reorders or removes a result (D1: reachability is untouchable).
+#[test]
+fn search_evidence_serves_exactly_what_search_serves() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    let plain = vault.search("memory", 5).unwrap();
+    let view = vault.search_evidence("memory", 5).unwrap();
+    assert_eq!(
+        view.results
+            .iter()
+            .map(|r| r.result.path.clone())
+            .collect::<Vec<_>>(),
+        plain.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+    );
+    // A fake-embedded space has no calibrated bar, so no verdict is offered.
+    assert_eq!(view.vouched, None);
+    assert!(view.chunk_total > 0);
+    assert!(view.terms.iter().any(|t| t.term == "memory"));
+}
+
+/// `limit` caps the rows and nothing else: a zero-limit evidence read still gets
+/// the vault's full reading, because the question is about the query rather than
+/// about how many results were wanted. (Contrast `search`, which returns before
+/// embedding at all — there, nothing is being asked.)
+#[test]
+fn a_zero_limit_evidence_read_still_reads_the_evidence() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    let view = vault.search_evidence("memory", 0).unwrap();
+    assert!(view.results.is_empty(), "a zero limit serves no rows");
+    assert!(
+        view.best_cos.is_some(),
+        "but the dense half still reported — an embedded vault must not read as unembedded"
+    );
+    assert!(view.terms.iter().any(|t| t.term == "memory"));
 }

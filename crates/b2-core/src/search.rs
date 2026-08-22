@@ -31,6 +31,49 @@ pub struct Hit {
     pub note_path: String,
     /// Higher is better (RRF score for hybrid; negated distance for vector-only).
     pub score: f64,
+    /// Which signals ranked this chunk, and how far its vector really sits from
+    /// the query — the absolute readings RRF discards (invariants.md D2).
+    pub provenance: HitProvenance,
+}
+
+/// Per-hit provenance carried **beside** the fused order, never folded into it
+/// (invariants.md D2, GH #201).
+///
+/// RRF reduces each list to integer ranks and adds reciprocals, which is exactly
+/// what makes a fused score read as confidence: rank 1 of a list that should
+/// have been empty scores identically to rank 1 of a list full of real matches.
+/// These are the absolute signals that reduction throws away. Recording them
+/// changes no ordering — [`rrf_fuse`] is untouched — it only stops the evidence
+/// from being unrecoverable by the time a surface has to decide what it vouches
+/// for.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HitProvenance {
+    /// 0-based rank in the BM25 list; `None` = the lexical half never ranked
+    /// this chunk — the "dense-only hit" a nonsense query serves `limit` of.
+    pub bm25_rank: Option<usize>,
+    /// 0-based rank in the dense list; `None` = the vector half never ranked it,
+    /// or never ran (a projected-but-unembedded vault).
+    pub vector_rank: Option<usize>,
+    /// L2 distance from the query vector to this chunk's, in
+    /// [`db::vector_search`]'s units — `cosine = 1 - d²/2`, the model's vectors
+    /// being unit-length. `None` whenever `vector_rank` is.
+    pub distance: Option<f32>,
+}
+
+/// Build the per-chunk provenance map for a fusion over `(bm25, vector)`, the
+/// dense list carrying its distances. Chunks absent from a list simply carry
+/// `None` for it — absence *is* the reading.
+fn provenance_of(bm25: &[i64], vector: &[(i64, f32)]) -> HashMap<i64, HitProvenance> {
+    let mut map: HashMap<i64, HitProvenance> = HashMap::new();
+    for (rank, &id) in bm25.iter().enumerate() {
+        map.entry(id).or_default().bm25_rank = Some(rank);
+    }
+    for (rank, &(id, distance)) in vector.iter().enumerate() {
+        let entry = map.entry(id).or_default();
+        entry.vector_rank = Some(rank);
+        entry.distance = Some(distance);
+    }
+    map
 }
 
 /// Reciprocal Rank Fusion of ranked id lists: `score(id) = Σ 1/(k + rank + 1)`
@@ -100,14 +143,268 @@ pub fn keyword_search(conn: &rusqlite::Connection, query: &str, limit: usize) ->
 /// the vector half supplies semantics, so the keyword half should be forgiving.
 /// Returns an empty string when the query has no usable terms.
 pub fn fts5_query(raw: &str) -> String {
-    let terms: Vec<String> = raw
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        // A double-quoted FTS5 string is a literal term; internal quotes can't
-        // occur here (split drops them), but double them defensively regardless.
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-        .collect();
+    let terms: Vec<String> = query_terms(raw).iter().map(|t| quoted(t)).collect();
     terms.join(" OR ")
+}
+
+/// The terms [`fts5_query`] ORs, in query order, before quoting: every maximal
+/// alphanumeric run. Factored out because the evidence reading
+/// ([`lexical_evidence`]) has to judge **exactly** the terms the `MATCH`
+/// expression searches for — a second tokenizer here would let the two disagree
+/// about what the query even said.
+pub fn query_terms(raw: &str) -> Vec<String> {
+    raw.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// One term as a double-quoted FTS5 string literal, so nothing in it is read as
+/// an operator. Internal quotes cannot occur (the split drops them) but are
+/// doubled defensively regardless.
+fn quoted(term: &str) -> String {
+    format!("\"{}\"", term.replace('"', "\"\""))
+}
+
+/// One query term's lexical reading: the term as written, and its **document
+/// frequency** — how many chunks match it alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermEvidence {
+    /// The term the sanitizer extracted (unstemmed; FTS5 stems it on the way in,
+    /// so `df` is the stemmed reading of this surface form).
+    pub term: String,
+    /// Chunks matching this term. `0` = the vault has never seen the word, which
+    /// is the strongest lexical statement available: not "ranked low", *absent*.
+    pub df: usize,
+}
+
+/// The lexical half's **absolute** reading for one query (invariants.md D2, GH
+/// #201) — what the OR-ed `MATCH` knows and then loses.
+///
+/// Matching at all is not evidence. [`keyword_search`] ORs every term for
+/// recall, so a phrase-shaped query matches on its function words: on the eval
+/// corpus the labelled negatives match 68 of 70 chunks through `a` / `to` / `my`
+/// alone, and one reads a *better* best-BM25 than several positives off nothing
+/// but mid-IDF function words (GH #201, Phase A). So neither a raw hit count nor
+/// a raw best score is a lexical-anchor test.
+///
+/// Document frequency is, and it is the reading kept here — as a **weight**, not
+/// a bin: a term is worth its IDF, so a word in most chunks counts for almost
+/// nothing and a word in none counts for the most there is. That keeps the rule
+/// working on a vault whose jargon is another vault's rare word, and it is what
+/// a hard stopword ceiling could not do (see [`LexicalEvidence::idf`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LexicalEvidence {
+    /// Chunks in the index — the scale every term's weight is read against.
+    pub chunk_total: usize,
+    /// Every distinct term the query contributed, in first-appearance order.
+    pub terms: Vec<TermEvidence>,
+}
+
+impl LexicalEvidence {
+    /// A term's inverse document frequency in this vault:
+    /// `ln((chunks + 1) / (df + 1))`.
+    ///
+    /// This is the whole stopword policy, and it is **continuous** — there is no
+    /// ceiling anywhere in it. A word in every chunk weighs ~0 and a word in none
+    /// weighs the most there is, with everything between graded rather than
+    /// sorted into two bins. The `+1`s keep both ends finite: a `df` of zero is
+    /// the reading this rule most depends on, and an empty vault must not be a
+    /// division by zero.
+    ///
+    /// A ceiling was tried first and **failed its transfer check** (GH #201): a
+    /// "term in ≤ 10% of chunks is content" rule is scale-free in the vault's
+    /// *size* but not in its *topical concentration*, and on the 15-chunk
+    /// single-domain fixture the ceiling came to 1.5 chunks — so `drone` (df 3)
+    /// and `comb` (df 7) were classed stopwords in a vault about beekeeping, the
+    /// lexical half went inert, and the bar cut 3 of 15 queries naming notes the
+    /// vault holds. The same geometry that broke every anchor-local z gate in GH
+    /// #196, met again on the lexical axis. Weighting has no bin to put them in
+    /// the wrong side of.
+    pub fn idf(&self, df: usize) -> f64 {
+        ((self.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln()
+    }
+
+    /// How much of the query's **content** the vault actually holds: the share of
+    /// its total term IDF carried by terms with `df >= 1`.
+    ///
+    /// Weighted, not counted, and that is what makes it a content test. Function
+    /// words weigh nothing, so they neither grant coverage nor dilute it — the
+    /// query "why parrots mimic speech" reads 0.08 on the eval corpus, almost all
+    /// of it the `why`. Words the vault has never seen weigh the *most*, so a
+    /// query is judged mostly on the words that would have mattered.
+    ///
+    /// `None` when no term carries any weight at all (every word in every chunk,
+    /// or no usable terms) — that is *no reading*, not a coverage of zero, and
+    /// the cosine half decides alone.
+    pub fn term_coverage(&self) -> Option<f64> {
+        let total: f64 = self.terms.iter().map(|t| self.idf(t.df)).sum();
+        if total <= f64::EPSILON {
+            return None;
+        }
+        // Folded from an explicit `0.0` rather than `.sum()`, whose additive
+        // identity for `f64` is `-0.0`: an empty present-set is the *most*
+        // common reading this function has (it is what a nonsense query looks
+        // like), and a coverage of `-0.0` prints as `-0.00`.
+        let present: f64 = self
+            .terms
+            .iter()
+            .filter(|t| t.df >= 1)
+            .map(|t| self.idf(t.df))
+            .fold(0.0, |a, b| a + b);
+        Some(present / total)
+    }
+
+    /// Whether the query has a **lexical anchor** — D2's lexical half.
+    ///
+    /// Coverage, not presence: "does the vault hold *any* of these words" is too
+    /// weak a test, because an off-topic query shares one word with almost any
+    /// vault. What separates a query the vault has material for from one it does
+    /// not is how much of the query's own weight the vault carries.
+    pub fn anchored(&self, min_term_coverage: f64) -> bool {
+        self.term_coverage().is_some_and(|c| c >= min_term_coverage)
+    }
+}
+
+/// Read the lexical evidence for `query`: every term's document frequency, over
+/// the same sanitized terms [`keyword_search`] searches for.
+///
+/// One `count(*)` per distinct term — the probe FTS5 has no cheaper form of
+/// without an `fts5vocab` shadow table, which would be schema surface bought for
+/// a handful of counts per query.
+pub fn lexical_evidence(conn: &rusqlite::Connection, query: &str) -> Result<LexicalEvidence> {
+    let chunk_total: usize = conn
+        .query_row("SELECT count(*) FROM chunks", [], |r| r.get::<_, i64>(0))?
+        .try_into()
+        .unwrap_or(0);
+    let mut terms: Vec<TermEvidence> = Vec::new();
+    for term in query_terms(query) {
+        if terms.iter().any(|t| t.term == term) {
+            continue; // a repeated term is one piece of evidence, not two
+        }
+        let df: i64 = conn.query_row(
+            "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?1",
+            [&quoted(&term)],
+            |r| r.get(0),
+        )?;
+        terms.push(TermEvidence {
+            term,
+            df: usize::try_from(df).unwrap_or(0),
+        });
+    }
+    Ok(LexicalEvidence { chunk_total, terms })
+}
+
+/// The per-model evidence bar D2 judges a query against: what counts as a
+/// lexical anchor, and how near the dense half must be to stand in for one.
+///
+/// **A distributional constant, so it is keyed to the model** (M2 — a swap
+/// invalidates it) and owes process rule 5's real-vault transfer check. It lives
+/// in code as a constant and is *measured* in the harness, never the other way
+/// round: the GH #150 cosine floor was a comment quoting numbers that went stale
+/// the first time the corpus grew a shape they were never read against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EvidenceBar {
+    /// Share of the query's term IDF the vault must carry for the lexical half
+    /// to count as evidence — see [`LexicalEvidence::term_coverage`].
+    pub min_term_coverage: f64,
+    /// Cosine the dense top-1 must reach for semantic proximity to stand as
+    /// evidence on its own, for a query with no lexical anchor.
+    pub min_cos: f64,
+}
+
+impl EvidenceBar {
+    /// The calibrated bar for `model_id`, or `None` when the active embedder has
+    /// none.
+    ///
+    /// `None` means **no verdict**, never a default one: a bar read off one
+    /// model's distance distribution says nothing about another's (M2), and the
+    /// fake embedder's hash vectors have no semantic geometry to hold a cosine
+    /// bar over at all — the same reason `discover::candidates` is asked not to
+    /// grade a fake-embedded space. A caller that gets `None` serves the list
+    /// exactly as it always did.
+    ///
+    /// The **device suffix is stripped** before the lookup (`…@metal`, GH #40).
+    /// A device switch is a model swap for *vector identity* — the stored
+    /// vectors differ in their last bits, so mixing them is refused — but the
+    /// bar is a claim about a distribution, and float-precision noise is not a
+    /// distributional change. That is an assumption, so it is one the harness
+    /// re-checks rather than one this comment asserts: the search evidence
+    /// bake-off re-derives the admissible window on **every** run, `just
+    /// eval-metal` runs it on the GPU build, and a bar that has drifted out of
+    /// its window prints as such there.
+    pub fn for_model(model_id: &str) -> Option<Self> {
+        let base = model_id.split_once('@').map_or(model_id, |(id, _)| id);
+        match base {
+            "BAAI/bge-base-en-v1.5" => Some(BGE_BASE_EVIDENCE_BAR),
+            _ => None,
+        }
+    }
+}
+
+/// The evidence bar for the shipped model, `BAAI/bge-base-en-v1.5`
+/// (invariants.md D2, GH #201).
+///
+/// Read from the search evidence bake-off, and re-derived on every `just eval`
+/// run rather than quoted here — `crates/b2-embed/examples/eval.rs`'s
+/// `search evidence bake-off` block prints the admissible window and says
+/// whether these three still sit inside it. Deliberately no numbers in this
+/// comment: that is the mistake GH #187 named, where a floor's docstring froze
+/// the day's readings and went stale the first time the corpus grew a shape they
+/// were never measured against.
+///
+/// Where the margin lives is worth knowing, though, because it is not spread
+/// evenly. The lexical half does nearly all the work and the cosine half is a
+/// **thin backstop** for what it drops: ask the lexical half for more — a
+/// stricter coverage — and the cosine window collapses, because the queries it
+/// then has to rescue are exactly the ones with the weakest semantic evidence
+/// too. So the safe band is a joint one, and the two are placed inside it
+/// together, never tuned one at a time. Both sit toward the **serving** side of
+/// their windows, because the two errors are not symmetric: serving a weak
+/// result costs a little trust, and cutting a real one is the tripwire D2
+/// asserts at zero.
+pub const BGE_BASE_EVIDENCE_BAR: EvidenceBar = EvidenceBar {
+    min_term_coverage: 0.20,
+    min_cos: 0.54,
+};
+
+/// The query-level evidence reading Flow ② carries beside its order
+/// (invariants.md D2): the two absolute signals a surface needs to say whether
+/// it vouches for anything at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryEvidence {
+    /// The lexical half's reading — see [`LexicalEvidence`].
+    pub lexical: LexicalEvidence,
+    /// Best cosine between the query vector and any scanned chunk vector: the
+    /// dense half's strongest absolute claim about *this* query, as opposed to
+    /// the rank it always has. `None` on a projected-but-unembedded vault, where
+    /// there is no dense half and BM25's own emptiness is already honest.
+    pub best_cos: Option<f64>,
+}
+
+impl QueryEvidence {
+    /// D2's query-level verdict: does the vault hold **positive evidence** for
+    /// this query — a lexical anchor, *or* semantic proximity clearing `bar`?
+    ///
+    /// Two independent signals, which is what keeps this out of the
+    /// single-population trap GH #196 measured: a topic query in a vault full of
+    /// that topic carries lexical evidence, semantic evidence, or both, from
+    /// opposite ends of the same geometry — while nonsense carries neither. A
+    /// one-signal test could not tell *nothing matches* from *everything
+    /// matches*.
+    pub fn vouched(&self, bar: EvidenceBar) -> bool {
+        self.lexical.anchored(bar.min_term_coverage)
+            || self.best_cos.is_some_and(|c| c >= bar.min_cos)
+    }
+}
+
+/// A retrieval's two halves: the fused order, and the query-level evidence
+/// behind it. One call, because the evidence is a by-product of the same two
+/// list reads — asking for it separately would re-embed the query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Retrieval {
+    pub hits: Vec<Hit>,
+    pub evidence: QueryEvidence,
 }
 
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
@@ -136,13 +433,23 @@ pub(crate) fn pool_size(limit: usize) -> usize {
 /// (index-engine.md): no query embedding, no model, no vectors.
 /// Scores are the RRF of the single BM25 list, so they live on the same scale (and
 /// sort the same way) as [`hybrid_search`]'s fused scores.
+///
+/// This path was already honest about zero — no lexical match, no results — and
+/// the [`QueryEvidence`] it returns says so with `best_cos: None`: there is no
+/// dense half here to overrule the lexical half's silence (invariants.md D2).
 pub fn keyword_only_search(
     conn: &rusqlite::Connection,
     query: &str,
     limit: usize,
-) -> Result<Vec<Hit>> {
+) -> Result<Retrieval> {
     if limit == 0 {
-        return Ok(Vec::new());
+        return Ok(Retrieval {
+            hits: Vec::new(),
+            evidence: QueryEvidence {
+                lexical: lexical_evidence(conn, query)?,
+                best_cos: None,
+            },
+        });
     }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
@@ -152,7 +459,15 @@ pub fn keyword_only_search(
         pool,
         "keyword-only retrieval (no embedding space yet)"
     );
-    resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), limit)
+    let provenance = provenance_of(&bm25, &[]);
+    let hits = resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), &provenance, limit)?;
+    Ok(Retrieval {
+        hits,
+        evidence: QueryEvidence {
+            lexical: lexical_evidence(conn, query)?,
+            best_cos: None,
+        },
+    })
 }
 
 /// Hybrid search: BM25 ⊕ vector(query) → RRF → top `limit`, resolved to notes.
@@ -166,25 +481,54 @@ pub fn hybrid_search(
     embedder: &dyn Embedder,
     query: &str,
     limit: usize,
-) -> Result<Vec<Hit>> {
+) -> Result<Retrieval> {
     if limit == 0 {
-        return Ok(Vec::new());
+        return Ok(Retrieval {
+            hits: Vec::new(),
+            evidence: QueryEvidence {
+                lexical: lexical_evidence(conn, query)?,
+                best_cos: None,
+            },
+        });
     }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
-    let vector: Vec<i64> = db::vector_search(conn, &embedder.embed_query(query)?, pool)?
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
+    let dense = db::vector_search(conn, &embedder.embed_query(query)?, pool)?;
+    let vector: Vec<i64> = dense.iter().map(|&(id, _)| id).collect();
+    // The dense list is nearest-first, so its head *is* the best cosine — the
+    // absolute reading RRF is about to reduce to "rank 0".
+    let best_cos = dense.first().map(|&(_, d)| cosine_of_distance(d));
     tracing::debug!(
         target: "b2::search",
         bm25_hits = bm25.len(),
         vector_hits = vector.len(),
+        best_cos,
         pool,
         "hybrid retrieval fusing BM25 ⊕ vector via RRF"
     );
 
-    resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), limit)
+    let provenance = provenance_of(&bm25, &dense);
+    let hits = resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), &provenance, limit)?;
+    Ok(Retrieval {
+        hits,
+        evidence: QueryEvidence {
+            // Two `count(*)` probes per distinct term, run beside a call that
+            // has already scanned every stored vector in the vault — the
+            // lexical reading is noise against the dense scan it rides on.
+            lexical: lexical_evidence(conn, query)?,
+            best_cos,
+        },
+    })
+}
+
+/// Cosine similarity from an L2 distance between **unit** vectors:
+/// `cos = 1 - d²/2`. The stored vectors are model output, which bge normalizes,
+/// so this is an identity rather than an approximation — and it is what puts the
+/// dense half's absolute reading on the one scale a bar can be written in
+/// (`db::vector_search` ranks by distance, where *smaller* is better).
+pub fn cosine_of_distance(distance: f32) -> f64 {
+    let d = distance as f64;
+    1.0 - (d * d) / 2.0
 }
 
 /// Vector-only search: the dense half of [`hybrid_search`] alone — embed the
@@ -208,9 +552,10 @@ pub fn vector_only_search(
         return Ok(Vec::new());
     }
     let pool = pool_size(limit);
-    let ranked: Vec<(i64, f64)> = db::vector_search(conn, &embedder.embed_query(query)?, pool)?
-        .into_iter()
-        .map(|(id, distance)| (id, -(distance as f64)))
+    let dense = db::vector_search(conn, &embedder.embed_query(query)?, pool)?;
+    let ranked: Vec<(i64, f64)> = dense
+        .iter()
+        .map(|&(id, distance)| (id, -(distance as f64)))
         .collect();
     tracing::debug!(
         target: "b2::search",
@@ -218,7 +563,8 @@ pub fn vector_only_search(
         pool,
         "vector-only retrieval (ablation instrument)"
     );
-    resolve_hits(conn, ranked, limit)
+    let provenance = provenance_of(&[], &dense);
+    resolve_hits(conn, ranked, &provenance, limit)
 }
 
 /// The shared tail of [`keyword_only_search`], [`hybrid_search`], and
@@ -242,6 +588,7 @@ pub fn vector_only_search(
 fn resolve_hits(
     conn: &rusqlite::Connection,
     fused: Vec<(i64, f64)>,
+    provenance: &HashMap<i64, HitProvenance>,
     limit: usize,
 ) -> Result<Vec<Hit>> {
     let mut hits = Vec::new();
@@ -257,6 +604,7 @@ fn resolve_hits(
                 chunk_id,
                 note_path,
                 score,
+                provenance: provenance.get(&chunk_id).copied().unwrap_or_default(),
             });
         }
     }
@@ -302,6 +650,14 @@ pub fn graph_filtered_search(
                 chunk_id,
                 note_path: note_path.clone(),
                 score: -(distance as f64), // closer = higher
+                // One list, walked in rank order: `hits.len()` is this chunk's
+                // rank among the reachable ones, which is the only rank this
+                // path has (there is no lexical half to be absent from).
+                provenance: HitProvenance {
+                    bm25_rank: None,
+                    vector_rank: Some(hits.len()),
+                    distance: Some(distance),
+                },
             });
         }
     }
