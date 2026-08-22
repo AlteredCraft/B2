@@ -160,22 +160,43 @@ tomorrow's model* — made mechanical.
   configuration moment, informed in place (plain-language privacy copy beside the Cloud-models
   setting, never a later popup). (GH #151)
 
-## D — Discovery surfacing
+## D — Surfacing & disclosure
 
-- **D1 — Discovery surfacing answers a relative question, and the ranked candidate list is served.**
-  "What in my vault belongs next to this note?" is relative, so `b2 similar` and the discovery pane
-  serve the ranked best-passage top-N whenever candidates exist; `limit` is a cap that under-fills
-  only for want of scorable notes. **An empty pane never asserts "nothing relates" from anchor-local
-  statistics** — such a test cannot distinguish *nothing is related* from *everything is related*
-  (the same geometry from opposite ends: a single-domain vault went dark on 16 of 17 notes, GH #196)
-  — so an empty result at a nonzero ask may state only what is checkable: the candidate set is
-  genuinely empty. Any future existence signal is **evidence-gated** (it must win a measured bake-off
-  on the orthogonal corpus, the dense single-domain fixture, and real vaults via `just calibrate`,
-  where "no gate at all" is an admissible winner) and **continuous in population size**: a threshold
-  may change what rows carry (banding), never which rows exist. Strength is a within-list grading
-  painted from the z, which gates nothing.
-  ([index-engine.md](index-engine.md) §3, GH #196/#197; the generation side's recall posture and
-  1-hop exclusion are unchanged)
+- **D1 — Discovery ranking answers a relative question; the default view answers a quality one; and
+  no anchor-local statistic ever makes a candidate unreachable.** "What in my vault belongs next to
+  this note?" is relative, so `b2 similar` and the discovery pane rank by best-passage distance and
+  the full ranked list stays reachable — `limit` is a cap that under-fills only for want of scorable
+  notes, and **an empty surface never asserts "nothing relates" from anchor-local statistics**: such
+  a test cannot distinguish *nothing is related* from *everything is related* (the same geometry
+  from opposite ends: a single-domain vault went dark on 16 of 17 notes, GH #196). Reachable is not
+  vouched for, though: **what the default view shows is a claim of quality, and filling to `limit`
+  regardless is a false one** — always-serve was GH #197's safe interim ruling, and real-vault
+  dogfooding (2026-08) measured its cost: a pane that always finds ten trains distrust of all ten.
+  A quality signal may therefore set the **default disclosure boundary** — a fold that is a *prefix*
+  of the ranked order (a signal that would admit rank 5 while folding rank 2 is inadmissible: row
+  order, band, and fold must never visibly disagree), with everything below it collapsed but one
+  gesture away, so a misjudged fold costs a keystroke where the retired gate cost the feature. Every
+  such signal is **evidence-gated** (it must win the measured bake-off on the orthogonal corpus, the
+  dense single-domain fixture — where a non-empty default view is absolute — and real vaults via
+  `just calibrate`, with "no fold at all" an admissible winner) and **continuous in population
+  size**: a threshold may move banding or the fold, never which rows exist or can be reached.
+  Strength stays a within-list grading painted from the z, which gates nothing.
+  ([index-engine.md](index-engine.md) §3, GH #196/#197; the bake-off is GH #200, its surfaces and
+  gate moves GH #202; the generation side's recall posture and 1-hop exclusion are unchanged)
+- **D2 — A served search result is a claim of evidence, and `limit` is a quota nowhere in B2.**
+  Flow ②'s vector half always has k nearest — *nearest* is a fact about the vault, never evidence
+  about the query — and RRF fuses ranks, discarding the absolute signals that could tell the
+  difference, so the pipeline as first shipped could not answer zero: a nonsense query served
+  `limit` confident-looking results, the same false claim D1 names. The rule: a result in the
+  default view must trace to positive evidence — a lexical match, or semantic proximity clearing a
+  bar calibrated per model in the harness — and a query the vault holds no evidence for answers
+  **"no matches"**, honestly empty, with the nearest-by-meaning list at most folded behind D1's
+  disclosure boundary and never presented as matches. D1's guards apply unchanged: any bar is a
+  distributional constant (process rule 5's `just calibrate` transfer check), earned against
+  labelled negative queries in the eval corpus before it ships, folding only in prefix form — and
+  **a labelled relevant note below the fold is the search-side tripwire, asserted at zero with no
+  headroom**. ([index-engine.md](index-engine.md) §4, GH #201, surfaces GH #202,
+  [docs/evals/README.md](../evals/README.md) process rules)
 
 ## E — Engineering discipline (what keeps the above true)
 

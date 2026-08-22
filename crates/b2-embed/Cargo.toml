@@ -57,3 +57,8 @@ metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# The eval harness's search evidence probe (GH #201) reads `chunks_fts` directly
+# over the connection `b2_core::open` hands back, so the examples need rusqlite's
+# *types* in scope. Dev-only, and feature-unified with b2-core's bundled build —
+# this adds nothing to the `b2` binary's tree.
+rusqlite = "0.40.1"

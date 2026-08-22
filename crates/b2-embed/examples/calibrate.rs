@@ -14,7 +14,22 @@
 //! just calibrate ~/notes --json          # the same reading as one JSON object
 //! just calibrate ~/notes --limit 5       # simulate a 5-card pane
 //! just calibrate ~/notes --leader-z 1.5 --member-z 1.0   # replay a different gate
+//! just calibrate ~/notes --mutual-k 5    # replay the fold at a different reciprocity depth
 //! ```
+//!
+//! Beside the retired z gate, the instrument replays the **mutual-k reciprocity
+//! fold** (GH #200, Phase A — the leading candidate for D1's *default disclosure
+//! boundary*): candidate B is *reciprocal* for anchor A iff A ranks within B's
+//! own top `mutual_k` candidates (default: `--limit`), and the replayed default
+//! view is the ranked list's **longest reciprocal prefix** — it ends at the
+//! first non-reciprocal candidate, so a reciprocal one ranked after that sits
+//! below the fold too (prefix form: the fold is a cut in the served order,
+//! never a filter that skips rows). A fold, not a gate —
+//! under D1 everything below it stays served and reachable, so the replay prices
+//! what the default view *would* show, never what exists. Rank-based, so it
+//! carries no distributional constant to transfer-check; running this replay on
+//! real vaults **is** its bake-off bench (GH #200's fourth row), beside the
+//! orthogonal corpus, the dense fixture, and the labelled negatives.
 //!
 //! **It is a pure read** — stored vectors only, no model call, no write beyond the
 //! `.b2/` directory every read command ensures — so it runs in seconds on a vault
@@ -36,6 +51,7 @@
 //! Phase-2 one, via the flags) is exactly what this instrument is for.
 
 use b2_core::vault::{SimilarView, Vault};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// How deep each anchor's pool is read. A bar is judged against the population it
@@ -195,6 +211,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         leader_z: 1.96,
         member_z: 1.49,
     };
+    let mut mutual_k_flag: Option<usize> = None;
     let mut json = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -202,6 +219,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--limit" => limit = it.next().ok_or("--limit needs a value")?.parse()?,
             "--leader-z" => gate.leader_z = it.next().ok_or("--leader-z needs a value")?.parse()?,
             "--member-z" => gate.member_z = it.next().ok_or("--member-z needs a value")?.parse()?,
+            "--mutual-k" => {
+                mutual_k_flag = Some(it.next().ok_or("--mutual-k needs a value")?.parse()?)
+            }
             "--json" => json = true,
             other if vault_path.is_none() && !other.starts_with('-') => {
                 vault_path = Some(PathBuf::from(other));
@@ -209,8 +229,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             other => return Err(format!("unrecognized argument: {other}").into()),
         }
     }
-    let vault_root = vault_path
-        .ok_or("usage: calibrate <vault> [--limit N] [--leader-z Z] [--member-z Z] [--json]")?;
+    let vault_root = vault_path.ok_or(
+        "usage: calibrate <vault> [--limit N] [--leader-z Z] [--member-z Z] [--mutual-k N] [--json]",
+    )?;
+    // The reciprocity depth defaults to the simulated pane size, resolved after
+    // parsing so flag order can't matter.
+    let mutual_k = mutual_k_flag.unwrap_or(limit);
 
     // A pure read over stored vectors, so the fake-embedder open is correct — the
     // same posture as `b2 similar`. The recorded identity is read straight from
@@ -245,8 +269,58 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // The mutual-k reciprocity fold, replayed (GH #200, Phase A). Every note's
+    // own top `mutual_k` candidate paths come from the same full-depth pools
+    // just read, so reciprocity costs no extra discovery pass. Candidate B is
+    // reciprocal for anchor A iff A sits in B's set; a candidate with no pool
+    // of its own cannot reciprocate (and, having no stored vectors, could not
+    // have been scored as a candidate either — the lookup's honesty is
+    // belt-and-braces). The fold is the ranked list's longest reciprocal
+    // prefix, capped at `limit` — prefix form is D1's admissibility
+    // requirement: a fold that skipped rank 2 to admit rank 5 would visibly
+    // disagree with the row order, so none is ever computed.
+    let top_of: HashMap<&str, HashSet<&str>> = readings
+        .iter()
+        .map(|r| {
+            (
+                r.path.as_str(),
+                r.pool
+                    .iter()
+                    .take(mutual_k)
+                    .map(|(p, _, _)| p.as_str())
+                    .collect::<HashSet<&str>>(),
+            )
+        })
+        .collect();
+    let folds: Vec<(usize, Vec<bool>)> = readings
+        .iter()
+        .map(|r| {
+            let recip: Vec<bool> = r
+                .pool
+                .iter()
+                .map(|(p, _, _)| {
+                    top_of
+                        .get(p.as_str())
+                        .is_some_and(|s| s.contains(r.path.as_str()))
+                })
+                .collect();
+            let fold = recip.iter().take(limit).take_while(|&&b| b).count();
+            (fold, recip)
+        })
+        .collect();
+
     if json {
-        print_json(&vault_root, &model, dim, limit, &gate, &readings, &poolless);
+        print_json(
+            &vault_root,
+            &model,
+            dim,
+            limit,
+            &gate,
+            mutual_k,
+            &readings,
+            &folds,
+            &poolless,
+        );
         return Ok(());
     }
 
@@ -259,23 +333,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "[calibrate] replayed gate: leader_z {:.2} / member_z {:.2}, inert under {MIN_POPULATION} \
-         candidates (a simulation — the shipped surface serves the ranked list, GH #197)\n",
+         candidates; replayed fold: mutual-k {mutual_k}, longest reciprocal prefix (simulations — \
+         the shipped surface serves the ranked list, GH #197/#200)\n",
         gate.leader_z, gate.member_z
     );
 
     println!(
-        "{:<44} {:>4}  {:^23}  {:^17}  {:>11}  {:>9}",
-        "anchor", "n", "cos min/med/max", "leader cos / z", "gate serves", "bands"
+        "{:<44} {:>4}  {:^23}  {:^17}  {:>11}  {:>5}  {:>9}",
+        "anchor", "n", "cos min/med/max", "leader cos / z", "gate serves", "fold", "bands"
     );
     println!("{}", "-".repeat(120));
     let mut dark = 0usize;
     let mut gate_served_total = 0usize;
+    let mut fold_served_total = 0usize;
+    let mut fold_empty = 0usize;
     let mut always_served_total = 0usize;
     let (mut strong, mut clear, mut near, mut ungraded) = (0usize, 0usize, 0usize, 0usize);
     let mut all_cos: Vec<f64> = Vec::new();
     let mut leader_zs: Vec<f64> = Vec::new();
     let mut worst_drift = 0.0f64;
-    for r in &readings {
+    for (r, (fold, _)) in readings.iter().zip(&folds) {
         let cos = r.cosines();
         let (min, med, max) = pile_stats(&cos).unwrap_or((f64::NAN, f64::NAN, f64::NAN));
         all_cos.extend_from_slice(&cos);
@@ -287,6 +364,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let served = r.gate_serves(&gate, limit);
         let always = r.pool.len().min(limit);
         gate_served_total += served;
+        fold_served_total += fold;
+        if *fold == 0 {
+            fold_empty += 1;
+        }
         always_served_total += always;
         if served == 0 {
             dark += 1;
@@ -302,7 +383,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         worst_drift = worst_drift.max(r.recheck_delta());
         println!(
-            "{:<44} {:>4}  {:>6.3}/{:>6.3}/{:>6.3}   {:>6.3} / {:>6}  {:>7}/{:<3}  {}",
+            "{:<44} {:>4}  {:>6.3}/{:>6.3}/{:>6.3}   {:>6.3} / {:>6}  {:>7}/{:<3}  {:>4}  {}",
             truncate(&r.path, 44),
             r.pool.len(),
             min,
@@ -318,6 +399,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 served.to_string()
             },
             always,
+            fold,
             match bands {
                 Some((s, c, n)) => format!("{s}●●● {c}●●○ {n}●○○"),
                 None => "ungraded".to_string(),
@@ -348,6 +430,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "  replayed z gate       {dark}/{} anchors dark, {gate_served_total} candidates served",
         readings.len()
+    );
+    println!(
+        "  mutual-{mutual_k} fold         {fold_empty}/{} anchors fold to an empty default view, \
+         {fold_served_total} candidates above the fold ({} below, still served — a fold, not a gate)",
+        readings.len(),
+        always_served_total.saturating_sub(fold_served_total)
     );
     println!(
         "  always-serve (top-{limit})  0/{} anchors dark, {always_served_total} candidates served",
@@ -385,7 +473,9 @@ fn print_json(
     dim: usize,
     limit: usize,
     gate: &GateSim,
+    mutual_k: usize,
     readings: &[AnchorReading],
+    folds: &[(usize, Vec<bool>)],
     poolless: &[String],
 ) {
     let row = serde_json::json!({
@@ -394,10 +484,15 @@ fn print_json(
         "dim": dim,
         "limit": limit,
         "gate": { "leader_z": gate.leader_z, "member_z": gate.member_z, "min_population": MIN_POPULATION },
-        "anchors": readings.iter().map(|r| serde_json::json!({
+        // The replayed fold's depth (GH #200): candidate B is reciprocal iff
+        // the anchor sits in B's own top `mutual_k`; `fold_serves` below is the
+        // ranked list's longest reciprocal prefix, capped at `limit`.
+        "mutual_k": mutual_k,
+        "anchors": readings.iter().zip(folds).map(|(r, (fold, recip))| serde_json::json!({
             "anchor": r.path,
             "n": r.pool.len(),
             "gate_serves": r.gate_serves(gate, limit),
+            "fold_serves": fold,
             "always_serves": r.pool.len().min(limit),
             "bands": r.bands(limit).map(|(s, c, n)| serde_json::json!({ "strong": s, "clear": c, "near": n })),
             "pool": r.pool.iter().enumerate().map(|(i, (path, cos, engine_z))| serde_json::json!({
@@ -405,6 +500,7 @@ fn print_json(
                 "cos": (cos * 1e4).round() / 1e4,
                 "z": r.z.as_ref().map(|z| (z[i] * 1e4).round() / 1e4),
                 "engine_z": engine_z.map(|z| (z * 1e4).round() / 1e4),
+                "reciprocal": recip[i],
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "no_pool": poolless,
