@@ -274,7 +274,10 @@ init:
     cargo run -p b2-cli -- init
 
 # Scores BM25-only vs hybrid (the semantic lift), passage-level ranks, and `similar`;
-# appends every run to crates/b2-embed/evals/results.jsonl (gitignored).
+# appends every run to crates/b2-embed/evals/results.jsonl (gitignored). It also prints the
+# three calibration blocks that gate nothing and exist to price the next rule: the discovery z
+# dump (GH #187), the search evidence dump (GH #201), and the fold bake-off (GH #200) — which
+# re-derives a disclosure rule's admissible window from the run rather than quoting a constant.
 [group('model')]
 [doc('Semantic-retrieval + discovery quality eval (real model).')]
 eval:
