@@ -423,11 +423,15 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
       neighbors) is removed. Distance is exclusion-only: a 2-hop note (triadic closure — "you linked A–B and B–E but
       never A–E") <em>survives</em>, ranked purely by semantic score.</li>
       <li><b>The ranked list is always served — <code>limit</code> is a cap, not a promise</b>
-      (invariants.md D1, GH #196/#197). Discovery answers a relative question, so no statistic gates the
-      list: the per-anchor z existence gate that used to empty it was measured reading a coherent
+      (invariants.md D1, GH #196/#197/#200). Discovery answers a relative question, so no statistic gates
+      the list: the per-anchor z existence gate that used to empty it was measured reading a coherent
       single-domain vault — everything related, so nothing "stands out" — as "nothing relates", darkening
       16 of 17 panes, and was retired rather than retuned. The z survives ungated as the strength band's
-      input, and an empty result means only that nothing unlinked has stored vectors to compare.</li>
+      input, and an empty result means only that nothing unlinked has stored vectors to compare. The
+      disclosure question was reopened once and closed again: a mutual-nearest-neighbour fold lost its
+      bake-off outright (GH #200 — every depth that stops hiding a labelled relative is past the depth
+      that still empties a loner's view, and the safe depths are the same <em>fraction</em> of two
+      different pools rather than one constant), so the served list is still undivided.</li>
     </ul>
     <p style="font-size:13px;color:var(--muted);margin:10px 0 0">In our fixture the two notes are directly linked,
     so each is excluded as the other's candidate — a correctly <em>empty</em> result, which is exactly the assertion
@@ -638,7 +642,7 @@ b2_relations:
     <tr><td class="mono">write</td><td>replace a note's <b>body</b> from stdin; frontmatter untouched</td><td>— (re-projects)</td></tr>
     <tr><td class="mono">mv</td><td>move/rename a note, resource, or folder + repair inbound link paths</td><td>embedder</td></tr>
     <tr><td class="mono">rm</td><td>delete a note, resource, or folder (<code>-r</code>); inbound links dangle, surfaced</td><td>—</td></tr>
-    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault)</td><td>embedder</td></tr>
+    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault); a query the vault holds no lexical or semantic evidence for answers "no matches" and serves no rows (invariants.md D2, GH #201/#202), and <code>--json</code> is an object — the rows plus that verdict</td><td>embedder</td></tr>
     <tr><td class="mono">neighbors</td><td>a note's neighbors, plus links that resolve to nothing</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every edge + its provenance and "why", with an orphan flag</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes, ranked, always served (path/title/score/evidence, plus z where graded — absent on tiny pools and fake spaces)</td><td>— (stored vectors)</td></tr>
