@@ -53,7 +53,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
 | [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; and with `--search`, the **search evidence transfer check** ([#201](https://github.com/AlteredCraft/B2/issues/201)) — every note's own title replayed as a query against the shipped bar, plus built-in nonsense. Process rule 5's transfer check for both axes |
 | [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
-| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 41 positive queries (a verbatim `passage` adds chunk-level scoring, n=20) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate |
+| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 44 positive queries (a verbatim `passage` adds chunk-level scoring, n=20; three carry the **date-shaped** block, [#202](https://github.com/AlteredCraft/B2/issues/202)) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | [`crates/b2-embed/evals/corpus-dense/`](../../crates/b2-embed/evals/corpus-dense/) | the **dense single-domain fixture** ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0b): fifteen beekeeping notes, all genuinely inter-related, **no loner** — the vault-level geometry the orthogonal corpus is structurally incapable of expressing; scored in its own throwaway vault, its own `results.jsonl` row (`"corpus": "dense"`), never averaged with the orthogonal rows |
 | [`crates/b2-embed/evals/similar-dense.json`](../../crates/b2-embed/evals/similar-dense.json) | the dense fixture's labels — **rankings only** (expected mates per anchor, per-mate scored); no negative anchors, because in this corpus "nothing relates" is false of every note |
@@ -427,7 +427,7 @@ says so instead of going quietly stale.
   queries it then drops are the ones with the weakest semantic evidence too. The two constants are
   therefore placed **jointly**, both toward the serving side, since the errors are not symmetric —
   serving a thin result costs a little trust and cutting a real one is D2's tripwire. Shipped:
-  `min_term_coverage 0.20` / `min_cos 0.54`, reading **0 of 41 positives cut, 0 of 5 negatives
+  `min_term_coverage 0.20` / `min_cos 0.54`, reading **0 of 44 positives cut, 0 of 5 negatives
   served**, and `shjfasd` — the dogfood report as a number — answered.
 
   **Both halves earn their place, and the bench shows each rescuing what the other would cut.**
@@ -485,6 +485,32 @@ says so instead of going quietly stale.
   name the relevant note and not the irrelevance of ranks 5–10 — the provenance is measured
   (`dense_only`: 0 of 410 served positive rows are dense-only, against 20 of 50 negative ones)
   and no rule is drawn from it.
+
+- **The date-shaped query block: the hazard was real, and the rule already handles it**
+  ([#202](https://github.com/AlteredCraft/B2/issues/202), measured 2026-08-22). A term the vault has
+  never seen carries the **maximum** IDF — "never seen" being the lexical half's strongest statement
+  — which is right for a content word and wrong for a year, a quarter, or a day. Real vault queries
+  carry those constantly, and no note need contain one to be the answer. **Neither existing bench
+  could see the shape**: no labelled query held a number, and the title-as-query transfer bench is
+  structurally blind to it, since a title's own tokens are in its own note by construction. Three
+  graded queries now carry it (three absent numerics against four content words, then two against
+  three, then one against several).
+
+  The reading says the bar is fine, and says *why*: they land at coverage **0.45 / 0.53 / 0.80**,
+  well clear of the 0.20 bar, because the content words they sit beside are rare and therefore
+  heavy. The corpus's lowest-coverage positive is still the pre-existing "a mountain that erupts and
+  spews magma" at 0.23. The shape that *would* bite — a query of nothing but numerics — has no
+  relevant note in any vault, so it is a **negative**, and answering it "no matches" is correct
+  rather than a defect. All three rank ✓1 on bm25, vector and hybrid alike; every aggregate moved
+  slightly **up** (hybrid hit@1 0.951 → 0.955) and no floor was touched.
+
+  What the block bought beyond coverage of the shape is a **stronger two-signal argument on the
+  labelled bench itself**. `quarterly budget review 2026 q1` reads a dense top-1 of **0.417** — the
+  lowest of all 44 positives, and *below* the labelled negatives' ceiling of 0.510 — so it is served
+  on the lexical half alone. Until now that inversion could only be shown at 200-note scale, with
+  the labelled corpus's own version a mere 0.026 wide (`french-press` at 0.484). It is now **0.093
+  wide on the corpus**, which retires the pure-cosine bar as a candidate on the primary bench rather
+  than only on the transfer one.
 
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
