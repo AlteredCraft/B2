@@ -13,7 +13,7 @@
 use b2_core::embed::Embedder;
 use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
 use b2_core::resource::{doc_kind, DocKind};
-use b2_core::vault::{AnswerView, Vault};
+use b2_core::vault::{AnswerView, SearchEvidenceView, Vault};
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use b2_llm::{
     is_ollama, refusal_message, LlmConfig, LlmError, OpenAiCompatProvider, OLLAMA_INSTALL_URL,
@@ -153,7 +153,10 @@ enum Command {
         #[arg(short = 'r', long)]
         recursive: bool,
     },
-    /// Hybrid keyword+semantic+graph search across the vault.
+    /// Hybrid keyword+semantic+graph search across the vault. A query the vault
+    /// holds no evidence for answers "no matches" rather than serving its nearest
+    /// rows (invariants.md D2); `--json` is an **object** — the rows plus that
+    /// verdict, which has nowhere to live in a bare list.
     Search {
         query: String,
         /// Maximum number of notes to return.
@@ -845,21 +848,25 @@ fn cmd_rm(cli: &Cli, target: &str, recursive: bool) -> Result<(), CliError> {
 fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
     // Search embeds the query for the vector half → it needs the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
-    let results = vault.search(query, limit)?;
+    // The evidence read, not the bare list (invariants.md D2, GH #201/#202): the
+    // rows are identical and in the same order, and the verdict beside them is
+    // what lets this command say **"no matches"** honestly instead of serving
+    // `limit` confident-looking results for a query the vault holds nothing for.
+    let view = vault.search_evidence(query, limit)?;
     if cli.json {
-        print_json(&results)?;
+        // The whole view, verdict included. This is an OBJECT where `--json`
+        // used to be an array — a deliberate break (GH #202), because a
+        // query-level verdict has nowhere to live in a list of rows. The rows
+        // themselves stay additive: each element of `results` is the old
+        // `SearchResult` plus flattened per-hit provenance.
+        //
+        // The JSON serves the rows even at `vouched: false`, where the human
+        // surface below shows none: an agent handed the rows *plus* an explicit
+        // verdict can be honest about them, where a human handed rows alone
+        // cannot — the asymmetry is deliberate, not an inconsistency.
+        print_json(&view)?;
     } else {
-        if results.is_empty() {
-            println!("No results.");
-        } else {
-            for r in &results {
-                let name = display_name(r.title.as_deref(), &r.path);
-                println!("{:.4}  {name} ({})", r.score, r.path);
-                if !r.snippet.is_empty() {
-                    println!("    {}", r.snippet);
-                }
-            }
-        }
+        println!("{}", search_report(&view, query));
         // Honesty (never overstate): with the fake embedder the vector half
         // isn't semantic. Under the real model it is, so no caveat. Kept on
         // stderr so stdout stays pure results.
@@ -870,6 +877,47 @@ fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// The human-mode rendering of a search — D2's three verdict states as one pure
+/// function (GH #202).
+///
+/// Pure, and separate from [`cmd_search`], because the state that matters most
+/// is the one the integration suite structurally cannot reach: `Some(false)`
+/// needs a *calibrated* bar, and the fake embedder the suite runs under has none
+/// by design (M2), so it can only ever produce `None`. A branch reachable only
+/// under the real model is a branch the fast suite can still own if the
+/// rendering is separated from the retrieval — which is the same argument that
+/// keeps quality out of CI and rendering in it.
+fn search_report(view: &SearchEvidenceView, query: &str) -> String {
+    match view.vouched {
+        // D2's "no matches", strict: the vault holds neither a lexical anchor
+        // nor semantic proximity clearing the model's bar, so the
+        // nearest-by-meaning rows are not shown at all — no reveal, no `--all`.
+        // Offering them behind a flag would still be this command putting them
+        // forward as candidates (GH #202, decision 1).
+        Some(false) => format!("No matches. Nothing in the vault matches “{query}”."),
+        // `Some(true)` — the vault vouches for these — and `None`, which is *no
+        // verdict at all*: the active embedder has no calibrated bar (the fake
+        // one, or any model until the harness measures it — M2), and reading
+        // that as "no matches" would blank a dev vault. Three states, three
+        // behaviors; `None` is never folded into `false`.
+        _ if view.results.is_empty() => "No results.".to_string(),
+        _ => view
+            .results
+            .iter()
+            .map(|r| {
+                let name = display_name(r.result.title.as_deref(), &r.result.path);
+                let head = format!("{:.4}  {name} ({})", r.result.score, r.result.path);
+                if r.result.snippet.is_empty() {
+                    head
+                } else {
+                    format!("{head}\n    {}", r.result.snippet)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
 }
 
 fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
@@ -1527,5 +1575,83 @@ fn user_message(err: &CliError) -> String {
         format!("{msg}\n(debug: {detail})")
     } else {
         msg
+    }
+}
+
+/// The one unit-tested corner of this adapter: D2's three verdict states as
+/// rendered by [`search_report`] (GH #202).
+///
+/// The integration suite spawns the binary under `B2_EMBEDDER=fake`, whose
+/// embedder has no calibrated bar — so `vouched` there is *always* `None` and
+/// the two states that matter (strict "no matches", and serving a vouched list)
+/// are unreachable from it. That is a fact about the model seam, not a hole to
+/// leave: the rendering is pure, so it is tested here directly rather than
+/// hidden behind an `#[ignore]` the suite would keep reporting as present.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use b2_core::vault::{EvidencedResult, SearchResult};
+
+    fn view(vouched: Option<bool>, n: usize) -> SearchEvidenceView {
+        SearchEvidenceView {
+            results: (0..n)
+                .map(|i| EvidencedResult {
+                    result: SearchResult {
+                        path: format!("notes/n{i}.md"),
+                        title: Some(format!("Note {i}")),
+                        score: 0.5,
+                        snippet: "a matched line".to_string(),
+                    },
+                    bm25_rank: Some(i),
+                    vector_rank: Some(i),
+                    cos: Some(0.7),
+                })
+                .collect(),
+            vouched,
+            chunk_total: 100,
+            terms: Vec::new(),
+            best_cos: Some(0.7),
+        }
+    }
+
+    #[test]
+    fn an_unvouched_query_shows_the_empty_state_and_none_of_its_rows() {
+        // Strict (GH #202, decision 1): the engine served rows, and the surface
+        // shows none of them — no reveal, no count of what is being withheld,
+        // since either would put them forward as candidates after all.
+        let out = search_report(&view(Some(false), 10), "Fasdfadsf");
+        assert!(out.starts_with("No matches."), "{out}");
+        assert!(!out.contains("notes/n0.md"), "no row leaks: {out}");
+        assert!(out.contains("Fasdfadsf"), "names the query back: {out}");
+    }
+
+    #[test]
+    fn a_vouched_query_serves_its_rows() {
+        let out = search_report(&view(Some(true), 2), "memory");
+        assert!(
+            out.contains("notes/n0.md") && out.contains("notes/n1.md"),
+            "{out}"
+        );
+        assert!(out.contains("a matched line"), "snippets ride along: {out}");
+    }
+
+    #[test]
+    fn no_calibrated_bar_serves_its_rows_exactly_as_before() {
+        // `None` is *no verdict*, never "no matches" (M2): the fake embedder and
+        // every uncalibrated model land here, and folding it into `false` would
+        // blank the app on a dev vault.
+        let out = search_report(&view(None, 2), "memory");
+        assert!(out.contains("notes/n0.md"), "{out}");
+        assert!(!out.contains("No matches"), "{out}");
+    }
+
+    #[test]
+    fn an_empty_list_reads_as_no_results_whatever_the_verdict() {
+        // The genuinely-empty list keeps its own older copy, which claims
+        // nothing about evidence — an unbuilt index is not a judgment.
+        for vouched in [Some(true), None] {
+            let out = search_report(&view(vouched, 0), "memory");
+            assert_eq!(out, "No results.", "{vouched:?}");
+        }
     }
 }
