@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>B2 — Search &amp; similarity: how B2 decides what's related</title>
-<meta name="description" content="A plain-language explainer of everything B2 uses to find and relate your notes: chunks, embeddings, keyword search, hybrid fusion, the two-stage similarity engine, and the always-served ranked list with its relative strength dots.">
+<meta name="description" content="A plain-language explainer of everything B2 uses to find and relate your notes: chunks, embeddings, keyword search, hybrid fusion, why a search with no evidence behind it answers &quot;no matches&quot;, the two-stage similarity engine, and the always-served ranked list with its relative strength dots.">
 <style>
   :root{
     --bg:#fbfcfd; --panel:#ffffff; --panel2:#f6f8fa; --ink:#1f2328; --muted:#59636e;
@@ -340,6 +340,40 @@
     deliberate damper — without it, a first place would dominate everything else. Searching both ways and
     merging is called <b>hybrid search</b>.</div>
 
+    <h3>When nothing matches: search can now answer zero</h3>
+    <p>Until recently it couldn't, and the reason was structural rather than a setting left too loose. The
+    meaning half <em>always</em> has a nearest neighbour — "nearest" is a fact about your vault, not about
+    your query — and the merge above throws away both systems' actual scores in favour of positions. So by
+    the time anything could have asked <em>"is any of this actually relevant?"</em>, the two numbers that
+    could have answered were gone. Type <code>Fasdfadsf</code> and you got ten confident-looking results.</p>
+    <p>B2 now reads two absolute signals beside the merged order, and serves results only if <b>either</b>
+    one says the vault holds something:</p>
+    <ul class="tidy">
+      <li><b>Do your words appear at all — weighted by how rare they are?</b> Not "does anything match":
+      almost any query shares <em>some</em> word with almost any vault, and a query that matches only
+      through <em>a</em>, <em>to</em> and <em>my</em> has told you nothing. Each word is weighted by how
+      many passages contain it, so a word in most of them counts for nearly nothing and a word in none
+      counts for the most there is — and B2 asks what share of your query's own weight the vault actually
+      carries. Stopwords are therefore <em>measured</em>, never a shipped list of words to ignore, which
+      matters in a vault about one subject: no fixed list would know that <em>comb</em> is a content word
+      in a beekeeping vault.</li>
+      <li><b>Or is the nearest passage genuinely near?</b> The plain distance, before ranks replaced it —
+      a backstop for the real questions your notes answer in words you didn't use.</li>
+    </ul>
+    <p>Two independent signals, deliberately, because one couldn't do it: a single test can't tell
+    <em>nothing here is related</em> from <em>everything here is related</em> — the same lesson the
+    related-notes panel learned the hard way (<a href="#floor">§5</a>). A query that clears neither gets a
+    plain <b>"no matches"</b>, and B2 shows you none of its nearest guesses — not folded away behind a
+    "show anyway", not counted, just not offered. The nearest list is genuinely out of reach for that one
+    query, which is the accepted price of the answer being trustworthy: what B2 shows you, it vouches
+    for.</p>
+    <div class="term"><span class="lbl">worth knowing</span> The bar is measured per embedding model, so a
+    model B2 has no measurement for yet gets <b>no verdict at all</b> rather than a guessed one — search
+    behaves exactly as it always did there, including in offline/dev mode. And
+    <code>b2 search --json</code> still hands an agent every row plus the verdict, even when the answer is
+    "no matches": a program that is <em>told</em> the vault vouches for nothing can be honest about the
+    rows anyway, where a person handed ten results cannot.</div>
+
     <h3>Three smaller heuristics you may notice</h3>
     <ul class="tidy">
       <li><b>Word endings are trimmed.</b> The keyword index reduces "running", "runs" and "ran" to a common
@@ -491,8 +525,15 @@
     <div class="ground"><b>Could a smarter "show nothing" rule come back?</b> Only by earning it: any
     replacement has to win a measured bake-off — on the standard test corpus, on a deliberately
     single-domain one built for exactly this failure, and on real vaults via a calibration command — and
-    "no rule at all" is allowed to win it. That is also what every comparable tool ships: a ranked list,
-    with the score as a signal rather than a verdict.</div>
+    "no rule at all" is allowed to win it. The first candidate ran that gauntlet and lost, so the panel
+    still serves the whole ranked list. That is also what every comparable tool ships: a ranked list, with
+    the score as a signal rather than a verdict.
+    <p style="margin:8px 0 0"><b>Search is the other side of that same coin, and it went the other way.</b>
+    Nothing above contradicts <a href="#search">§3</a>'s "no matches": <em>related to this note</em> is a
+    comparison with no zero point — everything in your vault is <em>somewhat</em> related to everything —
+    while <em>relevant to this query</em> has an honest zero, and B2 can measure it in two independent
+    ways. Where a claim can be checked, B2 makes it; where it can't, B2 hands you the ranking and gets out
+    of the way.</p></div>
   </section>
 
   <!-- ================================================================= -->
@@ -544,10 +585,14 @@
       one unrelated pair unusually highly, that pair sits high in the list by definition. One such case is
       a known, tracked residue in B2's own test corpus — now a mis-<em>ordering</em> (the real relation
       appears, a few places lower than it should) rather than an absence.</li>
-      <li><b>Whether any "show nothing" rule ever returns is an open, evidence-gated question.</b> The
-      leading candidate is a mutual-nearest-neighbour check (serve or flag only candidates whose own top
-      list contains the anchor — a rank-based test with no tuned constant), judged against corpora and
-      real vaults where "no rule at all" is allowed to win.</li>
+      <li><b>Whether any "show nothing" rule ever returns to the related-notes panel is an open,
+      evidence-gated question.</b> The leading candidate was a mutual-nearest-neighbour check (serve or
+      flag only candidates whose own top list contains the anchor — a rank-based test with no tuned
+      constant); it was measured against both corpora and real vaults, and it lost — every depth that
+      stopped hiding a genuinely related note was past the depth that still emptied a panel. The axis
+      stays open for the next candidate. Note that this is the <em>related-notes</em> panel only:
+      <a href="#search">search</a> does answer "no matches", because a query has an honest zero where a
+      note-to-note comparison does not.</li>
       <li><b>Quality depends on your reindex being current.</b> Discovery reads stored vectors and never
       re-embeds, so notes edited since the last index are compared on their old text. The desktop app
       re-indexes automatically on changes; the CLI does it when you run <code>b2 reindex</code>.</li>

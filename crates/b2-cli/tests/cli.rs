@@ -97,6 +97,16 @@ fn stderr(o: &Output) -> String {
     String::from_utf8(o.stderr.clone()).unwrap()
 }
 
+/// The rows of a `search --json` payload. Since GH #202 that payload is an
+/// **object** — the served rows plus D2's query-level verdict, which has nowhere
+/// to live in a bare array — so every caller reaches for `results` rather than
+/// treating the whole document as the list.
+fn results_of(v: &Value) -> &[Value] {
+    v["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("search --json is an object with a `results` array: {v}"))
+}
+
 /// Reindex a fresh golden vault; returns the guard + root ready for querying.
 fn reindexed() -> (tempfile::TempDir, PathBuf) {
     let (tmp, root) = golden_vault();
@@ -509,9 +519,7 @@ fn add_creates_a_note_human_and_json() {
     // Immediately searchable (keyword half is real even under the fake embedder).
     let search = run_in(&root, &["--json", "search", "gadgets"]);
     let v: Value = serde_json::from_slice(&search.stdout).unwrap();
-    assert!(v
-        .as_array()
-        .unwrap()
+    assert!(results_of(&v)
         .iter()
         .any(|h| h["path"] == "notes/gadgets.md"));
 
@@ -583,8 +591,7 @@ fn write_replaces_body_from_stdin_and_reprojects() {
     let hit = run_in(&root, &["--json", "search", "marmots"]);
     let v: Value = serde_json::from_slice(&hit.stdout).unwrap();
     assert!(
-        v.as_array()
-            .unwrap()
+        results_of(&v)
             .iter()
             .any(|h| h["path"] == "concepts/memory.md"),
         "the new body is indexed: {v}"
@@ -802,11 +809,23 @@ fn search_finds_note_human_and_json() {
     let json = run_in(&root, &["--json", "search", "forgetting"]);
     assert!(json.status.success(), "{}", stderr(&json));
     let v: Value = serde_json::from_slice(&json.stdout).unwrap();
-    let arr = v.as_array().expect("search --json is an array");
+    // The contract is an OBJECT since GH #202: the rows, plus the query-level
+    // verdict that has nowhere to live in a bare array (invariants.md D2).
+    let arr = results_of(&v);
     assert!(!arr.is_empty());
     assert!(arr
         .iter()
         .any(|h| h["path"] == "notes/spaced-repetition.md"));
+    // The verdict is present and, under the fake embedder, is `null` — no
+    // calibrated bar for this model, so no verdict is offered rather than one
+    // guessed (M2). Never `false`: that would be "no matches" on a dev vault.
+    assert!(v.get("vouched").is_some(), "the verdict travels: {v}");
+    assert!(v["vouched"].is_null(), "fake embedder has no bar: {v}");
+    // Per-hit provenance rides along on each row, additively.
+    assert!(
+        arr[0].get("bm25_rank").is_some() && arr[0].get("cos").is_some(),
+        "provenance flattened onto the row: {v}"
+    );
     // --json stdout is pure data: no caveat leaks into it.
     assert!(!stdout(&json).to_lowercase().contains("semantic"));
 }
@@ -817,7 +836,7 @@ fn search_respects_limit() {
     let out = run_in(&root, &["--json", "search", "memory", "--limit", "1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v.as_array().unwrap().len() <= 1);
+    assert!(results_of(&v).len() <= 1);
 }
 
 #[test]
@@ -827,7 +846,7 @@ fn search_before_reindex_is_empty_but_succeeds() {
     let out = run_in(&root, &["--json", "search", "forgetting"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v.as_array().unwrap().is_empty());
+    assert!(results_of(&v).is_empty());
 }
 
 // --- connection discovery (③): similar + link ------------------------------

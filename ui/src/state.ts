@@ -15,7 +15,7 @@ import type {
   ResourceExplainView,
   ResourceLink,
   ResourceSummary,
-  SearchResult,
+  EvidencedResult,
   SimilarView,
   UnresolvedLink,
 } from "./types";
@@ -280,7 +280,20 @@ export interface AppState {
   chatModelTyped: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
-  searchResults: SearchResult[];
+  /**
+   * The rows the search pane **serves** — which is not always every row the host
+   * returned. On an unvouched query (`searchVouched === false`) this is emptied at
+   * the boundary in `doSearch`, so the paint and the arrow walk cannot disagree
+   * about what is on screen: `render.ts` and `sidenav.ts` both derive from this one
+   * list, exactly as they do for every other pane (invariants.md D2, GH #202).
+   */
+  searchResults: EvidencedResult[];
+  /**
+   * D2's verdict for the current query — three-state, and each state is different
+   * copy in the empty branch (`false` = "no matches", `null` = no calibrated bar
+   * for this model, so no verdict was offered at all; see `SearchEvidenceView`).
+   */
+  searchVouched: boolean | null;
   /** When set, the link modal is open for this target. */
   linkTarget: LinkTarget | null;
   /** The verb selected in the link modal. */
@@ -389,6 +402,7 @@ export const state: AppState = {
   chatModelTyped: false,
   searchQuery: "",
   searchResults: [],
+  searchVouched: null,
   linkTarget: null,
   linkRelation: "references",
   settingsOpen: false,

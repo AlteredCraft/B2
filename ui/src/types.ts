@@ -269,6 +269,46 @@ export interface SearchResult {
   snippet: string;
 }
 
+/** One served row with the provenance RRF discarded — which list ranked its chunk,
+ *  and how near its vector actually was (`Vault::search_evidence`, GH #201). The
+ *  fields are flattened onto the row host-side, so this *is* a `SearchResult`. */
+export interface EvidencedResult extends SearchResult {
+  /** 0-based rank in the BM25 list; `null` = the lexical half never ranked it. */
+  bm25_rank: number | null;
+  /** 0-based rank in the dense list; `null` = the vector half never ranked it,
+   *  or never ran. */
+  vector_rank: number | null;
+  /** This chunk's cosine to the query; `null` whenever `vector_rank` is. */
+  cos: number | null;
+}
+
+/** One query term's lexical reading — its document frequency and the weight that
+ *  gives it in the coverage the verdict reads (`Vault::search_evidence`). */
+export interface QueryTermView {
+  term: string;
+  df: number;
+  idf: number;
+}
+
+/** `Vault::search_evidence` — the served rows plus D2's query-level verdict.
+ *
+ *  `vouched` is three-state and each state is different behavior (invariants.md
+ *  D2, GH #202):
+ *    • `true`  — the vault holds lexical or semantic evidence; serve the rows.
+ *    • `false` — it holds neither; the pane shows the honest empty state and
+ *                **none** of the rows (strict, no reveal).
+ *    • `null`  — no calibrated bar for the active model (the fake embedder, or
+ *                any model until the harness measures one — M2). Serve the rows
+ *                exactly as before; never read this as "no matches", which would
+ *                blank every dev vault. */
+export interface SearchEvidenceView {
+  results: EvidencedResult[];
+  vouched: boolean | null;
+  chunk_total: number;
+  terms: QueryTermView[];
+  best_cos: number | null;
+}
+
 /** One typed edge of a note, resolved for display (from `Vault::explain`). */
 export interface NeighborView {
   path: string;

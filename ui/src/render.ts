@@ -657,8 +657,7 @@ function searchSectionHtml(state: AppState, roving: string | null): string {
     </div>
     <p class="side-sub">for “${escapeHtml(state.searchQuery)}”${searchCaveat(state)}</p>`;
   if (state.loading) return head + `<p class="side-empty">Searching…</p>`;
-  if (state.searchResults.length === 0)
-    return head + `<p class="side-empty">No matches.</p>`;
+  if (state.searchResults.length === 0) return head + searchEmptyHtml(state);
   // A result card is the whole button, so it *is* the row — no fold, one level.
   const items = state.searchResults
     .map((r, i) => {
@@ -676,6 +675,25 @@ function searchSectionHtml(state: AppState, roving: string | null): string {
   return (
     head + `<div class="cards" role="tree" aria-label="Search results">${items}</div>`
   );
+}
+
+// The search pane's two empty states — the same blank list, two different reasons,
+// and saying so is the whole of D2's honesty on this surface (GH #202).
+//
+//   • `searchVouched === false` — the vault holds no evidence for this query: no
+//     lexical anchor, and nothing near enough by meaning at the active model's
+//     calibrated bar. The engine had rows and `doSearch` dropped them, strictly, so
+//     there is nothing to reveal and nothing to count. The copy says "no matches"
+//     because that is a claim about the *query*, which is the claim we can support.
+//   • anything else — the list is simply empty (an unbuilt index, a `null` verdict
+//     with nothing retrieved). That is not a judgment about the query, so the copy
+//     doesn't make one.
+function searchEmptyHtml(state: AppState): string {
+  return state.searchVouched === false
+    ? `<p class="side-empty">No matches. Nothing in this vault matches “${escapeHtml(
+        state.searchQuery,
+      )}”.</p>`
+    : `<p class="side-empty">No matches.</p>`;
 }
 
 function discoverySectionHtml(state: AppState, roving: string | null): string {

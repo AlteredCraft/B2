@@ -107,7 +107,7 @@ negative queries (empty `relevant` = "no matches") + the `search evidence calibr
 (`search_evidence` in the row) in `just eval`, and `just calibrate`'s **mutual-k reciprocity fold
 replay** (`fold_serves` per anchor, `reciprocal` per candidate, `--mutual-k`). Nothing gates yet:
 GH #200 was the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
-GH #202 lands the winners on every surface and moves the exit-gate assertions in the same change —
+GH #202 landed the winners on every surface and moved the exit-gate assertions in the same change —
 the #182 rule applied in advance for once.
 **GH #200 then ran, and "no fold at all" won**: `just eval`'s new `discovery fold bake-off` block
 judges every candidate rule on the *same* served lists over both corpora, sweeps mutual-k's depth
@@ -166,6 +166,27 @@ is offered behind the fold, the exit-gate moves) are #202's, landed together per
 nothing user-visible changes yet; and the **per-hit tail** fold is unshipped because the corpus
 labels name the relevant note, not the irrelevance of ranks 5–10 — the provenance is measured and
 reported (`dense_only` per query) and no rule is drawn from it.
+**GH #202 then paid the dogfood complaint on the search axis**, which is the half #200 could not
+pay: `Fasdfadsf` now answers *"no matches"* on every surface instead of ten confident-looking
+results. The adapter work is small and the ruling inside it is not — `vouched` is three-state and
+each state is a different behavior, which is the part worth holding onto. Evidence found serves as
+always. **No evidence is strict**: the honest empty state and *none* of the served rows — no
+reveal, no `--all`, no expander, because a fold is still a surface putting the rows forward, and
+#200 had built no disclosure boundary to put them behind anyway. The nearest list is unreachable
+from the human surface for that query, and that cost is accepted precisely because it is bounded
+to one query rather than to a vault (contrast #196, where an anchor-local gate darkened all of
+one). And **no calibrated bar is no verdict**, not "no matches" — the fake embedder and every
+model until the harness measures one land there (M2), so folding it into the empty state would
+blank a dev vault. The frontend applies the rule at **one** boundary (`doSearch` drops the rows,
+so `state.searchResults` *is* what the pane serves) rather than branching in both `render.ts` and
+`sidenav.ts`, which is the drift those two modules exist to prevent. `b2 search --json` became an
+**object** in the bargain — a documented break of the array contract, since a query-level verdict
+has nowhere to live in a list of rows — and it keeps serving the rows at `vouched: false` where
+the human surfaces show none: an agent handed rows *plus* a verdict can be honest about them, one
+a reader given rows alone cannot. The exit gate moved in the same commit series: search's negatives (zero
+served), the labelled positives the bar would cut and the dense fixture's title-as-query cuts
+(both structural zeros, no headroom), while every discovery row is unchanged, since search's rule
+moves no discovery rank or reachability — movement there is a bug, not a re-derivation.
 The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
 rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
 win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the

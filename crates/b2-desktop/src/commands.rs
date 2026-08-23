@@ -26,7 +26,7 @@ use b2_core::vault::{
     AnswerView, DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport,
     ExplainView, ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView,
     ProjectReport, ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
-    SearchResult, SimilarView, Vault, WriteReport,
+    SearchEvidenceView, SimilarView, Vault, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
 use b2_llm::ChatSetup;
@@ -410,15 +410,21 @@ pub fn similar(
     Ok(vault.similar(&note, limit)?)
 }
 
+/// Hybrid search **with its evidence reading** (invariants.md D2, GH #202) — the
+/// GUI sibling of `b2 search`, which changed to the same façade op in the same
+/// change. The rows are `search`'s, in `search`'s order; what rides beside them
+/// is the query-level verdict, and deciding what to *show* on each of its three
+/// states is the frontend's (`ui/src/main.ts`). The host returns the view whole:
+/// an adapter that withheld rows would be an adapter holding the rule (E3).
 #[tauri::command(async)]
 pub fn search(
     state: State<'_, AppState>,
     query: String,
     limit: usize,
-) -> Result<Vec<SearchResult>, CmdError> {
+) -> Result<SearchEvidenceView, CmdError> {
     // Semantic: the query is embedded, so this opens the real model (fail-fast if absent).
     let vault = open_semantic(state.inner())?;
-    Ok(vault.search(&query, limit)?)
+    Ok(vault.search_evidence(&query, limit)?)
 }
 
 #[tauri::command(async)]

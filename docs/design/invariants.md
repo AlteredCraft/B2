@@ -187,8 +187,10 @@ tomorrow's model* — made mechanical.
   the lower bound and the absolute; and the two corpora's safe depths are the same *fraction* of
   their candidate pools rather than the same constant — so the default view is still the whole
   served prefix. The permission above stands unchanged for the next candidate; what the measurement
-  retires is one rule, not the axis.
-  ([index-engine.md](index-engine.md) §3, GH #196/#197/#200; surfaces and gate moves GH #202; the
+  retires is one rule, not the axis. With no fold there were no discovery-side surfaces or gate
+  rows for GH #202 to land either: its exit-gate moves are all search's, and the harness keeps only
+  #200's **structural-zero tripwire**, which re-arms on its own if a fold ever ships.
+  ([index-engine.md](index-engine.md) §3, GH #196/#197/#200/#202; the
   generation side's recall posture and 1-hop exclusion are unchanged)
 - **D2 — A served search result is a claim of evidence, and `limit` is a quota nowhere in B2.**
   Flow ②'s vector half always has k nearest — *nearest* is a fact about the vault, never evidence
@@ -197,12 +199,13 @@ tomorrow's model* — made mechanical.
   `limit` confident-looking results, the same false claim D1 names. The rule: a result in the
   default view must trace to positive evidence — a lexical match, or semantic proximity clearing a
   bar calibrated per model in the harness — and a query the vault holds no evidence for answers
-  **"no matches"**, honestly empty, with the nearest-by-meaning list at most folded behind D1's
-  disclosure boundary and never presented as matches. D1's guards apply unchanged: any bar is a
-  distributional constant (process rule 5's `just calibrate` transfer check), earned against
-  labelled negative queries in the eval corpus before it ships, folding only in prefix form — and
-  **a labelled relevant note below the fold is the search-side tripwire, asserted at zero with no
-  headroom**.
+  **"no matches"**, honestly empty, the nearest-by-meaning list never presented as matches. The
+  clause that once said "at most folded behind D1's disclosure boundary" is struck: **#200 built no
+  such boundary**, and #202 ruled the human surface *strict* rather than folded (below). D1's
+  guards apply unchanged: any bar is a distributional constant (process rule 5's `just calibrate`
+  transfer check), earned against labelled negative queries in the eval corpus before it ships —
+  and **a labelled relevant query the bar would cut is the search-side tripwire, asserted at zero
+  with no headroom**.
   **The engine now answers it** (GH #201, 2026-08-22): `hybrid_search` carries the discarded
   signals beside the untouched fused order — per hit its rank in each list and its own distance,
   per query the lexical reading and the best cosine — and the rule over them is *lexical OR
@@ -217,12 +220,24 @@ tomorrow's model* — made mechanical.
   the vault holds) — the register keeps that, because it is the same lesson twice: a constant read
   off one corpus's distribution describes that corpus, and the fix was to change the *rule* rather
   than re-tune the number. The verdict reaches an adapter through `Vault::search_evidence`, which
-  serves exactly the rows `search` does in the same order; **what a surface does with it — the
-  empty state, whether the nearest list is offered behind the fold, the exit-gate moves — is GH
-  #202's**, landed together per #182's rule. The per-hit **tail** fold is unshipped and
-  deliberately so: it needs labels naming the irrelevance of ranks 5–10, which the corpus does not
-  carry, so the provenance is measured and reported rather than ruled on.
-  ([index-engine.md](index-engine.md) §4, GH #201, surfaces GH #202,
+  serves exactly the rows `search` does in the same order. The per-hit **tail** fold is unshipped
+  and deliberately so: it needs labels naming the irrelevance of ranks 5–10, which the corpus does
+  not carry, so the provenance is measured and reported rather than ruled on.
+  **The surfaces carry it now** (GH #202, 2026-08-22), and the verdict is **three-state, each state
+  a different behavior**: evidence found → serve as always; **no evidence → the honest empty state
+  and none of the rows** (*strict* — no reveal, no `--all`, no expander: any of those would put the
+  nearest list forward as candidates after all, which is the claim this invariant says a served row
+  makes; the nearest list becomes unreachable from the human surface, and that cost is accepted
+  because it is bounded to one query at a time, never a whole vault, which is what separates it
+  from the failure GH #196 measured); and **no calibrated bar for the active model → serve as
+  always, never "no matches"**, since that third state is what the fake embedder and every model
+  until the harness measures one produce (M2), and folding it into "no evidence" would blank a dev
+  vault. `b2 search --json` is consequently an **object** — the rows plus the verdict, a documented
+  break of the array contract, because a query-level reading has nowhere to live in a list of rows
+  — and it keeps serving the rows at `vouched: false` where the human surfaces show none: an agent
+  handed rows *plus* an explicit verdict can be honest about them where a reader given rows
+  alone cannot.
+  ([index-engine.md](index-engine.md) §4, GH #201/#202,
   [docs/evals/README.md](../evals/README.md) process rules)
 
 ## E — Engineering discipline (what keeps the above true)

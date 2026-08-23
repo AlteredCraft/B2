@@ -32,7 +32,7 @@ import type {
   ResourceExplainView,
   ResourceMoveReport,
   ResourceSummary,
-  SearchResult,
+  SearchEvidenceView,
   SimilarView,
   VaultInfo,
   WriteReport,
@@ -128,8 +128,12 @@ export const api = {
   similar: (note: string, limit = 10): Promise<SimilarView[]> =>
     invoke("similar", { note, limit }),
 
-  /** Hybrid keyword+semantic search across the vault. */
-  search: (query: string, limit = 20): Promise<SearchResult[]> =>
+  /** Hybrid keyword+semantic search across the vault, **with its evidence
+   *  reading** (invariants.md D2, GH #202): the same rows in the same order, plus
+   *  the query-level verdict that says whether the vault holds evidence for the
+   *  query at all. The host returns the view whole — what the pane *shows* on
+   *  each of `vouched`'s three states is `doSearch`'s call, in `main.ts`. */
+  search: (query: string, limit = 20): Promise<SearchEvidenceView> =>
     invoke("search", { query, limit }),
 
   /**

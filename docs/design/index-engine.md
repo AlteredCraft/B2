@@ -393,14 +393,31 @@ does. Therefore **semantic search is in v1** — exact, in-process, no vector ex
     ([GH #187](https://github.com/AlteredCraft/B2/issues/187)'s lesson).
   The verdict reaches an adapter through `Vault::search_evidence`, which serves **exactly** the
   rows `search` does, in the same order: a bar may set what the default view *vouches for*, never
-  what exists or can be reached (D1). Two things are deliberately not here. **The surfaces** — the
-  CLI's and the desktop's empty state, whether the nearest-by-meaning list is offered behind the
-  fold, and the exit-gate assertions — are
-  [#202](https://github.com/AlteredCraft/B2/issues/202)'s, landed together per
-  [#182](https://github.com/AlteredCraft/B2/issues/182)'s rule. And **the tail** — folding where a
-  *real* query's per-hit evidence runs out — is unshipped: it needs per-hit labels the corpus does
-  not carry (the labels name the relevant note, not the irrelevance of ranks 5–10), so the
-  provenance is measured and reported (`dense_only` per query) and no rule is drawn from it yet.
+  what exists or can be reached (D1). **The tail** — folding where a *real* query's per-hit
+  evidence runs out — is unshipped: it needs per-hit labels the corpus does not carry (the labels
+  name the relevant note, not the irrelevance of ranks 5–10), so the provenance is measured and
+  reported (`dense_only` per query) and no rule is drawn from it yet.
+  **The surfaces then consumed the verdict** ([#202](https://github.com/AlteredCraft/B2/issues/202),
+  2026-08-22), landed with the exit-gate moves in one change per
+  [#182](https://github.com/AlteredCraft/B2/issues/182)'s rule. `vouched` is `Option<bool>` and each
+  of its three states is a different behavior, which is the part an implementation is most likely to
+  collapse:
+  - `Some(true)` — serve the rows, as always.
+  - `Some(false)` — the honest empty state, and **none** of the rows. *Strict*: no reveal, no
+    `--all`, no expander. The question "should the nearest list sit behind a fold" was live when the
+    engine shipped and was answered *no* — a fold is still a surface putting the rows forward, and
+    #200 had in any case built no disclosure boundary to put them behind. The nearest list is
+    consequently unreachable from the human surface for that query, which is a real cost, accepted
+    because it is bounded to one query rather than to a vault (contrast GH #196, where an anchor-local
+    gate darkened a whole vault at once).
+  - `None` — **no verdict exists**, because the active model has no calibrated bar (M2). Serve the
+    rows exactly as before. This is what every fake-embedder run and every future model produces
+    until the harness measures a bar for it, so reading it as "no matches" would blank a dev vault;
+    it is the one state an implementation must never fold into `Some(false)`.
+  `b2 search --json` therefore became an **object** (`{results, vouched, chunk_total, terms,
+  best_cos}`), a documented break of the array contract: a query-level reading has nowhere to live in
+  a list of rows. It keeps serving the rows at `vouched: false` where the human surfaces show none —
+  an agent handed rows *plus* a verdict can be honest about them; a reader given rows alone cannot.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph

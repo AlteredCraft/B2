@@ -286,7 +286,17 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
 <span class="o">    Spaced repetition exploits the retrieval curve of [[concepts/memory]].</span>
 <span class="o">0.0161  memory (concepts/memory.md)</span>
 <span class="o">    The brain encodes, stores, and retrieves information.</span></pre>
-      <p>Use <code>--limit N</code> to widen or narrow the result set.</p>
+      <p>Use <code>--limit N</code> to widen or narrow the result set — a cap, never a quota to fill.
+      A query your vault holds no evidence for gets a plain <b>no matches</b> rather than its nearest
+      guesses:</p>
+<pre><span class="p">$</span> <span class="k">b2</span> search <span class="s">"Fasdfadsf"</span>
+<span class="o">No matches. Nothing in the vault matches “Fasdfadsf”.</span></pre>
+      <p>B2 decides that from two independent readings — whether your words appear at all (weighted by how
+      rare each one is) and how near the closest passage genuinely is — so it can tell <em>nothing here
+      matches</em> from <em>everything here matches</em>. <a href="search-and-similarity.html#search">How
+      that works</a>, in plain language. Under <code>--json</code> the answer is an object:
+      <code>results</code> plus the <code>vouched</code> verdict, so an agent gets the rows <em>and</em>
+      the honest reading of them.</p>
     </div>
   </div>
 

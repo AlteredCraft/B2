@@ -545,8 +545,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     commit(note.path);
     expandAncestors(note.path);
     state.selectedDir = parentDir(note.path); // the create context follows the selection
-    state.searchQuery = "";
-    state.searchResults = [];
+    resetSearch();
     // Paint the note the instant its body is read — the body is already in hand.
     // Discovery (`similar` + `explain`) is a slower, independent side-pane read; gating
     // the middle pane on it made note-open feel as slow as the whole discovery scan.
@@ -612,8 +611,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
     commit(resource.path);
     expandAncestors(resource.path);
     state.selectedDir = parentDir(resource.path); // the create context follows the selection
-    state.searchQuery = "";
-    state.searchResults = [];
+    resetSearch();
     state.similar = [];
     state.connections = [];
     state.resourceLinks = [];
@@ -1803,11 +1801,29 @@ async function refreshDiscovery(): Promise<void> {
   await Promise.all([connections, similar]);
 }
 
+// Monotonic search-request counter: bumped by `doSearch` alone, so it answers exactly
+// one question — has a *newer search* taken over since this one started? (A reset is a
+// different question and is asked of `state.searchQuery`; see the guards below.)
+let searchSeq = 0;
+
+// The search wiring, and the one place D2's verdict turns into what the pane shows
+// (invariants.md D2, GH #202). Three states, three behaviors:
+//
+//   • `false` — the vault holds neither a lexical anchor nor semantic proximity
+//     clearing this model's bar. The rows are **dropped here**, at the boundary, so
+//     the pane serves none of them: strict, no expander, no "N more" (GH #202,
+//     decision 1). Dropping them in state rather than branching in the paint is what
+//     keeps `render.ts` and `sidenav.ts` agreeing by construction — the same reason
+//     the row order lives in one place, since a pane you can arrow through in an
+//     order you can't see is worse than no arrows at all.
+//   • `true` — serve them, as always.
+//   • `null` — *no verdict*: no calibrated bar for the active model (the fake
+//     embedder, or any model until the harness measures one — M2). Serve them, as
+//     always. Reading `null` as "no matches" would blank every dev vault.
 async function doSearch(raw: string): Promise<void> {
   const query = raw.trim();
   if (!query) {
-    state.searchQuery = "";
-    state.searchResults = [];
+    resetSearch();
     render();
     return;
   }
@@ -1817,20 +1833,50 @@ async function doSearch(raw: string): Promise<void> {
   // wins, and the conversation waits in state until ⌘J brings it back (chat.ts's header).
   state.chatOpen = false;
   render();
+  // `refreshDiscovery`'s staleness guard, in the two parts this pane needs. A slower
+  // search for A must not land on top of a newer B, nor on a pane the user cleared —
+  // and it is load-bearing *because* of the verdict rather than merely tidy: a stale
+  // `false` would empty the pane while the header names the newer query, so the empty
+  // state would claim the vault holds no evidence for a query nothing has judged yet,
+  // the exact false claim D2 exists to stop.
+  //
+  // Two tests, not one, because two different things are owned. **Results** belong to
+  // this query, so a reset (`resetSearch` blanks the query) discards them as surely as
+  // a newer search does. **`state.loading` is global** — it drives the body class and
+  // disables switch-vault, unlike discovery's own per-section flags — so this call must
+  // always release it *unless* a newer search has taken it over, or a clear-mid-flight
+  // would strand the whole window in its loading state.
+  const seq = ++searchSeq;
+  const superseded = () => seq !== searchSeq;
+  const abandoned = () => superseded() || state.searchQuery !== query;
   try {
-    state.searchResults = await api.search(query);
+    const view = await api.search(query);
+    if (abandoned()) return;
+    state.searchVouched = view.vouched;
+    state.searchResults = view.vouched === false ? [] : view.results;
   } catch (e) {
+    if (abandoned()) return;
     state.searchResults = [];
+    state.searchVouched = null;
     flash(errText(e));
   } finally {
-    state.loading = false;
-    render();
+    if (!superseded()) {
+      state.loading = false;
+      render();
+    }
   }
 }
 
-function clearSearch(): void {
+// Back to discovery: no query, no rows, and no verdict. All three move together —
+// a verdict outliving the query it was read for is a claim about nothing.
+function resetSearch(): void {
   state.searchQuery = "";
   state.searchResults = [];
+  state.searchVouched = null;
+}
+
+function clearSearch(): void {
+  resetSearch();
   const input = document.getElementById("search-input") as HTMLInputElement | null;
   if (input) input.value = "";
   render();
@@ -2599,8 +2645,7 @@ async function switchVault(): Promise<void> {
     state.connections = [];
     state.resourceLinks = [];
     state.unresolved = [];
-    state.searchQuery = "";
-    state.searchResults = [];
+    resetSearch();
     // The conversation is grounded in the vault we just left — every citation in it
     // names a path that means nothing here (a note's identity is its path, L1). Dropping
     // it writes nothing and loses nothing durable: the transcript was session state. The
