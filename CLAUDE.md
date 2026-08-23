@@ -183,7 +183,7 @@ so `state.searchResults` *is* what the pane serves) rather than branching in bot
 **object** in the bargain — a documented break of the array contract, since a query-level verdict
 has nowhere to live in a list of rows — and it keeps serving the rows at `vouched: false` where
 the human surfaces show none: an agent handed rows *plus* a verdict can be honest about them, one
-handed rows alone cannot. The exit gate moved in the same commit series: search's negatives (zero
+a reader given rows alone cannot. The exit gate moved in the same commit series: search's negatives (zero
 served), the labelled positives the bar would cut and the dense fixture's title-as-query cuts
 (both structural zeros, no headroom), while every discovery row is unchanged, since search's rule
 moves no discovery rank or reachability — movement there is a bug, not a re-derivation.

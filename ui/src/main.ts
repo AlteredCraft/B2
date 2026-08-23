@@ -1801,6 +1801,11 @@ async function refreshDiscovery(): Promise<void> {
   await Promise.all([connections, similar]);
 }
 
+// Monotonic search-request counter: bumped by `doSearch` alone, so it answers exactly
+// one question — has a *newer search* taken over since this one started? (A reset is a
+// different question and is asked of `state.searchQuery`; see the guards below.)
+let searchSeq = 0;
+
 // The search wiring, and the one place D2's verdict turns into what the pane shows
 // (invariants.md D2, GH #202). Three states, three behaviors:
 //
@@ -1828,17 +1833,37 @@ async function doSearch(raw: string): Promise<void> {
   // wins, and the conversation waits in state until ⌘J brings it back (chat.ts's header).
   state.chatOpen = false;
   render();
+  // `refreshDiscovery`'s staleness guard, in the two parts this pane needs. A slower
+  // search for A must not land on top of a newer B, nor on a pane the user cleared —
+  // and it is load-bearing *because* of the verdict rather than merely tidy: a stale
+  // `false` would empty the pane while the header names the newer query, so the empty
+  // state would claim the vault holds no evidence for a query nothing has judged yet,
+  // the exact false claim D2 exists to stop.
+  //
+  // Two tests, not one, because two different things are owned. **Results** belong to
+  // this query, so a reset (`resetSearch` blanks the query) discards them as surely as
+  // a newer search does. **`state.loading` is global** — it drives the body class and
+  // disables switch-vault, unlike discovery's own per-section flags — so this call must
+  // always release it *unless* a newer search has taken it over, or a clear-mid-flight
+  // would strand the whole window in its loading state.
+  const seq = ++searchSeq;
+  const superseded = () => seq !== searchSeq;
+  const abandoned = () => superseded() || state.searchQuery !== query;
   try {
     const view = await api.search(query);
+    if (abandoned()) return;
     state.searchVouched = view.vouched;
     state.searchResults = view.vouched === false ? [] : view.results;
   } catch (e) {
+    if (abandoned()) return;
     state.searchResults = [];
     state.searchVouched = null;
     flash(errText(e));
   } finally {
-    state.loading = false;
-    render();
+    if (!superseded()) {
+      state.loading = false;
+      render();
+    }
   }
 }
 

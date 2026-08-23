@@ -417,7 +417,7 @@ does. Therefore **semantic search is in v1** — exact, in-process, no vector ex
   `b2 search --json` therefore became an **object** (`{results, vouched, chunk_total, terms,
   best_cos}`), a documented break of the array contract: a query-level reading has nowhere to live in
   a list of rows. It keeps serving the rows at `vouched: false` where the human surfaces show none —
-  an agent handed rows *plus* a verdict can be honest about them; one handed rows alone cannot.
+  an agent handed rows *plus* a verdict can be honest about them; a reader given rows alone cannot.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph

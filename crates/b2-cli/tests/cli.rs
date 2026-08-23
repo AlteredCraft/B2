@@ -101,7 +101,7 @@ fn stderr(o: &Output) -> String {
 /// **object** — the served rows plus D2's query-level verdict, which has nowhere
 /// to live in a bare array — so every caller reaches for `results` rather than
 /// treating the whole document as the list.
-fn results_of(v: &Value) -> &Vec<Value> {
+fn results_of(v: &Value) -> &[Value] {
     v["results"]
         .as_array()
         .unwrap_or_else(|| panic!("search --json is an object with a `results` array: {v}"))

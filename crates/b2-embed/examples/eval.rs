@@ -2470,6 +2470,19 @@ struct QueryEvidence {
     /// best-BM25 both failed to separate the piles (Phase A), so the anchor is
     /// derived from *these* rather than from either of those.
     terms: Vec<(String, usize)>,
+    /// **The engine's own verdict** for this query — `Vault::search_evidence`'s
+    /// `vouched`, i.e. exactly what the surfaces act on (GH #202). The exit gate
+    /// counts on *this*, never on the harness's restatement below: an assertion
+    /// about what ships must read what ships. `None` when the model has no
+    /// calibrated bar (M2).
+    ///
+    /// The restatement is kept beside it rather than deleted, because the sweep
+    /// genuinely needs it — [`bake_off`] evaluates the rule at coverages the
+    /// engine cannot be asked about — and because two independent readings of
+    /// one rule are a drift check when they are compared. So they are:
+    /// [`read_shipped_bar`] prints a `[FAULT]` on any query where they disagree,
+    /// which is this file's existing idiom for the z dump.
+    vouched: Option<bool>,
 }
 
 impl QueryEvidence {
@@ -2658,6 +2671,7 @@ fn score_search_evidence(
                         .count(),
                     chunk_total: view.chunk_total,
                     terms: view.terms.iter().map(|t| (t.term.clone(), t.df)).collect(),
+                    vouched: view.vouched,
                 })
             })
             .collect()
@@ -2943,21 +2957,47 @@ fn headroom(cell: &EvidenceCell) -> f64 {
 /// to read, so there is nothing to assert either.
 struct ShippedBar {
     bar: EvidenceBar,
-    /// Labelled positives the bar would cut — the tripwire's direction.
+    /// Labelled positives the bar cuts — the tripwire's direction.
     pos_cut: usize,
     /// Labelled negatives it still serves — the defect's direction.
     neg_served: usize,
+    /// Queries where the engine's verdict and the harness's independent
+    /// restatement of the same rule **disagree** — a drift between the two, which
+    /// is silence unless something looks. Expected empty; printed, not gated,
+    /// because it accuses the instrument as readily as the engine and the reader
+    /// has to say which.
+    faults: Vec<String>,
 }
 
 fn read_shipped_bar(ev: &SearchEvidence, model_id: &str) -> Option<ShippedBar> {
     let bar = EvidenceBar::for_model(model_id)?;
-    let vouches = |r: &QueryEvidence| {
-        r.anchored(bar.min_term_coverage) || r.best_cos.is_some_and(|c| c >= bar.min_cos)
-    };
+    // The ENGINE's verdict, not a restatement of it: this is what the gate
+    // asserts and what the surfaces act on. `None` cannot occur here — the model
+    // has a bar or this function returned already — so it is counted as served,
+    // the same direction the surfaces take it (M2: no verdict is not "no match").
     Some(ShippedBar {
         bar,
-        pos_cut: ev.positives.iter().filter(|r| !vouches(r)).count(),
-        neg_served: ev.negatives.iter().filter(|r| vouches(r)).count(),
+        pos_cut: ev
+            .positives
+            .iter()
+            .filter(|r| r.vouched == Some(false))
+            .count(),
+        neg_served: ev
+            .negatives
+            .iter()
+            .filter(|r| r.vouched != Some(false))
+            .count(),
+        faults: ev
+            .positives
+            .iter()
+            .chain(ev.negatives.iter())
+            .filter(|r| {
+                let restated = r.anchored(bar.min_term_coverage)
+                    || r.best_cos.is_some_and(|c| c >= bar.min_cos);
+                r.vouched != Some(restated)
+            })
+            .map(|r| r.query.clone())
+            .collect(),
     })
 }
 
@@ -2966,14 +3006,15 @@ fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
         bar,
         pos_cut,
         neg_served,
+        faults,
     }) = read_shipped_bar(ev, model_id)
     else {
         println!("    shipped bar: none for this model — no verdict is offered (M2)");
         return;
     };
-    let vouches = |r: &QueryEvidence| {
-        r.anchored(bar.min_term_coverage) || r.best_cos.is_some_and(|c| c >= bar.min_cos)
-    };
+    // Every line below reads the ENGINE's verdict, so the numbers printed are the
+    // numbers gated — one reading, not two that can drift apart.
+    let vouches = |r: &QueryEvidence| r.vouched != Some(false);
     println!(
         "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}",
         bar.min_term_coverage, bar.min_cos
@@ -2998,6 +3039,15 @@ fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
             r.best_cos
                 .map(|c| format!("{c:.3}"))
                 .unwrap_or_else(|| "—".to_string()),
+        );
+    }
+    if !faults.is_empty() {
+        println!(
+            "      [FAULT] the engine's verdict and this harness's restatement of the same rule \
+             disagree on {} query/queries: {}. One of the two has drifted — read the engine's \
+             `LexicalEvidence`, not this line's wording.",
+            faults.len(),
+            faults.join(", ")
         );
     }
     for r in &ev.negatives {

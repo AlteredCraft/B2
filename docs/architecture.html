@@ -642,7 +642,7 @@ b2_relations:
     <tr><td class="mono">write</td><td>replace a note's <b>body</b> from stdin; frontmatter untouched</td><td>— (re-projects)</td></tr>
     <tr><td class="mono">mv</td><td>move/rename a note, resource, or folder + repair inbound link paths</td><td>embedder</td></tr>
     <tr><td class="mono">rm</td><td>delete a note, resource, or folder (<code>-r</code>); inbound links dangle, surfaced</td><td>—</td></tr>
-    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault); a query the vault holds no lexical or semantic evidence for answers "no matches" and serves no rows (invariants.md D2, GH #201/#202), and <code>--json</code> is an object — the rows plus that verdict</td><td>embedder</td></tr>
+    <tr><td class="mono">search</td><td>hybrid keyword ⊕ semantic (BM25-only on an unembedded vault); a query the vault holds no lexical or semantic evidence for answers "no matches" and serves no rows (invariants.md D2, GH #201/#202) — only where the active model has a calibrated bar, since an unmeasured one yields no verdict and serves as before (M2); <code>--json</code> is an object, <code>{results, vouched, chunk_total, terms, best_cos}</code></td><td>embedder</td></tr>
     <tr><td class="mono">neighbors</td><td>a note's neighbors, plus links that resolve to nothing</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">explain</td><td>every edge + its provenance and "why", with an orphan flag</td><td>— (pure graph)</td></tr>
     <tr><td class="mono">similar</td><td>surface the nearest not-yet-linked notes, ranked, always served (path/title/score/evidence, plus z where graded — absent on tiny pools and fake spaces)</td><td>— (stored vectors)</td></tr>

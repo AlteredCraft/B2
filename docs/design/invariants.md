@@ -235,8 +235,8 @@ tomorrow's model* — made mechanical.
   vault. `b2 search --json` is consequently an **object** — the rows plus the verdict, a documented
   break of the array contract, because a query-level reading has nowhere to live in a list of rows
   — and it keeps serving the rows at `vouched: false` where the human surfaces show none: an agent
-  handed rows *plus* an explicit verdict can be honest about them where one handed rows alone
-  cannot.
+  handed rows *plus* an explicit verdict can be honest about them where a reader given rows
+  alone cannot.
   ([index-engine.md](index-engine.md) §4, GH #201/#202,
   [docs/evals/README.md](../evals/README.md) process rules)
 
