@@ -23,7 +23,7 @@ import type {
   OllamaModel,
   OllamaSetup,
   ResourceLink,
-  SearchResult,
+  EvidencedResult,
   SimilarView,
   UnresolvedLink,
 } from "./types.ts";
@@ -113,11 +113,14 @@ const dangling = (target: string): UnresolvedLink => ({
   explanation: null,
 });
 
-const hit = (path: string): SearchResult => ({
+const hit = (path: string): EvidencedResult => ({
   path,
   title: path,
   score: 1,
   snippet: "",
+  bm25_rank: 0,
+  vector_rank: 0,
+  cos: 0.7,
 });
 
 /** A ready local chat provider — the setup the pane paints a conversation under. */
@@ -233,6 +236,25 @@ check("the note pane's chrome carries an id, in reading and in graph mode", () =
 });
 
 // --- the side pane's chrome -------------------------------------------------------------
+
+// D2's honesty on this surface (GH #202): the pane's empty state says *why* it is
+// empty, and an unvouched query shows none of the rows the engine served.
+check("an unvouched query names the query back and serves no rows", () => {
+  const html = sidePaneHtml(
+    app({ searchQuery: "Fasdfadsf", searchResults: [], searchVouched: false }),
+  );
+  assert(html.includes("No matches."), `says no matches: ${html}`);
+  assert(html.includes("Fasdfadsf"), `names the query back: ${html}`);
+  assert(!html.includes("data-side-row"), `and paints no row at all: ${html}`);
+});
+
+check("a null verdict is no verdict: the plain empty state, never “no matches here”", () => {
+  // The fake embedder and every uncalibrated model land here (M2). The copy must
+  // not claim the vault holds nothing — nothing judged the query.
+  const html = sidePaneHtml(app({ searchQuery: "kivo", searchResults: [], searchVouched: null }));
+  assert(html.includes("No matches."), `still an empty state: ${html}`);
+  assert(!html.includes("Nothing in this vault"), `but claims nothing about it: ${html}`);
+});
 
 check("search mode's clear button carries an id — the one focusable that isn't a row", () => {
   const html = sidePaneHtml(app({ searchQuery: "kivo", searchResults: [hit("notes/kivo.md")] }));
