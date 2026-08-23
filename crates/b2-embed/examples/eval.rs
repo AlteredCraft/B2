@@ -82,20 +82,23 @@
 //!    **search** bar's hardest bench for the same reason (GH #201): topical
 //!    concentration is what killed the rule that lost, so the shipped bar is
 //!    replayed here every run over each note's own title plus nonsense
-//!    (`score_dense_search`), reported beside the discovery fold bench.
-//! 7. **The search evidence calibration** (invariants.md D2; GH #201, Phase A
-//!    of the disclosure work) — search's sibling of the z dump. Flow ② cannot
-//!    currently answer *zero*: the vector half always has k nearest and RRF
-//!    keeps only ranks, so a nonsense query serves `limit` confident-looking
-//!    results. Before any evidence bar ships (GH #201's to earn), this block
-//!    dumps the signals a query-level rule would judge, for every labelled
-//!    query: the OR-sanitized BM25 match count and best BM25 score, the dense
-//!    top-1 cosine, and what the shipped always-serve surface serves today —
-//!    split into the positive/negative piles, with the would-be pure-cosine
-//!    window re-derived each run (the GH #187 pattern, applied to search).
-//!    **Negative queries** (empty `relevant` — the query-side siblings of the
-//!    loner anchors) are excluded from every rank aggregate, so labelling them
-//!    moved no pre-existing number.
+//!    (`score_dense_search`), beside the discovery fold bench — **and asserted**
+//!    since GH #202: zero titles cut, zero nonsense served.
+//! 7. **The search evidence calibration and bake-off** (invariants.md D2;
+//!    GH #201/#202) — search's sibling of the z dump. Flow ② could not answer
+//!    *zero* as first shipped: the vector half always has k nearest and RRF
+//!    keeps only ranks, so a nonsense query served `limit` confident-looking
+//!    results. This block dumps the signals a query-level rule judges, for every
+//!    labelled query: the OR-sanitized BM25 match count and best BM25 score, the
+//!    dense top-1 cosine, the served count — split into the positive/negative
+//!    piles, with the shipped bar's admissible window re-derived each run rather
+//!    than quoted (the GH #187 pattern, applied to search). Since GH #202 the
+//!    shipped bar's own reading is **in the exit gate**: zero labelled negatives
+//!    served, zero labelled positives cut, both at their structural zeros with
+//!    no headroom, because headroom here would read as permission to serve a
+//!    nonsense query or cut a real one. **Negative queries** (empty `relevant` —
+//!    the query-side siblings of the loner anchors) are excluded from every rank
+//!    aggregate, so labelling them moved no pre-existing number.
 //!
 //! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
 //! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
@@ -228,6 +231,40 @@ const MAX_MATES_SUPPRESSED: usize = 0;
 /// everything relates, relabelling toward the model's order would *always*
 /// look plausible — a red reading argues about the notes.
 const FLOOR_DENSE_MATE_MRR: f64 = 0.32;
+/// How many **labelled negative queries** D2's shipped bar may still serve
+/// (GH #202). Zero: this is the defect the bar exists to fix, and #201's bench
+/// made permanent.
+///
+/// Not a tripwire but a floor at its measured value, which is unusual here and
+/// deliberate. The reading is 0 of 5 on the labelled negatives and 0 of 2 on the
+/// dense fixture's nonsense, and the "headroom" a floor normally carries would
+/// be *permission to serve a nonsense query* — there is no corpus drift that
+/// makes that acceptable. A new negative the bar serves is either a real
+/// regression or a query that was mislabelled; both want a red reading.
+const MAX_NEGATIVES_SERVED: usize = 0;
+/// How many **labelled relevant queries** D2's bar may cut (GH #202) — the
+/// search-side tripwire the invariant asserts at zero with no headroom, and the
+/// direction that costs a user something real: a served nonsense row costs a
+/// little trust, a cut positive costs the answer.
+///
+/// Its precondition was met by GH #208, which labelled the date-shaped query
+/// pile — the one query shape neither bench could previously see. The reading is
+/// 0 of 44. A nonzero value here is never a calibration nudge: it means the
+/// *rule* is wrong for a shape the corpus now carries, which is exactly how the
+/// df-ceiling rule died on the dense fixture (change the rule, not the number).
+const MAX_POSITIVES_CUT: usize = 0;
+/// How many of the **dense fixture's title-as-query probes** the bar may cut
+/// (GH #202). Zero, and this is the assertion that would have caught the losing
+/// rule: a note's own title is a query naming a note the vault demonstrably
+/// holds, so cutting one is indefensible whatever a labelled corpus says.
+///
+/// It gates a *different geometry* rather than a different threshold, which is
+/// why it is a third row and not headroom on [`MAX_POSITIVES_CUT`]: the labelled
+/// corpus minimizes shared vocabulary by construction (process rule 2's token
+/// audit), so topical concentration — the hazard that killed the df ceiling —
+/// is only expressible here. Titles need no labels, so nothing in this reading
+/// can be relabelled to clear it.
+const MAX_DENSE_TITLES_CUT: usize = 0;
 
 #[derive(Deserialize)]
 struct QuerySet {
@@ -1010,6 +1047,88 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
+    // D2's search-evidence rows (GH #202), landed with the surfaces that consume
+    // the verdict per #182's rule. Everything above is discovery's and is
+    // deliberately UNCHANGED: search's bar moves no discovery rank and no
+    // reachability, so movement up there is a bug, not a re-derivation.
+    //
+    // All three sit at their structural zeros with no headroom, which is the
+    // exception to the house sizing method rather than an oversight — headroom
+    // here would read as permission to serve a nonsense query or cut a real one,
+    // and no corpus drift makes either acceptable. A red reading argues about the
+    // rule or about a label, never about the constant.
+    //
+    // Skipped entirely when the model has no calibrated bar (M2): there is no
+    // verdict to assert, and asserting the absence of one would fail every run on
+    // a model the harness has simply not measured yet.
+    match read_shipped_bar(&evidence, &model_id) {
+        None => eprintln!(
+            "\n[note] no calibrated evidence bar for {model_id} — D2's exit-gate rows are not \
+             asserted this run (M2)."
+        ),
+        Some(reading) => {
+            if reading.neg_served > MAX_NEGATIVES_SERVED {
+                eprintln!(
+                    "\n[warn] the shipped evidence bar serves {} of {} labelled NEGATIVE queries where \
+                     D2 permits {MAX_NEGATIVES_SERVED} — a query the vault holds nothing for is being \
+                     answered with rows (read the per-query lines above, and do NOT relabel to clear \
+                     this).",
+                    reading.neg_served,
+                    evidence.negatives.len()
+                );
+                return Ok(false);
+            }
+            // The tripwire, and the direction that costs a user the answer rather
+            // than a little trust. Its precondition is GH #208's date-shaped pile:
+            // the assertion is only worth what the query shapes behind it are.
+            if reading.pos_cut > MAX_POSITIVES_CUT {
+                eprintln!(
+                    "\n[warn] the shipped evidence bar CUTS {} of {} labelled relevant queries where D2 \
+                     permits {MAX_POSITIVES_CUT} — a note the vault holds is unreachable for a query \
+                     naming it. Change the RULE, not the constant (the df ceiling died exactly here).",
+                    reading.pos_cut,
+                    evidence.positives.len()
+                );
+                return Ok(false);
+            }
+        }
+    }
+    // The same two directions on the dense fixture — a different geometry, not a
+    // different threshold. Topical concentration is what killed the losing rule
+    // and is structurally inexpressible on the orthogonal corpus (process rule 2's
+    // token audit minimizes shared vocabulary), so these are their own rows.
+    // Titles carry no labels, so nothing here can be relabelled to clear it.
+    let titles_cut = dense
+        .search
+        .titles
+        .iter()
+        .filter(|p| p.vouched == Some(false))
+        .count();
+    if titles_cut > MAX_DENSE_TITLES_CUT {
+        eprintln!(
+            "\n[warn] the evidence bar cuts {titles_cut} of {} dense-fixture titles where \
+             {MAX_DENSE_TITLES_CUT} is permitted — a note's own title is a query naming a note the \
+             vault demonstrably holds, and the lexical half has gone inert on a single-subject vault \
+             (GH #201's transfer check, as an assertion).",
+            dense.search.titles.len()
+        );
+        return Ok(false);
+    }
+    let nonsense_served = dense
+        .search
+        .nonsense
+        .iter()
+        .filter(|p| p.vouched == Some(true))
+        .count();
+    if nonsense_served > MAX_NEGATIVES_SERVED {
+        eprintln!(
+            "\n[warn] the evidence bar serves {nonsense_served} of {} nonsense queries on the dense \
+             fixture where {MAX_NEGATIVES_SERVED} is permitted — nonsense needs no token audit in any \
+             vault, which is exactly why this reading transfers.",
+            dense.search.nonsense.len()
+        );
+        return Ok(false);
+    }
     Ok(true)
 }
 
@@ -1133,8 +1252,10 @@ struct DensePass {
 /// shape it was never read against. So it is re-derived every run, here, beside
 /// the discovery fold bench that already sweeps this fixture.
 ///
-/// **Reports, gates nothing** — moving the exit gate is GH #202's, in the same
-/// change as the surfaces, per #182's rule.
+/// **In the exit gate** since GH #202, at [`MAX_DENSE_TITLES_CUT`] and
+/// [`MAX_NEGATIVES_SERVED`] — landed with the surfaces per #182's rule. It is a
+/// row of its own rather than headroom on the labelled corpus's, because what it
+/// watches is a different *geometry*, not a looser threshold.
 struct DenseSearch {
     /// Every note's own title replayed as a query — the **tripwire direction**
     /// (D2: a labelled-relevant query cut is zero with no headroom). Titles need
@@ -1227,7 +1348,7 @@ fn score_dense_search(
 /// Print the dense fixture's search-evidence reading (see [`DenseSearch`]).
 fn print_dense_search(search: &DenseSearch) {
     println!(
-        "  search bar  D2's shipped bar replayed on this geometry (GH #201; reported, not gated)"
+        "  search bar  D2's shipped bar replayed on this geometry (GH #201; GATED since GH #202)"
     );
     // The coverage reading comes FIRST, and above the bar, because it is
     // **model-free**: a fact about this vault's vocabulary, and the lexical
@@ -1684,8 +1805,9 @@ struct FoldReading {
     /// the quantity GH #200 judges a candidate at zero on — the suppression
     /// tripwire's disclosure-axis form. Reported rather than gated while
     /// nothing folds (it reads a structural 0 under always-serve, exactly as
-    /// suppression does); GH #202 takes it into the exit gate with the surfaces
-    /// if a fold ever ships.
+    /// suppression does) — and GH #202 shipped no fold to charge, so it stays
+    /// reporting-only; it becomes an exit-gate row with the first fold that does
+    /// ship, beside the suppression tripwire that re-arms the same way.
     mates_folded: Vec<(String, String, usize)>,
     /// Labelled mates above the fold — the other half of the same count.
     mates_above: usize,
@@ -2019,7 +2141,8 @@ fn print_fold_bench(bench: &FoldBench) {
     println!(
         "  (mates folded: served within limit={SIM_K} but below the fold — the fold's OWN cost, and \
          the quantity GH #200 judges a candidate at 0 on. Reported, not gated: nothing folds today, \
-         so the exit gate has nothing to watch until one ships (#202). {} further labelled mate(s) \
+         and GH #202 shipped no fold either, so the exit gate has nothing here to watch until one \
+         does. {} further labelled mate(s) \
          rank past limit={SIM_K} under every rule, always-serve included, so no fold is charged \
          for them.)",
         bench.mates_unserved
@@ -2810,30 +2933,59 @@ fn headroom(cell: &EvidenceCell) -> f64 {
 /// (a labelled positive the bar would cut — D2 asserts zero, no headroom) and
 /// the defect it exists to fix (a labelled negative it still serves).
 ///
-/// Printed rather than gated here: moving the exit gate is GH #202's, in the
-/// same change as the surfaces, per GH #182's rule that a change to the judged
-/// statistic is a change to every surface that paints it.
+/// **In the exit gate** since GH #202, at [`MAX_POSITIVES_CUT`] and
+/// [`MAX_NEGATIVES_SERVED`] — landed with the surfaces that consume the verdict,
+/// per GH #182's rule that a change to the judged statistic is a change to every
+/// surface that paints it. Read here rather than in the printer so the number
+/// asserted and the number explained are one number.
+///
+/// `None` when the active model has no calibrated bar (M2): there is no verdict
+/// to read, so there is nothing to assert either.
+struct ShippedBar {
+    bar: EvidenceBar,
+    /// Labelled positives the bar would cut — the tripwire's direction.
+    pos_cut: usize,
+    /// Labelled negatives it still serves — the defect's direction.
+    neg_served: usize,
+}
+
+fn read_shipped_bar(ev: &SearchEvidence, model_id: &str) -> Option<ShippedBar> {
+    let bar = EvidenceBar::for_model(model_id)?;
+    let vouches = |r: &QueryEvidence| {
+        r.anchored(bar.min_term_coverage) || r.best_cos.is_some_and(|c| c >= bar.min_cos)
+    };
+    Some(ShippedBar {
+        bar,
+        pos_cut: ev.positives.iter().filter(|r| !vouches(r)).count(),
+        neg_served: ev.negatives.iter().filter(|r| vouches(r)).count(),
+    })
+}
+
 fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
-    let Some(bar) = EvidenceBar::for_model(model_id) else {
+    let Some(ShippedBar {
+        bar,
+        pos_cut,
+        neg_served,
+    }) = read_shipped_bar(ev, model_id)
+    else {
         println!("    shipped bar: none for this model — no verdict is offered (M2)");
         return;
     };
     let vouches = |r: &QueryEvidence| {
         r.anchored(bar.min_term_coverage) || r.best_cos.is_some_and(|c| c >= bar.min_cos)
     };
-    let pos_cut = ev.positives.iter().filter(|r| !vouches(r)).count();
-    let neg_served = ev.negatives.iter().filter(|r| vouches(r)).count();
     println!(
         "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}",
         bar.min_term_coverage, bar.min_cos
     );
     println!(
         "      positives it would cut  {pos_cut}/{}   ← the search-side TRIPWIRE (D2: zero, no \
-         headroom)",
+         headroom; GATED at ≤ {MAX_POSITIVES_CUT})",
         ev.positives.len()
     );
     println!(
-        "      negatives it still serves {neg_served}/{}   ← the reported defect, as a number",
+        "      negatives it still serves {neg_served}/{}   ← the defect the bar exists to fix \
+         (GATED at ≤ {MAX_NEGATIVES_SERVED})",
         ev.negatives.len()
     );
     for r in ev.positives.iter().filter(|r| !vouches(r)) {

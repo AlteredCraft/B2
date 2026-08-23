@@ -22,7 +22,7 @@ deterministic, and model-free, so model quality can never flake CI
 
 | Command | What it measures | Model | Deterministic |
 |---|---|---|---|
-| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, the query-level evidence rule's admissible window re-derived per run, and the shipped bar replayed on the dense fixture ([#201](https://github.com/AlteredCraft/B2/issues/201)) | real bge | no |
+| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, the query-level evidence rule's admissible window re-derived per run, and the shipped bar replayed on the dense fixture ([#201](https://github.com/AlteredCraft/B2/issues/201)); **asserts** zero labelled negatives served, zero labelled positives cut, and zero dense titles cut ([#202](https://github.com/AlteredCraft/B2/issues/202)) | real bge | no |
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
@@ -141,8 +141,8 @@ nothing to watch. Its judged quantity — **labelled mates served within `limit`
 fold** — reads a structural 0 under always-serve exactly as suppression does, and it is kept
 printed rather than gated because the block's job is to price the *next* candidate rule, not to
 re-assert the incumbent. If a fold ever ships, that number and the swept window are what the
-gate takes ([#202](https://github.com/AlteredCraft/B2/issues/202) moves the assertions in the
-same change as the surfaces, per #182's rule). Recorded as `discovery_fold` in both corpora's
+gate takes — [#202](https://github.com/AlteredCraft/B2/issues/202) added no discovery row, since
+the fold it would have watched never shipped. Recorded as `discovery_fold` in both corpora's
 rows, carrying the per-anchor folds, the whole `k` sweep, and each candidate's `recip_rank` —
 the anchor's rank in *its* list — so any depth is re-derivable from a row without re-running the
 model.
@@ -157,7 +157,9 @@ whole coverage grid, and for each cell reads the **conditional** cosine window: 
 `min_cos` must keep and the pile it must cut, over only the queries the lexical half left
 undecided. Last it prints where the **shipped** constants stand against this run's piles: labelled
 positives the bar would cut (D2's tripwire, zero with no headroom) and labelled negatives it still
-serves. Recorded as `search_evidence` in the row — now carrying each query's terms with their
+serves — **both asserted since [#202](https://github.com/AlteredCraft/B2/issues/202)**, read from
+one function so the number gated and the number explained cannot drift apart.
+Recorded as `search_evidence` in the row — now carrying each query's terms with their
 document frequencies and the whole grid, so any cell is re-derivable from a row without re-running
 the model, the `discovery_fold` convention.
 
@@ -169,9 +171,10 @@ there can be relabelled to clear a number, and the reading is the tripwire direc
 `df` ceiling cut 3 of these 15. The nonsense strings are the only negatives that transfer between
 corpora: `queries.json`'s phrase-shaped ones are the orthogonal corpus's, audited against *it*, and
 the audit does not carry (on `corpus-dense`, "why parrots mimic speech" shares `mimic` with
-`robbing-behavior.md`). **Gating nothing**: moving the exit gate is
-[#202](https://github.com/AlteredCraft/B2/issues/202)'s, in the same change as the surfaces,
-per #182's rule. The block's job here is the #187 one — the constants live in code and their
+`robbing-behavior.md`). **Both directions are asserted here too**
+([#202](https://github.com/AlteredCraft/B2/issues/202)) — zero titles cut, zero nonsense served —
+as rows of their own rather than headroom on the labelled corpus's, because what they watch is a
+different *geometry* and not a looser threshold. The block's job here is also the #187 one — the constants live in code and their
 *justification* is recomputed every run, so a bar that drifts out of the window it was read from
 says so instead of going quietly stale.
 
@@ -342,10 +345,10 @@ says so instead of going quietly stale.
   quota nowhere). Phase A landed the instruments before any rule, per the #196/#197 sequencing
   precedent: five negative queries + the search evidence calibration in `just eval`, and the
   mutual-k reciprocity fold replay in `just calibrate` (per-anchor `fold_serves` beside the
-  replayed gate and always-serve, per-candidate `reciprocal` in the JSON). Nothing gates yet —
-  the bake-offs are #200 (discovery fold; "no fold at all" admissible) and #201 (search's
-  query-level bar); #202 lands the winners on every surface and moves the exit-gate assertions
-  in the same change.
+  replayed gate and always-serve, per-candidate `reciprocal` in the JSON). Nothing gated at that
+  point — the bake-offs were #200 (discovery fold; "no fold at all" admissible) and #201 (search's
+  query-level bar); #202 then landed the winners on every surface and moved the exit-gate
+  assertions in the same change. The axis split in two: **no fold on discovery, a bar on search.**
 
 - **The discovery fold bake-off ran, and no fold ships — mutual-k's admissible window is empty,
   and its safe depth does not transfer**
@@ -479,12 +482,12 @@ says so instead of going quietly stale.
   cheap. The 200-note bench also re-makes the two-signal case at scale, and harder: its weakest
   positive (`131-the-two-generals`, cos **0.475**) sits *below* the vault's own nonsense negatives
   (to 0.470), so the pure-cosine window there is 0.005 wide — closed for practical purposes —
-  while the query's coverage is 1.00 and the lexical half serves it without hesitation. Two things are deliberately unshipped: the **surfaces and the exit-gate moves** are
-  [#202](https://github.com/AlteredCraft/B2/issues/202)'s (per #182's rule, the same change), so
-  this block reports and gates nothing; and the **per-hit tail** fold, because the corpus labels
-  name the relevant note and not the irrelevance of ranks 5–10 — the provenance is measured
-  (`dense_only`: 0 of 410 served positive rows are dense-only, against 20 of 50 negative ones)
-  and no rule is drawn from it.
+  while the query's coverage is 1.00 and the lexical half serves it without hesitation. Two things were deliberately left out of #201: the **surfaces and the exit-gate moves**, which are
+  [#202](https://github.com/AlteredCraft/B2/issues/202)'s (per #182's rule, the same change) and
+  have since landed — this block gates now; and the **per-hit tail** fold, still unshipped because
+  the corpus labels name the relevant note and not the irrelevance of ranks 5–10 — the provenance is
+  measured (`dense_only`: 0 of 410 served positive rows are dense-only, against 20 of 50 negative
+  ones) and no rule is drawn from it.
 
 - **The date-shaped query block: the hazard was real, and the rule already handles it**
   ([#202](https://github.com/AlteredCraft/B2/issues/202), measured 2026-08-22). A term the vault has
@@ -511,6 +514,44 @@ says so instead of going quietly stale.
   the labelled corpus's own version a mere 0.026 wide (`french-press` at 0.484). It is now **0.093
   wide on the corpus**, which retires the pure-cosine bar as a candidate on the primary bench rather
   than only on the transfer one.
+
+- **The verdict reached the surfaces, and search's three exit-gate rows went in with it**
+  ([#202](https://github.com/AlteredCraft/B2/issues/202), shipped 2026-08-22; invariants.md **D2**,
+  and **D1**'s clause about a disclosure boundary struck). The engine could say "no evidence" since
+  #201 and nothing consumed it, so a real vault still answered `Fasdfadsf` with ten confident-looking
+  results. Now `b2 search`, the desktop pane and `--json` all read the verdict, and its **three
+  states are three behaviors** — evidence found serves as always; **no evidence** shows the honest
+  empty state and *none* of the rows (strict: no reveal, no expander, since a fold is still a
+  surface putting the rows forward, and #200 built no boundary to put them behind); **no calibrated
+  bar** serves as always, never as "no matches", because that state is what the fake embedder and
+  every unmeasured model produce (M2). `--json` became an object in the bargain, a documented break
+  of the array contract.
+
+  The harness moved with the rule, which is the #192/#197 precedent and the reason this is one
+  change rather than two. Three new rows, all at their structural zeros with **no headroom** — the
+  deliberate exception to the house sizing method, because headroom here would read as permission to
+  serve a nonsense query or cut a real one:
+
+  | assertion | bench | reading |
+  |---|---|---|
+  | labelled negative queries served | orthogonal corpus | 0 / 5 |
+  | labelled relevant queries cut | orthogonal corpus | 0 / 44 |
+  | title-as-query probes cut, nonsense served | dense fixture | 0 / 15, 0 / 2 |
+
+  The third is a row of its own rather than headroom on the second because it watches a different
+  *geometry*: topical concentration is what killed the `df` ceiling and the orthogonal corpus cannot
+  express it (process rule 2's token audit minimizes shared vocabulary by construction). The second's
+  precondition was #208's date-shaped block — an assertion is worth exactly the query shapes behind
+  it. All of them skip, with a printed note, on a model that has no calibrated bar: asserting the
+  absence of a verdict would fail every run on a model nobody has measured yet. The gated counts and
+  the printed ones come from **one** function, so the number asserted and the number explained
+  cannot drift.
+
+  **Every discovery row is unchanged** — per-mate MRR floors, hit@1, zero-empty-panes, the
+  suppression tripwire. Search's bar moves no discovery rank and no reachability, so movement there
+  would be a bug rather than a re-derivation. The two struck rows (*mates below a discovery fold*,
+  *negative anchors empty above the fold*) were struck by #200, not by this: there is no fold to
+  assert, and #200's structural-zero tripwire re-arms on its own if one ever ships.
 
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
