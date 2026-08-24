@@ -1,40 +1,26 @@
-//! Opt-in structured debug logging for the desktop host — the **GUI mirror** of the
-//! CLI's `init_logging` (`b2-cli/src/main.rs`). Same knobs, same on-the-wire shape, so
-//! `b2` and `b2-desktop` write into **one reportable JSONL dataset**: the kernel's
-//! `tracing` events (per-statement SQLite timings `b2::sqlite`, façade-op spans
-//! `b2::vault`, flow milestones `b2::search`/`b2::ingest`) as JSON Lines, one flat
-//! object per line for jq/DuckDB/pandas.
+//! Opt-in structured debug logging for the desktop host — the **GUI mirror** of the CLI's
+//! `init_logging`. Same knobs, same wire shape, so both adapters write into one reportable
+//! JSONL dataset of the kernel's `tracing` events.
 //!
-//! Installing the subscriber is legitimate **host** work, not engine logic: the core
-//! only *emits*; the subscriber and its wall-clock live in the adapter, keeping
-//! `b2-core` clock-free (root `CLAUDE.md`, "The core only emits").
+//! Installing the subscriber is legitimate **host** work: the core only *emits*; the
+//! subscriber and its wall-clock live in the adapter, keeping `b2-core` clock-free.
 //!
-//! Knobs (as the CLI): the sink is stderr by default; `B2_LOG_FILE=<path>` writes there
-//! in **append** mode instead. `B2_LOG` is a tracing filter directive (`debug`,
-//! `b2::sqlite=debug`, `warn`, …), honored verbatim. With none of `B2_LOG` / `B2_DEBUG`
-//! / `B2_LOG_FILE` set, no subscriber is installed and the kernel's instrumentation
-//! stays inert. Relative `B2_LOG_FILE` paths resolve against the process CWD — under
-//! `just app` (`cargo tauri dev`) that is `crates/b2-desktop/`, not the repo root;
-//! prefer an absolute path.
+//! Knobs, as the CLI: stderr by default, `B2_LOG_FILE=<path>` in **append** mode instead,
+//! `B2_LOG` a tracing filter honored verbatim. With none of the three set, no subscriber is
+//! installed. Relative `B2_LOG_FILE` paths resolve against the process CWD — under
+//! `just app` that is `crates/b2-desktop/`, so prefer an absolute path.
 //!
 //! **The implied default is scoped, and both adapters scope it the same way:** with no
-//! explicit `B2_LOG`, `B2_DEBUG`/`B2_LOG_FILE` imply **`b2=debug`** — the kernel's own
-//! targets — never a bare `debug`. This process is the loud case: it embeds Tauri + wry +
-//! hyper + reqwest, all noisy `tracing` emitters whose records have a foreign shape
-//! (`log.line`, `log.module_path`, no `sql`/`duration_us`) that would pollute the one
-//! reportable JSONL dataset. The CLI used to be the quiet counter-example — until chat
-//! linked an HTTP client that logs its connection handling (GH #154), which is how the
-//! two ended up on the same rule rather than one diverging from the other. Opt into the
-//! firehose with an explicit `B2_LOG=debug`, in either adapter.
+//! explicit `B2_LOG`, `B2_DEBUG`/`B2_LOG_FILE` imply **`b2=debug`**, never a bare `debug`.
+//! This process embeds Tauri + wry + hyper + reqwest, all noisy emitters whose records have
+//! a foreign shape that would pollute the dataset. Opt into the firehose explicitly.
 //!
-//! **One difference from the CLI, deliberate:** the CLI is a short-lived, single-shot
-//! process, so it writes through a plain `Mutex<File>`. The desktop app is long-lived
-//! and multi-threaded — the background embed pass alone can emit a burst of `b2::sqlite`
-//! events off the UI thread — so blocking those threads on file I/O would both stutter
-//! the GUI and pollute the throughput we capture these logs to measure. Here the sink is
-//! a `tracing-appender` **non-blocking** writer: events cross a channel to one dedicated
-//! writer thread. Its [`WorkerGuard`] flushes the channel on drop, so `main` must hold
-//! the returned guard for the whole run (dropping it early silently stops logging).
+//! **One difference from the CLI, deliberate:** the CLI is short-lived and writes through a
+//! plain `Mutex<File>`. This app is long-lived and multi-threaded — the background embed
+//! pass alone bursts `b2::sqlite` events off the UI thread — so blocking those threads on
+//! file I/O would stutter the GUI and pollute the very throughput these logs measure. The
+//! sink is a `tracing-appender` **non-blocking** writer, whose [`WorkerGuard`] flushes on
+//! drop, so `main` must hold the returned guard for the whole run.
 
 use std::fs::OpenOptions;
 use std::path::Path;

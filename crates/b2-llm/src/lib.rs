@@ -1,37 +1,23 @@
-//! `b2-llm` — B2's real chat provider.
+//! `b2-llm` — B2's real chat provider: the wire half of the second AI seam (ADR-0005), a
+//! hand-rolled **sync** OpenAI-compatible streaming client behind
+//! [`b2_core::llm::LlmProvider`], exactly as `b2-embed` sits behind `Embedder`. The engine
+//! never sees it — flow ④ is built and tested against `FakeLlm`.
 //!
-//! The wire half of the second AI seam: a hand-rolled **sync** OpenAI-compatible
-//! streaming client sitting behind [`b2_core::llm::LlmProvider`], exactly as
-//! `b2-embed` sits behind `Embedder`. The engine never sees it — flow ④
-//! (`Vault::ask`) is built and tested against `FakeLlm`; the adapters wire this
-//! in.
-//!
-//! Decisions (GH #151, the spec of record; cut as GH #154):
+//! Decisions (GH #151, cut as GH #154):
 //! - **Build our own.** The MVP wire surface is *one* endpoint shape —
-//!   `POST {base}/chat/completions` with `stream: true`, SSE frames until
-//!   `[DONE]` — so a client library would buy a dependency tree, not leverage.
-//!   Rig / genai / ollama-rs were evaluated and passed on; the question re-opens
-//!   *inside this crate*, behind the unchanged trait, when the phase-4 agent
-//!   loop is cut.
-//! - **Sync end-to-end, over `ureq`** (already in the tree via `b2-embed`'s
-//!   `hf-hub`). No tokio anywhere in the workspace, no async-to-sync bridge, and
-//!   **cancellation is just returning early from a blocking read loop** —
-//!   [`b2_core::llm::Completion`]'s cancelled marker, delivered at token
-//!   granularity.
-//! - **Any OpenAI-compatible URL.** Ollama is the *guided* default
-//!   ([`DEFAULT_BASE_URL`]); LM Studio, llama.cpp, vLLM, OpenRouter and the
-//!   cloud providers' compat endpoints are all a URL change. Note content leaves
-//!   the machine only by explicit configuration (invariant M5) — a cloud base
-//!   URL is that configuration, and nothing here defaults to one.
-//! - **The wire quirks we chose to own are the ones we handle**: keep-alive
-//!   comments, multi-line `data:` fields, delta shapes, mid-stream error frames,
-//!   a stream that stops without `[DONE]`. They are unit-tested over canned
-//!   frames in [`sse`] — the wire is the whole reason this crate exists, so it
-//!   is the part with tests.
+//!   `POST {base}/chat/completions` with `stream: true`, SSE frames until `[DONE]` — so a
+//!   client library would buy a dependency tree, not leverage. The question re-opens
+//!   *inside this crate*, behind the unchanged trait, when the agent loop is cut.
+//! - **Sync end-to-end, over `ureq`** (ADR-0011): no runtime, no async-to-sync bridge, and
+//!   **cancellation is just returning early from a blocking read loop**.
+//! - **Any OpenAI-compatible URL.** Ollama is the *guided* default; LM Studio, llama.cpp,
+//!   vLLM and the cloud compat endpoints are a URL change. Note content leaves the machine
+//!   only by explicit configuration (M5), and nothing here defaults to one.
+//! - **The wire quirks we own are the ones we handle**, unit-tested over canned frames in
+//!   [`sse`] — the wire is the whole reason this crate exists, so it is the part with tests.
 //!
-//! Chat carries **no index identity** (contrast invariant M2): nothing here is
-//! recorded in `meta`, nothing is cached, and swapping models never touches the
-//! index — which is what makes "change models at any time" true by construction.
+//! Chat carries **no index identity** (contrast ADR-0007): nothing is recorded in `meta`,
+//! nothing is cached, and swapping models never touches the index.
 
 mod provider;
 pub mod setup;
@@ -66,17 +52,14 @@ pub const ENV_MODEL: &str = "B2_LLM_MODEL";
 /// history. It is also the **override** — see [`ApiKeySource::Environment`].
 pub const ENV_API_KEY: &str = "B2_LLM_API_KEY";
 
-/// Where the bearer token in force came from. A **fact about the key, never the
-/// key** — this is the half of a cloud configuration that may safely be shown,
-/// logged, and sent to a webview, which is why it exists at all rather than the
-/// bare "is one set?" boolean it replaces (GH #176).
+/// Where the bearer token in force came from. A **fact about the key, never the key** —
+/// the half of a cloud configuration that may safely be shown, logged and sent to a
+/// webview, which is why it replaced a bare "is one set?" boolean (GH #176).
 ///
-/// The order below is the resolution order, and the one interesting rule is at
-/// the top of it: [`Environment`](Self::Environment) **wins**. An adapter that
-/// remembers a key for the user still yields to `B2_LLM_API_KEY`, so a shell
-/// that exports one gets the key it named — for a single run, for a scripted
-/// launch, or simply because the user would rather B2 kept no secret at all.
-/// [`LlmConfig::with_api_key`] enforces it in one place so no adapter has to.
+/// The order below is the resolution order, and the one interesting rule is at the top of
+/// it: [`Environment`](Self::Environment) **wins**. An adapter that remembers a key for the
+/// user still yields to `B2_LLM_API_KEY`, so a shell that exports one gets the key it
+/// named. [`LlmConfig::with_api_key`] enforces that in one place.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiKeySource {
@@ -95,14 +78,11 @@ pub enum ApiKeySource {
     Session,
 }
 
-/// Which model to chat with, and where it lives. **Adapter-level state, never
-/// vault or index state** (GH #151): nothing here is recorded anywhere in the
-/// vault, so a config change costs no reindex and leaves no trace in the
-/// Markdown.
-///
-/// Two named configurations, per the spec, are just two values of this type:
-/// **Local** (the default — a localhost endpoint, no key) and **Cloud models**
-/// (a provider endpoint + `api_key`, explicit opt-in only).
+/// Which model to chat with, and where it lives. **Adapter-level state, never vault or
+/// index state**: nothing here is recorded in the vault, so a config change costs no
+/// reindex. The spec's two named configurations are just two values of this type — Local
+/// (a localhost endpoint, no key) and Cloud models (a provider endpoint + `api_key`,
+/// explicit opt-in only).
 #[derive(Clone, PartialEq, Eq)]
 pub struct LlmConfig {
     /// The OpenAI-compatible base URL, e.g. `http://localhost:11434/v1`.
@@ -201,24 +181,18 @@ impl LlmConfig {
     }
 
     /// Lay an adapter's own bearer token over this config —
-    /// [`with_overrides`](Self::with_overrides)'s sibling, and deliberately
-    /// **not** the same rule.
+    /// [`with_overrides`](Self::with_overrides)'s sibling, and deliberately **not** the
+    /// same rule.
     ///
-    /// For the URL and the model, an adapter's explicit choice beats the
-    /// environment (the `B2_VAULT_PATH` convention). A key inverts that:
-    /// `B2_LLM_API_KEY` wins, and a key an adapter merely *remembered* — the
-    /// desktop's Keychain item — yields to it (GH #176). Two reasons, and the
-    /// second is the load-bearing one. A shell that exports a key is making a
-    /// per-run statement, which is the only way to point one launch at a
-    /// different provider without disturbing what is stored; and a user who
-    /// would rather B2 kept no secret at all needs a way to say so that a
-    /// stored key cannot silently outrank. The rule lives here, in the one
-    /// resolver, so no adapter has to re-derive it.
+    /// For the URL and the model, an adapter's explicit choice beats the environment. A key
+    /// inverts that: `B2_LLM_API_KEY` wins, and a key an adapter merely *remembered* yields
+    /// to it (GH #176). A shell that exports a key is making a per-run statement — the only
+    /// way to point one launch at a different provider — and a user who would rather B2
+    /// kept no secret at all needs a way to say so that a stored key cannot outrank.
     ///
-    /// `source` is where the caller's key came from, recorded so the
-    /// configuration can *say* which one answered (see [`ApiKeySource`]).
-    /// `None` keeps whatever the environment supplied, so "I didn't type a key"
-    /// never *clears* `B2_LLM_API_KEY`.
+    /// `source` is where the caller's key came from, recorded so the configuration can
+    /// *say* which one answered. `None` keeps whatever the environment supplied, so "I
+    /// didn't type a key" never *clears* `B2_LLM_API_KEY`.
     #[must_use]
     pub fn with_api_key(mut self, api_key: Option<&str>, source: ApiKeySource) -> Self {
         if self.api_key_source == ApiKeySource::Environment {
@@ -239,17 +213,14 @@ impl LlmConfig {
     }
 }
 
-/// What can go wrong talking to a model server. Structured, and **the adapters
-/// match on it** — which is the whole reason it isn't a string: E4's "can't
-/// reach the model server at …" message is [`LlmError::Unreachable`] rendered,
-/// not a substring test on someone's `io::Error`.
+/// What can go wrong talking to a model server. Structured, and **the adapters match on
+/// it** — which is why it isn't a string: the "can't reach the model server at …" message
+/// is [`LlmError::Unreachable`] rendered, not a substring test on someone's `io::Error`.
 ///
-/// Note the seam boundary: these are the failures an adapter can *see*, because
-/// it constructs the provider and probes it itself (the `b2-embed`
-/// `NotProvisioned` precedent). Failures *inside* a `complete` call cross
-/// `b2-core` as [`b2_core::Error::Llm`] — a message, by the seam's design — and
-/// surface as the generic "the model call failed", with this type's `Display`
-/// as the `B2_DEBUG` detail.
+/// Note the seam boundary: these are the failures an adapter can *see*, because it
+/// constructs the provider and probes it itself. Failures *inside* a `complete` call cross
+/// `b2-core` as [`b2_core::Error::Llm`] — a message, by the seam's design — and surface as
+/// the generic "the model call failed", with this type's `Display` as the `B2_DEBUG` detail.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     /// Nothing is listening: connection refused, DNS failure, TLS failure, a
@@ -264,26 +235,21 @@ pub enum LlmError {
     #[error("the model server rejected the request (HTTP {status}): {message}")]
     Http { status: u16, message: String },
 
-    /// A **probe** was refused: something is listening at `endpoint`, but it did
-    /// not serve the OpenAI-compatible `/models` route. Its own variant rather
-    /// than [`LlmError::Http`] because the *same status means different things in
-    /// the two places it can arrive*, and only the probe knows which it is in: a
-    /// 404 here is a base URL that isn't a chat API (the `…/v1X` typo), while a
-    /// 404 mid-answer is the server's own "model not found". An adapter that had
-    /// to guess between them would give the wrong fix half the time, so the
-    /// distinction is carried in the type — and turned into a sentence once, by
-    /// [`crate::setup::refusal_message`].
+    /// A **probe** was refused: something is listening at `endpoint`, but it did not serve
+    /// the OpenAI-compatible `/models` route. Its own variant rather than [`LlmError::Http`]
+    /// because the *same status means different things in the two places it can arrive*: a
+    /// 404 here is a base URL that isn't a chat API (the `…/v1X` typo), while a 404
+    /// mid-answer is the server's own "model not found". An adapter that had to guess would
+    /// give the wrong fix half the time, so the distinction is carried in the type — and
+    /// turned into a sentence once, by [`crate::setup::refusal_message`].
     #[error("the model server at {endpoint} refused a probe (HTTP {status}): {message}")]
     Refused {
         endpoint: String,
         status: u16,
-        /// The server's own explanation, when it sent one. It rides in `Display`
-        /// (as [`LlmError::Http`]'s does) because that *is* the `B2_DEBUG` line —
-        /// `user_message` prints `err.to_string()` and nothing else, so a field
-        /// left out of the format is a field no adapter can ever show. The
-        /// user-facing sentence is the one that omits it: a 404 body ("404 page
-        /// not found") says nothing a human can act on, so
-        /// [`crate::setup::refusal_message`] leans on the status instead.
+        /// The server's own explanation, when it sent one. It rides in `Display` because
+        /// that *is* the `B2_DEBUG` line — `user_message` prints `err.to_string()` and
+        /// nothing else, so a field left out of the format is one no adapter can show. The
+        /// user-facing sentence omits it: a 404 body says nothing a human can act on.
         message: String,
     },
 

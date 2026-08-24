@@ -1,31 +1,19 @@
-//! Bring an *outside* file into the vault — note/resource CRUD's **import** arm, and
-//! the kernel behind the desktop's drag-a-file-from-Finder-onto-the-tree gesture.
+//! Bring an *outside* file into the vault — CRUD's **import** arm, and the kernel
+//! behind the desktop's drag-from-Finder-onto-the-tree gesture.
 //!
-//! What separates this from [`crate::add`]: `add` **authors** a new document (B2 mints
-//! the frontmatter and owns every byte of it), while an import is a **byte-honest
-//! copy** of a file the human already has. B2 writes the bytes it was handed and
-//! authors nothing — the posture [`crate::vault::Vault::write`] takes with a body edit
-//! — so a dropped `.md` keeps its own frontmatter verbatim and a dropped PDF keeps its
-//! bytes. That is what makes this a permitted write: invariants.md W3 enumerates
-//! "create/move/delete of notes, resources, and folders on explicit command", and
-//! data-model.md §10's asymmetry is about *authoring* a resource's content, which this
-//! never does — placing one is the same category of act as moving or deleting it.
+//! What separates this from [`crate::add`]: `add` **authors** a new document, while an
+//! import is a **byte-honest copy** of a file the human already has. B2 writes the bytes
+//! it was handed and authors nothing, so a dropped `.md` keeps its own frontmatter
+//! verbatim and a dropped PDF keeps its bytes. That is what makes it a permitted write
+//! (ADR-0004): placing a file is the same category of act as moving or deleting one.
 //!
-//! **Vault first**, the same order `add`/`mv`/`link` write in: place the file, then
-//! project *from disk* — so the index is derived from what actually landed, never from
-//! what the caller said it was writing.
-//!
-//! **Model-free** (a [`ProjectionCtx`], like `create_note`): an imported note is
-//! projected — tree, keyword search, graph — with no embedder touched, and its chunks
-//! join the DB-derived missing-vector set for the next embed pass to fill. An imported
-//! resource joins the inventory exactly as the walk would have inventoried it. So
-//! importing works with no model provisioned, and a fake-opened vault can never write
-//! foreign vectors into a real-model embedding space.
+//! **Vault first**, the order `add`/`mv`/`link` also write in: place the file, then
+//! project *from disk*, so the index is derived from what actually landed. **Model-free**
+//! (a [`ProjectionCtx`], like `create_note`): an imported note's chunks join the pending
+//! set for the next embed pass, so importing works with no model provisioned.
 //!
 //! Two entry points because the two gestures arrive differently: a file dropped on the
-//! webview is **bytes** (the OS hands the page content, not a path), while a file
-//! chosen in an OS picker is a **path**. Both share one destination rule and one
-//! projection.
+//! webview is **bytes**, a file chosen in an OS picker is a **path**.
 
 use crate::error::{Error, Result};
 use crate::ingest::{self, ProjectionCtx};
@@ -46,14 +34,10 @@ pub struct ImportReport {
     pub note: bool,
 }
 
-/// Import `bytes` into the vault folder `dir` (`""` for the root) under `file_name`.
-/// The drag-and-drop arm: a file dropped on a webview arrives as content, so the
-/// bytes *are* the source.
-///
+/// Import `bytes` into the vault folder `dir` (`""` for the root) under `file_name` —
+/// the drag-and-drop arm, where the OS hands the page content rather than a path.
 /// Refuses [`Error::ImportDestination`] for a name/folder pair that isn't a valid
-/// vault-relative path (see [`destination`]) and [`Error::ImportTargetExists`] rather
-/// than clobber a file already sitting there (the vault never overwrites,
-/// data-model.md §1).
+/// vault-relative path and [`Error::ImportTargetExists`] rather than clobber.
 pub fn import_bytes(
     ctx: ProjectionCtx,
     dir: &str,
@@ -65,15 +49,12 @@ pub fn import_bytes(
     project_placed(ctx, rel, &abs)
 }
 
-/// Import the file at `source` (an absolute path outside — or inside — the vault)
-/// into the vault folder `dir`, keeping its name. The OS-picker arm, and the reason
-/// it exists rather than being `import_bytes(fs::read(source)?)` at the call site:
-/// the adapter then holds no logic, and the bytes never round-trip through it.
-///
-/// Same refusals as [`import_bytes`], plus [`Error::ImportDestination`] for a source
-/// that is a folder or has no file name. A source *inside* the vault is a duplicate,
-/// not an error: since a note's identity is its path (L1), a copy landing at a free
-/// path is simply a second note — the same thing it is in Finder.
+/// Import the file at `source` into the vault folder `dir`, keeping its name — the
+/// OS-picker arm, and the reason it exists rather than `import_bytes(fs::read(source)?)`
+/// at the call site: the adapter then holds no logic and the bytes never round-trip
+/// through it. Same refusals as [`import_bytes`], plus [`Error::ImportDestination`] for a
+/// source that is a folder or has no file name. A source *inside* the vault is a
+/// duplicate, not an error — a copy landing at a free path is simply a second note.
 pub fn import_path(ctx: ProjectionCtx, dir: &str, source: &Path) -> Result<ImportReport> {
     if source.is_dir() {
         return Err(Error::ImportDestination(format!(
@@ -97,13 +78,11 @@ pub fn import_path(ctx: ProjectionCtx, dir: &str, source: &Path) -> Result<Impor
     project_placed(ctx, rel, &abs)
 }
 
-/// Resolve `(dir, file_name)` into the vault-relative destination path, refusing
-/// anything that isn't one: a `file_name` carrying a path separator (a *name* is what
-/// a dropped file has — a name free to carry `../` or `a/b` would silently redirect
-/// the import out of the folder the human aimed at), and, via
-/// [`crate::pathspec::normalize_rel`], an empty, absolute, vault-escaping, or
-/// dot-prefixed result. The extension is left exactly as given: it is what decides
-/// note vs resource, and B2 does not get to rename the human's file.
+/// Resolve `(dir, file_name)` into the vault-relative destination, refusing anything
+/// that isn't one: a `file_name` carrying a path separator (a *name* free to carry `../`
+/// would silently redirect the import), and via [`crate::pathspec::normalize_rel`] an
+/// empty, absolute, vault-escaping or dot-prefixed result. The extension is left exactly
+/// as given — it decides note vs resource, and B2 does not rename the human's file.
 fn destination(dir: &str, file_name: &str) -> Result<String> {
     let name = file_name.trim();
     if name.is_empty() || name.contains('/') || name.contains('\\') {
@@ -131,21 +110,16 @@ fn destination_paths(vault_root: &Path, dir: &str, file_name: &str) -> Result<(S
 
 /// Reserve the destination and fill it — or leave nothing behind.
 ///
-/// **`create_new` is the refusal**, not a check before one: the "does it exist" and the
-/// "claim it" are a single syscall, so a file appearing in between — another window on
-/// the same vault, a sync client, the CLI (C1: many processes, one vault) — cannot be
-/// overwritten by an import. That is also why `import_path` streams instead of calling
-/// `fs::copy`, which would happily truncate an occupied destination. An
+/// **`create_new` is the refusal**, not a check before one: "does it exist" and "claim
+/// it" are a single syscall, so a file appearing in between — another window, a sync
+/// client, the CLI — cannot be overwritten. That is also why `import_path` streams
+/// instead of calling `fs::copy`, which would truncate an occupied destination. An
 /// [`io::ErrorKind::AlreadyExists`] *is* [`Error::ImportTargetExists`], so the race and
 /// the ordinary "that name is taken" reach the user as one message.
 ///
-/// A `fill` that fails partway (a full disk mid-write) takes the reserved file with it:
-/// the human asked for an import, and half a file is not one. Missing parent folders are
-/// created first, mirroring `add`'s parent creation.
-///
-/// "Byte-honest" is about the file's *content*, and this is where that scope shows: the
-/// destination is a file B2 created, so it carries ordinary new-file permissions rather
-/// than the source's mode. A vault member is a document, not an executable.
+/// A `fill` that fails partway takes the reserved file with it: half a file is not an
+/// import. The destination is a file B2 created, so it carries ordinary new-file
+/// permissions rather than the source's mode — byte-honesty is about content.
 fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<()>) -> Result<()> {
     if let Some(parent) = abs.parent() {
         fs::create_dir_all(parent)?;
@@ -165,21 +139,15 @@ fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<(
     Ok(())
 }
 
-/// Project the just-placed file from disk, routing on its extension exactly as the
-/// vault walk does ([`ResourceClass::of_path`]): `.md` is a note (chunks, FTS,
-/// edges), everything else is a resource (one inventory row). B2 adds nothing to
-/// either — the bytes are the human's and the destination path is the identity.
+/// Project the just-placed file from disk, routing on its extension exactly as the vault
+/// walk does: `.md` is a note (chunks, FTS, edges), everything else a resource (one
+/// inventory row). B2 adds nothing to either.
 ///
-/// **On a refusal the placed file is removed again.** That is B2 undoing its own
-/// half-finished write, not deleting vault material (W4): the file becomes vault
-/// material only if this returns `Ok`. Leaving it behind would strand bytes the tree
-/// can't show and the next pass could only re-refuse.
-///
-/// The removal is best-effort, and deliberately doesn't mask the error the caller needs:
-/// if the unlink *also* fails, the projection's error is still what's returned — it is
-/// the actionable one — and the leftover file is simply an unindexed file in the vault,
-/// which is the state a Finder copy produces and which the next whole-vault pass picks
-/// up as an ordinary new member.
+/// **On a refusal the placed file is removed again** — B2 undoing its own half-finished
+/// write, not deleting vault material: the file becomes vault material only if this
+/// returns `Ok`. The removal is best-effort and never masks the projection error, which
+/// is the actionable one; a leftover file is then just an unindexed file, the state a
+/// Finder copy produces and the next whole-vault pass picks up.
 fn project_placed(ctx: ProjectionCtx, rel: String, abs: &Path) -> Result<ImportReport> {
     match project_from_disk(ctx, &rel) {
         Ok(note) => Ok(ImportReport { path: rel, note }),

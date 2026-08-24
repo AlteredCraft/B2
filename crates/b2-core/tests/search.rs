@@ -45,16 +45,15 @@ fn candidate_pool_states_the_per_signal_depth_a_search_reaches() {
     assert!(b2_core::vault::chunk_candidate_pool(30) > b2_core::vault::chunk_candidate_pool(10));
 }
 
-/// The GH #142 ruling, pinned: the passage view's headroom exists for a torn read,
-/// which is a bounded event, so it is a **constant** — while the note view's exists
-/// for dedup, which scales with the ask, so it is a multiple. The two therefore
-/// diverge as `limit` grows, and the passage view is always the narrower.
+/// The GH #142 ruling, pinned: the passage view's headroom exists for a torn read, a bounded
+/// event, so it is a **constant** — while the note view's exists for dedup, which scales with
+/// the ask, so it is a multiple. The two diverge as `limit` grows, and the passage view is
+/// always narrower.
 ///
-/// This is a ranking commitment, not an arithmetic one: `pool_size`'s 5× turns each
-/// hit of headroom into five candidates per signal, and RRF over a wider candidate
-/// set returns different results (`2/121 > 1/61` at k = 60). Sharing `search`'s 3×
-/// here — as GH #140 briefly did — silently widened passage retrieval from 60 to 150
-/// candidates, a retrieval-quality change no eval had priced (GH #141, #142).
+/// A ranking commitment, not an arithmetic one: `pool_size`'s 5x turns each unit of headroom
+/// into five candidates per signal, and RRF over a wider candidate set returns different
+/// results (`2/121 > 1/61` at k = 60). Sharing `search`'s 3x here silently widened passage
+/// retrieval from 60 to 150 candidates — a quality change no eval had priced.
 #[test]
 fn the_passage_view_retrieves_a_narrower_pool_than_the_note_view() {
     // The 10-result ask both adapters and the eval use.
@@ -452,18 +451,15 @@ fn search_chunks_exposes_passage_level_hits() {
     assert!(srs.text.contains("forgetting"));
 }
 
-/// GH #137: a ranked chunk that no longer resolves is **skipped over**, not charged
-/// against `limit`. The torn read is legitimate, not theoretical — C1 promises
-/// readers are never refused while a writer rebuilds (index-engine.md §3), so a
-/// `b2 search` racing a `b2 reindex &` can see a chunk id whose row is already gone.
-/// Charging it a result slot would silently under-fill the answer.
+/// GH #137: a ranked chunk that no longer resolves is **skipped over**, not charged against
+/// `limit`. The torn read is legitimate — C1 promises readers are never refused while a
+/// writer rebuilds — so a `b2 search` racing a `b2 reindex &` can see a chunk id whose row is
+/// already gone, and charging it a result slot would silently under-fill the answer.
 ///
-/// The fixture stages exactly that window: an FTS row with no `chunks` row behind
-/// it (`chunks_fts` is an external-content table, so the two *can* disagree — which
-/// is precisely what a mid-flight `replace_chunks` produces). Its short, term-dense
-/// text ranks it first under BM25, and the test asserts that placement rather than
-/// assuming it, so a tokenizer or ranking change fails loudly instead of quietly
-/// making the case untested.
+/// The fixture stages exactly that window: an FTS row with no `chunks` row behind it, which
+/// is what a mid-flight `replace_chunks` produces. Its short, term-dense text ranks it first
+/// under BM25, and the test asserts that placement rather than assuming it, so a tokenizer
+/// change fails loudly instead of quietly making the case untested.
 #[test]
 fn a_ranked_chunk_that_no_longer_resolves_costs_no_hit_slot() {
     const DEAD_CHUNK: i64 = 999_999;
@@ -691,16 +687,14 @@ fn absent_words_weigh_most_and_drive_coverage_to_zero() {
     assert!(!ev.anchored(0.20));
 }
 
-/// The off-topic query's shape, and why weighting is what catches it: the vault
-/// shares only a **function word** with it, and a function word carries almost
-/// none of the query's weight. This is the labelled negative "why parrots mimic
-/// speech" on the eval corpus, where it reads about 0.08.
+/// The off-topic query's shape, and why weighting is what catches it: the vault shares only
+/// a **function word** with it, which carries almost none of the query's weight. This is the
+/// labelled negative "why parrots mimic speech", reading about 0.08 on the eval corpus.
 ///
-/// Note what the rule does *not* claim: three equally rare words, one of them
-/// present, is about a third of the query's weight and **is** an anchor at the
-/// shipped bar. That is deliberate — a vault that holds one of a query's rare
-/// words has something to say about it, and D2's tripwire is cutting a real
-/// query, not serving a thin one.
+/// Note what the rule does *not* claim: three equally rare words, one present, is about a
+/// third of the query's weight and **is** an anchor at the shipped bar. That is deliberate —
+/// a vault holding one of a query's rare words has something to say, and ADR-0015's tripwire
+/// is cutting a real query, not serving a thin one.
 #[test]
 fn a_shared_function_word_is_not_a_lexical_anchor() {
     let ev = search::LexicalEvidence {

@@ -1,44 +1,32 @@
-//! Shared validation for a user-supplied vault-relative Markdown destination —
-//! the one concern `b2 mv` (a move destination) and `b2 add` (a new-note path)
-//! have in common. Kept error-type-free (returns `Err(reason)` as a plain string)
-//! so each authoring op maps the reason onto its own [`crate::Error`] variant and
-//! its own user-facing phrasing, without the two coupling through a shared error.
-//!
-//! Also home to the shared **hidden-path predicate** ([`is_hidden`]): the one
-//! definition of what a dot-prefixed name is, applied identically by every walk
-//! and every authoring destination.
+//! Shared validation for a user-supplied vault-relative destination — the one concern
+//! `b2 mv` and `b2 add` have in common. Error-type-free (it returns `Err(reason)` as a
+//! plain string) so each authoring op maps the reason onto its own [`crate::Error`]
+//! variant without the two coupling. Also home to the shared hidden-path predicate.
 
-/// Whether this walked entry's *name* is dot-prefixed — the hidden-path
-/// predicate shared by the folder walk, the ingest walk, and the user-input
-/// validator [`normalize_rel`]. **Hidden means hidden** (GH #136): a
-/// dot-prefixed name is not vault material, whatever its extension — the ingest
-/// walk applies this *before* the note/resource routing decision, so a
-/// `.scratch.md` is skipped exactly as `.DS_Store` is (data-model.md §1).
+/// Whether this entry's *name* is dot-prefixed — the hidden-path predicate shared by the
+/// folder walk, the ingest walk, and [`normalize_rel`]. **Hidden means hidden** (GH #136):
+/// a dot-prefixed name is not vault material whatever its extension, so a `.scratch.md`
+/// is skipped exactly as `.DS_Store` is.
 ///
-/// Asked of the name's **bytes**, not of a decoded `&str`: a filename is bytes the
-/// OS accepted, and `to_str` answers `None` for one UTF-8 rejects — which would
-/// make `.draft-\xFF.md` *not hidden* and route it to the note collector, where the
-/// lossy path then fails to reopen and surfaces as a bogus "file no longer exists"
-/// skip on every pass. A leading `.` is ASCII and `OsStr`'s encoding is
-/// ASCII-compatible, so the byte test is exact for every name on every platform.
+/// Asked of the name's **bytes**, not a decoded `&str`: `to_str` answers `None` for a name
+/// UTF-8 rejects, which would make `.draft-\xFF.md` *not hidden* and route it to the note
+/// collector, where the lossy path fails to reopen and surfaces as a bogus "file no longer
+/// exists" skip. A leading `.` is ASCII and `OsStr`'s encoding is ASCII-compatible, so the
+/// byte test is exact on every platform.
 pub(crate) fn is_hidden(path: &std::path::Path) -> bool {
     path.file_name()
         .is_some_and(|n| n.as_encoded_bytes().starts_with(b"."))
 }
 
-/// Normalize + validate `input` into a vault-relative path (any file kind).
-/// Trims, and switches backslashes to `/` (so the index stays in its one
-/// separator convention). Rejects an empty, absolute, vault-escaping (`..`), or
-/// **hidden** path, returning the reason as `Err(String)`. The resource-move
-/// destination check (file-type support slice 1) — the extension is left exactly
-/// as given.
+/// Normalize + validate `input` into a vault-relative path of any file kind: trim, switch
+/// backslashes to `/` (the index keeps one separator convention), and reject an empty,
+/// absolute, vault-escaping or **hidden** path, returning the reason as `Err(String)`. The
+/// extension is left exactly as given.
 ///
-/// The hidden check is [`is_hidden`]'s rule over every segment, and it lives
-/// here — on the base validator — rather than on the directory variant alone
-/// (GH #136): the walk indexes no dot-prefixed member of any kind, so a
-/// destination b2 would create and then never see is a silent fs/index desync,
-/// whether it names a folder (`.templates/`), a resource (`.notes.csv`), or a
-/// note (`.scratch.md`).
+/// The hidden check is [`is_hidden`]'s rule over every segment, and it lives on the base
+/// validator rather than the directory variant alone (GH #136): the walk indexes no
+/// dot-prefixed member of any kind, so a destination b2 would create and then never see is
+/// a silent fs/index desync.
 pub(crate) fn normalize_rel(input: &str) -> Result<String, String> {
     let s = input.trim().replace('\\', "/");
     if s.is_empty() {
@@ -99,18 +87,14 @@ mod tests {
         assert!(normalize_rel_dir("../up").is_err());
     }
 
-    /// A filename is bytes, not text. `to_str` answers `None` for a name UTF-8
-    /// rejects, which made `.draft-\xFF.md` read as *not* hidden and routed it into
-    /// the note collector — where the lossy path names no file, so every pass
-    /// reported a bogus "file no longer exists" skip for something that should have
-    /// been invisible.
+    /// A filename is bytes, not text. `to_str` answers `None` for a name UTF-8 rejects,
+    /// which made `.draft-\xFF.md` read as *not* hidden and routed it into the note
+    /// collector — where the lossy path names no file, so every pass reported a bogus
+    /// "file no longer exists" skip.
     ///
-    /// Asserted on the predicate rather than through a real file on purpose:
-    /// `read_dir` can hand us any bytes the mounted filesystem holds, but APFS
-    /// refuses to *create* such a name (EILSEQ), so a fixture that writes one cannot
-    /// run on the platform B2 ships on. The predicate has to be total over its input
-    /// regardless of which filesystem produced it, and that is exactly what this
-    /// checks.
+    /// Asserted on the predicate rather than through a real file on purpose: `read_dir`
+    /// can hand us any bytes the filesystem holds, but APFS refuses to *create* such a
+    /// name, so a fixture that writes one cannot run on the platform B2 ships on.
     #[cfg(unix)]
     #[test]
     fn a_non_utf8_dot_prefixed_name_is_hidden() {

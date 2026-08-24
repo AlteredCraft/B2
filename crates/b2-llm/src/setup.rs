@@ -1,21 +1,15 @@
-//! The **onboarding corner** — deliberately Ollama-native, even though chat is
-//! generic (GH #151 §"Errors, degraded modes, onboarding"; cut as GH #155).
+//! The **onboarding corner** — deliberately Ollama-native, even though chat is generic
+//! (GH #151, cut as GH #155).
 //!
-//! The chat path speaks the generic OpenAI-compatible `/v1` surface and will talk
-//! to LM Studio, llama.cpp, vLLM or a cloud provider with a URL change. The
-//! *setup card* speaks Ollama's **native** API: detect the daemon, list what is
-//! installed (`GET /api/tags`), suggest a pull sized to the machine. That
-//! asymmetry is by design and stated in the spec so nobody later "generalizes"
-//! the card against an abstraction that cannot serve it — **guided setup is a
-//! per-runtime feature, and Ollama is the runtime B2 guides**.
+//! The chat path speaks the generic OpenAI-compatible `/v1` surface and will talk to LM
+//! Studio, llama.cpp, vLLM or a cloud provider with a URL change. The *setup card* speaks
+//! Ollama's **native** API: detect the daemon, list what is installed, suggest a pull sized
+//! to the machine. That asymmetry is by design, so nobody later "generalizes" the card
+//! against an abstraction that cannot serve it — **guided setup is a per-runtime feature.**
 //!
-//! Everything here is a *status*, never an error: [`probe_setup`] cannot fail,
-//! because "the daemon isn't running" is the answer the card is asking for. The
-//! typed [`LlmError`] still exists for the paths where a failure is a failure
-//! (`probe`, a mid-answer break); this module turns it into something to draw.
-//!
-//! Adapter-level throughout (GH #151): nothing here is recorded in the vault or
-//! the index, so a model swap costs no reindex (contrast M2).
+//! Everything here is a *status*, never an error: [`probe_setup`] cannot fail, because "the
+//! daemon isn't running" is the answer the card is asking for. Adapter-level throughout, so
+//! nothing here is recorded in the vault or the index.
 
 use crate::{ApiKeySource, LlmConfig, LlmError, OpenAiCompatProvider};
 use serde::{Deserialize, Serialize};
@@ -25,14 +19,10 @@ use std::time::Duration;
 /// only for onboarding.
 const TAGS_PATH: &str = "/api/tags";
 
-/// Where a human who has *no* Ollama is sent. The quickstart rather than the
-/// product page: someone reading this message has already found out that nothing
-/// is listening, so the page they need is the one with the install command and
-/// `ollama pull` on it, not the one with the download button.
-///
-/// One constant because two adapters print it — `b2-cli`'s `user_message` and the
-/// desktop's setup card — and a link that drifts between them is a link one of
-/// them gets wrong.
+/// Where a human who has *no* Ollama is sent — the quickstart rather than the product
+/// page: someone reading this has already found out nothing is listening, so they need the
+/// page with the install command on it. One constant because two adapters print it, and a
+/// link that drifts between them is one they get wrong.
 pub const OLLAMA_INSTALL_URL: &str = "https://docs.ollama.com/quickstart";
 
 /// The port Ollama serves on. Recognizing it is what decides whether Ollama's own
@@ -45,27 +35,22 @@ const OLLAMA_PORT: &str = ":11434";
 /// reason: a setup card that hangs is worse than one that says "not running".
 const TAGS_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Does this endpoint look like the Ollama daemon — its port, or a host that
-/// names it? It decides two things and no others: whether Ollama's own commands
-/// belong in an error message, and whether [`probe_setup`] asks `/api/tags` at
-/// all.
-///
-/// Deliberately a *guess about the runtime*, not a security check: being wrong
-/// costs one refused HTTP request and a message that mentions the wrong program.
+/// Does this endpoint look like the Ollama daemon — its port, or a host that names it? It
+/// decides two things: whether Ollama's own commands belong in an error message, and
+/// whether [`probe_setup`] asks `/api/tags` at all. Deliberately a *guess about the
+/// runtime*, not a security check: being wrong costs one refused request.
 pub fn is_ollama(base_url: &str) -> bool {
     let endpoint = base_url.to_ascii_lowercase();
     endpoint.contains(OLLAMA_PORT) || endpoint.contains("ollama")
 }
 
-/// Is this endpoint on **this machine** — the **Local** configuration (invariant
-/// M5)? Anything else is **Cloud models**: note passages leave the machine, which
-/// is why the desktop shows the privacy copy beside exactly this answer.
+/// Is this endpoint on **this machine** — the Local configuration (M5)? Anything else is
+/// Cloud models: note passages leave the machine, which is why the desktop shows the
+/// privacy copy beside exactly this answer.
 ///
-/// Host-only, and permissive about *how* loopback is spelled (`localhost`,
-/// `127.0.0.0/8`, `[::1]`), because the consequence of guessing "cloud" for a local URL
-/// is a privacy warning the user doesn't need — while guessing "local" for a
-/// remote one would hide a warning they do. So the test is a **membership** one:
-/// only the known loopback spellings count as local.
+/// Permissive about *how* loopback is spelled, because guessing "cloud" for a local URL
+/// only shows a warning the user doesn't need, while guessing "local" for a remote one
+/// would hide one they do. So it is a **membership** test: only known loopback spellings.
 pub fn is_local(base_url: &str) -> bool {
     let host = host_of(base_url);
     host == "localhost"
@@ -108,21 +93,16 @@ fn host_of(url: &str) -> String {
     }
 }
 
-/// Ollama's **native** root, derived from the configured OpenAI-compat base URL:
-/// `http://localhost:11434/v1` → `http://localhost:11434`. The compat surface is
-/// mounted under `/v1`; `/api/tags` is not.
+/// Ollama's **native** root, derived from the configured compat base URL: the compat
+/// surface is mounted under `/v1`, and `/api/tags` is not. Two derivations, in order,
+/// because the input is a URL a human typed:
 ///
-/// Two derivations, in order, because the input is a URL a human typed:
-///
-/// 1. Drop a trailing `/v1`. This is the one that must come first, since it is
-///    the only one that survives a **path-mounted** daemon — `https://gw/ollama/v1`
-///    keeps its `/ollama` prefix, which the authority alone would throw away.
-/// 2. Failing that, fall back to the **authority root**. What lands here is a base
-///    URL that isn't the compat surface at all — most often a typo (`…/v1X`) — and
-///    that is precisely when knowing whether the daemon is up is worth most: it is
-///    the difference between "is Ollama running?" and "Ollama is running, your path
-///    is wrong". Asking the wrong root would answer "not running" about a daemon
-///    plainly serving requests.
+/// 1. Drop a trailing `/v1`. This must come first, since it is the only one that survives a
+///    **path-mounted** daemon — `https://gw/ollama/v1` keeps its `/ollama` prefix.
+/// 2. Failing that, the **authority root**. What lands here is a base URL that isn't the
+///    compat surface at all — most often a typo — and that is precisely when knowing
+///    whether the daemon is up is worth most: "Ollama is running, your path is wrong"
+///    rather than "is Ollama running?".
 fn ollama_root(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     match trimmed.strip_suffix("/v1") {
@@ -265,16 +245,10 @@ pub struct ChatSetup {
     /// `false` for the **Local** configuration, `true` for **Cloud models** —
     /// which is the flag the privacy copy hangs off (M5).
     pub cloud: bool,
-    /// Whether a bearer token is configured and, when one is, which of the
-    /// resolver's sources supplied it. **Never the token itself**: the key does
-    /// not cross this boundary in either direction (the `LlmConfig` `Debug`
-    /// impl's rule, applied to the view).
-    ///
-    /// Richer than the "is one set?" boolean it replaced because the Settings
-    /// copy is different in each case (GH #176) — a key the environment
-    /// supplies cannot be removed from inside the app, and a key the Keychain
-    /// refused to take is gone at quit. Both are things a user has to be told
-    /// *before* they wonder why.
+    /// Whether a bearer token is configured and, when one is, which source supplied it.
+    /// **Never the token itself.** Richer than the boolean it replaced because the Settings
+    /// copy differs in each case (GH #176) — a key the environment supplies cannot be
+    /// removed from inside the app, and a key the Keychain refused to take is gone at quit.
     pub api_key_source: ApiKeySource,
     pub state: ChatState,
     /// A generic, actionable sentence when `state` isn't `Ready` (E4), else
@@ -310,13 +284,10 @@ impl ChatSetup {
     }
 }
 
-/// Ask the configured endpoint what it can do, and render the answer as a card's
-/// worth of facts. One `GET /models` (the generic probe), plus one
-/// `GET /api/tags` when the endpoint looks like Ollama's.
-///
-/// Never fails. A dead daemon, a wrong URL, a model nobody pulled: each is a
-/// [`ChatState`] with a sentence, because each is a thing the human can fix and
-/// the card exists to say how.
+/// Ask the configured endpoint what it can do and render the answer as a card's worth of
+/// facts: one `GET /models`, plus one `GET /api/tags` when the endpoint looks like Ollama's.
+/// Never fails — a dead daemon, a wrong URL, a model nobody pulled: each is a [`ChatState`]
+/// with a sentence, because each is a thing the human can fix.
 pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
     let ollama = is_ollama(&config.base_url).then(|| ollama_setup(&config.base_url));
     let (state, message, available) = match OpenAiCompatProvider::new(config.clone()).probe() {
@@ -379,24 +350,19 @@ fn unreachable_message(base_url: &str, _detail: &LlmError) -> String {
     }
 }
 
-/// What to tell a human when the endpoint **answered a probe with a refusal** —
-/// the sentence for [`LlmError::Refused`], phrased here so the CLI's wording and
-/// the app's stay one sentence (as [`unreachable_message`] is).
+/// What to tell a human when the endpoint **answered a probe with a refusal** — the
+/// sentence for [`LlmError::Refused`], phrased here so the CLI's wording and the app's stay
+/// one sentence. Split by status, because these are different mistakes with different fixes
+/// and a single "the server said no" would be useful for none:
 ///
-/// Split by status, because these are different mistakes with different fixes and
-/// a single "the server said no" would be true of all of them and useful for none:
+/// - **401/403** — the path is right and the credential isn't.
+/// - **404/405/410/501** — nothing serves `/models` here; overwhelmingly a base URL that
+///   isn't the compat surface, which is why the fix names the path rather than the server.
+/// - anything else — a server that is there and failing, whose own words are the most
+///   useful thing available.
 ///
-/// - **401/403** — the path is right and the credential isn't. Previously this read
-///   as *Connected* and failed at the first question.
-/// - **404/405/410/501** — nothing serves `/models` here. Overwhelmingly a base URL
-///   that isn't the compat surface (`…/v1X`, `…:11434` with no `/v1`), which is why
-///   the fix names the path rather than the server.
-/// - anything else — a server that is there and failing (5xx, a rate limit). Its own
-///   words are the most useful thing available, so they are what gets shown.
-///
-/// `ollama_root` is `Some` only when the daemon **answered its native API**, which
-/// is proof the machine is serving requests: with it, the 404 branch stops
-/// speculating and names the URL that would work.
+/// `ollama_root` is `Some` only when the daemon **answered its native API**, which is proof
+/// the machine is serving requests: with it, the 404 branch names the URL that would work.
 pub fn refusal_message(
     base_url: &str,
     status: u16,
@@ -490,13 +456,10 @@ struct TagsDetails {
     parameter_size: Option<String>,
 }
 
-/// Every model the daemon at `root` has installed. `Err(())` means the native API
-/// didn't answer — not that nothing is installed, which is a different card.
-///
-/// Its own agent rather than the provider's: this is a *different* API on a
-/// *different* path, wanted at a different (shorter) timeout, and it must never
-/// send the bearer token a cloud configuration might carry — `/api/tags` on an
-/// Ollama daemon is not where a cloud key goes.
+/// Every model the daemon at `root` has installed. `Err(())` means the native API didn't
+/// answer — not that nothing is installed, which is a different card. Its own agent rather
+/// than the provider's: a different API on a different path, wanted at a shorter timeout,
+/// and it must never send the bearer token a cloud configuration might carry.
 fn installed_models(root: &str) -> Result<Vec<OllamaModel>, ()> {
     let url = format!("{root}{TAGS_PATH}");
     let agent = ureq::AgentBuilder::new()

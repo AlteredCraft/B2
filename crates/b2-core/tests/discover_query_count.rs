@@ -1,15 +1,12 @@
-//! Regression: `discover::candidates` must not issue O(chunks) SQL — neither a
-//! per-hit `note_for_chunk` round-trip (#37's N+1: ~463k statements, a ~130s
-//! `b2 similar` on a real vault) nor a whole-space chunk-vector scan per open
-//! (#38: exact brute force over every stored vector — ~38.6k rows read, and under
-//! the old vec0 store ~38.6k shadow-probe log lines — per note-open). This locks the
-//! two-stage shape: **one** O(notes) centroid scan, then one bounded per-note vector
+//! Regression: `discover::candidates` must not issue O(chunks) SQL — neither a per-hit
+//! `note_for_chunk` round-trip (#37's N+1: ~463k statements, a ~130s `b2 similar` on a real
+//! vault) nor a whole-space vector scan per open (#38: ~38.6k rows read per note-open). This
+//! locks the two-stage shape: **one** O(notes) centroid scan, then one bounded per-note
 //! fetch per shortlisted note.
 //!
-//! Sole test in its binary on purpose: it installs a scoped tracing subscriber to read
-//! SQLite's per-statement profiler back, and tracing's global callsite-interest cache
-//! races when a sibling test evaluates the same callsites on another thread with no
-//! subscriber (see the note in `tests/logging.rs`).
+//! Sole test in its binary on purpose: it installs a scoped tracing subscriber, and tracing's
+//! global callsite-interest cache races when a sibling test evaluates the same callsites on
+//! another thread with no subscriber.
 
 use b2_core::embed::FakeEmbedder;
 use b2_core::ingest::ingest_vault;

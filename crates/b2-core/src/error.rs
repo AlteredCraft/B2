@@ -1,5 +1,5 @@
-//! The crate error type. Step 1 introduces it because ingest mixes SQLite and
-//! filesystem failures; earlier steps were SQLite-only.
+//! The crate error type — a `thiserror` enum, because the adapters match on its
+//! variants to choose a user-facing message.
 
 /// Errors surfaced by the index engine. Kept internal/structured — user-facing
 /// surfaces (CLI, future GUI) translate these into generic, actionable messages.

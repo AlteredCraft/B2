@@ -1,20 +1,14 @@
-//! Step 0 — DB skeleton & the substrate bet.
-//!
-//! Green-scenario assertions for build-plan step 0
-//! (index-engine.md):
-//!   - FTS5 is compiled in (the `bundled` SQLite). *(Vectors need no substrate proof
-//!     since schema v3, #38: they are plain BLOB tables scored in-process — the
-//!     `sqlite-vec` half of the original bet was retired with the dependency.)*
-//!   - open→reopen is stable; `WAL` + `foreign_keys=ON` hold; the #38 scan pragmas
-//!     (`mmap_size`/`cache_size`) are applied; `schema_version` seeded.
-//!   - the **first** open of a vault's index survives contention (#111): the one
-//!     pragma `busy_timeout` cannot cover is retried until it lands, and concurrent
-//!     openers of one fresh index coexist.
-//!   - `open` is concurrency-safe *through* its `schema_version` migration (#114,
-//!     invariant C1): a stale-schema rebuild is atomic and serialized, an incomplete
-//!     schema is rebuilt rather than trusted, and a reader is never refused. (C1's other
-//!     drop-and-rebuild — the vector tables, created at embed time — is covered where it
-//!     lives, in `embed.rs`.)
+//! DB skeleton and the substrate bet — green-scenario assertions for the index's step 0:
+//!   - FTS5 is compiled in (the `bundled` SQLite). Vectors need no substrate proof since
+//!     they became plain BLOB tables scored in-process (ADR-0006).
+//!   - open->reopen is stable; `WAL` + `foreign_keys=ON` hold; the #38 scan pragmas are
+//!     applied; `schema_version` seeded.
+//!   - the **first** open of a vault's index survives contention (#111): the one pragma
+//!     `busy_timeout` cannot cover is retried until it lands.
+//!   - `open` is concurrency-safe *through* its migration (#114, invariant C1): a
+//!     stale-schema rebuild is atomic and serialized, an incomplete schema is rebuilt rather
+//!     than trusted, and a reader is never refused. (C1's other drop-and-rebuild, the vector
+//!     tables, is covered in `embed.rs`.)
 
 use b2_core::{open, SCHEMA_VERSION};
 use std::sync::{mpsc, Arc, Barrier};
@@ -126,29 +120,17 @@ fn pragmas_and_schema_version_persist_across_reopen() {
     assert_eq!(rows, 1, "migration must be idempotent across reopen");
 }
 
-/// The **first** open of a vault's index is the one that can lose a lock race, and it
-/// must wait it out rather than fail (#111).
+/// The **first** open of a vault's index is the one that can lose a lock race, and it must
+/// wait it out rather than fail (ADR-0021).
 ///
-/// `journal_mode = WAL` is the only statement in [`open`] that takes a write lock, and
-/// only when it actually *changes* the mode — so exactly once per vault, on the
-/// first-ever open. `busy_timeout` does not cover that flip (SQLite skips the busy
-/// handler for a write lock upgraded from an open read transaction), so a second
-/// opener took an immediate `SQLITE_BUSY` — "database is locked" — and the documented
-/// cold-vault flow `b2 reindex & ; b2 status` failed ~40% of the time, usually killing
-/// the reindex.
+/// Made deterministic by holding the contended lock outright rather than racing for it.
+/// Unfixed, `open` gives up ~200 µs in, long before the holder lets go.
 ///
-/// Made deterministic by holding the contended lock outright rather than racing for
-/// it: a rollback-journal connection sits in `BEGIN IMMEDIATE` and releases it well
-/// inside the retry budget. Unfixed, `open` gives up ~200 µs in, long before the
-/// holder lets go.
-///
-/// **`IMMEDIATE`, not `EXCLUSIVE`** — the distinction is the whole test. `IMMEDIATE`
-/// holds `RESERVED`: readers still get in, writers don't. That is precisely the lock
-/// the flip trips over, because it fails on the *write* half after its read
-/// transaction is already open — the half SQLite skips the busy handler for. Swap in
-/// `EXCLUSIVE` and the flip blocks on the *read* half instead, which the busy handler
-/// does cover, so it waits happily with or without the fix and the test asserts
-/// nothing.
+/// **`IMMEDIATE`, not `EXCLUSIVE`** — the distinction is the whole test. `IMMEDIATE` holds
+/// `RESERVED`: readers still get in, writers don't, which is precisely the lock the WAL flip
+/// trips over. Swap in `EXCLUSIVE` and the flip blocks on the *read* half instead, which the
+/// busy handler does cover, so it waits happily with or without the fix.
+/// busy handler does cover, so it waits happily with or without the fix.
 #[test]
 fn first_open_waits_out_a_held_lock() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -183,26 +165,20 @@ fn first_open_waits_out_a_held_lock() {
     assert_eq!(journal_mode.to_lowercase(), "wal", "WAL must be engaged");
 }
 
-/// Eight openers reaching a brand-new index at once all come back with a connection —
-/// the user-visible shape of #111 (`b2 reindex &` racing a `b2 status`, or the desktop
-/// app launching against a vault a CLI reindex is building).
+/// Eight openers reaching a brand-new index at once all come back with a connection — the
+/// user-visible shape of #111.
 ///
-/// **This is a coexistence smoke test, not the #111 gate.** Say so plainly, because the
-/// name would otherwise promise a regression it does not catch: the flip's race window
-/// is ~200 µs wide, so eight barrier-released threads land inside it only sometimes —
-/// measured at **3 failures in 25 runs** against the unfixed `open`, i.e. green ~88% of
-/// the time on the very bug it appears to name. [`first_open_waits_out_a_held_lock`] is
-/// the gate; it holds the contended lock outright instead of racing for it, and fails
-/// 100% of the time when the retry is removed. What this test *does* buy is the property
-/// no deterministic single-lock test can state: that N concurrent openers finish at all
-/// — no deadlock, no starved thread, no error escaping the retry — which is what would
-/// break if `open` ever took a lock it holds rather than one it waits out.
+/// **This is a coexistence smoke test, not the #111 gate.** Say so plainly, because the name
+/// would otherwise promise a regression it does not catch: the flip's race window is ~200 µs
+/// wide, so eight barrier-released threads land inside it only sometimes — measured at **3
+/// failures in 25 runs** against the unfixed `open`, i.e. green ~88% of the time on the very
+/// bug it appears to name. [`first_open_waits_out_a_held_lock`] is the gate. What this test
+/// *does* buy is the property no deterministic single-lock test can state: that N concurrent
+/// openers finish at all — no deadlock, no starved thread, no error escaping the retry.
 ///
-/// Threads rather than processes because the contention is SQLite's, not the OS's:
-/// locking is per-*connection*, so same-process openers race the mode flip exactly as
-/// separate `b2` invocations do. The barrier is what gives it any chance of biting —
-/// without it the eight opens are released one by one and finish before they can
-/// overlap, and the race never even starts.
+/// Threads rather than processes because the contention is SQLite's: locking is
+/// per-*connection*, so same-process openers race the flip exactly as separate invocations
+/// do. The barrier is what gives it any chance of biting.
 #[test]
 fn concurrent_openers_of_a_fresh_index_coexist() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -244,29 +220,20 @@ fn stale_index(db_path: &std::path::Path) {
     .unwrap();
 }
 
-/// Eight openers reaching a **stale-schema** index at once leave one complete schema
-/// behind, and none of them fails (#114, invariant C1).
+/// Eight openers reaching a **stale-schema** index at once leave one complete schema behind,
+/// and none of them fails (ADR-0021, invariant C1).
 ///
-/// The migration is a read-then-decide-then-write sequence, and its rebuild was ~30
-/// separately-committed DDL statements: two openers that both read the stale version
-/// both rebuilt, and their statements interleaved — opener B's `DROP TABLE resources`
-/// landing after opener A's `CREATE TABLE resources`, leaving A to stamp the current
-/// version over a schema B had partly demolished. `busy_timeout` never applied, because
-/// nothing was contending for a lock; every statement succeeded, in the wrong order.
+/// **Both assertions are the test, and the second is the one that matters.** Failing opens
+/// are the loud half. The quiet half is an index left missing tables while *every* opener
+/// returned `Ok`, surfacing later as a broken `search`, arbitrarily far from the cause.
+/// Measured against the unfixed engine at 20 rounds x 8 openers: 2–12 failed opens per run
+/// and up to 8 missing-table observations, caught in **7 of 8** runs.
 ///
-/// **Both assertions are the test, and the second is the one that matters.** Failing
-/// opens (`no such table: main.resources`) are the loud half — bad, but self-announcing.
-/// The quiet half is an index left missing tables while *every* opener returned `Ok`,
-/// which surfaces later as a broken `search` or `reindex`, arbitrarily far from the
-/// cause. Measured against the unfixed engine at 20 rounds × 8 openers: 2–12 failed
-/// opens per run and up to 8 missing-table observations, caught in **7 of 8** runs.
-///
-/// So: a strong probe, not a certainty — the same honest caveat
-/// [`concurrent_openers_of_a_fresh_index_coexist`] carries, and for the same reason (a
-/// race only bites when the threads actually interleave). The deterministic gates for
-/// this fix are its two siblings below; this is the one that reproduces the bug as
-/// reported. Rounds are capped at 20 because detection flattens out past that while the
-/// wall-clock does not — the correlation is per-run machine mood, not per-round luck.
+/// So: a strong probe, not a certainty — the same caveat its sibling above carries. The
+/// deterministic gates are the two tests below; this is the one that reproduces the bug as
+/// reported. Rounds cap at 20 because detection flattens out past that while the wall-clock
+/// does not.
+/// does not.
 #[test]
 fn concurrent_opens_of_a_stale_index_leave_a_complete_schema() {
     const ROUNDS: usize = 20;
@@ -300,20 +267,16 @@ fn concurrent_opens_of_a_stale_index_leave_a_complete_schema() {
     }
 }
 
-/// An index whose stamp says "current" but whose tables say otherwise is **rebuilt**,
-/// not trusted (#114, invariant C1).
+/// An index whose stamp says "current" but whose tables say otherwise is **rebuilt**, not
+/// trusted (#114, invariant C1) — the wreckage the bug leaves in the field, written by a `b2`
+/// old enough to have raced itself. The fix makes new ones impossible; this is the other
+/// half, since existing ones have to heal.
 ///
-/// This is the wreckage the bug leaves in the field: a stamped-but-incomplete index,
-/// written by a `b2` old enough to have raced itself. The fix makes new ones impossible,
-/// and this is the other half — the existing ones have to heal, or the fix only helps
-/// vaults that were never bitten.
-///
-/// **Dropping the surviving rows is the assertion with teeth**, and the reason the
-/// repair is a full rebuild rather than a patch: recreating just the missing tables
-/// would leave `notes` rows claiming to be indexed while their chunks are gone, and an
-/// incremental reindex skips a note whose `body_hash` still matches — so the recreated
-/// tables would stay empty forever, quietly breaking S3 (`full-reindex ≡
-/// incremental-update`). The stamp is honest only if the whole projection is.
+/// **Dropping the surviving rows is the assertion with teeth**, and the reason the repair is
+/// a full rebuild rather than a patch: recreating just the missing tables would leave `notes`
+/// rows claiming to be indexed while their chunks are gone, and an incremental reindex skips
+/// a note whose `body_hash` still matches — so the recreated tables would stay empty forever,
+/// quietly breaking S3.
 #[test]
 fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -346,18 +309,14 @@ fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
     );
 }
 
-/// An index whose tables are all present but whose **stamp is gone** is rebuilt from
-/// empty too — the other way `schema_is_current` can say no (#114).
+/// An index whose tables are all present but whose **stamp is gone** is rebuilt from empty
+/// too — the other way `schema_is_current` can say no (#114).
 ///
-/// The sibling above loses a table and keeps the stamp; this one keeps every table and
-/// loses the stamp, which is the shape a guard on "was there a prior stamp?" waves
-/// through: nothing to compare, so nothing dropped, and the `CREATE … IF NOT EXISTS`
-/// batch settles over surviving tables of an unknown shape and re-stamps them current.
-/// Whatever wrote that state — a rebuild killed between clearing `meta` and re-stamping
-/// it, a half-restored backup, a hand-edited index — the tables are of no known version,
-/// and the rows in them are exactly the ones an incremental reindex would decline to
-/// refresh (S3). So the rebuild is unconditional: `apply_schema` has one outcome, an
-/// empty schema at the current version, whatever it finds.
+/// The sibling above loses a table and keeps the stamp; this one is the shape a guard on "was
+/// there a prior stamp?" waves through: nothing to compare, so nothing dropped, and the
+/// `CREATE … IF NOT EXISTS` batch settles over surviving tables of an unknown shape and
+/// re-stamps them current. Whatever wrote that state, its rows are exactly the ones an
+/// incremental reindex would decline to refresh (S3), so the rebuild is unconditional.
 #[test]
 fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -388,19 +347,17 @@ fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
 }
 
 /// Opening an index at the current schema is a **read**, so a writer holding the index
-/// cannot refuse it (#114, invariant C1: concurrent readers are unrestricted).
+/// cannot refuse it (#114, invariant C1).
 ///
-/// The migration used to re-run its ~30 `IF NOT EXISTS` DDL statements and re-stamp
-/// `meta` on *every* open, current schema or not — a write, on the one path that must
-/// never need one. Against a held write lock that stamp waited out the full 5 s
-/// `busy_timeout` and then failed the open outright: `b2 search` refused, in a vault
-/// whose only sin was having a reindex running. Now the common path reads two rows and
-/// writes nothing, so there is no lock to lose.
+/// The migration used to re-run its ~30 `IF NOT EXISTS` statements and re-stamp `meta` on
+/// *every* open — a write, on the one path that must never need one. Against a held write
+/// lock that stamp waited out the full 5 s `busy_timeout` and then failed the open outright:
+/// `b2 search` refused, in a vault whose only sin was having a reindex running.
 ///
-/// The writer here is a reindex mid-batch as a second process sees it. Its lock is
-/// proven held rather than assumed — a `busy_timeout = 0` probe must bounce off it —
-/// because a `BEGIN IMMEDIATE` that quietly took nothing would make this test pass
-/// against the very code it exists to catch.
+/// The writer here is a reindex mid-batch as a second process sees it. Its lock is proven
+/// held rather than assumed — a `busy_timeout = 0` probe must bounce off it — because a
+/// `BEGIN IMMEDIATE` that quietly took nothing would make this test pass against the very
+/// code it exists to catch.
 #[test]
 fn an_open_of_a_current_index_is_not_refused_by_a_writer() {
     let tmp = tempfile::TempDir::new().unwrap();

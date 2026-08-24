@@ -1,44 +1,28 @@
 //! Rank-stability probe — the **large-corpus** half of the eval harness (GH #141).
 //!
-//! The scored eval (`--example eval`) runs on the hand-labelled corpus in
-//! `evals/corpus/`: 23 notes / 29 chunks. Retrieval pulls at least
-//! `vault::chunk_candidate_pool(10) = 60` candidates from *each* signal, so on a
-//! corpus that small neither half of the hybrid is truncated — BM25 returns every
-//! matching chunk, the vector scan every stored vector — both lists are already
-//! complete, and widening the pool cannot add a candidate. Every number the eval
-//! prints is therefore **invariant under candidate width**: a change to either
-//! façade hit pool or to `search::pool_size` reads as "no change" there while
-//! genuinely reordering a real vault — the worked example is GH #140, whose 3× pool
-//! widening moved 5 of 7 probe top-10s on `fixtures/test-vault` and printed
-//! bit-identical eval numbers. That widening is the one this probe then priced, and
-//! GH #142 reverted on the strength of it.
+//! The scored eval runs on 23 notes / 29 chunks, which is smaller than the candidate pool
+//! each signal retrieves — so neither list is truncated, widening the pool cannot add a
+//! candidate, and every number it prints is **invariant under candidate width**. A change to
+//! a hit pool or to `search::pool_size` reads as "no change" there while genuinely reordering
+//! a real vault: GH #140's 3x widening moved 5 of 7 probe top-10s on `fixtures/test-vault`
+//! and printed bit-identical eval numbers. This probe priced that, and GH #142 reverted on
+//! the strength of it. Width is the whole of the gap — `RRF_K` re-weights the *same* lists,
+//! which the scored eval already sees.
 //!
-//! Width is the whole of the gap. `search::RRF_K` re-weights the *same* two lists,
-//! so it reorders a 29-chunk corpus as readily as a large one and the scored eval
-//! already sees it; this probe is for the candidates that eval was never handed.
+//! It runs on a vault big enough for the pool to **bind** (~200 notes / ~790 chunks) and
+//! reports two things:
 //!
-//! This probe measures the property that corpus cannot see. It runs on a vault big
-//! enough for the pool to **bind** (`fixtures/test-vault`, ~200 notes / ~790
-//! chunks) and reports two things:
+//! 1. **Pool sensitivity** — retrieval width is a function of the ask, so asking the same
+//!    query at several depths asks it at several pool widths. A pool-invariant retriever
+//!    would answer a shallow ask with an exact prefix of the deep one; RRF over a widened
+//!    pool does not, because a candidate ranked in *both* lists can outscore one ranked top
+//!    of a single list (`2/121 > 1/61` at k = 60). How often the prefix breaks is how much
+//!    candidate width is worth on this vault.
+//! 2. **Baseline drift** — the shipped top-K against the committed baseline, so any future
+//!    ranking change is visible as movement rather than inferred. `--bless` accepts it.
 //!
-//! 1. **Pool sensitivity** — retrieval width is a function of the ask
-//!    (`search_chunks(q, n)` reaches `chunk_candidate_pool(n)` candidates per signal,
-//!    `search(q, n)` reaches `note_candidate_pool(n)` — the two differ since #142,
-//!    and the table names each column's own widths), so
-//!    asking the *same query* at several depths asks it at several pool widths. A
-//!    pool-invariant retriever would answer a shallow ask with an exact prefix of
-//!    the deep one; RRF over a widened pool does not, because a candidate ranked in
-//!    *both* lists can outscore one ranked top of a single list (`2/121 > 1/61` at
-//!    k = 60). How often the prefix breaks is how much candidate width is worth on
-//!    this vault. No baseline, no config edit, no rebuild — one run answers it.
-//! 2. **Baseline drift** — the shipped top-K against the committed
-//!    `evals/stability-baseline.json`, so *any* future ranking change (candidate
-//!    width, the RRF constant, chunker, FTS sanitizer, resolution) is visible as
-//!    movement rather than inferred. `--bless` accepts the current ranking.
-//!
-//! The corpus here is **unlabelled**: this scores no relevance and never says
-//! *better*, only *different, and by how much*. Relevance is the scored eval's job;
-//! sensitivity is this one's.
+//! The corpus is **unlabelled**: this scores no relevance and never says *better*, only
+//! *different, and by how much*.
 //!
 //! ```console
 //! cargo run -p b2-embed --example stability             # the probe (fake embedder)
@@ -48,24 +32,19 @@
 //! cargo run -p b2-embed --example stability -- --vault path/to/vault
 //! ```
 //!
-//! **Why the fake embedder by default.** It is content-addressed and deterministic
-//! (blake3), so the committed baseline means the same thing on every machine — a
-//! real-model baseline would be device-specific (a Metal build tags its own model
-//! id, GH #40) and could not be committed. The cost is that fake vector ranking is
-//! uncorrelated with BM25, which *exaggerates* how much a pool change moves
-//! results; real bge rankings correlate, so the true shift is smaller. Read the
-//! numbers as "the mechanism is live on this vault, at this magnitude given
-//! uncorrelated signals", and use `--model` when the real magnitude is what the
-//! decision needs (that run scores the same probes with bge vectors and skips the
-//! baseline, which only exists for the deterministic mode).
+//! **Why the fake embedder by default.** It is deterministic, so the committed baseline means
+//! the same thing on every machine — a real-model baseline would be device-specific
+//! (ADR-0007) and could not be committed. The cost is that fake vector ranking is
+//! uncorrelated with BM25, which *exaggerates* how much a pool change moves results; use
+//! `--model` when the real magnitude is what the decision needs.
 //!
-//! **The control experiment.** `--vault crates/b2-embed/evals/corpus` runs the same
-//! probe on the eval corpus, where every prefix holds at every depth — that *is*
-//! #141: not stability, blindness.
+//! **The control experiment:** `--vault crates/b2-embed/evals/corpus` runs the same probe on
+//! the eval corpus, where every prefix holds at every depth — that *is* #141: not stability,
+//! blindness.
 //!
-//! Never a gate, and drift is not failure: a knob change is *supposed* to move
-//! ranking, and an unlabelled corpus cannot say whether the movement was an
-//! improvement. Exit status is 0 for any completed measurement.
+//! Never a gate, and drift is not failure: a knob change is *supposed* to move ranking, and
+//! an unlabelled corpus cannot say whether it improved. Exit status is 0 for any completed
+//! measurement.
 
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, ChunkSearchResult, Vault};
@@ -78,17 +57,13 @@ use std::time::Instant;
 
 /// The vault the committed baseline is defined over, relative to the repo root.
 const DEFAULT_VAULT: &str = "fixtures/test-vault";
-/// The depths each probe is asked at. Each one widens the pool it retrieves from —
-/// by view, since #142: the note view reaches `note_candidate_pool` = 60 / 150 / 450
-/// and the passage view `chunk_candidate_pool` = 30 / 60 / 160. The table prints
-/// each column's own widths rather than one shared pair.
+/// The depths each probe is asked at; each widens the pool it retrieves from, by view since
+/// #142, and the table prints each column's own widths.
 ///
-/// The first pair is what settled #142: at a 10-result ask, `search_chunks`' shipped
-/// 3× headroom retrieved 150 candidates per signal and the conservative `limit + 2`
-/// reading of #137 retrieves 60 — the same step this probe measures between depths 4
-/// and 10 under the note view's 3×. It moved 10 of 10 probes' top-4 passages, which
-/// is why the width went back to the narrow setting: real movement, unpriced by any
-/// relevance eval.
+/// The first pair is what settled #142: at a 10-result ask the passage view's shipped 3x
+/// headroom retrieved 150 candidates per signal against the conservative `limit + 2`'s 60 —
+/// the same step measured here between depths 4 and 10 under the note view's 3x. It moved 10
+/// of 10 probes' top-4 passages: real movement, unpriced by any relevance eval.
 const DEPTHS: [usize; 3] = [4, 10, 30];
 /// How deep a prefix the depths are compared over — capped by the shallowest ask.
 const PREFIX: usize = DEPTHS[0];
@@ -212,15 +187,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         report.indexed,
         t0.elapsed().as_secs_f64(),
     );
-    // Checked against the *widest* pool a probe reaches (the note view's): a vault
-    // between the two widths leaves the note half stable by construction while the
-    // passage half still measures something, which is a partly-blind run and worth
-    // saying so.
-    //
-    // Inclusive, like the eval's own blindness check: a pool exactly the size of the
-    // corpus truncates nothing either — BM25 has no more matches than its `LIMIT`,
-    // the vector scan tops out at the stored vectors — so equality is as blind as
-    // anything under it.
+    // Checked against the *widest* pool a probe reaches (the note view's): a vault between
+    // the two widths leaves the note half stable by construction while the passage half
+    // still measures something, which is a partly-blind run worth saying so about.
+    // Inclusive, like the eval's own blindness check — a pool exactly the size of the corpus
+    // truncates nothing either.
     if chunks <= note_candidate_pool(BASELINE_K) {
         eprintln!(
             "[warn] {chunks} chunks ≤ the {}-candidate pool the note view reaches (the passage view\n\

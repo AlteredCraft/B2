@@ -1,29 +1,18 @@
-//! Parse a note body into the links that become edges (data-model.md §2;
-//! resource forms: data-model.md §10).
+//! Parse a note body into the links that become edges.
 //!
-//! **The body carries no B2 syntax** (data-model §2, decision 2026-07-21): every
-//! body construct is ordinary Obsidian Markdown and yields an untyped
-//! `references` edge — prose around a link (a list marker, a leading verb) is
-//! just prose. Three body constructs:
-//!   - a bare `[[path|alias]]` anywhere ⇒ `references`;
-//!   - Markdown's own `[text](path)` / `![alt](path)` (relative vault targets
-//!     only — scheme/absolute/fragment-only targets are not vault members and
-//!     yield nothing) ⇒ `references`, the `!` marking an **embed** and the
-//!     text/alt captured as the edge's **caption** (an image's index text,
-//!     slice 3);
-//!   - the `![[file.ext|alias]]` embed ⇒ `references` + embed, alias as caption.
+//! **The body carries no B2 syntax** (ADR-0010): every body construct is ordinary
+//! Obsidian Markdown and yields an untyped `references` edge — prose around a link is just
+//! prose. Three body constructs: a bare `[[path|alias]]`; Markdown's own `[text](path)` /
+//! `![alt](path)` (relative vault targets only, the `!` marking an **embed** and the
+//! text/alt captured as the edge's **caption**); and the `![[file.ext|alias]]` embed. A
+//! *typed* edge — `<verb> [[path|alias]] — explanation` — exists only as a frontmatter
+//! `b2_relations:` entry, parsed by [`parse_relation`].
 //!
-//! A *typed* edge — `<verb> [[path|alias]] — explanation` — exists only as a
-//! frontmatter `b2_relations:` entry, parsed by [`parse_relation`]; the verb and
-//! explanation never come from the body.
-//!
-//! Hand-rolled (no regex dependency) and deliberately minimal. Known
-//! simplifications, to revisit when discovery/queries need them: a typed
-//! frontmatter entry yields exactly one edge (extra wikilinks in its trailing
-//! text are treated as explanation, not links); links inside code spans/fences
-//! are not excluded; only `—`/`:` introduce an explanation; a Markdown link's
-//! text stops at the first `]` (no nested brackets) and its target at the first
-//! `)` (no titles).
+//! Hand-rolled and deliberately minimal. Known simplifications, to revisit when queries
+//! need them: a typed frontmatter entry yields exactly one edge (extra wikilinks in its
+//! trailing text read as explanation); links inside code spans/fences are not excluded;
+//! only `—`/`:` introduce an explanation; a Markdown link's text stops at the first `]`
+//! and its target at the first `)`.
 
 /// A link found in a body, ready to be resolved + projected into `edges`.
 #[derive(Debug, Clone, PartialEq, Eq)]

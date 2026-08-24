@@ -1,35 +1,22 @@
-//! Chat wiring — the desktop's half of the second AI seam (GH #151, cut as
-//! GH #155), and the sibling of `main.rs`'s embedder wiring.
+//! Chat wiring — the desktop's half of the second AI seam (ADR-0005), and the sibling of
+//! `main.rs`'s embedder wiring. What lives here is *which provider a chat command talks
+//! to*, layered the way the vault root is: **flag beats environment beats default**, with
+//! the app's Settings standing in for the flags. Resolution itself is
+//! `b2_llm::LlmConfig::from_env`'s — one place, so the two adapters cannot drift.
 //!
-//! What lives here is *which provider a chat command talks to*, resolved the way
-//! the CLI resolves it and layered the same way the vault root is: **flag beats
-//! environment beats default**, with the app's Settings standing in for the
-//! flags. Resolution itself is `b2_llm::LlmConfig::from_env`'s — one place, so
-//! the two adapters cannot drift (root CLAUDE.md).
+//! Three things are deliberate:
 //!
-//! Three things are deliberate and worth reading before changing them:
-//!
-//! * **Chat config is adapter state, never vault or index state** (GH #151).
-//!   Nothing here is recorded in the vault, in `meta`, or anywhere the index can
-//!   see it — which is what makes "change models at any time" true by
-//!   construction: a chat model swap costs no reindex (contrast M2). The
-//!   endpoint and the model id persist beside the remembered vault, in the app's
-//!   own data dir, exactly like `last-vault`.
-//! * **The API key is remembered in the Keychain, never in a file** (GH #176).
-//!   A **Cloud models** configuration (M5 — the only way note content leaves the
-//!   machine) needs a bearer token. It is held in memory for the run and, when
-//!   the platform will take it, in the macOS Keychain so the next launch has it
-//!   — `keychain.rs` argues that choice. What it is *not* is a field in
-//!   `chat.json`: the endpoint and model persist there, and the key remains
-//!   `#[serde(skip)]` on both halves, so it is structurally incapable of
-//!   reaching that file and a hand-edited one cannot put a key back. It never
-//!   crosses to the webview either — the status view carries an
+//! * **Chat config is adapter state, never vault or index state.** Nothing here reaches
+//!   the index, which is what makes "change models at any time" true by construction: a
+//!   chat model swap costs no reindex (contrast ADR-0007).
+//! * **The API key is remembered in the Keychain, never in a file** (GH #176; see
+//!   `keychain.rs` for why). It stays `#[serde(skip)]` on both halves, so it is
+//!   structurally incapable of reaching `chat.json` and a hand-edited one cannot put a key
+//!   back. It never crosses to the webview either — the status view carries an
 //!   [`ApiKeySource`], never the key.
-//! * **`B2_LLM_API_KEY` outranks the remembered key.** A shell that exports one
-//!   gets the key it named, whatever is in the Keychain: it is the way to point
-//!   a single launch at another provider, and the way to tell B2 to keep no
-//!   secret of its own. The rule is `b2_llm::LlmConfig::with_api_key`'s, in the
-//!   one resolver, so this adapter states its sources and doesn't rank them.
+//! * **`B2_LLM_API_KEY` outranks the remembered key**, so a shell can point one launch at
+//!   another provider, or tell B2 to keep no secret of its own. That rule is the one
+//!   resolver's; this adapter states its sources and doesn't rank them.
 
 use crate::keychain::KeyStore;
 use b2_core::llm::{FakeLlm, LlmProvider};
@@ -51,35 +38,24 @@ pub struct ChatPrefs {
     pub model: Option<String>,
     /// The bearer token for a cloud endpoint, as it stands for this run.
     ///
-    /// `skip` on both halves, not merely `skip_serializing_if`: this type is
-    /// what [`write_prefs_to`] writes, so the field must be structurally
-    /// incapable of reaching that file, and a file that somehow named it must
-    /// not be able to put one *back*. A key that outlives the run lives in the
-    /// Keychain (`keychain.rs`), which is a different door entirely.
+    /// `skip` on both halves, not merely `skip_serializing_if`: this type is what
+    /// [`write_prefs_to`] writes, so the field must be structurally incapable of reaching
+    /// that file, and a file that somehow named it must not put one *back*.
     #[serde(skip)]
     pub api_key: Option<String>,
-    /// Whether [`api_key`](Self::api_key) is also in the [`KeyStore`] — i.e.
-    /// whether it survives quit.
-    ///
-    /// Meaningless on its own (a store cannot remember a key that isn't set),
-    /// which is why nothing reads it directly: [`ChatPrefs::api_key_source`] is
-    /// the answer callers want, and deriving that from the pair is what keeps
-    /// "a key with no source" unrepresentable. Skipped for its neighbor's
-    /// reason — it is a fact about a secret, and the launch that reloads the
-    /// key is what re-establishes it.
+    /// Whether [`api_key`](Self::api_key) is also in the [`KeyStore`] — i.e. whether it
+    /// survives quit. Meaningless on its own, which is why nothing reads it directly:
+    /// [`ChatPrefs::api_key_source`] is the answer callers want, and deriving it from the
+    /// pair keeps "a key with no source" unrepresentable.
     #[serde(skip)]
     pub key_remembered: bool,
 }
 
-/// Hand-written for `LlmConfig`'s reason, applied to the type that actually holds
-/// the key in force: **a secret kept in an encrypted store must not leak out of a
-/// log line instead.** `#[serde(skip)]` above closes the settings-file path and
-/// the Keychain closes the at-rest one; neither says anything
-/// about formatting — and `Debug` is what an adapter reaches for when something is
-/// wrong (a `tracing` field, a panic message, a `dbg!`), which in this host means
-/// stderr and, under `B2_LOG_FILE`, a JSONL file the user may well paste into an
-/// issue. Only the key's *presence* prints, which is the part that helps diagnose
-/// "the cloud endpoint rejects me".
+/// Hand-written for `LlmConfig`'s reason, applied to the type that holds the key in
+/// force: **a secret kept in an encrypted store must not leak out of a log line instead.**
+/// `Debug` is what an adapter reaches for when something is wrong — a `tracing` field, a
+/// panic message — which in this host means stderr and, under `B2_LOG_FILE`, a JSONL file
+/// the user may paste into an issue. Only the key's *presence* prints.
 impl std::fmt::Debug for ChatPrefs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChatPrefs")
@@ -98,14 +74,10 @@ impl std::fmt::Debug for ChatPrefs {
 }
 
 impl ChatPrefs {
-    /// The configuration these preferences resolve to: the shared env resolution
-    /// with this host's explicit choices laid over it (the `B2_VAULT_PATH`
-    /// convention — an explicit setting wins, the environment seeds it).
-    ///
-    /// The key is the one field that does **not** follow that rule, and the
-    /// asymmetry is deliberate: `with_api_key` yields to `B2_LLM_API_KEY` (GH
-    /// #176). This adapter passes what it has and where it got it; the ranking
-    /// is the resolver's.
+    /// The configuration these preferences resolve to: the shared env resolution with this
+    /// host's explicit choices laid over it. The key is the one field that does **not**
+    /// follow that rule — `with_api_key` yields to `B2_LLM_API_KEY` (GH #176). This adapter
+    /// passes what it has and where it got it; the ranking is the resolver's.
     pub fn config(&self) -> LlmConfig {
         LlmConfig::from_env()
             .with_overrides(self.base_url.as_deref(), self.model.as_deref())
@@ -133,11 +105,10 @@ pub fn use_fake_llm() -> bool {
 
 /// Pick + wire the chat provider — `main.rs`'s `open_vault` for the second seam.
 ///
-/// Unlike the CLI's `open_llm` this does **not** probe: the desktop probes once
-/// when the chat surface opens (`chat_setup`), and paying a round trip per turn
-/// would be a per-question tax on a cloud endpoint for an answer the pane already
-/// has on screen. A server that dies between the probe and the question surfaces
-/// as the same actionable message, from `Error::Llm` (see `error.rs`).
+/// Unlike the CLI's `open_llm` this does **not** probe: the desktop probes once when the
+/// chat surface opens, and a round trip per turn would be a per-question tax on a cloud
+/// endpoint. A server that dies between the probe and the question surfaces as the same
+/// actionable message from `Error::Llm`.
 pub fn provider(prefs: &ChatPrefs) -> Box<dyn LlmProvider> {
     if use_fake_llm() {
         return Box::new(FakeLlm);
@@ -188,41 +159,30 @@ pub fn read_prefs_from(file: Option<&Path>, keys: &dyn KeyStore) -> ChatPrefs {
     prefs
 }
 
-/// Apply a save's key field to the key in force, writing the [`KeyStore`] to
-/// match — the one place the store is written, and the whole of the field's
-/// three-state rule.
+/// Apply a save's key field to the key in force, writing the [`KeyStore`] to match — the
+/// one place the store is written, and the whole of the field's three-state rule.
 ///
-/// **The key is three-state, and has to be.** The Settings field paints empty
-/// even when a key is set (a password field that echoes its secret back is a
-/// worse idea), so "I didn't touch it" and "I cleared it" would otherwise be the
-/// same input — and collapsing them either signs the user out on every save or
-/// makes the key impossible to remove. The second is the dangerous one: with the
-/// key un-removable, repointing `base_url` at a different provider would send the
-/// *first* provider's bearer token to the second. So:
+/// **The key is three-state, and has to be.** The Settings field paints empty even when a
+/// key is set, so "I didn't touch it" and "I cleared it" would otherwise be the same
+/// input — and collapsing them either signs the user out on every save or makes the key
+/// impossible to remove. The second is the dangerous one: with the key un-removable,
+/// repointing `base_url` would send the *first* provider's token to the second. So:
 ///
-/// * `None` — **untouched**. Re-saving the endpoint must not sign you out, and
-///   the store already agrees with what's in force.
-/// * `Some(blank)` — **clear**, the UI's Remove button and the only way back to a
-///   keyless configuration. Forgotten in the store as well as in memory, or it
-///   would return at the next launch and make Remove a lie.
+/// * `None` — **untouched**. Re-saving the endpoint must not sign you out.
+/// * `Some(blank)` — **clear**, the UI's Remove button and the only way back to a keyless
+///   configuration; forgotten in the store too, or it would return at the next launch.
 /// * `Some(key)` — **set**, and remembered for next time.
 ///
-/// **Removal is all-or-nothing**, and that asymmetry with the *set* path is the
-/// point. A refused save is survivable — the key still works, just for this run —
-/// so it degrades. A refused *delete* is not: dropping the key from memory while
-/// the store keeps it would show the user a keyless configuration and then hand
-/// the credential back at the next launch. So a store that won't let go leaves
-/// the key exactly where it was, and the panel goes on showing it, which is the
-/// truth ([`KeyStore::clear`]).
+/// **Removal is all-or-nothing**, and that asymmetry with the *set* path is the point. A
+/// refused save is survivable — the key still works, just for this run. A refused *delete*
+/// is not: dropping the key from memory while the store keeps it would show a keyless
+/// configuration and hand the credential back at the next launch. So a store that won't
+/// let go leaves the key exactly where it was.
 ///
-/// The returned pair is `(key, remembered)` — [`ChatPrefs`]'s two fields. A store
-/// that refuses is **not** an error: the key stays in force for this run and the
-/// configuration reads [`ApiKeySource::Session`], which is exactly the behavior
-/// that shipped before #176. The convenience is what degrades, never chat.
-///
-/// What clearing reaches is B2's own key. A `B2_LLM_API_KEY` in the environment
-/// is the user's own configuration, still outranks this one, and Settings never
-/// had the standing to unset it — the copy beside the button says so.
+/// The returned pair is `(key, remembered)`. A store that refuses is **not** an error: the
+/// key stays in force and the configuration reads [`ApiKeySource::Session`], the behaviour
+/// that shipped before #176 — the convenience degrades, never chat. What clearing reaches
+/// is B2's own key; a `B2_LLM_API_KEY` still outranks it.
 pub fn apply_key(
     prev: &ChatPrefs,
     typed: Option<&str>,
@@ -368,13 +328,11 @@ mod tests {
         assert_eq!(store.peek(), None);
     }
 
-    /// The failure this module most owes a test: a store that **won't let go**.
-    ///
-    /// Dropping the key from memory while the Keychain keeps it would show a
-    /// keyless configuration and then resurrect the credential at the next
-    /// launch. So removal is all-or-nothing — and the proof is the second half,
-    /// where a fresh `read_prefs_from` over the same store finds exactly what the
-    /// panel was still claiming.
+    /// The failure this module most owes a test: a store that **won't let go**. Dropping
+    /// the key from memory while the Keychain keeps it would show a keyless configuration
+    /// and resurrect the credential at the next launch. So removal is all-or-nothing — and
+    /// the proof is the second half, where a fresh `read_prefs_from` over the same store
+    /// finds exactly what the panel was still claiming.
     #[test]
     fn a_removal_the_store_refuses_does_not_pretend_to_have_happened() {
         let store = MemoryStore::refusing_holding("sk-wont-let-go");

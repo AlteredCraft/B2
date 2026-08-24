@@ -1,16 +1,13 @@
-//! Importing an outside file through the [`Vault`] façade — the kernel behind the
-//! desktop's drag-a-file-from-Finder-onto-the-tree gesture (and its OS-picker twin).
+//! Importing an outside file through the [`Vault`] façade — the kernel behind the desktop's
+//! drag-from-Finder gesture and its OS-picker twin.
 //!
-//! What these pin, beyond "the file arrives": an import is a **byte-honest copy**
-//! (B2 authors nothing — a dropped `.md` keeps its own frontmatter, a dropped binary
-//! keeps its bytes), it **projects** what it placed so the tree/search see it with no
-//! reindex, it routes on the extension exactly as the vault walk does (note vs
-//! resource, data-model.md §10), and it never clobbers or lands anywhere but where it
-//! was aimed. The arriving *copy of a note* is the case that used to need its own
-//! refusal — the copy carried the original's `b2id`, so projecting it would have
-//! transferred that identity and every inbound edge (GH #81). Since GH #170 there is
-//! no identity to steal: the copy is simply a second note at a second path, which is
-//! what it looks like in Finder too, and that is what this file now pins.
+//! What these pin beyond "the file arrives": an import is a **byte-honest copy** (a dropped
+//! `.md` keeps its own frontmatter, a dropped binary its bytes), it **projects** what it
+//! placed so the tree and search see it with no reindex, it routes on the extension exactly
+//! as the vault walk does, and it never clobbers or lands anywhere but where it was aimed.
+//! An arriving *copy of a note* used to need its own refusal (the copy carried the
+//! original's `b2id`); with identity being the path (ADR-0003) it is simply a second note at
+//! a second path, which is what it looks like in Finder too.
 
 mod common;
 

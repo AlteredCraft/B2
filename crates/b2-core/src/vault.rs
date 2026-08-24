@@ -1,22 +1,13 @@
-//! The `Vault` façade — B2's one typed core API (invariants.md). Everything before
-//! this exists only as modules the
-//! integration tests call directly; this is the single entry point the `b2` CLI
-//! (and future adapters) are the sole clients of. It owns the open connection, the
-//! embedder, and the id generator, and exposes *only what the shipped commands need*
-//! — `open` / `reindex` / `project` / `embed` / `read` / `write` / `neighbors` /
-//! `explain` / `search` / `search_chunks` / `similar` / `ask` / `link` / `add` /
-//! `create` / `import` / `mv` / `rm`. Add
-//! operations when a command needs them; do not pre-build a sprawling surface.
+//! The `Vault` façade — B2's one typed core API and the only surface the two dumb
+//! adapters call (ADR-0012). It owns the connection and the injected embedder, and
+//! exposes only what the shipped commands need; add an operation when a command
+//! needs it, never speculatively.
 //!
-//! A vault is one portable folder: the index lives under `<root>/.b2/` (there is no
-//! durable state outside the Markdown — data-model.md §4), so pointing B2 at a folder
-//! of Markdown is the whole setup.
-//! The embedder is injected ([`open_with_embedder`](Vault::open_with_embedder)):
-//! the `b2` CLI wires the candle-backed `LocalEmbedder` (real semantics), while
-//! [`open`](Vault::open) defaults to the deterministic [`FakeEmbedder`] so the core
-//! test suite stays fast and model-free (testability points 4–5). `search`'s BM25
-//! (keyword) half is always real; the vector half is only semantic under a real
-//! embedder — callers must not overstate the fake.
+//! A vault is one portable folder: the index lives under `<root>/.b2/` (ADR-0002).
+//! [`open`](Vault::open) defaults to the deterministic [`FakeEmbedder`];
+//! [`open_with_embedder`](Vault::open_with_embedder) wires the real model
+//! (ADR-0005). Under the fake, `search`'s BM25 half is still real but the vector
+//! half is not semantic — callers must not overstate it.
 
 use crate::add::{self, AddReport};
 use crate::chat;
@@ -38,194 +29,136 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-/// Re-exported for the same reason: [`create_dir`](Vault::create_dir)'s report is
-/// part of the façade contract.
+// Report types the façade returns — re-exported so adapters name them through the
+// one typed contract.
 pub use crate::dirs::DirCreateReport;
-/// Re-exported for the same reason: [`import_file`](Vault::import_file)'s and
-/// [`import_path`](Vault::import_path)'s report is part of the façade contract.
 pub use crate::import::ImportReport;
-/// Re-exported so a `Vec<SkippedNote>` on [`ReindexReport`]/[`ProjectReport`] is
-/// nameable through the façade — the one typed contract adapters import from.
 pub use crate::ingest::SkippedNote;
-/// Re-exported for the same reason: [`move_dir`](Vault::move_dir)'s report is
-/// part of the façade contract.
 pub use crate::mv::DirMoveReport;
-/// Re-exported for the same reason: [`move_note`](Vault::move_note)'s and
-/// [`move_resource`](Vault::move_resource)'s reports are part of the façade
-/// contract.
 pub use crate::mv::{MoveReport, ResourceMoveReport};
-/// Re-exported for the same reason: the delete family's reports
-/// ([`delete_note`](Vault::delete_note) / [`delete_resource`](Vault::delete_resource)
-/// / [`delete_dir`](Vault::delete_dir)) are part of the façade contract.
 pub use crate::rm::{DeleteReport, DirDeleteReport, ResourceDeleteReport};
 
-/// The embedding dimension the *fake* embedder runs at when [`Vault::open`] is used
-/// without an injected model (tests/dev). The real model brings its own `dim` (768)
-/// through [`Vault::open_with_embedder`]; a model/dim swap re-embeds on `reindex`.
+/// Embedding dimension of the *fake* embedder ([`Vault::open`]). The real model
+/// brings its own (768); a model or dim swap re-embeds on `reindex` (ADR-0007).
 const EMBED_DIM: usize = 64;
 
 /// Longest snippet (in chars) shown for a search hit, so a result stays one line.
 const SNIPPET_CHARS: usize = 160;
 
-/// How much headroom [`Vault::search_chunks`] keeps over `limit`
-/// (see [`chunk_hit_pool`]). Deliberately a small constant: façade headroom is not
-/// free, it is *multiplied* — every hit of it buys [`search::pool_size`] five more
-/// candidates from each signal, and candidate width changes answers, not just work
-/// (GH #142).
+/// Headroom [`Vault::search_chunks`] keeps over `limit`. A small constant, because
+/// façade headroom is multiplied: each unit buys [`search::pool_size`] more
+/// candidates from each signal, and candidate width changes answers (GH #142).
 const TORN_READ_HEADROOM: usize = 2;
 
-/// How wide a hit pool [`Vault::search`] retrieves for a `limit`-sized result set:
-/// **3×**, and load-bearing. Its results are note-level, so the walk collapses every
-/// chunk that shares a note onto that note's best one; several top chunks routinely
-/// *do* share a note, so a pool of exactly `limit` would under-fill `limit` distinct
-/// notes on an ordinary query. The same headroom absorbs the other reason a hit is
-/// dropped — a chunk whose note row vanished
-/// mid-query, the concurrent-reindex window C1 explicitly allows (index-engine.md
-/// §3). Dedup is the binding reason and it scales with `limit`, so the widening does
-/// too; contrast [`chunk_hit_pool`], whose reason does not.
+/// [`Vault::search`]'s hit pool: **3×**, and load-bearing. Its results are
+/// note-level, so chunks sharing a note collapse onto that note's best one; without
+/// the headroom an ordinary query under-fills `limit` distinct notes. The same
+/// headroom absorbs a chunk whose note row vanished mid-query (the
+/// concurrent-reindex window C1 allows). Dedup scales with `limit`, so this does too.
 fn note_hit_pool(limit: usize) -> usize {
     limit.saturating_mul(3)
 }
 
-/// How wide a hit pool [`Vault::search_chunks`] retrieves: `limit` plus a fixed
-/// [`TORN_READ_HEADROOM`]. There is no dedup here — this is deliberately the
-/// un-deduped passage view — so the *only* hit it drops is one whose
-/// `chunk_detail` lookup missed on a torn read. That window
-/// is rare and bounded, not proportional to the ask, so a constant covers it and
-/// `limit`'s own multiple would buy nothing more: GH #137 asked for backfill, not
-/// for width.
+/// [`Vault::search_chunks`]'s hit pool: `limit` + [`TORN_READ_HEADROOM`]. No dedup
+/// here — this is the un-deduped passage view — so the only hit it drops is one
+/// whose `chunk_detail` lookup missed on a torn read, a bounded window a constant
+/// covers (GH #137).
 ///
-/// **The GH #142 ruling.** This pool briefly shared `search`'s 3×, which made the
-/// passage view retrieve `3 × 5 × limit` candidates per signal — 150 for a
-/// 10-result ask against 60 here. RRF does not merely append the extra candidates:
-/// scoring `Σ 1/(k + rank + 1)` at k = 60, a chunk ranked ~60th in *both* lists
-/// outscores one ranked first in a single list (`2/121 > 1/61`), so a wider pool
-/// returns different answers — 10 of 10 probes changed their top-4 passages across
-/// exactly that step on `fixtures/test-vault` (`just stability`). Wider may well be
-/// *better*; nothing has measured it, because the labelled corpus is 29 chunks —
-/// smaller than either pool, so it scores both identically (GH #141). Width is a
-/// retrieval-quality knob and stays at the conservative setting until an eval can
-/// price a change to it.
+/// Deliberately *not* `search`'s 3× (GH #142): RRF scores `Σ 1/(k + rank + 1)`, so a
+/// wider pool returns different answers, not merely more of them — 10 of 10 probes
+/// changed their top-4 passages across exactly that step (`just stability`). Wider
+/// may well be better; the labelled corpus is too small to price it (GH #141), so
+/// width stays at the conservative setting until an eval can (ADR-0013).
 fn chunk_hit_pool(limit: usize) -> usize {
     limit.saturating_add(TORN_READ_HEADROOM)
 }
 
-/// How many candidates **each retrieval signal** pulls for a `limit`-sized
-/// [`Vault::search`] call: the façade asks retrieval for [`note_hit_pool`] hits, and
-/// each signal (BM25's `LIMIT`, the vector scan's top-n) widens that again before
-/// the two lists are fused by RRF. [`chunk_candidate_pool`] is the passage view's
-/// depth; since GH #142 the two differ, so a measurement has to name which it means.
+/// Candidates **each retrieval signal** pulls for a `limit`-sized
+/// [`Vault::search`]: the façade asks retrieval for [`note_hit_pool`] hits, and each
+/// signal widens that again before the two lists are fused (ADR-0008).
 ///
-/// Public because a *measurement* needs it. Once a corpus has no more chunks than
-/// this, **neither** candidate list is truncated — BM25 returns every matching
-/// chunk, the vector scan every stored vector — so both lists are already complete
-/// and widening the pool further cannot change what `rrf_fuse` is handed. Scores on
-/// such a corpus are invariant under *candidate width*: a change to a hit pool or to
-/// `pool_size` reads as "no change" there while moving real-vault results. (Only
-/// width. [`search::RRF_K`] re-weights the *same* lists, so it reorders even a tiny
-/// corpus and the eval sees it.) The eval harness prints that blindness instead of
-/// letting a reader trust a number that could not have moved (GH #141).
+/// Public because a *measurement* needs it. A corpus with no more chunks than this
+/// truncates neither candidate list, so its scores are invariant under candidate
+/// width — a pool change reads as "no change" there while moving real-vault results.
+/// The eval harness prints that blindness rather than let a reader trust a number
+/// that could not have moved (GH #141). ([`search::RRF_K`] re-weights the *same*
+/// lists, so it reorders even a tiny corpus.)
 pub fn note_candidate_pool(limit: usize) -> usize {
     search::pool_size(note_hit_pool(limit))
 }
 
-/// [`note_candidate_pool`] for the passage view: the per-signal depth a
-/// [`Vault::search_chunks`] call reaches, over [`chunk_hit_pool`].
-///
-/// Always the narrower of the two, which makes it the threshold a *blindness* claim
-/// has to clear: a corpus no bigger than this truncates neither signal in **either**
-/// view, so every number a run prints — note ranks and passage ranks alike — is
-/// invariant under candidate width (GH #141).
+/// [`note_candidate_pool`] for the passage view, over [`chunk_hit_pool`]. Always
+/// the narrower of the two, which makes it the threshold a *blindness* claim must
+/// clear: under it, no number a run prints can move with candidate width (GH #141).
 pub fn chunk_candidate_pool(limit: usize) -> usize {
     search::pool_size(chunk_hit_pool(limit))
 }
 
 /// An open vault: the Markdown at `root`, projected into the disposable index at
-/// `root/.b2/b2.sqlite` (a pure projection — no durable state outside the Markdown).
+/// `root/.b2/b2.sqlite` (ADR-0002).
 pub struct Vault {
     root: PathBuf,
     conn: Connection,
-    // Injected through the seam: the CLI wires the real candle model; `open`
-    // defaults to `FakeEmbedder` so the core tests stay deterministic and model-free
-    // (the "build for tomorrow's model" seam, invariants.md).
+    /// Injected through the seam (ADR-0005): the adapters wire the real model,
+    /// `open` defaults to `FakeEmbedder`.
     embedder: Box<dyn Embedder>,
-    // The vault's one chunking policy (chunk.rs, spec §3 D5). Held here — not
-    // re-defaulted per call — so every path that chunks (reindex/project/write/
-    // add/link/mv) cuts identically under a *fixed* config and `incremental ≡
-    // full rebuild` holds by construction. Across a `set_chunk_config` change the
-    // guarantee is doc-enforced instead: an incremental pass would reuse chunks
-    // cut under the old policy, so a config change must pair with
-    // `project(force)` (as `set_chunk_config`'s doc requires and the eval does).
-    // Defaults to `ChunkConfig::default()`; the retrieval eval is the one client
-    // that overrides it, to A/B chunker levers in-process (the eval harness, crates/b2-embed/evals/).
+    /// The vault's one chunking policy, held here rather than re-defaulted per
+    /// call, so every path that chunks cuts identically and `incremental ≡ full
+    /// rebuild` holds by construction. Across a `set_chunk_config` change that
+    /// guarantee is doc-enforced instead: the change must pair with
+    /// `project(force)`. The retrieval eval is the only client that overrides it.
     chunk_config: ChunkConfig,
 }
 
-/// What `reindex` did: how many notes were projected and how many were actually
-/// (re)embedded (the rest reused their vectors — incremental). It reports no writes
-/// to the vault because there are none to report: a reindex reads (W1).
+/// What `reindex` did: notes projected, and how many were actually (re)embedded
+/// (the rest reused their vectors). It reports no vault writes because there are
+/// none — a reindex reads (ADR-0004).
 ///
-/// `cancelled` is `true` when a cooperative cancel cut the embed phase short:
-/// the counts then describe the partial work truthfully
-/// (e.g. "indexed 1000, embedded 240, cancelled") — the index is still consistent
-/// (keyword + graph complete, a prefix embedded) and an incremental re-run finishes
-/// the rest. Always `false` for [`reindex`](Vault::reindex) and the CLI, which never
-/// cancel.
+/// `cancelled` marks a cooperative cancel of the embed phase; the counts then
+/// describe the partial work truthfully and the index is still consistent (keyword
+/// and graph complete, a prefix embedded). Always `false` for
+/// [`reindex`](Vault::reindex).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexReport {
     pub indexed: usize,
     pub embedded: usize,
     pub cancelled: bool,
-    /// Files skipped as unreadable this run (see [`SkippedNote`]) — a whole-vault
-    /// reindex never fails on one bad file (non-UTF-8, permission-denied). Empty on a
-    /// clean vault; each entry names the file and a short, file-level reason.
+    /// Files skipped as unreadable this run — one bad file never fails the pass.
     pub skipped: Vec<SkippedNote>,
-    /// Ghost rows pruned this run (#31): notes whose files were deleted outside b2
-    /// with no replacement, reconciled so incremental equals a from-scratch rebuild.
+    /// Ghost rows pruned: notes whose files were deleted outside b2 (#31), so
+    /// incremental equals a from-scratch rebuild.
     pub notes_pruned: usize,
-    /// The resource inventory's counts (file-type support slice 1): resources seen
-    /// this run, and stale inventory rows pruned.
     pub resources_indexed: usize,
     pub resources_pruned: usize,
 }
 
-/// What [`project`](Vault::project) did — the model-free half of a reindex
-/// (index-engine.md): how many notes were projected. No embed counts: projection
-/// never touches vectors.
+/// What [`project`](Vault::project) did — the model-free half of a reindex. No
+/// embed counts: projection never touches vectors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectReport {
     pub indexed: usize,
-    /// Files skipped as unreadable this pass (see [`SkippedNote`]) — projecting a large
-    /// vault never fails on one bad file. Empty on a clean vault; surfaced so an
-    /// adapter can tell the user which files were left out and why.
+    /// Files skipped as unreadable this pass, so an adapter can say which and why.
     pub skipped: Vec<SkippedNote>,
-    /// Ghost rows pruned this pass (#31): notes whose files were deleted outside b2
-    /// with no replacement, reconciled so incremental equals a from-scratch rebuild.
+    /// Ghost rows pruned: notes whose files were deleted outside b2 (#31).
     pub notes_pruned: usize,
-    /// The resource inventory's counts (file-type support slice 1): resources seen
-    /// this pass, and stale inventory rows pruned.
     pub resources_indexed: usize,
     pub resources_pruned: usize,
 }
 
-/// What [`embed`](Vault::embed) did — the model-bound half of a reindex: how many
-/// notes had missing vectors filled (the rest were already complete), and whether a
-/// cooperative cancel cut the pass short (the counts then describe the partial work
-/// truthfully, and a re-run embeds exactly the remainder).
+/// What [`embed`](Vault::embed) did — the model-bound half of a reindex: notes
+/// whose missing vectors were filled, and whether a cooperative cancel cut the pass
+/// short (the counts stay truthful, and a re-run embeds exactly the remainder).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct EmbedReport {
     pub embedded: usize,
     pub cancelled: bool,
 }
 
-/// The vault's semantic-embedding coverage — how many of its notes are fully
-/// embedded — for the honest "N/M embedded" signal (#26, index-engine.md).
-/// Model-free: a pure count over the projection, so an adapter can surface
-/// "keyword-only for now" *precisely* (not just via the binary "is a model installed"
-/// flag) without loading the model. `embedded == total` (and `total > 0`) means
-/// semantic ranking is complete; `embedded < total` means [`search`](Vault::search) is
-/// running keyword-first over the unembedded remainder (`embedded == 0` = fully
-/// keyword-only, a projected-but-unembedded vault).
+/// The vault's embedding coverage — the honest "N/M embedded" signal (#26).
+/// Model-free: a pure count over the projection, so an adapter can say
+/// "keyword-only for now" precisely without loading a model. `embedded < total`
+/// means [`search`](Vault::search) is running keyword-first over the remainder;
+/// `embedded == 0` is a fully keyword-only vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct EmbedStatus {
     /// Notes whose every chunk has a stored vector.
@@ -234,64 +167,51 @@ pub struct EmbedStatus {
     pub total: usize,
 }
 
-/// What a reindex **would** do — the `reindex --dry-run` preview. The `would_*`
-/// keys (vs [`ReindexReport`]'s past-tense `indexed`/`embedded`) are the honesty
-/// signal: this is a forecast, computed read-only.
+/// What a reindex **would** do — the `reindex --dry-run` preview, computed
+/// read-only. The `would_*` keys are the honesty signal: this is a forecast.
 ///
-/// It forecasts work and nothing else, which is smaller than it used to be and
-/// deliberately so: the dry-run's other columns (which notes would be stamped, which
-/// stamps would churn an identity, which files collide) existed because a real run
-/// *wrote* to the vault. Since GH #170 it doesn't (W1), so there is nothing to warn
-/// about — only the embedding to size.
+/// It forecasts work and nothing else. The dry-run's old columns (which notes would
+/// be stamped, which files collide) existed because a real run wrote to the vault;
+/// it no longer does (ADR-0004), so only the embedding is left to size.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReindexPlan {
-    /// Notes a real reindex would project into the index (every `.md` file the
-    /// walk collects — dot-prefixed names are not notes, GH #136).
+    /// Notes a real reindex would project (every `.md` file the walk collects).
     pub would_index: usize,
-    /// …of which this many would be (re)embedded (the rest reuse their vectors).
+    /// …of which this many would be (re)embedded.
     pub would_embed: usize,
 }
 
 /// One neighbor of a note, resolved for display: the note at the other end of an
-/// active edge, with its path + title (so the CLI stays a dumb printer).
+/// edge, with its path + title, so the adapter stays a dumb printer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NeighborView {
-    /// The other note's vault-relative path — its identity (L1).
+    /// The other note's vault-relative path — its identity (ADR-0003).
     pub path: String,
-    /// The other note's title, if it has one.
     pub title: Option<String>,
     /// The stored relation verb (outbound direction of the edge).
     pub relation: String,
-    /// `"outbound"` (this note → other) or `"inbound"` (other → this note).
+    /// `"outbound"` (this note → other) or `"inbound"`.
     pub direction: String,
-    /// Display label: the verb outbound, its inverse inbound (data-model.md §2).
+    /// Display label: the verb outbound, its inverse inbound (ADR-0010).
     pub label: String,
     pub explanation: Option<String>,
-    /// Edge origin: `"inline"` (a human body link) or `"frontmatter"` (a relation
-    /// committed via `b2 link`, or a human/importer authored) — data-model.md §0.
-    /// `b2 explain` renders it; `b2 neighbors` carries it too.
+    /// Edge origin: `"inline"` (a body link) or `"frontmatter"` (ADR-0010).
     pub origin: String,
-    /// The other note's `created` date, if it has one — resolved from the
-    /// projection (GH #22), so an adapter can date a neighbor without re-reading
-    /// the file.
+    /// The other note's `created` date, resolved from the projection (GH #22).
     pub created: Option<String>,
 }
 
 /// One outbound link a note authors at a **resource** (an image, a PDF — any
-/// non-`.md` vault file), resolved for display. The third target kind an edge can
-/// have (note / resource / dangling); surfaced on [`ExplainView`] so a note's file
-/// links are visible from the note's side, not only as the resource's backlinks
-/// (GH #22). Distinct from [`NeighborView`] — a resource has no title and no
-/// direction (a resource never authors edges, so these are always outbound).
+/// non-`.md` vault file), resolved for display. Surfaced on [`ExplainView`] so a
+/// note's file links are visible from the note's side, not only as the resource's
+/// backlinks (GH #22). Distinct from [`NeighborView`]: a resource has no title and
+/// authors no edges, so these are always outbound.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceLinkView {
-    /// The resource's vault-relative path.
     pub path: String,
     /// Its inventory class (`image`/`pdf`/`html`/`text`/`media`/`binary`).
     pub class: String,
-    /// The relation verb (`references` for a bare link/embed).
     pub relation: String,
-    /// Edge origin — `"inline"` (a body link) or `"frontmatter"`.
     pub origin: String,
     /// The authored caption (alt text / `|caption`), if any.
     pub caption: Option<String>,
@@ -301,52 +221,39 @@ pub struct ResourceLinkView {
 }
 
 /// One outbound link a note authored that resolves to **nothing** — no note and no
-/// resource exists at its target (a `[[Hermes]]` naming a *folder*, or a plain
-/// typo). A note is one `.md` file (data-model.md §1), so a folder is never a valid
-/// target; rather than silently drop such a link, B2 surfaces it as *unresolved* so
-/// it reads as broken, not missing (GH #12). Has no `path` — the whole point is that
-/// nothing resolved — so it is a distinct shape from [`NeighborView`].
+/// resource at its target (a `[[Hermes]]` naming a *folder*, or a typo). A note is
+/// one `.md` file, so a folder is never a valid target; rather than drop such a link
+/// B2 surfaces it as unresolved, so it reads as broken rather than missing (GH #12).
+/// It has no `path` — that is the whole point.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnresolvedLink {
-    /// The target exactly as written in the Markdown (`[[target]]`) — e.g. `Hermes`.
+    /// The target exactly as written in the Markdown (`[[target]]`).
     pub target: String,
-    /// The relation verb (`references` for a bare link).
     pub relation: String,
-    /// Edge origin — `"inline"` (a body link) or `"frontmatter"` (a `b2_relations:`
-    /// entry).
     pub origin: String,
     pub explanation: Option<String>,
 }
 
-/// A note's full connection picture for `b2 explain`: the note itself (resolved to
-/// its identity + display fields), every active connection with its "why", and any
-/// **unresolved** outbound links (dangling — the target names no note or resource).
-/// A thin header over [`NeighborView`] — `explain`'s job is to present a note's typed
-/// edges and their explanations, so it reuses the same per-edge shape `neighbors`
-/// returns rather than a parallel one.
+/// A note's full connection picture for `b2 explain`: the note itself, every active
+/// connection with its "why", its outbound resource links, and any unresolved
+/// outbound links. A thin header over [`NeighborView`] — it reuses the per-edge
+/// shape `neighbors` returns rather than a parallel one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExplainView {
     pub path: String,
     pub title: Option<String>,
-    /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them),
-    /// each with its label, target, and explanation. Empty for an isolated note.
+    /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them).
     pub connections: Vec<NeighborView>,
-    /// Outbound links at **resources** (images, PDFs, …) — the third target kind,
-    /// so a note's file links are visible from the note's side (GH #22). Empty
-    /// when the note links no files.
+    /// Outbound links at resources — the third target kind (GH #22).
     pub resources: Vec<ResourceLinkView>,
-    /// Outbound links that resolved to nothing (a folder target or a typo) — shown
-    /// as broken rather than silently dropped (GH #12). Empty when every link
-    /// resolves.
+    /// Outbound links that resolved to nothing (GH #12).
     pub unresolved: Vec<UnresolvedLink>,
 }
 
-/// A note's content + display metadata for a reader — the Desktop UI MVP's left
-/// pane (crates/b2-desktop/CLAUDE.md), and the **one new façade op** that surface
-/// adds. Carries the note's identity, the frontmatter fields worth showing a human,
-/// and the **raw Markdown body read from disk** (the source of truth, not the index
-/// projection) so an adapter renders Markdown → HTML itself. A pure read — no
-/// embedding, like [`neighbors`](Vault::neighbors).
+/// A note's content + display metadata for a reader. Carries the note's identity,
+/// the frontmatter fields worth showing a human, and the **raw Markdown body read
+/// from disk** (the source of truth, not the projection) so an adapter renders
+/// Markdown itself. A pure read — no embedding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoteView {
     pub path: String,
@@ -358,40 +265,32 @@ pub struct NoteView {
     /// The note's Markdown body (frontmatter stripped), verbatim from disk.
     pub body: String,
     /// The raw frontmatter YAML **verbatim** (the text between the `---` fences,
-    /// fences excluded), or `None` when the note has none. This is the byte-honest
-    /// block, not a re-serialization of the projected fields above — so `b2_relations:`
-    /// and any keys B2 doesn't model show as written. The Desktop UI renders it in a
-    /// collapsible drawer (crates/b2-desktop/CLAUDE.md).
+    /// fences excluded), not a re-serialization of the projected fields above — so
+    /// `b2_relations:` and any keys B2 doesn't model show as written.
     pub frontmatter: Option<String>,
     /// Whether that block *reads* as YAML metadata
     /// ([`note::ParsedNote::frontmatter_readable`]): `false` means the raw bytes
-    /// above are shown verbatim but the projected fields came back empty
-    /// (malformed YAML, or not a key/value mapping). The drawer renders a
-    /// non-blocking "B2 can't read this frontmatter" notice off it — and because
-    /// every read passes through here, an external hand-edit surfaces the same
-    /// warning as an in-app save (GH #79).
+    /// above are shown verbatim but the projected fields came back empty. Every
+    /// read passes through here, so an external hand-edit surfaces the same warning
+    /// as an in-app save (GH #79).
     pub frontmatter_readable: bool,
-    /// blake3 of the **raw file bytes** at read time — the save-guard token:
-    /// [`write`](Vault::write) refuses when the file on
-    /// disk no longer hashes to the revision the edit was based on, so a save can
-    /// never silently clobber an external edit. Whole-file (not just the body), so
-    /// *any* out-of-band change conflicts honestly.
+    /// blake3 of the **raw file bytes** at read time — the save-guard token
+    /// [`write`](Vault::write) validates, so a save can never silently clobber an
+    /// external edit. Whole-file, so *any* out-of-band change conflicts honestly.
     pub revision: String,
 }
 
-/// One note's identity for a listing — its vault-relative `path` and display
-/// `title` — with **no body** (the heavy field). This is what the desktop UI's file
-/// tree renders: enough to show and open a note, cheap enough to fetch the whole
-/// vault at once. The full body is a separate [`read`](Vault::read) when a note is
-/// opened.
+/// One note's identity for a listing — `path` + `title`, with **no body**: enough
+/// to show and open a note, cheap enough to fetch the whole vault at once. The body
+/// is a separate [`read`](Vault::read) when a note is opened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoteSummary {
     pub path: String,
     pub title: Option<String>,
 }
 
-/// One resource's identity for the file tree (`Vault::list_resources`) — the
-/// per-kind sibling of [`NoteSummary`], never a union type (research §9b #10).
+/// One resource's identity for the file tree — the per-kind sibling of
+/// [`NoteSummary`], never a union type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceSummary {
     pub path: String,
@@ -400,8 +299,7 @@ pub struct ResourceSummary {
     pub mtime: Option<i64>,
 }
 
-/// The fallback card's data (`Vault::explain_resource`, slice-1 spec §4):
-/// the resource's inventory metadata plus its inbound backlinks.
+/// The resource fallback card's data: inventory metadata plus inbound backlinks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceExplainView {
     pub path: String,
@@ -433,16 +331,16 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-/// A search's evidence reading — [`Vault::search_evidence`]'s return, and the
-/// input a surface needs to decide what it vouches for (invariants.md D2).
+/// A search's evidence reading — [`Vault::search_evidence`]'s return, and what a
+/// surface needs to decide what it vouches for (ADR-0015).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchEvidenceView {
     /// The served results, whole and in fused order — evidence never reorders or
-    /// removes a row (D1: reachability is untouchable).
+    /// removes a row.
     pub results: Vec<EvidencedResult>,
-    /// Does the vault hold positive evidence for this query at the active
-    /// model's bar? `None` = no calibrated bar for this embedder, so no verdict
-    /// is offered rather than one guessed.
+    /// Does the vault hold positive evidence for this query at the active model's
+    /// bar? `None` = no calibrated bar for this embedder, so no verdict is offered
+    /// rather than one guessed.
     pub vouched: Option<bool>,
     /// Chunks in the index — the scale every term's weight is read against.
     pub chunk_total: usize,
@@ -456,12 +354,10 @@ pub struct SearchEvidenceView {
 /// One served result with the provenance RRF discarded — which lists ranked its
 /// chunk, and how near its vector actually was.
 ///
-/// The per-hit half of the evidence reading. The query-level verdict on
-/// [`SearchEvidenceView`] is what D2's "no matches" rests on; **this** is what a
-/// per-hit tail rule would be argued from (GH #201 Step 2, unshipped and
-/// deliberately so — the corpus does not yet label the irrelevance of ranks
-/// 5–10). Until then it is an instrument reading: a served row with
-/// `bm25_rank: None` is a hit the lexical half never saw at all.
+/// The query-level verdict on [`SearchEvidenceView`] is what ADR-0015's "no matches"
+/// rests on; **this** is what a per-hit tail rule would be argued from (GH #201
+/// Step 2, unshipped and deliberately so — the corpus does not yet label the
+/// irrelevance of ranks 5–10). Until then it is an instrument reading.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EvidencedResult {
     #[serde(flatten)]
@@ -481,22 +377,17 @@ pub struct QueryTermView {
     pub term: String,
     /// Chunks matching this term alone; `0` = the vault has never seen the word.
     pub df: usize,
-    /// This term's weight in the coverage reading — `ln((chunks+1)/(df+1))`.
-    /// Near zero for a word in most chunks, largest for one the vault has never
-    /// seen; the anchor is the share of the query's total weight the vault
-    /// carries (see [`b2_core::search::LexicalEvidence::term_coverage`]).
+    /// This term's weight in the coverage reading — `ln((chunks+1)/(df+1))`; near
+    /// zero for a ubiquitous word, largest for one the vault has never seen.
     pub idf: f64,
 }
 
 /// One **chunk-level** search hit — the sub-note view of [`search`](Vault::search).
-/// Same retrieval (BM25 ⊕ vector → RRF, keyword-only fallback), but ranked chunks
-/// are returned as-is instead of deduped up to notes, so a caller can see *which
-/// passage* matched and at what rank. The client is the out-of-CI retrieval eval
-/// (the eval harness, crates/b2-embed/evals/): note-rank scoring is blind to sub-note retrieval
-/// quality — exactly what chunking levers move — so the eval scores passage ranks
-/// through this view. Carries the chunk's **full text** (not a display snippet):
-/// the eval anchors passage-containment scoring on it; an adapter wanting a
-/// one-liner trims it itself.
+/// Same retrieval, but ranked chunks are returned as-is instead of deduped up to
+/// notes, so a caller can see *which passage* matched and at what rank. The client
+/// is the out-of-CI retrieval eval (ADR-0013): note-rank scoring is blind to
+/// sub-note quality, which is exactly what chunking levers move. Carries the chunk's
+/// **full text**, which the eval's containment scoring anchors on.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChunkSearchResult {
     pub path: String,
@@ -509,37 +400,31 @@ pub struct ChunkSearchResult {
     pub text: String,
 }
 
-/// The answer to one grounded-chat ask — flow ④'s display view (GH #151/#153).
-/// The model's streamed text with its `[n]` citation markers resolved back to
-/// the vault; per the standing convention this view type is the adapters' JSON
-/// / IPC contract when the chat surfaces land.
+/// The answer to one grounded-chat ask — flow ④'s display view: the model's
+/// streamed text with its `[n]` citation markers resolved back to the vault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnswerView {
     /// The answer, verbatim as streamed — including any marker that did *not*
-    /// resolve: model output is untrusted content (E5) but it is never
-    /// rewritten here; an unmatched marker is simply absent from `citations`.
+    /// resolve. Model output is untrusted content, but it is never rewritten here;
+    /// an unmatched marker is simply absent from `citations`.
     pub answer: String,
     /// The resolved citations, ascending by marker; one entry per **distinct**
     /// marker that names a real passage.
     pub citations: Vec<Citation>,
-    /// `true` when the caller's callback broke the stream mid-answer: `answer`
-    /// then holds the partial text honestly (the [`Completion`] marker,
-    /// surfaced), and citations resolve over what actually arrived.
-    ///
-    /// [`Completion`]: crate::llm::Completion
+    /// `true` when the caller's callback broke the stream mid-answer: `answer` then
+    /// holds the partial text honestly, and citations resolve over what arrived.
     pub cancelled: bool,
 }
 
-/// One resolved `[n]` citation: the passage's note, plus a one-line excerpt of
-/// the cited passage as display evidence (the `SimilarView::evidence` posture).
+/// One resolved `[n]` citation: the passage's note, plus a one-line excerpt of the
+/// cited passage as display evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Citation {
     /// The marker as it appears in the answer text (1-based passage number).
     pub marker: usize,
-    /// Vault-relative path of the cited note — its identity (L1), and what an
-    /// adapter opens on click. A note renamed between the answer and the click
-    /// goes stale, exactly as any path handle does; that is the durability GH #170
-    /// chose over a machine id in every file.
+    /// Vault-relative path of the cited note — its identity (ADR-0003), and what an
+    /// adapter opens on click. A note renamed between answer and click goes stale,
+    /// exactly as any path handle does.
     pub path: String,
     /// A one-line excerpt of the cited passage (its head, length-bounded).
     pub excerpt: String,
@@ -547,9 +432,8 @@ pub struct Citation {
 
 /// One semantically-similar candidate for `b2 similar`: a note near the anchor in
 /// embedding space that is **not** already connected to it, resolved for display
-/// with the passage that made it similar. This is connection-discovery candidate
-/// generation ([`discover::candidates`]) surfaced directly to the human — the
-/// machine finds the candidate, you decide whether to `link` it.
+/// with the passage that made it similar. The machine finds the candidate, the human
+/// decides whether to `link` it (ADR-0009).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SimilarView {
     pub path: String,
@@ -559,29 +443,24 @@ pub struct SimilarView {
     /// A one-line excerpt of the candidate chunk that achieved `score` — the
     /// evidence for *why* it surfaced.
     pub evidence: String,
-    /// How far this candidate stands above the anchor's own candidate population
-    /// — its **best-passage** z (the stage-2 statistic, GH #192), the one honest
-    /// input for a displayed *strength* band (GH #150), and non-increasing down
-    /// the row order (strictly monotonic in the score; tied scores share a z
-    /// and order by path), so the band never contradicts it. Since GH #197 it
-    /// **gates nothing** — the list is served ranked whatever the z's read; the
-    /// band is a within-list grading, relative to this note's other candidates,
-    /// never a verdict on existence. The unit is load-bearing for an adapter: a
-    /// band calibrated in the retired centroid unit grades every card down
-    /// (GH #182), so a surface showing one reads its landmarks off `just eval`'s
-    /// calibration block. `None` when no statistic was computed (a fake-embedded
-    /// space, a pool under the statistics minimum, or zero variance) — which is
-    /// also the adapters' cue to say the list is *ungraded* rather than let bare
-    /// cards read as uniformly weak; serialized only when present so older JSON
-    /// consumers see no change.
+    /// How far this candidate stands above the anchor's own candidate population —
+    /// its best-passage z (GH #192), and the one honest input for a displayed
+    /// *strength* band (GH #150). Non-increasing down the row order, so the band
+    /// never contradicts the ranking. It **gates nothing** (ADR-0014): the band is a
+    /// within-list grading, never a verdict on existence. The unit is load-bearing —
+    /// a band calibrated in the retired centroid unit grades every card down
+    /// (GH #182) — so a surface reads its landmarks off `just eval`'s calibration
+    /// block. `None` when no statistic was computed (a fake-embedded space, a pool
+    /// under the statistics minimum, or zero variance), which is the adapters' cue
+    /// to say the list is *ungraded* rather than let bare cards read as uniformly
+    /// weak; serialized only when present, so older JSON consumers see no change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub z: Option<f64>,
 }
 
-/// What [`write`](Vault::write) did: the saved note's vault-relative path and the
-/// **new revision** (blake3 of the final on-disk bytes) — the token the editor
-/// chains its next save on, so sequential saves never self-conflict
-/// ("last save wins — by construction").
+/// What [`write`](Vault::write) did: the saved note's path and the **new revision**
+/// (blake3 of the final on-disk bytes) — the token the editor chains its next save
+/// on, so sequential saves never self-conflict.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WriteReport {
     pub path: String,
@@ -606,22 +485,20 @@ impl Vault {
         Self::open_with_embedder(vault_root, Box::new(FakeEmbedder::new(EMBED_DIM)))
     }
 
-    /// Open the vault with a caller-supplied embedder — the seam the `b2` CLI uses
-    /// to inject the real candle model while tests keep the fake.
+    /// Open the vault with a caller-supplied embedder — the seam the adapters use to
+    /// inject the real candle model while tests keep the fake.
     ///
-    /// `open` **never mutates the embedding space** (the `open()`-time-drop fix,
-    /// GitHub Issues / index-engine.md §8): shaping the vector tables and any re-embed happen
-    /// only on `reindex`. That way changing the configured model can never silently
-    /// wipe vectors on the next command — a mismatch is caught, and fixed, at
-    /// `reindex`; `search` fails fast on it (see [`search`](Self::search)).
+    /// `open` **never mutates the embedding space** (ADR-0007): shaping the vector
+    /// tables and any re-embed happen only on `reindex`, so changing the configured
+    /// model can never silently wipe vectors on the next command. `search` fails
+    /// fast on a mismatch instead.
     pub fn open_with_embedder(vault_root: &Path, embedder: Box<dyn Embedder>) -> Result<Self> {
-        // Every façade op opens a `tracing` span (target `b2::vault`): under a
-        // subscriber with span-close events, each op reports its own duration, and
-        // the per-query `b2::sqlite` events carry which op they ran under. Inert
-        // (near-zero cost) until an adapter installs a subscriber — the determinism
-        // boundary is unchanged, since the core itself never reads a clock for this.
+        // Every façade op opens a `tracing` span (target `b2::vault`), so each op
+        // reports its own duration and the per-query `b2::sqlite` events carry which
+        // op they ran under. Inert until an adapter installs a subscriber, so the
+        // core still reads no clock of its own.
         let _op = tracing::debug_span!(target: "b2::vault", "open").entered();
-        // `Connection::open` creates the DB file but not its parent; make `.b2/` first.
+        // `Connection::open` creates the DB file but not its parent.
         fs::create_dir_all(vault_root.join(".b2"))?;
         let conn = db::open(&vault_root.join(".b2").join("b2.sqlite"))?;
         Ok(Self {
@@ -633,10 +510,10 @@ impl Vault {
     }
 
     /// The vault's **projection context** — the `(conn, root, cfg)` bundle every
-    /// write-side op threads, built once here rather than spelled out per call site
-    /// ([#134](https://github.com/AlteredCraft/B2/issues/134)). Handing this to an op
-    /// (rather than [`embed_ctx`](Self::embed_ctx)) is what *makes* it model-free: it
-    /// carries no embedder, so `rm`/`create_note`/`write` cannot embed even by mistake.
+    /// write-side op threads, built once here rather than per call site (GH #134).
+    /// Handing an op this rather than [`embed_ctx`](Self::embed_ctx) is what *makes*
+    /// it model-free: it carries no embedder, so `rm`/`create_note`/`write` cannot
+    /// embed even by mistake.
     fn ctx(&self) -> ingest::ProjectionCtx<'_> {
         ingest::ProjectionCtx::new(&self.conn, &self.root, &self.chunk_config)
     }
@@ -647,25 +524,20 @@ impl Vault {
         ingest::EmbedCtx::new(self.ctx(), self.embedder.as_ref())
     }
 
-    /// Override the vault's chunking policy (default: [`ChunkConfig::default()`]).
-    /// Every subsequent op that chunks — `project`/`reindex`/`write`/`add`/`link`/
-    /// `mv` — cuts with this config, so the index stays self-consistent. The
-    /// client is the out-of-CI retrieval eval, which sweeps chunker levers in one
-    /// process (`set_chunk_config` → `project(force)` → `embed` → score;
-    /// the eval harness, crates/b2-embed/evals/); the shipped adapters never call it. Changing the
-    /// config does **not** re-chunk by itself — pair it with `project(force)`.
+    /// Override the vault's chunking policy. Every subsequent op that chunks cuts
+    /// with it, so the index stays self-consistent. The client is the out-of-CI
+    /// retrieval eval (ADR-0013), which sweeps chunker levers in one process; the
+    /// shipped adapters never call it. It does not re-chunk by itself — pair it with
+    /// `project(force)`.
     pub fn set_chunk_config(&mut self, cfg: ChunkConfig) {
         self.chunk_config = cfg;
     }
 
     /// Rebuild the FTS index over the **same stored chunk text** with a different
-    /// tokenizer ([`db::rebuild_fts`]). Like [`set_chunk_config`](Self::set_chunk_config)
-    /// this is the out-of-CI eval harness's lever, not an adapter surface: the
-    /// tokenizer touches only the lexical half, so the GH #157 stemmer A/B can
-    /// flip it back and forth without re-chunking or re-embedding anything. The
-    /// choice is not recorded durably anywhere — the index is disposable, and a
-    /// `reindex` into a fresh `.b2/` restores the shipped default; the shipped
-    /// adapters never call this.
+    /// tokenizer — the eval harness's lexical-half lever (ADR-0013), not an adapter
+    /// surface, so the GH #157 stemmer A/B can flip it without re-chunking or
+    /// re-embedding. The choice is recorded nowhere durable: the index is disposable,
+    /// and a `reindex` into a fresh `.b2/` restores the shipped default.
     pub fn rebuild_fts(&self, tokenizer: db::FtsTokenizer) -> Result<()> {
         db::rebuild_fts(&self.conn, tokenizer)
     }
@@ -679,26 +551,21 @@ impl Vault {
         self.reindex_with_progress(false, &mut |_| ControlFlow::Continue(()))
     }
 
-    /// [`reindex`](Self::reindex) with three knobs its adapters need: `force`
-    /// re-chunks every note even if unchanged (a full rebuild without dropping the
-    /// index); `on_progress` fires after each embed batch so a slow full reindex under
-    /// the real model shows a live progress line instead of looking frozen; and the
-    /// callback's [`ControlFlow`] return **cooperatively cancels** the embed phase —
-    /// returning [`ControlFlow::Break`] stops embedding at that batch boundary while
-    /// Phase 2 still completes, leaving a consistent, resumable index.
-    /// The desktop host maps a cancel flag to `Break`; the CLI
-    /// always returns `Continue` (no behavior change for the non-cancel path, which
-    /// stays byte-identical). A cancelled run sets [`ReindexReport::cancelled`].
+    /// [`reindex`](Self::reindex) with the three knobs its adapters need: `force`
+    /// re-chunks every note even if unchanged; `on_progress` fires after each embed
+    /// batch so a slow reindex shows a live line instead of looking frozen; and
+    /// returning [`ControlFlow::Break`] from it **cooperatively cancels** the embed
+    /// phase at that batch boundary while projection still completes, leaving a
+    /// consistent, resumable index ([`ReindexReport::cancelled`]). The desktop maps
+    /// its cancel flag to `Break`; the CLI always returns `Continue`.
     ///
-    /// **`force` re-chunks; whether it re-*embeds* is content's to decide** (M4,
-    /// GH #170). Vectors are keyed by chunk text, so forcing a rebuild over unchanged
-    /// notes finds every vector already stored and reports `embedded: 0` — truthfully,
-    /// since a second forward pass over identical input could only produce identical
-    /// bytes. Where `force` is actually reached for — a chunker-policy change, the
-    /// eval harness's `set_chunk_config` → `project(force)` — the chunk text moves,
-    /// the hashes miss, and the model runs on exactly what changed. The one thing it
-    /// no longer repairs is a *damaged* stored vector; the index is disposable, so
-    /// deleting `.b2/` is the answer there and always was the better one.
+    /// **`force` re-chunks; whether it re-*embeds* is content's to decide.** Vectors
+    /// are keyed by chunk text (ADR-0006), so forcing a rebuild over unchanged notes
+    /// finds every vector already stored and reports `embedded: 0` truthfully. Where
+    /// `force` is actually reached for — a chunker-policy change — the chunk text
+    /// moves, the hashes miss, and the model runs on exactly what changed. It no
+    /// longer repairs a *damaged* stored vector; the index is disposable, so deleting
+    /// `.b2/` is the answer there.
     pub fn reindex_with_progress(
         &self,
         force: bool,
@@ -717,20 +584,13 @@ impl Vault {
         })
     }
 
-    /// The **projection pass** alone (index-engine.md): re-project
-    /// every `.md` note into `notes`/`chunks`(+FTS)/`edges` with **no model and no
-    /// vector work**, and no write to the vault. After it returns, the file
-    /// tree lists, notes open, keyword search answers, and the graph resolves; only
-    /// vectors (and thus `similar` / semantic ranking) wait for
-    /// [`embed`](Self::embed). `force` re-chunks every note, so `project(force)` +
-    /// `embed` is a full rebuild — though a re-chunked note whose text is unchanged
-    /// re-addresses the vectors it already had (GH #170), so "full" costs model
-    /// calls only where the text genuinely moved.
-    /// [`reindex`](Self::reindex) remains the composition of the two passes.
-    ///
-    /// *(The invariant's "index = projection of Markdown" still means the* full
-    /// *index — `project` + `embed` together; this op is named for the row-projection
-    /// pass it runs.)*
+    /// The **projection pass** alone: re-project every `.md` note into
+    /// `notes`/`chunks`(+FTS)/`edges` with **no model and no vector work**, and no
+    /// write to the vault. After it returns the file tree lists, notes open, keyword
+    /// search answers and the graph resolves; only vectors — and thus `similar` and
+    /// semantic ranking — wait for [`embed`](Self::embed). `force` re-chunks every
+    /// note, so `project(force)` + `embed` is a full rebuild, costing model calls
+    /// only where chunk text genuinely moved (ADR-0006).
     pub fn project(&self, force: bool) -> Result<ProjectReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "project", force).entered();
         let outcome = ingest::project_vault(self.ctx(), force)?;
@@ -743,16 +603,13 @@ impl Vault {
         })
     }
 
-    /// The **embed pass** alone: fill a vector for every chunk that lacks one — the
-    /// pending set is derived from the index itself (chunks with no `embeddings`
-    /// row), so this needs no prior [`project`](Self::project) call in the same
-    /// process and heals any interruption (a cancelled embed, a crash between the
-    /// passes) by embedding exactly what is still missing. Progress and cooperative
-    /// cancel behave as in [`reindex_with_progress`](Self::reindex_with_progress),
-    /// and progress is determinate from the first batch (the pending notes are
-    /// counted up front). Runs under the vault's injected embedder — semantically
-    /// useful only with the real model (the CLI/desktop wire it), deterministic
-    /// under the fake (tests).
+    /// The **embed pass** alone: fill a vector for every chunk that lacks one. The
+    /// pending set is derived from the index itself, so this needs no prior
+    /// [`project`](Self::project) call in the same process and heals any interruption
+    /// — a cancelled embed, a crash between passes — by embedding exactly what is
+    /// still missing. Progress and cooperative cancel behave as in
+    /// [`reindex_with_progress`](Self::reindex_with_progress), and progress is
+    /// determinate from the first batch.
     pub fn embed(
         &self,
         on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
@@ -765,12 +622,10 @@ impl Vault {
         })
     }
 
-    /// Preview a reindex (`reindex --dry-run`): report what [`reindex`](Self::reindex)
-    /// **would** do — how many notes it would index and (re)embed — with
-    /// **no** writes: no byte to the Markdown (which is true of the real run too
-    /// since GH #170), no index mutation, no embedding. `force` previews a
-    /// re-chunk of every note. A pure read, so it needs no model
-    /// (the CLI opens with the fake for it, like `neighbors`).
+    /// Preview a reindex (`reindex --dry-run`): what [`reindex`](Self::reindex)
+    /// **would** index and (re)embed, with no write of any kind — not to the
+    /// Markdown, the index, or the vectors. `force` previews a re-chunk of every
+    /// note. A pure read, so it needs no model.
     pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
         let _op = tracing::debug_span!(target: "b2::vault", "plan_reindex", force).entered();
         let planned = ingest::plan_reindex(&self.conn, &self.root, force)?;
@@ -781,19 +636,18 @@ impl Vault {
     }
 
     /// Active neighbors of the note referenced by `note_ref` (a path, with or
-    /// without the `.md`), each resolved to the other note's path + title for
-    /// display. Errors with
-    /// [`Error::NoteNotFound`] when the ref matches no indexed note (distinct from
-    /// a found note that simply has no neighbors → an empty list).
+    /// without the `.md`), each resolved to the other note's path + title. Errors
+    /// with [`Error::NoteNotFound`] for an unknown ref — distinct from a found note
+    /// with no neighbors, which is an empty list.
     pub fn neighbors(&self, note_ref: &str) -> Result<Vec<NeighborView>> {
         let _op = tracing::debug_span!(target: "b2::vault", "neighbors", note = note_ref).entered();
         let path = self.resolve_ref(note_ref)?;
         self.neighbors_of(&path)
     }
 
-    /// The active neighbors of an already-resolved path, each resolved to the
-    /// other note's path + title for display. Shared by [`neighbors`](Self::neighbors)
-    /// and [`explain`](Self::explain) so the two present the same edge shape.
+    /// The active neighbors of an already-resolved path. Shared by
+    /// [`neighbors`](Self::neighbors) and [`explain`](Self::explain), so the two
+    /// present the same edge shape.
     fn neighbors_of(&self, note_path: &str) -> Result<Vec<NeighborView>> {
         let mut out = Vec::new();
         for n in graph::neighbors(&self.conn, note_path)? {
@@ -834,10 +688,8 @@ impl Vault {
             .collect())
     }
 
-    /// The unresolved (dangling) outbound links of an already-resolved path —
-    /// authored links whose target names no note and no resource (a folder or a
-    /// typo). Shared by [`explain`](Self::explain) and
-    /// [`unresolved_links`](Self::unresolved_links) so both present the same shape.
+    /// The unresolved (dangling) outbound links of an already-resolved path, shared
+    /// by [`explain`](Self::explain) and [`unresolved_links`](Self::unresolved_links).
     fn unresolved_of(&self, note_path: &str) -> Result<Vec<UnresolvedLink>> {
         Ok(graph::unresolved_outbound(&self.conn, note_path)?
             .into_iter()
@@ -850,12 +702,10 @@ impl Vault {
             .collect())
     }
 
-    /// The unresolved (dangling) outbound links of the note referenced by `note_ref`
-    /// (a path, `.md` optional): links it authored that resolve to no note and no
-    /// resource — a `[[Hermes]]` naming a *folder*, or a typo (GH #12). Surfaced so a
-    /// broken link is visible, not silently dropped; `b2 neighbors`/`b2 explain` show
-    /// them. Errors with [`Error::NoteNotFound`] for an unknown ref; a note whose
-    /// every link resolves returns an empty list. A pure graph read — no embedding.
+    /// The unresolved (dangling) outbound links of `note_ref`: links it authored
+    /// that resolve to no note and no resource — a `[[Hermes]]` naming a *folder*, or
+    /// a typo (GH #12). A pure graph read; [`Error::NoteNotFound`] for an unknown
+    /// ref, an empty list for a note whose every link resolves.
     pub fn unresolved_links(&self, note_ref: &str) -> Result<Vec<UnresolvedLink>> {
         let _op = tracing::debug_span!(target: "b2::vault", "unresolved_links", note = note_ref)
             .entered();
@@ -863,16 +713,11 @@ impl Vault {
         self.unresolved_of(&path)
     }
 
-    /// Explain a note's connections (`b2 explain`): the note referenced by
-    /// `note_ref` (a path, `.md` optional) resolved to its identity + title, together
-    /// with every active typed edge and its "why", its outbound **resource** links
-    /// (images/PDFs — the third target kind, GH #22), plus any **unresolved**
-    /// outbound links (dangling — a folder target or a typo, surfaced not
-    /// dropped, GH #12).
-    /// Errors with [`Error::NoteNotFound`] when the ref matches no indexed note; a
-    /// found note with no edges returns an [`ExplainView`] with empty `connections`
-    /// and `unresolved`. A pure graph read — no embedding, like
-    /// [`neighbors`](Self::neighbors).
+    /// Explain a note's connections (`b2 explain`): the note resolved to its
+    /// identity + title, every active typed edge and its "why", its outbound
+    /// **resource** links (GH #22), and any **unresolved** outbound links — surfaced,
+    /// not dropped (GH #12). A pure graph read; [`Error::NoteNotFound`] for an
+    /// unknown ref, empty vectors for a note with no edges.
     pub fn explain(&self, note_ref: &str) -> Result<ExplainView> {
         let _op = tracing::debug_span!(target: "b2::vault", "explain", note = note_ref).entered();
         let path = self.resolve_ref(note_ref)?;
@@ -889,15 +734,11 @@ impl Vault {
         })
     }
 
-    /// Read a note for display (`Vault::read`) — the Desktop UI MVP's left pane and
-    /// the one new façade op that surface adds (crates/b2-desktop/CLAUDE.md). Resolve
-    /// `note_ref` (a path, `.md` optional) to its file and return the note's **raw
-    /// Markdown body from disk** (the source of truth, not the index projection) plus
-    /// the frontmatter metadata worth showing a reader. A pure read — no embedding,
-    /// like [`neighbors`](Self::neighbors) — so an adapter needs no model just to
-    /// render a note; ref resolution is centralized here so the adapter never
-    /// touches the filesystem itself. Errors with [`Error::NoteNotFound`] for an
-    /// unknown ref.
+    /// Read a note for display: resolve `note_ref` to its file and return the note's
+    /// **raw Markdown body from disk** (the source of truth, not the index
+    /// projection) plus the frontmatter metadata worth showing a reader. A pure,
+    /// model-free read, and ref resolution lives here so the adapter never touches
+    /// the filesystem itself. [`Error::NoteNotFound`] for an unknown ref.
     pub fn read(&self, note_ref: &str) -> Result<NoteView> {
         let _op = tracing::debug_span!(target: "b2::vault", "read", note = note_ref).entered();
         let path = self.resolve_ref(note_ref)?;
@@ -905,9 +746,8 @@ impl Vault {
         let revision = revision_of(&raw);
         let parsed = note::parse(&raw);
         let fields = parsed.fields();
-        // Display title is the filename (data-model.md §1); the frontmatter `title:`
-        // is inert. Derived from the path here so even a not-yet-reindexed note shows
-        // its filename in the pane header, matching the projected `notes.title`.
+        // The display title is the filename (the frontmatter `title:` is inert),
+        // derived from the path here so even a not-yet-reindexed note shows one.
         let title = Some(note::display_title(&path));
         Ok(NoteView {
             path,
@@ -923,20 +763,18 @@ impl Vault {
         })
     }
 
-    /// Save a note's **body** (`Vault::write`) — the editing surface's body write
-    /// op ([`write_frontmatter`](Self::write_frontmatter) is its frontmatter
-    /// sibling). Markdown-first and **model-free**: validate that the
-    /// file on disk still hashes to `base_revision` (else [`Error::WriteConflict`] —
-    /// an external editor changed it; nothing is written), splice `body` in
-    /// **verbatim** after the untouched frontmatter ([`note::ParsedNote::replace_body`]),
-    /// write the file, and re-project the note ([`ingest::project_file`] — chunks +
-    /// FTS + edges; a changed body's stale vectors are cleared and join the
-    /// DB-derived pending set for any later [`embed`](Self::embed) to fill). No
-    /// embedder is touched, so saving works with no model provisioned.
+    /// Save a note's **body** — the editing surface's body write op
+    /// ([`write_frontmatter`](Self::write_frontmatter) is its frontmatter sibling).
+    /// Markdown-first and **model-free**: validate that the file on disk still hashes
+    /// to `base_revision` (else [`Error::WriteConflict`] and nothing is written),
+    /// splice `body` in verbatim after the untouched frontmatter, write, and
+    /// re-project the note. A changed body's stale vectors are cleared and join the
+    /// pending set for any later [`embed`](Self::embed), so saving works with no
+    /// model provisioned.
     ///
     /// Returns the **new revision**, hashing the *final* on-disk bytes — which the
-    /// editor chains its next save on: sequential saves never self-conflict, and
-    /// only an external write trips the guard ("last save wins — by construction").
+    /// editor chains its next save on: sequential saves never self-conflict, and only
+    /// an external write trips the guard.
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write", note = note_ref).entered();
         let path = self.resolve_ref(note_ref)?;
@@ -956,9 +794,8 @@ impl Vault {
         // Re-project model-free, through the ordinary path.
         ingest::project_file(self.ctx(), &path)?;
 
-        // Hash the final on-disk bytes. Since GH #170 projection writes nothing, so
-        // these are our own splice — read back rather than assumed, because the
-        // revision the editor chains on must describe the file, not our intent.
+        // Read the final bytes back rather than assume them: the revision the editor
+        // chains on must describe the file, not our intent.
         let final_raw = fs::read_to_string(&abs)?;
         Ok(WriteReport {
             path,
@@ -966,27 +803,19 @@ impl Vault {
         })
     }
 
-    /// Save a note's **frontmatter** (`Vault::write_frontmatter`) — the drawer's
-    /// write op, [`write`](Self::write)'s frontmatter sibling (GH #79). The same
-    /// shape: validate the content-hash `base_revision` (else
-    /// [`Error::WriteConflict`]), splice `frontmatter` in **verbatim** between the
-    /// fences ([`note::ParsedNote::replace_frontmatter`] — every body byte
-    /// preserved by construction), write, re-project **model-free**. An unchanged
-    /// body keeps its chunks and vectors (the re-chunk keys on the body hash), so
-    /// a frontmatter save never re-embeds; the notes row and the typed edges
-    /// re-derive from the new block.
+    /// Save a note's **frontmatter** — [`write`](Self::write)'s sibling (GH #79),
+    /// with the same shape: validate the content-hash `base_revision`, splice
+    /// `frontmatter` in verbatim between the fences (every body byte preserved by
+    /// construction), write, re-project **model-free**. An unchanged body keeps its
+    /// chunks and vectors, so a frontmatter save never re-embeds.
     ///
-    /// **One** refusal, before any byte reaches disk: a top-level `---` line in
-    /// `frontmatter` ([`Error::Frontmatter`]) — it would close the block early and
-    /// shift the rest into the body, and the body is not this op's to change. It
-    /// used to be two: a changed or removed `b2id` was also refused, because
-    /// identity lived in the block being spliced. Since GH #170 identity is the
-    /// path, which this op cannot touch, so there is no line left to protect.
-    ///
-    /// Everything else in the block is the human's (W4/W5): malformed YAML saves
-    /// fine — it round-trips verbatim, projects best-effort, and surfaces through
-    /// [`NoteView::frontmatter_readable`] as a warning, exactly as the same edit
-    /// made in an external editor would.
+    /// **One** refusal, before any byte reaches disk: a top-level `---` line
+    /// ([`Error::Frontmatter`]) would close the block early and shift the rest into
+    /// the body, and the body is not this op's to change. Everything else in the
+    /// block is the human's: malformed YAML saves fine — it round-trips verbatim,
+    /// projects best-effort, and surfaces through
+    /// [`NoteView::frontmatter_readable`], exactly as the same edit made in an
+    /// external editor would.
     pub fn write_frontmatter(
         &self,
         note_ref: &str,
@@ -1024,13 +853,10 @@ impl Vault {
         })
     }
 
-    /// Every indexed note as a lightweight [`NoteSummary`] (`path`, `title`;
-    /// no body), ordered by `path` — the vault listing the desktop UI's file tree is
-    /// built from (spec's navigation surface). A pure, model-free read like
-    /// [`read`](Self::read): the tree shows exactly the notes the index knows, and
-    /// every one is [`read`](Self::read)-resolvable, so a click always opens. A
-    /// never-reindexed vault lists nothing (no error) — reindex populates it, the same
-    /// index-first honesty as [`search`](Self::search).
+    /// Every indexed note as a lightweight [`NoteSummary`], ordered by `path` — what
+    /// the file tree is built from. A pure model-free read: the tree shows exactly
+    /// the notes the index knows, and every one is [`read`](Self::read)-resolvable,
+    /// so a click always opens. A never-reindexed vault lists nothing, no error.
     pub fn list_notes(&self) -> Result<Vec<NoteSummary>> {
         let _op = tracing::debug_span!(target: "b2::vault", "list_notes").entered();
         Ok(db::all_notes(&self.conn)?
@@ -1040,10 +866,9 @@ impl Vault {
     }
 
     /// Every inventoried resource as a lightweight [`ResourceSummary`], ordered by
-    /// `path` — the file tree's resource half (research §9b #10: a sibling of
-    /// [`list_notes`](Self::list_notes), never a widened union; the adapters
-    /// compose the tree). A pure, model-free read; a never-projected vault lists
-    /// nothing, same index-first honesty as notes.
+    /// `path` — the file tree's resource half, a sibling of
+    /// [`list_notes`](Self::list_notes) rather than a widened union; the adapters
+    /// compose the tree.
     pub fn list_resources(&self) -> Result<Vec<ResourceSummary>> {
         let _op = tracing::debug_span!(target: "b2::vault", "list_resources").entered();
         Ok(db::list_resources(&self.conn)?
@@ -1057,23 +882,19 @@ impl Vault {
             .collect())
     }
 
-    /// Every folder in the vault (vault-relative, sorted, empty ones included) —
-    /// the file tree's structure half. Read **live off the filesystem, never the
-    /// index**: folders are user-authored *structure* with no derived data
-    /// (nothing to chunk, embed, or link), so the walk itself is the projection
-    /// and the tree stays one-to-one with disk — a `mkdir` in Finder or a folder
-    /// emptied by a move shows exactly as the filesystem has it. Dot-folders are
-    /// skipped, the ingest walk's routing rule. Model-free and index-free (works
-    /// on a never-reindexed vault).
+    /// Every folder in the vault (vault-relative, sorted, empty ones included) — the
+    /// file tree's structure half. Read **live off the filesystem, never the index**:
+    /// folders are user-authored structure with no derived data, so the walk itself
+    /// is the projection and the tree stays one-to-one with disk. Dot-folders are
+    /// skipped, as in the ingest walk. Works on a never-reindexed vault.
     pub fn list_dirs(&self) -> Result<Vec<String>> {
         let _op = tracing::debug_span!(target: "b2::vault", "list_dirs").entered();
         dirs::list_dirs(&self.root)
     }
 
-    /// The fallback card's data for one resource (`b2 explain <file>`, the desktop
-    /// card — slice-1 spec §4/§6): inventory metadata plus the backlinks panel,
-    /// straight off the materialized graph. `path` is a vault-relative path (the
-    /// adapters dispatched here via [`crate::resource::doc_kind`]); errors with
+    /// The fallback card's data for one resource: inventory metadata plus the
+    /// backlinks panel, straight off the materialized graph. `path` is vault-relative
+    /// (the adapters dispatch here via [`crate::resource::doc_kind`]); errors with
     /// [`Error::ResourceNotFound`] when it is not inventoried.
     pub fn explain_resource(&self, path: &str) -> Result<ResourceExplainView> {
         let _op = tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
@@ -1099,12 +920,11 @@ impl Vault {
         })
     }
 
-    /// Move/rename a resource (`b2 mv <file> <to>`) — the note move minus the
-    /// identity step (data-model.md §10): rewrite every inbound link's authored
-    /// text (both syntaxes, each keeping its own relative-vs-root convention),
-    /// move the file, update the inventory, re-project the touched notes. Errors
-    /// with [`Error::ResourceNotFound`] for an uninventoried source; destination
-    /// errors mirror [`move_note`](Self::move_note).
+    /// Move/rename a resource — the note move minus the identity step: rewrite every
+    /// inbound link's authored text (each syntax keeping its own relative-vs-root
+    /// convention), move the file, update the inventory, re-project the touched
+    /// notes. Errors with [`Error::ResourceNotFound`]; destination errors mirror
+    /// [`move_note`](Self::move_note).
     pub fn move_resource(&self, path: &str, to: &str) -> Result<ResourceMoveReport> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "mv_resource", from = path, to).entered();
@@ -1115,21 +935,18 @@ impl Vault {
     }
 
     /// Hybrid search (BM25 ⊕ vector → RRF) resolved to notes, best first, capped at
-    /// `limit` *notes*. Results are note-level: chunk hits are deduped to the
-    /// highest-scoring chunk per note, so one note never appears twice.
+    /// `limit` *notes*: chunk hits dedup to the highest-scoring chunk per note, so
+    /// one note never appears twice (ADR-0008).
     ///
-    /// **Keyword-first fallback** (index-engine.md): when the
-    /// vector space does not exist yet — a projected-but-unembedded vault — this
-    /// runs BM25-only (no query embedding, no model) instead of returning nothing,
-    /// so a vault is searchable the moment [`project`](Self::project) finishes.
-    /// A never-indexed vault still yields no hits, no error (its FTS index is
-    /// empty). `vault_info`-style callers should consult the `semantic` flag to
-    /// present keyword-only results honestly.
+    /// **Keyword-first fallback:** when the vector space does not exist yet — a
+    /// projected-but-unembedded vault — this runs BM25-only rather than returning
+    /// nothing, so a vault is searchable the moment [`project`](Self::project)
+    /// finishes. A never-indexed vault yields no hits and no error; callers should
+    /// consult the `semantic` flag to present keyword-only results honestly.
     ///
-    /// A `limit` of 0 short-circuits here, ahead of [`retrieve`](Self::retrieve) —
-    /// so it costs no query embedding, and no [`Error::ModelMismatch`] either: that
-    /// guard exists to stop *wrong results* being returned, and there are no
-    /// results to be wrong about. [`search_chunks`](Self::search_chunks) matches.
+    /// A `limit` of 0 short-circuits ahead of [`retrieve`](Self::retrieve), so it
+    /// costs no query embedding and no [`Error::ModelMismatch`] either: that guard
+    /// exists to stop *wrong results*, and there are none to be wrong about.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let _op = tracing::debug_span!(target: "b2::vault", "search", query, limit).entered();
         if limit == 0 {
@@ -1144,14 +961,12 @@ impl Vault {
     }
 
     /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
-    /// deduped, best first. **The eval harness's ablation instrument** (GH #158),
-    /// not an adapter surface: scoring it beside bm25-only and hybrid is what
-    /// gives fusion a measured single-signal baseline, and the eval's finding
-    /// that RRF can demote a dense rank-1 hit is a standing measurement only
-    /// because this stays callable. Same model-mismatch fail-fast as `search`; a
-    /// projected-but-unembedded vault returns no hits (there is nothing to scan
-    /// — where `search` would honestly *fall back* to keywords, an ablation that
-    /// quietly did the same would be measuring the wrong signal).
+    /// deduped, best first. **The eval harness's ablation instrument** (ADR-0013,
+    /// GH #158), not an adapter surface: scoring it beside bm25-only and hybrid is
+    /// what gives fusion a measured single-signal baseline. Same model-mismatch
+    /// fail-fast as `search`, but a projected-but-unembedded vault returns no hits —
+    /// where `search` honestly *falls back* to keywords, an ablation that quietly did
+    /// the same would be measuring the wrong signal.
     pub fn search_vector_only(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_vector_only", query, limit).entered();
@@ -1175,39 +990,34 @@ impl Vault {
             .collect())
     }
 
-    /// [`search`](Self::search) with the **evidence behind it** — D2's query-level
-    /// reading (invariants.md D2, GH #201): the same served results, plus the two
-    /// absolute signals RRF discards and the verdict they produce.
+    /// [`search`](Self::search) with the **evidence behind it** (ADR-0015): the same
+    /// served results, plus the two absolute signals RRF discards and the verdict
+    /// they produce.
     ///
-    /// Flow ② could not answer *zero* as first shipped: the dense half always has
-    /// k nearest, *nearest* is a fact about the vault rather than evidence about
-    /// the query, and RRF keeps only ranks — so a nonsense query served `limit`
-    /// confident-looking results. This read is what a surface consults to say
-    /// **"no matches"** honestly. It judges nothing itself: the results come back
-    /// whole and in order (D1 — reachability is untouchable), and what a surface
-    /// *vouches for* is the surface's decision to make from `vouched`.
+    /// Flow ② could not answer *zero* as first shipped — the dense half always has k
+    /// nearest, *nearest* is a fact about the vault rather than evidence about the
+    /// query, and RRF keeps only ranks — so a nonsense query served `limit`
+    /// confident-looking results. This read is what a surface consults to say **"no
+    /// matches"** honestly. It judges nothing itself: the results come back whole and
+    /// in order, and what a surface *vouches for* is the surface's decision to make.
     ///
-    /// `limit` caps the rows returned and nothing else: the evidence is read at
-    /// full strength even at zero, since it is a fact about the query and the
-    /// vault rather than about how many results were asked for.
-    ///
-    /// `vouched` is `None` when the active embedder has no calibrated bar — a
-    /// fake-embedded space has no semantic geometry to hold a cosine bar over,
-    /// and an uncalibrated model's bar would be another model's constant (M2).
-    /// A caller that gets `None` shows the list as it always did; it never
-    /// guesses a bar.
+    /// `limit` caps the rows and nothing else — the evidence is a fact about the
+    /// query and the vault, not about how many results were asked for. `vouched` is
+    /// `None` when the active embedder has no calibrated bar (a fake space has no
+    /// geometry to hold a cosine bar over, and an uncalibrated model's bar would be
+    /// another model's constant); a caller that gets `None` never guesses one.
     pub fn search_evidence(&self, query: &str, limit: usize) -> Result<SearchEvidenceView> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_evidence", query, limit).entered();
         // `limit.max(1)` where `search` would short-circuit: a zero limit caps the
         // *rows*, and the question this read answers is about the evidence. Going
         // through `retrieve(0)` would skip the dense scan and hand back
-        // `best_cos: None` — which reads as "no embedding space" — so a verdict
-        // taken from it would be the lexical half wearing both halves' name.
+        // `best_cos: None` — which reads as "no embedding space" — so a verdict taken
+        // from it would be the lexical half wearing both halves' name.
         let retrieval = self.retrieve(query, note_hit_pool(limit.max(1)))?;
         // The lexical half is read here rather than inside retrieval: it costs a
-        // `count(*)` per distinct query term, and only a caller that wants a
-        // verdict should pay for it (see `search::Retrieval`).
+        // `count(*)` per distinct query term, and only a caller that wants a verdict
+        // should pay for it.
         let evidence = search::QueryEvidence {
             lexical: search::lexical_evidence(&self.conn, query)?,
             best_cos: retrieval.best_cos,
@@ -1242,8 +1052,8 @@ impl Vault {
 
     /// The note-resolution tail shared by [`search`](Self::search) and
     /// [`search_vector_only`](Self::search_vector_only): dedup chunk hits to their
-    /// best-scoring note, resolve each to path + title + query-windowed snippet,
-    /// stop at `limit`.
+    /// best-scoring note, resolve path + title + query-windowed snippet, stop at
+    /// `limit`.
     fn resolve_note_hits(
         &self,
         hits: Vec<search::Hit>,
@@ -1258,10 +1068,9 @@ impl Vault {
             if out.iter().any(|(r, _)| r.path == hit.note_path) {
                 continue; // note already represented by a higher-scoring chunk
             }
-            // The note row can only be missing on a torn read (its chunk resolved a
-            // moment ago); drop the hit rather than emit a result for a note that is
-            // gone, exactly as `search_chunks` does — the pool has the headroom to
-            // backfill it (GH #137).
+            // The note row can only be missing on a torn read; drop the hit rather
+            // than name a note that is gone — the pool has headroom to backfill it
+            // (GH #137).
             if !db::note_exists(&self.conn, &hit.note_path)? {
                 continue;
             }
@@ -1283,14 +1092,11 @@ impl Vault {
     }
 
     /// [`search`](Self::search) at **chunk** granularity: the top `limit` ranked
-    /// chunks, resolved to their note + heading breadcrumb + full text, with **no
-    /// note dedup** — one note may appear several times when several of its
-    /// passages rank. Same retrieval, same fallback, same model-mismatch fail-fast
-    /// (see [`ChunkSearchResult`] for who consumes this and why).
-    ///
-    /// Retrieves a **narrower** pool than [`search`](Self::search): having no dedup,
-    /// it needs headroom for one thing only — see [`chunk_hit_pool`] for why that is
-    /// a small constant rather than `search`'s 3× (GH #142).
+    /// chunks resolved to their note + heading breadcrumb + full text, with **no note
+    /// dedup** — one note may appear several times when several of its passages rank.
+    /// Same retrieval, same fallback, same fail-fast (see [`ChunkSearchResult`] for
+    /// who consumes this). Retrieves a narrower pool than [`search`](Self::search) —
+    /// see [`chunk_hit_pool`].
     pub fn search_chunks(&self, query: &str, limit: usize) -> Result<Vec<ChunkSearchResult>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "search_chunks", query, limit).entered();
@@ -1302,12 +1108,9 @@ impl Vault {
             if out.len() == limit {
                 break;
             }
-            // Both lookups can miss only on an inconsistent index (a hit whose row
-            // vanished mid-call); drop such a hit rather than emit a half-resolved
-            // one — a rank slot with an empty path would read as a real result.
-            // The pool carries `TORN_READ_HEADROOM` over `limit`, so a dropped hit
-            // is backfilled from the next candidate instead of costing a slot
-            // (GH #137).
+            // Either lookup can miss only on an inconsistent index; drop such a hit
+            // rather than emit a half-resolved one — a rank slot with an empty path
+            // would read as a real result. The pool backfills it (GH #137).
             if !db::note_exists(&self.conn, &hit.note_path)? {
                 continue;
             }
@@ -1324,31 +1127,26 @@ impl Vault {
         Ok(out)
     }
 
-    /// Flow ④ — grounded chat over the vault (GH #151/#153): condense →
-    /// retrieve → assemble → stream → cite, orchestrated here, with the core
-    /// logic in [`crate::chat`]. The provider is injected **per call** — chat
-    /// is the sole consumer, and unlike the embedder it carries no index
-    /// identity (contrast M2), so nothing about it belongs on the open vault.
+    /// Flow ④ — grounded chat over the vault: condense → retrieve → assemble →
+    /// stream → cite, orchestrated here over the core logic in [`crate::chat`]. The
+    /// provider is injected **per call**: chat is its sole consumer and, unlike the
+    /// embedder, it carries no index identity (contrast ADR-0007), so nothing about
+    /// it belongs on the open vault.
     ///
-    /// - **Condense** (multi-turn only): one provider call rewrites the
-    ///   follow-up into a standalone retrieval query; a single-turn ask skips
-    ///   it; on failure or a cancelled stream it degrades to the raw question
-    ///   — that step can never break chat ([`chat::condense_query`]).
+    /// - **Condense** (multi-turn only): one provider call rewrites the follow-up
+    ///   into a standalone retrieval query; on failure it degrades to the raw
+    ///   question, so that step can never break chat.
     /// - **Retrieve**: [`search_chunks`](Self::search_chunks) at
-    ///   [`chat::ASK_PASSAGES`] — hybrid, with the same BM25-only fallback on
-    ///   a projected-but-unembedded vault (M4) and the same model-mismatch
-    ///   fail-fast: chat is a reader (C1), and it holds `search`'s posture.
-    /// - **Stream**: answer tokens flow up through `on_token` as they arrive;
-    ///   returning `ControlFlow::Break(())` cancels at token granularity, and
-    ///   the result reports it honestly ([`AnswerView::cancelled`]).
-    /// - **Cite**: distinct `[n]` markers in the answer resolve to
-    ///   `(path, excerpt)`; a hallucinated marker resolves to nothing
-    ///   and the answer text is never rewritten.
+    ///   [`chat::ASK_PASSAGES`], holding `search`'s posture — chat is a reader.
+    /// - **Stream**: tokens flow up through `on_token` as they arrive; returning
+    ///   `ControlFlow::Break(())` cancels at token granularity and the result reports
+    ///   it ([`AnswerView::cancelled`]).
+    /// - **Cite**: distinct `[n]` markers resolve to `(path, excerpt)`; a
+    ///   hallucinated marker resolves to nothing, and the text is never rewritten.
     ///
-    /// Nothing model-derived is stored anywhere — no response caching, no
-    /// `meta` rows, and history is the caller's, session-only (S4). Errors:
-    /// retrieval errors as `search` raises them; a failed *answer* call as
-    /// [`Error::Llm`](crate::Error::Llm).
+    /// Nothing model-derived is stored anywhere, and history is the caller's,
+    /// session-only. Errors: retrieval as `search` raises it; a failed *answer* call
+    /// as [`Error::Llm`](crate::Error::Llm).
     pub fn ask(
         &self,
         llm: &dyn LlmProvider,
@@ -1383,10 +1181,9 @@ impl Vault {
             "retrieved grounding passages"
         );
         let req = chat::build_request(question, history, passages);
-        // Normalize: the trait returns the crate-wide `Result`, so a provider
-        // *could* surface `Io`/`Serde`/… — but every failure of this call is a
-        // failed model call, and adapters match `Error::Llm` for the "can't
-        // reach the model server" message (E4). Enforced here, not hoped for.
+        // Normalize: the trait returns the crate-wide `Result`, but every failure of
+        // this call is a failed model call, and adapters match `Error::Llm` for the
+        // "can't reach the model server" message. Enforced here, not hoped for.
         let completion = llm.complete(&req, on_token).map_err(|e| match e {
             Error::Llm(_) => e,
             other => Error::Llm(other.to_string()),
@@ -1394,9 +1191,8 @@ impl Vault {
         let citations = chat::cited_markers(&completion.text, req.passages.len())
             .into_iter()
             .filter_map(|marker| {
-                // 1-based marker → 0-based passage. `cited_markers` already
-                // filtered to `1..=passage_count`; skip rather than index so
-                // even a broken invariant degrades to a missing citation.
+                // 1-based marker to 0-based passage; skip rather than index, so even
+                // a broken invariant degrades to a missing citation.
                 let p = req.passages.get(marker.checked_sub(1)?)?;
                 Some(Citation {
                     marker,
@@ -1414,9 +1210,8 @@ impl Vault {
 
     /// The shared retrieval core of [`search`](Self::search) and
     /// [`search_chunks`](Self::search_chunks): hybrid when the embedding space
-    /// exists (failing fast on a model mismatch — the stored vectors would be
-    /// incomparable with the query vector, so results would be silently wrong; the
-    /// fix is a `reindex`), BM25-only on a projected-but-unembedded vault.
+    /// exists (failing fast on a model mismatch), BM25-only on a
+    /// projected-but-unembedded vault.
     fn retrieve(&self, query: &str, pool: usize) -> Result<search::Retrieval> {
         if db::embedding_space_exists(&self.conn)? {
             self.ensure_query_space_matches()?;
@@ -1426,10 +1221,10 @@ impl Vault {
         }
     }
 
-    /// The model-identity guard shared by every query-embedding read: the stored
-    /// vectors must have been produced by the active embedder, or the query vector
-    /// is incomparable with them and results would be silently wrong. The fix is a
-    /// `reindex`.
+    /// The model-identity guard every query-embedding read shares: the stored vectors
+    /// must have been produced by the active embedder, or the query vector is
+    /// incomparable with them and results would be silently wrong (ADR-0007). The fix
+    /// is a `reindex`.
     fn ensure_query_space_matches(&self) -> Result<()> {
         if let Some((indexed_model, indexed_dim)) = db::recorded_embedder(&self.conn)? {
             if indexed_model != self.embedder.model_id() || indexed_dim != self.embedder.dim() {
@@ -1442,52 +1237,41 @@ impl Vault {
         Ok(())
     }
 
-    /// The vault's semantic-embedding coverage as an [`EmbedStatus`] — the honest
-    /// "N/M embedded" read (#26). A **pure model-free count** over the projection
-    /// (`db::embed_progress`), so an adapter can tell the user semantic ranking is
-    /// *partial* — flag results "keyword-only for now" — rather than silently
-    /// under-ranking while a vault embeds behind the first tree paint
-    /// (index-engine.md). `embedded == 0` on a projected-but-unembedded
-    /// vault; `embedded == total` (with `total > 0`) once every note has vectors.
+    /// The vault's embedding coverage as an [`EmbedStatus`] — the honest "N/M
+    /// embedded" read (#26). A **pure model-free count**, so an adapter can flag
+    /// results "keyword-only for now" rather than silently under-rank while a vault
+    /// embeds behind the first tree paint.
     pub fn embed_status(&self) -> Result<EmbedStatus> {
         let _op = tracing::debug_span!(target: "b2::vault", "embed_status").entered();
         let (embedded, total) = db::embed_progress(&self.conn)?;
         Ok(EmbedStatus { embedded, total })
     }
 
-    /// Surface the notes most semantically similar to `note_ref` (a path, `.md` optional)
-    /// that are **not already connected** to it — connection-discovery candidate
-    /// generation ([`discover::candidates`]) exposed directly: vector KNN over the
-    /// stored embeddings, minus the anchor's 1-hop graph neighbors, ranked
-    /// nearest-best-passage first. **The ranked list is what is served**
-    /// (GH #197): discovery answers a relative question — what in the vault
-    /// belongs next to this note — so no statistic gates the list, `limit` is a
-    /// cap that under-fills only for want of scorable notes, and an empty result
-    /// means the candidate set is genuinely empty (no embedding space, or no
-    /// unlinked note with stored vectors), never a verdict that nothing relates.
-    /// Each result carries the candidate's path + title, the passage that made
-    /// it similar, and — on a real-embedded space with a large enough population
-    /// — the `z` the strength band derives from. A **pure read over stored
-    /// vectors — no model call** (a prior `reindex` supplies them), like
-    /// [`neighbors`](Self::neighbors). Errors with [`Error::NoteNotFound`] for an
-    /// unknown ref; returns an empty list for a known note with no vectors or no
-    /// candidates.
+    /// The notes most semantically similar to `note_ref` that are **not already
+    /// connected** to it — [`discover::candidates`] surfaced directly: vector KNN over
+    /// the stored embeddings, minus the anchor's 1-hop neighbours, ranked
+    /// nearest-best-passage first. **The ranked list is what is served** (ADR-0014):
+    /// no statistic gates it, `limit` is a cap that under-fills only for want of
+    /// scorable notes, and an empty result means the candidate set is genuinely empty,
+    /// never a verdict that nothing relates. Each row carries path + title, the
+    /// passage that made it similar, and — on a real-embedded space with a large
+    /// enough population — the `z` the strength band derives from. A **pure read over
+    /// stored vectors, no model call**. [`Error::NoteNotFound`] for an unknown ref.
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
-        // No statistic is ever claimed over a fake-embedded space: hash vectors
-        // have no semantic geometry, so a z there would be noise wearing a band.
-        // Judged by the RECORDED identity — the space being searched — not the
-        // injected embedder. Grading changes what the rows carry, never which
-        // rows exist (GH #197).
+        // Never claim a statistic over a fake-embedded space: hash vectors have no
+        // semantic geometry, so a z there would be noise wearing a band. Judged by the
+        // RECORDED identity — the space being searched — not the injected embedder.
+        // Grading changes what the rows carry, never which rows exist (ADR-0014).
         let grade = !matches!(
             db::recorded_embedder(&self.conn)?,
             Some((model, _)) if model == crate::embed::FAKE_MODEL_ID
         );
-        // A resource anchor is honest, not silent: resources become discoverable
-        // when slice 3 gives them chunks + centroids (research §9b #7). Until
-        // then an inventoried resource errs "not yet" — never an empty result —
-        // and an unknown path falls through to the usual not-found.
+        // A resource anchor is honest, not silent: resources become discoverable once
+        // they have chunks + centroids. Until then an inventoried resource errs "not
+        // yet" — never an empty result — and an unknown path falls through to
+        // not-found.
         if crate::resource::doc_kind(note_ref) == crate::resource::DocKind::Resource
             && db::resource_detail(&self.conn, note_ref)?.is_some()
         {
@@ -1511,18 +1295,16 @@ impl Vault {
         Ok(out)
     }
 
-    /// Commit a typed connection `src --type--> dst` (`b2 link`, Flow ③): append a
-    /// typed-link string to the **source note's frontmatter `b2_relations:`** (Markdown
-    /// first, **never the body** — data-model.md §0) and re-project it as an
-    /// `origin='frontmatter'` active edge. Both ends resolve by path (`.md` optional).
-    /// `edge_type` must be a **core** verb (data-model.md §2) — the CLI defaults it to
-    /// `references`; a non-core verb errors with [`Error::InvalidRelation`] rather than
-    /// silently storing a typo. **Idempotent:** if the directed `(src, dst, type)` edge
-    /// already exists, nothing is written (`created: false`).
+    /// Commit a typed connection `src --type--> dst` (`b2 link`, flow ③): append a
+    /// typed-link string to the **source note's frontmatter `b2_relations:`** — never
+    /// the body (ADR-0010) — and re-project it as an `origin='frontmatter'` active
+    /// edge. Both ends resolve by path. `edge_type` must be a **core** verb; a
+    /// non-core one errors with [`Error::InvalidRelation`] rather than silently store
+    /// a typo. **Idempotent:** an existing `(src, dst, type)` edge writes nothing
+    /// (`created: false`).
     ///
-    /// Re-projection re-reads the source note (a frontmatter-only edit skips
-    /// re-embedding, but ingest still takes the embedder), so the CLI opens the vault
-    /// with the same embedder the index was built with, as for `add`/`mv`.
+    /// Re-projection re-reads the source note, so the adapters open the vault with the
+    /// same embedder the index was built with, as for `add`/`mv`.
     pub fn link(
         &self,
         src_ref: &str,
@@ -1556,9 +1338,8 @@ impl Vault {
             });
         }
 
-        // The typed-link spec targets the dst's path. A note's title is its filename
-        // (data-model.md §1), so a bare `[[path]]` already reads as the title — B2
-        // writes no alias, and a frontmatter `title:` (inert) is never consulted.
+        // The spec targets the dst's path. A note's title is its filename, so a bare
+        // `[[path]]` already reads as the title — B2 writes no alias.
         let link = format!("[[{dst_path}]]");
         let spec = match explanation {
             Some(e) => format!("{edge_type} {link} — {e}"),
@@ -1572,8 +1353,7 @@ impl Vault {
         fs::write(&abs, parsed.as_str())?;
 
         // 2. Re-project the source note so the edge re-materializes from the Markdown
-        //    as origin='frontmatter' — a projection of the line just written, not an
-        //    index write (data-model.md §3).
+        //    as origin='frontmatter' — a projection of the line just written.
         ingest::ingest_file(self.embed_ctx(), &src_path)?;
 
         Ok(LinkReport {
@@ -1584,52 +1364,43 @@ impl Vault {
         })
     }
 
-    /// Move/rename the whole folder `from` to `to` (both vault-relative
-    /// directory paths; a trailing `/` is tolerated). One `fs::rename` moves the
-    /// directory — unindexed files inside travel too — after every inbound link
-    /// at the moved set (including vault-root wikilinks *between* co-moved
-    /// notes) is rewritten, then the index re-projects; the graph never breaks
-    /// (each moved note's rows are re-keyed to its new path, `ON UPDATE CASCADE`).
-    /// Errors with [`Error::DirNotFound`] for a missing
-    /// source folder, [`Error::MoveDestination`] for an invalid destination
-    /// (including one inside the moved folder), or [`Error::MoveTargetExists`]
-    /// rather than merge into an existing entry.
+    /// Move/rename the whole folder `from` to `to` (both vault-relative; a trailing
+    /// `/` is tolerated). One `fs::rename` moves the directory — unindexed files
+    /// inside travel too — after every inbound link at the moved set (including
+    /// vault-root wikilinks *between* co-moved notes) is rewritten; the index then
+    /// re-projects and the graph never breaks (each moved note's rows re-key to its
+    /// new path, `ON UPDATE CASCADE`). Errors with [`Error::DirNotFound`],
+    /// [`Error::MoveDestination`] (including a destination inside the moved folder),
+    /// or [`Error::MoveTargetExists`] rather than merge into an existing entry.
     ///
-    /// Rewriting an inbound file changes its body, so this **re-embeds** those
-    /// files: the adapters open the vault with the real model for a dir move,
-    /// as for `mv`/`reindex`/`link`.
+    /// Rewriting an inbound file changes its body, so this **re-embeds** those files:
+    /// the adapters open with the real model for a dir move.
     pub fn move_dir(&self, from: &str, to: &str) -> Result<DirMoveReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mv_dir", from, to).entered();
         mv::move_dir(self.embed_ctx(), from, to)
     }
 
-    /// Move/rename the note `note_ref` (a path, `.md` optional) to `to` (a
-    /// vault-relative path; a `.md` suffix is optional), rewriting every inbound
-    /// `[[oldpath|alias]]` link to the new path and re-projecting the index
-    /// (invariants.md). The graph never breaks — the note's rows are re-keyed to the
-    /// new path (`ON UPDATE CASCADE`), so `neighbors`/backlinks show the same set
-    /// before and after and not one chunk is re-embedded; the human convenience-copy
-    /// link text is repaired alongside. Errors with [`Error::NoteNotFound`]
-    /// for an unknown source, or [`Error::MoveDestination`] /
-    /// [`Error::MoveTargetExists`] for a bad or occupied destination.
+    /// Move/rename the note `note_ref` to `to` (a vault-relative path, `.md`
+    /// optional), rewriting every inbound `[[oldpath|alias]]` link to the new path and
+    /// re-projecting. The graph never breaks — the note's rows re-key to the new path
+    /// (`ON UPDATE CASCADE`), so neighbors and backlinks show the same set before and
+    /// after and not one chunk is re-embedded (ADR-0003, ADR-0006); the human-readable
+    /// link text is repaired alongside. Errors with [`Error::NoteNotFound`],
+    /// [`Error::MoveDestination`] or [`Error::MoveTargetExists`].
     ///
-    /// Rewriting an inbound file changes its body, so this **re-embeds** those
-    /// files: the CLI opens the vault with the real model for `mv`, as for
-    /// `reindex`/`link`.
+    /// Rewriting an inbound file changes its body, so this **re-embeds** those files:
+    /// the adapters open with the real model for `mv`.
     pub fn move_note(&self, note_ref: &str, to: &str) -> Result<MoveReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mv", from = note_ref, to).entered();
         let old_rel = self.resolve_ref(note_ref)?;
         mv::move_note(self.embed_ctx(), &old_rel, to)
     }
 
-    /// Delete the note `note_ref` (a path, `.md` optional): the file leaves the disk,
-    /// its projection rows leave the index, and every inbound link at it
-    /// **dangles** — never rewritten, surfacing as an unresolved link (GH #12) —
-    /// exactly the state an external `rm` plus a full reindex produces. Errors
-    /// with [`Error::NoteNotFound`] for an unknown ref.
-    ///
-    /// **Model-free** (the `create_note`/`write` posture): no body changes, so the
-    /// inbound re-projection touches no vectors and needs no model.
+    /// Delete the note `note_ref`: the file leaves the disk, its projection rows leave
+    /// the index, and every inbound link at it **dangles** — never rewritten,
+    /// surfacing as unresolved (GH #12) — exactly the state an external `rm` plus a
+    /// full reindex produces. **Model-free**: no body changes, so the inbound
+    /// re-projection touches no vectors. [`Error::NoteNotFound`] for an unknown ref.
     pub fn delete_note(&self, note_ref: &str) -> Result<DeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm", note = note_ref).entered();
         let rel = self.resolve_ref(note_ref)?;
@@ -1654,16 +1425,14 @@ impl Vault {
         rm::delete_dir(self.ctx(), dir)
     }
 
-    /// Create a new note (`b2 add`): write `path` (a vault-relative path; `.md`
-    /// optional) with a minimal valid frontmatter (an optional `title`, today's
-    /// `created`) and `content` as its body, then project it into
-    /// the index — the created note is immediately searchable and in the graph.
-    /// Errors with [`Error::AddDestination`] for a bad path or
-    /// [`Error::AddTargetExists`] rather than clobber an existing file.
+    /// Create a new note (`b2 add`): write `path` with a minimal valid frontmatter (an
+    /// optional `title`, today's `created`) and `content` as its body, then project it
+    /// — the note is immediately searchable and in the graph. Nothing is added beyond
+    /// what the template wrote, so it stays fully reconstructible from Markdown.
+    /// Errors with [`Error::AddDestination`] or [`Error::AddTargetExists`] rather than
+    /// clobber an existing file.
     ///
-    /// Projection **embeds** the new note, so the CLI opens the vault with the real
-    /// model for `add`, as for `reindex`/`link`/`mv`. Nothing is added to the file
-    /// beyond what the template wrote: the note is fully reconstructible from Markdown.
+    /// Projection **embeds** the new note, so the CLI opens with the real model.
     pub fn add_note(
         &self,
         path: &str,
@@ -1675,17 +1444,14 @@ impl Vault {
         add::add_note(self.embed_ctx(), path, title, content, &created)
     }
 
-    /// Create a new, empty note **model-free** — the desktop's New-note action
-    /// (its tree affordance / ⌘N), the create sibling of [`write`](Self::write):
-    /// write `path` with the same minimal frontmatter as [`add_note`](Self::add_note)
-    /// (no title — a note's display title is its filename, data-model.md §1) and
-    /// project it via [`ingest::project_file`] with **no embedder touched**, so
-    /// creation works with no model provisioned and a fake-opened vault can never
-    /// write foreign vectors into a real-model embedding space. The note's chunks
-    /// join the DB-derived missing-vector set, healed by any later
-    /// [`embed`](Self::embed)/reindex (index-engine.md) — and an
-    /// empty body has nothing to embed anyway. Same refusals as `add_note`:
-    /// [`Error::AddDestination`] / [`Error::AddTargetExists`].
+    /// Create a new, empty note **model-free** — the desktop's New-note action, the
+    /// create sibling of [`write`](Self::write). Same minimal frontmatter as
+    /// [`add_note`](Self::add_note) (no title — a note's display title is its
+    /// filename), projected with **no embedder touched**, so creation works with no
+    /// model provisioned and a fake-opened vault can never write foreign vectors into
+    /// a real embedding space (ADR-0007). The chunks join the pending set any later
+    /// [`embed`](Self::embed) heals; an empty body has nothing to embed anyway. Same
+    /// refusals as `add_note`.
     pub fn create_note(&self, path: &str) -> Result<AddReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "create", path).entered();
         let created = self.today()?;
@@ -1693,23 +1459,18 @@ impl Vault {
     }
 
     /// Import a file the human already has into the vault folder `dir` (`""` for the
-    /// root) under `file_name`, from its **bytes** — the desktop's drag-a-file-onto-
-    /// the-tree gesture, where the OS hands the webview content rather than a path.
-    /// A `.md` lands as a note (projected); anything else lands as a resource (one
-    /// inventory row), exactly as the vault walk would have classified it.
+    /// root) under `file_name`, from its **bytes** — the desktop's drag-onto-the-tree
+    /// gesture, where the OS hands the webview content rather than a path. A `.md`
+    /// lands as a note (projected); anything else as a resource (one inventory row),
+    /// exactly as the vault walk would have classified it. The bytes are written
+    /// **verbatim** — B2 authors nothing here, unlike [`add_note`](Self::add_note),
+    /// which mints a document. **Model-free**, like [`create_note`](Self::create_note).
     ///
-    /// The bytes are written **verbatim** — B2 authors nothing here, unlike
-    /// [`add_note`](Self::add_note), which mints a document
-    /// ([`crate::import`]). **Model-free** (the `create_note` posture): the file is
-    /// projected with no embedder touched and its chunks fill on the next embed pass.
-    ///
-    /// Errors with [`Error::ImportDestination`] for a name that isn't a file name or
-    /// a folder/name pair that isn't a valid vault-relative path, and
-    /// [`Error::ImportTargetExists`] rather than clobber an existing file. The
-    /// destination path *is* the arriving note's identity, so refusing an occupied
-    /// one is the whole of the collision story — there is no id inside the file that
-    /// could clash with a note already here (GH #170). If projection fails, the
-    /// placed file is removed again: an import either lands and indexes, or leaves
+    /// Errors with [`Error::ImportDestination`] for an invalid name or folder/name
+    /// pair, and [`Error::ImportTargetExists`] rather than clobber an existing file:
+    /// the destination path *is* the arriving note's identity (ADR-0003), so refusing
+    /// an occupied one is the whole of the collision story. If projection fails the
+    /// placed file is removed again — an import either lands and indexes, or leaves
     /// nothing behind.
     pub fn import_file(&self, dir: &str, file_name: &str, bytes: &[u8]) -> Result<ImportReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "import", dir, file_name).entered();
@@ -1725,46 +1486,40 @@ impl Vault {
         import::import_path(self.ctx(), dir, source)
     }
 
-    /// Create the folder `dir` (vault-relative; missing parents included, an
-    /// occupied target refused) — the desktop's New-folder action, the structure
-    /// sibling of [`create_note`](Self::create_note). A folder is user-authored vault
-    /// structure, so this writes the filesystem and touches **nothing else**: no
-    /// index rows exist for a folder (see [`list_dirs`](Self::list_dirs)), and the
-    /// new folder is real to every tool — Finder, the CLI, a sync — the moment
-    /// this returns. Errors with [`Error::DirDestination`] for an invalid path or
-    /// [`Error::DirTargetExists`] when anything already sits there.
+    /// Create the folder `dir` (missing parents included, an occupied target refused)
+    /// — the desktop's New-folder action, the structure sibling of
+    /// [`create_note`](Self::create_note). A folder is user-authored structure, so
+    /// this writes the filesystem and touches **nothing else**: no index rows exist
+    /// for a folder (see [`list_dirs`](Self::list_dirs)), and it is real to Finder,
+    /// the CLI and a sync the moment this returns. Errors with
+    /// [`Error::DirDestination`] or [`Error::DirTargetExists`].
     pub fn create_dir(&self, dir: &str) -> Result<DirCreateReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "mkdir", dir).entered();
         dirs::create_dir(&self.root, dir)
     }
 
     /// Today's date (`YYYY-MM-DD`) from **SQLite** — the same clock that stamps
-    /// `indexed_at`, so `b2-core` needs no wall-clock crate and the façade is the
-    /// determinism boundary (as it is for `idgen`). The vault convention for a note's
-    /// `created:` field (data-model.md §1).
+    /// `indexed_at`, so `b2-core` needs no wall-clock crate and the façade stays the
+    /// determinism boundary. The vault convention for a note's `created:` field.
     fn today(&self) -> Result<String> {
         Ok(self
             .conn
             .query_row("SELECT strftime('%Y-%m-%d','now')", [], |r| r.get(0))?)
     }
 
-    /// Resolve a note reference to the indexed note's vault-relative path — which
-    /// *is* its identity (L1), so this is one canonicalization rather than the
-    /// two-step "is it an id? is it a path?" it replaced (GH #170).
-    ///
-    /// The reference is a path in whichever form the human writes links: with or
-    /// without the `.md` (`db::resolve_link_target`'s ladder), so `b2 explain
-    /// concepts/memory` and `b2 explain concepts/memory.md` both land. The
-    /// [`Error::NoteNotFound`] carries the caller's original `note_ref`, so the
-    /// error reads as they typed it.
+    /// Resolve a note reference to the indexed note's vault-relative path — which *is*
+    /// its identity (ADR-0003), so this is one canonicalization rather than the
+    /// two-step "is it an id? is it a path?" it replaced. The ref may be written with
+    /// or without the `.md`, as links are. The [`Error::NoteNotFound`] carries the
+    /// caller's original `note_ref`, so the error reads as they typed it.
     fn resolve_ref(&self, note_ref: &str) -> Result<String> {
         db::resolve_link_target(&self.conn, note_ref)?
             .ok_or_else(|| Error::NoteNotFound(note_ref.to_string()))
     }
 }
 
-/// A file's save-guard revision: blake3 of its raw bytes.
-/// One tiny fn so `read` (capture) and `write` (validate + return) can never drift.
+/// A file's save-guard revision: blake3 of its raw bytes. One fn, so `read`
+/// (capture) and `write` (validate + return) can never drift.
 fn revision_of(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()
 }
@@ -1791,9 +1546,9 @@ fn snippet(text: &str) -> String {
 }
 
 /// Like [`snippet`] but windows the excerpt around the first query-term match, so a
-/// section-sized chunk (qmd chunking, #19) still surfaces the matched text instead of
-/// only its head. Falls back to the head when no term matches or the match is already
-/// in view — a pure vector hit (query words absent from the chunk) keeps the head.
+/// section-sized chunk still surfaces the matched text instead of only its head.
+/// Falls back to the head when no term matches or the match is already in view — a
+/// pure vector hit keeps the head.
 fn query_snippet(text: &str, query: &str) -> String {
     let flat = flatten(text);
     if flat.chars().count() <= SNIPPET_CHARS {
@@ -1814,8 +1569,8 @@ fn query_snippet(text: &str, query: &str) -> String {
         return head_snippet(&flat);
     };
     let chars: Vec<char> = flat.chars().collect();
-    // `pos` is a char index into the lowercased text, whose length can differ from
-    // `flat` for exotic Unicode; clamp so the slice below can never go out of range.
+    // `pos` indexes the lowercased text, whose length can differ from `flat` for
+    // exotic Unicode; clamp so the slice below can never go out of range.
     let start = (pos - LEAD).min(chars.len());
     let end = (start + SNIPPET_CHARS).min(chars.len());
     let mut out = String::from("…");

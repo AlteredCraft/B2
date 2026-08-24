@@ -32,3 +32,4 @@ records say *why* an entry reads the way it does.
 | [0018](0018-ci-runs-just-ci-and-nothing-else.md) | CI runs `just ci` and nothing else |
 | [0019](0019-build-our-own-sqlite-index-engine.md) | Build our own SQLite index engine; qmd is a reference, not a dependency |
 | [0020](0020-embeddings-inside-the-single-binary.md) | Embeddings inside the single binary: candle + hf-hub, provisioned by `b2 init` |
+| [0021](0021-concurrency-is-serialized-on-sqlites-own-locks.md) | Many readers, one writer, serialized on SQLite's own locks |

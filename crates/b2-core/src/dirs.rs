@@ -19,14 +19,11 @@ pub struct DirCreateReport {
 }
 
 /// Every folder under `vault_root` (empty ones included), vault-relative with `/`
-/// separators and no trailing slash, sorted. Dot-prefixed directories (`.b2/`,
-/// `.git/`, `.obsidian/`) are skipped — the same hidden rule the ingest walk
-/// applies (`collect_vault_files`, GH #136), so the tree and the index agree on
-/// what a vault member is. That mirroring is deliberate and includes symlink behavior:
-/// `is_dir()` follows directory symlinks exactly as the ingest walk does, so a
-/// symlinked folder whose notes get indexed also shows in the tree — diverging
-/// here would desync structure from content. A vault-wide symlink policy, if one
-/// ever lands, must change both walks together.
+/// separators and no trailing slash, sorted. Dot-prefixed directories are skipped — the
+/// same hidden rule the ingest walk applies (GH #136), so the tree and the index agree on
+/// what a vault member is. That mirroring includes symlink behaviour: `is_dir()` follows
+/// directory symlinks exactly as the ingest walk does, so a vault-wide symlink policy, if
+/// one ever lands, must change both walks together.
 pub fn list_dirs(vault_root: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     collect_dirs(vault_root, vault_root, &mut out)?;

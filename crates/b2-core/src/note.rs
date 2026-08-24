@@ -1,18 +1,13 @@
 //! Lossless note parsing and the surgical frontmatter/body splices.
 //!
-//! A note is YAML frontmatter (optional) followed by a Markdown body. To make
-//! `parse → serialize → parse` byte-identical (data-model.md §6), a [`ParsedNote`]
-//! keeps the **raw text verbatim** and records only the byte spans of the
-//! frontmatter. Serialization returns the raw bytes; every mutation here is a
-//! surgical splice performed on the human's explicit command (W3) — appending a
-//! `b2_relations:` entry, replacing the body, replacing the frontmatter block. The
-//! queryable fields are extracted by a read-only YAML parse and never used to
-//! re-serialize.
-//!
-//! There is no `stamp_b2id` any more (GH #170). A note's identity is its path, so
-//! nothing is written on first sight, and the `b2id:` key an older B2 left in a file
-//! is now an ordinary unknown key: never parsed, never rewritten, round-tripped
-//! verbatim like any other.
+//! A note is optional YAML frontmatter followed by a Markdown body. To make
+//! `parse -> serialize -> parse` byte-identical, a [`ParsedNote`] keeps the **raw text
+//! verbatim** and records only the byte spans of the frontmatter; serialization returns
+//! the raw bytes. Every mutation here is a surgical splice performed on the human's
+//! explicit command (ADR-0004) — appending a `b2_relations:` entry, replacing the body,
+//! replacing the frontmatter block. The queryable fields come from a read-only YAML parse
+//! and are never used to re-serialize. A `b2id:` key an older B2 left behind is now an
+//! ordinary unknown key: never parsed, never rewritten, round-tripped verbatim.
 
 use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
@@ -108,14 +103,12 @@ impl ParsedNote {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
     }
 
-    /// Whether the frontmatter block reads as YAML metadata: `true` when there is
-    /// no block, an empty one, or one that parses to a key/value mapping; `false`
-    /// when the YAML is malformed or isn't a mapping — the raw bytes still
-    /// round-trip verbatim, but the projected [`fields`](Self::fields) came back
-    /// empty-handed. Surfaced so an adapter can tell the human "B2 can't read this
-    /// frontmatter" instead of silently showing blank metadata (GH #79) — warn,
-    /// never block: the bytes stay the human's to fix, and nothing B2 does depends
-    /// on reading them.
+    /// Whether the frontmatter block reads as YAML metadata: `true` for no block, an
+    /// empty one, or one that parses to a key/value mapping; `false` when it is malformed
+    /// or isn't a mapping — the raw bytes still round-trip verbatim, but
+    /// [`fields`](Self::fields) came back empty-handed. Surfaced so an adapter can warn
+    /// rather than silently show blank metadata (GH #79); never a block, since the bytes
+    /// stay the human's to fix.
     pub fn frontmatter_readable(&self) -> bool {
         self.fm_readable
     }
@@ -143,20 +136,15 @@ impl ParsedNote {
         self.reparse();
     }
 
-    /// Replace the note's **frontmatter YAML** with `new_yaml`, verbatim — the
-    /// byte-honest splice behind `Vault::write_frontmatter`, and
-    /// [`replace_body`](Self::replace_body)'s frontmatter sibling (GH #79). Only
-    /// the bytes between the fences change; the fences and every body byte are
-    /// preserved by construction. A note with no frontmatter gains a block; an
-    /// empty `new_yaml` removes the block entirely (fences included), exactly as
-    /// a hand-edit deleting it would leave the file. The one mechanical touch: a
-    /// non-empty `new_yaml` missing its final newline gains one, so the closing
-    /// fence always sits on its own line — every other byte is the caller's,
-    /// unformatted and unjudged.
+    /// Replace the note's **frontmatter YAML** with `new_yaml`, verbatim — the byte-honest
+    /// splice behind `Vault::write_frontmatter` (GH #79). Only the bytes between the
+    /// fences change; the fences and every body byte are preserved by construction. A note
+    /// with no frontmatter gains a block; an empty `new_yaml` removes the block entirely,
+    /// exactly as a hand-edit deleting it would. The one mechanical touch: a non-empty
+    /// `new_yaml` missing its final newline gains one.
     ///
-    /// A `new_yaml` containing a top-level `---` line would end the block early
-    /// and shift the following bytes into the body; callers that must not touch
-    /// the body (the façade op) refuse that input before splicing.
+    /// A `new_yaml` containing a top-level `---` line would end the block early and shift
+    /// the following bytes into the body; the façade op refuses that input before splicing.
     pub fn replace_frontmatter(&mut self, new_yaml: &str) {
         let mut block = new_yaml.to_string();
         if !block.is_empty() && !block.ends_with('\n') {

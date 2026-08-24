@@ -1,15 +1,10 @@
-//! `Vault::write_frontmatter` — the drawer's write op, `Vault::write`'s
-//! frontmatter sibling (GH #79). The invariants under test: the body (bytes AND
-//! boundary) is invariant under a frontmatter save; the one refusal — a `---` line,
-//! which would end the block early and shift bytes into the body — holds before any
-//! byte reaches disk; the revision guard mirrors `write`'s; malformed-but-human YAML
-//! saves fine (warn-don't-block, surfaced via `NoteView::frontmatter_readable`); and
-//! the saved block re-projects edges/tags without touching chunks or vectors.
-//!
-//! The identity guard this file used to open with is gone with the stamp (GH #170):
-//! B2 owned exactly one line inside this block and no longer owns any, so the block
-//! is wholly the human's (W3). What replaces that test is the one below it — every
-//! key survives whatever the human writes.
+//! `Vault::write_frontmatter` — the drawer's write op, `Vault::write`'s frontmatter sibling
+//! (GH #79). Under test: the body (bytes AND boundary) is invariant under a frontmatter save;
+//! the one refusal — a `---` line, which would end the block early — holds before any byte
+//! reaches disk; the revision guard mirrors `write`'s; malformed-but-human YAML saves fine
+//! (warn-don't-block); and the saved block re-projects edges and tags without touching chunks
+//! or vectors. B2 owns no line inside this block, so it is wholly the human's — which is what
+//! the "every key survives whatever the human writes" test pins.
 
 mod common;
 

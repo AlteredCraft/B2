@@ -1,36 +1,30 @@
-//! Body chunker — the qmd heuristic (index-engine.md §1, issue #19).
+//! Body chunker — the qmd heuristic (#19).
 //!
-//! Splits a note body into **size-targeted, overlapping, Markdown-aware** chunks
-//! that each carry a `heading_path` breadcrumb (the H1 › H2 › H3 stack the chunk
-//! falls under). The shape, borrowed wholesale from [tobi/qmd](https://github.com/tobi/qmd):
+//! Splits a note body into **size-targeted, overlapping, Markdown-aware** chunks that
+//! each carry a `heading_path` breadcrumb. The shape, borrowed wholesale from
+//! [tobi/qmd](https://github.com/tobi/qmd):
 //!
-//! - accumulate content toward `cfg.target_tokens` (default 450 — under bge's
-//!   512-token truncation, D1);
-//! - at the target, scan **backward** over a `cfg.backscan_tokens` window and cut at
-//!   the best-scoring structural break (`cfg.weights`: H1=100 … blank=20, list=5),
-//!   weighted by a **quadratic distance decay** so the boundary is the cleanest
-//!   *near* the target, not an arbitrary slice;
-//! - carry `cfg.overlap_frac` of the tail forward, so `char_start..char_end` ranges
-//!   **overlap** (they no longer partition the body — D4);
+//! - accumulate toward `cfg.target_tokens` (default 450 — under bge's 512-token
+//!   truncation);
+//! - at the target, scan **backward** over a `cfg.backscan_tokens` window and cut at the
+//!   best-scoring structural break (`cfg.weights`), weighted by a **quadratic distance
+//!   decay** so the boundary is the cleanest *near* the target, not an arbitrary slice;
+//! - carry `cfg.overlap_frac` of the tail forward, so the `char_start..char_end` ranges
+//!   overlap rather than partition the body;
 //! - never cut *inside* a fenced code block or a Markdown table — a forced cut with no
-//!   clean break in the window is pushed past the block's end so it stays whole (#41),
-//!   trading a slightly oversized chunk for a coherent one (`protected_regions`);
-//! - track a running heading stack and stamp each chunk's `heading_path` (D3).
+//!   clean break is pushed past the block's end (#41), trading a slightly oversized chunk
+//!   for a coherent one (`protected_regions`);
+//! - track a running heading stack and stamp each chunk's `heading_path`.
 //!
-//! The core is **model-free** (root `CLAUDE.md`): there is no tokenizer here (it
-//! lives in `b2-embed`, behind the seam, and this runs in the model-free projection
-//! pass). Chunks are sized by a cheap deterministic proxy — `chars / cfg.chars_per_token`
-//! (D2) — and the embedder's own 512-token truncation is the hard backstop, so a
-//! proxy under-estimate merely clips the tail of one unusually dense chunk (a table,
-//! code) rather than corrupting the index. `chunk_body` is a **pure function** of
-//! `(body, ChunkConfig)`: same input ⇒ same chunks ⇒ a reproducible index. Swapping
-//! chunkers is a pure re-projection — drop & rebuild — with no schema or invariant
-//! change (`token_count`/`heading_path` already exist on the `chunks` table).
+//! The core is **model-free** (ADR-0005): there is no tokenizer here, so chunks are sized
+//! by a cheap deterministic proxy (`chars / cfg.chars_per_token`) with the embedder's own
+//! 512-token truncation as the hard backstop — a proxy under-estimate merely clips the
+//! tail of one unusually dense chunk. `chunk_body` is a **pure function** of
+//! `(body, ChunkConfig)`, so swapping chunkers is a pure re-projection.
 //!
-//! `char_start..char_end` always addresses the exact body slice that produced `text`
-//! (anchoring for explain/highlight), **except** when `cfg.prepend_heading_path` is
-//! on: that eval knob (D3, default off) prepends the breadcrumb into the embedded
-//! `text`, so `text` then carries a synthetic prefix the range does not cover.
+//! `char_start..char_end` always addresses the body slice that produced `text`, **except**
+//! under `cfg.prepend_heading_path` — an eval knob (default off) that prepends the
+//! breadcrumb into the embedded text, which the range then does not cover.
 
 /// The tuning surface for [`chunk_body`] (spec §3, D5). Every lever that shapes a
 /// cut lives here; `Default` reproduces the shipped values, so adapters pass
@@ -400,17 +394,14 @@ fn snap_past_region(off: usize, regions: &[(usize, usize)]) -> usize {
     off
 }
 
-/// Byte ranges `[start, end)` a chunk boundary must not fall **strictly inside**
-/// (issue #41): a balanced fenced code block and a GFM table. Cutting at either edge
-/// (before the opening fence / table header, or after the closing fence / final row)
-/// is clean; cutting in the interior would bisect the block — embedding a code chunk
-/// with an unbalanced ```` ``` ```` fence, or orphaning a table's header from its rows.
+/// Byte ranges `[start, end)` a chunk boundary must not fall **strictly inside** (#41): a
+/// balanced fenced code block and a GFM table. Cutting at either edge is clean; cutting
+/// the interior would embed an unbalanced fence, or orphan a table's header from its rows.
 ///
-/// Fence tracking mirrors [`scan`]'s (any ```` ``` ````/`~~~` line toggles the state);
-/// an **unterminated** fence is left unprotected (treated as prose) rather than
-/// swallowing the whole tail into one chunk. A table is a header row directly above a
-/// delimiter row (`| --- | :-: |`) plus the contiguous rows beneath it. Regions come
-/// out sorted by start and never overlap (table scanning is suppressed inside a fence).
+/// Fence tracking mirrors [`scan`]'s; an **unterminated** fence is left unprotected rather
+/// than swallowing the whole tail into one chunk. A table is a header row directly above a
+/// delimiter row plus the contiguous rows beneath. Regions come out sorted and never
+/// overlap (table scanning is suppressed inside a fence).
 fn protected_regions(body: &str) -> Vec<(usize, usize)> {
     let mut regions: Vec<(usize, usize)> = Vec::new();
     let mut in_fence = false;

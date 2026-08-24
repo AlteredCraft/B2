@@ -1,18 +1,13 @@
 //! Cumulative, per-model **embedding time** — the desktop's persistent "how much has
-//! embedding cost with this model" ledger, surfaced in the Settings pane so a model swap
-//! can be judged on its real speed (embed-perf work, 2026-07-13).
+//! embedding cost with this model" ledger, surfaced in Settings so a model swap can be
+//! judged on its real speed.
 //!
-//! Host-owned state, exactly like [`persist_last_vault`](crate::persist_last_vault):
-//! `b2-core` stays **wall-clock-free** (the determinism rule), so the *adapter* times the
-//! embed pass and accumulates the total here. Keyed by model id — switch models and each
-//! bucket fills independently, so their totals (and derived throughput) stay directly
-//! comparable. A bucket is a **running total for the model's current stint**: [`reset`]
+//! Host-owned state, like `persist_last_vault`: `b2-core` stays wall-clock-free, so the
+//! *adapter* times the embed pass. Keyed by model id, so each bucket's totals stay directly
+//! comparable. A bucket is a running total for the model's **current stint**: [`reset`]
 //! drops it when the user switches *to* that model, because the swap re-embeds the whole
-//! corpus (`ensure_embedding_space` drops the vectors), so the ledger must restart with
-//! the vectors rather than stack a second corpus onto the old total. It lives under the
-//! same `dirs` data dir as `last-vault` and the model cache. Purely diagnostic:
-//! **best-effort**, and a read/write failure never fails an embed (a corrupt/missing file
-//! just reads as "no history").
+//! corpus (ADR-0007) and the ledger must restart with the vectors. Purely diagnostic and
+//! best-effort — a read/write failure never fails an embed.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -100,14 +95,12 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
     write_ledger(path, &file)
 }
 
-/// Forget `model`'s accumulated total, so its bucket restarts from zero on the next
-/// [`record`]. Called when the user **switches to** this model in Settings: the swap
-/// drops the vault's vectors, so the next reindex re-embeds the whole corpus and the
-/// cumulative ledger must restart with it (otherwise a switch back and forth would stack
-/// corpus after corpus onto the same bucket). Only the switched-to model is touched — the
-/// *other* models' history survives so the Settings pane can still compare them.
-/// Best-effort like [`record`]: a missing data dir or write failure is logged and
-/// swallowed, never failing the model switch the user actually asked for.
+/// Forget `model`'s accumulated total, so its bucket restarts on the next [`record`].
+/// Called when the user **switches to** this model: the swap drops the vault's vectors, so
+/// the next reindex re-embeds the whole corpus and the ledger must restart with it —
+/// otherwise switching back and forth would stack corpus after corpus onto one bucket. Only
+/// the switched-to model is touched, so the others' history survives for comparison.
+/// Best-effort like [`record`].
 pub fn reset(model: &str) {
     let Some(path) = stats_file() else {
         return; // no data dir ⇒ nothing was ever recorded ⇒ nothing to reset

@@ -1,14 +1,12 @@
-//! Flow ④ — grounded chat (GH #151 §"Flow ④", cut as GH #153): the core logic
-//! of `Vault::ask`, condense → retrieve → assemble → stream → cite. This module
-//! owns what must be deterministic and testable against [`FakeLlm`] — prompt
-//! assembly, the condensation degrade, citation-marker parsing — while the
-//! façade ([`crate::vault::Vault::ask`]) owns retrieval and resolving markers
-//! into display views, mirroring the `discover.rs`/`vault.rs` split.
+//! Flow ④ — grounded chat: the core logic of `Vault::ask`, condense -> retrieve ->
+//! assemble -> stream -> cite. This module owns what must be deterministic and testable
+//! against [`FakeLlm`] — prompt assembly, the condensation degrade, citation-marker
+//! parsing — while the façade owns retrieval and resolving markers into display views,
+//! mirroring the `discover.rs`/`vault.rs` split.
 //!
-//! What the LLM never does here (why the invariants survive, minus M1's
-//! wording): chat is a **reader** (C1) whose output is never stored — no
-//! response caching, no `meta` rows, session-only history (S4). Model output
-//! is untrusted content (E5), enforced where it renders.
+//! Chat is a **reader** whose output is never stored: no response caching, no `meta` rows,
+//! session-only history. Model output is untrusted content (ADR-0016), enforced where it
+//! renders.
 //!
 //! [`FakeLlm`]: crate::llm::FakeLlm
 

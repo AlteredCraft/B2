@@ -1,30 +1,18 @@
-//! Whole-space retrieval stays **exhaustive**: every path that scans the vector
-//! space returns complete, un-truncated results, with no silent cap.
+//! Whole-space retrieval stays **exhaustive**: every path that scans the vector space
+//! returns complete, un-truncated results, with no silent cap.
 //!
-//! *History.* This file was born to lock the fix for `sqlite-vec`'s `vec0`
-//! `MATCH … LIMIT k` ceiling — `k > 4096` raised "k value in knn query too large"
-//! and crashed discovery, graph-filtered search, and an oversized `--limit`. It did
-//! so by building a vault of **> 4096 chunks** and asserting the paths survived.
+//! *History.* This file was born to lock the fix for `sqlite-vec`'s `vec0` `MATCH … LIMIT k`
+//! ceiling, by building a vault of > 4096 chunks. That store is gone (ADR-0006): vectors are
+//! scanned in-process, and the callers either take **every** row or bound it with a plain
+//! `Vec::truncate` — structurally incapable of the old ceiling. The literal `4096` is now a
+//! retired dependency's magic number no live line knows about, and reaching 4096 *real*
+//! chunks under the qmd chunker costs the fast suite ~20s (GH #46) to reprove a boundary that
+//! cannot recur without reintroducing `sqlite-vec`.
 //!
-//! That store is gone (schema v3, #36/#38): vectors live in plain tables scored by a
-//! full in-process scan (`db::scan_vector_distances` → `for_each_stored_vector`),
-//! whose callers either take **every** row (`vector_search_all`) or bound it with a
-//! plain `Vec::truncate` (`vector_search`) — structurally incapable of the old
-//! `vec0` ceiling. The literal `4096` is now a retired dependency's magic number that
-//! no live line of code knows about, so gating on it is neither cheap nor meaningful:
-//! under the qmd chunker (#19/#42, size-targeted paragraph coalescing) reaching 4096
-//! *real* chunks costs the fast suite ~20s (GH #46), to reprove a boundary that can't
-//! recur without reintroducing `sqlite-vec` — a locked-against decision (root
-//! `CLAUDE.md`, "No vector extension").
-//!
-//! So instead of a >4096-chunk fixture, this asserts the property that actually
-//! matters now — **exhaustiveness / no silent truncation** — directly on the
-//! cap-bearing primitive (`vector_search*`), and proves the discovery and
-//! graph-filtered paths return *complete* results on a real, modest, fast multi-note
-//! vault. See GH #46 for the reasoning.
-//!
-//! Scope: the deterministic *fake* embedder — this proves plumbing (no crash,
-//! complete results), not model quality.
+//! So this asserts the property that actually matters — **exhaustiveness / no silent
+//! truncation** — directly on the cap-bearing primitive, and proves the discovery and
+//! graph-filtered paths return complete results on a modest, fast vault. Scope: the
+//! deterministic fake embedder, so this proves plumbing, not model quality.
 
 mod common;
 
@@ -37,17 +25,13 @@ use std::fs;
 use std::path::Path;
 
 /// Build a vault of `notes` unlinked notes, each body `paras` blank-line-separated
-/// paragraphs, and ingest it (project + fake-embed). Returns the connection and the
-/// notes' paths in creation order.
+/// paragraphs, and ingest it. Returns the connection and the notes' paths in creation order.
 ///
-/// **Chunking is size-targeted, not one-per-paragraph.** The qmd chunker (#19/#42)
-/// coalesces small paragraphs toward its ~450-token (~1800-char) target, so these
-/// ~50-char paragraphs pack ~30 to a chunk: a 90-paragraph note projects to ~3
-/// chunks, not 90 (the retired paragraph splitter's shape). Callers that need a known
-/// chunk total read it back with [`chunk_count`] rather than assuming `notes × paras`.
-///
-/// No links, so every note is a discovery candidate for every other, and each note is
-/// its own reachable set.
+/// **Chunking is size-targeted, not one-per-paragraph:** the qmd chunker coalesces small
+/// paragraphs toward its ~450-token target, so these ~50-char paragraphs pack ~30 to a chunk
+/// and a 90-paragraph note projects to ~3. Callers needing a known chunk total read it back
+/// with [`chunk_count`] rather than assuming `notes x paras`. No links, so every note is a
+/// discovery candidate for every other.
 fn big_vault(dir: &Path, notes: usize, paras: usize) -> (Connection, Vec<String>) {
     let vault = dir.join("vault");
     fs::create_dir_all(&vault).unwrap();

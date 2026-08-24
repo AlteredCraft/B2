@@ -1,24 +1,14 @@
-//! `b2-embed` — B2's real, local embedder.
+//! `b2-embed` — B2's real, local embedder: candle + hf-hub producing embeddings inside the
+//! single binary, with **BAAI/bge-base-en-v1.5** @ dim 768 as the default model (ADR-0020).
 //!
-//! This is the deferred "quality half" of build-spec steps 3 & 5 and the one place
-//! the architecture meets real friction (index-engine.md §6): producing embeddings
-//! inside a single binary. It sits **behind the [`b2_core::embed::Embedder`] seam**,
-//! so the store, the flows, and the whole `b2-core` test suite never see it — they
-//! run against the deterministic `FakeEmbedder`. The `b2` CLI is the only client
-//! that wires the real model in.
+//! It sits **behind the [`b2_core::embed::Embedder`] seam** (ADR-0005), so the store, the
+//! flows and the whole `b2-core` suite never see it — they run against the deterministic
+//! `FakeEmbedder`. The adapters are the only clients that wire the real model in.
 //!
-//! Decisions (locked 2026-06-30, GitHub Issues):
-//! - **Runtime = `candle` + `hf-hub`** — pure-Rust inference compiled into the
-//!   binary; no external ONNX runtime to ship. `hf-hub` is the download seam.
-//! - **Model = a BERT-family sentence embedder**, default **BAAI/bge-base-en-v1.5**
-//!   @ dim 768. (EmbeddingGemma-300M was the first choice but is gated on Hugging
-//!   Face — HTTP 401 without a token + license click — which defeats a friction-free
-//!   `b2 init`; bge was the pre-authorized fallback and validated in the spike.)
-//! - **Not bundled** — an explicit [`provision`] (`b2 init`) downloads + verifies the
-//!   model into a shared XDG cache; [`LocalEmbedder::load`] **fails fast** if absent.
-//! - **Configurable** via a global TOML at `$XDG_CONFIG_HOME/b2/config.toml`
-//!   (`[embedder] model / source / cache_dir`), source overridable to a mirror, an
-//!   alternate repo, or a local path (fully-offline install).
+//! The model is **not bundled**: an explicit [`provision`] (`b2 init`) downloads and
+//! verifies it into a shared XDG cache, and [`LocalEmbedder::load`] fails fast if it is
+//! absent. Configurable via `$XDG_CONFIG_HOME/b2/config.toml`, whose `source` can point at
+//! a mirror, an alternate repo, or a local path for a fully-offline install.
 
 mod config;
 mod model;

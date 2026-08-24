@@ -1,12 +1,9 @@
 //! The host's error type + the generic, actionable, no-internals-leaked mapping to a
-//! user-facing string — the desktop mirror of the CLI's `user_message`
-//! (crates/b2-desktop/CLAUDE.md; the repo-wide logging policy in the parent CLAUDE.md).
+//! user-facing string — the desktop mirror of the CLI's `user_message`.
 //!
 //! [`CmdError`] **serializes to that string**, so a `#[tauri::command]` returning
-//! `Result<T, CmdError>` hands the webview a safe, actionable message and never a
-//! sqlite/io/serde internal. `#[from]` supplies the `?` conversions from the two
-//! crates the host drives; `B2_DEBUG` opts into the raw detail for the developer,
-//! exactly as the CLI does.
+//! `Result<T, CmdError>` hands the webview a safe message and never a sqlite/io/serde
+//! internal. `B2_DEBUG` opts into the raw detail, exactly as the CLI does.
 
 use b2_embed::EmbedError;
 use serde::{Serialize, Serializer};
@@ -188,13 +185,11 @@ pub fn user_message(err: &CmdError) -> String {
     }
 }
 
-/// Log an error's **full internal detail** to stderr — the sqlite/io/serde specifics
-/// the webview must never see (repo logging policy: the server log carries everything,
-/// the client only the generic message). The desktop mirror of the CLI writing detail
-/// to stderr; under `tauri dev` it lands in the terminal running the host, so a failing
-/// command is diagnosable without a rebuild or `B2_DEBUG`. Called from the one place
-/// every command error crosses to the webview — [`CmdError`]'s `Serialize` impl — so
-/// logging stays uniform and out of the dumb command handlers.
+/// Log an error's **full internal detail** to stderr — the specifics the webview must
+/// never see. Under `tauri dev` it lands in the terminal running the host, so a failing
+/// command is diagnosable without a rebuild. Called from the one place every command error
+/// crosses to the webview ([`CmdError`]'s `Serialize` impl), so logging stays uniform and
+/// out of the dumb handlers.
 fn log_internal(err: &CmdError) {
     // `Core`/`Embed` are `#[error(transparent)]`, so `err` displays as its source —
     // one `to_string` covers every variant.

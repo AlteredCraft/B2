@@ -1,24 +1,18 @@
-//! Discovery surfacing (invariants.md D1, GH #197): **the ranked candidate list
-//! is served**. `limit` is a cap, the order is the deterministic best-passage
-//! sort, the z travels with every row as the strength band's input, and no
-//! statistic gates membership — the per-anchor z existence gate GH #150 shipped
-//! was retired when GH #196 measured it reading a coherent single-subject vault
-//! as "one diffuse cloud" and darkening 16 of 17 panes. Tiny pools are served
-//! band-less (no statistic exists, so none is claimed), and a fake-embedded
-//! space is served statistic-less (hash vectors have no semantic geometry) —
-//! grading changes what the rows *carry*, never which rows exist.
+//! Discovery surfacing (ADR-0014): **the ranked candidate list is served**. `limit` is a
+//! cap, the order is the deterministic best-passage sort, the z travels with every row as
+//! the strength band's input, and no statistic gates membership. Tiny pools are served
+//! band-less (no statistic exists, so none is claimed) and a fake-embedded space is served
+//! statistic-less — grading changes what the rows *carry*, never which rows exist.
 //!
-//! The fake embedder can't exercise the grading half (which is exactly why
-//! `Vault::similar` never grades a fake-embedded space; the last test pins
-//! that). So these tests inject a **geometric** embedder whose vectors are
-//! hand-placed: notes carry `VEC:<tag>` markers, and the embedder maps each tag
-//! to a designed unit vector. The scenarios keep the measured shapes the retired
-//! rule was calibrated (and falsified) on: a cluster anchor whose mate stands
-//! far above a tight noise cloud, and a diffuse anchor whose best candidate is
-//! just the least-far member of one undifferentiated cloud — which the retired
-//! gate emptied, and which now serves its ranked nearest like any other anchor,
-//! because "everything here is middling" is an answer the strength band can
-//! carry and an empty pane cannot.
+//! The fake embedder can't exercise the grading half, which is exactly why `Vault::similar`
+//! never grades a fake-embedded space (the last test pins that). So these tests inject a
+//! **geometric** embedder whose vectors are hand-placed: notes carry `VEC:<tag>` markers and
+//! the embedder maps each tag to a designed unit vector. The scenarios keep the measured
+//! shapes the retired rule was calibrated (and falsified) on: a cluster anchor whose mate
+//! stands far above a tight noise cloud, and a diffuse anchor whose best candidate is just
+//! the least-far member of one undifferentiated cloud — which the retired gate emptied, and
+//! which now serves its ranked nearest, because "everything here is middling" is an answer a
+//! strength band can carry and an empty pane cannot.
 
 mod common;
 
@@ -228,17 +222,12 @@ fn write_split_note(vault: &Path, name: &str, first: &str, second: &str) {
 
 #[test]
 fn a_buried_gem_outranks_and_is_served() {
-    // The multi-topic shape the GH #192 reorder exists for: `split.md` holds a
-    // passage almost parallel to the anchor (its stage-2 max-sim is far the best)
-    // while its second half drags its *centroid* away. The retired stage-1 floor
-    // judged that centroid, so `mid.md` — one middling chunk, no best passage
-    // anywhere near as close — outranked the gem, and a corpus-measured version
-    // of the same shape was suppressed outright (GH #187) or served to loner
-    // anchors on content it did not contain (GH #189). Judged after stage 2, the
-    // gem's own best pair is the signal: it ranks first, and the band a card
-    // shows (its z) descends with the rows because z, score, and the order are
-    // one number by construction. GH #197 changes none of this — it retired the
-    // gate, not the ranking or the statistic.
+    // The multi-topic shape the GH #192 reorder exists for: `split.md` holds a passage
+    // almost parallel to the anchor (its stage-2 max-sim is far the best) while its second
+    // half drags its *centroid* away. The retired stage-1 floor judged that centroid, so
+    // `mid.md` outranked the gem — and a corpus-measured version of the same shape was
+    // suppressed outright (GH #187) or served to loner anchors on content it did not contain
+    // (GH #189). Judged after stage 2, the gem's own best pair is the signal.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();

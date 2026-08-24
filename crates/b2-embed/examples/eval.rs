@@ -1,8 +1,6 @@
-//! Semantic-retrieval + discovery eval — the "separate, occasional pass" scoring
-//! model quality out of CI (the eval harness, crates/b2-embed/evals/). It lives as an **example**,
-//! not a test, so it never runs in the deterministic `cargo test` suite and model
-//! quality can never flake CI (invariants.md). Run it on
-//! demand:
+//! Semantic-retrieval + discovery eval — the pass that scores model quality **out of CI**
+//! (ADR-0013). It lives as an *example*, not a test, so it never runs in the deterministic
+//! `cargo test` suite and quality can never flake CI.
 //!
 //! ```console
 //! cargo run -p b2-embed --example eval               # score the configured model
@@ -10,125 +8,46 @@
 //! cargo run -p b2-embed --example eval -- --stemmer  # + FTS tokenizer A/B (the #157 gate)
 //! ```
 //!
-//! One run builds a throwaway vault from the hand-labelled corpus in `evals/` and
-//! scores four things through the real pipeline:
+//! **`docs/evals/README.md` is the notebook of record** — the corpus, what the exit code
+//! enforces, every verdict this harness has ruled, and the process rules. Read it before
+//! touching the corpus, the labels, or a constant here. What this comment carries is only
+//! what a reader of *this file* needs:
 //!
-//! 1. **BM25 baseline** — after `project` only (no vectors), every query is scored
-//!    keyword-only. The labelled queries avoid their target's keywords, so this is
-//!    the floor the model must clear.
-//! 2. **Hybrid retrieval** — after `embed`, the same queries through BM25 ⊕ vector
-//!    → RRF. The delta vs. the baseline is the **semantic lift** — the measured
-//!    value of the one AI seam. A **vector-only ablation** rides beside it
-//!    (`Vault::search_vector_only`, GH #158): the dense signal alone, so fusion
-//!    has a measured single-signal baseline to answer to, and every query hybrid
-//!    ranks *worse* than vector-only would is counted and named on the run.
-//! 3. **Passage rank** — queries labelled with a verbatim `passage` are also
-//!    scored at **chunk** level (`Vault::search_chunks`): note-rank is blind to
-//!    sub-note retrieval, which is exactly what chunking levers move
-//!    (index-engine.md, GH #44).
-//! 4. **Discovery** — `evals/similar.json` anchors score `Vault::similar` (the
-//!    centroid-shortlisted candidate generation, #38), which query-retrieval alone
-//!    does not exercise. The surface **always serves the ranked list** (GH #197 —
-//!    the per-anchor z existence gate is retired, so there is no floored/raw
-//!    split any more; the harness keeps its two-pass structure with both passes
-//!    on the one surface, as the tripwire that re-arms if a Phase-2 gate ever
-//!    ships). Positive anchors score **rank** two ways: the historical
-//!    per-anchor metric, which stops at the *first* mate it finds and therefore
-//!    saturates — it has read 1.000 across changes it was meant to judge, so
-//!    since GH #188 it is recorded in the row but no longer printed — and the
-//!    per-mate companion added by GH #183, which scores every labelled mate
-//!    separately so a hard one demoted behind an easy one is visible. That
-//!    second one is what the printed line and the exit gate read. Beside it sits
-//!    discovery's **precision** side (GH #188): the *strangers* a positive
-//!    anchor serves — unlabelled notes on a list the labels do not claim —
-//!    counted, named, and deliberately left ungated, since the cheapest way to
-//!    shrink that count is to label the stranger. **Negative anchors** —
-//!    deliberate loner notes whose labelled answer is "nothing relates" — are
-//!    served their ranked nearest like every anchor under always-serve; what
-//!    they measure now is *what those cards claim* (the bands, read in the
-//!    calibration block — assumption A2 of GH #197) rather than suppression,
-//!    and every surfaced candidate's score still lands in one of two **cosine
-//!    piles** — labelled related vs. everything else surfaced — the measured
-//!    distributions any future existence signal would be argued from.
-//! 5. **The discovery z calibration** (GH #187) — a deep discovery pass dumps
-//!    every candidate's stage-2 best-passage z (the strength band's input; it
-//!    gates nothing since GH #197), split into the populations an existence
-//!    bar would answer to: labelled mates, strangers on positive anchors, and
-//!    negative anchors' leaders. From those it re-derives the admissible
-//!    window a leader gate or member bar *would* have on the current corpus —
-//!    the record of why none ships (the member window has been empty since
-//!    #187 measured it; GH #196 showed the leader gate reading a dense vault
-//!    dark), and the reading any Phase-2 bake-off candidate is judged
-//!    against. This exists because the #150 windows were frozen into a rustdoc
-//!    as if timeless and went stale the first time the corpus grew a shape
-//!    they were never measured against: constants in code, measurements in the
-//!    harness. The dump's z is also recomputed harness-side from the served
-//!    scores, so a drift in the engine's statistic turns the block's check
-//!    line into a `[FAULT]`.
-//! 6. **The dense single-domain fixture** (GH #196/#197, Phase 0b) — a *second*
-//!    corpus (`evals/corpus-dense/`, labels `evals/similar-dense.json`) scored in
-//!    its **own throwaway vault** and recorded in its **own row** (corpus id
-//!    `dense`), never averaged with the orthogonal corpus's. Fifteen notes, all
-//!    genuinely inter-related, no loner: the vault-level geometry GH #196
-//!    measured breaking every anchor-local existence gate (no unrelated tail ⇒
-//!    every z compresses ⇒ every pane dark), which the orthogonal corpus is
-//!    structurally incapable of expressing — mixing it in would perturb every
-//!    existing anchor's population and dilute both instruments. Its labels are
-//!    **rankings only** (expected mates per anchor, per-mate scored) and its
-//!    assertions run the other way from the negatives the orthogonal corpus
-//!    carries: a per-mate MRR floor, and **zero empty panes** across every note
-//!    in the fixture — the mechanical form of GH #197's ruling that an empty
-//!    pane may never come from an anchor-local statistic. It carries the
-//!    **search** bar's hardest bench for the same reason (GH #201): topical
-//!    concentration is what killed the rule that lost, so the shipped bar is
-//!    replayed here every run over each note's own title plus nonsense
-//!    (`score_dense_search`), beside the discovery fold bench — **and asserted**
-//!    since GH #202: zero titles cut, zero nonsense served.
-//! 7. **The search evidence calibration and bake-off** (invariants.md D2;
-//!    GH #201/#202) — search's sibling of the z dump. Flow ② could not answer
-//!    *zero* as first shipped: the vector half always has k nearest and RRF
-//!    keeps only ranks, so a nonsense query served `limit` confident-looking
-//!    results. This block dumps the signals a query-level rule judges, for every
-//!    labelled query: the OR-sanitized BM25 match count and best BM25 score, the
-//!    dense top-1 cosine, the served count — split into the positive/negative
-//!    piles, with the shipped bar's admissible window re-derived each run rather
-//!    than quoted (the GH #187 pattern, applied to search). Since GH #202 the
-//!    shipped bar's own reading is **in the exit gate**: zero labelled negatives
-//!    served, zero labelled positives cut, both at their structural zeros with
-//!    no headroom, because headroom here would read as permission to serve a
-//!    nonsense query or cut a real one. **Negative queries** (empty `relevant` —
-//!    the query-side siblings of the loner anchors) are excluded from every rank
-//!    aggregate, so labelling them moved no pre-existing number.
+//! One run builds throwaway vaults from the labelled corpora in `evals/` and scores, through
+//! the real pipeline: a **BM25 baseline** (after `project` only — the floor the model must
+//! clear, since the labelled queries avoid their target's keywords); **hybrid retrieval**
+//! plus a **vector-only ablation** (GH #158), whose delta is the measured value of the one
+//! AI seam; **passage rank** at chunk level, which is where chunking levers show; and
+//! **discovery**, scored per labelled mate rather than per anchor (GH #183 — the per-anchor
+//! metric saturates), with the strangers a positive anchor serves counted, named, and
+//! deliberately ungated, since the cheapest way to shrink that count is to label one.
 //!
-//! What this corpus **cannot** score is *candidate width*. 29 chunks is no more
-//! than the candidates each signal retrieves — `chunk_candidate_pool(K)` for the
-//! passage view, `note_candidate_pool(K)` for the note view, the narrower of the two
-//! being what has to bind — so neither list is truncated, widening the pool cannot
-//! add a candidate, and every number above is invariant under either view's headroom
-//! or `search::pool_size` — a change to any of them
-//! prints bit-identical scores here while reordering a real vault (GH #141). A run
-//! that is blind that way says so; the property is measured by the rank-stability
-//! probe (`--example stability`) on a vault big enough for the pool to bind. Note
-//! the scope: `RRF_K` re-weights the same lists rather than changing them, so it
-//! *does* move scores here and needs no separate instrument.
+//! Two calibration blocks re-derive their windows **every run** rather than quoting a
+//! reading: the discovery **z dump** (GH #187) and the **search evidence bake-off**
+//! (ADR-0015, GH #201/#202). That is the house rule — constants in code, measurements in the
+//! harness — and it exists because the GH #150 floors were frozen into a docstring and went
+//! stale the first time the corpus grew a shape they were never read against.
 //!
-//! `--sweep` re-chunks + re-embeds the same vault under variant [`ChunkConfig`]s
-//! (`Vault::set_chunk_config` → `project(force)` → `embed`) and reports the same
-//! scores per config — the in-process chunker A/B the #44 gate runs on.
+//! The **dense single-domain fixture** (`evals/corpus-dense/`) is scored in its own vault
+//! and its own row, never averaged in: fifteen genuinely inter-related notes with no loner,
+//! the geometry that broke every anchor-local existence gate (ADR-0014) and killed the first
+//! lexical evidence rule (ADR-0015). The orthogonal corpus is structurally incapable of
+//! expressing topical concentration, so a run that judges a bar only there judges it on the
+//! geometry it survives.
 //!
-//! `--stemmer` is the #157 instrument: `Vault::rebuild_fts` swaps `chunks_fts`
-//! between the shipped `porter unicode61` (schema v5 — the A/B's verdict) and the
-//! unstemmed `unicode61` ablation, over the **identical** chunk rows and vectors —
-//! nothing re-chunks or re-embeds, so every rank move is the tokenizer's alone.
-//! BM25-only is scored under both tokenizers while the vault is still unembedded
-//! (the honest lexical ablation), hybrid under both after; the dense ablation is
-//! re-scored across the flip purely as an instrument check (FTS cannot reach it,
-//! so any movement means the harness is broken, not the engine). Discovery is
-//! not re-scored: `similar` never touches FTS.
+//! What this corpus **cannot** score is *candidate width*: 29 chunks is no more than the
+//! candidates each signal retrieves, so neither list is truncated and every number is
+//! invariant under either view's headroom or `search::pool_size` (GH #141). A run that is
+//! blind that way says so; the property is measured by `--example stability` on a vault big
+//! enough for the pool to bind. `RRF_K` re-weights the *same* lists, so it does move scores
+//! here and needs no separate instrument.
 //!
-//! Every scored run appends one JSON line to `evals/results.jsonl` (gitignored),
-//! so runs accumulate into a comparable dataset: "tune from numbers" needs the
-//! numbers kept.
+//! `--sweep` re-chunks + re-embeds the same vault under variant [`ChunkConfig`]s. `--stemmer`
+//! swaps `chunks_fts` between the shipped `porter unicode61` and the unstemmed ablation over
+//! **identical** chunk rows and vectors, so every rank move is the tokenizer's alone.
+//!
+//! Every scored run appends one JSON line to `evals/results.jsonl` (gitignored), so runs
+//! accumulate into a comparable dataset.
 
 // `result_row`'s JSON literal is one `json!` expansion per key, and the row has
 // grown a key per instrument (GH #158, #141, #183, #187, #188). Raising the
@@ -180,90 +99,58 @@ const BAND_CLEAR_Z: f64 = 1.96;
 /// Untouched by the GH #197 re-derivation: retrieval never had a gate to
 /// retire.
 const FLOOR_HIT1: f64 = 0.75;
-/// The floor on **per-mate** discovery MRR@[`SIM_K`] (GH #188) — the
-/// non-saturating rank metric GH #183 added, gated once a baseline existed to
-/// price it. **Re-derived for always-serve** (GH #197): the shipped reading
-/// moved from 0.633 to 0.650 when the existence gate retired — exactly the
-/// returned phishing mate, served at rank 4 (+1/(4·15)) — so the floor moved
-/// with it, by the same method that set it.
+/// The floor on **per-mate** discovery MRR@[`SIM_K`] (GH #188) — the non-saturating rank
+/// metric, gated once a baseline existed to price it. Re-derived for always-serve
+/// (ADR-0014): the reading moved 0.633 -> 0.650 when the existence gate retired.
 ///
-/// Placed **below** the reading, never at it: a gate pinned to today's number
-/// fails on the first legitimate corpus edit, which trains the one habit this
-/// harness must never train — editing a *label* to get green (process rule 2's
-/// concern, stated for this metric in `docs/evals/README.md`). Per-mate is
-/// label-sensitive by construction: adding a mate to an anchor changes `n` and
-/// moves the aggregate whether or not the engine did anything.
-///
-/// Sizing, measured rather than guessed (GH #188's method, re-run for the
-/// GH #197 reading): five consecutive always-serve runs on an unchanged
-/// corpus/model/build reproduce every rank, z, and cosine **exactly**, so the
-/// run-to-run noise floor is 0 and the headroom exists for *corpus* drift
-/// instead. At n = 15 mates one mate lost from rank 1 costs 1/15 ≈ 0.067, and
-/// this floor sits ~2 such losses under the shipped 0.650 — a real regression
-/// trips it, a corpus edit that legitimately adds a hard mate does not.
+/// Placed **below** the reading, never at it: a gate pinned to today's number fails on the
+/// first legitimate corpus edit, which trains the one habit this harness must never train
+/// (process rule 2 — editing a *label* to get green). Sizing is measured, not guessed: five
+/// consecutive runs on an unchanged corpus/model/build reproduce every rank exactly, so the
+/// noise floor is 0 and the headroom exists for *corpus* drift. At n = 15 mates one mate
+/// lost from rank 1 costs 1/15, and this floor sits ~2 such losses under the reading.
 const FLOOR_MATE_MRR: f64 = 0.52;
 /// How many labelled mates the shipped surface may fail to serve at all.
 ///
-/// **Structurally 0 under always-serve** (GH #197): both discovery passes read
-/// the one ranked surface, so nothing can be reachable in one and unserved in
-/// the other — the pre-#197 reading of 1 (`phishing.md`, under the retired
-/// member bar) went to 0 with the gate that caused it. Kept as an assertion —
-/// at zero, with no headroom, deliberately — because it is the **tripwire**
-/// that re-arms the moment any Phase-2 existence signal puts a second surface
-/// back in the path: a nonzero value here can only mean a gate is suppressing
-/// a human-labelled relation again, which is exactly the event that must never
-/// ship unmeasured twice.
+/// **Structurally 0 under always-serve** (ADR-0014): both discovery passes read the one
+/// ranked surface, so nothing can be reachable in one and unserved in the other. Kept as an
+/// assertion at zero, with no headroom, because it is the **tripwire** that re-arms the
+/// moment any Phase-2 existence signal puts a second surface back in the path: a nonzero
+/// value can only mean a gate is suppressing a human-labelled relation again.
 const MAX_MATES_SUPPRESSED: usize = 0;
-/// The floor on the **dense fixture's** per-mate MRR@[`SIM_K`] (GH #197,
-/// Phase 0b) — the single-domain corpus's rank metric, gated once its baseline
-/// existed to price it (the same measure-then-calibrate order as
-/// [`FLOOR_MATE_MRR`]'s own history).
+/// The floor on the **dense fixture's** per-mate MRR@[`SIM_K`] (ADR-0014, Phase 0b), gated
+/// once its baseline existed — the same measure-then-calibrate order as [`FLOOR_MATE_MRR`].
 ///
-/// The reading is 0.467 (n = 14 mates) on the corpus as it stands: the model
-/// recovers the within-cluster labels and ranks the three cross-cluster claims
-/// lower — headroom in both directions, which is what a non-saturating
-/// instrument needs. (The fixture's first reading was 0.502; a one-word
-/// grammar fix in `hive-inspection.md` moved one mate a rank, the worked
-/// example of why these floors carry corpus-drift margin at all.) Repeat runs
-/// are bit-identical, so the margin is for corpus drift: at n = 14 one mate
-/// lost from rank 1 costs 1/14 ≈ 0.071, and this floor sits ~2 such losses
-/// under the reading. Process rule 2 binds hard here: in a corpus where
-/// everything relates, relabelling toward the model's order would *always*
-/// look plausible — a red reading argues about the notes.
+/// The reading is 0.467 (n = 14): the model recovers the within-cluster labels and ranks the
+/// three cross-cluster claims lower, which is headroom in both directions. (Its first
+/// reading was 0.502; a one-word grammar fix moved one mate a rank — the worked example of
+/// why these floors carry corpus-drift margin.) At n = 14 one mate lost from rank 1 costs
+/// 1/14, and this sits ~2 such losses under. Process rule 2 binds hard here: in a corpus
+/// where everything relates, relabelling toward the model's order would always look
+/// plausible — a red reading argues about the notes.
 const FLOOR_DENSE_MATE_MRR: f64 = 0.32;
-/// How many **labelled negative queries** D2's shipped bar may still serve
-/// (GH #202). Zero: this is the defect the bar exists to fix, and #201's bench
-/// made permanent.
+/// How many **labelled negative queries** the shipped evidence bar may still serve
+/// (ADR-0015, GH #202). Zero: this is the defect the bar exists to fix.
 ///
-/// Not a tripwire but a floor at its measured value, which is unusual here and
-/// deliberate. The reading is 0 of 5 on the labelled negatives and 0 of 2 on the
-/// dense fixture's nonsense, and the "headroom" a floor normally carries would
-/// be *permission to serve a nonsense query* — there is no corpus drift that
-/// makes that acceptable. A new negative the bar serves is either a real
-/// regression or a query that was mislabelled; both want a red reading.
+/// A floor at its measured value rather than below it, which is the deliberate exception to
+/// the house sizing method — the "headroom" a floor normally carries would be *permission to
+/// serve a nonsense query*. A new negative the bar serves is either a real regression or a
+/// mislabelled query; both want a red reading.
 const MAX_NEGATIVES_SERVED: usize = 0;
-/// How many **labelled relevant queries** D2's bar may cut (GH #202) — the
-/// search-side tripwire the invariant asserts at zero with no headroom, and the
-/// direction that costs a user something real: a served nonsense row costs a
-/// little trust, a cut positive costs the answer.
-///
-/// Its precondition was met by GH #208, which labelled the date-shaped query
-/// pile — the one query shape neither bench could previously see. The reading is
-/// 0 of 44. A nonzero value here is never a calibration nudge: it means the
-/// *rule* is wrong for a shape the corpus now carries, which is exactly how the
-/// df-ceiling rule died on the dense fixture (change the rule, not the number).
+/// How many **labelled relevant queries** the bar may cut (GH #202) — the search-side
+/// tripwire ADR-0015 asserts at zero with no headroom, and the direction that costs a user
+/// something real: a served nonsense row costs a little trust, a cut positive costs the
+/// answer. Its precondition was met by GH #208, which labelled the date-shaped query pile.
+/// The reading is 0 of 44. A nonzero value is never a calibration nudge: it means the *rule*
+/// is wrong for a shape the corpus now carries.
 const MAX_POSITIVES_CUT: usize = 0;
-/// How many of the **dense fixture's title-as-query probes** the bar may cut
-/// (GH #202). Zero, and this is the assertion that would have caught the losing
-/// rule: a note's own title is a query naming a note the vault demonstrably
-/// holds, so cutting one is indefensible whatever a labelled corpus says.
-///
-/// It gates a *different geometry* rather than a different threshold, which is
-/// why it is a third row and not headroom on [`MAX_POSITIVES_CUT`]: the labelled
-/// corpus minimizes shared vocabulary by construction (process rule 2's token
-/// audit), so topical concentration — the hazard that killed the df ceiling —
-/// is only expressible here. Titles need no labels, so nothing in this reading
-/// can be relabelled to clear it.
+/// How many of the **dense fixture's title-as-query probes** the bar may cut (GH #202).
+/// Zero, and this is the assertion that would have caught the losing rule: a note's own
+/// title names a note the vault demonstrably holds, so cutting one is indefensible whatever
+/// a labelled corpus says. A third row rather than headroom on [`MAX_POSITIVES_CUT`] because
+/// it gates a different *geometry*: the labelled corpus minimizes shared vocabulary by
+/// construction, so topical concentration is only expressible here. Titles need no labels,
+/// so nothing in this reading can be relabelled to clear it.
 const MAX_DENSE_TITLES_CUT: usize = 0;
 
 #[derive(Deserialize)]
@@ -364,41 +251,27 @@ struct SimilarPass {
     /// Rank of the first `expected` hit per positive anchor — the pre-existing
     /// hit@1 / hit@3 / MRR discovery metrics, unchanged.
     rank: Agg,
-    /// **Per-mate** ranks: one entry per `(anchor, expected mate)` pair rather
-    /// than one per anchor (GH #183). [`Self::rank`] takes the *first* labelled
-    /// mate it finds and stops, so an anchor with several mates scores a hit on
-    /// its easiest one and every harder mate is invisible — which is exactly
-    /// how that metric sat pinned at hit@1 = hit@3 = MRR@5 = 1.000 across the
-    /// centroid-vs-best-passage ordering change it was supposed to judge
-    /// (index-engine.md §3). Worse, *adding* a hard mate to an existing anchor
-    /// makes `rank` strictly easier, never harder.
+    /// **Per-mate** ranks: one entry per `(anchor, expected mate)` pair rather than one per
+    /// anchor (GH #183). [`Self::rank`] takes the *first* labelled mate it finds and stops,
+    /// so an anchor scores a hit on its easiest one and every harder mate is invisible —
+    /// which is how that metric sat pinned at 1.000 across the ordering change it was
+    /// supposed to judge. Worse, *adding* a hard mate makes `rank` strictly easier.
     ///
-    /// Scoring each labelled mate on its own is the "rank-sensitive readout
-    /// that doesn't saturate" GH #183 asked for: a mate that drops out of the
-    /// top `SIM_K`, or merely slides from rank 2 to rank 4, moves this number
-    /// even while `rank` stays at ceiling. A `None` is honest here — it means
-    /// that specific labelled mate did not surface at all.
+    /// Scoring each mate on its own is the non-saturating readout GH #183 asked for: a mate
+    /// sliding from rank 2 to rank 4 moves this number even while `rank` stays at ceiling. A
+    /// `None` is honest — that mate did not surface at all.
     ///
-    /// **In the exit gate** since GH #188, at [`FLOOR_MATE_MRR`]. It shipped
-    /// reporting-only for one issue's worth of time on the discovery floor's
-    /// own precedent (GH #150: measure, then calibrate — both cheap floor
-    /// variants failed when measured, so a threshold picked the day a metric
-    /// is born is intuition wearing a number), and that is where the baseline
-    /// came from: repeated runs on an unchanged corpus/model/build are
-    /// bit-identical, so the gate is sized for *corpus* drift and placed below
-    /// today's reading rather than at it.
+    /// **In the exit gate** since GH #188, at [`FLOOR_MATE_MRR`]. It shipped reporting-only
+    /// for one issue's worth of time on the measure-then-calibrate precedent, and that is
+    /// where the baseline came from.
     mate: Agg,
-    /// [`Self::mate`] measured on the second pass — which since GH #197 reads
-    /// the **same always-serve surface** as the first (there is no unfloored
-    /// sibling to diff against: `similar` *is* the ranked list).
+    /// [`Self::mate`] measured on the second pass — which since ADR-0014 reads the **same
+    /// always-serve surface** as the first, since `similar` *is* the ranked list.
     ///
-    /// Kept, with [`Self::mate_suppressed`] beside it, as the **tripwire
-    /// structure**: while nothing gates, the two aggregates agree by
-    /// construction and suppression reads a structural 0. If a Phase-2
-    /// bake-off ever ships an existence signal, the passes diverge again and
-    /// the suppression assertion re-arms with no harness change. (Historically
-    /// this pair was first the centroid-vs-passage ordering A/B, then — after
-    /// GH #192 aligned the orders — the floor's isolated suppression cost.)
+    /// Kept, with [`Self::mate_suppressed`] beside it, as the **tripwire structure**: while
+    /// nothing gates, the two agree by construction and suppression reads a structural 0. If
+    /// a Phase-2 bake-off ever ships an existence signal the passes diverge again and the
+    /// assertion re-arms with no harness change.
     mate_raw: Agg,
     /// Labelled mates the second pass reaches that the first never serves —
     /// a surface suppressing a human-labelled relation outright, as opposed to
@@ -414,24 +287,19 @@ struct SimilarPass {
     /// unfloored rank with its shipped one. Both passes walk `set.anchors` and
     /// each `label.expected` in the same order, so the flat index lines up.
     mate_floored: Vec<Option<usize>>,
-    /// **Strangers**: unlabelled notes the shipped surface serves on a
-    /// *positive* anchor, within the same top-`SIM_K` the ranks are read at —
-    /// `(anchor, path)` per card, so the smoke alarm comes with the list you
-    /// argue against it with (process rule 1).
+    /// **Strangers**: unlabelled notes the shipped surface serves on a *positive* anchor,
+    /// within the same top-`SIM_K` the ranks are read at — `(anchor, path)` per card, so the
+    /// smoke alarm comes with the list you argue against it with (process rule 1).
     ///
-    /// This is discovery's **precision** side, and the harness had none: the
-    /// gated numbers watch mate ranks (recall) and negative anchors, and the
-    /// negatives gate is *structurally* blind to `member_z` — while
-    /// `member_z ≤ leader_z` a negative anchor is clean iff its leader is cut,
-    /// so a relaxed member bar spends its entire cost here, on positive
-    /// anchors' tails, where nothing was counting (GH #187/#188).
+    /// This is discovery's **precision** side, and the harness had none: the gated numbers
+    /// watch mate ranks and negative anchors, and the negatives gate is structurally blind to
+    /// a member bar — while `member_z <= leader_z`, a negative anchor is clean iff its leader
+    /// is cut, so a relaxed member bar spends its entire cost here (GH #187/#188).
     ///
-    /// Deliberately **reported, not gated**, and the reason is the gaming
-    /// direction rather than the noise: the cheapest way to shrink this count
-    /// is to *label the stranger*, which silently moves the per-mate metric
-    /// too. An unlabelled note served is not proof of junk — the labels are
-    /// not exhaustive — so it reads as a smoke alarm with names attached, and
-    /// the argument happens against the notes.
+    /// Deliberately **reported, not gated**, and the reason is the gaming direction: the
+    /// cheapest way to shrink this count is to *label the stranger*, which silently moves the
+    /// per-mate metric too. The labels are not exhaustive, so an unlabelled note served is
+    /// not proof of junk — it reads as a smoke alarm with names attached.
     strangers: Vec<(String, String)>,
     /// Positive anchors serving at least one stranger — the spread behind
     /// [`Self::strangers`], since one anchor with a long tail and five anchors
@@ -536,20 +404,16 @@ impl AnchorZ {
     }
 }
 
-/// The z dump across every discovery anchor, split into the populations an
-/// existence bar would answer to (GH #187; the unit is the stage-2 best-passage
-/// z since GH #192, and it gates nothing since GH #197).
+/// The z dump across every discovery anchor, split into the populations an existence bar
+/// would answer to (GH #187; the unit is the stage-2 best-passage z, and it gates nothing —
+/// ADR-0014).
 ///
-/// Three populations, because a two-bar rule's constants answer to different
-/// ones — the conflation is what made "the negatives gate would catch a bad
-/// `member_z`" look true when it was not: while `member_z ≤ leader_z`, a
-/// negative anchor is clean **iff its leader is cut**, so no member bar can
-/// dirty (or clean) it. A leader gate is calibrated by negative-anchor leaders
-/// against positive-anchor leaders; a member bar by strangers on positive
-/// anchors against labelled mates. Both windows are re-derived here on every
-/// run — the standing record of why no such rule ships (the member window has
-/// been empty since #187; GH #196 measured the leader gate darkening a dense
-/// vault), and the first reading any Phase-2 bake-off candidate answers to.
+/// Three populations, because a two-bar rule's constants answer to different ones — the
+/// conflation is what made "the negatives gate would catch a bad `member_z`" look true when
+/// it was not. A leader gate is calibrated by negative-anchor leaders against positive-anchor
+/// leaders; a member bar by strangers against labelled mates. Both windows are re-derived
+/// every run — the standing record of why no such rule ships, and the first reading any
+/// Phase-2 candidate answers to.
 #[derive(Default)]
 struct FloorZ {
     /// Every anchor with computed statistics, in label order.
@@ -989,21 +853,14 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
-    // The negatives' suppression assertion (GH #150) RETIRED with the gate it
-    // watched (GH #197): under always-serve a loner anchor serves its ranked
-    // nearest — that is the ruling, not a regression, so `neg_clean == neg_n`
-    // would now assert the retired behavior. The anchors stay labelled, the
-    // strangers instrument keeps counting, and what the served cards *claim*
-    // is the calibration block's band readout (every leader paints `●○○` on
-    // the corpus today).
-    // Discovery **rank** (GH #188; re-derived for always-serve by GH #197).
-    // The per-mate metric shipped reporting-only on purpose — the precedent
-    // (GH #150) is measure-then-calibrate, and a threshold picked the day a
-    // metric is born is intuition wearing a number. The rank floor sits below
-    // its measured reading (corpus-drift headroom, run noise being zero);
-    // suppression, next, sits AT its structural zero — a tripwire, not a
-    // budget. `docs/evals/README.md` carries the failure mode neither may
-    // train.
+    // The negatives' suppression assertion RETIRED with the gate it watched (ADR-0014):
+    // under always-serve a loner anchor serves its ranked nearest — that is the ruling, not
+    // a regression. The anchors stay labelled, the strangers instrument keeps counting, and
+    // what the served cards *claim* is the calibration block's band readout.
+    //
+    // Discovery **rank** (GH #188). The rank floor sits below its measured reading (corpus
+    // drift headroom, run noise being zero); suppression, next, sits AT its structural zero
+    // — a tripwire, not a budget.
     if similar.mate.mrr() < FLOOR_MATE_MRR {
         eprintln!(
             "\n[warn] per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_MATE_MRR:.2} floor — discovery ranking regressed \
@@ -1047,19 +904,14 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         return Ok(false);
     }
-    // D2's search-evidence rows (GH #202), landed with the surfaces that consume
-    // the verdict per #182's rule. Everything above is discovery's and is
-    // deliberately UNCHANGED: search's bar moves no discovery rank and no
-    // reachability, so movement up there is a bug, not a re-derivation.
+    // The search-evidence rows (ADR-0015, GH #202), landed with the surfaces that consume
+    // the verdict. Everything above is discovery's and is deliberately UNCHANGED: search's
+    // bar moves no discovery rank and no reachability, so movement up there is a bug.
     //
-    // All three sit at their structural zeros with no headroom, which is the
-    // exception to the house sizing method rather than an oversight — headroom
-    // here would read as permission to serve a nonsense query or cut a real one,
-    // and no corpus drift makes either acceptable. A red reading argues about the
-    // rule or about a label, never about the constant.
-    //
-    // Skipped entirely when the model has no calibrated bar (M2): there is no
-    // verdict to assert, and asserting the absence of one would fail every run on
+    // All three sit at their structural zeros with no headroom — the exception to the house
+    // sizing method rather than an oversight, since headroom here would read as permission
+    // to serve a nonsense query or cut a real one. Skipped entirely when the model has no
+    // calibrated bar (ADR-0007): asserting the absence of a verdict would fail every run on
     // a model the harness has simply not measured yet.
     match read_shipped_bar(&evidence, &model_id) {
         None => eprintln!(
@@ -1233,29 +1085,19 @@ struct DensePass {
     search: DenseSearch,
 }
 
-/// The shipped search evidence bar's reading **on the single-domain fixture**
-/// (invariants.md D2, GH #201; added in the PR #205 review sweep).
+/// The shipped search evidence bar's reading **on the single-domain fixture** (ADR-0015).
 ///
-/// This exists because the bar's first form died here and nowhere else. A hard
-/// `df ≤ 10%` content ceiling read 0 cut / 0 served on the labelled orthogonal
-/// corpus — clean by every number that bench can produce — and then classed
-/// `drone` (df 3) and `comb` (df 7) as stopwords in a vault about beekeeping,
-/// cutting 3 of 15 queries naming notes the vault holds. The lexical rule's
-/// hazard is **topical concentration**, which the orthogonal corpus is
-/// structurally incapable of expressing (process rule 2's token audit minimizes
-/// shared vocabulary by construction), so a run that judges the bar only there
-/// is judging it on the geometry it survives.
+/// This exists because the bar's first form died here and nowhere else. A hard `df <= 10%`
+/// content ceiling read 0 cut / 0 served on the labelled orthogonal corpus — clean by every
+/// number that bench can produce — and then classed `drone` (df 3) and `comb` (df 7) as
+/// stopwords in a vault about beekeeping, cutting 3 of 15 answerable queries. The lexical
+/// rule's hazard is **topical concentration**, which the orthogonal corpus cannot express, so
+/// a run that judges the bar only there judges it on the geometry it survives.
 ///
-/// The reading was taken once by hand through `just calibrate --search` when the
-/// rule was chosen. Taking it *once* is the thing GH #187 named: a constant whose
-/// justification is not recomputed goes stale the first time the corpus grows a
-/// shape it was never read against. So it is re-derived every run, here, beside
-/// the discovery fold bench that already sweeps this fixture.
-///
-/// **In the exit gate** since GH #202, at [`MAX_DENSE_TITLES_CUT`] and
-/// [`MAX_NEGATIVES_SERVED`] — landed with the surfaces per #182's rule. It is a
-/// row of its own rather than headroom on the labelled corpus's, because what it
-/// watches is a different *geometry*, not a looser threshold.
+/// The reading was first taken once, by hand. Taking it *once* is the thing GH #187 named,
+/// so it is re-derived every run, here, beside the fold bench that already sweeps this
+/// fixture. **In the exit gate** since GH #202, as a row of its own rather than headroom on
+/// the labelled corpus's, because it watches a different *geometry*.
 struct DenseSearch {
     /// Every note's own title replayed as a query — the **tripwire direction**
     /// (D2: a labelled-relevant query cut is zero with no headroom). Titles need
@@ -1281,16 +1123,12 @@ struct SearchProbe {
     vouched: Option<bool>,
 }
 
-/// The negatives replayed on the dense fixture: **nonsense only**.
-///
-/// The labelled negatives in `queries.json` are the *orthogonal* corpus's, and
-/// process rule 2's token audit is what makes them negatives — an audit that
-/// says nothing about a different corpus. Running it against `corpus-dense`
-/// disqualifies the phrase-shaped ones on their merits: "why parrots mimic
-/// speech" shares `mimic` with `robbing-behavior.md`, so on this fixture it is a
-/// query the vault has a rare-ish word for, which is a thing D2's rule
-/// deliberately serves. Nonsense needs no audit in any vault, which is exactly
-/// why it is the part that transfers.
+/// The negatives replayed on the dense fixture: **nonsense only**. The labelled negatives in
+/// `queries.json` are the *orthogonal* corpus's, and process rule 2's token audit is what
+/// makes them negatives — an audit that says nothing about a different corpus. Against
+/// `corpus-dense` the phrase-shaped ones disqualify themselves on their merits ("why parrots
+/// mimic speech" shares `mimic` with `robbing-behavior.md`, which is a thing the rule
+/// deliberately serves). Nonsense needs no audit in any vault, which is why it transfers.
 const DENSE_NONSENSE: [&str; 2] = ["shjfasd", "vrelqip zonktar wembleforth"];
 
 /// Replay the shipped bar over the dense fixture (see [`DenseSearch`]).
@@ -2470,18 +2308,15 @@ struct QueryEvidence {
     /// best-BM25 both failed to separate the piles (Phase A), so the anchor is
     /// derived from *these* rather than from either of those.
     terms: Vec<(String, usize)>,
-    /// **The engine's own verdict** for this query — `Vault::search_evidence`'s
-    /// `vouched`, i.e. exactly what the surfaces act on (GH #202). The exit gate
-    /// counts on *this*, never on the harness's restatement below: an assertion
-    /// about what ships must read what ships. `None` when the model has no
-    /// calibrated bar (M2).
+    /// **The engine's own verdict** for this query — `Vault::search_evidence`'s `vouched`,
+    /// i.e. exactly what the surfaces act on (GH #202). The exit gate counts on *this*, never
+    /// on the harness's restatement below: an assertion about what ships must read what
+    /// ships. `None` when the model has no calibrated bar.
     ///
-    /// The restatement is kept beside it rather than deleted, because the sweep
-    /// genuinely needs it — [`bake_off`] evaluates the rule at coverages the
-    /// engine cannot be asked about — and because two independent readings of
-    /// one rule are a drift check when they are compared. So they are:
-    /// [`read_shipped_bar`] prints a `[FAULT]` on any query where they disagree,
-    /// which is this file's existing idiom for the z dump.
+    /// The restatement is kept beside it because the sweep needs it — [`bake_off`] evaluates
+    /// the rule at coverages the engine cannot be asked about — and because two independent
+    /// readings of one rule are a drift check when compared. So they are: [`read_shipped_bar`]
+    /// prints a `[FAULT]` on any query where they disagree.
     vouched: Option<bool>,
 }
 
@@ -2796,17 +2631,11 @@ fn print_search_evidence(ev: &SearchEvidence) {
     }
 }
 
-/// Print the **search evidence bake-off** (invariants.md D2; GH #201, Phase C)
-/// — the query-level rule's window, re-derived from the labelled piles on every
-/// run rather than quoted from the day it was read.
-///
-/// This is the GH #187 idiom on search's side of the disclosure axis, and it
-/// exists for the reason #187 named: the GH #150 cosine floor shipped as numbers
-/// frozen into a docstring, and they went stale the first time the corpus grew a
-/// shape they were never measured against. So the constant lives in
-/// [`b2_core::search::BGE_BASE_EVIDENCE_BAR`] and its *justification* is
-/// recomputed here — including, last, whether the shipped bar still sits inside
-/// the window it was read from.
+/// Print the **search evidence bake-off** (ADR-0015, GH #201) — the query-level rule's
+/// window, re-derived from the labelled piles on every run rather than quoted from the day it
+/// was read. The GH #187 idiom on search's side: the constant lives in
+/// [`b2_core::search::BGE_BASE_EVIDENCE_BAR`] and its *justification* is recomputed here,
+/// including whether the shipped bar still sits inside the window it was read from.
 fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_id: &str) {
     println!(
         "  search evidence bake-off (D2 — the query-level rule, re-derived every run; GH #201)"
@@ -2943,18 +2772,13 @@ fn headroom(cell: &EvidenceCell) -> f64 {
     }
 }
 
-/// Where the **shipped** constant stands against this run's piles: the tripwire
-/// (a labelled positive the bar would cut — D2 asserts zero, no headroom) and
-/// the defect it exists to fix (a labelled negative it still serves).
+/// Where the **shipped** constant stands against this run's piles: the tripwire (a labelled
+/// positive the bar would cut — ADR-0015 asserts zero, no headroom) and the defect it exists
+/// to fix (a labelled negative it still serves).
 ///
-/// **In the exit gate** since GH #202, at [`MAX_POSITIVES_CUT`] and
-/// [`MAX_NEGATIVES_SERVED`] — landed with the surfaces that consume the verdict,
-/// per GH #182's rule that a change to the judged statistic is a change to every
-/// surface that paints it. Read here rather than in the printer so the number
-/// asserted and the number explained are one number.
-///
-/// `None` when the active model has no calibrated bar (M2): there is no verdict
-/// to read, so there is nothing to assert either.
+/// **In the exit gate** since GH #202, at [`MAX_POSITIVES_CUT`] and [`MAX_NEGATIVES_SERVED`].
+/// Read here rather than in the printer, so the number asserted and the number explained are
+/// one number. `None` when the active model has no calibrated bar.
 struct ShippedBar {
     bar: EvidenceBar,
     /// Labelled positives the bar cuts — the tripwire's direction.
@@ -3106,16 +2930,14 @@ fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
     Some((sorted[0], median, sorted[sorted.len() - 1]))
 }
 
-/// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding
-/// short rows to the batch's longest and masking them out has to leave each row's
-/// CLS vector unchanged. The reindex path batches freely, so a regression here
-/// would silently corrupt every stored vector — and every score this eval prints.
+/// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding short rows
+/// to the batch's longest and masking them out has to leave each row's CLS vector unchanged.
+/// The reindex path batches freely, so a regression here would silently corrupt every stored
+/// vector — and every score this eval prints.
 ///
-/// This lives in the eval rather than in `cargo test` because it needs the
-/// provisioned model, which the fast suite deliberately never touches (root
-/// `CLAUDE.md`, "Keep `cargo test` fast, deterministic, and model-free"). Running
-/// it here means it actually runs, on every `just eval`, instead of sitting behind
-/// an `#[ignore]` nobody passes `--ignored` to.
+/// It lives in the eval rather than `cargo test` because it needs the provisioned model,
+/// which the fast suite deliberately never touches (ADR-0013). Running it here means it
+/// actually runs, instead of sitting behind an `#[ignore]` nobody passes `--ignored` to.
 fn check_batch_matches_single(model: &LocalEmbedder) -> Result<(), Box<dyn std::error::Error>> {
     // Deliberately varied lengths, so batching pads the short rows to the longest.
     let texts = [
@@ -3174,28 +2996,17 @@ fn timed_embed(vault: &Vault) -> Result<(usize, f64), Box<dyn std::error::Error>
 
 /// State the one thing this corpus **cannot** measure, on every run that can't.
 ///
-/// Retrieval pulls [`note_candidate_pool`] candidates from each signal before
-/// fusing, or [`chunk_candidate_pool`] for the passage view. A corpus with no more
-/// chunks than that truncates *neither* list — BM25 has fewer matches than its
-/// `LIMIT`, the vector scan tops out at the stored vectors — so both lists are
-/// already complete, widening the pool cannot add a candidate, and every score above
-/// is invariant under **candidate width**. A change to either view's headroom or to
-/// `search::pool_size` then prints bit-identical numbers here while genuinely
-/// reordering a real vault (GH #141; the worked example is GH #140/#142).
+/// A corpus with no more chunks than a signal's candidate pool truncates *neither* list, so
+/// both are already complete, widening cannot add a candidate, and every score above is
+/// invariant under **candidate width**: a change to either view's headroom or to
+/// `search::pool_size` prints bit-identical numbers here while genuinely reordering a real
+/// vault (GH #141). Judged on the **narrower** of the two pools, since blindness is a claim
+/// about every number the run prints.
 ///
-/// Judged on the **narrower** of the two pools, which since #142 is the passage
-/// view's: blindness is a claim about every number the run prints, and a corpus that
-/// fits inside the narrower pool fits inside the wider one too.
-///
-/// Scoped deliberately to width. `RRF_K` re-weights the *same* two lists
-/// (`Σ 1/(k+rank+1)`), so it reorders results on any corpus — measured on this one:
-/// k = 60 → 10 moves note ranks across the query set. This eval sees that; it is
-/// only blind to candidates it was never going to be handed.
-///
-/// A warning, not a gate: this eval is out-of-CI and human-read, and the point is
-/// that a reader must not take an unmoved number as evidence of no change. The
-/// property itself is measured by the rank-stability probe (`--example stability`),
-/// which runs on a vault big enough for the pool to bind.
+/// Scoped deliberately to width — `RRF_K` re-weights the *same* two lists, so it reorders
+/// results on any corpus, and this eval sees that. A warning, not a gate: the point is that a
+/// reader must not take an unmoved number as evidence of no change. The property itself is
+/// measured by `--example stability`, on a vault big enough for the pool to bind.
 fn warn_if_pool_blind(chunks: usize) {
     let pool = chunk_candidate_pool(K).min(note_candidate_pool(K));
     if chunks <= pool {

@@ -1,14 +1,13 @@
-//! `b2` — the first adapter over the `b2-core` typed API (invariants.md,
-//! headless-first: "the CLI is the UI before the UI"). It holds **no engine logic**:
-//! it parses args, picks + injects the embedder, calls the [`Vault`] façade, and
-//! prints — human-readable by default, or `--json` for agents.
+//! `b2` — one of the two dumb adapters over the `b2-core` typed API (ADR-0012),
+//! headless-first: "the CLI is the UI before the UI". It holds **no engine logic** — it
+//! parses args, injects the embedder and chat provider, calls the [`Vault`] façade, and
+//! prints (human-readable, or `--json` for agents).
 //!
-//! The embedder is the real, candle-backed [`LocalEmbedder`] by default (`search`'s
-//! vector half is genuinely semantic). It is **not bundled**: `b2 init` downloads it
-//! into a shared XDG cache, and `reindex`/`search` **fail fast** with "run `b2 init`"
-//! if it is absent — never a surprise mid-command download (index-engine.md §6).
-//! `B2_EMBEDDER=fake` forces the deterministic fake embedder — an offline/dev mode
-//! that needs no model, and what the CLI test suite uses to stay fast and model-free.
+//! The embedder is the real candle-backed [`LocalEmbedder`] by default. It is **not
+//! bundled**: `b2 init` downloads it into a shared XDG cache, and `reindex`/`search` fail
+//! fast with "run `b2 init`" if it is absent, never a surprise mid-command download
+//! (ADR-0020). `B2_EMBEDDER=fake` forces the deterministic fake — an offline/dev mode,
+//! and what the CLI suite runs under.
 
 use b2_core::embed::Embedder;
 use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
@@ -30,12 +29,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// foreground, or (for a `reindex`) by another process's `b2 reindex --cancel` (GH #55),
 /// which raises the *same* signal so both reach here.
 ///
-/// Two loops read it, through the same [`ControlFlow`] seam, at the checkpoint cadence
-/// each has: the reindex embed loop at every batch boundary — stopping *after* the
-/// current batch, so a cancel leaves a consistent, re-runnable partial index rather than
-/// a torn write (index-engine.md) — and the chat surfaces' token callback at every token
-/// (GH #154), where stopping renders the partial answer honestly. `chat` clears it before
-/// each turn, so a Ctrl-C that stopped one answer never cancels the next.
+/// Two loops read it through the same [`ControlFlow`] seam: the reindex embed loop at
+/// every batch boundary, stopping *after* the current batch so a cancel leaves a
+/// consistent, re-runnable index; and the chat surfaces' token callback at every token,
+/// where stopping renders the partial answer honestly. `chat` clears it before each turn.
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Whether `b2 chat` is streaming an answer right now — which is what decides
@@ -210,12 +207,10 @@ enum Command {
     },
 }
 
-/// Which model to chat with, and where it lives — shared by `ask` and `chat`.
-///
-/// The precedence is the `B2_VAULT_PATH` convention exactly: an explicit flag beats
-/// the environment beats the built-in default. Resolution itself lives in
-/// `b2_llm::LlmConfig` (one place, so the desktop's settings layer over the same
-/// base) — which is why these are plain options rather than clap `env` args.
+/// Which model to chat with, and where it lives — shared by `ask` and `chat`. Precedence
+/// is the `B2_VAULT_PATH` convention exactly: an explicit flag beats the environment beats
+/// the default. Resolution lives once in `b2_llm::LlmConfig`, so the desktop's settings
+/// layer over the same base — which is why these are plain options, not clap `env` args.
 #[derive(Args, Debug)]
 struct LlmArgs {
     /// The OpenAI-compatible base URL of your model server
@@ -240,11 +235,10 @@ impl Cli {
         self.vault.as_deref().unwrap_or_else(|| Path::new("."))
     }
 
-    /// The vault root for commands that **write** to the vault (`reindex`, `add`, `mv`,
-    /// `rm`, `link`): `positional` (only `reindex` has one) wins, then `-C`/`$B2_VAULT_PATH`;
-    /// with none, error rather than silently building or mutating in the current
-    /// directory — a stale binary or a mistyped var would otherwise pollute the wrong
-    /// place (and leave a stray `.b2/`). This is the write-side counterpart to
+    /// The vault root for commands that **write** (`reindex`, `add`, `mv`, `rm`, `link`):
+    /// `positional` wins, then `-C`/`$B2_VAULT_PATH`; with none, error rather than
+    /// silently mutating the current directory, where a stale binary or mistyped var would
+    /// otherwise leave a stray `.b2/`. The write-side counterpart to
     /// [`vault_or_cwd`](Self::vault_or_cwd).
     fn require_vault<'a>(&'a self, positional: Option<&'a Path>) -> Result<&'a Path, CliError> {
         positional
@@ -265,29 +259,21 @@ fn main() -> ExitCode {
     }
 }
 
-/// Opt-in structured debug logging: the kernel's `tracing` events — per-statement
-/// SQLite timings from SQLite's own profiler (`b2::sqlite`, with `duration_us` and
-/// `slow=true` on anything at/over `B2_SLOW_QUERY_MS`, default 100), façade-op
-/// spans (`b2::vault`), and flow milestones (`b2::search`/`b2::ingest`) — rendered
-/// as **JSON Lines**, one flat object per line, so a run's log pipes straight into
-/// jq/DuckDB/pandas for reporting and plotting while `--json` stdout stays pure data.
+/// Opt-in structured debug logging: the kernel's `tracing` events — per-statement SQLite
+/// timings, façade-op spans, flow milestones — rendered as **JSON Lines**, one flat object
+/// per line, so a run's log pipes straight into jq/DuckDB while `--json` stdout stays pure
+/// data.
 ///
-/// The sink is stderr by default; `B2_LOG_FILE=<path>` writes the log there instead
-/// (**append** mode, so successive runs accumulate into one reportable dataset —
-/// every event carries its own timestamp). A file is also the guaranteed-pure
-/// capture: stderr can interleave human notices (progress lines, skipped-file
-/// lists) with the JSONL in non-`--json` runs.
+/// The sink is stderr by default; `B2_LOG_FILE=<path>` writes there instead, in **append**
+/// mode so successive runs accumulate into one dataset. A file is also the
+/// guaranteed-pure capture: stderr can interleave human notices with the JSONL.
 ///
-/// `B2_LOG` holds a tracing filter directive (e.g. `debug`, `b2::sqlite=debug`,
-/// `warn` for slow queries only); setting `B2_DEBUG` (which already opts into error
-/// detail) or `B2_LOG_FILE` without `B2_LOG` implies **`b2=debug`** — the kernel's
-/// own targets, scoped exactly as the desktop sink scopes its implied default. That
-/// scoping is what keeps the dataset reportable now that a chat command links an
-/// HTTP client: `ureq` logs its connection handling through the `log` bridge, in a
-/// foreign shape (`log.line`, `log.module_path`, no `duration_us`), and a bare
-/// `debug` would fold it into the same file as the timings. Opt into the firehose
-/// with an explicit `B2_LOG=debug`. With none of the three set, no subscriber is
-/// installed and the kernel's instrumentation stays inert.
+/// `B2_LOG` holds a tracing filter directive; `B2_DEBUG` or `B2_LOG_FILE` without it
+/// implies **`b2=debug`** — the kernel's own targets only. That scoping is what keeps the
+/// dataset reportable now that a chat command links an HTTP client: `ureq` logs through
+/// the `log` bridge in a foreign shape, and a bare `debug` would fold it into the same
+/// file. Opt into the firehose with an explicit `B2_LOG=debug`. With none of the three
+/// set, no subscriber is installed and the instrumentation stays inert.
 fn init_logging() {
     let log_file = std::env::var_os("B2_LOG_FILE");
     let directive = match std::env::var("B2_LOG") {
@@ -422,12 +408,10 @@ fn cmd_reindex(
         }
         return Ok(());
     }
-    // Single-in-flight: take an advisory lock *before* the (slow) model load so
-    // a second `b2 reindex` — e.g. a foreground run racing one you backgrounded
-    // with `b2 reindex &` — refuses cleanly instead of two processes writing the
-    // same index. Advisory, not a PID file: the OS frees it the instant the holder
-    // exits (crash, kill, or Ctrl-C included), so nothing stale is ever left behind.
-    // `lock` is held until this command fn ends; dropping it releases the lock.
+    // Single-in-flight: take an advisory lock *before* the slow model load, so a second
+    // `b2 reindex` refuses cleanly instead of two processes writing the same index.
+    // Advisory, not a PID file: the OS frees it the instant the holder exits (crash, kill
+    // or Ctrl-C included), so nothing stale is left behind. Held until this fn ends.
     let lock = open_reindex_lock(root)?;
     match lock.try_lock() {
         Ok(()) => {}
@@ -854,16 +838,13 @@ fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
     // `limit` confident-looking results for a query the vault holds nothing for.
     let view = vault.search_evidence(query, limit)?;
     if cli.json {
-        // The whole view, verdict included. This is an OBJECT where `--json`
-        // used to be an array — a deliberate break (GH #202), because a
-        // query-level verdict has nowhere to live in a list of rows. The rows
-        // themselves stay additive: each element of `results` is the old
-        // `SearchResult` plus flattened per-hit provenance.
+        // The whole view, verdict included. This is an OBJECT where `--json` used to be
+        // an array — a deliberate break (GH #202), because a query-level verdict has
+        // nowhere to live in a list of rows; the rows themselves stay additive.
         //
-        // The JSON serves the rows even at `vouched: false`, where the human
-        // surface below shows none: an agent handed the rows *plus* an explicit
-        // verdict can be honest about them, where a human handed rows alone
-        // cannot — the asymmetry is deliberate, not an inconsistency.
+        // The JSON serves the rows even at `vouched: false`, where the human surface below
+        // shows none: an agent handed the rows *plus* an explicit verdict can be honest
+        // about them, where a human handed rows alone cannot.
         print_json(&view)?;
     } else {
         println!("{}", search_report(&view, query));
@@ -879,16 +860,14 @@ fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The human-mode rendering of a search — D2's three verdict states as one pure
+/// The human-mode rendering of a search — ADR-0015's three verdict states as one pure
 /// function (GH #202).
 ///
-/// Pure, and separate from [`cmd_search`], because the state that matters most
-/// is the one the integration suite structurally cannot reach: `Some(false)`
-/// needs a *calibrated* bar, and the fake embedder the suite runs under has none
-/// by design (M2), so it can only ever produce `None`. A branch reachable only
-/// under the real model is a branch the fast suite can still own if the
-/// rendering is separated from the retrieval — which is the same argument that
-/// keeps quality out of CI and rendering in it.
+/// Pure, and separate from [`cmd_search`], because the state that matters most is the one
+/// the integration suite structurally cannot reach: `Some(false)` needs a *calibrated*
+/// bar, and the fake embedder the suite runs under has none by design. A branch reachable
+/// only under the real model is still the fast suite's to own once the rendering is
+/// separated from the retrieval.
 fn search_report(view: &SearchEvidenceView, query: &str) -> String {
     match view.vouched {
         // D2's "no matches", strict: the vault holds neither a lexical anchor
@@ -1010,12 +989,10 @@ fn cmd_ask(cli: &Cli, question: &str, llm_args: &LlmArgs) -> Result<(), CliError
 fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
     let llm = open_llm(llm_args)?;
     let vault = open_vault(cli.vault_or_cwd(), true)?;
-    // Ctrl-C means two different things in a REPL, and a handler that only ever
-    // meant one of them would trap the user: mid-answer it cancels the stream (the
-    // partial text stands), but at an idle prompt — where nothing is running to
-    // cancel — it must still be the way out, since swallowing it would leave
-    // `/exit` and Ctrl-D as the only exits from a program the user is pressing
-    // Ctrl-C at. `ctrlc` runs this on its own thread, so exiting from it is safe.
+    // Ctrl-C means two different things in a REPL, and a handler that only ever meant one
+    // would trap the user: mid-answer it cancels the stream (the partial text stands), but
+    // at an idle prompt it must still be the way out, since swallowing it would leave
+    // `/exit` and Ctrl-D as the only exits. `ctrlc` runs this on its own thread.
     let _ = ctrlc::set_handler(|| {
         if ANSWERING.load(Ordering::SeqCst) {
             CANCEL.store(true, Ordering::SeqCst);
@@ -1088,14 +1065,11 @@ fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// One grounded ask, rendered as it arrives — the shared body of `ask` and each
-/// `chat` turn (flow ④'s streaming contract: every surface streams).
-///
-/// Under `--json` this is a **JSON Lines event stream** — one `token` event per
-/// token, then one `answer` event carrying the [`AnswerView`] — so an agent
-/// consuming the pipe sees the answer forming and still gets the resolved
-/// citations as data. Otherwise tokens print to stdout as they land, with the
-/// sources list after them.
+/// One grounded ask, rendered as it arrives — the shared body of `ask` and each `chat`
+/// turn (flow ④'s streaming contract: every surface streams). Under `--json` this is a
+/// **JSON Lines event stream** — one `token` event per token, then one `answer` event
+/// carrying the [`AnswerView`] — so an agent sees the answer forming and still gets the
+/// resolved citations as data.
 fn ask_streamed(
     vault: &Vault,
     llm: &dyn LlmProvider,
@@ -1174,12 +1148,10 @@ fn note_fake_llm() {
 
 /// Pick + wire the chat provider — [`open_vault`]'s sibling for the second seam.
 ///
-/// `B2_LLM=fake` forces the deterministic [`FakeLlm`] (the `B2_EMBEDDER=fake`
-/// sibling: an offline/dev mode that needs no server, and what the CLI suite runs
-/// under). Otherwise the real client is built from the environment with this
-/// command's flags laid over it, and **probed before anything else happens** — the
-/// `b2 init` posture applied to chat: a stopped daemon or an un-pulled model is a
-/// sentence before the question is asked, never a surprise after it.
+/// `B2_LLM=fake` forces the deterministic [`FakeLlm`], the `B2_EMBEDDER=fake` sibling.
+/// Otherwise the real client is built from the environment with this command's flags laid
+/// over it, and **probed before anything else happens** — the `b2 init` posture applied to
+/// chat: a stopped daemon is a sentence before the question, never a surprise after it.
 fn open_llm(args: &LlmArgs) -> Result<Box<dyn LlmProvider>, CliError> {
     if use_fake_llm() {
         return Ok(Box::new(FakeLlm));
@@ -1195,13 +1167,10 @@ fn use_fake_llm() -> bool {
     std::env::var_os("B2_LLM").is_some_and(|v| v == "fake")
 }
 
-/// Open a vault with the appropriate embedder.
-///
-/// `needs_semantic` commands (`reindex`, `search`) load the real [`LocalEmbedder`]
-/// from the shared cache and **fail fast** with "run `b2 init`" if it's absent.
-/// Pure-graph commands pass `false` and use the fake — no model required just to
-/// explore the graph. `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev
-/// mode, and what the test suite runs under).
+/// Open a vault with the appropriate embedder. `needs_semantic` commands (`reindex`,
+/// `search`) load the real [`LocalEmbedder`] and **fail fast** with "run `b2 init`" if it
+/// is absent; pure-graph commands pass `false` and use the fake, so no model is required
+/// just to explore the graph. `B2_EMBEDDER=fake` forces the fake everywhere.
 fn open_vault(root: &Path, needs_semantic: bool) -> Result<Vault, CliError> {
     if needs_semantic && !use_fake_embedder() {
         let config = EmbedConfig::load()?;
@@ -1297,13 +1266,12 @@ fn open_reindex_lock(root: &Path) -> Result<File, CliError> {
 }
 
 /// Stamp this process's id into the reindex lock — **only ever called with the lock
-/// held**, which is what makes truncate-then-write safe here (we are its sole writer;
-/// `open_reindex_lock` deliberately doesn't truncate, since that would race a holder).
+/// held**, which is what makes truncate-then-write safe (`open_reindex_lock` deliberately
+/// does not truncate, since that would race a holder).
 ///
-/// The pid outlives the run — nothing clears it on exit — and that is harmless by
-/// construction: [`reindex_holder`] reads it *only* when the lock is contended, so the
-/// **lock**, never the file's contents, decides whether a run is in flight. A leftover
-/// pid from a finished run is therefore never mistaken for a live one.
+/// The pid outlives the run, harmlessly: [`reindex_holder`] reads it *only* when the lock
+/// is contended, so the **lock**, never the file's contents, decides whether a run is in
+/// flight.
 fn record_reindex_pid(lock: &File) -> std::io::Result<()> {
     let mut handle = lock;
     handle.set_len(0)?;
@@ -1346,16 +1314,15 @@ fn reindex_holder(root: &Path) -> Option<ReindexHolder> {
     Some(ReindexHolder { pid })
 }
 
-/// `b2 reindex --cancel` (GH #55): stop a reindex running on this vault by signalling
-/// the pid its lock names. It adds **no cancellation machinery** — SIGINT is exactly
-/// what Ctrl-C delivers, so the holder takes the shipped path (the handler installed in
-/// the `reindex` arm → the [`CANCEL`] flag → [`ControlFlow::Break`] at the next batch
-/// boundary → a consistent, re-runnable partial index). That's the whole point: a run
-/// backgrounded with `b2 reindex &` has no controlling terminal for Ctrl-C to reach.
+/// `b2 reindex --cancel` (GH #55): stop a reindex on this vault by signalling the pid its
+/// lock names. It adds **no cancellation machinery** — SIGINT is exactly what Ctrl-C
+/// delivers, so the holder takes the shipped path to a consistent, re-runnable partial
+/// index. That is the point: a run backgrounded with `b2 reindex &` has no controlling
+/// terminal for Ctrl-C to reach.
 ///
-/// One window is inherent and accepted: a holder still loading the model hasn't
-/// installed the handler yet, so SIGINT terminates it outright — the same as Ctrl-C
-/// there today, and safe for the same reason (nothing is written until embedding starts).
+/// One window is inherent and accepted: a holder still loading the model hasn't installed
+/// the handler yet, so SIGINT terminates it outright — the same as Ctrl-C there today, and
+/// safe for the same reason (nothing is written until embedding starts).
 fn cancel_reindex(root: &Path, json: bool) -> Result<(), CliError> {
     let Some(holder) = reindex_holder(root) else {
         return Err(CliError::NoReindexRunning);
@@ -1442,13 +1409,11 @@ enum CliError {
     StdinRequired,
 }
 
-// `is_ollama` — "does this endpoint look like the Ollama daemon" — used below to
-// decide whether Ollama's own commands belong in an error message (`--llm-url`
-// also points at LM Studio, llama.cpp, vLLM and cloud endpoints, where "run
-// `ollama serve`" is advice about the wrong program). The rule lives in `b2-llm`
-// (GH #155): the Ollama-native onboarding corner there needs the same answer for
-// a bigger decision — whether to ask the daemon what it has installed — and one
-// rule with two callers cannot drift the way two copies would.
+// `is_ollama` — "does this endpoint look like the Ollama daemon" — decides whether
+// Ollama's own commands belong in an error message (`--llm-url` also points at LM Studio,
+// llama.cpp, vLLM and cloud endpoints, where "run `ollama serve`" is advice about the
+// wrong program). The rule lives in `b2-llm` (GH #155), where guided setup needs the same
+// answer for a bigger decision, so one rule with two callers cannot drift.
 
 /// The head of a model server's own model list, for "…or pick one it already
 /// serves". Bounded: a local runtime holds a handful, but a cloud endpoint lists
@@ -1578,15 +1543,14 @@ fn user_message(err: &CliError) -> String {
     }
 }
 
-/// The one unit-tested corner of this adapter: D2's three verdict states as
+/// The one unit-tested corner of this adapter: ADR-0015's three verdict states as
 /// rendered by [`search_report`] (GH #202).
 ///
-/// The integration suite spawns the binary under `B2_EMBEDDER=fake`, whose
-/// embedder has no calibrated bar — so `vouched` there is *always* `None` and
-/// the two states that matter (strict "no matches", and serving a vouched list)
-/// are unreachable from it. That is a fact about the model seam, not a hole to
-/// leave: the rendering is pure, so it is tested here directly rather than
-/// hidden behind an `#[ignore]` the suite would keep reporting as present.
+/// The integration suite spawns the binary under `B2_EMBEDDER=fake`, whose embedder has no
+/// calibrated bar — so `vouched` there is always `None` and the two states that matter are
+/// unreachable from it. That is a fact about the model seam, not a hole to leave: the
+/// rendering is pure, so it is tested here directly rather than hidden behind an
+/// `#[ignore]` the suite would keep reporting as present.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,14 +1,11 @@
-//! `b2 reindex --dry-run` — a read-only preview of a reindex. Driven through the
-//! [`Vault`] façade against the golden vault, deterministic under the FakeEmbedder.
-//! The contract: it forecasts exactly what a real reindex *would* do, and touches
-//! nothing — no note projected into the index, and (as of GH #170, on both paths)
-//! no byte written to the vault.
+//! `b2 reindex --dry-run` — a read-only preview, driven through the [`Vault`] façade against
+//! the golden vault. The contract: it forecasts exactly what a real reindex *would* do, and
+//! touches nothing — no note projected, no byte written to the vault.
 //!
-//! The preview is one column now. It used to answer "which notes would be stamped",
-//! "which stamps would churn an identity", and "which files collide", because a real
-//! run *wrote* to the vault and "show me before you touch my files" was a fair ask.
-//! A run that writes nothing (W1) has nothing to warn about — only work to size — so
-//! what is left to test is that the forecast matches the run.
+//! The preview is one column now. It used to answer "which notes would be stamped" and
+//! "which files collide", because a real run *wrote* to the vault. A run that writes nothing
+//! (ADR-0004) has only work to size, so what is left to test is that the forecast matches
+//! the run.
 
 mod common;
 

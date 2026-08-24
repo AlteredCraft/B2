@@ -7,16 +7,14 @@
 
 use crate::error::Result;
 
-/// Turns note text into a vector. The dimension is fixed per model and recorded
-/// as `meta.embed_dim` (build spec §1.0/§1.2).
+/// Turns note text into a vector. The dimension is fixed per model and recorded as
+/// `meta.embed_dim` (ADR-0007).
 ///
-/// `embed` is **fallible**: the fake never fails, but a real model runs tensor
-/// math that can (e.g. a device/allocation error), and the index path must surface
-/// that rather than panic. Retrieval is **asymmetric-ready**: [`embed`](Self::embed)
-/// embeds a document/passage (indexing); [`embed_query`](Self::embed_query) embeds a
-/// search query. Models that prefix the two differently (EmbeddingGemma's
-/// `title:…|text:` vs `task:…|query:`; bge's query instruction, index-engine.md §5)
-/// override `embed_query`; the default is symmetric.
+/// `embed` is **fallible**: the fake never fails, but a real model runs tensor math that
+/// can, and the index path must surface that rather than panic. Retrieval is
+/// **asymmetric-ready** — [`embed`](Self::embed) embeds a passage,
+/// [`embed_query`](Self::embed_query) a query; models that prefix the two differently
+/// override the latter, whose default is symmetric.
 pub trait Embedder {
     /// Stable identifier recorded in `meta.embed_model_id`. A change to it (or to
     /// `dim`) is a model swap → drop the stored vectors + re-embed (index-engine.md §8).
@@ -134,17 +132,15 @@ pub fn unpack_f32_into(bytes: &[u8], out: &mut Vec<f32>) {
     );
 }
 
-/// Squared Euclidean distance between two equal-length vectors — the index's one
-/// ranking key, minus the final `sqrt` (`sqrt` is monotonic, so dropping it never
-/// changes an ordering; it is applied once per *surfaced* result, not per
-/// comparison). A length mismatch (impossible for vectors from one embedding space)
-/// scores the shared prefix rather than panicking.
+/// Squared Euclidean distance between two equal-length vectors — the index's one ranking
+/// key, minus the final `sqrt` (monotonic, so dropping it never changes an ordering; it is
+/// applied once per *surfaced* result). A length mismatch scores the shared prefix rather
+/// than panicking.
 ///
-/// Eight independent accumulators, summed at the end: float addition is
-/// non-associative, so a single running sum forms one serial dependency chain the
-/// compiler must execute as written — splitting it lets LLVM autovectorize.
-/// Measured at the #38 scale (38.6k × 768-dim, 12 anchors) the naive iterator shape
-/// cost ~530 ms; this shape ~75 ms.
+/// Eight independent accumulators, summed at the end: float addition is non-associative,
+/// so a single running sum forms one serial dependency chain the compiler must execute as
+/// written — splitting it lets LLVM autovectorize. Measured at the #38 scale, the naive
+/// iterator shape cost ~530 ms against this shape's ~75 ms.
 pub fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
     let (a, b) = (&a[..n], &b[..n]);

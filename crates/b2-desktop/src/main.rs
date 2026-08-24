@@ -1,29 +1,20 @@
 //! `b2-desktop` — the Tauri host, B2's **second dumb adapter** over the
-//! [`Vault`](b2_core::vault::Vault) façade (the GUI sibling of `b2-cli`). It holds
-//! **no engine logic**: each `#[tauri::command]` deserializes its args, calls one
-//! façade method, and serializes the result (crates/b2-desktop/CLAUDE.md). The rules
-//! that keep it a *dumb* adapter live in this crate's charter, `CLAUDE.md`.
+//! [`Vault`](b2_core::vault::Vault) façade and the GUI sibling of `b2-cli` (ADR-0012). It
+//! holds **no engine logic**; the rules that keep it dumb live in this crate's `CLAUDE.md`.
 //!
 //! Two things this file owns, both mirroring the CLI:
-//!   * **Vault root resolution** — an explicit launch arg (the CLI's positional), else
-//!     the **last vault the user opened** (persisted across launches, see
-//!     [`read_last_vault`]), else `$B2_VAULT_PATH` (the CLI's `-C` / env). Seeded once
-//!     at startup into [`AppState`] and thereafter **swappable at runtime** by the
-//!     in-app vault picker (`choose_vault`), which also **remembers** the pick so the
-//!     next launch reopens it. Every command opens a *fresh* vault from the current
-//!     root, exactly as the one-process-per-command CLI does. (The remembered choice is
-//!     desktop-only state — a long-lived window's "reopen what I had"; the stateless CLI
-//!     has no equivalent, so this is a legitimate host responsibility, not engine logic.)
-//!   * **Embedder wiring** — pure reads open with the deterministic fake; anything
-//!     that embeds a query or writes vectors (`search` / `link` / `embed`) opens the
-//!     real [`LocalEmbedder`] and **fails fast** with "run `b2 init`" if it's absent.
-//!     `project` — the model-free half of a reindex (index-engine.md) — opens the fake,
-//!     so the first tree paint never waits on a model load.
-//!     `B2_EMBEDDER=fake` forces the fake everywhere (offline/dev mode).
+//!   * **Vault root resolution** — an explicit launch arg, else the last vault the user
+//!     opened (persisted across launches), else `$B2_VAULT_PATH`. Seeded once into
+//!     [`AppState`] and thereafter swappable at runtime by the in-app picker, which also
+//!     remembers the pick. Every command opens a *fresh* vault from the current root,
+//!     exactly as the one-process-per-command CLI does.
+//!   * **Embedder wiring** — pure reads open with the deterministic fake; anything that
+//!     embeds a query or writes vectors opens the real [`LocalEmbedder`] and fails fast
+//!     with "run `b2 init`" if absent. `project` opens the fake, so the first tree paint
+//!     never waits on a model load. `B2_EMBEDDER=fake` forces the fake everywhere.
 //!
-//! And one it hands off: the **menu bar** is declared in [`menu`] rather than inherited
-//! from `Menu::default()`, so its chords are B2's own data and the UI can list them
-//! ([#119](https://github.com/AlteredCraft/B2/issues/119)).
+//! And one it hands off: the **menu bar** is declared in [`menu`] rather than inherited, so
+//! its chords are B2's own data and the UI can list them (ADR-0017, #119).
 
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -54,28 +45,19 @@ use watch::VaultWatcher;
 /// instant on a vault switch, long enough not to spin hot.
 const CANCEL_POLL: Duration = Duration::from_millis(25);
 
-/// The host's shared state: the active vault root plus the background-reindex control
-/// bits. Resolved once at startup, then **swappable at runtime**
-/// by the in-app vault picker (`choose_vault`) — so the root sits behind a [`Mutex`].
-/// Every command still opens its own short-lived [`Vault`] over the *current* root
-/// (SQLite WAL permits concurrent readers + one writer), the faithful mirror of the CLI
-/// opening a fresh vault per invocation. `None` means no vault is configured; commands
-/// then return an actionable [`CmdError::VaultRequired`].
+/// The host's shared state: the active vault root plus the background-reindex and chat
+/// control bits. The root is resolved once at startup and swappable at runtime by the
+/// picker, so it sits behind a [`Mutex`]; every command still opens its own short-lived
+/// [`Vault`] over the *current* root, the faithful mirror of the CLI opening a fresh vault
+/// per invocation. `None` means no vault is configured.
 ///
-/// The reindex bits are host **infrastructure**, not engine logic: *how the window
-/// drives and interrupts* the one façade op stays here; *what* to embed stays in the
-/// core (the charter's line). `reindex_running` is a single-in-flight guard for the
-/// long, vector-writing **embed** pass (the fast, model-free `project` command runs
-/// outside it by design — index-engine.md); a running embed checks
-/// `reindex_cancel` at each batch boundary (via the closure it passes to
-/// `Vault::embed`) and stops cooperatively when it is set.
-/// The chat bits mirror the reindex ones exactly, and for the same reason: an
-/// answer is a long, streaming, **cancellable** background op driven from the
-/// window (the pane's Esc), so *how the window drives and interrupts it* is host
-/// infrastructure while *what* it retrieves and asks stays behind the façade.
-/// `ask_cancel` is read by the token callback at every token — the seam's own
-/// cancellation checkpoint (GH #153) — and `ask_running` is the single-in-flight
-/// guard that keeps one turn's stale cancel from killing the next.
+/// The reindex and chat bits are host **infrastructure**, not engine logic: *how the window
+/// drives and interrupts* a long façade op stays here, *what* it computes stays in the
+/// core. `reindex_running` is a single-in-flight guard for the vector-writing embed pass
+/// (the model-free `project` runs outside it by design), and a running embed checks
+/// `reindex_cancel` at each batch boundary. `ask_cancel` is read by the token callback at
+/// every token — the seam's own cancellation checkpoint — and `ask_running` keeps one
+/// turn's stale cancel from killing the next.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
     /// Set by `cancel_reindex` (and a vault switch); the running reindex closure
@@ -95,18 +77,14 @@ pub struct AppState {
     /// resolves a fresh provider from it. **Never vault or index state**
     /// (GH #151) — see `chat.rs`.
     chat: Mutex<ChatPrefs>,
-    /// Held for the whole of one Settings save, which the `chat` lock alone
-    /// cannot cover.
+    /// Held for the whole of one Settings save, which the `chat` lock alone cannot cover.
     ///
-    /// A save is a read-modify-write spanning three places — the Keychain, the
-    /// `chat` mutex, and `chat.json` — and `chat_prefs()` deliberately drops its
-    /// lock between them (it must: a Keychain write can block on the OS access
-    /// prompt, and no ask should wait behind that). So two overlapping saves can
-    /// interleave, and the loser writes *its* preferences to disk after the
-    /// winner has already installed the newer ones in memory — a settings file
-    /// that disagrees with the running app until the next launch reads it back.
-    /// The window is small and needs two saves in flight, but the Keychain
-    /// prompt is exactly what makes one save long enough to be caught.
+    /// A save is a read-modify-write spanning the Keychain, the `chat` mutex and
+    /// `chat.json`, and `chat_prefs()` deliberately drops its lock between them — it must,
+    /// since a Keychain write can block on the OS access prompt and no ask should wait
+    /// behind that. So two overlapping saves can interleave, and the loser writes *its*
+    /// preferences after the winner installed the newer ones in memory. The window is small,
+    /// but the Keychain prompt is exactly what makes a save long enough to be caught.
     chat_saving: Mutex<()>,
 }
 
@@ -316,22 +294,16 @@ pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
     Ok(open_vault(state, true)?.0)
 }
 
-/// Whether the real (semantic) embedder is available right now — mirrors the CLI:
-/// false under `B2_EMBEDDER=fake`, or if the model isn't provisioned yet. Used by
-/// `vault_info` to tell the UI whether semantic ranking is live, so the app can be
-/// honest (never overstate the fake), exactly as `b2 search` is.
+/// Whether the real (semantic) embedder is available right now — mirrors the CLI: false
+/// under `B2_EMBEDDER=fake`, or if the model isn't provisioned. `vault_info` uses it to
+/// tell the UI whether semantic ranking is live, so the app never overstates the fake.
 ///
-/// A **probe, never a load** ([#133](https://github.com/AlteredCraft/B2/issues/133)):
-/// `is_model_provisioned` is the repo's one "installed" check
-/// ([`b2_embed::LocalEmbedder::load`]'s own fail-fast precondition — `files_present`),
-/// so this answers the question `load` would, without parsing `config.json`, building
-/// the tokenizer, or mmapping the weights. That matters because `vault_info` calls it
-/// on **every** first paint and vault switch — the path the `project`/`embed` split
-/// exists to keep model-free. What the probe trades away: a *present-but-corrupt*
-/// model reads as `semantic: true` here and fails at the first `search`/`reindex`
-/// instead. That failure is already fail-fast and actionable ("model load failed"),
-/// and the flag's own contract is "is a model installed", which is exactly what a
-/// file check answers.
+/// A **probe, never a load** (#133): `is_model_provisioned` is the repo's one "installed"
+/// check, so this answers the question `load` would without parsing `config.json`, building
+/// the tokenizer, or mmapping the weights — which matters because `vault_info` calls it on
+/// every first paint and vault switch. What the probe trades away: a present-but-corrupt
+/// model reads as `semantic: true` and fails at the first `search`/`reindex` instead, which
+/// is already fail-fast and actionable.
 pub fn semantic_available() -> bool {
     if use_fake_embedder() {
         return false;
@@ -339,17 +311,14 @@ pub fn semantic_available() -> bool {
     EmbedConfig::load().is_ok_and(|c| c.is_model_provisioned(&c.model))
 }
 
-/// Resolve the vault root once at startup. Precedence, most-explicit first:
-///   1. an explicit **launch argument** (the CLI's positional) — a per-launch override;
-///   2. the **last vault the user opened** via the picker, remembered across launches
-///      ([`read_last_vault`]) — so the app reopens what was open when it was last closed;
-///   3. `$B2_VAULT_PATH` (the CLI's `-C` / env) — the first-run / never-picked default.
+/// Resolve the vault root once at startup. Precedence, most-explicit first: an explicit
+/// **launch argument** (the CLI's positional); the **last vault the user opened** via the
+/// picker; then `$B2_VAULT_PATH` (the CLI's `-C` / env).
 ///
 /// The remembered choice deliberately beats `$B2_VAULT_PATH`: on a GUI the picker is the
-/// primary way you choose a vault, and "remember my choice" is the expected behavior; the
-/// env var seeds the *first* run, and a launch arg remains the escape hatch to force a
-/// specific vault for one session without disturbing the remembered pick. A leading-`-`
-/// first arg is ignored so a macOS `-psn_…` Finder argument is never mistaken for a path.
+/// primary way you choose a vault, so the env var seeds the *first* run and a launch arg
+/// remains the escape hatch for one session. A leading-`-` first arg is ignored, so a macOS
+/// `-psn_…` Finder argument is never mistaken for a path.
 fn resolve_root() -> Option<PathBuf> {
     let arg = std::env::args()
         .nth(1)
@@ -425,13 +394,11 @@ fn main() {
     // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
     // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
     let _guard = logging::init_logging();
-    // The chat endpoint/model the user last chose, if any, plus the API key out of
-    // the Keychain (chat.rs, keychain.rs). Adapter state like the remembered vault —
-    // never vault or index state — and best-effort throughout: an absent or
-    // unreadable file, or a store with nothing in it, is "nothing configured", which
-    // resolves to the same local default the CLI uses with no flags. A vault with no
-    // cloud model configured has no Keychain item, so this asks for nothing and
-    // prompts for nothing on the overwhelmingly common launch.
+    // The chat endpoint/model the user last chose, plus the API key out of the Keychain.
+    // Adapter state like the remembered vault, and best-effort throughout: nothing
+    // configured resolves to the same local default the CLI uses with no flags. A vault
+    // with no cloud model configured has no Keychain item, so the common launch asks for
+    // nothing and prompts for nothing.
     let state = AppState::with_chat(resolve_root(), chat::read_prefs(&keychain::Keychain));
     tauri::Builder::default()
         // The menu bar, declared (#119). Without this call Tauri installs

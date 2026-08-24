@@ -1,23 +1,18 @@
-//! #18 — property tests over **generated vaults**, pinning the load-bearing
-//! invariants the golden-vault scenarios cover only pointwise (invariants.md):
+//! #18 — property tests over **generated vaults**, pinning the load-bearing invariants the
+//! golden-vault scenarios cover only pointwise:
 //!
-//!   1. **Round-trip is lossless** — `parse → serialize` is byte-identical for *any*
-//!      text, and the surgical edit (`replace_body`) is an exact splice that touches
-//!      nothing else (data-model.md §6).
-//!   2. **`full reindex ≡ incremental`** — after any sequence of *external* vault
-//!      mutations (edits, adds, deletes, renames through plain `fs`, the hard path),
-//!      the incrementally maintained index equals a from-scratch rebuild of the same
-//!      files ("index = a pure projection of (the vault directory)").
-//!   3. **Rename keeps every backlink resolving** (`b2 mv`) — and the repair lives in
-//!      the *Markdown*, not just the DB: a drop-and-rebuild sees the same graph. Since
-//!      GH #170 the moved note's identity **is** the path it moved to, so the property
-//!      is that the inbound set arrives intact at the destination, not that a stable id
-//!      carried it there.
+//!   1. **Round-trip is lossless** — `parse -> serialize` is byte-identical for *any* text,
+//!      and the surgical edit is an exact splice that touches nothing else.
+//!   2. **`full reindex ≡ incremental`** — after any sequence of *external* vault mutations
+//!      through plain `fs`, the incrementally maintained index equals a from-scratch rebuild
+//!      (ADR-0002).
+//!   3. **Rename keeps every backlink resolving** — and the repair lives in the *Markdown*,
+//!      not just the DB. Since identity is the path (ADR-0003) the property is that the
+//!      inbound set arrives intact at the destination.
 //!
-//! **Determinism (the suite's hard rule):** the runner uses a *fixed* ChaCha seed, so
-//! every run explores the identical case sequence — no flaky CI, and a failure
-//! reproduces exactly. Shrinking still works. To explore new ground, change `SEED`
-//! or raise the case counts locally; commit any find as a regular regression test.
+//! **Determinism (the suite's hard rule):** the runner uses a *fixed* ChaCha seed, so every
+//! run explores the identical case sequence and a failure reproduces exactly. To explore new
+//! ground change `SEED` locally; commit any find as a regular regression test.
 
 use b2_core::note::parse;
 use b2_core::vault::Vault;

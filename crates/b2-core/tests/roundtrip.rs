@@ -1,15 +1,10 @@
-//! Step 1 — lossless parse/serialize (the round-trip invariant).
+//! Lossless parse/serialize — `parse -> serialize -> parse` must be byte-identical,
+//! preserving unknown frontmatter keys and order, comments, and whitespace. B2 achieves it
+//! by keeping the raw text and only ever making the surgical edits it is asked to make.
 //!
-//! `parse → serialize → parse` must be byte-identical, preserving unknown
-//! frontmatter keys + order, comments, and whitespace (data-model.md §6). B2
-//! achieves this by keeping the raw text and only ever making the surgical edits
-//! it is asked to make — never re-dumping YAML.
-//!
-//! The *headingless* case (text with no frontmatter block at all) is not pinned
-//! here: `tests/props.rs::any_text_round_trips_byte_identical` already proves it
-//! over 512 generated strings, which are overwhelmingly frontmatter-free. What
-//! that property cannot reach — a real, messy, human-authored block — is exactly
-//! what the cases below hold.
+//! The *headingless* case is not pinned here: `props.rs` already proves it over 512 generated
+//! strings, which are overwhelmingly frontmatter-free. What that property cannot reach — a
+//! real, messy, human-authored block — is what the cases below hold.
 
 use b2_core::note::parse;
 use std::fs;

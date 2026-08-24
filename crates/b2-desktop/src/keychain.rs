@@ -1,54 +1,31 @@
-//! Where a cloud bearer token is remembered between launches — the macOS
-//! Keychain (GH #176).
-//!
-//! Chat's **Cloud models** configuration (invariant M5) needs a bearer token, and
-//! for one release this host held it in memory for the session only: nothing was
-//! written down, and `B2_LLM_API_KEY` was the only way to make one persist. That
-//! was the conservative choice and it had a real cost — a desktop user who
-//! configures a cloud provider and finds the key gone after a restart reads it as
-//! a bug, and "export a variable in your shell" is a terminal instruction inside a
-//! GUI. #176 settled it: **remember the key, in the platform's own encrypted
-//! store, and let the environment override it.**
+//! Where a cloud bearer token is remembered between launches — the macOS Keychain
+//! (GH #176). Chat's Cloud configuration needs a bearer token, and for one release this
+//! host held it in memory only, which read as a bug to anyone who restarted the app.
 //!
 //! Three things decided the shape:
 //!
-//! * **The Keychain, not a file.** Storing a secret is taking responsibility for
-//!   it. A plaintext JSON beside `chat.json` is readable by every process running
-//!   as the user, rides into backups and sync, and outlives an uninstall; the
-//!   Keychain is encrypted at rest, ACL'd per application, and its access prompt
-//!   is one the user already recognizes. B2 ships macOS-only, so the
-//!   platform-specific answer costs nothing in portability today.
-//! * **The framework, not `/usr/bin/security`.** Shelling out would put the token
-//!   in `add-generic-password -w <key>` — in the `security` process's argv, and so
-//!   in `ps`. That is the exact argument #154 makes against a key in a CLI flag,
-//!   and it would have been funny to lose to it here.
-//! * **It must never be able to break chat.** The Keychain can refuse — locked,
-//!   the user declines the prompt, no keychain at all in a headless run — and the
-//!   whole point of remembering a key is a convenience. So every operation here is
-//!   best-effort and *says* what happened rather than raising: a refused save
-//!   degrades to the session-only behavior that shipped in #155, with the key the
-//!   user typed still in force for this run and the Settings copy saying so
-//!   (`b2_llm::ApiKeySource::Session`).
+//! * **The Keychain, not a file.** A plaintext JSON beside `chat.json` is readable by every
+//!   process running as the user, rides into backups and sync, and outlives an uninstall.
+//!   B2 ships macOS-only, so the platform-specific answer costs nothing in portability.
+//! * **The framework, not `/usr/bin/security`.** Shelling out would put the token in the
+//!   `security` process's argv, and so in `ps` — the exact argument against a key in a CLI
+//!   flag.
+//! * **It must never be able to break chat.** The Keychain can refuse — locked, the prompt
+//!   declined, no keychain at all — so every operation here is best-effort and *says* what
+//!   happened rather than raising: a refused save degrades to session-only, with the key
+//!   still in force and the Settings copy saying so.
 //!
-//! One item, not one per endpoint. A user repointing `base_url` at a different
-//! provider overwrites the key rather than accumulating a drawer of them — which
-//! is also the safer default, since the hazard a per-endpoint store would create
-//! is precisely the one `chat.rs`'s Remove button exists to prevent (sending
-//! provider A's token to provider B).
-//!
-//! Note for anyone running `cargo tauri dev`: the item's ACL names the binary that
-//! created it, so a rebuilt (and unsigned) `b2-desktop` is a *different*
-//! application to the Keychain and macOS will ask again. That is the platform
-//! working, not a bug here — "Always Allow" applies to the binary you granted it
-//! to.
+//! One item, not one per endpoint: a user repointing `base_url` overwrites the key rather
+//! than accumulating a drawer of them, which also avoids the hazard `chat.rs`'s Remove
+//! button exists to prevent. Note for `cargo tauri dev`: the item's ACL names the binary
+//! that created it, so a rebuilt unsigned `b2-desktop` is a different application to the
+//! Keychain and macOS will ask again.
 
 /// A place the host can keep one secret between launches.
 ///
-/// A trait for one concrete reason (the repo's rule against speculative
-/// abstraction stands): **a unit test must not touch the developer's real
-/// Keychain**, so `chat.rs`'s key resolution and its three-state save are
-/// exercised against `MemoryStore` below. This is host infrastructure, not one of the
-/// enumerated model seams (invariant M1).
+/// A trait for one concrete reason: **a unit test must not touch the developer's real
+/// Keychain**, so `chat.rs`'s key resolution is exercised against `MemoryStore` below.
+/// Host infrastructure, not one of the enumerated model seams (ADR-0005).
 pub trait KeyStore {
     /// The remembered key, or `None` when there is none — *or* when the store
     /// refused. The two are deliberately one answer: a caller whose fallback is
@@ -61,19 +38,14 @@ pub trait KeyStore {
     /// only** rather than to fail the save.
     fn save(&self, key: &str) -> bool;
 
-    /// Forget the remembered key. `true` when the store no longer holds one —
-    /// including when it never did, which is the outcome this asks for and not a
-    /// failure.
+    /// Forget the remembered key. `true` when the store no longer holds one — including
+    /// when it never did, which is the outcome this asks for and not a failure.
     ///
-    /// The return value is load-bearing, and an earlier draft of this trait got
-    /// it wrong by making removal infallible. A refused delete leaves the item in
-    /// the Keychain; if the caller drops the key from memory anyway, Settings
-    /// shows a keyless configuration, the user believes their credential is gone
-    /// — and the **next launch reads it straight back out of the store**. A
-    /// secret that returns from the dead after you deleted it is the worst
-    /// failure this module could have, so removal is all-or-nothing: `false` here
-    /// means the caller must keep the key exactly as it was and let the UI go on
-    /// showing it (`chat::apply_key`).
+    /// The return value is load-bearing, and an earlier draft got it wrong by making
+    /// removal infallible. A refused delete leaves the item in the Keychain; if the caller
+    /// drops the key from memory anyway, Settings shows a keyless configuration and the
+    /// **next launch reads the credential straight back out**. So removal is
+    /// all-or-nothing: `false` means the caller must keep the key exactly as it was.
     fn clear(&self) -> bool;
 }
 

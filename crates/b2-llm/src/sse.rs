@@ -1,26 +1,20 @@
-//! The SSE reader — the wire quirks this crate exists to own (GH #151: "the
-//! costs we own knowingly").
+//! The SSE reader — the wire quirks this crate exists to own.
 //!
-//! Server-Sent Events is a line protocol: `field: value` lines, a blank line
-//! ending each event, and `:`-leading lines that are comments. OpenAI-compatible
-//! servers use exactly one field — `data:` — carrying a JSON chunk per event,
-//! and end with the literal `data: [DONE]`. What varies between servers, and
-//! what the tests below pin, is everything around that: keep-alive comments
-//! during a long prefill, `\r\n` line endings, a `data:` with no space after the
-//! colon, a spec-legal multi-line `data:`, an error object arriving *inside* a
-//! 200 response, and a stream that just stops.
+//! Server-Sent Events is a line protocol: `field: value` lines, a blank line ending each
+//! event, `:`-leading comments. OpenAI-compatible servers use exactly one field — `data:` —
+//! carrying a JSON chunk per event, ending with the literal `data: [DONE]`. What varies
+//! between servers, and what the tests below pin, is everything around that: keep-alive
+//! comments during a long prefill, CRLF, a `data:` with no space, a spec-legal multi-line
+//! `data:`, an error object arriving *inside* a 200, and a stream that just stops.
 //!
 //! Two endings are deliberately different, because they are different facts:
 //!
-//! - A stream that ends **without** `[DONE]` (or a `finish_reason`) is
-//!   truncated, not broken: the tokens that arrived are real, so the completion
-//!   comes back `cancelled: true` — the seam's own words for "the provider's own
-//!   early stop", surfaced to the human as a partial answer rather than as a
-//!   failure with nothing to show.
-//! - A frame that is **garbled** — a `data:` payload that isn't JSON — is an
-//!   error. Silently skipping it would turn a protocol mismatch (talking to
-//!   something that isn't an OpenAI-compatible endpoint) into a quietly
-//!   truncated answer, which is the one outcome nobody can debug.
+//! - A stream that ends **without** `[DONE]` is truncated, not broken: the tokens that
+//!   arrived are real, so the completion comes back `cancelled: true` and the human sees a
+//!   partial answer rather than a failure with nothing to show.
+//! - A **garbled** frame — a `data:` payload that isn't JSON — is an error. Skipping it
+//!   would turn a protocol mismatch into a quietly truncated answer, the one outcome
+//!   nobody can debug.
 
 use crate::provider::ErrorDetail;
 use crate::LlmError;
@@ -29,14 +23,10 @@ use serde::Deserialize;
 use std::io::BufRead;
 use std::ops::ControlFlow;
 
-/// Read an SSE response to its end, delivering each content delta to `on_token`
-/// as it arrives.
-///
-/// Returns the accumulated text plus how the stream ended. `on_token` steers it:
-/// [`ControlFlow::Break`] stops the loop at once and returns, which drops the
-/// reader — and with it the connection — at the next scope exit. That is the
-/// whole of cancellation (GH #151: "cancellation is just returning early from a
-/// blocking read loop").
+/// Read an SSE response to its end, delivering each content delta to `on_token` as it
+/// arrives. Returns the accumulated text plus how the stream ended. `on_token` steers it:
+/// [`ControlFlow::Break`] stops the loop at once and returns, which drops the reader — and
+/// with it the connection — at the next scope exit. That is the whole of cancellation.
 pub(crate) fn stream_completion<R: BufRead>(
     mut reader: R,
     on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,

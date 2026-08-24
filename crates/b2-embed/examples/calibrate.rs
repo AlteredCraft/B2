@@ -1,76 +1,42 @@
-//! Real-vault discovery calibration — the instrument GH #197 (Phase 0a) promoted
-//! out of GH #196's hand arithmetic. It runs against **any built vault**, needs no
-//! labels, and prints the numbers every discovery-surfacing ruling has turned on:
-//! per-anchor candidate-pool distributions (cosine min/median/max), each anchor's
-//! leader cosine and z, what a z existence gate would serve versus what
-//! always-serve does, and the strength bands the desktop would paint — plus a
-//! vault-level summary. Process rule 3's dogfooding clause, made mechanical
-//! (`docs/evals/README.md`, process rule 5): **a constant derived from a corpus's
-//! score distribution is invalid until transfer-checked on a real vault**, and
-//! this is the check.
+//! Real-vault discovery calibration — the instrument ADR-0014's Phase 0a promoted out of
+//! GH #196's hand arithmetic. It runs against **any built vault**, needs no labels, and
+//! prints the numbers every discovery-surfacing ruling has turned on: per-anchor pool
+//! distributions, each anchor's leader cosine and z, what a z gate would serve versus what
+//! always-serve does, and the strength bands the desktop would paint. This is process rule
+//! 5 made mechanical — **a constant derived from a corpus's score distribution is invalid
+//! until transfer-checked on a real vault**.
 //!
 //! ```console
 //! just calibrate ~/notes                 # per-anchor lines + the summary block
 //! just calibrate ~/notes --json          # the same reading as one JSON object
 //! just calibrate ~/notes --limit 5       # simulate a 5-card pane
 //! just calibrate ~/notes --leader-z 1.5 --member-z 1.0   # replay a different gate
-//! just calibrate ~/notes --mutual-k 5    # replay the fold at a different reciprocity depth
+//! just calibrate ~/notes --mutual-k 5    # replay the fold at a different depth
 //! ```
 //!
-//! Beside the retired z gate, the instrument replays the **mutual-k reciprocity
-//! fold** (GH #200, Phase A — the leading candidate for D1's *default disclosure
-//! boundary*): candidate B is *reciprocal* for anchor A iff A ranks within B's
-//! own top `mutual_k` candidates (default: `--limit`), and the replayed default
-//! view is the ranked list's **longest reciprocal prefix** — it ends at the
-//! first non-reciprocal candidate, so a reciprocal one ranked after that sits
-//! below the fold too (prefix form: the fold is a cut in the served order,
-//! never a filter that skips rows). A fold, not a gate —
-//! under D1 everything below it stays served and reachable, so the replay prices
-//! what the default view *would* show, never what exists. Rank-based, so it
-//! carries no distributional constant to transfer-check; running this replay on
-//! real vaults **is** its bake-off bench (GH #200's fourth row), beside the
-//! orthogonal corpus, the dense fixture, and the labelled negatives.
+//! Beside the retired z gate it replays the two **default-disclosure** candidates ADR-0014
+//! admits a fold from. The **mutual-k reciprocity fold** (GH #200): B is reciprocal for A
+//! iff A ranks within B's own top `mutual_k`, and the replayed default view is the ranked
+//! list's longest reciprocal prefix — a cut in the served order, never a filter that skips
+//! rows. That bake-off has **ruled, and no fold ships**: the window is empty on both corpora,
+//! and this instrument supplied the reading that generalized it — the same `k` is a different
+//! rule on every vault (10 discloses 36% of cards on the orthogonal corpus, 91% on the dense
+//! fixture, 98% on `fixtures/test-vault`). The **authored-edge reference bar** is replayed
+//! beside it, and this is the only instrument that *can*: the rule calibrates from the score
+//! distribution of the human's own committed edges, and both eval corpora are link-free by
+//! construction. Unlike reciprocity that is a distributional constant, so this instrument is
+//! not an aside for it — it is the whole of its evidence.
 //!
-//! That bake-off has since **ruled, and no fold ships** (GH #200, 2026-08-22):
-//! mutual-k's admissible window is empty on both eval corpora, and this
-//! instrument supplied the reading that generalized the finding — the same `k`
-//! is a different rule on every vault (`k = 10` discloses 36% of the cards on
-//! the orthogonal corpus, 91% on the dense fixture, 98% on `fixtures/test-vault`,
-//! where `k = 5` darkens 7 of 200 panes). The replay stays because the *next*
-//! candidate is priced the same way, and because a real vault is still the
-//! bench neither corpus can be.
+//! **It is a pure read** — stored vectors only, no model call — so it runs in seconds on any
+//! personal-scale vault and never perturbs what it measures.
 //!
-//! The **authored-edge reference bar** (GH #200's candidate 2) is replayed beside
-//! it, and this is the only instrument that *can* replay it: the rule calibrates
-//! "what related looks like in this vault" from the score distribution of the
-//! human's own committed edges, and both eval corpora are link-free by
-//! construction — engineered orthogonality leaves nothing to link — so the rule
-//! has no population there. Here it has one. The bar is the population's lower
-//! quartile (the whole distribution prints beside it, because a quantile is a
-//! choice and a choice printed as one number is an assumption), and the replayed
-//! default view is the longest prefix at or above it. Unlike reciprocity this is
-//! a **distributional constant**, so process rule 5's transfer check binds it —
-//! which is to say: this instrument is not an aside for candidate 2, it is the
-//! whole of its evidence.
+//! The z is **recomputed harness-side from the served scores**, kept independent of the
+//! engine's own statistic so the instrument can also *check* it: where the engine ships a z
+//! beside a candidate, the two are diffed and a drift reports as a fault.
 //!
-//! **It is a pure read** — stored vectors only, no model call, no write beyond the
-//! `.b2/` directory every read command ensures — so it runs in seconds on a vault
-//! of any personal scale and never perturbs what it measures.
-//!
-//! The z here is **recomputed harness-side from the served scores** (`d² = score²`,
-//! `z = (mean − d²) / σ` with the sample σ, leader self-included) — GH #196's
-//! recovered arithmetic, kept independent of the engine's own statistics so the
-//! instrument can also *check* them: where the engine ships a z beside a candidate,
-//! the two are diffed and a drift is reported as a fault, the same posture as the
-//! eval's `z_recheck`.
-//!
-//! The replayed gate defaults to the constants GH #197 retired (`leader_z` 1.96 /
-//! `member_z` 1.49, inert under a 12-candidate population — GH #192's values), so
-//! the acceptance reading reproduces GH #196's finding on its reporting vault:
-//! leaders +1.358 / +1.522 / +1.529, cosine span 0.573 → 0.797, 16 of 17 anchors
-//! dark. The gate is a **simulation** — since GH #197 the shipped surface serves
-//! the ranked list and gates nothing; replaying the retired rule (or a candidate
-//! Phase-2 one, via the flags) is exactly what this instrument is for.
+//! The replayed gate defaults to the constants ADR-0014 retired, so the acceptance reading
+//! reproduces GH #196's finding on its reporting vault: 16 of 17 anchors dark. It is a
+//! **simulation** — the shipped surface gates nothing.
 
 use b2_core::vault::{SimilarView, Vault};
 use b2_embed::{EmbedConfig, LocalEmbedder};
@@ -220,25 +186,18 @@ fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
     Some((sorted[0], median, sorted[sorted.len() - 1]))
 }
 
-/// **Candidate 2** of GH #200's bake-off, replayed: an *authored-edge reference
-/// bar*. The idea is to calibrate "what related looks like **in this vault**"
-/// from the one labelled population every real vault carries — the score
-/// distribution of the human's own committed edges — and fold the default view
-/// at the longest prefix scoring at or above it.
+/// **Candidate 2** of GH #200's bake-off, replayed: an *authored-edge reference bar*. It
+/// calibrates "what related looks like **in this vault**" from the one labelled population
+/// every real vault carries — the score distribution of the human's committed edges — and
+/// folds the default view at the longest prefix scoring at or above it.
 ///
-/// Priceable only where that population exists, which is why it lives here
-/// rather than in `just eval`: **both eval corpora are link-free by
-/// construction** (the token audit that keeps them orthogonal leaves nothing to
-/// link), so the rule has nothing to calibrate from there. Its pair score is the
-/// same statistic discovery ranks on — the best chunk pair across the two notes'
-/// stored vectors — computed here over the *linked* pairs discovery never scores
-/// (the 1-hop exclusion removes exactly them).
-///
-/// The bar is the population's **lower quartile**: the default view vouches for
-/// a candidate that looks at least as related as the weaker quarter of what this
-/// human has already been willing to link. The whole distribution prints beside
-/// it, because the quantile is a choice and a choice printed as one number is an
-/// assumption.
+/// Priceable only where that population exists, which is why it lives here rather than in
+/// `just eval`: **both eval corpora are link-free by construction**. Its pair score is the
+/// same statistic discovery ranks on, computed over the *linked* pairs discovery never scores
+/// (the 1-hop exclusion removes exactly them). The bar is the population's **lower quartile**
+/// — a candidate at least as related as the weaker quarter of what this human already linked
+/// — and the whole distribution prints beside it, because a quantile is a choice and a choice
+/// printed as one number is an assumption.
 struct EdgeBar {
     /// Authored edges whose pair could be scored (both notes embedded).
     n: usize,
@@ -364,24 +323,18 @@ struct SearchProbe {
     vouched: bool,
 }
 
-/// The **search evidence transfer check** (invariants.md D2; GH #201) — process
-/// rule 5's bench for the query-level bar, which is a distributional constant
-/// and therefore invalid until a real vault has answered for it.
+/// The **search evidence transfer check** (ADR-0015) — process rule 5's bench for the
+/// query-level bar, which is a distributional constant and therefore invalid until a real
+/// vault has answered for it.
 ///
-/// It needs no labels, and that is the point: the positives are each note's own
-/// **title**, a query the vault demonstrably holds material for by construction,
-/// and the negatives are [`NONSENSE`], strings no vault holds. Neither side is a
-/// hand-label, so running this on someone's notes costs them nothing and the
-/// reading cannot be tuned by relabelling — process rule 2's standing worry,
-/// answered by there being nothing here to relabel.
+/// It needs no labels, and that is the point: the positives are each note's own **title**, a
+/// query the vault demonstrably holds material for by construction, and the negatives are
+/// [`NONSENSE`]. Neither is a hand-label, so running this on someone's notes costs them
+/// nothing and the reading cannot be tuned by relabelling.
 ///
-/// What it can and cannot see is worth stating plainly. It **can** see the
-/// tripwire direction — a bar that cuts queries a real vault holds material for
-/// is the failure GH #196 punished, and title queries are the cheapest honest
-/// probe of it. It **cannot** see the paraphrase case (a user's words for a note
-/// they wrote in other words); generating those needs judgement, which is what
-/// the labelled corpus is for. Read the two benches together, never either
-/// alone.
+/// It **can** see the tripwire direction — a bar that cuts queries a real vault holds
+/// material for is the failure ADR-0014 punished. It **cannot** see the paraphrase case,
+/// which needs judgement and is what the labelled corpus is for. Read the two together.
 fn print_search_transfer(
     vault: &Vault,
     conn: &Connection,
@@ -637,16 +590,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // The mutual-k reciprocity fold, replayed (GH #200, Phase A). Every note's
-    // own top `mutual_k` candidate paths come from the same full-depth pools
-    // just read, so reciprocity costs no extra discovery pass. Candidate B is
-    // reciprocal for anchor A iff A sits in B's set; a candidate with no pool
-    // of its own cannot reciprocate (and, having no stored vectors, could not
-    // have been scored as a candidate either — the lookup's honesty is
-    // belt-and-braces). The fold is the ranked list's longest reciprocal
-    // prefix, capped at `limit` — prefix form is D1's admissibility
-    // requirement: a fold that skipped rank 2 to admit rank 5 would visibly
-    // disagree with the row order, so none is ever computed.
+    // The mutual-k reciprocity fold, replayed (GH #200). Every note's own top `mutual_k`
+    // candidate paths come from the same full-depth pools just read, so reciprocity costs no
+    // extra discovery pass. A candidate with no pool of its own cannot reciprocate. The fold
+    // is the ranked list's longest reciprocal prefix, capped at `limit` — prefix form is
+    // ADR-0014's admissibility requirement, since a fold that skipped rank 2 to admit rank 5
+    // would visibly disagree with the row order.
     let top_of: HashMap<&str, HashSet<&str>> = readings
         .iter()
         .map(|r| {

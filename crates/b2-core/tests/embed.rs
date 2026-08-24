@@ -308,21 +308,15 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     );
 }
 
-/// Concurrent embed passes leave **one** intact vector space (#114, invariant C1).
+/// Concurrent embed passes leave **one** intact vector space (ADR-0021, invariant C1).
 ///
-/// `ensure_embedding_space` is the file's second drop-and-rebuild, and it had the same
-/// defect as the schema migration: read whether the space matches, then drop and
-/// recreate — unwrapped and unserialized. Two embed passes can genuinely overlap, and
-/// nothing structural prevents it: the `#55` advisory lock is taken by `b2-cli` alone,
-/// so a desktop reindex and a `b2 reindex` are exactly this test.
-///
-/// Where the migration race needed twenty rounds to bite, this one is near-certain —
-/// every caller runs the batch, so the window is four statements wide rather than a
-/// stale-version read. Measured against the unfixed engine: **70 of 80 workers errored**
-/// (`table embeddings already exists`) and **every** round lost vectors, in each of three
-/// runs. Both halves are asserted here, and losing vectors is the quiet one — a `DROP`
-/// landing after another pass has started writing takes the vectors it already wrote
-/// with it, leaving an index that reports a complete embed over a half-empty space.
+/// `ensure_embedding_space` is the second drop-and-rebuild in `db.rs`, and two embed passes
+/// genuinely overlap: the `#55` advisory lock is `b2-cli`'s alone, so a desktop reindex and a
+/// `b2 reindex` are exactly this test. Where the migration race needed twenty rounds to bite,
+/// this one is near-certain — every caller runs the batch. Measured against the unfixed
+/// engine: **70 of 80 workers errored** and **every** round lost vectors, in each of three
+/// runs. Losing vectors is the quiet half: a `DROP` landing after another pass started
+/// writing leaves an index reporting a complete embed over a half-empty space.
 #[test]
 fn concurrent_embed_passes_leave_one_intact_vector_space() {
     use std::sync::{Arc, Barrier};

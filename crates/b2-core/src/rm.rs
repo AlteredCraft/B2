@@ -1,19 +1,14 @@
 //! Delete a note / resource / folder — the destructive complement of [`crate::mv`].
 //!
-//! A delete is "a move minus the destination": the file(s) leave the disk, the
-//! projection rows leave the index, and the inbound links that pointed at the
-//! deleted target **dangle** — they are never rewritten (there is nothing to
-//! rewrite them *to*), exactly the state an external `rm` plus a full reindex
-//! produces. That equivalence is the correctness bar (`incremental ≡ full
-//! rebuild`, index-engine.md §8): after every op here, the index is byte-identical
-//! to a from-scratch rebuild of the now-current Markdown.
+//! A delete is "a move minus the destination": the files leave the disk, the projection
+//! rows leave the index, and inbound links **dangle** — never rewritten, since there is
+//! nothing to rewrite them to — exactly the state an external `rm` plus a full reindex
+//! produces. That equivalence is the correctness bar (S3).
 //!
-//! The single-note projection paths never prune (ingest.rs #31 is whole-vault
-//! only), so each op drops its rows directly, then re-projects the **surviving**
-//! inbound files: their edges re-derive against the pruned tables, so a link at
-//! the dead target re-keys to its raw-path (dangling) edge id — the same id a
-//! rebuild derives. Bodies are untouched, so re-projection re-chunks nothing and
-//! the ops are **model-free** (the `create_note`/`write` posture, not `mv`'s).
+//! The single-note projection paths never prune, so each op drops its rows directly, then
+//! re-projects the **surviving** inbound files: their edges re-derive against the pruned
+//! tables and re-key to the dangling edge id a rebuild would derive. Bodies are untouched,
+//! so re-projection re-chunks nothing and the ops are **model-free**.
 
 use crate::db;
 use crate::error::{Error, Result};
@@ -82,13 +77,10 @@ fn reproject_dangled(ctx: ProjectionCtx, dangled: &BTreeSet<String>) -> Result<(
 }
 
 /// Delete the note at `rel`: file off disk, projection rows off the index
-/// (chunks/FTS/centroid/aliases/outbound edges cascade with the `notes` row, as in
-/// whole-vault pruning), then re-project the inbound linkers so their edges
-/// re-dangle. The caller (the façade) resolved the ref.
-///
-/// The note's chunk **vectors** deliberately do not cascade — they are
-/// content-addressed and may be shared (M4), so the whole-vault pass collects them
-/// when nothing references them ([`db::prune_orphan_vectors`]).
+/// (chunks/FTS/centroid/aliases/outbound edges cascade with the `notes` row), then
+/// re-project the inbound linkers so their edges re-dangle. The façade resolved the ref.
+/// The note's chunk **vectors** deliberately do not cascade — content-addressed and
+/// possibly shared (ADR-0006), they are collected by the whole-vault pass.
 pub fn delete_note(ctx: ProjectionCtx, rel: &str) -> Result<DeleteReport> {
     let (conn, root) = (ctx.conn, ctx.root);
     // The graph names the bounded inbound set before the rows go. A self-link's

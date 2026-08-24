@@ -1,16 +1,10 @@
 //! Shared helpers for the integration tests (golden-vault fixtures).
 //!
-//! Every test binary that says `mod common;` gets this whole file, so it is
-//! deliberately small and dependency-light: fixture setup and the two or three
-//! read-back shims almost every file needs. Anything that only one file wants
-//! (a purpose-built vault, a bespoke row snapshot) stays in that file.
-//!
-//! One thing that is **not** here on purpose: the tracing `MakeWriter` capture
-//! `tests/logging.rs` and `tests/discover_query_count.rs` each define. Hoisting it
-//! would make all ~28 test binaries link `tracing-subscriber` to serve two, and
-//! those two are already documented as needing their own binary (tracing's global
-//! callsite-interest cache races across parallel test threads). The 20 duplicated
-//! lines are the price of that isolation.
+//! Every test binary that says `mod common;` gets this whole file, so it is deliberately
+//! small and dependency-light. Anything only one file wants stays in that file — including,
+//! on purpose, the tracing `MakeWriter` capture `tests/logging.rs` and
+//! `tests/discover_query_count.rs` each define: hoisting it would make all ~28 test binaries
+//! link `tracing-subscriber` to serve two that already need their own binary anyway.
 #![allow(dead_code)]
 
 use b2_core::embed::FakeEmbedder;

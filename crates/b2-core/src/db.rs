@@ -1,32 +1,19 @@
 //! Opening the index, the schema migration, and the projection helpers for the
 //! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), the
-//! `embeddings`/`note_centroids` vector tables, and the typed `edges` graph.
+//! `embeddings`/`note_centroids` vector tables, and the typed `edges` graph. Every
+//! table here is a derived projection of Markdown — nothing is a source of truth
+//! (ADR-0002).
 //!
-//! **A note is keyed by its vault-relative path** (invariants L1, GH #170) — there
-//! is no separate resolver table, because there is no separate identity: `notes.path`
-//! is the primary key, and every child (`note_aliases`, `chunks`, `note_centroids`,
-//! `edges.src_path`) references it `ON DELETE CASCADE ON UPDATE CASCADE`. The update
-//! half is what makes a B2-performed move a **re-key** rather than a rebuild — one
-//! `UPDATE notes SET path` carries every derived row with it, transactionally.
+//! **A note is keyed by its vault-relative path** (ADR-0003): `notes.path` is the
+//! primary key and every child references it `ON DELETE CASCADE ON UPDATE CASCADE`.
+//! The update half is what makes a B2-performed move a **re-key** rather than a
+//! rebuild — one `UPDATE notes SET path` carries every derived row with it. It needs
+//! `PRAGMA foreign_keys = ON`, set on every connection alongside `WAL`.
 //!
-//! Every connection is opened `WAL` + `foreign_keys=ON` per
-//! index-engine.md — the pragma is load-bearing twice over now, since without it
-//! neither cascade fires. Every table here is a derived projection of `Markdown` —
-//! nothing is a source of truth.
-//!
-//! Vectors live in **plain tables** and every distance is computed in-process
-//! (schema v3, #38). The previous store — `sqlite-vec`'s `chunks_vec` `vec0`
-//! virtual table — charged a per-row shadow-table probe on every scan (~38.6k
-//! internal statements per `b2 similar` on a real vault) while its only shipped
-//! search was the same brute force we compute ourselves; a plain-table scan is one
-//! sequential statement.
-//!
-//! Those vectors are **content-addressed** (schema v6, GH #170): `embeddings` is
-//! keyed by `text_hash`, the blake3 of the chunk text that *is* the embed input, so
-//! a moved or renamed note finds every vector already stored and re-embeds nothing.
-//! The one bookkeeping cost is that a vector no longer dies with its chunk —
-//! [`prune_orphan_vectors`] collects hashes nothing references, on the same
-//! derived-data lifecycle as centroids (M4).
+//! Vectors live in **plain tables**, scored in-process, content-addressed by the
+//! blake3 of the chunk text (ADR-0006). The one bookkeeping cost is that a vector no
+//! longer dies with its chunk — [`prune_orphan_vectors`] collects what nothing
+//! references, on the same derived-data lifecycle as centroids.
 
 use crate::chunk::Chunk;
 use crate::embed::pack_f32;
@@ -40,41 +27,26 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-/// The B2 index schema version stamped into `meta.schema_version`. Bumping it is
-/// the migration gate: on a mismatch `migrate()` drops the derived tables and lets
-/// the next `reindex` rebuild them (the index is disposable). **2** dropped the
-/// suggestion machinery — the `status` column, the `origin='suggested'` value, and
-/// the `edge_provenance` table — with the 2026-07-04 relator cut (data-model.md §4).
-/// **3** replaced the `chunks_vec` vec0 virtual table with the plain `embeddings` +
-/// `note_centroids` tables and dropped the `sqlite-vec` dependency (#38); a pre-3
-/// index's orphaned `chunks_vec` entry is left inert in `sqlite_master` (its module
-/// is no longer linked, so it can't be dropped) — delete `.b2/b2.sqlite` for a
-/// byte-clean slate; either way the next `reindex` rebuilds everything queried.
-/// **4** added the `resources` inventory and widened `edges` with resource targets
-/// (`dst_resource_path`/`embed`/`caption`) — file-type support slice 1
-/// (data-model.md §10).
-/// **5** switched `chunks_fts` to `porter unicode61` — the GH #157 A/B's verdict
-/// (unstemmed BM25 missed every inflection: `pedalling` found nothing in a note
-/// saying "pedals"; porter rescued 7 queries and regressed none, with the
-/// code-literal and universe/university precision probes standing guard —
-/// GH #157, index-engine.md §3).
-/// **6** re-keyed the whole index on the **vault-relative path** and made
-/// `embeddings` content-addressed (GH #170): `notes(path PK)`, children referencing
-/// it `ON DELETE CASCADE ON UPDATE CASCADE`, `edges(src_path, dst_path)`, and
-/// `embeddings(text_hash PK)` fed by a new `chunks.text_hash` column. No migration,
-/// by design (S5) — an older index is simply rebuilt from the vault, which is also
-/// the whole upgrade story for a vault whose notes still carry `b2id:` lines: the
-/// key becomes an ordinary unknown one, preserved verbatim and never read.
+/// The B2 index schema version stamped into `meta.schema_version`. Bumping it is the
+/// migration gate: on a mismatch `migrate()` drops the derived tables and lets the
+/// next `reindex` rebuild them — there are no migrations, by design (ADR-0002).
+///
+/// **2** dropped the suggestion machinery with the 2026-07-04 relator cut. **3**
+/// replaced the `chunks_vec` vec0 virtual table with plain vector tables (ADR-0006);
+/// a pre-3 index's orphaned `chunks_vec` entry stays inert in `sqlite_master`,
+/// because its module is no longer linked to drop it. **4** added the `resources`
+/// inventory and widened `edges` with resource targets. **5** switched `chunks_fts`
+/// to `porter unicode61` (the GH #157 A/B's verdict). **6** re-keyed the whole index
+/// on the vault-relative path and made `embeddings` content-addressed (GH #170).
 pub const SCHEMA_VERSION: i64 = 6;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
 const SLOW_QUERY_MS_DEFAULT: u64 = 100;
 
-/// The duration at or above which a statement logs as a **slow query** (WARN
-/// instead of DEBUG). Read once from `B2_SLOW_QUERY_MS` (milliseconds), defaulting
-/// to [`SLOW_QUERY_MS_DEFAULT`]. Observability config only — it never changes what
-/// any operation computes, so the core's determinism guarantee is untouched.
+/// The duration at or above which a statement logs as a **slow query** (WARN instead
+/// of DEBUG), read once from `B2_SLOW_QUERY_MS`. Observability config only — it never
+/// changes what an operation computes.
 fn slow_query_threshold() -> Duration {
     static THRESHOLD: OnceLock<Duration> = OnceLock::new();
     *THRESHOLD.get_or_init(|| {
@@ -87,37 +59,28 @@ fn slow_query_threshold() -> Duration {
 }
 
 /// Whether a finished statement is worth the string work in [`on_sqlite_profile`]:
-/// true only when something would actually receive the event — a **slow** statement
-/// with WARN enabled, or **any** statement with DEBUG enabled.
+/// true only when something would receive the event.
 ///
-/// Split out of the callback because it is the one part with branches worth pinning.
-/// It reads as pure optimization, but the `slow && warn` term is load-bearing: drop it
-/// (the tempting "just check DEBUG" simplification) and slow-query WARNs disappear for
-/// anyone running a WARN-only subscriber — silently, since a suppressed log has no
-/// other symptom. The unit test below is the truth table.
+/// Split out because the `slow && warn` term is load-bearing: drop it (the tempting
+/// "just check DEBUG" simplification) and slow-query WARNs silently disappear for a
+/// WARN-only subscriber. The unit test below is the truth table.
 fn should_emit(slow: bool, warn_enabled: bool, debug_enabled: bool) -> bool {
     (slow && warn_enabled) || debug_enabled
 }
 
-/// SQLite's own per-statement profiler, surfaced as structured `tracing` events:
-/// `sqlite3_trace_v2(SQLITE_TRACE_PROFILE)` fires this when a statement finishes,
-/// with the statement and its execution time measured by SQLite itself. Each event
-/// (target `b2::sqlite`) carries the SQL **template** (`?N` placeholders, never the
-/// bound values — so no note content or embedding blobs land in the log, and events
-/// group cleanly by statement for reporting), a numeric `duration_us`, and the
-/// statement's `vm_steps`/`fullscan_steps` counters (the "why was it slow" signal —
-/// a high fullscan count means a missing index). Statements at or over
-/// [`slow_query_threshold`] log at WARN with `slow=true`; the rest at DEBUG.
+/// SQLite's own per-statement profiler (`sqlite3_trace_v2`), surfaced as structured
+/// `tracing` events on target `b2::sqlite`: the SQL **template** (`?N` placeholders,
+/// never bound values, so no note content lands in the log and events group by
+/// statement), `duration_us`, and the `vm_steps`/`fullscan_steps` counters — the "why
+/// was it slow" signal, since a high fullscan count means a missing index. At or over
+/// [`slow_query_threshold`] it logs at WARN, otherwise DEBUG.
 ///
-/// **`duration_us` precision is platform-bound.** SQLite's profiler clock is only as
-/// fine as the host's; on some platforms (macOS observed) it quantizes to ~1ms, so
-/// `duration_us` comes back as a multiple of 1000 and sub-millisecond statements read
-/// as `0`. Treat it as coarse wall-clock. For fine-grained per-statement cost use
-/// `vm_steps` — it counts VDBE opcodes, so it's deterministic and clock-independent.
+/// **`duration_us` precision is platform-bound** — some platforms (macOS observed)
+/// quantize SQLite's profiler clock to ~1ms, so sub-millisecond statements read as
+/// `0`. For fine-grained cost use `vm_steps`: VDBE opcodes, deterministic and
+/// clock-independent.
 ///
-/// A plain `fn` because `trace_v2` registers a function pointer (no captured
-/// state). Emitting through `tracing` costs nothing until an adapter installs a
-/// subscriber (the CLI's is opt-in via `B2_LOG`/`B2_DEBUG`).
+/// A plain `fn` because `trace_v2` registers a function pointer.
 fn on_sqlite_profile(event: TraceEvent<'_>) {
     let TraceEvent::Profile(stmt, elapsed) = event else {
         return; // only SQLITE_TRACE_PROFILE is masked in, but TraceEvent is non-exhaustive
@@ -156,24 +119,20 @@ fn on_sqlite_profile(event: TraceEvent<'_>) {
 /// idempotent migration. Safe to call on a fresh or an already-built index.
 pub fn open(path: &Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
-    // Profile every statement on this connection through SQLite's trace_v2 hook —
-    // the source of the `b2::sqlite` query-timing events (see `on_sqlite_profile`).
+    // Profile every statement through SQLite's trace_v2 hook (`on_sqlite_profile`).
     conn.trace_v2(
         TraceEventCodes::SQLITE_TRACE_PROFILE,
         Some(on_sqlite_profile),
     );
     // execute_batch tolerates the row PRAGMA mmap_size returns.
-    // busy_timeout: WAL allows one writer at a time, and two short-statement
-    // writers can now legitimately race (a save during the background embed).
-    // A modest wait turns that contention into a few-ms
-    // stall instead of an immediate SQLITE_BUSY error. (Set explicitly rather than
-    // leaned on: rusqlite happens to arm the same 5 s at `Connection::open`, but
-    // that is its default, not our contract.)
-    // mmap_size + cache_size: the whole-space vector scans stream ~100+ MB of blob
-    // rows per call on a real vault; under the 2 MB default cache with no mmap that
-    // read path was pread/syscall-bound — the bulk of `b2 similar`'s ~4.4 s (#38).
-    // mmap_size is a *cap*, not an allocation (the OS page cache does the work — the
-    // one cache B2 is happy to lean on); cache_size is in KiB when negative (32 MiB).
+    // busy_timeout: WAL allows one writer at a time, and two short-statement writers
+    // can legitimately race (a save during the background embed); a modest wait turns
+    // that into a few-ms stall instead of SQLITE_BUSY. Set explicitly rather than
+    // leaned on — rusqlite arms the same 5 s by default, but that is its contract.
+    // mmap_size + cache_size: whole-space vector scans stream ~100+ MB of blob rows
+    // per call on a real vault, which under the 2 MB default cache was syscall-bound
+    // (the bulk of `b2 similar`'s ~4.4 s, #38). mmap_size is a *cap*, not an
+    // allocation; cache_size is KiB when negative (32 MiB).
     conn.execute_batch(
         "PRAGMA busy_timeout = 5000;
          PRAGMA foreign_keys = ON;
@@ -186,36 +145,28 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-/// How many times [`enter_wal_mode`] attempts the flip before surfacing the busy
-/// error. Large, because these retries are *standing in for* `busy_timeout` — the one
-/// statement it does not cover — so the whole wait budget is here: doubling from
-/// [`LOCK_RETRY_BACKOFF_START`] up to [`LOCK_RETRY_BACKOFF_MAX`], ≈4 s of total wait,
-/// the same order as the timeout the rest of the connection gets.
+/// How many times [`enter_wal_mode`] attempts the flip before surfacing the busy error.
+/// Large, because these retries *stand in for* `busy_timeout` — the one statement it does
+/// not cover (ADR-0021) — so the whole ≈4 s wait budget is here.
 const WAL_FLIP_ATTEMPTS: u32 = 16;
 
-/// How many times the DDL rebuilds ([`migrate`], [`ensure_embedding_space`]) re-attempt
-/// their `BEGIN IMMEDIATE` before surfacing the busy error. Small where the flip's is
-/// large, and for the opposite reason: these retries sit *on top of* `busy_timeout`
-/// rather than standing in for it — each attempt already waits the full 5 s for the
-/// write lock, so three is ≈15 s of patience. Past that it isn't a race to wait out,
-/// it's a stuck writer, and saying so beats hanging.
+/// How many times the DDL rebuilds re-attempt their `BEGIN IMMEDIATE`. Small where the
+/// flip's is large, and for the opposite reason: these sit *on top of* `busy_timeout`, so
+/// each attempt already waits its full 5 s. Past ≈15 s it is a stuck writer (ADR-0021).
 const REBUILD_ATTEMPTS: u32 = 3;
 
 /// The pause schedule [`retry_while_locked`] uses between attempts.
 const LOCK_RETRY_BACKOFF_START: Duration = Duration::from_millis(2);
 const LOCK_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(500);
 
-/// Run `op`, retrying while SQLite reports the lock it wants is held by someone else —
-/// the one shape of failure in this module that is a *race*, not a fault, and so the
-/// one worth re-attempting. `what` names the contended step for the log line only.
+/// Run `op`, retrying while SQLite reports the lock it wants is held by someone else
+/// — the one failure in this module that is a *race* rather than a fault. `what` names
+/// the contended step for the log line only.
 ///
-/// The backoff sleeps, but reads no clock and decides nothing from one — the core's
-/// determinism guarantee (ids and timestamps passed in, never sampled) is untouched;
-/// this only changes how long a contended step waits, never what it computes.
-///
-/// Both callers hand it an operation that is **idempotent and self-checking**: a retry
-/// re-reads the state it is about to change, so the attempt that follows a lost race
-/// finds the work already done rather than doing it twice.
+/// The backoff sleeps but reads no clock and decides nothing from one, so the core's
+/// determinism is untouched. Both callers hand it an operation that is idempotent and
+/// self-checking: a retry re-reads the state it is about to change, so the attempt
+/// after a lost race finds the work already done.
 fn retry_while_locked<T>(
     what: &str,
     attempts: u32,
@@ -242,38 +193,21 @@ fn retry_while_locked<T>(
     }
 }
 
-/// Put the connection in WAL mode, waiting out a concurrent opener (#111).
+/// Put the connection in WAL mode, waiting out a concurrent opener (ADR-0021).
 ///
-/// `journal_mode = WAL` is the one statement in [`open`] that takes a write lock, and
-/// only when it actually *changes* the mode — so exactly once per vault, on the
-/// first-ever open, and never again. **`busy_timeout` does not cover it.** The flip
-/// upgrades an already-open read transaction, and SQLite only consults the busy
-/// handler for a write lock taken from no transaction at all (`btreeBeginTrans`'s
-/// retry loop is guarded on `inTransaction == TRANS_NONE`; the RESERVED lock inside
-/// `sqlite3PagerBegin` is documented as taken without the handler). A second opener
-/// therefore gets an immediate `SQLITE_BUSY` no matter how the pragmas are ordered —
-/// measured here at ~4% of racing opens with the timeout set first, and it is the
-/// documented cold-vault flow that pays: `b2 reindex &` then `b2 status`, where the
-/// reindex is usually the loser and silently doesn't happen.
+/// `journal_mode = WAL` is the one statement in [`open`] that takes a write lock, and only
+/// when it actually *changes* the mode — so once per vault, ever — and it is the one
+/// `busy_timeout` cannot cover, so the retry is ours ([`retry_while_locked`]). It converges
+/// fast: the next attempt either takes the lock or finds the database already in WAL.
 ///
-/// So the retry is ours to do ([`retry_while_locked`]). It converges fast because it
-/// only has to outlast the *other* opener's flip: on the next attempt we either take
-/// the lock or find the database already in WAL, where the pragma is a no-op needing no
-/// lock at all.
-///
-/// **The mode is read back, not assumed.** The pragma reports the mode it *ended* on as
-/// a row, and there is one case where it declines the flip with no error at all: a
-/// filesystem with no shared-memory support (`sqlite3PagerWalSupported` — a network
-/// share, or a synced folder on some setups, both plausible homes for a personal
-/// vault), where SQLite returns the *old* mode and `SQLITE_OK`. A row-discarding
-/// `execute_batch` would report success having changed nothing, so this queries instead.
-/// A decline is **not** an error — B2 is correct in rollback-journal mode, and refusing
-/// to open such a vault would be the worse bug — but it is said out loud rather than
-/// silently assumed, and it is **not** retried: nothing is holding a lock, so no amount
-/// of waiting would change the answer.
+/// **The mode is read back, not assumed.** A filesystem with no shared-memory support
+/// declines the flip with `SQLITE_OK` and the *old* mode, which a row-discarding
+/// `execute_batch` would report as success. A decline is not an error — B2 is correct in
+/// rollback-journal mode — but it is said out loud, and not retried: nothing holds a lock,
+/// so waiting changes nothing.
 fn enter_wal_mode(conn: &Connection) -> Result<()> {
-    // A *declined* flip comes back as `Ok` carrying the old mode, so it falls out of the
-    // retry immediately — nothing holds a lock, and no amount of waiting changes it.
+    // A *declined* flip comes back as `Ok` carrying the old mode, so it leaves the
+    // retry immediately.
     let mode = retry_while_locked("journal_mode=WAL", WAL_FLIP_ATTEMPTS, || {
         Ok(conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0))?)
     })?;
@@ -287,10 +221,9 @@ fn enter_wal_mode(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Whether an error is SQLite lock contention — the retryable kind. `SQLITE_BUSY` is
-/// what the WAL flip and a contended `BEGIN IMMEDIATE` lose with; `SQLITE_LOCKED` is its
-/// same-process sibling, matched too since the desktop host opens the index from more
-/// than one thread.
+/// Whether an error is SQLite lock contention — the retryable kind. `SQLITE_LOCKED`
+/// is matched alongside `SQLITE_BUSY` because the desktop host opens the index from
+/// more than one thread.
 fn is_locked(err: &Error) -> bool {
     matches!(err, Error::Sqlite(e) if matches!(
         e.sqlite_error_code(),
@@ -298,15 +231,12 @@ fn is_locked(err: &Error) -> bool {
     ))
 }
 
-/// The tables [`apply_schema`] creates — the structural half of [`schema_is_current`],
-/// and the list a completed migration is checked against.
+/// The tables [`apply_schema`] creates — the structural half of [`schema_is_current`].
 ///
-/// Tables only, and that is sufficient rather than lazy: the damage this guards against
-/// is a concurrent `DROP TABLE` (#114), and dropping a table takes its indexes and
-/// triggers down with it — so a missing table is the visible edge of *every* partial
-/// rebuild, and the list stays short enough to stay honest. The unit test at the foot of
-/// this file pins it to what the DDL actually creates, so a table added without updating
-/// this list fails the suite rather than silently narrowing the check.
+/// Tables only, and that is sufficient rather than lazy: this guards against a
+/// concurrent `DROP TABLE` (#114), and dropping a table takes its indexes and triggers
+/// with it, so a missing table is the visible edge of every partial rebuild. The unit
+/// test at the foot of this file pins the list to what the DDL actually creates.
 const SCHEMA_TABLES: [&str; 7] = [
     "meta",
     "notes",
@@ -317,52 +247,26 @@ const SCHEMA_TABLES: [&str; 7] = [
     "edges",
 ];
 
-/// Bring the index to [`SCHEMA_VERSION`] — **atomically, and serialized against every
-/// other opener** (invariants C1, #114).
+/// Bring the index to [`SCHEMA_VERSION`] — **atomically, and serialized against every other
+/// opener** on SQLite's own write lock (ADR-0021, which carries the measured races and why
+/// an advisory lock file was rejected).
 ///
-/// Two properties, and the reasons they cost what they cost:
-///
-/// **Serialized.** `migrate` is a read-then-decide-then-write sequence, so two openers
-/// that both read a stale version will both rebuild, and unsynchronized their ~30 DDL
-/// statements interleave freely: opener B's `DROP TABLE resources` lands after opener
-/// A's `CREATE TABLE resources`, and A then stamps the current version over a schema B
-/// has partly demolished. Measured before the fix over 320 racing opens (40 rounds × 8):
-/// **10 opens failed outright** with `no such table: main.resources`, and **8
-/// missing-table observations** were left behind by rounds where *every* opener returned
-/// `Ok` — the quiet half, found later by a `search` that can't. `busy_timeout` never applied —
-/// nothing was contending for a lock; the statements all succeeded, in the wrong order.
-///
-/// The serialization is SQLite's own write lock (`BEGIN IMMEDIATE`), not a second
-/// mechanism layered over the database: the loser of the race blocks on the winner's
-/// transaction under the `busy_timeout` already set in [`open`], and the re-check inside
-/// that transaction is where it learns the work is done. An advisory lock file would
-/// serialize this too, but it would be a *third* concurrency mechanism (alongside the
-/// `#55` reindex lock and the `#111` flip retry) guarding state the database is already
-/// able to guard — and it would be the weaker guard exactly where it matters, since a
-/// vault on a network share or synced folder is where `flock` quietly stops meaning
-/// anything.
-///
-/// **Atomic.** The drop-and-rebuild runs in one transaction (DDL is transactional in
-/// SQLite), so a crash, a cancel, or an error mid-rebuild rolls back to the schema that
-/// was there before. Nothing observes the half-built shape — the stamp and the tables it
-/// vouches for commit together, which is what lets [`schema_is_current`] trust the stamp.
-///
-/// **The fast path takes no write lock at all.** An index already at the current version
-/// is the overwhelmingly common case (every open after the first), and it now costs two
-/// reads instead of the ~30 `IF NOT EXISTS` DDL statements plus a `meta` write it used to
-/// re-run on every single open. That is what keeps C1's "a reader is never refused" true:
-/// a reader opening a current index cannot be blocked by a writer, because it asks for
-/// nothing a writer holds.
+/// Three properties, each load-bearing. **Serialized:** `migrate` reads, decides, then
+/// writes, so two openers that both read a stale version both rebuild and their ~30 DDL
+/// statements interleave. **Atomic:** the drop-and-rebuild runs in one transaction, so the
+/// stamp and the tables it vouches for commit together, which is what lets
+/// [`schema_is_current`] trust it. **The fast path takes no write lock at all**, which is
+/// what keeps C1's "a reader is never refused" true: an already-current index costs two
+/// reads instead of the ~30 `IF NOT EXISTS` statements it used to re-run on every open.
 fn migrate(conn: &mut Connection) -> Result<()> {
     if schema_is_current(conn)? {
         return Ok(());
     }
     retry_while_locked("schema migration", REBUILD_ATTEMPTS, || {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Re-checked *inside* the write lock, which is the whole point of taking it: if
-        // we lost the race to another opener, we waited on its transaction and this is
-        // where we find its work already committed. Idempotent by construction — the
-        // winner's rebuild and this check cannot interleave.
+        // Re-checked *inside* the write lock, which is the whole point of taking it:
+        // if we lost the race we waited on the winner's transaction, and this is where
+        // we find its work already committed.
         if !schema_is_current(&tx)? {
             apply_schema(&tx)?;
         }
@@ -371,13 +275,11 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     })
 }
 
-/// Whether this connection sees a **complete** schema at the current [`SCHEMA_VERSION`]:
-/// every table in [`SCHEMA_TABLES`] present *and* the stamp current.
-///
-/// Both halves are load-bearing. The stamp alone was the whole test before #114, and a
-/// current stamp over an incomplete schema is precisely what that bug could leave behind
-/// — so an index damaged by an older `b2` is detected here and rebuilt, rather than
-/// carried forward to fail far from its cause on the next `search`.
+/// Whether this connection sees a **complete** schema at the current
+/// [`SCHEMA_VERSION`]: every table in [`SCHEMA_TABLES`] present *and* the stamp
+/// current. Both halves are load-bearing — a current stamp over an incomplete schema
+/// is precisely what #114 could leave behind, so an index damaged by an older `b2` is
+/// detected here rather than far from its cause on the next `search`.
 fn schema_is_current(conn: &Connection) -> Result<bool> {
     let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
     let present: HashSet<String> = stmt
@@ -404,42 +306,31 @@ fn stamped_version(conn: &Connection) -> Result<Option<i64>> {
     Ok(meta_value(conn, "schema_version")?.and_then(|s| s.parse().ok()))
 }
 
-/// Create the schema and stamp `schema_version`, dropping whatever was there first. The
-/// DDL mirrors index-engine.md (the vector tables are created at embed time — see
-/// [`ensure_embedding_space`]).
+/// Create the schema and stamp `schema_version`, dropping whatever was there first.
+/// The DDL mirrors `index-engine.md`; the vector tables are created at embed time
+/// instead (ADR-0006, [`ensure_embedding_space`]).
 ///
-/// **One outcome, whatever it finds:** an empty schema at the current version. Reaching
-/// here means [`schema_is_current`] said no, and every way it can say no rebuilds from
-/// the same empty slate — the tables are the wrong shape (a version bump), structurally
-/// incomplete (a rebuild an older `b2` lost a race in the middle of, #114), or present
-/// but unstamped, which is an index of *no known version* however it got that way.
+/// **One outcome, whatever it finds:** an empty schema at the current version.
+/// Reaching here means [`schema_is_current`] said no, and every way it can say no —
+/// wrong shape, structurally incomplete (#114), or present but unstamped — is an index
+/// of no known version. So the drop is unconditional: guarding it on "was there a prior
+/// stamp?" reads like an optimization, but `DROP TABLE IF EXISTS` over an empty catalog
+/// is already a no-op, and all the guard would do is wave through the
+/// unstamped-but-populated index. Dropping is safe because the index is disposable
+/// (ADR-0002), and rows surviving in tables of unknown shape are worse than none: an
+/// incremental reindex skips notes whose `body_hash` still matches, so it would leave
+/// the recreated tables empty forever.
 ///
-/// So the drop is unconditional, and deliberately so: guarding it on "was there a prior
-/// stamp?" reads like an optimization for the fresh-index case, but `DROP TABLE IF
-/// EXISTS` over an empty catalog is already a no-op — all the guard actually does is
-/// wave through the unstamped-but-populated index, letting `CREATE … IF NOT EXISTS`
-/// settle over surviving tables and stamp them current.
-///
-/// Dropping is safe *because* of where we are: the index is disposable (invariants.md,
-/// "volatile vault over a disposable index"), and rows surviving in tables of an unknown
-/// shape are worse than no rows at all — an incremental reindex skips notes whose
-/// `body_hash` still matches, so it would leave the recreated tables empty forever and
-/// quietly break S3 (`full-reindex ≡ incremental-update`). Dropping them all means the
-/// next `reindex` refills everything.
-///
-/// **Called only from inside [`migrate`]'s transaction**, which is what makes the
-/// drop-then-create sequence safe; it is not a standalone entry point.
+/// **Called only from inside [`migrate`]'s transaction**, which is what makes
+/// drop-then-create safe; it is not a standalone entry point.
 fn apply_schema(conn: &Connection) -> Result<()> {
     // `meta` must exist before the batch below can clear it.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
-    // Children first (FKs); dropping `chunks` takes its FTS triggers with it.
-    //
-    // The legacy vec0 `chunks_vec` (schema ≤ 2) is deliberately absent from this
-    // list: its module is no longer linked, so SQLite cannot DROP it — any orphaned
-    // entry stays inert in `sqlite_master` and nothing ever queries it (delete the
-    // index file for a byte-clean slate). `DELETE FROM meta` clears the recorded
+    // Children first (FKs); dropping `chunks` takes its FTS triggers with it. The
+    // legacy vec0 `chunks_vec` (schema <= 2) is deliberately absent: its module is no
+    // longer linked, so SQLite cannot DROP it. `DELETE FROM meta` clears the recorded
     // embedder, so the next embed pass recreates the vector tables from nothing.
     conn.execute_batch(
         "DROP TABLE IF EXISTS edge_provenance;
@@ -572,12 +463,9 @@ pub struct NoteRow<'a> {
 /// Upsert a note keyed by its vault-relative `path` and replace its aliases.
 /// `indexed_at` is set by SQLite so the projection needs no wall-clock from Rust.
 ///
-/// `ON CONFLICT(path)` is the *whole* of path reconciliation, and that is the point of
-/// keying on the path (L1, GH #170): the filesystem already guarantees one file per
-/// path, so a note deleted and recreated there, or swapped in out of band, is simply
-/// that path's note now. The pre-pivot version had to hunt down and drop a stale row
-/// that still held the path under a different identity before it could insert — a
-/// state that no longer exists to reconcile.
+/// `ON CONFLICT(path)` is the *whole* of path reconciliation, which is the point of
+/// keying on the path (ADR-0003): the filesystem already guarantees one file per path,
+/// so a note deleted and recreated there is simply that path's note now.
 pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
     conn.execute(
         "INSERT INTO notes
@@ -615,22 +503,18 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 }
 
 /// Delete every `notes` row whose path is not in `seen` — the paths the whole-vault
-/// walk actually met, whether it projected them or skipped them as unreadable (the
-/// walk *saw* that file, so evicting it would lie). Returns how many were pruned —
-/// the note half of #31, the sibling of [`prune_resources_except`]: without it a note
-/// file deleted outside `b2` leaves a ghost row that `list_notes`, keyword search,
-/// `similar`, and the graph keep serving until a from-scratch rebuild, so an
-/// incremental reindex diverges from `full-reindex ≡ incremental-update`
-/// (index-engine.md §8).
+/// walk actually met, including ones skipped as unreadable (the walk *saw* that file,
+/// so evicting it would lie). Returns how many were pruned: the note half of #31,
+/// without which a file deleted outside `b2` leaves a ghost row that listings, search,
+/// `similar` and the graph keep serving, so an incremental reindex diverges from a
+/// from-scratch rebuild (S3).
 ///
-/// The ghost's aliases, chunks (FTS kept in lockstep by the `chunks_ad` trigger),
-/// centroid, and **outgoing** edges all cascade with the row. Its *vectors* no longer
-/// do — they are content-addressed and may be shared, so they are collected
-/// separately by [`prune_orphan_vectors`]. **Inbound** edges are the caller's concern:
-/// `edges.dst_path` carries no FK (it must be free to be NULL — the dangling case,
-/// G5), so this must run *before* the edge-derivation phase, which then re-resolves
-/// every link against the pruned `notes` and re-dangles the ones that pointed here —
-/// exactly what a from-scratch rebuild produces.
+/// Aliases, chunks (FTS in lockstep via the `chunks_ad` trigger), centroid and
+/// **outgoing** edges cascade with the row. Vectors no longer do — they are
+/// content-addressed and may be shared, so [`prune_orphan_vectors`] collects them.
+/// **Inbound** edges are the caller's concern: `edges.dst_path` carries no FK (it must
+/// be free to be NULL — the dangling case), so this must run *before* edge derivation,
+/// which then re-dangles the links that pointed here.
 pub fn prune_notes_except(conn: &Connection, seen: &HashSet<&str>) -> Result<usize> {
     let mut stmt = conn.prepare("SELECT path FROM notes")?;
     let stored = stmt
@@ -854,32 +738,28 @@ pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Resu
 // chunks (FTS kept in lockstep by the triggers in migrate())
 // ---------------------------------------------------------------------------
 
-/// The content address of one chunk's embed input: blake3 of the chunk text,
-/// hex-encoded. The text stored on the row *is* what the embedder is handed
-/// (`chunk.rs` folds the heading breadcrumb into it before it lands here), so this
-/// hash keys the vector store exactly (M4, GH #170) — two chunks with byte-identical
-/// text must have the same vector, which is a correctness statement before it is a
-/// saving.
+/// The content address of one chunk's embed input: blake3 of the chunk text. The text
+/// stored on the row *is* what the embedder is handed (`chunk.rs` folds the heading
+/// breadcrumb in before it lands here), so this hash keys the vector store exactly
+/// (ADR-0006) — two chunks with byte-identical text must have the same vector, which is
+/// a correctness statement before it is a saving.
 ///
 /// The model identity is deliberately *not* mixed in: a model swap drops the whole
-/// `embeddings` table (M2, [`ensure_embedding_space`]), so the space is per-model by
-/// construction and a wider key would only make that drop look optional.
+/// `embeddings` table (ADR-0007), so the space is per-model by construction and a wider
+/// key would only make that drop look optional.
 pub fn text_hash(text: &str) -> String {
     blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
-/// Replace a note's chunks (delete + reinsert) and return the new chunk ids in
-/// `seq` order. The FTS triggers emit the `'delete'` sentinel for the removed rows.
-/// Stored vectors do **not** cascade — they are content-addressed and may be shared
-/// with another note's identical chunk, so they outlive any one chunk row and the
-/// whole-vault pass collects what nothing references
-/// ([`prune_orphan_vectors`]). That is exactly what makes a re-chunk (or a move)
-/// re-embed nothing when the text is unchanged: the new rows carry the same
-/// `text_hash` and find their vectors already there.
+/// Replace a note's chunks (delete + reinsert) and return the new chunk ids in `seq`
+/// order; the FTS triggers emit the `'delete'` sentinel for the removed rows.
 ///
-/// The note's centroid summarizes the *old* chunk set, so it is dropped here — the
-/// next embed pass recomputes it. Together this is what makes an incremental
-/// re-index equal a full rebuild. The caller embeds the returned ids (Flow ①).
+/// Stored vectors do **not** cascade — they are content-addressed and may be shared,
+/// so they outlive any one chunk row and the whole-vault pass collects what nothing
+/// references (ADR-0006, [`prune_orphan_vectors`]). That is exactly what makes a
+/// re-chunk (or a move) re-embed nothing when the text is unchanged. The note's
+/// centroid summarizes the *old* chunk set, so it is dropped here and the next embed
+/// pass recomputes it. The caller embeds the returned ids.
 pub fn replace_chunks(conn: &Connection, note_path: &str, chunks: &[Chunk]) -> Result<Vec<i64>> {
     // Guarded on existence so the model-free projection pass still never *creates*
     // the embedding space (index-engine.md).
@@ -913,11 +793,10 @@ pub fn replace_chunks(conn: &Connection, note_path: &str, chunks: &[Chunk]) -> R
     Ok(new_ids)
 }
 
-/// The closed set of tokenizers `chunks_fts` can be rebuilt with — an enum so the
+/// The closed set of tokenizers `chunks_fts` can be rebuilt with — an enum, so the
 /// string spliced into [`rebuild_fts`]'s DDL is never caller-supplied text.
-/// `PorterUnicode61` is the shipped default (schema v5, the GH #157 verdict —
-/// index-engine.md §3); `Unicode61` is the unstemmed ablation arm the eval
-/// harness keeps measurable.
+/// `PorterUnicode61` is the shipped default (the GH #157 verdict); `Unicode61` is the
+/// unstemmed ablation arm the eval harness keeps measurable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FtsTokenizer {
     Unicode61,
@@ -935,19 +814,14 @@ impl FtsTokenizer {
     }
 }
 
-/// The tokenizer `chunks_fts` was actually created with, read back from the
-/// schema rather than assumed.
+/// The tokenizer `chunks_fts` was actually created with, read back from the schema
+/// rather than assumed — because it *moves*: [`rebuild_fts`] swaps it under the GH #157
+/// ablation, so a caller that must tokenize a query the way the index does (see
+/// [`search::lexical_evidence`](crate::search::lexical_evidence)) has to ask.
 ///
-/// It is read rather than assumed because it *moves*: [`rebuild_fts`] swaps it
-/// under the GH #157 ablation, so a caller that needs to tokenize a query the
-/// way the index does (see
-/// [`search::lexical_evidence`](crate::search::lexical_evidence)) must ask which
-/// one is in force rather than name the shipped default.
-///
-/// The recorded value is matched against the closed [`FtsTokenizer`] set, never
-/// spliced onward as text — the same discipline as [`rebuild_fts`]'s DDL. An
-/// unreadable or unrecognised schema degrades to the shipped default, which is
-/// the one `migrate` creates.
+/// The recorded value is matched against the closed [`FtsTokenizer`] set, never spliced
+/// onward as text. An unreadable or unrecognised schema degrades to the shipped
+/// default, which is the one `migrate` creates.
 pub fn index_tokenizer(conn: &Connection) -> Result<FtsTokenizer> {
     const DEFAULT: FtsTokenizer = FtsTokenizer::PorterUnicode61;
     let sql: Option<String> = conn
@@ -971,21 +845,19 @@ pub fn index_tokenizer(conn: &Connection) -> Result<FtsTokenizer> {
 }
 
 /// Drop and recreate `chunks_fts` with `tokenizer`, repopulated from the untouched
-/// `chunks` content table (FTS5's external-content `'rebuild'` command). The chunk
-/// rows, vectors, and centroids are untouched — the tokenizer only changes how the
-/// lexical half indexes and matches the same text, which is what makes the GH #157
-/// stemmer A/B runnable without re-chunking or re-embedding.
+/// `chunks` content table (FTS5's external-content `'rebuild'`). Chunk rows, vectors
+/// and centroids are untouched — the tokenizer only changes how the lexical half
+/// indexes the same text, which is what makes the GH #157 stemmer A/B runnable without
+/// re-chunking or re-embedding.
 ///
-/// A drop-and-rebuild like the migration and the embed-time vector tables, so it
-/// takes the same write-lock discipline (`BEGIN IMMEDIATE` + retry); the op is
-/// idempotent, so an attempt that follows a lost race lands on the same end state.
-/// The `chunks_ai`/`_ad`/`_au` triggers live on `chunks` and reference this table
-/// by name, so they survive the swap and keep later ingest in sync.
+/// A drop-and-rebuild like the migration, so it takes the same write-lock discipline;
+/// the op is idempotent, so an attempt after a lost race lands on the same end state.
+/// The `chunks_*` triggers live on `chunks` and reference this table by name, so they
+/// survive the swap.
 pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
     retry_while_locked("chunks_fts rebuild", REBUILD_ATTEMPTS, || {
-        // `new_unchecked` for the same reason as `ensure_embedding_space`: this
-        // takes `&Connection`, and nothing in this crate can already be inside a
-        // transaction on it.
+        // `new_unchecked` for the same reason as `ensure_embedding_space`: this takes
+        // `&Connection`, and nothing in this crate can already be inside a transaction.
         let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         tx.execute_batch(&format!(
             "DROP TABLE IF EXISTS chunks_fts;
@@ -1004,9 +876,9 @@ pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// embeddings — the vector tables are created at embed time (not in migrate()):
+// embeddings — the vector tables are created at embed time, not in migrate():
 // their *existence* is the "this vault has an embedding space" signal the
-// projected-but-unembedded fallbacks key on (index-engine.md).
+// projected-but-unembedded fallbacks key on (ADR-0006).
 // ---------------------------------------------------------------------------
 
 /// Whether the embedding space (the `embeddings` table) currently exists.
@@ -1019,29 +891,24 @@ pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// Ensure the vector tables (`embeddings` + `note_centroids`) exist, recording
-/// `(embed_model_id, embed_dim)` in `meta`. If either differs from what is recorded
-/// — a model swap — the tables are dropped and recreated empty, so a full re-embed
-/// follows (index-engine.md §8). `meta` is the only place a swap can be detected,
-/// so vectors never go silently stale. (`dim` is bookkeeping only now — a plain
-/// BLOB column needs no `FLOAT[N]` DDL literal — but it still gates the swap and
-/// the read-time fail-fast.)
+/// Ensure the vector tables exist, recording `(embed_model_id, embed_dim)` in `meta`. If
+/// either differs from what is recorded — a model swap — the tables are dropped and
+/// recreated empty, so a full re-embed follows: `meta` is the only place a swap is
+/// detectable, so vectors never go silently stale (ADR-0007). (`dim` is bookkeeping only now
+/// that vectors are plain BLOBs, but it still gates the swap and the read-time fail-fast.)
 ///
-/// **Serialized and atomic on the same terms as [`migrate`]** (#114). This is the second
-/// drop-and-rebuild in the file and it had the identical defect: two embed passes that
-/// both find the space missing — the desktop's reindex task and a `b2 reindex`, which
-/// nothing stops from overlapping, since the `#55` advisory lock is taken by the CLI
-/// alone — would both run the batch, and B's `DROP TABLE embeddings` landing after A's
-/// `CREATE` leaves A inserting vectors into a table that no longer exists. Same
-/// structure, same fix: check, then re-check under `BEGIN IMMEDIATE`, rebuild once.
+/// **Serialized and atomic on the same terms as [`migrate`]** (ADR-0021): two embed passes
+/// genuinely overlap — the desktop's reindex task and a `b2 reindex`, which the CLI's own
+/// advisory lock does not cover — and B's `DROP` after A's `CREATE` leaves A inserting into
+/// a table that no longer exists.
 pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> Result<()> {
     if embedding_space_matches(conn, model_id, dim)? {
         return Ok(());
     }
     retry_while_locked("embedding-space rebuild", REBUILD_ATTEMPTS, || {
-        // `new_unchecked` because this takes `&Connection`, not `&mut` — the embed pass
-        // threads a shared connection through. Sound here because `b2-core` opens no
-        // other transaction on it: nothing in this crate can already be inside one.
+        // `new_unchecked` because this takes `&Connection`, not `&mut` — the embed
+        // pass threads a shared connection through. Sound because `b2-core` opens no
+        // other transaction on it.
         let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         if !embedding_space_matches(&tx, model_id, dim)? {
             tx.execute_batch(
@@ -1066,19 +933,18 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
 }
 
 /// Whether the vector tables exist *and* were built by this exact embedder identity —
-/// the "nothing to do" test [`ensure_embedding_space`] runs twice, once cheaply and once
-/// under the write lock. Identity first: a recorded model that differs settles it
-/// without the `sqlite_master` lookup.
+/// the "nothing to do" test [`ensure_embedding_space`] runs twice, once cheaply and
+/// once under the write lock. Identity first: a differing model settles it without the
+/// `sqlite_master` lookup.
 fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Result<bool> {
     let unchanged = meta_value(conn, "embed_model_id")?.as_deref() == Some(model_id)
         && meta_value(conn, "embed_dim")?.as_deref() == Some(dim.to_string().as_str());
     Ok(unchanged && embedding_space_exists(conn)?)
 }
 
-/// The `(embed_model_id, embed_dim)` a prior ingest recorded in `meta`, if any.
-/// `None` means the vault has never been embedded (no vector tables yet). This is
-/// the only place a model swap is detectable, so a read compares it to the active
-/// embedder and fails fast on a mismatch (index-engine.md §8).
+/// The `(embed_model_id, embed_dim)` a prior ingest recorded, if any; `None` means the
+/// vault has never been embedded. The only place a model swap is detectable, so a read
+/// compares it to the active embedder and fails fast on a mismatch (ADR-0007).
 pub fn recorded_embedder(conn: &Connection) -> Result<Option<(String, usize)>> {
     let model = meta_value(conn, "embed_model_id")?;
     let dim = meta_value(conn, "embed_dim")?;
@@ -1097,10 +963,9 @@ fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Store one embedding under the content address of the text it was produced from.
-/// `OR IGNORE` rather than a plain insert because the store is shared: two notes
-/// holding byte-identical chunk text address the same row, and the second writer is
-/// simply agreeing with the first (same input, same vector). That also makes a
+/// Store one embedding under the content address of the text it came from. `OR IGNORE`
+/// because the store is shared: two notes with byte-identical chunk text address the
+/// same row, and the second writer is agreeing with the first. That also makes a
 /// resumed or overlapping embed pass idempotent.
 pub fn set_vector(conn: &Connection, text_hash: &str, embedding: &[f32]) -> Result<()> {
     conn.execute(
@@ -1111,15 +976,14 @@ pub fn set_vector(conn: &Connection, text_hash: &str, embedding: &[f32]) -> Resu
 }
 
 /// Delete every stored vector no chunk references — the collection pass
-/// content-addressing costs us, run by the whole-vault projection
-/// ([`crate::ingest::project_vault`]) once the chunk set for this run is final.
+/// content-addressing costs us, run by the whole-vault projection once this run's chunk
+/// set is final.
 ///
-/// A vector cannot be dropped with its chunk (the pre-#170 `ON DELETE CASCADE`)
-/// precisely because it may be shared, and that sharing is the point: a moved note's
-/// chunks are deleted and re-inserted under a new `note_path`, and their vectors have
-/// to survive the gap. So the lifecycle is the centroids' — derived data, reconciled
-/// by the pass that knows the whole picture, never by a per-row rule that cannot.
-/// Requires the embedding space to exist; the caller checks.
+/// A vector cannot be dropped with its chunk precisely because it may be shared, and
+/// that sharing is the point: a moved note's chunks are deleted and re-inserted under a
+/// new path, and their vectors have to survive the gap (ADR-0006). So the lifecycle is
+/// the centroids' — derived data reconciled by the pass that knows the whole picture,
+/// never by a per-row rule that cannot. Requires the embedding space to exist.
 pub fn prune_orphan_vectors(conn: &Connection) -> Result<usize> {
     Ok(conn.execute(
         "DELETE FROM embeddings
@@ -1139,12 +1003,10 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
-/// The whole `chunk_id → note_path` map in one scan — the bulk form of
-/// [`note_for_chunk`] for hot loops that resolve *many* hits to their notes
-/// (graph-filtered search walks the full ranked space; a per-hit `note_for_chunk`
-/// there is an O(vault) round-trip storm in the worst case — the same N+1 shape
-/// that once made `b2 similar` a ~130s stall, #37). One map load turns the inner
-/// loop into a pointer chase.
+/// The whole `chunk_id -> note_path` map in one scan — the bulk form of
+/// [`note_for_chunk`] for loops that resolve *many* hits (graph-filtered search walks
+/// the full ranked space, where a per-hit lookup is the N+1 shape that once made
+/// `b2 similar` a ~130s stall, #37).
 pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare("SELECT id, note_path FROM chunks")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
@@ -1186,11 +1048,9 @@ pub fn note_body_hash(conn: &Connection, note_path: &str) -> Result<Option<Strin
         .optional()?)
 }
 
-/// Whether every chunk of `note_path` already has a stored vector (and it has at
-/// least one chunk). False after a model swap emptied the vector tables, so an
-/// unchanged-body note is still re-embedded then. Requires the embedding space to
-/// exist — callers ensure it first. A plain indexed anti-join — the vec0 version
-/// paid a virtual-table shadow probe per chunk here (#36).
+/// Whether every chunk of `note_path` already has a stored vector (and it has at least
+/// one). False after a model swap emptied the vector tables, so an unchanged-body note
+/// is still re-embedded then. Requires the embedding space to exist.
 pub fn note_fully_embedded(conn: &Connection, note_path: &str) -> Result<bool> {
     let (n_chunks, n_missing): (i64, i64) = conn.query_row(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE v.text_hash IS NULL)
@@ -1203,23 +1063,18 @@ pub fn note_fully_embedded(conn: &Connection, note_path: &str) -> Result<bool> {
 }
 
 /// The vault's embedding coverage as `(notes_embedded, notes_total)` — the honest
-/// "N/M embedded" signal (#26). `notes_total` is every projected note; `notes_embedded`
-/// counts notes whose every chunk already has a stored vector (the aggregate of
-/// [`note_fully_embedded`]). It is `0` when the embedding space doesn't exist yet — a
-/// projected-but-unembedded vault — so this reads cleanly before any embed. **Model-free:**
-/// a pure count over the projection, so an adapter can report coverage without loading the
-/// model. `notes_embedded == notes_total` (with `notes_total > 0`) means semantic ranking
-/// is complete; a smaller `notes_embedded` means search is running keyword-first over the
-/// unembedded remainder.
+/// "N/M embedded" signal (#26). `notes_embedded` counts notes whose every chunk has a
+/// stored vector; it is `0` before any embed, so this reads cleanly on a
+/// projected-but-unembedded vault. **Model-free:** a pure count over the projection.
 pub fn embed_progress(conn: &Connection) -> Result<(usize, usize)> {
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
-    // No embeddings table → nothing is embedded (it's created at embed time, not in the
-    // base migration), and the join below would reference a missing table.
+    // No embeddings table -> nothing is embedded, and the join below would reference a
+    // missing table.
     if !embedding_space_exists(conn)? {
         return Ok((0, total as usize));
     }
-    // A note counts as embedded iff it has ≥1 chunk and none of its chunks lack a vector —
-    // the same predicate as `note_fully_embedded`, aggregated over the whole vault.
+    // A note counts as embedded iff it has >=1 chunk and none lack a vector — the same
+    // predicate as `note_fully_embedded`, aggregated.
     let embedded: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes n
          WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.note_path = n.path)
@@ -1246,19 +1101,16 @@ pub struct PendingChunk {
 }
 
 /// Every chunk still lacking a stored vector, in `(path, seq)` order — the
-/// **DB-derived pending set** the embed pass fills
-/// (index-engine.md). Deriving it here is what decouples projection
-/// from embedding: nothing is handed between the two passes in memory, so any stop
-/// point (a cancelled embed, a crash between the passes) heals on the next embed.
-/// The ordering reproduces the fused reindex's per-note batching + progress.
-/// Generalizes [`note_fully_embedded`]; like it, requires the embedding space to
-/// exist — callers ensure it first.
+/// **DB-derived pending set** the embed pass fills. Deriving it here is what decouples
+/// projection from embedding: nothing is handed between the passes in memory, so any
+/// stop point (a cancelled embed, a crash between passes) heals on the next embed. The
+/// ordering reproduces the fused reindex's per-note batching and progress. Requires the
+/// embedding space to exist.
 ///
 /// A row is a *chunk*, not a distinct vector: two chunks sharing text appear twice,
-/// each under its own note, because the caller needs to know which notes are waiting
-/// on work. Deduplicating the actual embedder calls is the pass's job
-/// ([`crate::ingest::embed_vault`]) — it is the only layer that knows the order the
-/// notes will be worked in.
+/// because the caller needs to know which notes are waiting on work. Deduplicating the
+/// embedder calls is [`crate::ingest::embed_vault`]'s job — it is the only layer that
+/// knows the order the notes will be worked in.
 pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<PendingChunk>> {
     let mut stmt = conn.prepare(
         "SELECT c.note_path, c.text, c.text_hash
@@ -1339,13 +1191,12 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<(String, Option<String>)>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// A note's stored chunk vectors as `(chunk_id, vector)` in `seq` order — one
-/// indexed join, not a per-chunk round-trip. Reading a note's own vectors back is
-/// what lets discovery search from them without re-embedding — passage↔passage, no
-/// `embed_query` (index-engine.md §3); it is also discovery's second-stage rescore unit and
-/// the input to a centroid refresh. Call only when the embedding space exists
-/// (`embedding_space_exists`), else the read hits a missing table. `prepare_cached`
-/// because discovery calls this once per shortlisted note.
+/// A note's stored chunk vectors as `(chunk_id, vector)` in `seq` order — one indexed
+/// join, not a per-chunk round-trip. Reading a note's own vectors back is what lets
+/// discovery search from them without re-embedding (passage-to-passage, no
+/// `embed_query`); it is also discovery's rescore unit and the input to a centroid
+/// refresh. Call only when the embedding space exists. `prepare_cached` because
+/// discovery calls this once per shortlisted note.
 pub fn note_chunk_vectors(conn: &Connection, note_path: &str) -> Result<Vec<(i64, Vec<f32>)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT c.id, e.vector FROM chunks c
@@ -1361,11 +1212,10 @@ pub fn note_chunk_vectors(conn: &Connection, note_path: &str) -> Result<Vec<(i64
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Recompute and store `note_path`'s centroid from its currently stored chunk
-/// vectors (the row is deleted when it has none). The embed pass calls this after
-/// finishing a note, so a centroid row exists exactly for embedded notes and always
-/// summarizes their *current* vectors — the derived-projection discipline, no
-/// separate invalidation. Requires the embedding space to exist.
+/// Recompute and store `note_path`'s centroid from its currently stored chunk vectors
+/// (the row is deleted when it has none). The embed pass calls this after finishing a
+/// note, so a centroid row exists exactly for embedded notes and always summarizes
+/// their *current* vectors — derived data with no separate invalidation (ADR-0006).
 pub fn refresh_note_centroid(conn: &Connection, note_path: &str) -> Result<()> {
     let vectors: Vec<Vec<f32>> = note_chunk_vectors(conn, note_path)?
         .into_iter()
@@ -1389,26 +1239,20 @@ pub fn refresh_note_centroid(conn: &Connection, note_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Every fully-embedded note with **no** centroid row, path-ordered — the second
-/// half of the embed pass's work list (GH #170).
+/// Every fully-embedded note with **no** centroid row, path-ordered — the second half
+/// of the embed pass's work list (GH #170).
 ///
 /// It exists because content-addressing broke a coupling the old design leaned on.
-/// `replace_chunks` drops a note's centroid (it summarized the chunk set being
-/// replaced), and it used to drop that note's vectors with it — so a re-chunked note
-/// always had pending chunks, and refreshing the centroid inside the embed loop was
-/// enough. Vectors now survive a re-chunk, which is the whole point: a moved or
-/// re-cut-but-identical note re-embeds nothing. That leaves a note that can reach the
-/// embed pass with a *complete* vector set and no centroid, and nothing pending to
-/// bring it back.
-///
-/// Silently. `similar`'s coarse stage scans centroids only (#38), so such a note
-/// would stop being discoverable while looking perfectly indexed everywhere else —
-/// and an incremental pass would diverge from a from-scratch rebuild (S3), which is
-/// how the property suite caught it.
+/// `replace_chunks` drops a note's centroid and used to drop its vectors too, so a
+/// re-chunked note always had pending chunks and refreshing the centroid inside the
+/// embed loop sufficed. Vectors now survive a re-chunk — that is the whole point — so a
+/// note can reach the embed pass with a complete vector set, no centroid, and nothing
+/// pending to bring it back. Silently: discovery's coarse stage scans centroids only,
+/// so such a note would stop being discoverable while looking perfectly indexed
+/// (S3, which is how the property suite caught it).
 ///
 /// "Fully embedded" is the gate, not "has any vector": a centroid over a partial set
-/// would be wrong rather than merely stale, so a note cut off mid-embed is left for
-/// the pass that finishes it. Requires the embedding space to exist.
+/// would be wrong rather than merely stale.
 pub fn notes_missing_centroids(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT c.note_path FROM chunks c
@@ -1432,9 +1276,9 @@ pub fn for_each_note_centroid(conn: &Connection, mut f: impl FnMut(&str, &[u8]))
     let mut stmt = conn.prepare("SELECT note_path, centroid FROM note_centroids")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
-        // Match the ValueRefs rather than `.as_str()?`/`.as_blob()?` — their
-        // `FromSqlError` isn't in our error enum, and the column types are fixed by
-        // our own DDL, so a mismatched row is skipped rather than an error.
+        // Match the ValueRefs rather than `.as_str()?` — their `FromSqlError` isn't in
+        // our error enum, and the column types are fixed by our own DDL, so a
+        // mismatched row is skipped rather than an error.
         let rusqlite::types::ValueRef::Text(text) = row.get_ref(0)? else {
             continue;
         };
@@ -1449,18 +1293,14 @@ pub fn for_each_note_centroid(conn: &Connection, mut f: impl FnMut(&str, &[u8]))
 }
 
 /// Stream every embedded chunk's `(chunk_id, vector_blob)` through `f`, one row at a
-/// time — the scan behind every vector read, which never materializes the whole
-/// space at once. One SQL statement for the whole space: the vec0 version of this
-/// scan cost a shadow-table probe per row (~38.6k internal statements — and O(vault)
-/// log lines — per call on a real vault, #38). The blob is *borrowed* for the
-/// callback (`get_ref`), so scoring it adds no per-row allocation.
+/// time — the scan behind every vector read, which never materializes the whole space
+/// at once (ADR-0006). The blob is *borrowed* for the callback, so scoring adds no
+/// per-row allocation.
 ///
-/// Ranking is per **chunk**, so content-addressing (M4) has to be undone here: the
-/// join walks `embeddings` and hands each vector to every chunk that addresses it,
-/// which is why two notes with identical text still get one rank each. It costs an
-/// indexed probe per row against the pre-#170 straight table scan — cheap next to the
-/// blob read it accompanies, and bounded by the same chunk count as before, since a
-/// shared vector is read once and scored twice rather than stored twice.
+/// Ranking is per **chunk**, so content-addressing has to be undone here: the join
+/// hands each vector to every chunk that addresses it, which is why two notes with
+/// identical text still get one rank each. A shared vector is read once and scored
+/// twice rather than stored twice.
 pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT c.id, e.vector FROM embeddings e JOIN chunks c ON c.text_hash = e.text_hash",
@@ -1469,7 +1309,7 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
     while let Some(row) = rows.next()? {
         let chunk_id: i64 = row.get(0)?;
         // Match the ValueRef rather than `as_blob()?` — its `FromSqlError` isn't in our
-        // error enum, and a stored vector is always a Blob, so a non-blob is skipped.
+        // error enum, and a stored vector is always a Blob.
         if let rusqlite::types::ValueRef::Blob(blob) = row.get_ref(1)? {
             f(chunk_id, blob);
         }
@@ -1477,11 +1317,10 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
     Ok(())
 }
 
-/// Every chunk's squared-L2 distance to `query`, sorted nearest first (ties broken
-/// by `chunk_id` for determinism) — the shared scan behind [`vector_search`] /
-/// [`vector_search_all`]. Distances are computed **in-process** over the
-/// [`for_each_stored_vector`] stream: one sequential statement, one reused decode
-/// buffer, the unrolled [`l2_sq`](crate::embed::l2_sq) — the #38 read-path shape.
+/// Every chunk's squared-L2 distance to `query`, sorted nearest first (ties broken by
+/// `chunk_id` for determinism) — the shared scan behind [`vector_search`] /
+/// [`vector_search_all`], computed in-process over the [`for_each_stored_vector`]
+/// stream: one sequential statement, one reused decode buffer (ADR-0006).
 fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
     let mut out: Vec<(i64, f32)> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
@@ -1497,13 +1336,11 @@ fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
     Ok(out)
 }
 
-/// Brute-force nearest-neighbour search: the `k` nearest chunk ids to `query`, with
-/// their L2 distances, nearest first (ties broken by `chunk_id` for determinism).
-/// A full linear scan — exact, no silent truncation at any `k` — which is the
-/// brute force index-engine.md §4 specs as comfortable at vault scale. L2 over the
-/// stored embeddings ranks by cosine (b2-embed L2-normalizes). The `sqrt` is applied
-/// once per *returned* hit; ranking happens on the squared distance (monotonic).
-/// [`vector_search_all`] is the same scan without the `k` bound.
+/// Brute-force nearest-neighbour search: the `k` nearest chunk ids to `query` with
+/// their L2 distances, nearest first. A full linear scan — exact, no silent truncation
+/// at any `k` — which is what ADR-0006 specs as comfortable at vault scale. L2 over the
+/// stored embeddings ranks by cosine (b2-embed L2-normalizes); the `sqrt` is applied
+/// once per *returned* hit, since ranking is monotonic in the squared distance.
 pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
     let mut hits = scan_vector_distances(conn, query)?;
     hits.truncate(k);
@@ -1647,24 +1484,19 @@ pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> 
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Re-key a note from `old_path` to `new_path` — **the** index-side move (GH #170).
+/// Re-key a note from `old_path` to `new_path` — **the** index-side move (ADR-0003).
 ///
 /// One statement, and the FK graph does the rest: `note_aliases`, `chunks`,
-/// `note_centroids` and `edges.src_path` all declare `ON UPDATE CASCADE` against
-/// `notes(path)`, so every derived row travels with the note atomically and the
-/// note's chunk *vectors* are never touched at all (they are content-addressed —
-/// M4 — so they belong to the text, not to the path). What does **not** cascade is
-/// `edges.dst_path`: it carries no FK, because it must be free to be NULL for a
-/// dangling link (G5), so the callers re-project every inbound source afterwards.
+/// `note_centroids` and `edges.src_path` all declare `ON UPDATE CASCADE`, so every
+/// derived row travels with the note atomically and its chunk *vectors* are never
+/// touched at all — they are content-addressed, so they belong to the text, not the
+/// path (ADR-0006). What does **not** cascade is `edges.dst_path`: it carries no FK,
+/// because it must be free to be NULL for a dangling link, so callers re-project every
+/// inbound source afterwards.
 ///
-/// A **directory move** runs this for every moved note *before* re-projecting any
-/// file, so link resolution — which is path-based — is independent of re-projection
-/// order (the same reason full ingest is two-phase). The follow-up
-/// [`crate::ingest::ingest_file`] refreshes the row's filename-derived title and
-/// mtime.
-///
-/// Requires `PRAGMA foreign_keys = ON` (set in [`open`]); without it the cascades
-/// silently do not fire and the children are orphaned.
+/// A **directory move** runs this for every moved note *before* re-projecting any file,
+/// so link resolution stays independent of re-projection order. Requires
+/// `PRAGMA foreign_keys = ON`; without it the cascades silently do not fire.
 pub fn repoint_note_path(conn: &Connection, old_path: &str, new_path: &str) -> Result<()> {
     conn.execute(
         "UPDATE notes SET path = ?1 WHERE path = ?2",
@@ -1726,11 +1558,8 @@ mod tests {
     use std::collections::HashSet;
 
     /// [`SCHEMA_TABLES`] is what a completed migration is *checked* against, so a table
-    /// added to the DDL and not to the list would narrow the completeness check in
-    /// silence — the check would keep passing over an index missing the new table. This
+    /// added to the DDL and not to the list would narrow that check in silence. This
     /// pins the list to what the DDL actually creates, in both directions.
-    ///
-    /// Runs against an in-memory database: the claim is about the DDL, not about files.
     #[test]
     fn schema_tables_lists_exactly_what_the_ddl_creates() {
         let conn = Connection::open_in_memory().unwrap();

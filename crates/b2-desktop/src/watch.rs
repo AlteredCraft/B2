@@ -1,26 +1,18 @@
-//! Native filesystem watch → **auto-reload on external edits** (crates/b2-desktop/CLAUDE.md,
-//! [#14](https://github.com/AlteredCraft/B2/issues/14)). B2's premise is that the
-//! vault is *also* edited outside the app (Obsidian/vim, a `git pull`), so the window has
-//! to notice "the files changed under me" and reconcile — replacing the editing spec's
-//! "stale until you try to save" conflict bar (crates/b2-desktop/CLAUDE.md) with live
-//! reconciliation. The conflict bar remains the fallback for the one case this can't cover
-//! safely: an external edit to the note you are *actively typing in* (never clobber a live
-//! buffer).
+//! Native filesystem watch → **auto-reload on external edits** (#14). B2's premise is that
+//! the vault is *also* edited outside the app (Obsidian/vim, a `git pull`), so the window
+//! has to notice and reconcile. The conflict bar remains the fallback for the one case this
+//! cannot cover safely: an external edit to the note you are *actively typing in*.
 //!
-//! **Still a dumb adapter (this crate's charter).** The watcher holds **no engine logic**:
-//! it watches the vault directory, coalesces a burst of raw OS events into one **debounced
-//! `vault-changed` pulse**, and emits it to the webview. The frontend reconciles by calling
-//! the *existing* façade ops (`list_notes` for the tree, `read_note`/`similar`/`explain`
-//! for the open note) — exactly the "*how the window drives* the façade stays here; *what*
-//! it computes stays in the core" line. This is host **infrastructure**, the same class as
-//! the background-reindex task lifecycle (main.rs) and the OS folder picker.
+//! **Still a dumb adapter** (ADR-0012): the watcher holds no engine logic — it watches the
+//! vault directory, coalesces a burst of raw OS events into one **debounced
+//! `vault-changed` pulse**, and emits it. The frontend reconciles by calling the *existing*
+//! façade ops. This is host infrastructure, the same class as the background-reindex task
+//! and the OS folder picker.
 //!
 //! **Security: the webview gets no filesystem permission.** The watch runs entirely in the
-//! Rust host (like the dialog), and the pulse is a bare signal carrying no paths — so this
-//! adds nothing to the webview's least-privilege capability set (capabilities/default.json;
-//! listening for a host event is covered by `core:default`). The frontend never touches the
-//! disk; it re-reads through the façade, which keeps `index = projection of (Markdown)`
-//! honest and path resolution centralized.
+//! Rust host, and the pulse is a bare signal carrying no paths, so it adds nothing to the
+//! webview's least-privilege capability set. The frontend never touches the disk; it
+//! re-reads through the façade, which keeps path resolution centralized.
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
@@ -41,14 +33,12 @@ pub const VAULT_CHANGED_EVENT: &str = "vault-changed";
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// Managed state holding the active watcher. Replacing or dropping it stops the previous
-/// watch (its channel sender drops, so the debounce thread's `recv` ends and the thread
-/// exits) — how a vault switch re-points the watch and app shutdown tears it down.
+/// watch (its channel sender drops, so the debounce thread's `recv` ends) — how a vault
+/// switch re-points the watch and shutdown tears it down.
 ///
 /// Kept **out of [`AppState`](crate::AppState)** on purpose: the watcher pulls in `notify`
 /// and a live OS handle, while `AppState` is the pure, unit-tested root+reindex state
-/// machine. Wiring the two together would drag a filesystem handle into those hermetic
-/// tests for no benefit — so the watcher is its own Tauri-managed state, started from the
-/// setup hook and the `choose_vault` command (both of which have an `AppHandle`).
+/// machine, and wiring the two would drag a filesystem handle into those hermetic tests.
 #[derive(Default)]
 pub struct VaultWatcher(Mutex<Option<RecommendedWatcher>>);
 

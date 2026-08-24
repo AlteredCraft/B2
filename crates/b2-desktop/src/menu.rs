@@ -1,34 +1,25 @@
-//! The app's macOS menu bar — **declared**, not inherited
-//! ([#119](https://github.com/AlteredCraft/B2/issues/119)).
+//! The app's macOS menu bar — **declared**, not inherited (ADR-0017, #119).
 //!
-//! Tauri applies `Menu::default()` to an app that sets none, and a dozen chords ride
-//! in with it: ⌘Q, ⌘W, ⌘M, ⌘H, ⌥⌘H, ⌘Z, ⇧⌘Z, ⌘X, ⌘C, ⌘V, ⌘A, ⌃⌘F. Those chords are
-//! live in the window, and they used to be invisible twice over. Nothing enumerates
-//! the default, so no documentation could list them; and AppKit dispatches a menu key
-//! equivalent inside `NSApplication.sendEvent` *before* the key window's responder
-//! chain, so they never reach the webview's keydown handler and the keyboard registry
-//! (`ui/src/bindings.ts`) could not see them either. Invariant **K1**
-//! (docs/design/invariants.md) promises a keyboard path that is *findable*; an
-//! inherited chord sits outside that promise entirely — you cannot document what you
-//! cannot enumerate.
+//! Tauri applies `Menu::default()` to an app that sets none, and a dozen chords ride in
+//! with it. Those chords are live in the window and used to be invisible twice over:
+//! nothing enumerates the default, and AppKit dispatches a menu key equivalent inside
+//! `NSApplication.sendEvent` *before* the key window's responder chain, so they never reach
+//! the webview's keydown handler either. Invariant K1 promises a keyboard path that is
+//! *findable*, and you cannot document what you cannot enumerate.
 //!
-//! So the menu is B2's own data now. [`MENU`] is the whole of it — the sections, their
-//! items, and the chord macOS gives each one — and it has exactly two readers:
-//! [`build`], which is what the window actually gets, and [`chords`], which the
-//! `menu_chords` command hands the UI so the reference sheet can list them and the
-//! registry's conflict check can see them (`ui/src/menukeys.ts`).
+//! So the menu is B2's own data now. [`MENU`] is the whole of it, with exactly two readers:
+//! [`build`], which is what the window gets, and [`chords`], which the `menu_chords`
+//! command hands the UI for the reference sheet and the registry's conflict check.
 //!
 //! **The items stay predefined on purpose.** The Edit menu is load-bearing rather than
-//! decorative — Cut/Copy/Paste/Select All work in the webview *because* the native
-//! items route the standard selectors to it, so these remain [`PredefinedMenuItem`]s
-//! rather than custom items B2 would then have to implement itself. The consequence is
-//! that B2 does not *choose* these accelerators: muda assigns them and exposes no
-//! getter for them, so the `keys` column below restates them. This is the one place to
-//! fix if a muda release ever moves one.
+//! decorative — Cut/Copy/Paste work in the webview *because* the native items route the
+//! standard selectors to it. The consequence is that B2 does not *choose* these
+//! accelerators: muda assigns them and exposes no getter, so the `keys` column below
+//! restates them. This is the one place to fix if a muda release moves one.
 //!
-//! **Two departures from `Menu::default()`**, neither of which touches a chord: its
-//! Window menu repeats Close Window (⌘W), which already lives in File, and its Help
-//! menu is empty on macOS. Neither survives here.
+//! **Two departures from `Menu::default()`**, neither touching a chord: its Window menu
+//! repeats Close Window (⌘W), which already lives in File, and its Help menu is empty on
+//! macOS. Neither survives here.
 
 use serde::Serialize;
 use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
@@ -403,15 +394,12 @@ mod tests {
 
     #[test]
     fn the_exported_chords_are_what_the_ui_mirrors() {
-        // `ui/src/menukeys.ts` carries this same list — it is the UI's only offline
-        // knowledge of what the menu takes, and what its conflict gate reads. **Change
-        // the two together**: the app compares them at startup (`menuDrift`, called from
-        // the frontend's boot) and reports a mismatch, the same posture as
-        // `WRITE_CONFLICT_MESSAGE` and `VAULT_CHANGED_EVENT`.
-        //
-        // A row moving in or out of this list is a change to what the app reserves from
-        // its own keyboard, which is exactly the kind of thing that used to happen
-        // invisibly — hence a pin rather than a count.
+        // `ui/src/menukeys.ts` carries this same list — the UI's only offline knowledge of
+        // what the menu takes, and what its conflict gate reads. **Change the two
+        // together**: the app compares them at startup (`menuDrift`) and reports a
+        // mismatch, the same posture as `WRITE_CONFLICT_MESSAGE`. A row moving in or out is
+        // a change to what the app reserves from its own keyboard, which is exactly what
+        // used to happen invisibly — hence a pin rather than a count.
         let exported: Vec<String> = chords()
             .iter()
             .map(|c| format!("{} {} {}", c.id, c.keys, c.label))

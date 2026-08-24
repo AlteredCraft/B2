@@ -1,10 +1,8 @@
-//! Resource classification and document-kind dispatch — file-type support
-//! slice 1 (data-model.md §10).
+//! Resource classification and document-kind dispatch.
 //!
-//! Class is decided by **extension only** — deterministic, no content sniffing;
-//! a mislabeled file degrades gracefully rather than mis-executing. The table is
-//! closed with [`ResourceClass::Binary`] as the total fallback, so *every* file
-//! classifies ("any file GitHub could store").
+//! Class is decided by **extension only** — deterministic, no content sniffing, so a
+//! mislabeled file degrades gracefully. The table is closed with
+//! [`ResourceClass::Binary`] as the total fallback, so *every* file classifies.
 
 /// The closed class table (research §3). Everything that is not a note maps to
 /// exactly one of these; `Binary` catches all the rest.
@@ -66,16 +64,12 @@ pub enum DocKind {
     Resource,
 }
 
-/// Dispatch a document reference — an adapter argument (`b2 explain <arg>`,
-/// `b2 mv <arg> …`, a `similar` anchor) or a link target — to the note or
-/// resource arm, by the reference's own shape, never by DB state: **an
-/// extension other than `md` means resource; `.md` or no extension means
-/// note.** Extensionless covers the wikilink habit (`concepts/memory`), which
-/// since GH #170 is the only extra form a note ref takes — a note is named by
-/// its path and nothing else.
-/// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a
-/// note ref here — it is still walked, inventoried, and reachable through
-/// surfaces that know its kind (the tree); revisit if a real vault hurts.
+/// Dispatch a document reference — an adapter argument or a link target — to the note or
+/// resource arm by the reference's own shape, never by DB state: **an extension other than
+/// `md` means resource; `.md` or no extension means note.** Extensionless covers the
+/// wikilink habit (`concepts/memory`), the only extra form a note ref takes (ADR-0003).
+/// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a note ref —
+/// it is still walked, inventoried, and reachable through surfaces that know its kind.
 pub fn doc_kind(arg: &str) -> DocKind {
     let name = arg.rsplit('/').next().unwrap_or(arg);
     match name.rsplit_once('.') {

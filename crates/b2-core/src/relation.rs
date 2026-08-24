@@ -1,9 +1,7 @@
-//! The relation vocabulary (data-model.md §2): a closed three-verb
-//! stance core — `references` (neutral), `supports` (for), `contradicts`
-//! (against) — with display-only inverse labels and symmetry, plus a tolerated
-//! tail kept verbatim. The core encodes the one thing embedding similarity
-//! cannot infer: stance. It is a relaxable policy, not a structural assumption
-//! (invariants.md) — adding a verb here is the whole
+//! The relation vocabulary (ADR-0010): a closed three-verb stance core — `references`
+//! (neutral), `supports` (for), `contradicts` (against) — with display-only inverse
+//! labels and symmetry, plus a tolerated tail kept verbatim. The core encodes the one
+//! thing embedding similarity cannot infer: stance. Adding a verb here is the whole
 //! change.
 
 /// A core relation verb and its display metadata.

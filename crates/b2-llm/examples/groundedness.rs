@@ -1,49 +1,36 @@
-//! Groundedness + citation-accuracy smoke for the chat seam — the embedder
-//! eval's posture (GH #151 §"Testing & evaluation", cut as GH #154) applied to
-//! the second seam.
+//! Groundedness + citation-accuracy smoke for the chat seam — the embedder eval's posture
+//! (ADR-0013) applied to the second seam.
 //!
-//! It lives as an **example**, not a test, for the reason `b2-embed`'s does: it
-//! needs a real model (two, in fact — an embedder to retrieve with and a chat
-//! model to answer with), it is non-deterministic, and it talks to the network.
-//! `cargo test` must never do any of those (E2). Run it on demand:
+//! It lives as an **example**, not a test, for the reason `b2-embed`'s does: it needs two
+//! real models, it is non-deterministic, and it talks to the network. `cargo test` must never
+//! do any of those.
 //!
 //! ```console
 //! ollama serve &                                     # or any OpenAI-compatible server
 //! cargo run -p b2-llm --example groundedness         # B2_LLM_URL / B2_LLM_MODEL apply
 //! ```
 //!
-//! One run builds a throwaway vault from the retrieval eval's corpus
-//! (`crates/b2-embed/evals/corpus`), embeds it with the configured model, and
-//! asks each labelled question in `evals/questions.json` through the real
-//! `Vault::ask` — the same flow ④ the CLI and the desktop call. Four things are
-//! scored, and they are deliberately separable, because a bad answer has more
-//! than one possible author:
+//! One run builds a throwaway vault from the retrieval eval's corpus, embeds it, and asks
+//! each labelled question through the real `Vault::ask`. Four things are scored, deliberately
+//! separable because a bad answer has more than one possible author:
 //!
-//! 1. **Retrieval reach** — did the labelled note make it into the passages at
-//!    all? This is the ceiling: the model cannot cite what it was never handed,
-//!    so a question that fails here is a *retrieval* result, not a chat one, and
-//!    it belongs to `--example eval`.
-//! 2. **Grounding** — did the answer cite anything? An uncited answer is either
-//!    a refusal or general knowledge, and the grounded prompt forbids the second.
-//! 3. **Citation accuracy** — did it cite the *labelled* note? The headline
-//!    number, scored only over questions retrieval actually reached.
-//! 4. **Refusal** — on the negative questions (empty `expect`), did it say "I
-//!    don't find that in your notes" instead of confabulating? Refusing when the
-//!    corpus *does* answer is scored too, as the opposite failure.
+//! 1. **Retrieval reach** — did the labelled note make it into the passages at all? The
+//!    ceiling: a question that fails here is a *retrieval* result, not a chat one.
+//! 2. **Grounding** — did the answer cite anything? An uncited answer is a refusal or general
+//!    knowledge, and the grounded prompt forbids the second.
+//! 3. **Citation accuracy** — did it cite the *labelled* note? The headline number, scored
+//!    only over questions retrieval actually reached.
+//! 4. **Refusal** — on the negative questions, did it say "I don't find that in your notes"
+//!    instead of confabulating? Refusing when the corpus *does* answer is scored too.
 //!
-//! Hallucinated `[n]` markers are counted alongside: a marker naming no passage
-//! resolves to no citation (`Vault::ask` never rewrites the answer), so it is
-//! invisible in the citation list and would otherwise go unmeasured.
+//! Hallucinated `[n]` markers are counted alongside: a marker naming no passage resolves to
+//! no citation, so it would otherwise go unmeasured.
 //!
-//! Every run appends one JSON line to `evals/results.jsonl` (gitignored, since
-//! the numbers depend on the machine's models) — the same append-only convention
-//! as the retrieval eval and `B2_LOG_FILE`. **Exit code**: 0 normally, 2 when
-//! retrieval reached labelled notes and yet *no* answer cited one — a broken
-//! pipeline rather than a weak model. A run where retrieval reached nothing
-//! still exits 0 and says so: there was no chat result to judge, and the finding
-//! belongs to `--example eval`. Model quality is read off the numbers, not off
-//! the exit code — a gate that fails on every small local model would be a gate
-//! nobody runs.
+//! Every run appends one JSON line to `evals/results.jsonl` (gitignored, since the numbers
+//! depend on the machine's models). **Exit code**: 0 normally, 2 when retrieval reached
+//! labelled notes and yet *no* answer cited one — a broken pipeline rather than a weak model.
+//! Model quality is read off the numbers, not the exit code: a gate that fails on every small
+//! local model would be a gate nobody runs.
 
 use b2_core::chat::{cited_markers, ASK_PASSAGES};
 use b2_core::embed::Embedder;

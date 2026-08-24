@@ -1,23 +1,18 @@
-//! The chat seam — `LlmProvider`, the second enumerated AI seam (invariant M1;
-//! GH #151 is the spec of record, GH #153 the cut). Sibling of [`crate::embed`]:
-//! the engine is built and tested against the deterministic [`FakeLlm`]; a real
-//! provider (`b2-llm`'s sync OpenAI-compat SSE client) drops in through the same
-//! trait with no schema or flow change.
+//! The chat seam — `LlmProvider`, the second enumerated AI seam (ADR-0005). Sibling of
+//! [`crate::embed`]: the engine is built and tested against the deterministic [`FakeLlm`],
+//! and `b2-llm`'s real provider drops in through the same trait with no schema or flow
+//! change.
 //!
 //! Two deliberate contrasts with the embedder seam:
 //!
-//! - **No index identity** (contrast M2): chat output is never stored, so
-//!   [`LlmProvider::model_id`] is display/logging only — no `meta` row, no
-//!   reindex on model swap, which is what makes "change models at any time"
-//!   true by construction.
-//! - **Streaming is the contract, not a nicety**: tokens flow up through a
-//!   callback as they arrive, and the callback's return value steers
-//!   **cooperative cancellation** at token granularity. This is in the trait
-//!   from day one because it is the kind of contract that calcifies —
-//!   retrofitting it would touch every implementor and call site.
+//! - **No index identity** (contrast ADR-0007): chat output is never stored, so
+//!   [`LlmProvider::model_id`] is display only — no `meta` row, no reindex on a model
+//!   swap, which is what makes "change models at any time" true by construction.
+//! - **Streaming is the contract, not a nicety**: tokens flow up through a callback, whose
+//!   return steers cooperative cancellation at token granularity. In the trait from day
+//!   one because retrofitting it would touch every implementor and call site.
 //!
-//! Sync, no tokio: the blocking HTTP client lives behind the trait, and
-//! cancellation is just returning early from a blocking read loop.
+//! Sync, no runtime (ADR-0011): cancellation is returning early from a blocking read loop.
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
@@ -35,12 +30,10 @@ pub enum Role {
 
 /// One turn of the conversation, oldest first in [`ChatRequest::turns`].
 ///
-/// Serializable **both ways**, unlike the read-only view types: history is the
-/// adapter's (session-only, S4), so a GUI carrying a conversation across the IPC
-/// hands it back turn by turn on the next ask — the desktop's `ask` command
-/// deserializes exactly this rather than defining a parallel DTO
-/// (crates/b2-desktop/CLAUDE.md). Nothing about that makes it stored state: it
-/// crosses a process boundary, it never reaches disk.
+/// Serializable **both ways**, unlike the read-only view types: history is the adapter's
+/// and session-only, so a GUI carrying a conversation across the IPC hands it back turn by
+/// turn rather than defining a parallel DTO. It crosses a process boundary; it never
+/// reaches disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatTurn {
     pub role: Role,
@@ -181,14 +174,12 @@ pub trait LlmProvider {
 /// on it (chat carries no index identity); it exists so logs read honestly.
 pub const FAKE_LLM_MODEL_ID: &str = "fake-llm-v1";
 
-/// Deterministic provider for tests/dev — the [`crate::embed::FakeEmbedder`]
-/// sibling, keyed on [`ChatRequest::kind`]. A **chat** request streams a fixed
-/// grounded answer that cites every passage it was handed, one `[n]` marker
-/// per token, so the engine suite can assert the whole flow-④ pipeline — and
-/// mid-stream cancellation at an exact token — model-free (E2); handed **no**
-/// passages (empty retrieval), it obeys its instructions and answers
-/// [`NO_EVIDENCE_ANSWER`]. A **condensation** request echoes the question:
-/// the latest user turn, verbatim.
+/// Deterministic provider for tests/dev — the [`crate::embed::FakeEmbedder`] sibling,
+/// keyed on [`ChatRequest::kind`]. A **chat** request streams a fixed grounded answer
+/// citing every passage it was handed, one `[n]` marker per token, so the suite can assert
+/// the whole flow-④ pipeline — and mid-stream cancellation at an exact token — model-free;
+/// handed no passages it answers [`NO_EVIDENCE_ANSWER`]. A **condensation** request echoes
+/// the latest user turn verbatim.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FakeLlm;
 

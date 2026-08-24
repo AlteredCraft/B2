@@ -1,12 +1,9 @@
-//! The provider itself: [`OpenAiCompatProvider`], one `POST
-//! {base}/chat/completions` with `stream: true` per call, its SSE response read
-//! by [`crate::sse`].
+//! The provider itself: [`OpenAiCompatProvider`], one `POST {base}/chat/completions` with
+//! `stream: true` per call, its SSE response read by [`crate::sse`].
 //!
-//! Everything here is blocking. That is the design, not a limitation: the seam
-//! hands us a `FnMut` callback and asks us to stop when it says `Break`, which
-//! over a blocking reader is `return` — no runtime, no channel, no cancellation
-//! token (GH #151), and — since GH #174 trimmed `hf-hub`'s default features —
-//! no tokio in the `b2` binary's dependency tree either.
+//! Everything here is blocking. That is the design, not a limitation: the seam hands us a
+//! `FnMut` callback and asks us to stop when it says `Break`, which over a blocking reader
+//! is `return` — no runtime, no channel, no cancellation token (ADR-0011).
 
 use crate::sse;
 use crate::{LlmConfig, LlmError};
@@ -76,34 +73,24 @@ impl OpenAiCompatProvider {
         &self.config
     }
 
-    /// Fail fast, before a human waits: `GET {base}/models`.
+    /// Fail fast, before a human waits: `GET {base}/models` — the `b2 init` posture applied
+    /// to the second seam (ADR-0020's "never a surprise mid-command"). It answers two
+    /// questions and deliberately no others:
     ///
-    /// This is the `b2 init` posture applied to the second seam — "never a
-    /// surprise mid-command" (index-engine.md §6). It answers two questions,
-    /// and deliberately no others:
+    /// 1. **Is this a chat endpoint?** A *transport* failure is unreachable; an **HTTP
+    ///    refusal is a refusal**, reported with its status. It used to be tolerated — any
+    ///    answer, 404 included, read as "a server is there, it just doesn't implement
+    ///    `/models`" — and that is the one reading this probe may not take, because it
+    ///    cannot be told apart from the far commoner mistake it silently blessed: a wrong
+    ///    path (`…:11434/v1X` came back as *Connected* and failed at the first question).
+    ///    The tolerance survives where the evidence supports it — a **2xx** whose body isn't
+    ///    a model list — and [`crate::setup`] is where a refusal becomes advice.
+    /// 2. **Does it serve the configured model?** Checked only when the response *parsed*
+    ///    as a non-empty model list, and leniently: the check may only ever catch a real
+    ///    mistake, never invent one, because a false refusal would block a working setup.
     ///
-    /// 1. **Is this a chat endpoint?** A *transport* failure is unreachable;
-    ///    an **HTTP refusal is a refusal**, reported with its status. It used to
-    ///    be tolerated — any answer, 404 included, was read as "a server is
-    ///    there, it just doesn't implement `/models`" — and that is the one
-    ///    reading this probe may not take, because it cannot be told apart from
-    ///    the far commoner mistake it silently blessed: a **wrong path**. A base
-    ///    URL of `…:11434/v1X` made Ollama 404, which came back as *Connected*,
-    ///    and the configuration failed at the first question instead. A probe
-    ///    exists to prevent exactly that, so it now believes only what it can
-    ///    check. The tolerance survives where the evidence supports it — a **2xx**
-    ///    whose body isn't a model list answered *on the right path* — and
-    ///    [`crate::setup`] is where a refusal becomes advice, since a 401 and a
-    ///    404 are different mistakes with different fixes.
-    /// 2. **Does it serve the configured model?** Checked only when the
-    ///    response *parsed* as a non-empty model list, and leniently
-    ///    ([`model_listed`]) — the check may only ever catch a real mistake,
-    ///    never invent one, because a false refusal here would block a working
-    ///    setup.
-    ///
-    /// The cost is one round trip per process (sub-millisecond on localhost),
-    /// paid to turn the most common setup mistakes into sentences instead of
-    /// a failed answer.
+    /// The cost is one round trip per process, paid to turn the most common setup mistakes
+    /// into sentences instead of a failed answer.
     pub fn probe(&self) -> Result<(), LlmError> {
         let url = self.config.endpoint("/models");
         let response = match self
@@ -169,17 +156,13 @@ impl OpenAiCompatProvider {
             turns = req.turns.len(),
             "streaming a chat completion"
         );
-        // One retry, in exactly one window. Connections are pooled — the probe's,
-        // and the previous turn's in a `chat` session — and a server that closed
-        // an idle one (or a proxy that did) fails the *send*, not the answer.
-        // `ureq` won't retry that itself: its rule is idempotent-methods-only, and
-        // a POST isn't one. But a request that never reached a server generated
-        // nothing, so re-sending it is invisible — no double answer, no double
-        // charge — and the alternative is a working setup that fails one call in
-        // a while for a reason the user can do nothing about. Which failures those
-        // are is [`worth_resending`]'s judgement, and the window closes the moment
-        // a response exists: an error *inside* the stream is never retried,
-        // because tokens have already been delivered.
+        // One retry, in exactly one window. Connections are pooled — the probe's, and the
+        // previous turn's in a `chat` session — and a server that closed an idle one fails
+        // the *send*, not the answer. `ureq` won't retry that itself (idempotent methods
+        // only, and a POST isn't one), but a request that never reached a server generated
+        // nothing, so re-sending it is invisible. Which failures qualify is
+        // [`worth_resending`]'s judgement, and the window closes the moment a response
+        // exists: an error *inside* the stream is never retried.
         let mut attempt = 0;
         let response = loop {
             attempt += 1;
@@ -269,21 +252,17 @@ impl LlmProvider for OpenAiCompatProvider {
     }
 }
 
-/// Is this transport failure one where re-sending the request is *invisible* —
-/// that is, one where the server cannot already be generating an answer?
-///
-/// Two families qualify, and nothing else does:
+/// Is this transport failure one where re-sending is *invisible* — that is, one where the
+/// server cannot already be generating an answer? Two families qualify:
 ///
 /// - **Never connected** (`Dns`, `ConnectionFailed`): no server saw anything.
-/// - **The connection was already dead** (`Io` over a closed/reset/broken
-///   socket): the pooled-connection case this retry exists for — measured, it
-///   arrives as `Io` + `ConnectionAborted`.
+/// - **The connection was already dead** (`Io` over a closed socket): the pooled-connection
+///   case this retry exists for — measured, it arrives as `Io` + `ConnectionAborted`.
 ///
-/// A **timeout** is the case that must *not* retry, and the reason this function
-/// isn't just "any transport error": a server that took the request and went
-/// quiet may be loading a model or already generating, so re-sending would ask
-/// for the same expensive work twice. `ureq` reports it in the same `Io` kind as
-/// a dead socket, so the underlying `io::ErrorKind` is what separates them.
+/// A **timeout** must *not* retry, and is the reason this isn't just "any transport error":
+/// a server that took the request and went quiet may be loading a model or already
+/// generating. `ureq` reports it in the same `Io` kind as a dead socket, so the underlying
+/// `io::ErrorKind` is what separates them.
 fn worth_resending(t: &ureq::Transport) -> bool {
     match t.kind() {
         ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed => true,

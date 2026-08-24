@@ -1,18 +1,13 @@
-//! Create a new note (the `b2 add` kernel op — note CRUD's *create*).
+//! Create a new note (the `b2 add` kernel op — CRUD's *create*).
 //!
-//! B2 authors a *new* file here — which is not the same as authoring a human's
-//! body: the whole document is B2-minted on the user's request, and its frontmatter
-//! is B2's managed zone (data-model.md §0/§1). What B2 still never does is inject
-//! structure into an *existing* human note; `add` only ever writes a file that did
-//! not exist.
+//! B2 authors a *new* file here, which is not the same as authoring a human's body: the
+//! whole document is B2-minted on request, and its frontmatter is B2's managed zone. What
+//! B2 still never does is inject structure into an *existing* note (ADR-0004).
 //!
-//! **Markdown-first**, like [`crate::mv`] and [`crate::vault::Vault::link`]: write the
-//! `.md` file, then project it into the index from that source of truth. The note is
-//! fully reconstructible from Markdown — it is a file at a path, and that path is its
-//! identity (L1) — so `add` records nothing durable of its own.
-//!
-//! The `created` date is passed in (the façade's determinism boundary, like the
-//! move/link timestamps), keeping `b2-core` wall-clock-free.
+//! **Markdown-first**: write the `.md`, then project it from that source of truth. The
+//! note is fully reconstructible from Markdown — a file at a path, and that path is its
+//! identity (ADR-0003) — so `add` records nothing durable of its own. The `created` date
+//! is passed in, keeping `b2-core` wall-clock-free.
 
 use crate::error::{Error, Result};
 use crate::ingest::{self, EmbedCtx, ProjectionCtx};
@@ -28,18 +23,13 @@ pub struct AddReport {
     pub path: String,
 }
 
-/// Create a new note at `path_input` (a vault-relative path; a `.md` suffix is
-/// optional and added if missing) with a minimal, valid frontmatter (an optional
-/// `title`, and `created`) and `content` as its body, then project it into the index.
+/// Create a new note at `path_input` (a `.md` suffix is optional and added if missing)
+/// with a minimal, valid frontmatter and `content` as its body, then project it.
 ///
-/// Refuses to clobber: [`Error::AddTargetExists`] if a file already sits at the
-/// destination, [`Error::AddDestination`] for an empty/absolute/vault-escaping path
-/// (the vault never overwrites, data-model.md §1). Missing parent directories are
-/// created, mirroring `mv`.
-///
-/// Projection **embeds** the new note's chunks, so the caller must open the vault
-/// with the same embedder the index was built with (the CLI loads the real model
-/// for `add`, as for `reindex`/`link`/`mv`).
+/// Refuses to clobber: [`Error::AddTargetExists`] if a file already sits there,
+/// [`Error::AddDestination`] for an empty/absolute/vault-escaping path. Missing parent
+/// directories are created, mirroring `mv`. Projection **embeds** the new note's chunks,
+/// so the caller must open with the embedder the index was built with.
 pub fn add_note(
     ctx: EmbedCtx,
     path_input: &str,
@@ -55,16 +45,11 @@ pub fn add_note(
     Ok(AddReport { path: rel })
 }
 
-/// The **model-free** sibling of [`add_note`] — the desktop's New-note action
-/// (`Vault::create_note`): same file write, but the projection is
-/// [`ingest::project_file`] (chunks + FTS + edges, **no embedder**), the same pass
-/// `Vault::write` runs after a save. The new note's chunks join the DB-derived
-/// missing-vector set for any later embed/reindex to fill
-/// (index-engine.md) — and a body-less note has nothing to
-/// embed anyway. Same validation and refusals as [`add_note`].
-///
-/// Taking a [`ProjectionCtx`] rather than an [`EmbedCtx`] is what makes that posture
-/// the type system's to keep: this function holds no embedder and so cannot embed.
+/// The **model-free** sibling of [`add_note`] — the desktop's New-note action: same file
+/// write, but projected through [`ingest::project_file`] with no embedder, the same pass
+/// `Vault::write` runs after a save. The new chunks join the pending set for any later
+/// embed, and a body-less note has nothing to embed anyway. Same refusals as [`add_note`].
+/// Taking a [`ProjectionCtx`] is what makes that posture the type system's to keep.
 pub fn create_note(
     ctx: ProjectionCtx,
     path_input: &str,
@@ -103,16 +88,13 @@ fn write_new_note(
 }
 
 /// Render a new note's text: a minimal valid frontmatter block followed by the body.
-/// `title` is YAML-quoted (so any character is a safe scalar) and omitted entirely
-/// when `None`; `content` is trimmed of trailing newlines and, when non-empty,
-/// placed after one blank line.
+/// `title` is YAML-quoted and omitted entirely when `None`; `content` is trimmed of
+/// trailing newlines and placed after one blank line.
 ///
-/// The template seeds only what can't be reconstructed later: `created` (deterministic,
-/// lost forever if not stamped now) and an optional `title`. `type:` is deliberately
-/// *not* seeded — ingest defaults an absent `type` to `"note"` (data-model.md §1), so
-/// stamping it here would be pure redundancy (GH #80). And no key is `b2`-namespaced:
-/// these are seeded courtesies owned by the human the moment they're written, not keys
-/// B2 owns and machines on (`b2_relations:` is the only such key).
+/// The template seeds only what can't be reconstructed later: `created` (lost forever if
+/// not stamped now) and an optional `title`. `type:` is deliberately not seeded — ingest
+/// defaults it to `"note"`, so stamping it would be redundancy (GH #80). No key is
+/// `b2`-namespaced: these are seeded courtesies the human owns the moment they exist.
 fn render_note(title: Option<&str>, content: Option<&str>, created: &str) -> String {
     let mut s = String::from("---\n");
     if let Some(t) = title {

@@ -1,19 +1,16 @@
-//! The `#[tauri::command]` handlers — B2's IPC surface, and the frontend's mirror of
-//! the [`Vault`](b2_core::vault::Vault) façade (crates/b2-desktop/CLAUDE.md). Each
-//! handler is **deserialize → call one façade method → serialize**: no branch, no
-//! loop, no rule. If a handler ever needs one, that logic belongs behind the façade
-//! in `b2-core` (add a façade op, not host logic) — that is the whole discipline that
-//! keeps the GUI and CLI from drifting. The façade already returns `Serialize` views
-//! (the CLI's `--json` types), so Tauri hands them to the webview directly — the IPC
-//! contract is nearly free (no parallel DTO layer).
+//! The `#[tauri::command]` handlers — B2's IPC surface, and the frontend's mirror of the
+//! [`Vault`](b2_core::vault::Vault) façade (ADR-0012). Each handler is **deserialize ->
+//! call one façade method -> serialize**: no branch, no loop, no rule. If a handler ever
+//! needs one, that logic belongs behind the façade in `b2-core`. The façade already
+//! returns `Serialize` views (the CLI's `--json` types), so the IPC contract is nearly
+//! free — no parallel DTO layer.
 //!
 //! Every data command is `#[tauri::command(async)]` so Tauri runs it **off the main
-//! thread** — a slow `search` (model load) or `embed` (embedding) never freezes the
-//! window. The bodies stay fully synchronous (no `async`/`tokio` in our code, per the
-//! repo's no-speculative-async rule); `(async)` is only the "don't block the UI" knob.
+//! thread** — a slow `search` or `embed` never freezes the window. The bodies stay fully
+//! synchronous (ADR-0011); `(async)` is only the "don't block the UI" knob.
 //!
 //! The thin `*_impl` split lets the command layer be unit-tested against a real vault
-//! without a Tauri runtime (the `State` wrapper is only in the one-line `#[command]`).
+//! without a Tauri runtime.
 
 use crate::chat::ChatPrefs;
 use crate::error::CmdError;
@@ -39,14 +36,11 @@ use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-/// The active vault's root + whether semantic ranking is live (real model), for the
-/// UI header and honest empty states (mirrors `b2 search`'s "semantic off" caveat).
-///
-/// `semantic` answers "is the real model installed"; `notes_embedded`/`notes_total`
-/// answer the *precise* "how much of this vault is actually embedded" (#26), so the UI
-/// can flag search as "keyword-only for now" while a projected vault embeds behind the
-/// first tree paint — not just under the fake embedder. A model-free count (the façade's
-/// `embed_status` read).
+/// The active vault's root + whether semantic ranking is live, for the UI header and
+/// honest empty states. `semantic` answers "is the real model installed";
+/// `notes_embedded`/`notes_total` answer the *precise* "how much of this vault is embedded"
+/// (#26), so the UI can flag search as "keyword-only for now" while a projected vault
+/// embeds behind the first tree paint. A model-free count.
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultInfo {
     pub root: String,
@@ -67,25 +61,18 @@ pub fn vault_info(state: State<'_, AppState>) -> Result<VaultInfo, CmdError> {
     vault_info_impl(state.inner())
 }
 
-/// The in-app vault switcher: open a **native folder picker** and, if the user picks a
-/// folder, point the app at it (every later command opens over the new root) and
-/// **remember** it so the next launch reopens it. Returns the new [`VaultInfo`] on
-/// success, or `None` when the user cancels — the UI then leaves the current vault
-/// untouched.
+/// The in-app vault switcher: open a **native folder picker** and, if the user picks,
+/// point the app at it and **remember** it for the next launch. Returns the new
+/// [`VaultInfo`], or `None` when the user cancels.
 ///
-/// Host-owned by design: vault-root resolution is this crate's job (main.rs), and the
-/// picker is an OS concern, so this is a legitimate host responsibility, not engine
-/// logic (there is nothing here to push behind the façade). Running the dialog in Rust
-/// (not the webview) is also what keeps the webview dialog-permission-free.
+/// Host-owned by design: vault-root resolution is this crate's job and the picker is an OS
+/// concern, so there is nothing here to push behind the façade — and running the dialog in
+/// Rust keeps the webview dialog-permission-free. The `persist_last_vault` call lives in
+/// this untestable wrapper, not in [`set_vault_root_impl`], so the unit-tested state
+/// transition never writes to the real user data dir; it is best-effort.
 ///
-/// The `persist_last_vault` call lives here in the (untestable) dialog wrapper, not in
-/// [`set_vault_root_impl`], so the unit-tested state transition never writes to the real
-/// user data dir. It is best-effort: a failed write is logged and swallowed, never
-/// blocking the switch the user just made.
-///
-/// `(async)` runs this off the main thread, which is *required*: `blocking_pick_folder`
-/// waits on the main thread to show the panel, so calling it from the main thread would
-/// deadlock.
+/// `(async)` is *required*: `blocking_pick_folder` waits on the main thread to show the
+/// panel, so calling it from the main thread would deadlock.
 #[tauri::command(async)]
 pub fn choose_vault(
     app: tauri::AppHandle,
@@ -179,14 +166,12 @@ const OPENABLE_SCHEMES: [&str; 3] = ["http://", "https://", "mailto:"];
 
 /// Is this a link the host will open in the user's browser or mail app?
 ///
-/// A note is **untrusted input** (invariant E5): its links are authored by whoever wrote
-/// the file, and `open` on macOS launches whatever app has registered the scheme — so an
-/// unfiltered handoff turns a `.md` into "run the thing this URL names". The allow-list
-/// is therefore the whole of the security posture here, and it is deliberately three
-/// schemes wide: the web, and email.
-///
+/// A note is **untrusted input** (ADR-0016): its links are authored by whoever wrote the
+/// file, and `open` on macOS launches whatever app has registered the scheme — so an
+/// unfiltered handoff turns a `.md` into "run the thing this URL names". The allow-list is
+/// the whole of the security posture here, and it is deliberately three schemes wide.
 /// Byte-wise rather than `&url[..n]`, so a URL beginning mid-UTF-8 can't panic the slice;
-/// control characters are refused outright (a `\n` in an href is smuggling, never a URL).
+/// control characters are refused outright.
 fn is_openable_link(url: &str) -> bool {
     if url.chars().any(|c| c.is_ascii_control()) {
         return false;
@@ -199,17 +184,14 @@ fn is_openable_link(url: &str) -> bool {
 }
 
 /// *Open a web link in the system default browser* — [`open_resource`]'s sibling for the
-/// links **inside** a note, and the same OS handoff rather than in-webview navigation.
-///
-/// Following a `https://…` in place would replace the whole app with a web page in a
-/// window that has no back button, no address bar and no way home; the webview holds no
-/// opener permission, so the frontend routes the click here instead
-/// (`ui/src/links.ts` + the click delegation in `main.ts`). Vault-free — nothing here
-/// touches the index — so it takes no `State`, like `clipboard_text`.
+/// links **inside** a note. Following a `https://…` in place would replace the whole app
+/// with a web page in a window that has no back button, no address bar and no way home;
+/// the webview holds no opener permission, so the frontend routes the click here. Vault-
+/// free, so it takes no `State`.
 ///
 /// The frontend has already decided this href is a web link; this re-checks, because the
 /// frontend's copy of the rule is *routing* and the note that authored the href is not
-/// trusted (the `open_resource` posture: the caller passes, the host validates).
+/// trusted (ADR-0016 — the caller passes, the host validates).
 #[tauri::command(async)]
 pub fn open_external(url: String) -> Result<(), CmdError> {
     if !is_openable_link(&url) {
@@ -233,15 +215,12 @@ pub fn clipboard_text(app: tauri::AppHandle) -> Result<String, CmdError> {
         .map_err(|e| CmdError::ClipboardFailed(e.to_string()))
 }
 
-/// Save a note's body — the editing surface's body write (crates/b2-desktop/CLAUDE.md;
-/// [`write_frontmatter`] is its frontmatter sibling).
-/// **Model-free** like `project`: `Vault::write` splices the body and re-projects
-/// without touching vectors, so this opens the fake vault (no model load; saving
-/// works with nothing provisioned) and runs **outside** the single-in-flight embed
-/// slot (short, and safe against a racing vault switch for the same
-/// captured-root reason as `project`). A stale `base_revision` surfaces as the
-/// **stable** conflict message the frontend recognizes to drive its conflict bar —
-/// change it in `error.rs` and `ui/src/api.ts` together.
+/// Save a note's body — the editing surface's body write ([`write_frontmatter`] is its
+/// frontmatter sibling). **Model-free** like `project`, so this opens the fake vault (no
+/// model load; saving works with nothing provisioned) and runs **outside** the
+/// single-in-flight embed slot. A stale `base_revision` surfaces as the **stable** conflict
+/// message the frontend drives its conflict bar from — change it in `error.rs` and
+/// `ui/src/api.ts` together.
 #[tauri::command(async)]
 pub fn write_note(
     state: State<'_, AppState>,
@@ -252,14 +231,10 @@ pub fn write_note(
     write_note_impl(state.inner(), &note, &body, &base_revision)
 }
 
-/// Save a note's frontmatter — the drawer's write op (GH #79), `write_note`'s
-/// frontmatter sibling with the identical posture: **model-free** (an unchanged
-/// body keeps its vectors, so no model is ever needed), outside the embed slot,
-/// and guarded by the same `base_revision` conflict contract the frontend
-/// recognizes. The fence refusal — the one thing the façade still checks, because a
-/// stray `---` would shift bytes into the body — lives behind
-/// `Vault::write_frontmatter`, not here. B2 owns no line *inside* the block: the
-/// `b2id` guard went with the stamp (GH #170).
+/// Save a note's frontmatter — the drawer's write op (GH #79), `write_note`'s sibling with
+/// the identical posture: model-free (an unchanged body keeps its vectors), outside the
+/// embed slot, same `base_revision` conflict contract. The fence refusal lives behind
+/// `Vault::write_frontmatter`, not here: B2 owns no line *inside* the block.
 #[tauri::command(async)]
 pub fn write_frontmatter(
     state: State<'_, AppState>,
@@ -271,29 +246,22 @@ pub fn write_frontmatter(
 }
 
 /// Create a new, empty note — the file tree's New-note action (and ⌘N). **Model-free**
-/// like `write_note`/`project`: `Vault::create_note` writes the file and projects it
-/// without touching vectors, so creating works with no model provisioned, and it runs
-/// outside the single-in-flight embed slot (short, and a fake-opened vault must never
-/// write into a real-model embedding space). The note's chunks join the DB-derived
-/// pending set for the next embed pass — and an empty body has nothing to embed anyway.
-/// Missing parent folders are created, mirroring `b2 add`; an *empty* folder is
+/// like `write_note`: it writes the file and projects it without touching vectors, so
+/// creating works with no model provisioned and runs outside the embed slot (a fake-opened
+/// vault must never write into a real-model embedding space). The chunks join the pending
+/// set for the next embed pass. Missing parent folders are created; an *empty* folder is
 /// [`create_dir`]'s job.
 #[tauri::command(async)]
 pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
     create_note_impl(state.inner(), &path)
 }
 
-/// Import a file from **outside** the vault into the folder `dir` (`""` for the root)
-/// — the file tree's drop target (a drag from Finder) and its Import files… action.
-/// `data` is the file's bytes, base64-encoded: a file dropped on a webview arrives as
-/// *content*, not a path (the OS hands WebKit the bytes), and Tauri's JSON IPC carries
-/// no byte array cheaply. Decoding it is **transport**, not logic — the façade op takes
-/// the bytes and does the placing, the projecting, and every refusal.
-///
-/// **Model-free** (the `create_note`/`write_note` posture): `Vault::import_file` writes
-/// the file and projects it without touching vectors, so importing works with no model
-/// provisioned and runs outside the single-in-flight embed slot. An imported note's
-/// chunks join the DB-derived pending set for the next embed pass.
+/// Import a file from **outside** the vault into the folder `dir` (`""` for the root) —
+/// the tree's drop target and its Import files… action. `data` is the file's bytes,
+/// base64-encoded: a file dropped on a webview arrives as *content*, not a path, and
+/// Tauri's JSON IPC carries no byte array cheaply. Decoding is **transport**, not logic —
+/// the façade op does the placing, the projecting, and every refusal. **Model-free**, so
+/// it runs outside the embed slot and its chunks join the pending set.
 #[tauri::command(async)]
 pub fn import_file(
     state: State<'_, AppState>,
@@ -316,16 +284,11 @@ pub fn import_path(
     import_path_impl(state.inner(), &dir, &source)
 }
 
-/// The keyboard half of the drop gesture (K1): open a **native multi-select file
-/// picker** and return what was chosen, as absolute paths for [`import_path`] to place.
-/// An empty list means the user cancelled.
-///
-/// Host-owned for `choose_vault`'s reason — a picker is an OS concern with nothing to
-/// push behind the façade, and running it in Rust is what keeps the webview
-/// dialog-permission-free. It deliberately imports *nothing*: the choosing is the OS's
-/// job, the placing is the façade's, and this command only carries the answer between
-/// them. `(async)` is required, as there: `blocking_pick_files` waits on the main
-/// thread to show the panel.
+/// The keyboard half of the drop gesture (K1): open a **native multi-select file picker**
+/// and return the absolute paths for [`import_path`] to place; an empty list means the user
+/// cancelled. Host-owned for `choose_vault`'s reason, and it deliberately imports
+/// *nothing*: the choosing is the OS's job, the placing is the façade's. `(async)` is
+/// required, as there.
 #[tauri::command(async)]
 pub fn pick_import_files(app: tauri::AppHandle) -> Result<Vec<String>, CmdError> {
     let Some(picked) = app.dialog().file().blocking_pick_files() else {
@@ -452,34 +415,28 @@ pub fn link(
     Ok(vault.link(&src, &dst, &relation, explanation.as_deref())?)
 }
 
-/// The **projection pass** — the fast, model-free half of a reindex
-/// (index-engine.md). One façade call over the **fake** vault (no
-/// model load on the first-paint path), so the moment it returns the file tree can
-/// repopulate and keyword search answers; `embed` then streams behind it. Fast and
-/// synchronous-feeling; nothing to stream, nothing to cancel.
+/// The **projection pass** — the fast, model-free half of a reindex. One façade call over
+/// the **fake** vault (no model load on the first-paint path), so the moment it returns the
+/// tree repopulates and keyword search answers; `embed` then streams behind it. Nothing to
+/// stream, nothing to cancel.
 ///
-/// Deliberately **outside** the single-in-flight reindex slot: the slot exists to
-/// protect the long, vector-writing embed pass, and a `project` racing a vault
-/// switch is harmless — it writes the `.b2/` of the root it captured at dispatch,
-/// idempotently, never the new vault's ("why leaving `project` outside the slot
-/// is safe").
+/// Deliberately **outside** the single-in-flight reindex slot: the slot protects the long,
+/// vector-writing embed pass, and a `project` racing a vault switch is harmless — it writes
+/// the `.b2/` of the root it captured at dispatch, idempotently.
 #[tauri::command(async)]
 pub fn project(state: State<'_, AppState>) -> Result<ProjectReport, CmdError> {
     project_impl(state.inner())
 }
 
-/// The **embed pass** — fill the missing vectors as an **observable, cancellable
-/// background action**. Tauri runs the `(async)` body on a
-/// worker thread, so the window stays live; progress streams to the webview over
-/// `on_event` (a typed, per-invocation [`Channel`]), and the closure returns
-/// `ControlFlow::Break` once the shared cancel flag is set — the one cancel
-/// checkpoint the core exposes. This is the old fused `reindex` command minus the
-/// projection it no longer does; the guard/cancel machinery attaches here.
+/// The **embed pass** — fill the missing vectors as an observable, cancellable background
+/// action. Tauri runs the `(async)` body on a worker thread, so the window stays live;
+/// progress streams to the webview over a typed per-invocation [`Channel`], and the closure
+/// returns `ControlFlow::Break` once the shared cancel flag is set — the one cancel
+/// checkpoint the core exposes.
 ///
-/// Still a dumb adapter: the body is "claim the slot → open one vault → call one
-/// façade op → serialize," with progress forwarded and a flag consulted. Task
-/// spawn/track/cancel + IPC streaming are host infrastructure (same class as the root
-/// `Mutex` and the OS dialog), not engine logic.
+/// Still a dumb adapter: "claim the slot -> open one vault -> call one façade op ->
+/// serialize", with progress forwarded and a flag consulted. Task spawn/track/cancel and
+/// IPC streaming are host infrastructure, not engine logic.
 #[tauri::command(async)]
 pub fn embed(
     state: State<'_, AppState>,
@@ -519,12 +476,9 @@ pub fn set_model(model: String) -> Result<Vec<ModelChoice>, CmdError> {
 }
 
 /// Provision (download + verify) the **currently-selected** model into the shared cache —
-/// the in-app equivalent of `b2 init`, driven from the Settings panel so a freshly-picked
-/// model can be installed without dropping to a terminal. Idempotent (an already-present,
-/// loadable model is a no-op) and network-bound, so it runs `(async)` off the main thread.
-/// Returns the refreshed model list, with the just-installed model's `installed` flag now
-/// true. Still thin: it drives [`b2_embed::provision`] — exactly what `b2 init` runs — and
-/// reprojects the choices; the download/verify logic lives in `b2-embed`, not here.
+/// the in-app equivalent of `b2 init`, so a freshly-picked model installs without dropping
+/// to a terminal. Idempotent and network-bound, hence `(async)`. Still thin: it drives
+/// [`b2_embed::provision`] — exactly what `b2 init` runs — and reprojects the choices.
 #[tauri::command(async)]
 pub fn provision_model() -> Result<Vec<ModelChoice>, CmdError> {
     let config = EmbedConfig::load()?;
@@ -583,33 +537,26 @@ pub fn embed_stats() -> Vec<EmbedStat> {
         .collect()
 }
 
-/// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI
-/// folds these into its keyboard registry as reserved chords: the reference sheet lists
-/// them, and the conflict check can finally see the one set of chords it was blind to
-/// — AppKit dispatches a menu key equivalent before the webview receives the key at all,
-/// so no amount of watching `keydown` would have found them.
-///
-/// Static data, so infallible and vault-free — the shape of [`embed_device`], not of a
-/// façade call.
+/// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI folds
+/// these into its keyboard registry as reserved chords (ADR-0017), so the reference sheet
+/// lists them and the conflict check can finally see the one set it was blind to — AppKit
+/// dispatches a menu key equivalent before the webview receives the key at all. Static
+/// data, so infallible and vault-free.
 #[tauri::command]
 pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
 }
 
-/// **Flow ④ — one grounded answer** (GH #151/#153, cut here as GH #155): condense →
-/// retrieve → assemble → stream → cite, all of it behind `Vault::ask`. The host's whole
-/// contribution is the shape of the *delivery*: Tauri runs the `(async)` body on a worker
-/// thread (the cancellable-reindex-task precedent), tokens stream to the webview over a
-/// typed per-invocation [`Channel`] as they arrive, and the resolved [`AnswerView`] is the
-/// command's return — the same two facts `b2 ask --json` emits as a JSONL event stream,
-/// which is the standing convention (the view types are the adapters' shared contract).
+/// **Flow ④ — one grounded answer**: condense -> retrieve -> assemble -> stream -> cite,
+/// all of it behind `Vault::ask`. The host's whole contribution is the shape of the
+/// *delivery*: Tauri runs the `(async)` body on a worker thread, tokens stream to the
+/// webview over a typed per-invocation [`Channel`], and the resolved [`AnswerView`] is the
+/// return — the same two facts `b2 ask --json` emits as a JSONL event stream.
 ///
-/// `history` is the **caller's**: session-only (S4), held in the pane's own state and
-/// handed back turn by turn, exactly as `b2 chat` holds a `Vec<ChatTurn>`. Nothing about a
-/// chat is stored here or anywhere else — no `meta` row, no cache, no transcript.
-///
-/// Opens the **real-model** vault: retrieval embeds the question for the vector half, like
-/// `search` (and degrades to BM25-only on an unembedded vault, M4 — chat keeps working).
+/// `history` is the **caller's**: session-only, held in the pane's own state and handed
+/// back turn by turn. Nothing about a chat is stored anywhere. Opens the **real-model**
+/// vault, since retrieval embeds the question — and degrades to BM25-only on an unembedded
+/// vault, so chat keeps working.
 #[tauri::command(async)]
 pub fn ask(
     state: State<'_, AppState>,
@@ -644,31 +591,25 @@ pub fn cancel_ask(state: State<'_, AppState>) {
 }
 
 /// What the chat surface needs to draw itself before a question is asked: the endpoint and
-/// model in force, whether that is the **Local** or the **Cloud models** configuration, and
-/// — when the runtime is Ollama — the native inventory behind the setup card (GH #151's
-/// deliberately Ollama-native onboarding corner: is the daemon up, what is installed, what
-/// would you pull on a machine this size).
+/// model in force, whether that is the Local or the Cloud configuration, and — when the
+/// runtime is Ollama — the native inventory behind the setup card (the deliberately
+/// Ollama-native onboarding corner: is the daemon up, what is installed, what would you
+/// pull on a machine this size).
 ///
-/// Thin like `list_models`: this is provider wiring, not a vault op, so the one call is
-/// into `b2-llm` (which owns the probe, the `/api/tags` read and the tier heuristic) and
-/// the rest is serialization. Network-bound, hence `(async)`.
-///
-/// Infallible **by design** — "the daemon isn't running" is the answer the card is asking
-/// for, not an error to raise (`b2_llm::probe_setup`). And it never carries the API key:
-/// the view reports only that one is configured.
+/// Thin like `list_models`: provider wiring, not a vault op, so the one call is into
+/// `b2-llm` and the rest is serialization. Infallible **by design** — "the daemon isn't
+/// running" is the answer the card is asking for, not an error — and it never carries the
+/// API key, only that one is configured.
 #[tauri::command(async)]
 pub fn chat_setup(state: State<'_, AppState>) -> ChatSetup {
     chat_setup_impl(state.inner())
 }
 
 /// Save the chat configuration and re-probe it — the Settings section's one write.
-///
-/// **Adapter state, never vault or index state** (GH #151): the endpoint and model persist
-/// beside the remembered vault, so a chat model swap costs no reindex (contrast M2). The
-/// key goes to the platform's own encrypted store instead (GH #176 — `keychain.rs` says
-/// why, and what happens when that store says no); `None` leaves whatever is already in
-/// force, so re-saving the endpoint doesn't silently clear a key the user typed a minute
-/// ago.
+/// **Adapter state, never vault or index state**: the endpoint and model persist beside the
+/// remembered vault, so a chat model swap costs no reindex (contrast ADR-0007). The key
+/// goes to the platform's encrypted store instead (GH #176); `None` leaves whatever is in
+/// force, so re-saving the endpoint doesn't silently clear a key the user just typed.
 #[tauri::command(async)]
 pub fn set_chat_config(
     state: State<'_, AppState>,
@@ -677,13 +618,10 @@ pub fn set_chat_config(
     api_key: Option<String>,
 ) -> ChatSetup {
     {
-        // One save at a time. `(async)` means Tauri runs these handlers off the main
-        // thread and does not serialize them, so without this two overlapping saves
-        // could interleave and leave `chat.json` holding the *older* endpoint while
-        // memory holds the newer one (`AppState::chat_saving` spells out how). Scoped
-        // to the mutating part only — the probe below is a network round trip, and
-        // holding a lock across it would make every save wait out the previous one's
-        // timeout.
+        // One save at a time. `(async)` means Tauri runs these off the main thread and
+        // does not serialize them, so two overlapping saves could interleave and leave
+        // `chat.json` holding the *older* endpoint while memory holds the newer. Scoped to
+        // the mutating part only — the probe below is a network round trip.
         let _saving = state.begin_chat_save();
         let prefs = set_chat_config_impl(
             state.inner(),
@@ -702,14 +640,11 @@ pub fn set_chat_config(
     chat_setup_impl(state.inner())
 }
 
-/// The testable core of `set_chat_config`: normalize the three fields into
-/// [`ChatPrefs`] and install them. Blank is "unset" for the endpoint and the model
-/// (the `LlmConfig::from_env` rule — an emptied field returns to the
-/// environment/default rather than configuring an unusable endpoint).
-///
-/// The key does not go through `clean`, and must not: blank is a *distinct* input
-/// there rather than the absence of one. `chat::apply_key` owns that three-state
-/// rule and the [`KeyStore`](crate::keychain::KeyStore) write it implies.
+/// The testable core of `set_chat_config`: normalize the three fields into [`ChatPrefs`]
+/// and install them. Blank is "unset" for the endpoint and the model, so an emptied field
+/// returns to the environment/default rather than configuring an unusable endpoint. The key
+/// does not go through `clean`, and must not: blank is a *distinct* input there, and
+/// `chat::apply_key` owns that three-state rule.
 fn set_chat_config_impl(
     state: &AppState,
     base_url: Option<String>,
@@ -852,13 +787,10 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     })
 }
 
-/// Set the active vault root and report the resulting [`VaultInfo`] — the testable core
-/// of `choose_vault`, split off from the (untestable) OS dialog. The picker only yields
-/// existing directories, so no validation is needed here; the switch takes effect for
-/// every subsequent command via [`AppState::current_root`].
-///
-/// **Cancels any in-flight reindex first**, waiting for it to wind down before
-/// repointing the root, so a reindex can never keep writing the vault the app has left.
+/// Set the active vault root and report the resulting [`VaultInfo`] — the testable core of
+/// `choose_vault`, split off from the untestable OS dialog. **Cancels any in-flight reindex
+/// first**, waiting for it to wind down before repointing the root, so a reindex can never
+/// keep writing the vault the app has left.
 fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdError> {
     state.cancel_and_wait_for_reindex();
     state.set_root(root);
@@ -962,15 +894,14 @@ fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdEr
     Ok(vault.delete_dir(dir)?)
 }
 
-/// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against
-/// the registry *before* any filesystem write, so the unknown-model path is hermetic (no
-/// file touched); the real-config write itself is exercised by `b2-embed`'s `write_model`
-/// tests against a tempfile, not here (same posture as `persist_last_vault` in main.rs).
+/// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against the
+/// registry *before* any filesystem write, so the unknown-model path is hermetic; the
+/// real-config write is exercised by `b2-embed`'s own tests.
 ///
 /// A *changed* model also restarts that model's embed-time ledger ([`stats::reset`]): the
-/// swap drops the vault's vectors, so the next reindex re-embeds the whole corpus and the
-/// cumulative stat must restart with it rather than stack a second corpus onto the old
-/// total. Re-selecting the current model is a no-op that keeps its accumulated history.
+/// swap drops the vault's vectors (ADR-0007), so the next reindex re-embeds the whole
+/// corpus and the cumulative stat must restart with it. Re-selecting the current model is a
+/// no-op that keeps its history.
 fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
     let previous = EmbedConfig::load().ok().map(|c| c.model);
     EmbedConfig::set_model(model)?;
@@ -1741,13 +1672,11 @@ mod tests {
         });
     }
 
-    // --- chat (flow ④, GH #155) -----------------------------------------------------
+    // --- chat (flow ④) --------------------------------------------------------------
     //
-    // The host owns exactly one thing here, and it is what these cover: the **framing of
-    // the token stream** — every token, in order, as it arrives — plus the guard and the
-    // cancel checkpoint around it. Everything the answer *is* (condense, retrieve, prompt,
-    // citations) belongs to `Vault::ask` and is covered by the engine suite against the
-    // same `FakeLlm` used here.
+    // The host owns exactly one thing here: the **framing of the token stream** — every
+    // token, in order, as it arrives — plus the guard and cancel checkpoint around it.
+    // Everything the answer *is* belongs to `Vault::ask` and the engine suite.
 
     /// A vault whose passages are real, so the fake provider has something to cite.
     fn ask_state(tmp: &tempfile::TempDir) -> (AppState, Vault) {

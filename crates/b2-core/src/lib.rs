@@ -1,10 +1,7 @@
-//! B2 index engine (`b2.sqlite`) — a **disposable** projection of `Markdown`.
-//!
-//! Built step 0→5 per `index-engine.md`; the schema is a
-//! derived projection of `data-model.md` and must satisfy it, never the
-//! reverse. Step 0 is the substrate: open the DB with the locked pragmas over the
-//! bundled, statically-linked SQLite (FTS5 compiled in; vectors are plain BLOB
-//! tables scored in-process since schema v3, #38 — no extension needed).
+//! B2 index engine (`b2.sqlite`) — a **disposable** projection of Markdown (ADR-0002).
+//! The schema is derived from `data-model.md` and must satisfy it, never the reverse.
+//! SQLite is bundled and statically linked with FTS5 compiled in; vectors are plain BLOB
+//! tables scored in-process, so no extension is needed (ADR-0006, ADR-0019).
 
 pub mod add;
 pub mod chat;
