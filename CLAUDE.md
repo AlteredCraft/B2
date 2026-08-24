@@ -1,751 +1,238 @@
----
----
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What B2 is
 
-A personal, local-first Markdown knowledge vault with an AI layer that **surfaces semantically similar
-notes** for you to connect. The Markdown files stay plain and yours; B2 is the intelligence layer
-over them, not a container around them. This Cargo workspace is the **index engine + its two dumb
-adapters** — the `b2` CLI and the Tauri desktop app (with the `ui/` frontend); the design lives in
-`docs/design/`.
+A personal, local-first Markdown knowledge vault with an AI layer that **surfaces semantically
+similar notes** for you to connect. The Markdown files stay plain and yours; B2 is the intelligence
+layer over them, not a container around them. This Cargo workspace is the **index engine + its two
+dumb adapters** — the `b2` CLI and the Tauri desktop app (with the `ui/` frontend).
 
-## Design docs are the source of truth
+## Where the truth lives
 
-The code is a *projection of the spec*, and comments cite it constantly (e.g. `data-model.md §2`,
-`index-engine.md §6`). Before changing behavior, read the relevant doc — the schema must satisfy the
-data model, never the reverse. The three canonical docs live in `docs/design/`:
+Read before changing behaviour. The code is a *projection of the spec*, and comments cite it
+constantly (`data-model.md §2`, `index-engine.md §6`, invariant ids like `S2`, `D1`).
 
-- `docs/design/invariants.md` — the **invariant register**: the one-page normative list of what must
-  always be true, and the source of *why* (cited by id — S2, G2, …). On conflict with any other doc, it wins.
-- `docs/design/data-model.md` — the *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary.
-- `docs/design/index-engine.md` — the *how*: SQLite (FTS5 + in-process vector scan) projection, table DDL, data flows.
-
-Planned-but-unstarted work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues);
-shipped build history lives in git. Model quality (the `Embedder` seam) is measured out-of-CI by the
-eval harness under `crates/b2-embed/evals/` — the hand-labelled retrieval + discovery evals
-(BM25-vs-hybrid ablation, note & passage ranks, `b2 similar` ranks plus the discovery negatives —
-loner anchors whose labelled answer is "nothing relates" — and the related/junk score piles that
-calibrate the quality floor, index-engine.md §3), the chunker-sweep gate, and the results log. A
-**multi-topic note family** (GH #183) — three positives pairing an on-topic half with a genuinely
-off-topic one (the on-topic half first, then second, then outweighed ~3:1), plus a negative whose
-two halves are both unrelated — is the minimum shape that makes centroid-average discovery ranking
-(the order shipped until GH #192) and best-passage ranking disagree; every note before it was
-single-subject, where the two agree by
-construction. It ships with the metric that can read it: `similar`'s per-anchor hit@1/hit@3/MRR@5
-stay pinned at **1.000 even with the family in place** (a hit needs only *one* of an anchor's mate
-set, so an anchor's easy mate hides its hard one), so the eval also scores **per-mate** ranks —
-every labelled mate on its own — which read 0.43/0.79/0.595 at the time and moves when the sort
-key does.
-That is what finally priced the centroid-vs-best-passage trade index-engine.md §3 had only
-asserted, and the answer was worse than assumed: 3 of 14 labelled mates were **suppressed outright**
-by the centroid floor (reachable under best-passage order, never served), not merely demoted.
-The eval measures it; GH #182 was where the surfacing decision got made. GH #187 then measured *why*
-no threshold fixes it, by dumping the number the floor actually judges — every candidate's ungated
-stage-1 z — and re-deriving both of `DiscoveryFloor`'s admissible windows from it on **every run**
-(the `floor calibration` block, and `discovery_z` in the row). The leader gate still had a window;
-the **member bar had none** — labelled mates ran from +0.80
-while strangers on positive anchors reached +1.62, so the two populations overlapped by 0.8 z and no
-constant separates an inversion. Which is also why the floor's docstring cited the instrument
-instead of quoting a window: the GH #150 numbers were frozen into that comment and went stale the
-first time the corpus grew a shape they were never measured against. Constants in code,
-measurements in the harness. GH #192 then acted on the measurement: the floor moved to **judging
-after stage 2, on the best-passage z** — the same number that orders the list and paints the band,
-so the three cannot disagree, and stage 1 is recall only. Its defaults were re-read from the
-harness's windows in the new unit (leader 1.96 / member 1.49), which served 14 of 15 labelled
-mates at zero strangers, landed GH #189's journal-shaped `week-log.md` (gem served, loner anchors
-clean — the corpus is now 31 notes / 70 chunks), and left exactly one suppression: the phishing
-pair-residue, the pair-scorer escalation's standing evidence. GH #182 closed on the half that
-reorder left behind — the desktop's strength band was still calibrated on the *centroid* z's
-landmarks, so in the new unit its top band was unreachable and the corpus's strongest confirmed
-relation graded as middling; the bands were re-read off the measured landmarks and the
-labelled-mate population
-(`ui/src/strength.ts`), which is the standing rule: **a change to the judged statistic is a change
-to every surface that paints it**. GH #188 then put discovery in the exit gate — per-mate MRR@5
-and the suppressed-mate count became assertions beside hit@1 and the negatives, each set a
-margin to the *safe* side of the day's reading rather than at it (five repeat runs are
-bit-identical, so the headroom is for corpus drift, not run noise), with a
-strangers-on-positive-anchors count reported but
-deliberately ungated, since the cheapest way to shrink it is to label the stranger. The saturating
-per-anchor line is retired from stdout and kept in the JSON row.
-The closing chapter is GH #196/#197: the first real vault dogfooded against the re-derived floor
-was a **single-domain** one — the geometry the orthogonal corpus is structurally incapable of
-expressing, since process rule 2's token audit deliberately minimizes shared vocabulary — and the
-z existence gate read it exactly backwards: with no unrelated tail, every leader's z compresses
-under the bar, and **16 of 17 panes went dark on a vault whose ranking was correct throughout**.
-The defect was the gate itself, not its calibration (a single-population outlier test cannot
-distinguish *nothing is related* from *everything is related*), so GH #197 retired it rather than
-re-tuned it: discovery **serves the ranked top-N always** (invariants.md D1 — the register's one
-discovery-surfacing entry), the member bar is deleted, the empty states say only "nothing to
-compare", and the z survives ungated as the strength band's input. The harness moved with the rule
-(the #192 precedent): the negatives' suppression assertion retired — a loner anchor now serves its
-ranked nearest, and what its cards *claim* is the readout (all five leaders paint the weakest band,
-`●○○`, on the corpus) — the per-mate MRR floor was re-derived from the measured always-serve
-reading (0.650 = the old 0.633 plus the returned phishing mate, served at rank 4 now: the
-pair-scorer's standing evidence is ordering quality, not existence), and the suppression assertion
-is a **structural-zero tripwire** that re-arms if a Phase-2 gate ever ships. Two instruments landed
-first, per the sequencing rule: **`just calibrate <vault>`** (GH #196's hand arithmetic as a
-command — per-anchor pool distributions, replayed-gate-vs-always-serve, band histograms, on any
-built vault; process rule 5 makes it the mandatory transfer check for any distributional constant)
-and the **dense single-domain fixture** (`evals/corpus-dense/`, 15 beekeeping notes, all
-inter-related, no loner; rankings-only labels, its own `"corpus": "dense"` rows, and the
-**zero-empty-panes** assertion — the ruling made mechanical). Whether any existence signal returns
-is Phase 2's evidence-gated bake-off, where "no gate at all" is an admissible winner; #182's
-standing rule — **a change to the judged statistic is a change to every surface that paints it** —
-bound this change too, and stays.
-The 2026-08-22 dogfood report then reopened the question on the **disclosure** axis (GH
-#200/#201/#202): always-serve's cost measured as trust — a pane that always fills to `limit`, and
-ten confident-looking search results for a nonsense query, zero being unrepresentable in Flow ② as
-built (the vector half always has k nearest; RRF keeps only ranks). **D1 was redrafted** to split
-ranking / reachability / default disclosure — an evidence-gated *prefix fold* may set what the
-default view vouches for, everything below it stays served and one gesture away, reachability
-untouchable — and **D2 is new**: a served search result is a claim of evidence, `limit` a cap and
-a quota nowhere. Phase A shipped instruments only, per the #196 sequencing rule: five labelled
-negative queries (empty `relevant` = "no matches") + the `search evidence calibration` block
-(`search_evidence` in the row) in `just eval`, and `just calibrate`'s **mutual-k reciprocity fold
-replay** (`fold_serves` per anchor, `reciprocal` per candidate, `--mutual-k`). Nothing gates yet:
-GH #200 was the discovery-fold bake-off ("no fold at all" admissible), #201 the search bar's, and
-GH #202 landed the winners on every surface and moved the exit-gate assertions in the same change —
-the #182 rule applied in advance for once.
-**GH #200 then ran, and "no fold at all" won**: `just eval`'s new `discovery fold bake-off` block
-judges every candidate rule on the *same* served lists over both corpora, sweeps mutual-k's depth
-`1..15`, and — the #187 idiom on the disclosure axis — re-derives the rule's admissible window
-each run instead of quoting one. It is empty in both directions at once: the depth that hides no
-labelled mate (`k = 14` orthogonal, `k = 7` dense) is past the depth that still folds a loner's
-default view to empty (`k ≤ 11`, and never all five), and every `k ≤ 5` darkens 1–3 of the dense
-fixture's 15 panes — D1's absolute. The general finding is the *pair* of safe depths: 14 and 7 are
-the same **fraction** of their candidate pools and different constants, so a reciprocity depth is
-a rank *in a population* and transfers no better than the cosine and z constants #150/#196
-retired — while the fraction cannot ship in its place, since a candidate's own list is truncated
-at `SHORTLIST_MIN`. `just calibrate` replaying the fold at 200-note scale is the third reading
-that settles it: **one constant, three vaults, three different rules** — `k = 10` discloses 36% of
-the cards on the orthogonal corpus, 91% on the dense fixture and 98% on `fixtures/test-vault`
-(vacuous), while `k = 5` darkens 7 of that vault's 200 panes. Candidate 2, the authored-edge bar, is **undecided rather than rejected**:
-both corpora carry zero authored edges by construction (measured per run as `authored_edges`), so
-its bench is a real vault with human-authored edges judged by its owner — the bake-off's fourth
-bench, and the one this ruling could not run — and as a distributional constant it owes process
-rule 5's transfer check. Its only available *mechanism* reading (`just calibrate` on the synthetic
-`fixtures/test-vault`, whose links are generated rather than judged) says the quantile is the whole
-rule: authored cosines 0.475 / 0.628 / 0.901 / 0.979 against a pane's top-5 above 0.94, so a
-lower-quartile bar folds nothing and a median one cuts deep. So `discover::candidates` is unchanged — one
-undivided ranked list, no per-row disclosure flag — the block stays in `just eval` reporting-only
-to price the next candidate, and the dogfood complaint that opened #200 stays **unpaid**: with no
-fold, the honesty rides on the strength band and the empty-state copy. What reciprocity *did*
-prove is kept as evidence for the pair-scorer escalation: at `k ≤ 11` four of five loners fold to
-empty while from `k ≥ 7` every dense pane stays lit — the loner-versus-dense discrimination #196
-proved no *anchor-local* statistic can make.
-**GH #201 then ran search's half of the same axis, and unlike #200 it found a rule.** The defect
-was structural rather than a loose threshold: the dense half always has k nearest, and RRF reduces
-both lists to integer ranks, so by the time anything could look, the two absolute signals that
-proved the query's own emptiness were gone — `shjfasd` served ten confident-looking results.
-`hybrid_search` now returns a `Retrieval`: the **same fused order**, each hit naming its rank in
-each list and its own distance, plus a query-level reading — and D2's rule over it is *lexical OR
-semantic*, two independent signals precisely so it can tell "nothing matches" from "everything
-matches", which #196 proved a one-signal test cannot. The lexical half is **IDF-weighted term
-coverage** — how much of the query's own weight the vault carries — and its first form, a hard
-`df ≤ 10% of chunks` content ceiling, is the chapter's real finding: it cleared the labelled
-corpus at 0 cut / 0 served and then **failed process rule 5 on the dense fixture**, where a
-1.5-chunk ceiling classed `drone` (df 3) and `comb` (df 7) as stopwords in a vault about
-beekeeping, the lexical half went inert, and the bar cut 3 of 15 queries naming notes the vault
-holds. A *fraction of chunks* is scale-free in a vault's size but not in its topical
-concentration — #196's geometry met a third time, now on the lexical axis — and the response was
-to change the **rule**, not re-tune the number: weighting has no bin to put a saturated subject
-word on the wrong side of. The shipped bar (`min_term_coverage` OR `min_cos`, keyed to
-`embed_model_id`, device suffix shared and re-checked by `just eval-metal`) reads 0 cut / 0
-negatives served on all three benches (the dense one re-read every `just eval` run, since topical
-concentration is the geometry that disqualified the rule that lost) — the labelled corpus, the dense fixture, and a 200-note
-vault, where its weakest positive (cos 0.475) sits *below* that vault's own nonsense and is
-served on the lexical half alone, which is the two-signal argument made at scale, and its *justification* is re-derived on every run by the
-new `search evidence bake-off` block rather than quoted in a comment — #187's lesson, applied in
-advance this time. `just calibrate --search` is the transfer bench that caught the ceiling: any
-built vault, no labels, every note's own title replayed as a query plus built-in nonsense. Two
-things are deliberately not in #201: the **surfaces** (the empty state, whether the nearest list
-is offered behind the fold, the exit-gate moves) are #202's, landed together per #182's rule, so
-nothing user-visible changes yet; and the **per-hit tail** fold is unshipped because the corpus
-labels name the relevant note, not the irrelevance of ranks 5–10 — the provenance is measured and
-reported (`dense_only` per query) and no rule is drawn from it.
-**GH #202 then paid the dogfood complaint on the search axis**, which is the half #200 could not
-pay: `Fasdfadsf` now answers *"no matches"* on every surface instead of ten confident-looking
-results. The adapter work is small and the ruling inside it is not — `vouched` is three-state and
-each state is a different behavior, which is the part worth holding onto. Evidence found serves as
-always. **No evidence is strict**: the honest empty state and *none* of the served rows — no
-reveal, no `--all`, no expander, because a fold is still a surface putting the rows forward, and
-#200 had built no disclosure boundary to put them behind anyway. The nearest list is unreachable
-from the human surface for that query, and that cost is accepted precisely because it is bounded
-to one query rather than to a vault (contrast #196, where an anchor-local gate darkened all of
-one). And **no calibrated bar is no verdict**, not "no matches" — the fake embedder and every
-model until the harness measures one land there (M2), so folding it into the empty state would
-blank a dev vault. The frontend applies the rule at **one** boundary (`doSearch` drops the rows,
-so `state.searchResults` *is* what the pane serves) rather than branching in both `render.ts` and
-`sidenav.ts`, which is the drift those two modules exist to prevent. `b2 search --json` became an
-**object** in the bargain — a documented break of the array contract, since a query-level verdict
-has nowhere to live in a list of rows — and it keeps serving the rows at `vouched: false` where
-the human surfaces show none: an agent handed rows *plus* a verdict can be honest about them, one
-a reader given rows alone cannot. The exit gate moved in the same commit series: search's negatives (zero
-served), the labelled positives the bar would cut and the dense fixture's title-as-query cuts
-(both structural zeros, no headroom), while every discovery row is unchanged, since search's rule
-moves no discovery rank or reachability — movement there is a bug, not a re-derivation.
-The harness's high-level overview is **`docs/evals/README.md`**, which also carries its **process
-rules** (a corpus edit ships as its own commit + the two-direction token audit; a paired per-query
-win/loss list is the primary A/B readout) — read it before touching the corpus, the labels, or the
-metrics. Its **decision history is the GitHub Issue that drove each verdict plus the commit that
-shipped it**, the same rule as the rest of the repo; the numbers behind a claim live in
-`results.jsonl` (gitignored, local).
-That corpus scores *relevance* and was, until GH #183, deliberately small enough to be blind to one
-class of change: retrieval reaches at least `vault::chunk_candidate_pool(10) = 60` candidates per
-signal (150 for the note view, `note_candidate_pool`), and while a corpus has no more chunks than
-that, neither signal is truncated and a **candidate-width** change (either hit pool, `pool_size`)
-prints bit-identical numbers (GH #141). The harness's other half measures that regardless — `just
-stability`, a model-free rank probe on `fixtures/test-vault` — and `just eval` says out loud when its
-corpus fits inside the pool (`pool_blind` in the row, a `[warn]` on stdout). The blindness is to
-candidates, not to fusion: `RRF_K` re-weights the same lists and moves scores regardless of corpus
-size. The two halves rule together, and have: GH #140 widened the passage view to the note view's 3×
-as plumbing, the blind-at-the-time eval saw nothing, the probe saw 10 of 10 probes' top-4 passages
-change — and GH #142 put the width back, because a probe can say *different* but only a labelled
-corpus can say *better*. GH #183's multi-topic family pushed the corpus to 30 notes / 63 chunks —
-past the 60-chunk passage-view pool for the first time — so `just eval` no longer reports
-`pool_blind`: at the shipped `K=10` default, the passage view now genuinely truncates a few chunks
-per query, same as a real vault would. `just stability` remains the deliberate, purpose-built probe
-for candidate-width at a scale where it actually binds; the corpus crossing the threshold by three
-chunks is a side effect of the notes needing genuine multi-chunk halves, not a redesign of either
-instrument.
+| Source | Role |
+|---|---|
+| [`docs/design/invariants.md`](docs/design/invariants.md) | The **invariant register** — the normative list of what must always be true, cited by id. **On conflict with any other doc, it wins.** |
+| [`docs/design/data-model.md`](docs/design/data-model.md) | The *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary. |
+| [`docs/design/index-engine.md`](docs/design/index-engine.md) | The *how*: the SQLite (FTS5 + in-process vector scan) projection, table DDL, data flows. |
+| [`ADRs/`](ADRs/README.md) | **Architecture Decision Records** — why each of the above reads the way it does. Key architectural choices only, terse. Add one when a decision is expensive to reverse and its *why* isn't readable off the code; do **not** add one per feature or bug. |
+| [`docs/evals/README.md`](docs/evals/README.md) | The eval harness overview + its **process rules** — read before touching the corpus, the labels, or the metrics. |
+| [GitHub Issues](https://github.com/AlteredCraft/B2/issues) | Backlog and planned work. Decision history = the issue that drove a verdict + the commit that shipped it. |
 
 ## Commands
 
+`just` (no args) lists every recipe with a one-line summary, grouped setup / dev / gates / coverage /
+model — that listing is the command reference; what follows is what it can't tell you.
+
+**The two gates.** Same commands, same order, whether you run them or GitHub does (ADR-0018):
+
 ```bash
-# Build the workspace / the `b2` binary
-cargo build
-cargo run -p b2-cli -- --help          # run the CLI in place (binary is named `b2`)
-cargo install --path crates/b2-cli --locked --force   # install `b2` onto PATH (~/.cargo/bin)
-
-# `just` wraps these; `just` (no args) lists every recipe, grouped: setup / dev / gates /
-# coverage / model. The two gates are `just check` (fast) and `just ci` (complete) — see below.
-
-# Fast test suite — deterministic, model-free; the bulk of what CI runs
-cargo test -p b2-core                   # the engine suite (fake embedder; no ML deps)
-cargo test                              # whole workspace (compiles candle in b2-embed, and b2-desktop
-                                        # embeds ui/dist — run `just ui-build` once first)
-cargo test -p b2-core --test discover   # one integration-test file (targets in tests/*.rs)
-cargo test -p b2-core one_note_reindex  # filter by test-name substring
-
-# The repo has two suites — cargo's and the frontend's — and `just` is where both are named.
-# Prefer these over the raw commands when you want the prerequisites handled for you:
-just test                               # = cargo test -p b2-core (the fast engine suite above)
-just test-ui                            # = the ui/ suite (installs npm deps first)
-                                        # Both suites together, plus fmt/lint/audit, is `just ci`.
-
-# Coverage (needs `cargo install cargo-llvm-cov` — or `brew install cargo-llvm-cov` — plus
-# `rustup component add llvm-tools-preview`; BOTH, and the component is per-toolchain. Without
-# them the recipes die on cargo's bare "no such command: `llvm-cov`", which names neither —
-# `just doctor` checks for both and prints the fix.)
-just coverage                           # engine line/region coverage — mirrors `just test`, no ML deps
-just coverage-html                      # the same as a browsable per-line report under target/llvm-cov/
-just coverage-all                       # + the CLI adapter (its tests spawn the instrumented `b2`
-                                        # binary, so those runs count); heavier cold — b2-cli pulls candle
-just coverage-app                       # the desktop host's own unit tests (builds ui/dist first);
-                                        # a low number by design — b2-desktop is a dumb adapter
-just coverage-lcov                      # lcov.info for editor gutters / a CI upload
-
-# Real embedder (out of CI; needs the model provisioned first)
-cargo run -p b2-cli -- init             # download + verify bge-base-en-v1.5 into the XDG cache
-cargo run -p b2-embed --example eval    # retrieval + discovery quality eval (never in `cargo test`):
-                                        # BM25-vs-hybrid lift, passage ranks, `similar`; appends each
-                                        # run to crates/b2-embed/evals/results.jsonl (gitignored). Also
-                                        # gates batch ≡ single embedding (a correctness check that needs
-                                        # the real model, so it lives here rather than behind #[ignore])
-cargo run -p b2-embed --example eval -- --sweep   # + in-process ChunkConfig A/B (the GH #44 gate)
-
-# Grounded chat (flow ④, GH #154/#155) — needs a model server, so it is out of CI like the embedder.
-# Any OpenAI-compatible endpoint works; Ollama is the guided default (`ollama serve` +
-# `ollama pull llama3.2`). `B2_LLM=fake` swaps in the deterministic FakeLlm — no server, no
-# network — which is what the CLI suite runs under.
-cargo run -p b2-cli -- ask "what did I write about X?"        # one-shot, streamed, cited
-cargo run -p b2-cli -- ask "…" --json                         # JSONL event stream: tokens, then AnswerView
-cargo run -p b2-cli -- chat                                   # interactive; Ctrl-C stops an answer, /exit leaves
-# The GUI's half of the same flow (GH #155): ⌘J opens the chat pane in the right column, Esc
-# stops a streaming answer, a citation opens its note in the centre pane, and Settings → Chat
-# (⌘,) is where the Local / Cloud models configuration and the Ollama setup card live. Nothing
-# extra to run — `just app` is the app, and `B2_LLM=fake` works there too.
-just eval-chat                          # = cargo run -p b2-llm --example groundedness — the chat seam's
-                                        # quality eval (citation accuracy, refusal on the labelled
-                                        # negatives, retrieval reach as its ceiling); appends each run to
-                                        # crates/b2-llm/evals/results.jsonl (gitignored)
-
-# Rank stability — the harness's model-free half (GH #141). The eval's 55-chunk corpus fits inside
-# even the 60-candidate chunk pool retrieval reaches, so it CANNOT see a candidate-width change; this
-# probe can. It asks the same queries at widening pools on fixtures/test-vault (~200 notes / ~780
-# chunks) and diffs the shipped top-10 against a committed snapshot. Fake embedder, so it is
-# deterministic, needs no `just init`, and its baseline is reproducible on any machine — the cost is
-# that uncorrelated fake vectors exaggerate the shift (`--model` for the real bge magnitude).
-just stability                          # = cargo run -p b2-embed --example stability
-just stability --verbose                # + the rankings that diverged, side by side
-just stability --vault crates/b2-embed/evals/corpus   # the control: on the eval corpus nothing moves
-just stability-bless                    # accept the current ranking as the baseline, after an
-                                        # INTENDED ranking change (it records what is, never better)
-
-# Metal GPU embedder — research lever (GH #40, macOS-only). The `metal` cargo feature moves the
-# BERT forward pass to the Apple-Silicon GPU (default build stays CPU + Accelerate). It's a
-# BUILD switch, not runtime: recompile to flip. Selecting Metal tags the recorded model id
-# `…@metal`, so switching device re-embeds the vault (a model swap) and `search` fails fast
-# rather than mixing CPU/GPU vectors — no silent staleness. The desktop Settings pane (⌘,) shows
-# a subtle CPU/Metal badge for the running build (`b2_embed::active_device_label`).
-cargo run -p b2-cli --features metal -- reindex   # embed on the GPU (else identical to reindex)
-just eval-metal        # retrieval-quality eval on Metal (compare to `just eval` on CPU)
-just app               # desktop app — auto-selects Metal on Apple Silicon (`just app-cpu` forces CPU)
-just compare-device    # CPU-vs-Metal embed A/B on fixtures/test-vault → chunks/s + speedup
-
-# Desktop app (crates/b2-desktop + ui/; needs Node + `cargo install tauri-cli --locked`)
-just icons                              # re-vendor the Bootstrap Icons subset into ui/src/icons.gen.ts
-                                        # after editing the manifest in ui/scripts/gen-icons.ts or
-                                        # bumping the bootstrap-icons devDependency. `just test-ui`
-                                        # runs the same generator in --check mode first, so a stale
-                                        # generated file fails the gate instead of shipping quietly.
-just ui-install                         # install the frontend's npm deps — rarely run by hand: every
-                                        # recipe that needs node_modules (app / app-cpu / app-build /
-                                        # ui-dev / ui-build, so check-app + coverage-app transitively)
-                                        # depends on it, so a pull that adds a frontend dep can't leave
-                                        # you at a Vite "failed to resolve import". A satisfied
-                                        # `npm install` is a ~0.3s no-op, hence no staleness guard.
-B2_VAULT_PATH=~/notes just app          # run the app in dev (Vite HMR + a live Tauri window)
-B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app   # + structured JSONL log ($PWD: cwd is crates/b2-desktop)
-just check-app                          # clippy -D warnings for b2-desktop (builds ui/dist first) —
-                                        # the desktop half of `just check`, split out because it's heavier
-just test-ui                            # the frontend's pure-logic suite — node's own test runner over
-                                        # src/**/*.test.ts (globbed, so a new file is never silently
-                                        # skipped — recursively, so that holds for a nested one too),
-                                        # stripping the TS types and running off the source.
-                                        # (Raw: `cd ui && npm test`, which needs `just ui-install`
-                                        # first — the recipe handles that.) Most cases are dependency-free,
-                                        # but paste.test.ts exercises the real turndown conversion
-
-cargo fmt
-cargo clippy --workspace --exclude b2-desktop   # fast lint gate (desktop needs ui/dist; see check-app)
-
-# THE TWO GATES. Same commands, same order, whether you run them or GitHub does.
-just check                              # FAST (~3s warm): fmt-check, then clippy with `-D warnings`,
-                                        # then the engine suite, then the ui/ suite. The loop you run
-                                        # while working — no network, no desktop build.
-just ci                                 # COMPLETE (~18s warm): no-tokio, ui-build, then fmt-check,
-                                        # clippy over the WHOLE workspace (no `--exclude b2-desktop`
-                                        # — ui-build already satisfied its ui/dist embed), the whole
-                                        # cargo suite, the ui/ suite, and `audit` last. This is
-                                        # verbatim what .github/workflows/ci.yml runs; run it before
-                                        # pushing.
-just no-tokio                           # fails if tokio is back in the `b2` binary's dependency tree
-                                        # (GH #174). Reads the lockfile, compiles nothing. Leads `ci`
-                                        # because a dep added with default features on can restore the
-                                        # whole async HTTP stack, and every other stage stays green.
-just audit                              # npm audit --audit-level=high over ui/ (needs the network).
-                                        # Its own recipe, and deliberately NOT a prerequisite of
-                                        # ui-install (which is upstream of `just app` — a fresh
-                                        # advisory must not stop the app launching) nor of `check`.
+just check     # FAST (~3s warm): fmt-check → clippy -D warnings → engine suite → ui/ suite.
+               # The loop you run while working. No network, no desktop build.
+just ci        # COMPLETE (~18s warm): no-tokio → ui-build → fmt-check → clippy (whole workspace)
+               # → cargo suite → ui/ suite → audit. Verbatim what CI runs. Run before pushing.
 ```
 
-### Gates, CI, and the justfile (GH #87)
+**Test suites.** `just test` = `cargo test -p b2-core`, the fast deterministic model-free engine
+suite (the bulk of the weight). `just test-ui` = the `ui/` pure-logic suite (node's own runner over
+`src/**/*.test.ts`, globbed recursively, running off the source with types stripped). Narrower runs:
+`cargo test -p b2-core --test discover` (one file), `cargo test -p b2-core one_note_reindex` (name
+filter). Whole-workspace `cargo test` compiles candle and embeds `ui/dist` — run `just ui-build` once
+first.
 
-**`.github/workflows/ci.yml` runs `just ci` and nothing else.** Every check lives in the recipe;
-the workflow supplies only the environment (the `rust-toolchain.toml` toolchain, Node + `npm ci`,
-`just`, and `Swatinem/rust-cache`). That split is the point — a check re-specified in YAML is a
-check that can drift from the one you run locally. It runs on **macos-latest**: B2 ships on macOS
-only, and the Xcode CLT that `b2-desktop`'s WebView links against are preinstalled, so the whole
-workspace builds with no platform setup step. CI is model-free by construction — `b2-core` never
-links candle, and `b2-cli`'s tests spawn the binary under `B2_EMBEDDER=fake`. One extra CI-only
-step follows the gate: **`git diff --exit-code`**, asserting no stage edited a tracked file. That
-turns two standing conventions into enforcement — the lockfile can't drift out from under
-`package.json`, and the engine suite can't mutate `fixtures/golden-vault/` (the tests copy it to a
-tempdir first, so a suite can never edit a committed fixture).
+**Out of CI, real model** (ADR-0005, ADR-0013): `just init` provisions bge-base-en-v1.5 into the XDG
+cache; `just eval` / `eval-sweep` / `eval-stemmer` / `eval-metal` / `eval-chat` score quality;
+`just stability` is the model-free rank probe (`stability-bless` accepts an *intended* ranking
+change — it records what is, never what is better); `just calibrate <vault>` is the real-vault
+transfer check any distributional constant owes. Grounded chat needs a model server —
+`ollama serve` + `ollama pull llama3.2`, or `B2_LLM=fake` for the deterministic provider.
 
-**Advisory-but-exit-0 output is a hole in any gate.** A tool that reports a problem and exits `0`
-passes green: clippy does it with warnings (hence `-D warnings` on every lint stage), and
-`npm install` does it with vulnerabilities — which is how a high-severity `postcss` advisory
-(GHSA-r28c-9q8g-f849) rode along under `vite` until it was spotted by hand. When you wire a new
-tool into a recipe, check its exit code on a *failing* input, not just its output. `ui/package.json`
-carries an `allowScripts` field for the same reason at the other end: npm 12 blocks
-`esbuild`/`fsevents` postinstall scripts and warns about it on every `npm install`, so the denial
-is recorded explicitly (the build works without them) rather than left as five lines of recurring
-noise that trains you to skim npm output.
+**Coverage** needs both `cargo-llvm-cov` and `rustup component add llvm-tools-preview` (per
+toolchain). Without them the recipes die on cargo's bare "no such command: `llvm-cov`", which names
+neither — `just doctor` checks both and prints the fix.
 
-**Authoring recipes:** every recipe carries `[group('…')]` + `[doc("…")]`. `just` otherwise renders
-a recipe's *last comment line* as its `--list` summary, so multi-line rationale surfaces as a
-nonsense fragment. The doc attribute states the summary explicitly, which frees the comment block
-above a recipe to be as long as the reasoning needs — and the group is what makes `just` (no args)
-readable at ~27 recipes.
+**Metal** is a *build* switch, not runtime: `cargo run -p b2-cli --features metal -- reindex`, and
+`just app` auto-selects it on Apple Silicon (`just app-cpu` forces CPU). Flipping device re-embeds
+the vault, because the device is part of the embedding space's identity (ADR-0007).
 
-Env vars: `B2_VAULT_PATH` sets the vault root so commands need no `-C`/`--vault` (an explicit flag wins).
-Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`rm`/`link`) require
-an explicit vault (flag, positional, or env) and refuse otherwise, so a stale binary or typo'd var can't
-silently touch the wrong dir (`Cli::require_vault`).
-`B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere
-(offline/dev mode, and what the test suite runs under); `B2_DEBUG` makes the CLI print internal error
-detail after the generic message.
-The chat seam has the same shape (GH #154): `B2_LLM_URL` / `B2_LLM_MODEL` name the OpenAI-compatible
-endpoint and model (defaults `http://localhost:11434/v1` + `llama3.2` — Ollama's), `B2_LLM_API_KEY`
-carries a **cloud** endpoint's bearer token (never a flag: a key in a flag is a key in `ps`),
-and `B2_LLM=fake` is `B2_EMBEDDER=fake`'s sibling — the deterministic `FakeLlm`, no server, what the
-CLI suite runs under. `ask`/`chat`'s `--llm-url` / `--llm-model` beat the env, which beats the default
-(the `B2_VAULT_PATH` rule); resolution itself lives once in `b2_llm::LlmConfig::from_env`, so the
-desktop layers its settings over the same base — Settings → Chat is that adapter's "flags", persisted
-beside the remembered vault in the app's data dir (GH #155). The **key** is the one field that layers the
-other way (GH #176): the desktop remembers it in the **macOS Keychain** — encrypted at rest, never a
-plain file, and never in `chat.json`, which is structurally incapable of carrying one — and
-`B2_LLM_API_KEY` **overrides** whatever is stored, so a shell can point one launch elsewhere or tell B2
-to keep no secret at all. A Keychain that refuses costs the convenience and nothing else: the key stays
-in force for the run, and the app says so (`b2_llm::ApiKeySource` is what the Settings copy reads —
-`none` / `environment` / `stored` / `session`, four states because each is different copy). The key
-never crosses back to the webview in any of them. Chat config is otherwise **adapter-level, never
-vault or index state** — nothing about it is recorded, so a model swap costs no reindex (contrast M2).
-`B2_LOG` turns on structured debug logging: **JSON Lines** (stdout stays pure data), one flat object
-per event — pipe into jq/DuckDB/pandas for reporting/plotting. Sink is stderr by default;
-`B2_LOG_FILE=<path>` writes there instead (append mode, so runs accumulate into one reportable
-dataset, and the capture is pure JSONL even when stderr carries human notices). Its value is a tracing
-filter directive (`debug`, `b2::sqlite=debug`, `warn`, …); `B2_DEBUG` or `B2_LOG_FILE` alone implies
-**`b2=debug`** — the kernel's own targets, in both adapters, so a dependency's `tracing`/`log` records
-(Tauri and wry in the app; `ureq`'s connection handling under `ask`/`chat` since GH #154) stay out of
-the one reportable dataset. The kernel
-emits: per-statement SQLite timings from SQLite's own profiler (`sqlite3_trace_v2` +
-`SQLITE_TRACE_PROFILE`, wired in `db::open` — target `b2::sqlite`, SQL template + numeric `duration_us`
-+ `vm_steps`/`fullscan_steps`; statements at/over `B2_SLOW_QUERY_MS` (default 100) log at WARN with
-`slow=true`), a span per `Vault` façade op (`b2::vault`; close events carry the op's duration), and
-flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the subscriber (and its clock)
-lives in the adapter (`init_logging`, in **both** `b2-cli/src/main.rs` and `b2-desktop/src/logging.rs`),
-so `b2-core` stays wall-clock-free and the instrumentation is inert unless an adapter opts in. The two
-sinks emit the same JSONL shape; they differ only where the host demands it — the desktop uses a
-non-blocking writer (long-lived, multi-threaded), where the CLI's short single-shot run takes a plain
-`Mutex<File>` (an explicit `B2_LOG` is honored verbatim in both).
-**Desktop path quirk:** `just app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a *relative*
-`B2_LOG_FILE=./logs/x.jsonl` lands under that crate dir, not the repo root — pass an **absolute** path
-(e.g. `B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app`) to write where you expect.
+**Desktop path quirk:** `just app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a
+*relative* `B2_LOG_FILE` lands under that crate dir. Pass an absolute path:
+`B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app`.
+
+### Environment variables
+
+- **`B2_VAULT_PATH`** — the vault root, so commands need no `-C`/`--vault` (an explicit flag wins).
+  Read-only commands fall back to the current dir; **commands that write** (`reindex`/`add`/`mv`/
+  `rm`/`link`) require an explicit vault and refuse otherwise (`Cli::require_vault`), so a stale
+  binary or typo'd var can't silently touch the wrong dir.
+- **`B2_EMBEDDER=fake`** — the deterministic fake embedder everywhere (offline/dev; what the test
+  suite runs under). **`B2_LLM=fake`** is its sibling for chat.
+- **`B2_DEBUG`** — print internal error detail after the generic message.
+- **`B2_LLM_URL` / `B2_LLM_MODEL`** — the OpenAI-compatible endpoint + model (defaults
+  `http://localhost:11434/v1` + `llama3.2`). **`B2_LLM_API_KEY`** carries a cloud endpoint's bearer
+  token — never a flag, because a key in a flag is a key in `ps`. `ask`/`chat`'s `--llm-url` /
+  `--llm-model` beat the env, which beats the default; resolution lives once in
+  `b2_llm::LlmConfig::from_env`, and the desktop layers its Settings over the same base. The **key**
+  layers the other way: the desktop stores it in the **macOS Keychain**, never in `chat.json`, and
+  `B2_LLM_API_KEY` overrides whatever is stored (`b2_llm::ApiKeySource` — `none`/`environment`/
+  `stored`/`session` — is what the Settings copy reads; the key never crosses back to the webview).
+  Chat config is adapter-level, never vault or index state, so a chat-model swap costs no reindex.
+- **`B2_LOG`** — structured debug logging as **JSON Lines** (stdout stays pure data), one flat object
+  per event, to stderr or to **`B2_LOG_FILE=<path>`** (append mode, so runs accumulate into one
+  reportable dataset). The value is a tracing filter (`debug`, `b2::sqlite=debug`, …); `B2_DEBUG` or
+  `B2_LOG_FILE` alone implies **`b2=debug`** — the kernel's own targets only, so Tauri/wry/`ureq`
+  records stay out of the dataset. Emitted: per-statement SQLite timings from SQLite's own profiler
+  (`b2::sqlite` — SQL template, `duration_us`, `vm_steps`/`fullscan_steps`; at/over
+  `B2_SLOW_QUERY_MS`, default 100, logged at WARN with `slow=true`), a span per `Vault` op
+  (`b2::vault`), and flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the
+  subscriber and its clock live in the adapter (`init_logging` in both), so `b2-core` stays
+  wall-clock-free and the instrumentation is inert unless an adapter opts in.
 
 ## Architecture
 
-### The core invariant
-
-**`index = a pure projection of (the vault directory)`.** (The full register: `docs/design/invariants.md`.) Two storage tiers:
-
-1. **The vault directory** — the source of truth. **Markdown is its sole authored subset** — the only
-   format whose bytes B2 may write; non-`.md` files are *resources* (path-keyed peers contributing
-   derived rows only). Every committed connection lives in the Markdown: a body `[[link]]` (always
-   untyped), or a frontmatter `b2_relations:` entry (the sole home of a typed relation; written by
-   `b2 link` or by hand).
-2. **Disposable SQLite index** (`<vault>/.b2/b2.sqlite`) — FTS5 + plain-table vectors (`embeddings`, content-addressed by chunk-text hash, + `note_centroids`, scored in-process) + the typed `edges` graph.
-   Drop it and `reindex` rebuilds it identical. Nothing here is authoritative, and **no durable
-   B2-derived state lives outside the Markdown** (the human's own directory tree is vault material,
-   not B2 state — see the folders paragraph below).
-
-**A note's identity is its vault-relative path** (invariant L1, GH #170), which is why the second tier
-holds no key the first doesn't: `notes.path` is the primary key and every derived row cascades off it.
-
-Consequences that shape the code: incremental re-index must equal a full rebuild (idempotency); every
-edge is re-derived from Markdown on every reindex; and **B2 makes no unbidden write at all** — reading a
-vault, walking it, reindexing it, writes nothing (W1), so `reindex` runs on a read-only vault and leaves
-a git-versioned one with no diff. Every write is the mechanics of a command: `b2 link` appending a
-frontmatter `b2_relations:` entry, the move-repair of inbound link paths, the desktop editor's saves
-through `Vault::write` (a byte-honest splice of the **human's own** body edit, guarded by a content-hash
-revision; B2 never authors body content itself), and the frontmatter drawer's saves through
-`Vault::write_frontmatter` (the same-guard splice of the **human's own** frontmatter bytes, body
-untouched — B2 owns no line inside that block). **Import** (`Vault::import_file` / `import_path`, the
-desktop's drag-a-file-from-Finder-onto-the-tree gesture) is the same posture applied to a *new* file:
-the bytes are the human's, copied verbatim and then projected — B2 adds nothing to them, so a dropped
-`.md` keeps its own frontmatter and a dropped PDF its bytes.
-
-*(Through 2026-08 B2 stamped a `b2id:` ULID into every note it saw. GH #170 removed it: no link ever
-named it, and it bought out-of-band-move re-binding at the cost of a collision subsystem, a carve-out on
-S3, and a machine key in the user's files. A `b2id:` line an older B2 left behind is now an ordinary
-unknown key — never read, never removed. There is no migration: `rm -rf .b2/` and reindex.)*
-
-**Many processes hold one index open at once** (invariant C1, index-engine.md §3 "Opening the index
-concurrently"): `b2 reindex &` racing a `b2 status`, the desktop app launching against a vault a CLI
-reindex is building, the desktop host's own threads. Readers are unrestricted and **never refused** — the
-common `open` reads two rows and takes no write lock. The two *drop-and-rebuild* paths are the ones that
-must be serialized, and both are, on SQLite's own write lock: the `schema_version` migration and the
-embed-time vector tables each check, re-check inside `BEGIN IMMEDIATE`, and rebuild once (GH #114). Note
-what does **not** cover this: the `reindex` advisory lock (GH #55) lives in `b2-cli` and is taken by
-writers only, so it can't serialize a reader — or a desktop reindex — against anything.
-
-**Folders are user-authored structure, and the filesystem is authoritative for them** (data-model.md
-"Folders"): a folder — empty or not — is vault material like a note, never projected
-into the index (nothing to chunk, embed, or link). The tree's structure listing (`Vault::list_dirs`) is a
-**live fs walk**, so the desktop file tree is one-to-one with the vault's managed (non-dot) subtree by
-construction; `create_dir` / `move_dir` / `delete_dir` proxy the OS (create-with-parents — an occupied
-target refused — / `rename` / `remove_dir_all`) and resolve targets against the disk, so empty folders
-work everywhere (`b2 mv`, `b2 rm -r`, the tree).
-
-### The seams (Bitter-Lesson tenet: build for tomorrow's model)
-
-The AI parts sit behind swappable traits — the **enumerated seams** (invariant M1); the engine is
-built and tested against deterministic fakes, and a real model drops in through its seam with no
-schema or flow change.
-
-- **`Embedder`** (`b2-core/src/embed.rs`) — text → vector. Real impl is `b2-embed`'s candle-backed
-  `LocalEmbedder` (bge-base-en-v1.5, 768-dim); test/dev impl is `FakeEmbedder` (blake3-hashed,
-  content-addressed, *not* semantic). The fake is content-addressed so drop→rebuild is reproducible.
-- **`LlmProvider`** (`b2-core/src/llm.rs`) — grounded chat (flow ④, `Vault::ask`; GH #151/#153/#154):
-  messages in, streamed tokens out through a callback whose return value steers **cooperative
-  cancellation** — sync, no tokio. Real impl is `b2-llm`'s `OpenAiCompatProvider` (any
-  OpenAI-compatible endpoint; Ollama by default); test/dev impl is `FakeLlm` (a chat request echoes
-  citation markers for its passages; a condensation request echoes the question). Unlike the embedder, chat
-  carries **no index identity** (contrast M2): nothing it produces is stored — no `meta` row, no
-  response caching, session-only history — so swapping chat models never touches the index, and a
-  provider swap is a URL/config change. Note content leaves the machine only by explicit cloud
-  configuration (M5).
-
-*(Connection discovery is deliberately model-free at surface time: `b2 similar` surfaces candidates,
-`b2 link` is the human committing — the human is the precision gate. A reranker would be the next seam
-if/when one lands — `index-engine.md` §5.)*
+**`index = a pure projection of (the vault directory)`** (ADR-0002; invariants S1–S5). Two tiers: the
+vault directory is the source of truth, `<vault>/.b2/b2.sqlite` is a disposable cache — FTS5 +
+plain-table vectors + the typed `edges` graph. A note's identity is its **vault-relative path**
+(ADR-0003). **B2 makes no unbidden write at all** (ADR-0004): reading, walking and reindexing write
+nothing; every write is the mechanics of a command the human invoked.
 
 ### Workspace crates
 
-- **`b2-core`** — the whole index engine and the typed `Vault` façade. Deliberately **model-free**
-  (no candle) so its test suite stays fast and deterministic. Deps: rusqlite (bundled SQLite + FTS5),
-  blake3, ulid, yaml-rust2. (No vector extension: vectors are plain BLOB tables scored in-process —
-  `embed::l2_sq` over `db::for_each_stored_vector`/`for_each_note_centroid`.)
-- **`b2-embed`** — the real candle-backed embedder. Heavy ML deps (candle, tokenizers, hf-hub) live
-  **only here**. `provision` (`b2 init`) downloads + verifies the model into a shared XDG cache;
+- **`b2-core`** — the whole index engine and the typed `Vault` façade. Deliberately **model-free** (no
+  candle) so its suite stays fast and deterministic. Deps: rusqlite (bundled SQLite + FTS5), blake3,
+  ulid, yaml-rust2. No vector extension — vectors are plain BLOB tables scored in-process (ADR-0006).
+- **`b2-embed`** — the real candle-backed embedder (bge-base-en-v1.5, 768-dim). **All heavy ML deps
+  live only here.** `provision` (`b2 init`) downloads + verifies into a shared XDG cache;
   `LocalEmbedder::load` fails fast with "run `b2 init`" if absent. `hf-hub` is taken
-  `default-features = false` — B2 calls its **sync** (`ureq`) API, so the async backend its defaults
-  carry is weight for a path nothing reaches (GH #174); the download's TLS is consequently rustls +
-  webpki-roots, the same stack `b2-llm` already uses.
-- **`b2-llm`** — the real chat provider (GH #154): a hand-rolled **sync** OpenAI-compatible SSE client
-  over `ureq` (already in the tree via `hf-hub`), behind the `LlmProvider` seam. Sync end-to-end is the
-  point — **no B2 code is async and no B2 crate starts a runtime**, and cancellation is returning early
-  from a blocking read loop. That claim used to be made of the *lockfile* ("no tokio enters the
-  workspace") and was false there: `hf-hub`'s default features pulled `reqwest` → `hyper` → `tokio`
-  into the `b2` binary to serve a code path nothing called. GH #174 trimmed them
-  (`default-features = false`), so the binary's tree is now tokio-free too and `just no-tokio` keeps it
-  that way. The desktop host is the one place a runtime exists, and it isn't ours: **Tauri** brings its
-  own, which is what a GUI host is. One wire shape (`POST {base}/chat/completions`, `stream: true`,
-  frames until `[DONE]`), so the quirks it owns are its tests: keep-alive comments, multi-line `data:`, CRLF, mid-stream error frames,
-  a stream that stops without `[DONE]` (a *truncated* answer, honestly marked cancelled — not an error),
-  and a garbled frame (an error, so a protocol mismatch can't pass as a short answer). Ollama is the
-  guided default; any compatible URL works, and a cloud one only by explicit configuration (M5).
-  `probe` is `b2 init`'s posture for chat — one `GET /models` before a human waits, turning "the daemon
-  isn't running", "that model isn't pulled" and "that URL isn't a chat API" into sentences rather than a
-  failed answer. It believes only what it can check: an **HTTP refusal is a refusal** (`LlmError::Refused`,
-  its own variant because a 404 at probe time is a wrong base URL while a 404 mid-answer is the server's
-  own "model not found"), and the tolerance is bounded to a **2xx** whose body isn't a model list. It used
-  to read *any* answer as reachable, which meant a mistyped `…/v1X` came back **Connected** and failed at
-  the first question. `setup` is the
-  same question asked for a *card* instead of a command (GH #155): it never fails, and it is the one
-  deliberately **Ollama-native** corner in a crate that is otherwise generic `/v1` — the daemon's own
-  `GET /api/tags` for what is installed, plus a pull suggestion sized to the machine's memory
-  (illustrative, non-binding). That asymmetry is by design, per #151: guided setup is a per-runtime
-  feature, and Ollama is the runtime B2 guides — so it must not be "generalized" against an abstraction
-  that cannot serve it.
-- **`b2-cli`** — the `b2` binary. A *dumb* adapter over the façade: parse args, pick + inject the
-  embedder and (for `ask`/`chat`) the chat provider, call `Vault`, print (human-readable, streamed for
-  an answer, or `--json` for agents). Holds no engine logic.
-- **`b2-desktop`** — the Tauri host: the *second* dumb adapter, the GUI sibling of `b2-cli`. Each
-  `#[tauri::command]` is deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view
-  types as the IPC contract; it also owns host-only infrastructure (the async cancellable reindex task,
-  the fs-watch `vault-changed` pulse, the OS folder dialog, the **declared menu bar** — `menu.rs`,
-  GH #119 — and the streaming, cancellable `ask` that is its exact sibling for chat: tokens out on a
-  `Channel`, a cooperative cancel flag read at every token, and the chat provider injected the way the
-  embedder is, with the endpoint remembered beside the vault and the API key in the macOS Keychain,
-  under `B2_LLM_API_KEY`'s override (`chat.rs` + `keychain.rs`, GH #155/#176). Has its own `CLAUDE.md` with the
-  thin-adapter rules — read it before touching this crate.
-- **`ui/`** (not a crate) — the desktop frontend: Vite + vanilla TS + CodeMirror 6, a separate npm
-  toolchain talking to the host over Tauri IPC (`ui/src/api.ts` is the seam). Rendering a note is a
-  **trust boundary** (invariant E5, GH #77): a `.md` can come from anyone, so the one Markdown→HTML
-  path (`renderMarkdown`) sanitizes its output — DOMPurify in `ui/src/sanitize.ts`, wired as `marked`'s
-  `postprocess` hook so every call site is covered by construction — and every value B2 itself
-  interpolates goes through `escapeHtml`. The webview CSP is the second layer, not the guard. A note's
-  **links** are the same boundary from the other side: the webview *is* the app, so a link is never
-  followed in place — `ui/src/links.ts` routes a web link (`http`/`https`/`mailto`) to the host's
-  `open_external`, an OS handoff behind a scheme allow-list the host re-checks, and every other scheme
-  is refused rather than handed to whatever app registered it. Fenced code is
-  syntax-highlighted from CodeMirror's own grammar registry (`@codemirror/language-data`, lazily
-  loaded one language per chunk) — `ui/src/highlight.ts` drives *every* surface (reading view, live
-  preview, source mode) from one resolver and one theme-aware `tok-*` palette, so a fence looks the
-  same read or edited. Chrome **iconography** is one family from one registry — `ui/src/icons.ts`
-  maps a *meaning* (`resourceIcon(class)`, `foldChevron(open)`) onto a Bootstrap Icons glyph, and
-  `ui/scripts/gen-icons.ts` vendors the named subset into `icons.gen.ts` rather than importing the
-  package at runtime (the CSP forbids a CDN, and `npm test` runs off the source through node, where a
-  Vite `?raw` import wouldn't resolve). The generator's `--check` mode runs first in `npm test`, so a
-  generated file that drifted from the dependency fails the gate; `just icons` refreshes it. The GUI
-  is **keyboard-complete** (invariant K1): the file tree *and* the
-  discovery pane follow the ARIA `tree` pattern over the row order of `ui/src/treenav.ts` /
-  `ui/src/sidenav.ts` — the *same* order `render.ts` paints, so the arrows and the eye can't disagree
-  — every pane restores focus across its own repaint (`paintTree` by path; `capturePaneFocus` by row
-  key, graph-node scene id, or a control's stable `id` for the other two; `captureModalFocus` by `id`
-  for the overlay layer), every overlay traps and restores it, `⇧F10` is the keyboard's right-click,
-  and Settings (⌘,) is a tabbed surface whose rail follows the ARIA `tabs` pattern over
-  `ui/src/settingstabs.ts` — General / Index / Embedding / **Chat** / **Keyboard**, the last being the
-  whole chord table (`ui/src/shortcuts.ts`) that `?` jumps straight to, *Chat* being where the chat
-  model lives (GH #155: the **Local** / **Cloud models** configurations, the privacy copy beside the
-  cloud one — the consent moment is the configuration moment, M5 — and the Ollama-native setup card), and *Index* being where the manual Reindex
-  lives now that indexing is automatic (auto-index on open + the fs-watch pulse). Settings takes the
-  **whole window** rather than floating in a box (five sections, one of them a page of chord table,
-  outgrew one), keeping modal semantics — `role="dialog"`, the ⇥ trap, Escape — but no backdrop, since
-  there is no outside left to click. The top bar keeps the live progress meter, beside the vault name
-  it is in reference to, since a run must stay watchable and cancellable with Settings shut; Settings →
-  Index paints a second meter of its own while a run is live, because the surface covers that bar
-  (one painter, `paintReindex`, writes every meter on screen). The **chat pane** (⌘J, GH #155) is the right column's third mode,
-  beside discovery and search rather than in the centre: an answer's citations open their notes *in the
-  centre pane*, so the conversation never has to leave the screen to be checked. Its transcript is
-  `ui/src/chat.ts`, which emits `sidenav.ts`'s own rows — so the pane inherits that column's whole
-  keyboard walk and, load-bearing on a surface that repaints per token, its focus-restoration-by-row-key. Chords themselves are declared once in
-  `ui/src/bindings.ts` — the keyboard registry — and the dispatcher, the editor's keymap and that
-  sheet all derive from it, so none of the three can drift; `conflicts()` fails the suite on two
-  commands sharing a keystroke in one scope, `ui/src/editorkeys.ts` checks B2's chords against
-  CodeMirror's own ~100 stock bindings so an upgrade can't quietly take one, and `ui/src/menukeys.ts`
-  checks them against the **macOS menu bar's** — declared in `crates/b2-desktop/src/menu.rs` rather than
-  inherited from Tauri's default, since AppKit dispatches a menu accelerator before the webview sees the
-  key at all, which made it the one clash nothing could detect (GH #119). Those four checkers are also
-  what makes the keyboard **the user's** (GH #121): every chord in the sheet is a button that re-records
-  it, `ui/src/keymap.ts` lays the rebindings over the shipped table (`activeBindings()`) and judges a
-  candidate chord by asking all four about the table it *would* produce — refusing a same-scope clash or
-  a menu-bar chord, merely warning about a shadow or a CodeMirror overlap — and `ui/src/recorder.ts`
-  reads the one thing no table can know: a chord that produces **no keydown** was taken upstream by
-  macOS or another app, which is why GH #122's Carbon hotkey table was closed rather than built. That
-  is also why the arrow families moved *into* the registry: `treenav.ts` / `sidenav.ts` /
-  `settingstabs.ts` still own **command → move**, but the registry now owns **key → command**, so the
-  arrows are rebindable and visible to the checkers like everything else. The layout persists in
-  `localStorage` beside the theme and the pane widths — a viewing choice, never vault state — and the
-  loader re-judges what it reads, so a hand-edited store can't install a keyboard you can't use to fix
-  itself. The four obligations a new surface owes are in
-  [`crates/b2-desktop/CLAUDE.md`](crates/b2-desktop/CLAUDE.md).
+  `default-features = false` (ADR-0011).
+- **`b2-llm`** — the real chat provider: a hand-rolled **sync** OpenAI-compatible SSE client over
+  `ureq` behind the `LlmProvider` seam. One wire shape (`POST {base}/chat/completions`,
+  `stream: true`, frames until `[DONE]`), so the quirks it owns are its tests: keep-alive comments,
+  multi-line `data:`, CRLF, mid-stream error frames, a stream that stops without `[DONE]` (a
+  *truncated* answer, honestly marked cancelled — not an error), and a garbled frame (an error, so a
+  protocol mismatch can't pass as a short answer). `probe` is `b2 init`'s posture for chat — one
+  `GET /models` before a human waits — and it believes only what it can check: an HTTP refusal is a
+  refusal (`LlmError::Refused`), and tolerance is bounded to a 2xx whose body isn't a model list.
+  `setup` is the same question asked for a *card*: it never fails, and it is the one deliberately
+  **Ollama-native** corner (`GET /api/tags` + a memory-sized pull suggestion) in an otherwise generic
+  `/v1` crate. That asymmetry is by design — guided setup is a per-runtime feature — so it must not
+  be "generalized" against an abstraction that cannot serve it.
+- **`b2-cli`** — the `b2` binary. A *dumb* adapter (ADR-0012): parse args, inject the embedder and
+  chat provider, call `Vault`, print (human-readable, streamed, or `--json` for agents).
+- **`b2-desktop`** — the Tauri host, the GUI sibling of `b2-cli`. Each `#[tauri::command]` is
+  deserialize → one `Vault` call → serialize, reusing the CLI's `--json` view types as the IPC
+  contract; it owns host-only infrastructure (the cancellable reindex task, the fs-watch
+  `vault-changed` pulse, the OS folder dialog, the declared menu bar, the streaming cancellable
+  `ask`, the Keychain). **Has its own `CLAUDE.md` with the thin-adapter rules — read it before
+  touching this crate.**
+- **`ui/`** (not a crate) — the frontend: Vite + vanilla TS + CodeMirror 6, talking to the host over
+  Tauri IPC (`ui/src/api.ts` is the seam). Rendering is a **trust boundary** (ADR-0016). Chords live
+  in one registry (ADR-0017). Fenced code is highlighted from CodeMirror's own grammar registry
+  through one resolver (`ui/src/highlight.ts`), so a fence looks the same read or edited; icons are
+  one vendored Bootstrap Icons subset generated into `icons.gen.ts` (`just icons`; `npm test` runs
+  the generator in `--check` mode first, so a stale generated file fails the gate). Layout, theme,
+  pane widths and rebound chords persist in `localStorage` — a viewing choice, never vault state —
+  and the loader re-judges what it reads.
 
 ### The `Vault` façade (`b2-core/src/vault.rs`)
 
-The **one typed API**. The CLI and the desktop host are its only clients; every other `b2-core`
-module is called directly only by the integration tests. Surface: lifecycle + indexing (`open` /
+The **one typed API**; the CLI and the desktop host are its only clients (every other `b2-core`
+module is called directly only by integration tests). Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
-`explain_resource` / `search` / `similar` / `ask`), writes (`add_note` / `create_note` / `create_dir` /
-`import_file` / `import_path` / `move_note` / `move_resource` / `move_dir` / `link` / `write` /
-`delete_note` / `delete_resource` / `delete_dir`).
-**Add operations when a command needs them; do not
-pre-build a broad surface.** The embedder is injected here: `open` defaults to the fake, `open_with_embedder` is how the
-adapters wire the real model.
+`explain_resource` / `search` / `search_evidence` / `similar` / `ask`), writes (`add_note` /
+`create_note` / `create_dir` / `import_file` / `import_path` / `move_note` / `move_resource` /
+`move_dir` / `link` / `write` / `write_frontmatter` / `delete_note` / `delete_resource` /
+`delete_dir`). **Add operations when a command needs them; do not pre-build a broad surface.** The
+embedder is injected here: `open` defaults to the fake, `open_with_embedder` wires the real model.
 
 ### Data flows
 
-- **Flow ① ingest/reindex** (`ingest.rs`) — parse → project notes, chunks (+FTS), embeddings, and the
-  typed `edges` graph, **writing nothing to the vault**. Two-phase so link resolution is
-  independent of file order. It is **two separately-invokable passes**
-  (the `project`/`embed` split, #15): model-free `project_vault` (notes/chunks/FTS/edges) and
-  `embed_vault` (fills the DB-derived missing-vector set); `reindex` composes them, and `search`
-  falls back to BM25-only on a projected-but-unembedded vault. The whole-vault pass owns every
-  *reconciliation*: pruning rows for files the walk no longer met (#31) and collecting vectors no
-  chunk references (GH #170) — the single-note paths touch one note and never prune. Anomalies it
-  used to surface (duplicate `b2id`s, identity restamps — #81/#88) went with the stamp: a
-  Finder-duplicated note is now simply two notes at two paths, which is what it looks like in
-  Finder too.
-- **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN (an exact in-process scan
-  of `embeddings`) fused with Reciprocal Rank Fusion (k=60), resolved from chunks up to notes. Raw NL
-  queries are sanitized into a safe FTS5 `MATCH` expression (punctuation is FTS5 syntax and would
-  otherwise crash the parse).
-- **Flow ③ connection discovery** — **`b2 similar`** (`discover::candidates`) surfaces the semantically
-  nearest *unlinked* notes in **two stages** (#38): a coarse O(notes) scan over per-note centroids
-  (`note_centroids`, maintained by the embed pass) shortlists candidates, then exact max-sim over only
-  the shortlist's chunk vectors — minus the anchor's 1-hop graph neighbors, no model call;
-  **`b2 link`** appends a typed `b2_relations:` entry to the source note's frontmatter
-  (`note::add_relation`, Markdown-first, **never the body**) and re-projects it as an `origin=frontmatter`
-  active edge. No suggestion queue — a connection exists only once you author it.
-  The GUI adds the *other* authoring gesture over the same candidates (`ui/src/droplink.ts`): dragging a
-  Similar card onto a line of the note being edited types a `[[wikilink]]` at that line's end — the
-  untyped, body kind of link, landing in the editor's buffer exactly as `[[` completion does, so B2 still
-  authors nothing (W1) and the human is still the precision gate.
-- **Flow ④ grounded chat** (`chat.rs` + `Vault::ask`, GH #151/#153) — condense (multi-turn only; a
-  provider call rewrites the follow-up into a standalone query, degrading to the raw question on
-  failure — that step can never break chat) → retrieve (`search_chunks` at `chat::ASK_PASSAGES`,
-  BM25-only fallback unchanged) → assemble (the grounded system prompt + numbered passages — prompt
-  assembly is core logic) → stream (tokens up through the caller's callback; `Break` cancels at
-  token granularity) → cite (`[n]` markers resolve to `(path, excerpt)` in `AnswerView`; a
-  hallucinated marker resolves to nothing and the answer text is never rewritten). Chat is a
-  **reader** (C1); nothing model-derived is stored (`llm_cache` stays unused), history is
-  session-only (S4), and model output is untrusted content (E5 — enforced at the render surface).
-  Its CLI surfaces are `b2 ask` (one-shot) and `b2 chat` (interactive, history carried in the
-  adapter's own `Vec<ChatTurn>` and nowhere else) — **every surface streams**, which is why `--json`
-  is a JSONL *event* stream (token events, then the `AnswerView`) rather than one printed object.
-  The GUI's surface is the chat pane (GH #155), the same two facts over Tauri: tokens on a per-call
-  `Channel`, the `AnswerView` as the command's return, and the history held in the pane's own state
-  for the CLI's reason. Both adapters cancel the same way — Ctrl-C there, **Esc** here — and both
-  render what already arrived rather than discarding it, because `Completion` marks a cut stream
-  rather than failing it.
+- **Flow ① ingest/reindex** (`ingest.rs`) — parse → project notes, chunks (+FTS), embeddings and the
+  typed `edges` graph, **writing nothing to the vault**. Two-phase, so link resolution is independent
+  of file order, and **two separately-invokable passes**: model-free `project_vault`
+  (notes/chunks/FTS/edges) and `embed_vault` (fills the DB-derived missing-vector set). `reindex`
+  composes them; `search` falls back to BM25-only on a projected-but-unembedded vault. The
+  whole-vault pass owns every *reconciliation* — pruning rows for files the walk no longer met,
+  collecting vectors no chunk references — and single-note paths never prune.
+- **Flow ② hybrid search** (`search.rs`) — BM25 (`chunks_fts`) ⊕ vector KNN fused with RRF, resolved
+  from chunks up to notes (ADR-0008). Raw NL queries are sanitized into a safe FTS5 `MATCH`
+  expression (punctuation is FTS5 syntax and would otherwise crash the parse). `hybrid_search`
+  returns a `Retrieval` carrying the per-hit and per-query evidence signals RRF discards; a query the
+  vault holds no evidence for answers **"no matches"** (ADR-0015).
+- **Flow ③ connection discovery** — `discover::candidates` ranks the nearest *unlinked* notes in two
+  stages (centroid shortlist → exact max-sim over the shortlist's chunk vectors, minus the anchor's
+  1-hop neighbours), and always serves the ranked top-N (ADR-0009, ADR-0014). `b2 link` appends a
+  typed `b2_relations:` entry (`note::add_relation` — frontmatter, **never the body**) and re-projects
+  it. The GUI's other authoring gesture is `ui/src/droplink.ts`: dragging a Similar card onto a line
+  types a `[[wikilink]]` there, landing in the editor's buffer exactly as `[[` completion does.
+- **Flow ④ grounded chat** (`chat.rs` + `Vault::ask`) — condense (multi-turn only; degrades to the
+  raw question on failure, so that step can never break chat) → retrieve (`search_chunks` at
+  `chat::ASK_PASSAGES`) → assemble (grounded system prompt + numbered passages — prompt assembly is
+  core logic) → stream (tokens through the caller's callback; `Break` cancels at token granularity)
+  → cite (`[n]` markers resolve to `(path, excerpt)` in `AnswerView`; a hallucinated marker resolves
+  to nothing, and the answer text is **never rewritten**). Chat is a **reader**: nothing model-derived
+  is stored, history is session-only, model output is untrusted content. Every surface streams, which
+  is why `--json` is a JSONL *event* stream. Both adapters cancel the same way (Ctrl-C / Esc) and
+  render what already arrived — `Completion` marks a cut stream rather than failing it.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
-  within *k* typed hops of an anchor (scoped traversal). `b2 similar`'s candidate generation is its
-  *complement* (`discover::candidates` — nearest notes *not* already connected).
+  within *k* typed hops of an anchor. `discover::candidates` is its *complement* (nearest notes *not*
+  already connected).
 
-### The typed graph & relation vocabulary
+### The typed graph
 
-`edges` carries `origin` (`inline`/`frontmatter`) and a deterministic id derived from the identity tuple
-`(src, dst, type, occurrence)`. There is **no `status` column** — every edge is authored and active. The
-edge set = union of body links (`inline`, all untyped `references` — **the body carries no B2 syntax**,
-so no verb/explanation is ever parsed from prose) and frontmatter `b2_relations:` (`frontmatter`, the
-sole typed home), with **frontmatter-wins dedup** on same-`(target, type)` overlap (the frontmatter row
-alone can carry an explanation; a *different* verb over a body-linked target simply coexists — the
-"augment" case, data-model §2). Backlinks are why the graph is materialized rather than parsed at read
-time. The relation vocabulary (`relation.rs`) is a **closed three-verb stance core** — `references`
-(neutral), `supports` (for), `contradicts` (against) — plus a tolerated tail stored verbatim; the core
-is your typing palette on `b2 link` (and what queries rely on). Edges are stored once, directed;
-inverse labels are display-only.
+`edges` carries `origin` (`inline`/`frontmatter`) and a deterministic id from `(src, dst, type,
+occurrence)`. **No `status` column** — every edge is authored and active. Body links are always
+untyped `references`; frontmatter `b2_relations:` is the sole typed home; overlap dedups
+frontmatter-wins. The vocabulary is a closed three-verb stance core (`references` / `supports` /
+`contradicts`) plus a tolerated verbatim tail. Edges are directed and stored once; inverse labels are
+display-only. Details and rationale: ADR-0010.
 
 ### Embedding-space discipline
 
-Vectors live in **plain tables** — `embeddings(text_hash, vector)` and `note_centroids(note_path,
-centroid)` — created at **embed time**, not in the base migration: their existence is the "this vault
-has an embedding space" signal the projected-but-unembedded fallbacks key on. Every distance is
-computed **in-process** (`embed::l2_sq`, one scan; rationale: #38).
-
-The vector store is **content-addressed** (GH #170): the key is blake3 of the chunk text, which *is*
-the embed input, so identical text has one vector and a moved or renamed note re-embeds nothing — the
-thing that makes path-keyed identity cheap. Two consequences to hold onto: a vector **outlives** the
-chunk that addressed it (it may be shared, so `replace_chunks` no longer cascades it away), which is
-why the whole-vault pass collects unreferenced hashes; and `--force` re-*chunks* but re-embeds only
-what genuinely differs, because recomputing identical input could only produce identical bytes. Every
-read joins through `chunks`, so an uncollected orphan is invisible to search, discovery and coverage
-alike. `meta` records `(embed_model_id,
-embed_dim)` — the only place a model swap is detectable. The compute **device** folds into this
-identity: the real embedder tags its recorded `embed_model_id` with the resolved device (CPU stays the
-bare repo id; a `--features metal` GPU build appends `@metal`, `b2-embed/src/model.rs`), so a
-device/precision change that alters vectors *is* a model swap — GH #40. A swap drops both tables and
-re-embeds on `reindex`; `search` **fails fast** on a mismatch rather than returning silently-wrong
-results. `open`
-never mutates the vector space (so changing the configured model can't wipe vectors on the next
-command). Centroids are derived data with the vectors' own lifecycle: the embed pass refreshes a
-note's centroid after filling its vectors; a re-chunk drops it (`db::replace_chunks`) — no separate
-invalidation exists or is needed.
+`embeddings(text_hash, vector)` + `note_centroids(note_path, centroid)`, created at **embed time** so
+their existence is the "this vault has an embedding space" signal the fallbacks key on;
+content-addressed by blake3 of the chunk text (ADR-0006). `meta.(embed_model_id, embed_dim)` is the
+one place a model swap is detectable, device included — a swap drops both tables and re-embeds on
+`reindex`, `search` fails fast rather than mixing spaces, and `open` never mutates the vector space
+(ADR-0007).
 
 ## Conventions
 
-- **Determinism is a hard requirement of the core.** No wall-clock and no randomness inside `b2-core`:
-  timestamps and ids are passed in (see `IdGen`, and the `created` param on write ops), so operations are
-  reproducible and unit-testable. Nothing in the core mints anything — a note's identity is its path
-  — so the `IdGen` seam is gone; tests assert against the golden-vault *paths* in
-  `tests/common/mod.rs`.
+- **Determinism is a hard requirement of the core.** No wall-clock and no randomness inside
+  `b2-core`: timestamps are passed in (the `created` param on write ops), and nothing is minted at
+  all — a note's identity is its path, so the `IdGen` seam is gone. Tests assert against golden-vault
+  *paths* in `tests/common/mod.rs`.
 - **Keep `cargo test` fast, deterministic, and model-free.** Real-model work belongs out of CI —
-  behind `b2 init`, `--example eval`, or manual runs. Never add candle/tokenizers deps to `b2-core`.
+  behind `b2 init`, an `--example`, or a manual run. Never add candle/tokenizers deps to `b2-core`.
 - **Never `#[ignore]` a test, and a hard-to-write test is a signal, not a chore.** `#[ignore]` hides a
-  test from the suite while leaving it looking present — a silent gap. If a test is difficult to write,
-  keep faithful, or make pass, *stop and reflect*: is the test valuable; are we testing the right thing;
-  is the fault in the test or in the system under test? A test that fights you is usually coupled to an
-  implementation detail (a retired dependency's constant, a since-changed fixture assumption) rather than
-  a real invariant — re-anchor it on the invariant, or fix the system. When the resolution isn't obvious,
-  **open a conversation with the user** to work through it; do not reach for `#[ignore]`, a slow/brittle
-  fixture, or a weakened assertion to move on. **A check that genuinely needs the real model belongs in the
-  eval harness, not in `cargo test` wearing an `#[ignore]`** — `--example eval` runs on demand and actually
-  runs, which is the whole point (the batch ≡ single embedding check is the worked example).
-- **Shared test scaffolding lives in `crates/b2-core/tests/common/mod.rs`.** Fixture setup
-  (`reindexed_vault` / `opened_vault` / `ingest_golden`) and the read-back shims (`index_conn`, `count`)
-  are there; a helper wanted by more than one file goes there rather than being copied. What only one file
-  needs — a purpose-built vault, a bespoke row snapshot — stays in that file. The one deliberate exception
-  is the tracing `Capture` writer duplicated by `tests/logging.rs` and `tests/discover_query_count.rs`:
-  hoisting it would make every test binary link `tracing-subscriber` to serve two, and those two already
-  need their own binaries (tracing's global callsite-interest cache races across parallel test threads).
-- **A test's name is part of its contract.** If the name claims more than the body asserts, the suite reads
-  as covering ground it doesn't — the same silent gap as `#[ignore]`. `just coverage` is how you find the
-  other half of that problem: a line the suite never executes.
+  test while leaving it looking present — a silent gap. If a test is difficult to write, keep
+  faithful, or make pass, *stop and reflect*: is the test valuable; are we testing the right thing; is
+  the fault in the test or in the system? A test that fights you is usually coupled to an
+  implementation detail rather than a real invariant — re-anchor it, or fix the system. When the
+  resolution isn't obvious, **open a conversation with the user**; do not reach for `#[ignore]`, a
+  brittle fixture, or a weakened assertion. A check that genuinely needs the real model belongs in the
+  eval harness, where it actually runs (the batch ≡ single embedding check is the worked example).
+- **A test's name is part of its contract.** If the name claims more than the body asserts, the suite
+  reads as covering ground it doesn't. `just coverage` finds the other half of that problem: a line
+  the suite never executes.
+- **Shared test scaffolding lives in `crates/b2-core/tests/common/mod.rs`** — fixture setup
+  (`reindexed_vault` / `opened_vault` / `ingest_golden`) and the read-back shims (`index_conn`,
+  `count`). A helper wanted by more than one file goes there rather than being copied; what only one
+  file needs stays in that file. The one deliberate exception is the tracing `Capture` writer
+  duplicated by `tests/logging.rs` and `tests/discover_query_count.rs`: hoisting it would make every
+  test binary link `tracing-subscriber` to serve two, and those two already need their own binaries
+  (tracing's global callsite-interest cache races across parallel test threads).
 - **User-facing errors are generic and actionable, never leaking internals** (sqlite/io/serde). The
-  CLI funnels everything through `user_message` (`b2-cli/src/main.rs`); `B2_DEBUG` opts into detail.
-  This matches the repo-wide logging policy in the parent `CLAUDE.md`.
-- Integration tests copy the committed `fixtures/golden-vault/` into a tempdir first, so no suite can
-  mutate the repo fixtures. (Ingest writes nothing to a vault now — W1 — so this is belt and braces
-  rather than the guard it was; CI's `git diff --exit-code` is the backstop either way.) `fixtures/test-vault/` is a *separate*,
-  larger synthetic fixture (~200 notes) for **out-of-CI throughput/quality experiments**, not the
-  deterministic suite — see `fixtures/README.md` and `just compare-device` (the CPU-vs-Metal embed A/B).
+  CLI funnels everything through `user_message`; `B2_DEBUG` opts into detail.
+- Integration tests copy `fixtures/golden-vault/` into a tempdir first, so no suite can mutate the
+  repo fixtures (CI's `git diff --exit-code` is the backstop). `fixtures/test-vault/` is a *separate*,
+  larger synthetic fixture (~200 notes) for **out-of-CI throughput/quality experiments** — see
+  `fixtures/README.md`.
 
 ## Idiomatic Rust
 

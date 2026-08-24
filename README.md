@@ -87,6 +87,7 @@ and work with a vault in about ten minutes. Then go deeper:
 | [docs/design/invariants.md](docs/design/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
 | [docs/design/data-model.md](docs/design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [docs/design/index-engine.md](docs/design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
+| [ADRs/](ADRs/README.md) | **Architecture Decision Records** — one terse record per key architectural choice: the context, the ruling, and what it costs. The *why* behind the register's entries. |
 
 Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
 

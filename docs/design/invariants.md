@@ -15,6 +15,9 @@ status: active
 >
 > **On conflict, this page wins and the other doc gets fixed.** Changing this page is a deliberate
 > decision, never a drive-by edit. Cite entries by id (S2, G2, …).
+>
+> The *why* behind an entry — the context it was ruled in, and what the ruling costs — lives in
+> [`ADRs/`](../../ADRs/README.md). Changing an entry here means writing or superseding an ADR there.
 
 The register is the two design tenets — *a volatile vault over a disposable index* and *build for
 tomorrow's model* — made mechanical.
