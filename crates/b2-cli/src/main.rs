@@ -69,7 +69,7 @@ For agents (--json):
                                   — report \"no matches\" instead of using the rows.
   2. Read the files it names      Paths are vault-relative; open them for the full
                                   note, not just the matched snippet.
-  3. b2 neighbors / b2 explain    Follow the typed graph around a promising note;
+  3. b2 neighbors/explain <note>  Follow the typed graph around a promising note;
                                   b2 similar <note> ranks unlinked semantic
                                   neighbors.
   4. Refine and search again      Pass --exclude <path> (repeatable) for notes
