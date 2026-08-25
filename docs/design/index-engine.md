@@ -227,9 +227,14 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
     is re-derived on every `just eval` run — never frozen into a comment (ADR-0013).
   - The verdict reaches an adapter through `Vault::search_evidence`, which serves **exactly** the rows
     `search` does, in the same order — three-state, and the three states are three behaviours
-    (ADR-0015). **The tail** — folding where a *real* query's per-hit evidence runs out — is unshipped:
-    it needs per-hit labels the corpus does not carry, so provenance is measured and reported
-    (`dense_only`) and no rule is drawn from it yet.
+    (ADR-0015). `search_evidence_excluding` (`b2 search --exclude`) is the same read minus a
+    **caller-named** set of notes — the follow-up-search form an agent loop passes its
+    already-inspected paths to. The subtraction is the caller's, never the verdict's: the verdict and
+    its signals still read the whole vault, the remaining rows keep their fused order, and the pool is
+    unchanged (width moves only on measured relevance, below), so a heavily-excluded query may
+    honestly under-fill. **The tail** — folding where a *real* query's per-hit evidence runs out — is
+    unshipped: it needs per-hit labels the corpus does not carry, so provenance is measured and
+    reported (`dense_only`) and no rule is drawn from it yet.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph

@@ -839,6 +839,54 @@ fn search_respects_limit() {
     assert!(results_of(&v).len() <= 1);
 }
 
+/// `--exclude` is the follow-up-search flag for agent loops: a re-query minus the
+/// notes already inspected serves the next-ranked ones instead of the same head.
+#[test]
+fn search_exclude_drops_a_served_note_and_serves_the_rest() {
+    let (_g, root) = reindexed();
+
+    // Both golden notes serve for "memory"; excluding one leaves the other.
+    let full = run_in(&root, &["--json", "search", "memory"]);
+    let v: Value = serde_json::from_slice(&full.stdout).unwrap();
+    let served: Vec<String> = results_of(&v)
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        served.contains(&"concepts/memory.md".to_string()),
+        "{served:?}"
+    );
+
+    let out = run_in(
+        &root,
+        &[
+            "--json",
+            "search",
+            "memory",
+            "--exclude",
+            "concepts/memory.md",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let remaining: Vec<String> = results_of(&v)
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !remaining.contains(&"concepts/memory.md".to_string()),
+        "an excluded path is never served: {remaining:?}"
+    );
+    assert_eq!(
+        remaining,
+        served
+            .into_iter()
+            .filter(|p| p != "concepts/memory.md")
+            .collect::<Vec<_>>(),
+        "the other rows stand, in order"
+    );
+}
+
 #[test]
 fn search_before_reindex_is_empty_but_succeeds() {
     let (_g, root) = golden_vault();
