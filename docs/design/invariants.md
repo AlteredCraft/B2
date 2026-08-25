@@ -224,8 +224,14 @@ tomorrow's model* — made mechanical.
   off one corpus's distribution describes that corpus, and the fix was to change the *rule* rather
   than re-tune the number. The verdict reaches an adapter through `Vault::search_evidence`, which
   serves exactly the rows `search` does in the same order. The per-hit **tail** fold is unshipped
-  and deliberately so: it needs labels naming the irrelevance of ranks 5–10, which the corpus does
-  not carry, so the provenance is measured and reported rather than ruled on.
+  by **measurement** now, not by missing labels (GH #206, 2026-08-25): `tail_relevant` made the
+  labels exhaustive per query, the four-family prefix-cut bake-off ran on both corpora and a real
+  vault, and no admissible family reaches more than 23 of the **367** filler rows an oracle fold
+  would cut — the fused order is not an evidence order (filler outranks keep rows it loses to on
+  every absolute signal), and D1's prefix requirement rightly forbids a fold from re-sorting it.
+  So the tail complaint is an **ordering** problem, its payment the reranker seam M1 reserves, and
+  the bake-off re-arms every run
+  ([docs/evals/README.md](../evals/README.md), the #206 verdict).
   **The surfaces carry it now** (GH #202, 2026-08-22), and the verdict is **three-state, each state
   a different behavior**: evidence found → serve as always; **no evidence → the honest empty state
   and none of the rows** (*strict* — no reveal, no `--all`, no expander: any of those would put the

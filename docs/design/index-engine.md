@@ -233,8 +233,10 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
     its signals still read the whole vault, the remaining rows keep their fused order, and the pool is
     unchanged (width moves only on measured relevance, below), so a heavily-excluded query may
     honestly under-fill. **The tail** — folding where a *real* query's per-hit evidence runs out — is
-    unshipped: it needs per-hit labels the corpus does not carry, so provenance is measured and
-    reported (`dense_only`) and no rule is drawn from it yet.
+    measured and stays unshipped (GH #206): with `tail_relevant` labels in place, the four-family
+    prefix-cut bake-off found every admissible rule vacuous — the fused order is not an evidence
+    order, so admissible folds reach 2–23 of the 367 rows an oracle fold would cut. The ruling and
+    its numbers live in [docs/evals/README.md](../evals/README.md); the bake-off re-arms every run.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
   candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
   exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph

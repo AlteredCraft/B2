@@ -22,11 +22,11 @@ deterministic, and model-free, so model quality can never flake CI
 
 | Command | What it measures | Model | Deterministic |
 |---|---|---|---|
-| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, the query-level evidence rule's admissible window re-derived per run, and the shipped bar replayed on the dense fixture ([#201](https://github.com/AlteredCraft/B2/issues/201)); **asserts** zero labelled negatives served, zero labelled positives cut, and zero dense titles cut ([#202](https://github.com/AlteredCraft/B2/issues/202)) | real bge | no |
+| `just eval` | BM25 / vector-only / hybrid note & passage ranks, semantic lift, fusion demotions, discovery per-mate ranks on the always-served surface + the **dense fixture's zero-empty-panes and rank assertions** ([#197](https://github.com/AlteredCraft/B2/issues/197)), strangers, cosine piles, the z calibration dump, and the **search evidence calibration + bake-off** — negative queries' BM25/cosine/served readings, the query-level evidence rule's admissible window re-derived per run, and the shipped bar replayed on the dense fixture ([#201](https://github.com/AlteredCraft/B2/issues/201)), plus the **per-hit tail bake-off** — four candidate prefix-cut families judged from the served rows' provenance against the `tail_relevant` keep-set, constraints re-derived per run on both corpora with the cross-bench join printed once per run ([#206](https://github.com/AlteredCraft/B2/issues/206)); **asserts** zero labelled negatives served, zero labelled positives cut, and zero dense titles cut ([#202](https://github.com/AlteredCraft/B2/issues/202)) | real bge | no |
 | `just eval-sweep` | the same, per `ChunkConfig` variant — the chunker A/B ([#44](https://github.com/AlteredCraft/B2/issues/44)'s gate, seven variants) | real bge | no |
 | `just eval-stemmer` | the same, under the unstemmed `unicode61` ablation beside the shipped `porter unicode61` ([#157](https://github.com/AlteredCraft/B2/issues/157)'s instrument) | real bge | no |
 | `just stability` | top-10 drift vs a blessed baseline as candidate pools widen ([#141](https://github.com/AlteredCraft/B2/issues/141)) | fake | yes |
-| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a), and the replayed **mutual-k reciprocity fold** — the leading disclosure-boundary candidate, priced per anchor before anything ships ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase A; `--mutual-k`); with `--search`, the **search evidence bar** replayed over title-as-query positives and built-in nonsense ([#201](https://github.com/AlteredCraft/B2/issues/201)) | stored vectors (pure read; `--search` loads the model) | yes, per vault |
+| `just calibrate <vault>` | discovery calibration on **any built vault**, no labels: per-anchor pool cosines, leader z, what a replayed z gate would serve vs always-serve, strength-band histogram ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a), and the replayed **mutual-k reciprocity fold** — the leading disclosure-boundary candidate, priced per anchor before anything ships ([#200](https://github.com/AlteredCraft/B2/issues/200), Phase A; `--mutual-k`); with `--search`, the **search evidence bar** replayed over title-as-query positives and built-in nonsense ([#201](https://github.com/AlteredCraft/B2/issues/201)), and the **per-hit tail families** priced on the one row a title query certifies with no label — its own note ([#206](https://github.com/AlteredCraft/B2/issues/206)) | stored vectors (pure read; `--search` loads the model) | yes, per vault |
 | `just eval-metal` | `just eval` on the Apple-Silicon GPU (model id gains `@metal` — a different vector space) | real bge | no |
 
 `just eval` scores **quality** — it can say *better*. `just stability` scores **movement** — it
@@ -53,7 +53,7 @@ the effect is unambiguous rather than a three-chunk edge case.
 | [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
 | [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; and with `--search`, the **search evidence transfer check** ([#201](https://github.com/AlteredCraft/B2/issues/201)) — every note's own title replayed as a query against the shipped bar, plus built-in nonsense. Process rule 5's transfer check for both axes |
 | [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
-| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 44 positive queries (a verbatim `passage` adds chunk-level scoring, n=20; three carry the **date-shaped** block, [#202](https://github.com/AlteredCraft/B2/issues/202)) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate |
+| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 44 positive queries (a verbatim `passage` adds chunk-level scoring, n=20; three carry the **date-shaped** block, [#202](https://github.com/AlteredCraft/B2/issues/202)) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate. Seven positives carry **`tail_relevant`** ([#206](https://github.com/AlteredCraft/B2/issues/206)): the per-hit keep-set, **exhaustive by label** for every positive query — a served note in neither `relevant` nor `tail_relevant` is filler by judgement, not by omission — encoded by *note* rather than rank so a reranking change can never invalidate a label |
 | [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
 | [`crates/b2-embed/evals/corpus-dense/`](../../crates/b2-embed/evals/corpus-dense/) | the **dense single-domain fixture** ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0b): fifteen beekeeping notes, all genuinely inter-related, **no loner** — the vault-level geometry the orthogonal corpus is structurally incapable of expressing; scored in its own throwaway vault, its own `results.jsonl` row (`"corpus": "dense"`), never averaged with the orthogonal rows |
 | [`crates/b2-embed/evals/similar-dense.json`](../../crates/b2-embed/evals/similar-dense.json) | the dense fixture's labels — **rankings only** (expected mates per anchor, per-mate scored); no negative anchors, because in this corpus "nothing relates" is false of every note |
@@ -162,6 +162,19 @@ one function so the number gated and the number explained cannot drift apart.
 Recorded as `search_evidence` in the row — now carrying each query's terms with their
 document frequencies and the whole grid, so any cell is re-derivable from a row without re-running
 the model, the `discovery_fold` convention.
+
+The **per-hit tail bake-off** ([#206](https://github.com/AlteredCraft/B2/issues/206)) is reported
+the same way, and — like [#200](https://github.com/AlteredCraft/B2/issues/200)'s fold — gates
+nothing, because nothing folds: its job is to price the candidate per-hit rules against the
+`tail_relevant` keep-set, each family's constraint re-derived per run over the keep-prefixes (a
+filler row served above a keep row must pass too, or the keep row folds with it — D1's prefix
+requirement doing the work), every payoff read beside the **oracle ceiling** (what a fold placed by
+the labels themselves would cut), and the cross-bench join printed once both corpora are read.
+Recorded as `search_tail` in the orthogonal row and a `tail` subkey under the dense row's
+`search_transfer`; the served rows themselves are under `search_evidence.positives[].rows`
+(path, per-hit provenance, relevance by label), so any constant is re-derivable from a row without
+re-running the model — the `discovery_fold` convention at hit granularity. If a tail fold ever
+ships, the keep-below-fold count is the tripwire the gate takes, at zero.
 
 The bake-off runs on the **orthogonal** corpus, which is where the labels are — and that is
 precisely the geometry the lexical rule survives, so the dense fixture carries a second reading of
@@ -484,10 +497,11 @@ says so instead of going quietly stale.
   (to 0.470), so the pure-cosine window there is 0.005 wide — closed for practical purposes —
   while the query's coverage is 1.00 and the lexical half serves it without hesitation. Two things were deliberately left out of #201: the **surfaces and the exit-gate moves**, which are
   [#202](https://github.com/AlteredCraft/B2/issues/202)'s (per #182's rule, the same change) and
-  have since landed — this block gates now; and the **per-hit tail** fold, still unshipped because
-  the corpus labels name the relevant note and not the irrelevance of ranks 5–10 — the provenance is
-  measured (`dense_only`: 0 of 410 served positive rows are dense-only, against 20 of 50 negative
-  ones) and no rule is drawn from it.
+  have since landed — this block gates now; and the **per-hit tail** fold, then unshipped because
+  the corpus labels named the relevant note and not the irrelevance of ranks 5–10 — the provenance
+  was measured (`dense_only`: 0 of 410 served positive rows, against 20 of 50 negative ones) and no
+  rule drawn from it. [#206](https://github.com/AlteredCraft/B2/issues/206) supplied those labels
+  and ran that bake-off — the verdict below.
 
 - **The date-shaped query block: the hazard was real, and the rule already handles it**
   ([#202](https://github.com/AlteredCraft/B2/issues/202), measured 2026-08-22). A term the vault has
@@ -553,12 +567,61 @@ says so instead of going quietly stale.
   *negative anchors empty above the fold*) were struck by #200, not by this: there is no fold to
   assert, and #200's structural-zero tripwire re-arms on its own if one ever ships.
 
+- **The per-hit tail bake-off ran, and no tail fold ships — the fused order is not an evidence
+  order, and every admissible prefix cut is vacuous against the oracle**
+  ([#206](https://github.com/AlteredCraft/B2/issues/206), measured and ruled 2026-08-25;
+  invariants.md **D2**). The labels moved first, per the issue's own sequencing: `tail_relevant`
+  (its own commit) made the per-hit judgement **exhaustive** for every positive query — a served
+  note in neither `relevant` nor `tail_relevant` is filler *by label* — encoded by note rather than
+  rank, so a reranking change can never invalidate a label. What the labels then said, before any
+  rule was tried: **the complaint is real and it is a tail** — 386 of 440 served positive rows are
+  filler, and **367** of them sit below their list's last keep row (36 of 44 lists keep only rank
+  1), so a fold placed by the labels themselves — the oracle — would cut 95% of the filler. Four
+  families auditioned, every one a **prefix cut** (D1: a filler row served above a keep row must
+  pass the test too, or the keep row folds with it — which is the clause that decides the whole
+  bake-off). The readings, all re-derived per run:
+
+  | family | orthogonal corpus | dense fixture (absolute) | 200-note vault (`calibrate --search`) | joint payoff |
+  |---|---|---|---|---|
+  | lexical (first dense-only row) | admissible, cuts 7 | **✗ cuts 59 title rows** | signal silent — **0 of 2000** served rows dense-only | disqualified |
+  | lex-or-cos per hit | unconstrained | c ≤ 0.344 | unconstrained | **2** of the oracle's 367 |
+  | cos ≥ c | c ≤ 0.365 | c ≤ 0.321 | demands c ≤ 0.366 | **15** of 367 at c = 0.321 |
+  | cos ≥ best − δ | δ ≥ 0.271 | δ ≥ 0.317 | demands δ ≥ 0.173 | **23** of 367 at δ = 0.317 |
+
+  The **lexical fold** — the issue's own leading signal, from #201's `dense_only` reading — is
+  disqualified twice over, and the two disqualifications are one finding: "the lexical half never
+  ranked it" is a fact about *pool depth against corpus size*, not about evidence. On the 15-chunk
+  fixture the OR-list runs out early, so the signal fires on real matches (59 title rows); at
+  780 chunks every served row sits inside the BM25 pool, so it never fires at all; and on the
+  labelled corpus it fires precisely on the nonsense queries (20 of 50 rows) the query-level bar
+  already answers whole. The per-hit shape of #200's non-transferable depth, met a third time.
+  The two cosine families are **mechanically admissible on all three benches** — and still do not
+  ship, on two grounds the run itself prints. Their joint edges sit **at** the dense fixture's own
+  binding row (`robbing-behavior` → `feeding-bees.md`, cos 0.321, drop 0.317) with zero headroom —
+  the constant placement this file's sizing method exists to forbid, and the safe direction (toward
+  serving) only shrinks the payoff. And the payoffs are 15 and 23 rows of the 367 an oracle fold
+  reaches — 4–6% — because the **fused order and the evidence disagree in the middle of the list**:
+  the worked example is the volcano query, which serves six filler rows at cos 0.352–0.490 *above*
+  the keep-labelled `week-log.md` at cos **0.570** (its chunk sits at BM25 rank 41, so RRF demotes
+  it below rows it beats on every absolute signal). D1's prefix requirement rightly forbids a fold
+  from re-sorting the list, so every admissible constant is set by those crossings, not by the
+  filler. The finding worth keeping: the tail complaint is not a *disclosure* problem at this
+  ordering's resolution — it is an **ordering** problem, the same species as the phishing pair
+  below, and its payment is a better fused order (the reranker seam M1 reserves; the pair-scorer
+  escalation), after which this same bake-off re-prices every family against lists where rank and
+  evidence agree. Until then the incumbent — no per-hit fold — stands on search exactly as it does
+  on discovery, the instrument re-arms every run, and the dogfood complaint stays measured rather
+  than paid: 367 rows of headroom, on the record, waiting on the order.
+
 The deliberately open thread: the **phishing pair** — a real relation the model ranks under
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
 always-serve it is *served*, at best-passage rank 4, so the residue is **ordering quality rather
 than existence** — still the standing evidence for the pair-scorer escalation named in
 [`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
-demands it. The journal-shape inversion that used to sit beside it was resolved by #192's
+demands it. [#206](https://github.com/AlteredCraft/B2/issues/206)'s verdict added search's own
+specimen of the species: 367 labelled filler rows sit below the oracle fold and no admissible
+prefix cut reaches more than 23 of them, because the fused order misplaces the evidence — the
+second standing exhibit for a reranker, measured on the other flow. The journal-shape inversion that used to sit beside it was resolved by #192's
 reorder; the single-domain inversion beside *that* by #197's ruling. Beside it now sits the
 **dense-vault band compression** (#197's A6): on a vault where every candidate is close, the
 within-list z compresses and the dots lose resolution — first reading taken on a real-embedded

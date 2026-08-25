@@ -3207,6 +3207,11 @@ struct TailBench {
     /// Positives whose keep-prefix is the whole served list — a fold has
     /// nothing to cut there under any admissible rule.
     saturated: usize,
+    /// The **oracle** ceiling: rows below each list's last keep row — what a
+    /// perfect prefix fold (one placed by the labels themselves) would cut.
+    /// Every family's payoff is read against this, because "cuts N rows" means
+    /// nothing until the reachable maximum is beside it.
+    oracle: usize,
     families: Vec<TailFamilyReading>,
     /// Junk rows the parameterless lexical fold would cut on the negatives'
     /// served lists, of their total — the GH #201 `dense_only` reading, priced
@@ -3240,6 +3245,10 @@ fn score_search_tail(ev: &SearchEvidence) -> TailBench {
         .iter()
         .filter(|q| !q.rows.is_empty() && keep_prefix(&q.rows).len() == q.rows.len())
         .count();
+    let oracle = positives
+        .iter()
+        .map(|q| q.rows.len() - keep_prefix(&q.rows).len())
+        .sum();
     let families = TailRule::ALL
         .iter()
         .map(|&rule| {
@@ -3277,6 +3286,7 @@ fn score_search_tail(ev: &SearchEvidence) -> TailBench {
         keep_rows,
         filler_rows,
         saturated,
+        oracle,
         families,
         neg_lexical_cut,
         neg_rows: ev.negatives.iter().map(|q| q.rows.len()).sum(),
@@ -3300,6 +3310,11 @@ fn print_search_tail(bench: &TailBench) {
         "    served rows over the positives: {} keep / {} filler by label; {} list(s) saturated \
          (keep to the last served row)",
         bench.keep_rows, bench.filler_rows, bench.saturated
+    );
+    println!(
+        "    oracle ceiling: a fold placed by the labels themselves (each list's last keep row) \
+         would cut {} of {} — every payoff below is read against this",
+        bench.oracle, bench.filler_rows
     );
     for f in &bench.families {
         let constraint = match f.rule {
@@ -3367,6 +3382,7 @@ fn tail_json(bench: &TailBench) -> serde_json::Value {
         "keep_rows": bench.keep_rows,
         "filler_rows": bench.filler_rows,
         "saturated_lists": bench.saturated,
+        "oracle": bench.oracle,
         "neg_lexical_cut": bench.neg_lexical_cut,
         "neg_rows": bench.neg_rows,
         "families": bench.families.iter().map(|f| serde_json::json!({
@@ -3515,7 +3531,11 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
                                 .to_string()
                         } else {
                             winner = true;
-                            format!("✓ admissible on both benches — cuts {cut} filler rows")
+                            format!(
+                                "✓ admissible on both benches — cuts {cut} of the {} an oracle \
+                                 fold reaches",
+                                orth.oracle
+                            )
                         }
                     }
                 }
@@ -3565,11 +3585,11 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
                                 } else {
                                     winner = true;
                                     format!(
-                                    "✓ admissible at {} {edge:.3} on both benches — cuts {} of {} \
-                                     filler rows",
+                                    "✓ admissible at {} {edge:.3} on both benches — cuts {} of \
+                                     the {} an oracle fold reaches",
                                     if rule == TailRule::CosDrop { "δ ≥" } else { "c ≤" },
                                     payoff.filler_cut,
-                                    orth.filler_rows
+                                    orth.oracle
                                 )
                                 }
                             }
@@ -3581,10 +3601,12 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
     }
     if winner {
         println!(
-            "  → at least one family survives both benches AND cuts labelled filler. Before \
-             anything ships it still owes process rule 5's real-vault reading (`just calibrate \
-             --search`, the tail block) — a constant read off these corpora describes them, not a \
-             vault."
+            "  → the ✓ family/families above survive both corpora at their joint edges. That is \
+             ADMISSIBILITY, not a shipping order: a joint edge sits AT a bench's own binding row \
+             (zero headroom — the constant placement the house sizing method forbids), each payoff \
+             reads against the oracle ceiling above, and a shipped constant owes process rule 5's \
+             real-vault reading besides (`just calibrate --search`, the tail block). The ruling of \
+             record lives in docs/evals/README.md."
         );
     } else {
         println!(

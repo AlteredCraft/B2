@@ -45,5 +45,10 @@ defect was structural, not a loose threshold.
 - Exit-gate rows: zero labelled negatives served, zero labelled positives cut, zero dense-fixture
   title-queries cut — structural zeros, no headroom. Discovery rows are unchanged, because search's
   rule moves no discovery rank; movement there would be a bug.
-- The per-hit **tail** fold is unshipped: the labels name the relevant note, not the irrelevance of
-  ranks 5–10. Provenance is measured and reported, and no rule is drawn from it.
+- The per-hit **tail** fold is unshipped — since GH #206 (2026-08-25) by **measurement** rather
+  than by missing labels: `tail_relevant` deepened the labels to per-hit exhaustiveness, a
+  four-family prefix-cut bake-off ran on both corpora plus a real vault, and every admissible
+  family is vacuous (2–23 of the 367 rows an oracle fold reaches), because the fused order is not
+  an evidence order and D1 rightly forbids a fold from re-sorting it. The tail complaint is an
+  ordering problem — standing evidence for the reranker seam, not for a disclosure rule. The
+  bake-off re-derives this verdict every `just eval` run.

@@ -335,7 +335,9 @@ stability-bless:
 # words weigh beside a word it has never seen (the lexical anchor's whole premise, checked per
 # vault rather than assumed of English), then the evidence bar replayed over every note's own
 # title as a query (the positives — no labels needed, and nothing to relabel) and over
-# built-in nonsense strings (the negatives). It is the one part of this instrument that is
+# built-in nonsense strings (the negatives), and last the per-hit tail families (GH #206)
+# priced on the same title queries — what each family's constant would have to be to hide no
+# title's own note behind a fold. It is the one part of this instrument that is
 # not a pure read — judging the cosine half means embedding a query, so it loads the real
 # model on a real-embedded vault; a fake-embedded one still gets the model-free lexical half.
 [group('model')]
