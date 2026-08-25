@@ -1780,7 +1780,7 @@ struct FoldBench {
     /// population ("what related looks like in this vault", read off the human's
     /// own committed links). Both eval corpora are link-free by construction, so
     /// this reads 0 and candidate 2 is *unpriceable here*: it is measured where
-    /// its population exists, by `just calibrate` on a real vault.
+    /// its population exists, by `make calibrate` on a real vault.
     authored_edges: usize,
 }
 
@@ -2197,7 +2197,7 @@ fn print_fold_bench(bench: &FoldBench) {
         bench.authored_edges,
         if bench.authored_edges == 0 {
             "UNPRICEABLE here (a link-free corpus offers the rule no population to calibrate from; \
-             it is measured where one exists, by `just calibrate` on a real vault)"
+             it is measured where one exists, by `make calibrate` on a real vault)"
         } else {
             "priceable — see the calibrate replay"
         }
@@ -2679,7 +2679,7 @@ fn print_search_evidence(ev: &SearchEvidence) {
         Some(w) if w.open() => println!(
             "    cos window   ({:.3}, {:.3}]  — open on THIS corpus for a pure-cosine query bar; \
              the real keep-set is smaller (lexical evidence keeps its own), and a real vault is the \
-             other half of any such claim (process rule 5, `just calibrate`)",
+             other half of any such claim (process rule 5, `make calibrate`)",
             w.cut_max, w.keep_min
         ),
         Some(w) => println!(
@@ -2993,9 +2993,9 @@ enum TailRule {
     /// rows vs 20 of 50 negative ones). Parameterless, so nothing
     /// distributional to place — but **not** scale-free: `bm25_rank` is a rank
     /// in a pool-truncated list (`search::pool_size`), so "never ranked" is
-    /// partly a fact about pool depth against vault size. `just calibrate
-    /// --search` measures that rather than assuming it (process rule 5's
-    /// posture, owed even without a constant).
+    /// partly a fact about pool depth against vault size. `make calibrate
+    /// VAULT=<vault> ARGS=--search` measures that rather than assuming it
+    /// (process rule 5's posture, owed even without a constant).
     Lexical,
     /// Fold at the first row that is dense-only **and** under a per-hit cosine
     /// bar — the shipped query rule's shape (lexical OR semantic) read per hit.
@@ -3622,7 +3622,7 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
              ADMISSIBILITY, not a shipping order: a joint edge sits AT a bench's own binding row \
              (zero headroom — the constant placement the house sizing method forbids), each payoff \
              reads against the oracle ceiling above, and a shipped constant owes process rule 5's \
-             real-vault reading besides (`just calibrate --search`, the tail block). The ruling of \
+             real-vault reading besides (`make calibrate VAULT=<vault> ARGS=--search`, the tail block). The ruling of \
              record lives in docs/evals/README.md."
         );
     } else {
@@ -3759,7 +3759,7 @@ fn warn_if_pool_blind(chunks: usize) {
         eprintln!(
             "[warn] {chunks} chunks ≤ {pool}-candidate pool — neither signal is truncated here, so a\n\
              \x20      candidate-width change (either hit pool, pool_size) cannot move any number in this run\n\
-             \x20      (GH #141). `just stability` measures that property on a large vault. (RRF_K is\n\
+             \x20      (GH #141). `make stability` measures that property on a large vault. (RRF_K is\n\
              \x20      not in that set — it re-weights the same lists, and this corpus does see it.)\n"
         );
     }
@@ -4014,7 +4014,7 @@ fn print_floor_windows(z: &FloorZ) {
             None => println!("    {name} window  no reading (a population was empty)"),
             Some(w) if w.open() => println!(
                 "    {name} window  ({:+.3}, {:+.3}]  — open on THIS corpus; a real vault is the \
-                 other half of any such claim (process rule 5, `just calibrate`)",
+                 other half of any such claim (process rule 5, `make calibrate`)",
                 w.cut_max, w.keep_min
             ),
             Some(w) => println!(

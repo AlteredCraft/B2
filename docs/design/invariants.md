@@ -181,7 +181,7 @@ tomorrow's model* — made mechanical.
   gesture away, so a misjudged fold costs a keystroke where the retired gate cost the feature. Every
   such signal is **evidence-gated** (it must win the measured bake-off on the orthogonal corpus, the
   dense single-domain fixture — where a non-empty default view is absolute — and real vaults via
-  `just calibrate`, with "no fold at all" an admissible winner) and **continuous in population
+  `make calibrate`, with "no fold at all" an admissible winner) and **continuous in population
   size**: a threshold may move banding or the fold, never which rows exist or can be reached.
   Strength stays a within-list grading painted from the z, which gates nothing. **The first
   bake-off found no admissible fold** (GH #200, 2026-08-22): mutual-kNN reciprocity's window is
@@ -205,7 +205,7 @@ tomorrow's model* — made mechanical.
   **"no matches"**, honestly empty, the nearest-by-meaning list never presented as matches. The
   clause that once said "at most folded behind D1's disclosure boundary" is struck: **#200 built no
   such boundary**, and #202 ruled the human surface *strict* rather than folded (below). D1's
-  guards apply unchanged: any bar is a distributional constant (process rule 5's `just calibrate`
+  guards apply unchanged: any bar is a distributional constant (process rule 5's `make calibrate`
   transfer check), earned against labelled negative queries in the eval corpus before it ships —
   and **a labelled relevant query the bar would cut is the search-side tripwire, asserted at zero
   with no headroom**.

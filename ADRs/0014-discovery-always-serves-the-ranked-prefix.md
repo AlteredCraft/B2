@@ -49,7 +49,7 @@ population is the anchor's centroid-nearest slice, pre-selected related.
 - **The first bake-off found none** (mutual-kNN reciprocity, GH #200): its admissible window is
   empty in both directions, and the two corpora's safe depths are the same *fraction* of their
   candidate pools rather than the same constant — a reciprocity depth is a rank in a population and
-  transfers no better than the cosine and z constants already retired. The block stays in `just eval`
+  transfers no better than the cosine and z constants already retired. The block stays in `make eval`
   reporting-only, to price the next candidate.
 
 ## Consequences

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Environment sanity check for local development — "stop 0" before `just app` works.
+# Environment sanity check for local development — "stop 0" before `make app` works.
 #
 # Walks the same order a fresh clone hits in the README's Build-and-run: Rust (needed for
 # every recipe) -> Node/npm + the Tauri CLI (desktop app only) -> the platform's native
 # webview toolchain -> optional extras (the embedding model; B2_VAULT_PATH is purely FYI —
-# `just app` works with or without it via the in-app vault switcher). Each check
+# `make app` works with or without it via the in-app vault switcher). Each check
 # prints pass/fail/warn with the fix inline, so a broken environment becomes a checklist
-# instead of a scavenger hunt — this script exists because `just app` failing with
+# instead of a scavenger hunt — this script exists because `make app` failing with
 # "error: no such command: `tauri`" gives no hint that the fix is a separate `cargo install`.
 #
-# Usage: `just doctor` (or run directly: scripts/doctor.sh). Exits 0 if every hard
+# Usage: `make doctor` (or run directly: scripts/doctor.sh). Exits 0 if every hard
 # requirement passes; warnings (optional extras) don't fail the run.
 
 set -uo pipefail
@@ -47,7 +47,7 @@ else
     warn "cargo found but not via rustup — rust-toolchain.toml (pins 1.96) won't auto-apply; if builds complain about MSRV, install rustup instead"
   fi
   # Running cargo here resolves (and, via rustup, auto-installs) the toolchain pinned in
-  # rust-toolchain.toml — the same thing `just build`/`just app` would do on first run, so
+  # rust-toolchain.toml — the same thing `make build`/`make app` would do on first run, so
   # doing it here just surfaces that cost up front instead of mid-build.
   if VERSION_OUT="$(cargo --version 2>&1)"; then
     pass "cargo resolves: $VERSION_OUT"
@@ -56,24 +56,17 @@ else
   fi
 fi
 
-# --- just itself (informational — you're running this via `just doctor` most likely) --------
-# Version floor is 1.27, where `[group(…)]` and `[doc(…)]` recipe attributes landed. The whole
-# justfile uses them (GH #87), so an older `just` fails to *parse* it — meaning `just doctor`
-# can't reach this check and only a direct `scripts/doctor.sh` run will see it. Worth naming
-# anyway: the parse error points at an attribute, not at the version that would accept it.
-section "just"
-if command -v just >/dev/null 2>&1; then
-  JUST_VERSION="$(just --version 2>/dev/null | awk '{print $2}')"
-  JUST_MAJOR="${JUST_VERSION%%.*}"
-  JUST_MINOR="${JUST_VERSION#*.}"; JUST_MINOR="${JUST_MINOR%%.*}"
-  if [[ "$JUST_MAJOR" =~ ^[0-9]+$ && "$JUST_MINOR" =~ ^[0-9]+$ ]] \
-     && (( JUST_MAJOR < 1 || (JUST_MAJOR == 1 && JUST_MINOR < 27) )); then
-    fail "just $JUST_VERSION is too old — the justfile uses [group]/[doc] recipe attributes (just 1.27+); upgrade with: brew upgrade just (or: cargo install just --force)"
-  else
-    pass "just found ($(just --version))"
-  fi
+# --- make itself (informational — you're running this via `make doctor` most likely) --------
+# No version floor: the Makefile targets GNU Make 3.81, what Apple's Xcode Command Line Tools
+# ship (and has for years, since Apple won't bundle GPLv3 Make 4.x) — so it works out of the box
+# on macOS with no separate install. The "Platform build toolchain" section below confirms the
+# CLT are present; this check just names `make` itself in case a non-CLT `make` is on PATH first
+# (e.g. a Homebrew `gmake` aliased over it) with something older or broken.
+section "make"
+if command -v make >/dev/null 2>&1; then
+  pass "make found ($(make --version 2>/dev/null | head -1))"
 else
-  warn "just not found — install with: brew install just (or: cargo install just). cargo/cargo run still work without it."
+  warn "make not found — it ships with the Xcode Command Line Tools (run: xcode-select --install) or Linux's build-essential; cargo/cargo run still work without it."
 fi
 
 # --- Node + npm (needed for ui/, the desktop frontend) ---------------------------------------
@@ -118,15 +111,15 @@ fi
 if [[ -d "ui/node_modules" ]] && [[ -n "$(ls -A ui/node_modules 2>/dev/null)" ]]; then
   pass "ui/node_modules present"
 else
-  fail "ui/ dependencies not installed — run: just ui-install"
+  fail "ui/ dependencies not installed — run: make ui-install"
 fi
 
-# --- Tauri CLI (the one that broke: `just app` needs `cargo tauri`) -------------------------
+# --- Tauri CLI (the one that broke: `make app` needs `cargo tauri`) -------------------------
 section "Tauri CLI"
 if TAURI_VERSION_OUT="$(cargo tauri --version 2>&1)"; then
   pass "cargo-tauri found ($TAURI_VERSION_OUT)"
   if [[ "$TAURI_VERSION_OUT" != *" 2."* ]]; then
-    warn "expected a 2.x Tauri CLI (this project's tauri.conf.json is schema v2); found: $TAURI_VERSION_OUT — if \`just app\` fails with a config error, run: cargo install tauri-cli --locked --force"
+    warn "expected a 2.x Tauri CLI (this project's tauri.conf.json is schema v2); found: $TAURI_VERSION_OUT — if \`make app\` fails with a config error, run: cargo install tauri-cli --locked --force"
   fi
 else
   fail "cargo-tauri not found — run: cargo install tauri-cli --locked"
@@ -164,44 +157,44 @@ esac
 if [[ -n "$MODEL_CACHE" && -f "$MODEL_CACHE/model.safetensors" ]]; then
   pass "default model (bge-base-en-v1.5) found in cache"
 else
-  warn "default model not found at the default cache path — this only checks the default location (a custom cache_dir in config.toml won't show up here); run: just init (idempotent — a no-op if already installed). Not needed if you run with B2_EMBEDDER=fake."
+  warn "default model not found at the default cache path — this only checks the default location (a custom cache_dir in config.toml won't show up here); run: make init (idempotent — a no-op if already installed). Not needed if you run with B2_EMBEDDER=fake."
 fi
 
-# --- Optional: coverage tooling (`just coverage*`) ------------------------------------------
-# Same reason this script exists at all: `just coverage` fails with cargo's bare
+# --- Optional: coverage tooling (`make coverage*`) ------------------------------------------
+# Same reason this script exists at all: `make coverage` fails with cargo's bare
 # "error: no such command: `llvm-cov`", which names neither of the two things that are
 # actually missing. Both are needed — the subcommand *and* the rustup component it drives
 # (the component is per-toolchain, so it can be absent even when the binary is installed).
-section "Coverage tooling (optional — needed by \`just coverage\`)"
+section "Coverage tooling (optional — needed by \`make coverage\`)"
 if cargo llvm-cov --version >/dev/null 2>&1; then
   pass "cargo-llvm-cov found ($(cargo llvm-cov --version 2>/dev/null))"
 else
-  warn "cargo-llvm-cov not found — run: cargo install cargo-llvm-cov (or: brew install cargo-llvm-cov). Only needed for \`just coverage\`."
+  warn "cargo-llvm-cov not found — run: cargo install cargo-llvm-cov (or: brew install cargo-llvm-cov). Only needed for \`make coverage\`."
 fi
 if command -v rustup >/dev/null 2>&1; then
   if rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'; then
     pass "llvm-tools-preview component installed"
   else
-    warn "rustup component llvm-tools-preview missing — run: rustup component add llvm-tools-preview. Only needed for \`just coverage\`."
+    warn "rustup component llvm-tools-preview missing — run: rustup component add llvm-tools-preview. Only needed for \`make coverage\`."
   fi
 fi
 
 # --- Informational: B2_VAULT_PATH --------------------------------------------------------
-# Not required either way: `just app` opens the in-app vault switcher when unset. This is
+# Not required either way: `make app` opens the in-app vault switcher when unset. This is
 # purely FYI, so it never counts as a warning.
 section "Vault (informational)"
 if [[ -n "${B2_VAULT_PATH:-}" ]]; then
-  info "B2_VAULT_PATH set: $B2_VAULT_PATH — just app will open this vault directly"
+  info "B2_VAULT_PATH set: $B2_VAULT_PATH — make app will open this vault directly"
 else
-  info "B2_VAULT_PATH not set — just app will open the in-app vault switcher (or set it to jump straight to a vault)"
+  info "B2_VAULT_PATH not set — make app will open the in-app vault switcher (or set it to jump straight to a vault)"
 fi
 
 # --- Summary ---------------------------------------------------------------------------------
 section "Summary"
 if [[ "$FAILS" -eq 0 ]]; then
-  printf '  %sAll required checks passed%s (%d warning(s)). Try: just app\n' "$C_GREEN" "$C_RESET" "$WARNS"
+  printf '  %sAll required checks passed%s (%d warning(s)). Try: make app\n' "$C_GREEN" "$C_RESET" "$WARNS"
   exit 0
 else
-  printf '  %s%d check(s) failed%s, %d warning(s). Fix the [FAIL] items above, then re-run: just doctor\n' "$C_RED" "$FAILS" "$C_RESET" "$WARNS"
+  printf '  %s%d check(s) failed%s, %d warning(s). Fix the [FAIL] items above, then re-run: make doctor\n' "$C_RED" "$FAILS" "$C_RESET" "$WARNS"
   exit 1
 fi

@@ -3,7 +3,7 @@
 // others.
 //
 // Two jobs. The first is that B2's own chords don't conflict: `conflicts(DEFAULT_BINDINGS)`
-// must be empty, and because `npm test` runs inside both `just check` and `just ci`, that
+// must be empty, and because `npm test` runs inside both `make check` and `make ci`, that
 // assertion *is* the gate. The second is proving the gate can fail — a checker that has
 // only ever seen a clean table is indistinguishable from one that returns `[]`
 // unconditionally, so the interesting cases below are synthetic tables built to clash.

@@ -105,7 +105,7 @@
   <p>You'll need a <b>Rust toolchain</b> (<a href="https://rustup.rs">rustup.rs</a>) to build the
   <code>b2</code> binary — B2 ships as source today, as one static binary. macOS and Linux are the
   tested platforms. For the <b>desktop app</b> (its own section near the end) add <b>Node + npm</b> and the
-  <b>Tauri CLI</b>; a <code>just doctor</code> in the checkout checks all of it and prints the fix for
+  <b>Tauri CLI</b>; a <code>make doctor</code> in the checkout checks all of it and prints the fix for
   anything missing.</p>
 
   <p>One thing is <b>optional</b>, and it's <em>local</em> — B2 makes no network calls and needs no
@@ -408,8 +408,8 @@ Expanding review intervals beat massed practice for long-term recall.</pre>
   what may be written to your notes. Open the vault you just built and it's all there; run both against it
   and they stay in step.</p>
 
-<pre><span class="p">$</span> <span class="k">just</span> doctor              <span class="c"># checks Node, npm, the Tauri CLI, the platform toolchain</span>
-<span class="p">$</span> <span class="k">B2_VAULT_PATH</span>=~/vault <span class="k">just</span> app</pre>
+<pre><span class="p">$</span> <span class="k">make</span> doctor              <span class="c"># checks Node, npm, the Tauri CLI, the platform toolchain</span>
+<span class="p">$</span> <span class="k">B2_VAULT_PATH</span>=~/vault <span class="k">make</span> app</pre>
 
   <p>On first launch with nothing remembered, the window opens with no vault selected — click the vault
   switcher and pick a folder. After that it reopens whatever you had open last, and

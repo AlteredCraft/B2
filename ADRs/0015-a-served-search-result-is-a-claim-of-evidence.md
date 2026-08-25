@@ -51,4 +51,4 @@ defect was structural, not a loose threshold.
   family is vacuous (2–23 of the 367 rows an oracle fold reaches), because the fused order is not
   an evidence order and D1 rightly forbids a fold from re-sorting it. The tail complaint is an
   ordering problem — standing evidence for the reranker seam, not for a disclosure rule. The
-  bake-off re-derives this verdict every `just eval` run.
+  bake-off re-derives this verdict every `make eval` run.

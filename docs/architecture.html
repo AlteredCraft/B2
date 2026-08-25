@@ -385,7 +385,7 @@ $ b2 search <span class="s">"how does forgetting affect recall"</span>
   <span class="mono">graph_filtered_search_restricts_to_reachable_notes</span> excludes a text-matching note
   disconnected from the anchor. <b>Honest scope:</b> under the fake embedder the vector half isn't semantic, so
   these prove the <em>plumbing</em>, not model quality — that's the out-of-CI <b>eval harness</b>
-  (<code>just eval</code>: hand-labelled retrieval + discovery corpus, BM25/vec-only/hybrid columns, suppression
+  (<code>make eval</code>: hand-labelled retrieval + discovery corpus, BM25/vec-only/hybrid columns, suppression
   gates; <span class="mono">docs/evals/README.md</span> is the overview, the git history and the
   issue that drove each change are the decision log).</div>
 </section>
@@ -712,7 +712,7 @@ b2_relations:
     </table>
     <p style="margin:12px 0 0;font-size:12.5px;color:var(--muted)">Run under <code>cargo test</code> (rustc 1.96,
     the fake embedder), alongside the frontend's own 493 checks (<code>ui/</code>, node's test runner) — both
-    gates are one recipe, <code>just ci</code>, which is verbatim what CI runs. <b>Nothing is
+    gates are one target, <code>make ci</code>, which is verbatim what CI runs. <b>Nothing is
     <code>#[ignore]</code>d</b>: a check that genuinely needs the real model lives in the eval harness, which
     runs on demand and actually runs, rather than hiding in the suite behind a flag nobody passes. Open any file
     in the right column; it is the ground truth this page paraphrases.</p>
@@ -730,11 +730,11 @@ b2_relations:
     <ul class="tidy">
       <li><b>Semantic quality in CI.</b> The engine suite runs on the deterministic fake embedder, so it proves
       plumbing, not ranking quality. The real model is measured by the out-of-CI <b>eval harness</b>
-      (<code>just eval</code>): a hand-labelled retrieval + discovery corpus scoring BM25 / vector-only / hybrid
+      (<code>make eval</code>): a hand-labelled retrieval + discovery corpus scoring BM25 / vector-only / hybrid
       note ranks, passage ranks, and per-mate discovery ranks (with a zero-empty-panes assertion on a second,
       deliberately single-domain fixture, enforced in the exit code) — plus a model-free rank-stability probe
-      (<code>just stability</code>) for what a small corpus is structurally blind to, and a real-vault
-      calibration command (<code>just calibrate</code>) for what no synthetic corpus can claim alone. Every
+      (<code>make stability</code>) for what a small corpus is structurally blind to, and a real-vault
+      calibration command (<code>make calibrate</code>) for what no synthetic corpus can claim alone. Every
       shipped verdict — porter stemming (#157), the chunker config (#44), the discovery floor in (#150) and
       back out (#196/#197) — traces to a recorded run on the issue that drove it and the commit that shipped
       it; <span class="mono">docs/evals/README.md</span> is the overview. Model quality never flakes CI.</li>

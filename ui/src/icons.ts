@@ -23,7 +23,7 @@ import { escapeHtml } from "./escape.ts";
 import { ICON_BODIES } from "./icons.gen.ts";
 
 /** Every vendored icon. A typo is a type error; adding one is a name in the generator's
- *  manifest plus `just icons`. */
+ *  manifest plus `make icons`. */
 export type IconName = keyof typeof ICON_BODIES;
 
 export interface IconOptions {

@@ -32,14 +32,14 @@
 //        decision about strength.
 //
 // Which numbers those are today is a measurement, not a constant of nature:
-// `just eval`'s **discovery z calibration** block dumps the populations on
-// every run (`results.jsonl`'s `discovery_z`), and `just calibrate` reads the
+// `make eval`'s **discovery z calibration** block dumps the populations on
+// every run (`results.jsonl`'s `discovery_z`), and `make calibrate` reads the
 // same bands on any real vault. Read them there before moving the two numbers
 // below — the lesson of GH #187 is that a measured window frozen into a
 // comment goes stale silently, so this one cites its instrument instead of
 // quoting a window as timeless. A known open question rides on them: on a
 // dense single-domain vault every z compresses (GH #196), so the bands can
-// read uniformly low there — measured by `just calibrate`'s band histogram
+// read uniformly low there — measured by `make calibrate`'s band histogram
 // (GH #197's A6), with the re-reference decision deferred to Phase 2.
 
 /** How many candidates a note needs before any of them can be graded — the UI-side

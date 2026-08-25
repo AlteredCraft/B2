@@ -25,43 +25,43 @@ constantly (`data-model.md §2`, `index-engine.md §6`, invariant ids like `S2`,
 
 ## Commands
 
-`just` (no args) lists every recipe with a one-line summary, grouped setup / dev / gates / coverage /
+`make` (no args) lists every target with a one-line summary, grouped setup / dev / gates / coverage /
 model — that listing is the command reference; what follows is what it can't tell you.
 
 **The two gates.** Same commands, same order, whether you run them or GitHub does (ADR-0018):
 
 ```bash
-just check     # FAST (~3s warm): fmt-check → clippy -D warnings → engine suite → ui/ suite.
+make check     # FAST (~3s warm): fmt-check → clippy -D warnings → engine suite → ui/ suite.
                # The loop you run while working. No network, no desktop build.
-just ci        # COMPLETE (~18s warm): no-tokio → ui-build → fmt-check → clippy (whole workspace)
+make ci        # COMPLETE (~18s warm): no-tokio → ui-build → fmt-check → clippy (whole workspace)
                # → cargo suite → ui/ suite → audit. Verbatim what CI runs. Run before pushing.
 ```
 
-**Test suites.** `just test` = `cargo test -p b2-core`, the fast deterministic model-free engine
-suite (the bulk of the weight). `just test-ui` = the `ui/` pure-logic suite (node's own runner over
+**Test suites.** `make test` = `cargo test -p b2-core`, the fast deterministic model-free engine
+suite (the bulk of the weight). `make test-ui` = the `ui/` pure-logic suite (node's own runner over
 `src/**/*.test.ts`, globbed recursively, running off the source with types stripped). Narrower runs:
 `cargo test -p b2-core --test discover` (one file), `cargo test -p b2-core one_note_reindex` (name
-filter). Whole-workspace `cargo test` compiles candle and embeds `ui/dist` — run `just ui-build` once
+filter). Whole-workspace `cargo test` compiles candle and embeds `ui/dist` — run `make ui-build` once
 first.
 
-**Out of CI, real model** (ADR-0005, ADR-0013): `just init` provisions bge-base-en-v1.5 into the XDG
-cache; `just eval` / `eval-sweep` / `eval-stemmer` / `eval-metal` / `eval-chat` score quality;
-`just stability` is the model-free rank probe (`stability-bless` accepts an *intended* ranking
-change — it records what is, never what is better); `just calibrate <vault>` is the real-vault
+**Out of CI, real model** (ADR-0005, ADR-0013): `make init` provisions bge-base-en-v1.5 into the XDG
+cache; `make eval` / `eval-sweep` / `eval-stemmer` / `eval-metal` / `eval-chat` score quality;
+`make stability` is the model-free rank probe (`stability-bless` accepts an *intended* ranking
+change — it records what is, never what is better); `make calibrate VAULT=<vault>` is the real-vault
 transfer check any distributional constant owes. Grounded chat needs a model server —
 `ollama serve` + `ollama pull llama3.2`, or `B2_LLM=fake` for the deterministic provider.
 
 **Coverage** needs both `cargo-llvm-cov` and `rustup component add llvm-tools-preview` (per
 toolchain). Without them the recipes die on cargo's bare "no such command: `llvm-cov`", which names
-neither — `just doctor` checks both and prints the fix.
+neither — `make doctor` checks both and prints the fix.
 
 **Metal** is a *build* switch, not runtime: `cargo run -p b2-cli --features metal -- reindex`, and
-`just app` auto-selects it on Apple Silicon (`just app-cpu` forces CPU). Flipping device re-embeds
+`make app` auto-selects it on Apple Silicon (`make app-cpu` forces CPU). Flipping device re-embeds
 the vault, because the device is part of the embedding space's identity (ADR-0007).
 
-**Desktop path quirk:** `just app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a
+**Desktop path quirk:** `make app` runs `cargo tauri dev` with cwd `crates/b2-desktop/`, so a
 *relative* `B2_LOG_FILE` lands under that crate dir. Pass an absolute path:
-`B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes just app`.
+`B2_LOG_FILE=$PWD/logs/desktop.jsonl B2_VAULT_PATH=~/notes make app`.
 
 ### Environment variables
 
@@ -133,7 +133,7 @@ nothing; every write is the mechanics of a command the human invoked.
   Tauri IPC (`ui/src/api.ts` is the seam). Rendering is a **trust boundary** (ADR-0016). Chords live
   in one registry (ADR-0017). Fenced code is highlighted from CodeMirror's own grammar registry
   through one resolver (`ui/src/highlight.ts`), so a fence looks the same read or edited; icons are
-  one vendored Bootstrap Icons subset generated into `icons.gen.ts` (`just icons`; `npm test` runs
+  one vendored Bootstrap Icons subset generated into `icons.gen.ts` (`make icons`; `npm test` runs
   the generator in `--check` mode first, so a stale generated file fails the gate). Layout, theme,
   pane widths and rebound chords persist in `localStorage` — a viewing choice, never vault state —
   and the loader re-judges what it reads.
@@ -218,7 +218,7 @@ one place a model swap is detectable, device included — a swap drops both tabl
   brittle fixture, or a weakened assertion. A check that genuinely needs the real model belongs in the
   eval harness, where it actually runs (the batch ≡ single embedding check is the worked example).
 - **A test's name is part of its contract.** If the name claims more than the body asserts, the suite
-  reads as covering ground it doesn't. `just coverage` finds the other half of that problem: a line
+  reads as covering ground it doesn't. `make coverage` finds the other half of that problem: a line
   the suite never executes.
 - **Shared test scaffolding lives in `crates/b2-core/tests/common/mod.rs`** — fixture setup
   (`reindexed_vault` / `opened_vault` / `ingest_golden`) and the read-back shims (`index_conn`,

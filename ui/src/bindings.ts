@@ -367,7 +367,7 @@ export const DEFAULT_BINDINGS = [
 ] as const satisfies readonly Binding[];
 
 /** Every command id in the table, as a type — so a typo in main.ts or shortcuts.ts is a
- *  compile error (`tsc --noEmit` runs in `npm run build`, which `just ci` runs) rather
+ *  compile error (`tsc --noEmit` runs in `npm run build`, which `make ci` runs) rather
  *  than a chord that silently stops working. */
 export type BindingId = (typeof DEFAULT_BINDINGS)[number]["id"];
 
@@ -679,7 +679,7 @@ export function scopeContains(outer: Scope | string, inner: Scope | string): boo
 /** Two commands in the same scope that answer to the same keystroke. Which one runs
  *  depends on the order of the handler's branches, which is not a contract anyone can
  *  read — so this is the error tier, and bindings.test.ts fails the suite on a non-empty
- *  result. That check is the gate: `npm test` runs in both `just check` and `just ci`.
+ *  result. That check is the gate: `npm test` runs in both `make check` and `make ci`.
  *
  *  Keystrokes rather than chords, because the two aren't the same question: `Any-Escape`
  *  and `Escape` are different chords that the same key press satisfies. */
