@@ -3122,18 +3122,35 @@ fn tail_constraint<'a>(
                         }
                     }
                 }
+                // The cosine arms read the row's cosine through a finiteness
+                // filter (PR #212 review): a NaN would sail through `c < e`
+                // comparisons as silently-true-nowhere — worse, `is_none_or`
+                // admits the FIRST row unconditionally, so a NaN first row
+                // would seed the edge. A non-finite reading is *no reading*,
+                // and the honest arm for that is `dead`, with the row named —
+                // never a silent skip that reports the family unconstrained.
                 TailRule::LexOrCos => {
                     if row.bm25_rank.is_none() {
-                        // A dense-only keep-prefix row always has a cosine —
-                        // a served row is in at least one list.
-                        let c = row.cos.unwrap_or(f64::NEG_INFINITY);
-                        if out.edge.is_none_or(|e| c < e) {
-                            out.edge = Some(c);
-                            out.edge_row = Some((name.to_string(), row.path.clone()));
+                        match row.cos.filter(|c| c.is_finite()) {
+                            // A served row is in at least one list, so a
+                            // dense-only row carries a cosine unless it is
+                            // non-finite — either way, no finite reading means
+                            // this row can pass at no bar.
+                            None => {
+                                if out.dead.is_none() {
+                                    out.dead = Some((name.to_string(), row.path.clone()));
+                                }
+                            }
+                            Some(c) => {
+                                if out.edge.is_none_or(|e| c < e) {
+                                    out.edge = Some(c);
+                                    out.edge_row = Some((name.to_string(), row.path.clone()));
+                                }
+                            }
                         }
                     }
                 }
-                TailRule::Cos => match row.cos {
+                TailRule::Cos => match row.cos.filter(|c| c.is_finite()) {
                     None => {
                         if out.dead.is_none() {
                             out.dead = Some((name.to_string(), row.path.clone()));
@@ -3146,7 +3163,7 @@ fn tail_constraint<'a>(
                         }
                     }
                 },
-                TailRule::CosDrop => match row.cos {
+                TailRule::CosDrop => match row.cos.filter(|c| c.is_finite()) {
                     None => {
                         if out.dead.is_none() {
                             out.dead = Some((name.to_string(), row.path.clone()));

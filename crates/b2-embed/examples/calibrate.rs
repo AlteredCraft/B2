@@ -588,7 +588,10 @@ fn print_search_transfer(
             lex_hidden.push((p, own, first));
         }
         for row in prefix {
-            match row.cos {
+            // Finiteness-filtered (PR #212 review): a NaN cosine is *no
+            // reading*, and `is_none_or` would otherwise let a NaN first row
+            // seed an edge. It lands in the dead arm, named, never skipped.
+            match row.cos.filter(|c| c.is_finite()) {
                 None => {
                     if cos_dead.is_none() {
                         cos_dead = Some((p, row));
@@ -658,7 +661,16 @@ fn print_search_transfer(
         ),
         None => bar_line("cos ≥ c", cos_edge, false),
     }
-    bar_line("lex-or-cos ≥ c", lexcos_edge, false);
+    match cos_dead {
+        // A dead row that is also dense-only kills the two-signal family too:
+        // no lexical rank and no finite cosine passes at no bar.
+        Some((p, row)) if row.bm25_rank.is_none() => println!(
+            "    lex-or-cos ≥ c              DEAD — {} → {} is dense-only with no finite cosine",
+            truncate(&p.query, 32),
+            row.path
+        ),
+        _ => bar_line("lex-or-cos ≥ c", lexcos_edge, false),
+    }
     match cos_dead {
         Some(_) => println!("    cos ≥ best − δ              DEAD — same row as the cos family"),
         None => bar_line("cos ≥ best − δ", drop_edge, true),

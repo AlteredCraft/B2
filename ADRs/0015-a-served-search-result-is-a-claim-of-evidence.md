@@ -1,7 +1,7 @@
 # ADR-0015 — A served search result is a claim of evidence
 
 - **Status:** Accepted · 2026-08-22
-- **Refs:** invariants D2 · GH #201, #202
+- **Refs:** invariants D2 · GH #201, #202, #206
 
 ## Context
 
