@@ -222,9 +222,9 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
     because the queries it then has to rescue are the ones with the weakest semantic evidence too. The
     two constants are placed inside a **joint** band, never tuned one at a time.
   - The constants are **distributional**, so they are keyed to `embed_model_id` (M2 — a swap
-    invalidates them; the device suffix shares the reading and `just eval-metal` is where that
+    invalidates them; the device suffix shares the reading and `make eval-metal` is where that
     assumption is re-checked). They live in `search::BGE_BASE_EVIDENCE_BAR` and their *justification*
-    is re-derived on every `just eval` run — never frozen into a comment (ADR-0013).
+    is re-derived on every `make eval` run — never frozen into a comment (ADR-0013).
   - The verdict reaches an adapter through `Vault::search_evidence`, which serves **exactly** the rows
     `search` does, in the same order — three-state, and the three states are three behaviours
     (ADR-0015). `search_evidence_excluding` (`b2 search --exclude`) is the same read minus a
@@ -271,7 +271,7 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
   code-literal queries) did not move. Stemming remains a real trade — Porter is English-only, and a
   vault holds code, identifiers, and proper nouns — so the retired arm stays measurable:
   `Vault::rebuild_fts` swaps the tokenizer over identical chunk rows and vectors (nothing re-chunks or
-  re-embeds), and `just eval-stemmer` scores the unstemmed ablation beside every default run.
+  re-embeds), and `make eval-stemmer` scores the unstemmed ablation beside every default run.
 - **Does brute force scale to B2?** Comfortably. A personal vault of 10k notes → ~50–100k chunks;
   brute-force cosine over ~100k × 768-dim float32 vectors is single-digit to low-tens of milliseconds.
   We are nowhere near the regime where ANN matters; if a vault ever is, int8/binary quantization and
@@ -302,7 +302,7 @@ changes whether the precision is worth it, not the reranker's cost.
 more chunks than that, neither signal is truncated and a candidate-width change prints bit-identical
 numbers while genuinely reordering a real vault
 ([GH #141](https://github.com/AlteredCraft/B2/issues/141)). Score *relevance* on the labelled corpus,
-but measure a width change with `just stability` over a vault big enough for the pool to bind. That
+but measure a width change with `make stability` over a vault big enough for the pool to bind. That
 gate has already ruled once: [#140](https://github.com/AlteredCraft/B2/pull/140) widened the passage
 view as plumbing, the eval printed bit-identical numbers, the probe found 10 of 10 top-4 lists
 changed, and [#142](https://github.com/AlteredCraft/B2/issues/142) returned it — **the instrument that

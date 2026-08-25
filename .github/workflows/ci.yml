@@ -1,17 +1,18 @@
-# The repo's one enforcement point (GH #87 §2). Everything it *checks* lives in `just ci`, not
+# The repo's one enforcement point (GH #87 §2). Everything it *checks* lives in `make ci`, not
 # here — this file is only the environment that recipe needs. That split is deliberate: a check
 # re-specified in YAML is a check that can drift from the one you run locally, and until this
-# workflow existed CLAUDE.md's "what CI runs" was aspirational. Now `just ci` is literally it.
+# workflow existed CLAUDE.md's "what CI runs" was aspirational. Now `make ci` is literally it.
 #
 # Runner: macos-latest. B2 is developed and shipped on macOS only — Metal is macOS-only, and the
-# Xcode Command Line Tools that `b2-desktop`'s WebView links against are preinstalled there, so
-# the whole workspace (including the Tauri host) builds with no platform setup step at all. A
-# Linux runner would need the webkit2gtk/libsoup apt block and would red-build on portability
-# breaks nobody ships against.
+# Xcode Command Line Tools that `b2-desktop`'s WebView links against are preinstalled there (and
+# supply `make`, so no separate task-runner install step is needed either), so the whole
+# workspace (including the Tauri host) builds with no platform setup step at all. A Linux
+# runner would need the webkit2gtk/libsoup apt block and would red-build on portability breaks
+# nobody ships against.
 #
 # Model-free by construction, so no `b2 init` step and no model download: `b2-core` never links
 # candle, and `b2-cli`'s tests spawn the binary under `B2_EMBEDDER=fake` (crates/b2-cli/tests/cli.rs).
-# The real-model work — `just eval` and friends — is non-deterministic and stays out of CI on
+# The real-model work — `make eval` and friends — is non-deterministic and stays out of CI on
 # purpose (CLAUDE.md, "Keep `cargo test` fast, deterministic, and model-free").
 
 name: CI
@@ -36,7 +37,7 @@ env:
 
 jobs:
   ci:
-    name: just ci
+    name: make ci
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -60,15 +61,14 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       # `npm ci` — not `npm install` — because CI is where lockfile drift should be an error
-      # rather than a silent rewrite. `just ci`'s own `ui-install` prerequisite is a no-op after
+      # rather than a silent rewrite. `make ci`'s own `ui-install` prerequisite is a no-op after
       # this, and the tree-clean assertion below catches it if it turns out not to be.
       - name: Install frontend dependencies
         run: npm --prefix ui ci
 
-      - uses: extractions/setup-just@v4
-
-      # The gate. Same command, same stages, same order as a local run.
-      - run: just ci
+      # The gate. Same command, same stages, same order as a local run. No separate task-runner
+      # install step: `make` is already on the runner (macos-latest ships Xcode CLT).
+      - run: make ci
 
       # Nothing above is allowed to edit a tracked file. This catches two real invariants at
       # once: `ui-install` rewriting package-lock.json (drift between package.json and the

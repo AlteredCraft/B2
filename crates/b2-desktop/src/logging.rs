@@ -8,7 +8,7 @@
 //! Knobs, as the CLI: stderr by default, `B2_LOG_FILE=<path>` in **append** mode instead,
 //! `B2_LOG` a tracing filter honored verbatim. With none of the three set, no subscriber is
 //! installed. Relative `B2_LOG_FILE` paths resolve against the process CWD — under
-//! `just app` that is `crates/b2-desktop/`, so prefer an absolute path.
+//! `make app` that is `crates/b2-desktop/`, so prefer an absolute path.
 //!
 //! **The implied default is scoped, and both adapters scope it the same way:** with no
 //! explicit `B2_LOG`, `B2_DEBUG`/`B2_LOG_FILE` imply **`b2=debug`**, never a bare `debug`.

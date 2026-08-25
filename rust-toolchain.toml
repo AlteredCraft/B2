@@ -7,5 +7,5 @@
 channel = "1.96"
 profile = "minimal"
 # `minimal` omits rustfmt + clippy; name them so the repo's `cargo fmt` / `cargo
-# clippy` gates (and `just check`) work on a freshly auto-installed toolchain.
+# clippy` gates (and `make check`) work on a freshly auto-installed toolchain.
 components = ["rustfmt", "clippy"]

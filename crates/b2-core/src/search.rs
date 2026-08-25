@@ -357,7 +357,7 @@ impl EvidenceBar {
     /// their last bits — but the bar is a claim about a distribution, and
     /// float-precision noise is not a distributional change. That is an assumption the
     /// harness re-checks rather than one this comment asserts: the bake-off re-derives
-    /// the admissible window on every run, and `just eval-metal` runs it on the GPU build.
+    /// the admissible window on every run, and `make eval-metal` runs it on the GPU build.
     pub fn for_model(model_id: &str) -> Option<Self> {
         let base = model_id.split_once('@').map_or(model_id, |(id, _)| id);
         match base {
@@ -369,7 +369,7 @@ impl EvidenceBar {
 
 /// The evidence bar for the shipped model, `BAAI/bge-base-en-v1.5` (ADR-0015).
 ///
-/// Read from the search evidence bake-off and re-derived on every `just eval` run rather
+/// Read from the search evidence bake-off and re-derived on every `make eval` run rather
 /// than quoted here — deliberately no numbers in this comment, which is the mistake
 /// GH #187 named, where a floor's docstring froze the day's readings.
 ///

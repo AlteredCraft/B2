@@ -117,11 +117,11 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // A bare `--` is dropped, not parsed. `just stability --verbose` forwards the
-    // flag straight through (measured on just 1.58), but the habit of typing
-    // `just stability -- --verbose` is common and just forwards *that* separator
-    // into the recipe verbatim — the example would otherwise reject its own
-    // documented invocation on a literal `--`.
+    // A bare `--` is dropped, not parsed, defensively. `make stability ARGS=--verbose`
+    // needs no `--` of its own (`cargo run ... -- $(ARGS)` already supplies the one
+    // separator), but the habit of typing one anyway — e.g. pasting a raw
+    // `cargo run ... -- --verbose` invocation into ARGS — is common enough that the
+    // example should not reject its own documented usage on a literal `--`.
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--").collect();
     let bless = has_flag(&args, "--bless");
     let real_model = has_flag(&args, "--model");
@@ -159,7 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Work on a throwaway copy: indexing writes `.b2/`, and the committed fixtures
     // are never ours to mutate — the same isolation the integration tests and
-    // `just compare-device` use. (Indexing no longer writes to the vault itself at
+    // `make compare-device` use. (Indexing no longer writes to the vault itself at
     // all — W1, GH #170 — so the copy is now about `.b2/` alone.)
     let tmp = tempfile::TempDir::new()?;
     let root = tmp.path().join("vault");
@@ -587,7 +587,7 @@ fn write_baseline(
              *movement* — any ranking change (candidate width, the RRF constant, chunking, resolution) shows up here \
              as drift rather \
              than being inferred. It scores nothing: the corpus is unlabelled, so drift means different, \
-             never worse. Regenerate with `just stability-bless` once a ranking change is the intended one."
+             never worse. Regenerate with `make stability-bless` once a ranking change is the intended one."
         ),
         vault: DEFAULT_VAULT.to_string(),
         embedder: "fake".to_string(),

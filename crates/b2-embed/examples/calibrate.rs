@@ -7,11 +7,11 @@
 //! until transfer-checked on a real vault**.
 //!
 //! ```console
-//! just calibrate ~/notes                 # per-anchor lines + the summary block
-//! just calibrate ~/notes --json          # the same reading as one JSON object
-//! just calibrate ~/notes --limit 5       # simulate a 5-card pane
-//! just calibrate ~/notes --leader-z 1.5 --member-z 1.0   # replay a different gate
-//! just calibrate ~/notes --mutual-k 5    # replay the fold at a different depth
+//! make calibrate VAULT=~/notes                                        # per-anchor lines + the summary block
+//! make calibrate VAULT=~/notes ARGS=--json                            # the same reading as one JSON object
+//! make calibrate VAULT=~/notes ARGS="--limit 5"                       # simulate a 5-card pane
+//! make calibrate VAULT=~/notes ARGS="--leader-z 1.5 --member-z 1.0"   # replay a different gate
+//! make calibrate VAULT=~/notes ARGS="--mutual-k 5"                    # replay the fold at a different depth
 //! ```
 //!
 //! Beside the retired z gate it replays the two **default-disclosure** candidates ADR-0014
@@ -54,7 +54,7 @@ const MIN_POPULATION: usize = 12;
 /// The strength-band landmarks the desktop paints (`ui/src/strength.ts`, GH #182):
 /// `●●●` at or above the labelled-mate population's upper quartile, `●●○` at or
 /// above the retired leader bar. Restated constants, not imports — the bands are
-/// UI copy, and `just eval`'s calibration block is where their values are
+/// UI copy, and `make eval`'s calibration block is where their values are
 /// re-measured.
 const BAND_STRONG_Z: f64 = 2.52;
 const BAND_CLEAR_Z: f64 = 1.96;
@@ -192,7 +192,7 @@ fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
 /// folds the default view at the longest prefix scoring at or above it.
 ///
 /// Priceable only where that population exists, which is why it lives here rather than in
-/// `just eval`: **both eval corpora are link-free by construction**. Its pair score is the
+/// `make eval`: **both eval corpora are link-free by construction**. Its pair score is the
 /// same statistic discovery ranks on, computed over the *linked* pairs discovery never scores
 /// (the 1-hop exclusion removes exactly them). The bar is the population's **lower quartile**
 /// — a candidate at least as related as the weaker quarter of what this human already linked
@@ -310,7 +310,7 @@ const NONSENSE: [&str; 4] = [
 /// a re-run on an unchanged vault reads the same queries.
 const MAX_TITLE_QUERIES: usize = 400;
 
-/// One query's transfer reading — the same two absolute signals `just eval`'s
+/// One query's transfer reading — the same two absolute signals `make eval`'s
 /// bake-off judges, read on a real vault instead of a labelled corpus.
 struct SearchProbe {
     query: String,
@@ -546,7 +546,7 @@ fn print_search_transfer(
     println!("    the bar serves {served}/{}", negatives.len());
 
     // ---- The per-hit tail families (GH #206), priced on this vault. ----------
-    // `just eval`'s tail bake-off derives each family's admissible window from
+    // `make eval`'s tail bake-off derives each family's admissible window from
     // the labelled corpora; this is the reading that says whether such a window
     // survives a real vault (process rule 5 — owed even by the parameterless
     // family, whose "lexical half never ranked it" signal is partly a fact
@@ -676,7 +676,7 @@ fn print_search_transfer(
         None => bar_line("cos ≥ best − δ", drop_edge, true),
     }
     println!(
-        "    → read these against the corpus windows in `just eval`'s tail bake-off: a family \
+        "    → read these against the corpus windows in `make eval`'s tail bake-off: a family \
          ships only"
     );
     println!("      where the joint corpus edge also hides nothing here (process rule 5)");
@@ -797,7 +797,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Candidate 2 of the same bake-off (GH #200): the authored-edge reference
     // bar, priceable only where the human has committed edges — which is why it
-    // is measured here and not in `just eval` (both eval corpora are link-free
+    // is measured here and not in `make eval` (both eval corpora are link-free
     // by construction, so the rule has no population there).
     let edge_bar = EdgeBar::read(&vault, &conn)?;
 

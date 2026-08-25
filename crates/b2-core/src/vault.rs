@@ -66,7 +66,7 @@ fn note_hit_pool(limit: usize) -> usize {
 ///
 /// Deliberately *not* `search`'s 3× (GH #142): RRF scores `Σ 1/(k + rank + 1)`, so a
 /// wider pool returns different answers, not merely more of them — 10 of 10 probes
-/// changed their top-4 passages across exactly that step (`just stability`). Wider
+/// changed their top-4 passages across exactly that step (`make stability`). Wider
 /// may well be better; the labelled corpus is too small to price it (GH #141), so
 /// width stays at the conservative setting until an eval can (ADR-0013).
 fn chunk_hit_pool(limit: usize) -> usize {
@@ -360,7 +360,7 @@ pub struct SearchEvidenceView {
 /// and **no tail fold shipped**: the fused order is not an evidence order, so every
 /// admissible prefix cut proved vacuous, and the tail complaint is ordering work
 /// (the reranker seam), not disclosure work. This stays an instrument reading,
-/// re-priced on every `just eval` run.
+/// re-priced on every `make eval` run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EvidencedResult {
     #[serde(flatten)]
@@ -452,7 +452,7 @@ pub struct SimilarView {
     /// never contradicts the ranking. It **gates nothing** (ADR-0014): the band is a
     /// within-list grading, never a verdict on existence. The unit is load-bearing —
     /// a band calibrated in the retired centroid unit grades every card down
-    /// (GH #182) — so a surface reads its landmarks off `just eval`'s calibration
+    /// (GH #182) — so a surface reads its landmarks off `make eval`'s calibration
     /// block. `None` when no statistic was computed (a fake-embedded space, a pool
     /// under the statistics minimum, or zero variance), which is the adapters' cue
     /// to say the list is *ungraded* rather than let bare cards read as uniformly

@@ -1,7 +1,7 @@
 # ADR-0011 — No B2 code is async; no B2 crate starts a runtime
 
 - **Status:** Accepted · 2026-08-14
-- **Refs:** GH #154, #174 · `just no-tokio`
+- **Refs:** GH #154, #174 · `make no-tokio`
 
 ## Context
 
@@ -17,7 +17,7 @@ pulled reqwest → hyper → tokio into the `b2` binary to serve a path nothing 
 - `b2-llm` is a hand-rolled sync OpenAI-compatible SSE client over `ureq`; `hf-hub` is taken
   `default-features = false` so B2 uses its sync API (TLS is rustls + webpki-roots, the same stack
   `b2-llm` uses).
-- **`just no-tokio` is a gate** — it reads the lockfile, compiles nothing, and leads `just ci`
+- **`make no-tokio` is a gate** — it reads the lockfile, compiles nothing, and leads `make ci`
   because a dependency added with default features on can restore the whole async HTTP stack while
   every other stage stays green.
 - Do not introduce `async` (or generics, traits, macros) without a concrete need.

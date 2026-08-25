@@ -12,16 +12,16 @@ the gate slow, networked, and flaky.
 ## Decision
 
 - **Quality never enters CI.** Real-model work lives behind `b2 init` and the harness under
-  `crates/b2-embed/evals/`, run on demand (`just eval`, `just eval-sweep`, `just eval-stemmer`,
-  `just eval-chat`, `just eval-metal`).
-- Two halves that rule together: `just eval` scores **quality** (it can say *better*) on labelled
-  corpora; `just stability` is a model-free rank probe on a ~200-note fixture that scores
+  `crates/b2-embed/evals/`, run on demand (`make eval`, `make eval-sweep`, `make eval-stemmer`,
+  `make eval-chat`, `make eval-metal`).
+- Two halves that rule together: `make eval` scores **quality** (it can say *better*) on labelled
+  corpora; `make stability` is a model-free rank probe on a ~200-note fixture that scores
   **movement** (it can only say *different*) — and sees candidate-width changes a small corpus is
   structurally blind to.
 - **Constants in code, measurements in the harness.** A shipped threshold's justification is
   **re-derived on every run** by the harness rather than quoted in a comment, because a number
   frozen into a comment goes stale the first time the corpus grows a shape it never saw.
-- **A distributional constant owes a transfer check** (`just calibrate <vault>`) on a real vault
+- **A distributional constant owes a transfer check** (`make calibrate VAULT=<vault>`) on a real vault
   before it ships: a constant read off one corpus's distribution describes that corpus.
 - `#[ignore]` is forbidden — a check that genuinely needs the real model belongs in the harness,
   where it actually runs.

@@ -29,7 +29,7 @@ records say *why* an entry reads the way it does.
 | [0015](0015-a-served-search-result-is-a-claim-of-evidence.md) | A served search result is a claim of evidence |
 | [0016](0016-rendering-note-content-is-a-trust-boundary.md) | Rendering note content is a trust boundary |
 | [0017](0017-the-gui-is-keyboard-complete-with-one-chord-registry.md) | The GUI is keyboard-complete, and every chord lives in one registry |
-| [0018](0018-ci-runs-just-ci-and-nothing-else.md) | CI runs `just ci` and nothing else |
+| [0018](0018-ci-runs-make-ci-and-nothing-else.md) | CI runs `make ci` and nothing else |
 | [0019](0019-build-our-own-sqlite-index-engine.md) | Build our own SQLite index engine; qmd is a reference, not a dependency |
 | [0020](0020-embeddings-inside-the-single-binary.md) | Embeddings inside the single binary: candle + hf-hub, provisioned by `b2 init` |
 | [0021](0021-concurrency-is-serialized-on-sqlites-own-locks.md) | Many readers, one writer, serialized on SQLite's own locks |

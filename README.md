@@ -40,7 +40,7 @@ explained connections between them yourself.
 > so there is no `reindex` to remember; the manual one lives in Settings as a **cancellable background action**
 > (live progress, a Cancel button, the UI usable throughout). Projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
-> ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `just app` — pick a vault from the
+> ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `make app` — pick a vault from the
 > in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —
 > slice 1, inventory & graph, is built; the wider backlog lives in
 > [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
@@ -94,12 +94,12 @@ Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredC
 
 ## Build and run
 
-**Stop 0 — check your setup.** On a fresh clone, run `just doctor` first: it checks Rust,
+**Stop 0 — check your setup.** On a fresh clone, run `make doctor` first: it checks Rust,
 Node/npm, the Tauri CLI, and the platform build toolchain, and prints the fix for anything
-missing (this is the fastest path to a working `just app` — see the desktop app section below).
+missing (this is the fastest path to a working `make app` — see the desktop app section below).
 
 ```bash
-just doctor
+make doctor
 ```
 
 ```bash
@@ -107,63 +107,64 @@ cargo install --path crates/b2-cli --locked   # installs `b2` to ~/.cargo/bin (o
 b2 --help
 ```
 
-This puts a real `b2` on your PATH. Re-run it (add `--force`) or `just install` to update after code changes.
+This puts a real `b2` on your PATH. Re-run it (add `--force`) or `make install` to update after code changes.
 
 For engine iteration where you don't want to reinstall each time, `cargo run -p b2-cli -- …` runs in place.
-[`just`](https://github.com/casey/just) recipes wrap this and the other common commands:
+A `Makefile` wraps this and the other common commands — needs no separate install, `make` ships
+with the platform build toolchain (Xcode Command Line Tools on macOS):
 
 ```bash
-just doctor     # sanity-check your local setup — run this first on a fresh clone
-just install    # build + install `b2` onto your PATH (~/.cargo/bin)
-just test       # fast, deterministic, model-free engine suite
-just check      # THE FAST GATE (~3s): fmt-check + clippy (-D warnings) + engine & frontend
+make doctor     # sanity-check your local setup — run this first on a fresh clone
+make install    # build + install `b2` onto your PATH (~/.cargo/bin)
+make test       # fast, deterministic, model-free engine suite
+make check      # THE FAST GATE (~3s): fmt-check + clippy (-D warnings) + engine & frontend
                 # tests — the loop you run while working
-just ci         # THE COMPLETE GATE (~18s): the above over the whole workspace, plus the
+make ci         # THE COMPLETE GATE (~18s): the above over the whole workspace, plus the
                 # desktop crate, every test in the repo, and an `npm audit` of ui/.
-                # GitHub Actions runs this exact recipe, so green here is green there.
-just init       # download + verify the embedding model into the shared cache
-just eval       # semantic-retrieval quality eval (real model; never part of CI)
-just eval-chat  # grounded-chat quality eval (needs a model server; never part of CI)
-just            # list every recipe, grouped: setup / dev / gates / coverage / model
+                # GitHub Actions runs this exact target, so green here is green there.
+make init       # download + verify the embedding model into the shared cache
+make eval       # semantic-retrieval quality eval (real model; never part of CI)
+make eval-chat  # grounded-chat quality eval (needs a model server; never part of CI)
+make            # list every target, grouped: setup / dev / gates / coverage / model
 ```
 
 There is no git hook and none is wanted (`.git/hooks` isn't cloneable) — CI is the enforcement,
-and `just ci` is how you get the same answer before you push.
+and `make ci` is how you get the same answer before you push.
 
 ### The desktop app (`crates/b2-desktop` + `ui/`)
 
 The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend — Node 18, 20, or 22+;
 that floor comes from vite, [nvm](https://github.com/nvm-sh/nvm) is the easiest way to install
 one: `nvm install --lts`) and the **Tauri CLI** (`cargo install tauri-cli --locked`). Run
-`just doctor` first — it checks both (including the Node version, and whether nvm is
+`make doctor` first — it checks both (including the Node version, and whether nvm is
 available if Node is missing), plus the platform build toolchain (Xcode Command Line Tools on
 macOS), and tells you exactly what's missing and how to fix it (this is what catches e.g.
-`just app` failing with `error: no such command: 'tauri'` before it happens).
+`make app` failing with `error: no such command: 'tauri'` before it happens).
 
 ```bash
-just doctor           # confirm Node, npm, and the Tauri CLI are all in place
-just app              # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
-just app-cpu          # …same, but force the CPU embedder
-just app-build        # bundle a per-platform app
-just ui-install       # (rarely needed by hand — every recipe above depends on it)
+make doctor           # confirm Node, npm, and the Tauri CLI are all in place
+make app              # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
+make app-cpu          # …same, but force the CPU embedder
+make app-build        # bundle a per-platform app
+make ui-install       # (rarely needed by hand — every recipe above depends on it)
 ```
 
 On first launch (nothing remembered yet) the window opens with no vault selected — click the
-vault switcher to pick one; from then on, `just app` reopens whatever vault you had open last.
+vault switcher to pick one; from then on, `make app` reopens whatever vault you had open last.
 `B2_VAULT_PATH` (or a launch argument) is an alternative for that first run, letting you skip
-the picker and jump straight into a vault, e.g. `B2_VAULT_PATH=~/notes just app`. Search or use
+the picker and jump straight into a vault, e.g. `B2_VAULT_PATH=~/notes make app`. Search or use
 the file tree to open a note, read or edit it on the left (live-preview Markdown, autosave), and
 connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake` for an
 offline, non-semantic dev mode (no `b2 init` needed).
 
-**Embedder device — CPU or Metal GPU.** `just app` senses the platform and embeds on the **Metal GPU**
+**Embedder device — CPU or Metal GPU.** `make app` senses the platform and embeds on the **Metal GPU**
 on Apple Silicon (measured **~7× faster** than CPU on the test vault — [GH #40](https://github.com/AlteredCraft/B2/issues/40)),
-falling back to CPU automatically if the GPU can't initialize. `just app-cpu` forces the CPU embedder
+falling back to CPU automatically if the GPU can't initialize. `make app-cpu` forces the CPU embedder
 (the A/B counterpart, or if you hit a GPU issue). The active device is shown as a subtle badge in
 **Settings (⌘,)**. Metal is a **compile-time** choice, so the recipe you run picks it — and because CPU
 and Metal produce distinct vectors, switching device re-embeds the vault on the next reindex (a one-time
 model swap; `search` refuses to mix the two). See [`fixtures/README.md`](fixtures/README.md) and
-`just compare-device` to benchmark the two on your own hardware.
+`make compare-device` to benchmark the two on your own hardware.
 
 Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
 every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,
