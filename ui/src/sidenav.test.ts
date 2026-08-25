@@ -89,8 +89,8 @@ check("no note open: discovery has no rows at all", () => {
 check("both section heads, each followed by its cards in list order", () => {
   equal(
     keys(sideRows(pane())),
-    "section:similar|similar:0:notes/kivo.md|similar:1:notes/prep.md|" +
-      "section:connections|connections:0:notes/onsite.md",
+    "section:connections|connections:0:notes/onsite.md|" +
+      "section:similar|similar:0:notes/kivo.md|similar:1:notes/prep.md",
     "rows",
   );
 });
@@ -111,13 +111,13 @@ check("a row carries the depth and fold state the paint needs", () => {
 
 check("a collapsed section keeps its head and drops its cards", () => {
   const rows = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  equal(keys(rows), "section:similar|section:connections|connections:0:notes/onsite.md", "rows");
-  equal(rows[0].expanded, false, "the head reads collapsed");
+  equal(keys(rows), "section:connections|connections:0:notes/onsite.md|section:similar", "rows");
+  equal(rows[2].expanded, false, "the head reads collapsed");
 });
 
 check("an empty section is a row with nothing to step into", () => {
   const rows = sideRows(pane({ similar: [], connections: [] }));
-  equal(keys(rows), "section:similar|section:connections", "both heads survive");
+  equal(keys(rows), "section:connections|section:similar", "both heads survive");
   equal(rows[0].hasChildRows, false, "no cards under it");
   equal(rows[0].fold?.kind, "section", "still foldable — the chevron works either way");
 });
@@ -127,8 +127,8 @@ check("a folded card stays a row; only its body goes", () => {
     pane({ collapsedCards: new Set([cardKey("similar", "notes/kivo.md")]) }),
   );
   equal(keys(rows).includes("similar:0:notes/kivo.md"), true, "still navigable");
-  equal(rows[1].expanded, false, "and reads collapsed");
-  equal(rows[2].expanded, true, "its neighbour is untouched");
+  equal(rows[3].expanded, false, "and reads collapsed");
+  equal(rows[4].expanded, true, "its neighbour is untouched");
 });
 
 // Two edges to one target are legal (a body link plus a typed frontmatter relation —
@@ -136,7 +136,7 @@ check("a folded card stays a row; only its body goes", () => {
 // still be unique, or ↓ off the second lands back under the first and navigation sticks.
 check("duplicate edges to one note are distinct rows sharing one fold key", () => {
   const rows = sideRows(pane({ connections: [edge("notes/a.md"), edge("notes/a.md", "supports")] }));
-  const [first, second] = rows.slice(-2);
+  const [first, second] = [rows[1], rows[2]];
   assert(first.key !== second.key, "row keys are unique");
   equal(first.fold?.kind === "card" && first.fold.key, cardKey("connections", "notes/a.md"), "fold key");
   equal(second.fold?.kind === "card" && second.fold.key, cardKey("connections", "notes/a.md"), "the same");
@@ -145,8 +145,12 @@ check("duplicate edges to one note are distinct rows sharing one fold key", () =
 
 check("unresolved links are rows too — after the edges, and unfoldable", () => {
   const rows = sideRows(pane({ unresolved: [dangling("Hermes")] }));
-  equal(keys(rows).endsWith("connections:0:notes/onsite.md|unresolved:0:Hermes"), true, "last");
-  equal(rows[rows.length - 1].fold, null, "a broken link has no body to fold");
+  equal(
+    keys(rows).includes("connections:0:notes/onsite.md|unresolved:0:Hermes"),
+    true,
+    "right after the edges",
+  );
+  equal(rows[2].fold, null, "a broken link has no body to fold");
 });
 
 check("search mode is a flat list of results — no section heads", () => {
@@ -178,28 +182,28 @@ function press(key: string): KeyEventLike {
 
 check("up/down step between visible rows and stop at the ends", () => {
   const rows = sideRows(pane());
-  equal(move(rows, "section:similar", "side.row.next")?.key, "similar:0:notes/kivo.md", "down");
-  equal(move(rows, "similar:0:notes/kivo.md", "side.row.prev")?.key, "section:similar", "up");
-  equal(move(rows, "section:similar", "side.row.prev"), null, "no wrap off the top");
-  equal(move(rows, "connections:0:notes/onsite.md", "side.row.next"), null, "no wrap off the bottom");
+  equal(move(rows, "section:connections", "side.row.next")?.key, "connections:0:notes/onsite.md", "down");
+  equal(move(rows, "connections:0:notes/onsite.md", "side.row.prev")?.key, "section:connections", "up");
+  equal(move(rows, "section:connections", "side.row.prev"), null, "no wrap off the top");
+  equal(move(rows, "similar:1:notes/prep.md", "side.row.next"), null, "no wrap off the bottom");
 });
 
 check("down never descends into a collapsed section", () => {
-  const rows = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  equal(move(rows, "section:similar", "side.row.next")?.key, "section:connections", "skips the cards");
+  const rows = sideRows(pane({ collapsedSections: new Set(["connections"] as const) }));
+  equal(move(rows, "section:connections", "side.row.next")?.key, "section:similar", "skips the cards");
 });
 
 check("Home/End jump to the first and last rows", () => {
   const rows = sideRows(pane());
-  equal(move(rows, "section:connections", "side.row.first")?.key, "section:similar", "Home");
-  equal(move(rows, "section:similar", "side.row.last")?.key, "connections:0:notes/onsite.md", "End");
+  equal(move(rows, "section:similar", "side.row.first")?.key, "section:connections", "Home");
+  equal(move(rows, "section:connections", "side.row.last")?.key, "similar:1:notes/prep.md", "End");
 });
 
 check("the first arrow press lands even with nothing focused", () => {
   const rows = sideRows(pane());
-  equal(move(rows, null, "side.row.next")?.key, "section:similar", "down → first");
-  equal(move(rows, null, "side.row.prev")?.key, "connections:0:notes/onsite.md", "up → last");
-  equal(move(rows, null, "side.row.in")?.key, "section:similar", "right → first");
+  equal(move(rows, null, "side.row.next")?.key, "section:connections", "down → first");
+  equal(move(rows, null, "side.row.prev")?.key, "similar:1:notes/prep.md", "up → last");
+  equal(move(rows, null, "side.row.in")?.key, "section:connections", "right → first");
 });
 
 check("right expands a collapsed section, then steps into it", () => {
@@ -265,7 +269,7 @@ check("a key the pane doesn't own is left alone", () => {
 check("the tabstop prefers the keyboard's row, else the first", () => {
   const rows = sideRows(pane());
   equal(rovingSideKey(rows, "similar:1:notes/prep.md"), "similar:1:notes/prep.md", "keyboard wins");
-  equal(rovingSideKey(rows, null), "section:similar", "else the first row");
+  equal(rovingSideKey(rows, null), "section:connections", "else the first row");
   equal(rovingSideKey([], "gone"), null, "an empty pane has no tabstop");
 });
 
@@ -273,7 +277,7 @@ check("a tabstop that folded or scrolled out of existence falls back", () => {
   // The section collapsed under the focused card, or a new note replaced discovery
   // wholesale: the pane must not be left with zero tabbable rows (⇥ would skip it).
   const rows = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
-  equal(rovingSideKey(rows, "similar:0:notes/kivo.md"), "section:similar", "folded away → first row");
+  equal(rovingSideKey(rows, "similar:0:notes/kivo.md"), "section:connections", "folded away → first row");
   equal(sideRowIndex(rows, null), -1, "nothing focused is not row 0");
 });
 
