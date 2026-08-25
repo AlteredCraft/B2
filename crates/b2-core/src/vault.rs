@@ -355,9 +355,12 @@ pub struct SearchEvidenceView {
 /// chunk, and how near its vector actually was.
 ///
 /// The query-level verdict on [`SearchEvidenceView`] is what ADR-0015's "no matches"
-/// rests on; **this** is what a per-hit tail rule would be argued from (GH #201
-/// Step 2, unshipped and deliberately so — the corpus does not yet label the
-/// irrelevance of ranks 5–10). Until then it is an instrument reading.
+/// rests on; **this** is what the per-hit tail bake-off is argued from (GH #206).
+/// That bake-off has run — the labels carry the per-hit depth (`tail_relevant`) —
+/// and **no tail fold shipped**: the fused order is not an evidence order, so every
+/// admissible prefix cut proved vacuous, and the tail complaint is ordering work
+/// (the reranker seam), not disclosure work. This stays an instrument reading,
+/// re-priced on every `just eval` run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EvidencedResult {
     #[serde(flatten)]

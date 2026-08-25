@@ -321,6 +321,21 @@ struct SearchProbe {
     best_cos: Option<f64>,
     /// What the shipped bar would say — `true` = the default view vouches.
     vouched: bool,
+    /// For a title-as-query probe, the note the title came from — the one row
+    /// this bench can certify as relevant with no label (GH #206). `None` for
+    /// nonsense.
+    own_path: Option<String>,
+    /// The served list's per-hit provenance, in fused order — what the tail
+    /// families' constraints are read from.
+    rows: Vec<TailRow>,
+}
+
+/// One served row's per-hit provenance (GH #206) — `EvidencedResult`, shorn of
+/// the display fields this instrument never prints.
+struct TailRow {
+    path: String,
+    bm25_rank: Option<usize>,
+    cos: Option<f64>,
 }
 
 /// The **search evidence transfer check** (ADR-0015) — process rule 5's bench for the
@@ -386,7 +401,9 @@ fn print_search_transfer(
         bar.min_term_coverage, bar.min_cos
     );
 
-    let read = |query: &str| -> Result<SearchProbe, Box<dyn std::error::Error>> {
+    let read = |query: &str,
+                own_path: Option<String>|
+     -> Result<SearchProbe, Box<dyn std::error::Error>> {
         let view = vault.search_evidence(query, limit)?;
         let idf = |df: usize| ((view.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln();
         let total: f64 = view.terms.iter().map(|t| idf(t.df)).sum();
@@ -405,10 +422,20 @@ fn print_search_transfer(
             // The engine's own verdict, not a restatement of it: this bench
             // prices what would actually ship.
             vouched: view.vouched.unwrap_or(true),
+            own_path,
+            rows: view
+                .results
+                .iter()
+                .map(|r| TailRow {
+                    path: r.result.path.clone(),
+                    bm25_rank: r.bm25_rank,
+                    cos: r.cos,
+                })
+                .collect(),
         })
     };
 
-    let mut titles: Vec<String> = Vec::new();
+    let mut titles: Vec<(String, String)> = Vec::new();
     for note in vault.list_notes()? {
         if titles.len() == MAX_TITLE_QUERIES {
             break;
@@ -420,10 +447,13 @@ fn print_search_transfer(
                 .unwrap_or_default()
         });
         if !title.trim().is_empty() {
-            titles.push(title);
+            titles.push((title, note.path));
         }
     }
-    let positives: Vec<SearchProbe> = titles.iter().map(|t| read(t)).collect::<Result<_, _>>()?;
+    let positives: Vec<SearchProbe> = titles
+        .iter()
+        .map(|(t, path)| read(t, Some(path.clone())))
+        .collect::<Result<_, _>>()?;
     let cut: Vec<&SearchProbe> = positives.iter().filter(|p| !p.vouched).collect();
     let covs: Vec<f64> = positives.iter().filter_map(|p| p.coverage).collect();
     let coss: Vec<f64> = positives.iter().filter_map(|p| p.best_cos).collect();
@@ -491,7 +521,10 @@ fn print_search_transfer(
         );
     }
 
-    let negatives: Vec<SearchProbe> = NONSENSE.iter().map(|q| read(q)).collect::<Result<_, _>>()?;
+    let negatives: Vec<SearchProbe> = NONSENSE
+        .iter()
+        .map(|q| read(q, None))
+        .collect::<Result<_, _>>()?;
     let served = negatives.iter().filter(|p| p.vouched).count();
     println!(
         "  nonsense negatives (n={}, built-in — the vault-independent half of the pile)",
@@ -511,6 +544,142 @@ fn print_search_transfer(
         );
     }
     println!("    the bar serves {served}/{}", negatives.len());
+
+    // ---- The per-hit tail families (GH #206), priced on this vault. ----------
+    // `just eval`'s tail bake-off derives each family's admissible window from
+    // the labelled corpora; this is the reading that says whether such a window
+    // survives a real vault (process rule 5 — owed even by the parameterless
+    // family, whose "lexical half never ranked it" signal is partly a fact
+    // about pool depth against vault size). No labels here: the one served row
+    // a title query certifies is its **own note**, so each family is priced on
+    // what its constant would have to be to hide none of them — the tripwire
+    // direction. The fold is a prefix cut (D1), so every row served above an
+    // own note must pass the family's test too.
+    let mut own_served = 0usize;
+    let mut own_missed = 0usize;
+    // (probe, own note's rank, first dense-only rank above it)
+    let mut lex_hidden: Vec<(&SearchProbe, usize, usize)> = Vec::new();
+    let mut cos_edge: Option<(f64, &SearchProbe, &TailRow)> = None;
+    let mut cos_dead: Option<(&SearchProbe, &TailRow)> = None;
+    let mut lexcos_edge: Option<(f64, &SearchProbe, &TailRow)> = None;
+    let mut drop_edge: Option<(f64, &SearchProbe, &TailRow)> = None;
+    let (mut dense_only_rows, mut total_rows) = (0usize, 0usize);
+    for p in &positives {
+        total_rows += p.rows.len();
+        dense_only_rows += p.rows.iter().filter(|r| r.bm25_rank.is_none()).count();
+        let own = p
+            .own_path
+            .as_ref()
+            .and_then(|op| p.rows.iter().position(|r| &r.path == op));
+        let Some(own) = own else {
+            own_missed += 1;
+            continue;
+        };
+        own_served += 1;
+        // The drop family's reference is the list's own best served cosine —
+        // the whole list's, not the prefix's, matching how the fold would read.
+        let best = p
+            .rows
+            .iter()
+            .filter_map(|r| r.cos)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let prefix = &p.rows[..=own];
+        if let Some(first) = prefix.iter().position(|r| r.bm25_rank.is_none()) {
+            lex_hidden.push((p, own, first));
+        }
+        for row in prefix {
+            // Finiteness-filtered (PR #212 review): a NaN cosine is *no
+            // reading*, and `is_none_or` would otherwise let a NaN first row
+            // seed an edge. It lands in the dead arm, named, never skipped.
+            match row.cos.filter(|c| c.is_finite()) {
+                None => {
+                    if cos_dead.is_none() {
+                        cos_dead = Some((p, row));
+                    }
+                }
+                Some(c) => {
+                    if cos_edge.is_none_or(|(e, _, _)| c < e) {
+                        cos_edge = Some((c, p, row));
+                    }
+                    let drop = best - c;
+                    if drop_edge.is_none_or(|(e, _, _)| drop > e) {
+                        drop_edge = Some((drop, p, row));
+                    }
+                    if row.bm25_rank.is_none() && lexcos_edge.is_none_or(|(e, _, _)| c < e) {
+                        lexcos_edge = Some((c, p, row));
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "  tail transfer (GH #206 — the per-hit tail families priced on this vault; judged on \
+         the one"
+    );
+    println!("    row a title query certifies with no label: its own note)");
+    println!(
+        "    own note served within limit for {own_served}/{} titles ({own_missed} missed — \
+         retrieval's, not a fold's)",
+        positives.len()
+    );
+    println!(
+        "    dense-only rows among all served rows: {dense_only_rows}/{total_rows} — how often \
+         the lexical signal fires at this scale"
+    );
+    match lex_hidden.first() {
+        None => println!(
+            "    lexical (dense-only fold)   hides 0/{own_served} own notes — no dense-only row \
+             above any of them"
+        ),
+        Some((p, own, first)) => println!(
+            "    lexical (dense-only fold)   ✗ hides {}/{own_served} own notes — first: {} (own \
+             note rank {}, dense-only row at rank {})",
+            lex_hidden.len(),
+            truncate(&p.query, 32),
+            own + 1,
+            first + 1
+        ),
+    }
+    let bar_line =
+        |label: &str, edge: Option<(f64, &SearchProbe, &TailRow)>, floor: bool| match edge {
+            None => println!(
+                "    {label:<27} unconstrained (no row above an own note engages the test)"
+            ),
+            Some((e, p, row)) => println!(
+                "    {label:<27} needs {} {e:.3} to hide none (set by {} → {})",
+                if floor { "δ ≥" } else { "c ≤" },
+                truncate(&p.query, 32),
+                row.path
+            ),
+        };
+    match cos_dead {
+        Some((p, row)) => println!(
+            "    cos ≥ c                     DEAD — {} → {} is served above its own note with no \
+             cosine",
+            truncate(&p.query, 32),
+            row.path
+        ),
+        None => bar_line("cos ≥ c", cos_edge, false),
+    }
+    match cos_dead {
+        // A dead row that is also dense-only kills the two-signal family too:
+        // no lexical rank and no finite cosine passes at no bar.
+        Some((p, row)) if row.bm25_rank.is_none() => println!(
+            "    lex-or-cos ≥ c              DEAD — {} → {} is dense-only with no finite cosine",
+            truncate(&p.query, 32),
+            row.path
+        ),
+        _ => bar_line("lex-or-cos ≥ c", lexcos_edge, false),
+    }
+    match cos_dead {
+        Some(_) => println!("    cos ≥ best − δ              DEAD — same row as the cos family"),
+        None => bar_line("cos ≥ best − δ", drop_edge, true),
+    }
+    println!(
+        "    → read these against the corpus windows in `just eval`'s tail bake-off: a family \
+         ships only"
+    );
+    println!("      where the joint corpus edge also hides nothing here (process rule 5)");
     Ok(())
 }
 
