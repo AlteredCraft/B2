@@ -53,11 +53,36 @@ fn cancel_flow() -> ControlFlow<()> {
     }
 }
 
+/// The retrieval loop, stated where an agent will actually read it (`b2 --help`) —
+/// the toolset carrying its own usage instructions, the way an MCP server ships its
+/// tool descriptions. The loop itself lives in the *caller*: B2's part is dumb,
+/// composable reads (ADR-0012), and the vault being plain Markdown on disk is what
+/// makes "open the file yourself" a step no B2 command needs to exist for.
+const AGENT_HELP: &str = "\
+For agents (--json):
+  Every command takes --json, and the vault is plain Markdown on disk — a result's
+  `path` is a real file, readable and greppable directly. The retrieval loop:
+
+  1. b2 search \"<query>\" --json   Hybrid keyword+semantic search: the ranked rows
+                                  plus an evidence verdict. `\"vouched\": false`
+                                  means the vault holds no evidence for this query
+                                  — report \"no matches\" instead of using the rows.
+  2. Read the files it names      Paths are vault-relative; open them for the full
+                                  note, not just the matched snippet.
+  3. b2 neighbors/explain <note>  Follow the typed graph around a promising note;
+                                  b2 similar <note> ranks unlinked semantic
+                                  neighbors.
+  4. Refine and search again      Pass --exclude <path> (repeatable) for notes
+                                  already inspected, so follow-ups surface fresh
+                                  material. Fewer results than asked = the head of
+                                  the ranking is spent; refine the query.";
+
 #[derive(Parser)]
 #[command(
     name = "b2",
     version,
-    about = "B2 — explore a Markdown vault's typed graph and search from the terminal"
+    about = "B2 — explore a Markdown vault's typed graph and search from the terminal",
+    after_long_help = AGENT_HELP
 )]
 struct Cli {
     /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
@@ -159,6 +184,15 @@ enum Command {
         /// Maximum number of notes to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Leave a note out of the results: a vault-relative path exactly as a
+        /// previous search served it (repeatable). The follow-up-search flag for
+        /// agent loops — pass the notes already inspected so a re-query surfaces
+        /// fresh material instead of the same head. It subtracts rows only: the
+        /// evidence verdict still reads the whole vault, and a heavily-excluded
+        /// query may serve fewer than LIMIT notes — the cue to refine the query
+        /// rather than page deeper.
+        #[arg(long, value_name = "PATH")]
+        exclude: Vec<String>,
     },
     /// Surface the notes most semantically similar to NOTE that you haven't linked
     /// yet — connection discovery, ranked nearest first. NOTE is a vault-relative
@@ -343,7 +377,11 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Explain { note } => cmd_explain(cli, note),
         Command::Mv { from, to } => cmd_mv(cli, from, to),
         Command::Rm { target, recursive } => cmd_rm(cli, target, *recursive),
-        Command::Search { query, limit } => cmd_search(cli, query, *limit),
+        Command::Search {
+            query,
+            limit,
+            exclude,
+        } => cmd_search(cli, query, *limit, exclude),
         Command::Similar { note, limit } => cmd_similar(cli, note, *limit),
         Command::Link {
             src,
@@ -829,14 +867,15 @@ fn cmd_rm(cli: &Cli, target: &str, recursive: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn cmd_search(cli: &Cli, query: &str, limit: usize) -> Result<(), CliError> {
+fn cmd_search(cli: &Cli, query: &str, limit: usize, exclude: &[String]) -> Result<(), CliError> {
     // Search embeds the query for the vector half → it needs the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
     // The evidence read, not the bare list (invariants.md D2, GH #201/#202): the
     // rows are identical and in the same order, and the verdict beside them is
     // what lets this command say **"no matches"** honestly instead of serving
     // `limit` confident-looking results for a query the vault holds nothing for.
-    let view = vault.search_evidence(query, limit)?;
+    // `--exclude` paths are the caller's subtraction, never the verdict's.
+    let view = vault.search_evidence_excluding(query, limit, exclude)?;
     if cli.json {
         // The whole view, verdict included. This is an OBJECT where `--json` used to be
         // an array — a deliberate break (GH #202), because a query-level verdict has

@@ -1006,15 +1006,54 @@ impl Vault {
     /// `None` when the active embedder has no calibrated bar (a fake space has no
     /// geometry to hold a cosine bar over, and an uncalibrated model's bar would be
     /// another model's constant); a caller that gets `None` never guesses one.
+    ///
+    /// [`search_evidence_excluding`](Self::search_evidence_excluding) is this same
+    /// read minus a caller-named set of notes — the follow-up-search form.
     pub fn search_evidence(&self, query: &str, limit: usize) -> Result<SearchEvidenceView> {
-        let _op =
-            tracing::debug_span!(target: "b2::vault", "search_evidence", query, limit).entered();
+        self.search_evidence_excluding(query, limit, &[])
+    }
+
+    /// [`search_evidence`](Self::search_evidence) minus a **caller-named** set of notes:
+    /// hits on `exclude` paths are dropped before note resolution, so the served rows
+    /// backfill from the same ranking with the next fresh notes. This is the
+    /// follow-up-search form an agent loop passes its already-inspected paths to — a
+    /// re-query that hands back the same head reads as progress and is none.
+    ///
+    /// The subtraction is the caller's, never the verdict's: `vouched`, the terms and
+    /// `best_cos` still read the whole vault, because the evidence is a fact about the
+    /// query and the vault (ADR-0015), not about what the caller has already read. The
+    /// retrieval pool is also unchanged — width is a ranking choice priced by the eval,
+    /// not plumbing (GH #141/#142) — so exclusion spends the same headroom note-dedup
+    /// does, and a heavily-excluded query may serve fewer than `limit` rows: the
+    /// ranking's head is spent, and the honest next move is a refined query, not a
+    /// deeper page.
+    ///
+    /// Paths match exactly as a result served them — a note's identity is its
+    /// vault-relative path (L1) — and an unknown path excludes nothing.
+    pub fn search_evidence_excluding(
+        &self,
+        query: &str,
+        limit: usize,
+        exclude: &[String],
+    ) -> Result<SearchEvidenceView> {
+        let _op = tracing::debug_span!(
+            target: "b2::vault",
+            "search_evidence",
+            query,
+            limit,
+            excluded = exclude.len()
+        )
+        .entered();
         // `limit.max(1)` where `search` would short-circuit: a zero limit caps the
         // *rows*, and the question this read answers is about the evidence. Going
         // through `retrieve(0)` would skip the dense scan and hand back
         // `best_cos: None` — which reads as "no embedding space" — so a verdict taken
         // from it would be the lexical half wearing both halves' name.
-        let retrieval = self.retrieve(query, note_hit_pool(limit.max(1)))?;
+        let mut retrieval = self.retrieve(query, note_hit_pool(limit.max(1)))?;
+        // The subtraction drops hits only. `best_cos` is a scalar the retrieval
+        // already carries, so the vault's nearest chunk still reports even when the
+        // caller has already read the note it belongs to.
+        retrieval.hits.retain(|h| !exclude.contains(&h.note_path));
         // The lexical half is read here rather than inside retrieval: it costs a
         // `count(*)` per distinct query term, and only a caller that wants a verdict
         // should pay for it.

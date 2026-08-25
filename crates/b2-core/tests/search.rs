@@ -935,6 +935,74 @@ fn a_zero_limit_evidence_read_still_reads_the_evidence() {
     assert!(view.terms.iter().any(|t| t.term == "memory"));
 }
 
+/// The follow-up-search subtraction: excluding an already-served note drops it and
+/// its slot backfills from the same ranking, the remaining rows keeping their
+/// relative order — a re-query in an agent loop surfaces the *next* notes, never
+/// the same head again.
+#[test]
+fn excluding_a_served_note_backfills_from_the_same_ranking() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    // Both golden notes carry "memory", so the full read serves two rows and there
+    // is a next-ranked note for the exclusion to backfill with.
+    let full = vault.search_evidence("memory", 5).unwrap();
+    let served: Vec<String> = full.results.iter().map(|r| r.result.path.clone()).collect();
+    assert!(
+        served.contains(&MEMORY_PATH.to_string()) && served.contains(&SRS_PATH.to_string()),
+        "the fixture must serve both notes for this query: {served:?}"
+    );
+
+    let head = served[0].clone();
+    let view = vault
+        .search_evidence_excluding("memory", 5, std::slice::from_ref(&head))
+        .unwrap();
+    let remaining: Vec<String> = view.results.iter().map(|r| r.result.path.clone()).collect();
+    assert!(
+        !remaining.contains(&head),
+        "an excluded path is never served"
+    );
+    assert_eq!(
+        remaining,
+        served
+            .into_iter()
+            .filter(|p| *p != head)
+            .collect::<Vec<_>>(),
+        "the rows that remain are the same ranking minus the exclusion, order untouched"
+    );
+}
+
+/// `--exclude` subtracts rows, never evidence: the verdict and its signals are facts
+/// about the query and the vault (ADR-0015), identical whatever the caller has
+/// already read — and a path the vault never held excludes nothing at all.
+#[test]
+fn exclusion_subtracts_rows_never_the_evidence() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vault_dir = tmp.path().join("vault");
+    golden_vault_copy(&vault_dir);
+    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    vault.reindex().unwrap();
+
+    let full = vault.search_evidence("memory", 5).unwrap();
+    let excluded = vault
+        .search_evidence_excluding("memory", 5, &[MEMORY_PATH.to_string()])
+        .unwrap();
+    assert_eq!(excluded.vouched, full.vouched);
+    assert_eq!(excluded.chunk_total, full.chunk_total);
+    assert_eq!(excluded.terms, full.terms);
+    // Even when the excluded note holds the vault's nearest chunk, the dense half's
+    // absolute claim is unchanged — nearest is a fact about the vault.
+    assert_eq!(excluded.best_cos, full.best_cos);
+
+    let unknown = vault
+        .search_evidence_excluding("memory", 5, &["notes/never-was.md".to_string()])
+        .unwrap();
+    assert_eq!(unknown, full, "an unknown path excludes nothing");
+}
+
 /// Terms are deduped by the identity **FTS5** uses, not by spelling (PR #205
 /// review). `chunks_fts` is tokenized, so `Memory` / `memory` / `memories` are
 /// one token and match the same chunks; counting them separately would let a
