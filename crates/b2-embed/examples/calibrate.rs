@@ -7,11 +7,11 @@
 //! until transfer-checked on a real vault**.
 //!
 //! ```console
-//! make calibrate VAULT=~/notes                                        # per-anchor lines + the summary block
-//! make calibrate VAULT=~/notes ARGS=--json                            # the same reading as one JSON object
-//! make calibrate VAULT=~/notes ARGS="--limit 5"                       # simulate a 5-card pane
-//! make calibrate VAULT=~/notes ARGS="--leader-z 1.5 --member-z 1.0"   # replay a different gate
-//! make calibrate VAULT=~/notes ARGS="--mutual-k 5"                    # replay the fold at a different depth
+//! make calibrate VAULT=$HOME/notes                                        # per-anchor lines + the summary block
+//! make calibrate VAULT=$HOME/notes ARGS=--json                            # the same reading as one JSON object
+//! make calibrate VAULT=$HOME/notes ARGS="--limit 5"                       # simulate a 5-card pane
+//! make calibrate VAULT=$HOME/notes ARGS="--leader-z 1.5 --member-z 1.0"   # replay a different gate
+//! make calibrate VAULT=$HOME/notes ARGS="--mutual-k 5"                    # replay the fold at a different depth
 //! ```
 //!
 //! Beside the retired z gate it replays the two **default-disclosure** candidates ADR-0014

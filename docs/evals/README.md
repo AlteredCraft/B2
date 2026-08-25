@@ -640,8 +640,8 @@ make init             # provision bge-base-en-v1.5 (one time)
 make eval             # ~1min warm (both corpora); appends rows, exits non-zero on a gate regression
 make eval-sweep       # + the seven-variant chunker A/B
 make stability        # model-free, deterministic; `make stability-bless` only after an INTENDED change
-make calibrate VAULT=~/notes   # the real-vault transfer check (process rule 5) — any built vault, no labels
-make calibrate VAULT=~/notes ARGS=--search   # ...and the search evidence bar's half of it (loads the real model)
+make calibrate VAULT=$HOME/notes   # the real-vault transfer check (process rule 5) — any built vault, no labels
+make calibrate VAULT=$HOME/notes ARGS=--search   # ...and the search evidence bar's half of it (loads the real model)
 ```
 
 ## Process rules

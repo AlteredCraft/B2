@@ -2994,8 +2994,8 @@ enum TailRule {
     /// distributional to place — but **not** scale-free: `bm25_rank` is a rank
     /// in a pool-truncated list (`search::pool_size`), so "never ranked" is
     /// partly a fact about pool depth against vault size. `make calibrate
-    /// ARGS=--search` measures that rather than assuming it (process rule 5's
-    /// posture, owed even without a constant).
+    /// VAULT=<vault> ARGS=--search` measures that rather than assuming it
+    /// (process rule 5's posture, owed even without a constant).
     Lexical,
     /// Fold at the first row that is dense-only **and** under a per-hit cosine
     /// bar — the shipped query rule's shape (lexical OR semantic) read per hit.
@@ -3622,7 +3622,7 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
              ADMISSIBILITY, not a shipping order: a joint edge sits AT a bench's own binding row \
              (zero headroom — the constant placement the house sizing method forbids), each payoff \
              reads against the oracle ceiling above, and a shipped constant owes process rule 5's \
-             real-vault reading besides (`make calibrate ARGS=--search`, the tail block). The ruling of \
+             real-vault reading besides (`make calibrate VAULT=<vault> ARGS=--search`, the tail block). The ruling of \
              record lives in docs/evals/README.md."
         );
     } else {

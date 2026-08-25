@@ -320,7 +320,7 @@ eval-metal: ## The same eval, embedding on the Metal GPU (GH #40, macOS-only).
 # Reindexes an isolated copy on each device and reports chunks/s + speedup. Never mutates the
 # committed fixture; artifacts are gitignored + cleaned up.
 compare-device: ## CPU-vs-Metal embed throughput A/B on a vault (default fixtures/test-vault; GH #40, macOS-only). Usage: make compare-device [VAULT=<path>]
-	scripts/compare-embed-device.sh $(if $(VAULT),$(VAULT),fixtures/test-vault)
+	scripts/compare-embed-device.sh "$(if $(VAULT),$(VAULT),fixtures/test-vault)"
 
 # The chat seam's out-of-CI half (GH #154), and the second AI seam's answer to `make eval`:
 # it asks the labelled questions in crates/b2-llm/evals/questions.json through the real
