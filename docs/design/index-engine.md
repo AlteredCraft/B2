@@ -194,6 +194,10 @@ would still only filter what is surfaced, never author a link. Under always-serv
 
 Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extension, no ANN.
 
+> Step-by-step flowcharts of flows ② and ③ — every stage anchored to the function that implements
+> it — live in [retrieval-flows.md](retrieval-flows.md). This section stays the spec; that doc is
+> the guided walk through the code.
+
 - **Storage & scoring.** Vectors live in plain tables — `embeddings(text_hash, vector)` plus per-note
   `note_centroids` — read with one statement and scored in-process (`embed::l2_sq`).
   Content-addressing costs the scan one indexed join back to `chunks` to recover which chunk each
@@ -209,8 +213,10 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
   decision and history in
   **[ADR-0015](../../ADRs/0015-a-served-search-result-is-a-claim-of-evidence.md)**). `hybrid_search`
   returns a `Retrieval`: the same fused order (untouched — provenance is carried, never folded in),
-  each hit naming the lists that ranked it and its own distance, plus a query-level `QueryEvidence`.
-  The rule over it is *lexical OR semantic*:
+  each hit naming the lists that ranked it and its own distance, plus the dense half's best cosine.
+  The lexical reading is deliberately *not* in it — it costs a `count(*)` per distinct term, so
+  `Vault::search_evidence` reads it only where a caller wants a verdict and joins the two signals
+  into the query-level `QueryEvidence`. The rule over them is *lexical OR semantic*:
   - **The lexical anchor is IDF-weighted coverage, not presence.** `fts5_query` ORs every term, and
     the labelled phrase negatives match 68 of 70 chunks through `a`/`to`/`my` alone — one reading a
     *better* best-BM25 than several positives off nothing but function words. So neither a hit count
@@ -237,11 +243,14 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
     prefix-cut bake-off found every admissible rule vacuous — the fused order is not an evidence
     order, so admissible folds reach 2–23 of the 367 rows an oracle fold would cut. The ruling and
     its numbers live in [docs/evals/README.md](../evals/README.md); the bake-off re-arms every run.
-- **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids shortlists
-  candidates (`SHORTLIST_PER_RESULT = 20` per asked result, floored at `SHORTLIST_MIN = 200`), then an
-  exact max-sim rescore over only the shortlist's chunk vectors, minus the anchor's 1-hop graph
-  neighbors. No model call at surface time — `b2 similar` surfaces, `b2 link` commits, and the human
-  is the precision gate (ADR-0009).
+- **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids — the
+  anchor and its 1-hop graph neighbours excluded *up front*, so the already-connected never occupy a
+  shortlist slot — keeps a shortlist (`SHORTLIST_PER_RESULT = 20` per asked result, floored at
+  `SHORTLIST_MIN = 200`), then an exact max-sim rescore over only the shortlist's chunk vectors.
+  No model call at surface time, and nothing is re-embedded: the anchor is represented by its
+  *stored* chunk vectors, never an `embed_query` of its text (bge's asymmetric query prefix is the
+  wrong side of the space). `b2 similar` surfaces, `b2 link` commits, and the human is the precision
+  gate (ADR-0009).
 - **Candidate width is per view, and it is a quality knob, not plumbing.** Retrieval widens twice:
   each façade read asks for a hit pool over its `limit`, and each signal (`search::pool_size`) pulls
   5× *that* (minimum 30) before RRF fuses the two lists. The two reads need headroom for different
