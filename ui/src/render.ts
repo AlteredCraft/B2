@@ -701,10 +701,10 @@ function discoverySectionHtml(state: AppState, roving: string | null): string {
     return `<div class="side-head"><h2>Discovery</h2></div>
       <p class="side-empty">Open a note to see similar notes and its connections.</p>`;
   }
-  return `<div class="side-nav" role="tree" aria-label="Discovery">${similarSectionHtml(
+  return `<div class="side-nav" role="tree" aria-label="Discovery">${connectionsSectionHtml(
     state,
     roving,
-  )}${connectionsSectionHtml(state, roving)}</div>`;
+  )}${similarSectionHtml(state, roving)}</div>`;
 }
 
 // A collapsible discovery-section header (chevron + title + count) — the same fold

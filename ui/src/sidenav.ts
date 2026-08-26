@@ -154,7 +154,6 @@ export function sideRows(s: SideNavState): SideRow[] {
     };
   };
 
-  section("similar", () => s.similar.map((c, i) => card("similar", i, c.path)));
   section("connections", () => [
     ...s.connections.map((c, i) => card("connections", i, c.path)),
     // An unresolved link points at nothing, so it has no body to fold and nothing to
@@ -168,6 +167,7 @@ export function sideRows(s: SideNavState): SideRow[] {
       hasChildRows: false,
     })),
   ]);
+  section("similar", () => s.similar.map((c, i) => card("similar", i, c.path)));
   return rows;
 }
 
