@@ -97,7 +97,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <a href="indexing.html">Indexing</a>
-      <a href="discovery.html">Discovery</a>
+      <a href="retrieval.html">Retrieval</a>
       <a href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
     </div>
   </div>
@@ -340,13 +340,13 @@
     deliberate damper — without it, a first place would dominate everything else. Searching both ways and
     merging is called <b>hybrid search</b>.</div>
 
-    <h3>When nothing matches: search can now answer zero</h3>
-    <p>Until recently it couldn't, and the reason was structural rather than a setting left too loose. The
-    meaning half <em>always</em> has a nearest neighbour — "nearest" is a fact about your vault, not about
-    your query — and the merge above throws away both systems' actual scores in favour of positions. So by
-    the time anything could have asked <em>"is any of this actually relevant?"</em>, the two numbers that
-    could have answered were gone. Type <code>Fasdfadsf</code> and you got ten confident-looking results.</p>
-    <p>B2 now reads two absolute signals beside the merged order, and serves results only if <b>either</b>
+    <h3>When nothing matches: search answers zero</h3>
+    <p>That takes deliberate machinery, because the pipeline above can't do it by itself. The meaning half
+    <em>always</em> has a nearest neighbour — "nearest" is a fact about your vault, not about your query —
+    and the merge throws away both systems' actual scores in favour of positions. So by the time anything
+    could ask <em>"is any of this actually relevant?"</em>, the two numbers that could answer are gone; left
+    alone, typing <code>Fasdfadsf</code> would get ten confident-looking results.</p>
+    <p>So B2 reads two absolute signals beside the merged order, and serves results only if <b>either</b>
     one says the vault holds something:</p>
     <ul class="tidy">
       <li><b>Do your words appear at all — weighted by how rare they are?</b> Not "does anything match":
@@ -409,7 +409,7 @@
     </ul>
     <div class="term"><span class="lbl">the term</span> The note's average position is its <b>centroid</b>.
     The best-pair comparison is <b>max-sim</b>, or <b>best-passage</b> scoring. Deep dive:
-    <a href="discovery.html">Inside <code>b2 similar</code></a>.</div>
+    <a href="retrieval.html#similar">the retrieval flows, stage by stage</a>.</div>
 
     <h3>Why the second pass matters: the buried gem</h3>
     <p>An average is a lie about any note that covers more than one subject. Consider a weekly journal with
@@ -470,17 +470,15 @@
     ranked list answers it. B2 always shows you the nearest unlinked notes; the strength dots — not an
     empty panel — carry the quality signal.</p>
 
-    <p>B2 used to have a statistical rule for staying quiet: a candidate had to "stand out from the
-    anchor's own background" or the panel showed nothing, on the theory that a nearest neighbour of an
-    unrelated crowd isn't worth your time. The rule did exactly what it was designed to do — and the
-    design was wrong. "Stands out from the background" quietly assumes most of your vault is unrelated to
-    any given note, and a vault where everything shares one subject — a research vault, a project vault, a
-    single-subject zettelkasten — breaks that assumption by construction: the background is <em>itself</em>
-    related, nothing can stand out from it, and the panel went dark on the very vaults with the most to
-    connect. Measured on a real 17-note single-domain vault, 16 of 17 notes showed nothing — including
-    three articles on the same narrow subject that were each other's top-ranked neighbours. The rule could
-    not tell <em>"nothing is related"</em> from <em>"everything is related"</em>, so it was retired rather
-    than retuned.</p>
+    <p>Why no statistical rule for staying quiet? Because any such rule has to read the anchor's own
+    candidates, and that reading is ambiguous in exactly the case that matters. "Stands out from the
+    background" quietly assumes most of your vault is unrelated to any given note — and a vault where
+    everything shares one subject (a research vault, a project vault, a single-subject zettelkasten) breaks
+    that assumption by construction: the background is <em>itself</em> related, nothing can stand out from
+    it, and a gate reads the vault with the <em>most</em> to connect as having nothing. An anchor-local
+    statistic cannot tell <em>"nothing is related"</em> from <em>"everything is related"</em> — so B2 lets
+    none claim to. (That is invariant D1; the measurements that settled it are recorded in
+    <a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0014-discovery-always-serves-the-ranked-prefix.md">ADR-0014</a>.)</p>
 
     <figure>
       <svg viewBox="0 0 840 250" role="img" aria-label="Two vaults' candidates on one closeness axis: a mixed vault with a standout, and a single-domain vault where everything is close">
@@ -511,25 +509,24 @@
           <line x1="800" y1="222" x2="800" y2="238" stroke="#6e7781"/>
         </g>
       </svg>
-      <figcaption><b>The geometry that decided it.</b> A "stand out from the background" test serves the
-      top row's standout and — reading the bottom row's tight cluster as one indistinct background —
-      serves <em>nothing</em> from the vault where every candidate is genuinely related. Both rows deserve
+      <figcaption><b>The geometry that decides it.</b> A "stand out from the background" test would serve
+      the top row's standout and — reading the bottom row's tight cluster as one indistinct background —
+      serve <em>nothing</em> from the vault where every candidate is genuinely related. Both rows deserve
       their ranked list; only the dots should differ.</figcaption>
     </figure>
 
-    <p>So today the rule is simple: <b>the ranked list is served, and you are the judge.</b> The panel is
+    <p>So the rule is simple: <b>the ranked list is served, and you are the judge.</b> The panel is
     empty only when there is genuinely nothing to compare — no unlinked note with stored vectors yet — and
     it says exactly that, never "nothing relates". The per-candidate statistic survives as the input to
     the <a href="#bands">strength dots</a>: a within-list grading, so a research vault reads "here are
     your nearest, all middling" instead of a dark panel.</p>
 
-    <div class="ground"><b>Could a smarter "show nothing" rule come back?</b> Only by earning it: any
-    replacement has to win a measured bake-off — on the standard test corpus, on a deliberately
+    <div class="ground"><b>Could a smarter "show nothing" rule ever ship?</b> Only by earning it: any
+    candidate has to win a measured bake-off — on the standard test corpus, on a deliberately
     single-domain one built for exactly this failure, and on real vaults via a calibration command — and
-    "no rule at all" is allowed to win it. The first candidate ran that gauntlet and lost, so the panel
-    still serves the whole ranked list. That is also what every comparable tool ships: a ranked list, with
-    the score as a signal rather than a verdict.
-    <p style="margin:8px 0 0"><b>Search is the other side of that same coin, and it went the other way.</b>
+    "no rule at all" is allowed to win it (and has, so far — the record is ADR-0014's). What ships today is
+    also what every comparable tool ships: a ranked list, with the score as a signal rather than a verdict.
+    <p style="margin:8px 0 0"><b>Search is the other side of that same coin, and it goes the other way.</b>
     Nothing above contradicts <a href="#search">§3</a>'s "no matches": <em>related to this note</em> is a
     comparison with no zero point — everything in your vault is <em>somewhat</em> related to everything —
     while <em>relevant to this query</em> has an honest zero, and B2 can measure it in two independent
@@ -570,13 +567,10 @@
     <div class="warnbox">
       <div class="hd"><span>▲</span><span class="tag">Open question</span></div>
       <b>In a tightly single-subject vault, the strength dots can read uniformly modest.</b>
-      <p>The related-notes panel now always serves the ranked list — the "show nothing" rule that used to
-      darken single-subject vaults was retired after being measured doing exactly that
-      (<a href="https://github.com/AlteredCraft/B2/issues/196">#196</a>,
-      <a href="https://github.com/AlteredCraft/B2/issues/197">#197</a>). What remains open is the
-      <em>grading</em>: the dots compare each candidate with the note's other candidates, and in a vault
-      where every candidate is close, that comparison compresses — genuinely strong relationships can all
-      paint one or two dots. The list order is unaffected and correct; only the dots lose resolution.
+      <p>The related-notes panel always serves the ranked list (<a href="#floor">§5</a>); what remains open
+      is the <em>grading</em>: the dots compare each candidate with the note's other candidates, and in a
+      vault where every candidate is close, that comparison compresses — genuinely strong relationships can
+      all paint one or two dots. The list order is unaffected and correct; only the dots lose resolution.
       Measuring that compression on real vaults (there's a calibration command for exactly this), and
       deciding what the dots should reference instead, is the named next step.</p>
     </div>
@@ -586,14 +580,12 @@
       one unrelated pair unusually highly, that pair sits high in the list by definition. One such case is
       a known, tracked residue in B2's own test corpus — now a mis-<em>ordering</em> (the real relation
       appears, a few places lower than it should) rather than an absence.</li>
-      <li><b>Whether any "show nothing" rule ever returns to the related-notes panel is an open,
-      evidence-gated question.</b> The leading candidate was a mutual-nearest-neighbour check (serve or
-      flag only candidates whose own top list contains the anchor — a rank-based test with no tuned
-      constant); it was measured against both corpora and real vaults, and it lost — every depth that
-      stopped hiding a genuinely related note was past the depth that still emptied a panel. The axis
-      stays open for the next candidate. Note that this is the <em>related-notes</em> panel only:
-      <a href="#search">search</a> does answer "no matches", because a query has an honest zero where a
-      note-to-note comparison does not.</li>
+      <li><b>Whether any "show nothing" rule ever ships in the related-notes panel is an open,
+      evidence-gated question.</b> Every candidate must win the measured bake-off §5 describes, "no rule at
+      all" is an admissible winner, and no candidate has yet beaten it (the record is
+      <a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0014-discovery-always-serves-the-ranked-prefix.md">ADR-0014</a>'s).
+      This is the <em>related-notes</em> panel only: <a href="#search">search</a> does answer "no matches",
+      because a query has an honest zero where a note-to-note comparison does not.</li>
       <li><b>Quality depends on your reindex being current.</b> Discovery reads stored vectors and never
       re-embeds, so notes edited since the last index are compared on their old text. The desktop app
       re-indexes automatically on changes; the CLI does it when you run <code>b2 reindex</code>.</li>
@@ -625,21 +617,20 @@
           <td>Exact comparison, in-process, no extension</td>
           <td><a href="architecture.html">Architecture</a></td></tr>
         <tr><td><b>Fusion</b></td><td>How the two rankings become one</td><td>RRF with a damping constant of
-          60; ties break toward the meaning signal</td><td><a href="architecture.html">Architecture</a></td></tr>
+          60; ties break toward the meaning signal</td><td><a href="retrieval.html#search">Retrieval</a></td></tr>
         <tr><td><b>Candidate pools</b></td><td>How deep each signal looks before fusing</td>
           <td>Per signal, at a 10-result search: 150 passages (note view) / 60 (passage view)</td>
-          <td><a href="architecture.html">Architecture</a></td></tr>
+          <td><a href="retrieval.html#search">Retrieval</a></td></tr>
         <tr><td><b>Shortlist (pass 1)</b></td><td>Which notes are worth comparing properly</td>
           <td>20× the requested count, at least 200 notes</td>
-          <td><a href="discovery.html">Discovery</a></td></tr>
+          <td><a href="retrieval.html#similar">Retrieval</a></td></tr>
         <tr><td><b>Best-passage score (pass 2)</b></td><td>How related two notes actually are, and which
           passage proves it</td><td>Best pair across all passages of both</td>
-          <td><a href="discovery.html">Discovery</a></td></tr>
+          <td><a href="retrieval.html#similar">Retrieval</a></td></tr>
         <tr><td><b>Link exclusion</b></td><td>Which candidates are hidden as "already known"</td>
-          <td>Anything 1 link away from the anchor</td><td><a href="discovery.html">Discovery</a></td></tr>
+          <td>Anything 1 link away from the anchor</td><td><a href="retrieval.html#similar">Retrieval</a></td></tr>
         <tr><td><b>Surfacing rule</b></td><td>What the related-notes panel shows</td>
-          <td>The ranked list, always — no statistical gate (the z existence gate was retired
-          by measurement)</td>
+          <td>The ranked list, always — no statistical gate (invariant D1, ADR-0014)</td>
           <td><a href="#floor">Section 5</a></td></tr>
         <tr><td><b>Strength bands</b></td><td>How many dots a card gets (grading only — never what
           appears)</td>
@@ -647,7 +638,7 @@
           <td><a href="#bands">Section 6</a></td></tr>
         <tr><td><b>Grounded chat</b></td><td>Which passages an answer is allowed to cite</td>
           <td>Top 10 passages from the same hybrid search</td>
-          <td><a href="architecture.html">Architecture</a></td></tr>
+          <td><a href="architecture.html#chat">Architecture</a></td></tr>
       </tbody>
     </table>
     </div>
@@ -655,7 +646,7 @@
     against a hand-labelled corpus of notes and expected answers, and several were chosen by
     <em>rejecting</em> a change that looked better on paper. That test harness, its rules, and the record of
     every verdict live in
-    <a href="https://github.com/AlteredCraft/B2/blob/main/docs/evals/README.md">docs/evals/</a>.</div>
+    <a href="https://github.com/AlteredCraft/B2/blob/main/crates/b2-embed/evals/README.md">crates/b2-embed/evals/</a>.</div>
   </section>
 
   <!-- ================================================================= -->
@@ -699,11 +690,6 @@
       <div class="gitem"><div class="gterm">Stemming</div><div class="gdef">Trimming words to a common root
         in the keyword index so "running" matches "run". Improves recall; occasionally over-merges
         (<em>universe</em> / <em>university</em>).</div></div>
-      <div class="gitem"><div class="gterm">Quality floor <span class="also">retired</span></div>
-        <div class="gdef">The retired rule that decided whether the related-notes list was worth showing
-        at all, measured in z-scores against the anchor's own candidates. Retired by measurement: it read
-        a single-subject vault — where everything is related — as "nothing relates". The ranked list is
-        now always served, and the z survives only as the strength dots' input.</div></div>
       <div class="gitem"><div class="gterm">z-score <span class="also">"σ", "sigma"</span></div>
         <div class="gdef">How far above the typical value something sits, measured in units of the normal
         spread. "2.5σ" means "well above this note's ordinary candidates". In B2 it grades the strength
@@ -719,20 +705,16 @@
         <p style="margin:0;font-size:13px;color:var(--muted)"><a href="indexing.html">The indexing
         pipeline</a> — chunking, embedding, and what <code>reindex</code> actually writes.</p></div>
       <div class="card"><div class="kickerlbl">Mechanics</div>
-        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="discovery.html">Inside
-        <code>b2 similar</code></a> — the discovery run, step by step, with the real data structures.</p></div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="retrieval.html">The retrieval deep
+        dive</a> — both flows stage by stage, every step anchored to the function that implements it.</p></div>
       <div class="card"><div class="kickerlbl">Mechanics</div>
         <p style="margin:0;font-size:13px;color:var(--muted)"><a href="architecture.html">System
         architecture</a> — the whole engine, the seams, and where each flow lives.</p></div>
-      <div class="card"><div class="kickerlbl">Mechanics</div>
-        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/docs/design/retrieval-flows.md">Retrieval
-        flowcharts</a> — both flows stage by stage, every step anchored to the function that implements
-        it.</p></div>
       <div class="card"><div class="kickerlbl">Evidence</div>
-        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/docs/evals/README.md">The
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/crates/b2-embed/evals/README.md">The
         eval harness</a> — how every number on this page was measured, and the verdicts it has ruled.</p></div>
       <div class="card"><div class="kickerlbl">Specification</div>
-        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/tree/main/docs/design">Design
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/tree/main/design">Design
         docs</a> — the normative spec the code is a projection of.</p></div>
       <div class="card"><div class="kickerlbl">Getting started</div>
         <p style="margin:0;font-size:13px;color:var(--muted)"><a href="quickstart.html">Quick start</a> —
@@ -741,9 +723,10 @@
   </section>
 
   <footer>
-    B2 · search &amp; similarity explainer · the design docs in <code>docs/design/</code> are the source of
+    B2 · search &amp; similarity explainer · the design docs in
+    <a href="https://github.com/AlteredCraft/B2/tree/main/design"><code>design/</code></a> are the source of
     truth and the code is a projection of the spec. Back to the <a href="index.html">overview</a>, the
-    <a href="architecture.html">architecture</a>, or <a href="discovery.html">the discovery deep dive</a>.
+    <a href="architecture.html">architecture</a>, or <a href="retrieval.html">the retrieval deep dive</a>.
   </footer>
 
 </div>

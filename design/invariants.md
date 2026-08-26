@@ -17,7 +17,7 @@ status: active
 > decision, never a drive-by edit. Cite entries by id (S2, G2, …).
 >
 > The *why* behind an entry — the context it was ruled in, and what the ruling costs — lives in
-> [`ADRs/`](../../ADRs/README.md). Changing an entry here means writing or superseding an ADR there.
+> [`ADRs/`](../ADRs/README.md). Changing an entry here means writing or superseding an ADR there.
 
 The register is the two design tenets — *a volatile vault over a disposable index* and *build for
 tomorrow's model* — made mechanical.
@@ -232,7 +232,7 @@ tomorrow's model* — made mechanical.
   every absolute signal), and D1's prefix requirement rightly forbids a fold from re-sorting it.
   So the tail complaint is an **ordering** problem, its payment the reranker seam M1 reserves, and
   the bake-off re-arms every run
-  ([docs/evals/README.md](../evals/README.md), the #206 verdict).
+  ([crates/b2-embed/evals/README.md](../crates/b2-embed/evals/README.md), the #206 verdict).
   **The surfaces carry it now** (GH #202, 2026-08-22), and the verdict is **three-state, each state
   a different behavior**: evidence found → serve as always; **no evidence → the honest empty state
   and none of the rows** (*strict* — no reveal, no `--all`, no expander: any of those would put the
@@ -248,7 +248,7 @@ tomorrow's model* — made mechanical.
   handed rows *plus* an explicit verdict can be honest about them where a reader given rows
   alone cannot.
   ([index-engine.md](index-engine.md) §4, GH #201/#202,
-  [docs/evals/README.md](../evals/README.md) process rules)
+  [crates/b2-embed/evals/README.md](../crates/b2-embed/evals/README.md) process rules)
 
 ## E — Engineering discipline (what keeps the above true)
 
@@ -256,17 +256,17 @@ tomorrow's model* — made mechanical.
   are injected (`created` params) and nothing is minted at all — since GH #170 identity is the path,
   so the id generator that was the core's other randomness source is gone rather than merely
   injected. Clocks and log subscribers live in the adapters.
-  ([CLAUDE.md](../../CLAUDE.md) Conventions)
+  ([CLAUDE.md](../CLAUDE.md) Conventions)
 - **E2 — `cargo test` is fast, deterministic, and model-free; model quality never enters CI.**
   Real-model work lives behind `b2 init` / the out-of-CI eval harness. `#[ignore]` is forbidden — a
   hard-to-write test is a signal to re-anchor on the invariant or fix the system.
-  ([docs/evals/README.md](../evals/README.md), the harness under `crates/b2-embed/evals/`)
+  ([crates/b2-embed/evals/README.md](../crates/b2-embed/evals/README.md), the harness under `crates/b2-embed/evals/`)
 - **E3 — The `Vault` façade is the one typed API, and every adapter is dumb.** CLI and desktop
   commands are deserialize → one façade call → serialize; logic that wants to live in an adapter
   belongs behind the façade. Dependencies point one way (adapters → core, never back); façade ops are
-  added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md))
+  added on need, never pre-built. ([crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md))
 - **E4 — User-facing errors are generic and actionable, never leaking internals.** Full detail goes
-  to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../../CLAUDE.md) Conventions)
+  to logs / `B2_DEBUG`, not to the terminal or webview. ([CLAUDE.md](../CLAUDE.md) Conventions)
 - **E5 — Note content is untrusted input; rendering is a trust boundary.** Authorship is not trust: a
   `.md` can come from anyone (a shared vault, a downloaded or web-clipped note), so B2 treats rendered
   note content — and model output, which is the same class of input (M1) — as hostile. Two rules hold
@@ -278,7 +278,7 @@ tomorrow's model* — made mechanical.
   a web link (`http`, `https`, `mailto`) is an **OS handoff** performed host-side behind a scheme
   allow-list, and every other scheme is refused rather than handed to an OS that would launch whatever
   app claims it.
-  ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #77)
+  ([crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md), GH #77)
 
 ## C — Concurrency: many readers, one builder
 
@@ -318,4 +318,4 @@ tomorrow's model* — made mechanical.
     chord; advised, and allowed, when an inner surface or the editor also binds it.
 
   The `b2` CLI satisfies this by nature; K1 governs the GUI adapter.
-  ([crates/b2-desktop/CLAUDE.md](../../crates/b2-desktop/CLAUDE.md), GH #78, #119, #121)
+  ([crates/b2-desktop/CLAUDE.md](../crates/b2-desktop/CLAUDE.md), GH #78, #119, #121)

@@ -12,7 +12,7 @@ status: active
 > vector scan + the typed graph) and the flows over it. Companion docs: [invariants.md](invariants.md)
 > (the normative *why*, cited by id) and [data-model.md](data-model.md) (the *what*).
 >
-> **Rationale lives in [`ADRs/`](../../ADRs/README.md)** — why SQLite and not qmd (ADR-0019), why
+> **Rationale lives in [`ADRs/`](../ADRs/README.md)** — why SQLite and not qmd (ADR-0019), why
 > plain vector tables (ADR-0006), why the graph is materialized (ADR-0010), why discovery always
 > serves (ADR-0014), why a served result claims evidence (ADR-0015), why candle (ADR-0020). This
 > doc specifies what the engine *is*; each section names the record that decided it.
@@ -40,7 +40,7 @@ chunking for code stays deferred ([GH #104](https://github.com/AlteredCraft/B2/i
 
 ## 2. Why we rebuild instead of depend on qmd
 
-Recorded in full as **[ADR-0019](../../ADRs/0019-build-our-own-sqlite-index-engine.md)**. In one
+Recorded in full as **[ADR-0019](../ADRs/0019-build-our-own-sqlite-index-engine.md)**. In one
 line: qmd is a search engine and B2 is a typed graph with hybrid retrieval over it — qmd models no
 typed edges, no backlinks, and nothing that repairs links on a move (G1–G6, L1), and SQLite holds all
 three queryable concerns in one transactional store.
@@ -167,7 +167,7 @@ already walks each body for chunking. The standing cost is the move-repair ampli
 ### Discovery surfacing serves the ranked list — `limit` is a cap, not a promise
 
 The standing rule is **invariants.md D1**; the decision, the seven issues of measurement behind it,
-and the retired z-gate are **[ADR-0014](../../ADRs/0014-discovery-always-serves-the-ranked-prefix.md)**.
+and the retired z-gate are **[ADR-0014](../ADRs/0014-discovery-always-serves-the-ranked-prefix.md)**.
 Mechanically, in this engine:
 
 - `similar` serves the ranked top-N whenever candidates exist. `limit` under-fills only for want of
@@ -194,9 +194,9 @@ would still only filter what is surfaced, never author a link. Under always-serv
 
 Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extension, no ANN.
 
-> Step-by-step flowcharts of flows ② and ③ — every stage anchored to the function that implements
-> it — live in [retrieval-flows.md](retrieval-flows.md). This section stays the spec; that doc is
-> the guided walk through the code.
+> The step-by-step walk through flows ② and ③ — every stage anchored to the function that
+> implements it — is the docs site's [retrieval deep dive](../docs/retrieval.html). This section
+> stays the spec; that page is the guided walk through the code.
 
 - **Storage & scoring.** Vectors live in plain tables — `embeddings(text_hash, vector)` plus per-note
   `note_centroids` — read with one statement and scored in-process (`embed::l2_sq`).
@@ -211,7 +211,7 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
   runs over the single BM25 list, so scores stay on one scale.
 - **The flow can answer zero, and the evidence rides beside the order** (invariants.md **D2**;
   decision and history in
-  **[ADR-0015](../../ADRs/0015-a-served-search-result-is-a-claim-of-evidence.md)**). `hybrid_search`
+  **[ADR-0015](../ADRs/0015-a-served-search-result-is-a-claim-of-evidence.md)**). `hybrid_search`
   returns a `Retrieval`: the same fused order (untouched — provenance is carried, never folded in),
   each hit naming the lists that ranked it and its own distance, plus the dense half's best cosine.
   The lexical reading is deliberately *not* in it — it costs a `count(*)` per distinct term, so
@@ -242,7 +242,7 @@ Semantic search is **in v1** (ADR-0019) — exact, in-process, no vector extensi
     measured and stays unshipped (GH #206): with `tail_relevant` labels in place, the four-family
     prefix-cut bake-off found every admissible rule vacuous — the fused order is not an evidence
     order, so admissible folds reach 2–23 of the 367 rows an oracle fold would cut. The ruling and
-    its numbers live in [docs/evals/README.md](../evals/README.md); the bake-off re-arms every run.
+    its numbers live in [crates/b2-embed/evals/README.md](../crates/b2-embed/evals/README.md); the bake-off re-arms every run.
 - **Flow ③ discovery is two-stage** (`discover.rs`). An O(notes) coarse scan over centroids — the
   anchor and its 1-hop graph neighbours excluded *up front*, so the already-connected never occupy a
   shortlist slot — keeps a shortlist (`SHORTLIST_PER_RESULT = 20` per asked result, floored at
@@ -322,7 +322,7 @@ fusion: `RRF_K` re-weights the same two lists and reorders results at any corpus
 the smallest, most variable win ([GH #105](https://github.com/AlteredCraft/B2/issues/105)).
 
 The harness itself — corpora, labels, metrics, exit gates, process rules — is
-[docs/evals/README.md](../evals/README.md); read it before touching any of them.
+[crates/b2-embed/evals/README.md](../crates/b2-embed/evals/README.md); read it before touching any of them.
 
 ## 6. The AI seams — the embedder in a single binary, and grounded chat
 
@@ -331,7 +331,7 @@ Two seams, both enumerated by M1 (ADR-0005) and both injected by the adapters.
 ### `Embedder`
 
 Runtime, provisioning, and the model choice are
-**[ADR-0020](../../ADRs/0020-embeddings-inside-the-single-binary.md)**: `candle` + `hf-hub` compiled
+**[ADR-0020](../ADRs/0020-embeddings-inside-the-single-binary.md)**: `candle` + `hf-hub` compiled
 into the binary, an explicit `b2 init` into a shared XDG cache, default `BAAI/bge-base-en-v1.5`
 (768-dim, CLS-pooled, L2-normalized, bge's asymmetric query prefix), the dimension read from the
 model's own `config.json`.

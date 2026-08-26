@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B2 — Inside b2 search &amp; b2 similar: the two retrieval flows</title>
+<meta name="description" content="The code-anchored walk through B2's two retrieval flows: hybrid search (BM25 ⊕ vector KNN fused by RRF, served with an evidence verdict) and connection discovery (the two-stage scan over stored vectors, always served). Every stage names the function that implements it.">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3340; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --purple:#bc8cff;
+    --pink:#f778ba; --cyan:#39c5cf; --danger:#f85149; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --t1:#58a6ff; --t3:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  .wrap{max-width:880px;margin:0 auto;padding:0 24px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:10px}
+  .topbar .brand{font-weight:700;letter-spacing:.3px}
+  .topbar .brand span{color:var(--muted);font-weight:400}
+  .topbar .links{display:flex;gap:18px;font-size:13.5px;flex-wrap:wrap}
+  .topbar .links a{color:var(--muted)}
+  header.hero{padding:44px 0 6px}
+  .kicker{font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin-bottom:10px}
+  h1.title{font-size:34px;line-height:1.05;margin:0 0 14px;letter-spacing:-.5px}
+  p.lead{font-size:17px;color:var(--muted);max-width:780px;margin:0}
+  p.lead b{color:var(--ink)}
+  .eq{font-family:var(--mono);color:var(--ink)}
+  section{margin:40px 0;scroll-margin-top:20px}
+  section h2{font-size:22px;margin:0 0 4px;letter-spacing:-.2px}
+  section h2 .num{font-family:var(--mono);font-size:14px;color:var(--muted);margin-right:8px}
+  section h3{font-size:16px;margin:26px 0 4px;letter-spacing:-.1px}
+  section p.sub{color:var(--muted);margin:2px 0 16px;max-width:820px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .card.tight{padding:14px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}h1.title{font-size:28px}}
+  .kickerlbl{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);margin-bottom:6px}
+  ul.tidy{margin:8px 0;padding-left:20px;max-width:820px} ul.tidy li{margin:6px 0}
+  pre{background:#0a0e14;border:1px solid var(--line);border-radius:10px;padding:13px 15px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#c9d4e0;margin:12px 0}
+  pre .c{color:#6b7682} pre .n{color:#79c0ff} pre .g{color:#8fe3a6} pre .a{color:#f0b661}
+  .ground{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--green);border-radius:8px;padding:11px 14px;font-size:13px}
+  .ground b{color:var(--ink)} .ground .mono{color:#8fe3a6;font-family:var(--mono);font-size:12px}
+  .invariant{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:11px 14px;font-size:13.5px}
+  .invariant b{color:var(--ink)}
+  .caveat{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;padding:11px 14px;font-size:13.5px}
+  .caveat b{color:var(--ink)}
+  .goodbox{margin:22px 0 6px;background:rgba(63,185,80,.07);border:1px solid rgba(63,185,80,.35);border-left:4px solid var(--green);border-radius:10px;padding:15px 18px;font-size:14px;line-height:1.6}
+  .goodbox b{color:var(--ink)} .goodbox p{margin:7px 0 0;color:var(--ink)}
+  .goodbox .tag{display:inline-block;font:700 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.9px;color:var(--green);border:1px solid rgba(63,185,80,.5);border-radius:5px;padding:3px 6px;margin-bottom:7px}
+  .files{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin:2px 0 10px}
+  table{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0}
+  th,td{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
+  td.mono,td code{font-family:var(--mono);font-size:12px;color:#c9d4e0}
+  .tblwrap{overflow-x:auto}
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:18px 0}
+  .diagram svg{width:100%;height:auto;display:block}
+  .diagram text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--ink)}
+  .diagram .mono-t{font-family:var(--mono)}
+  .diagram .title{font-size:13px;font-weight:600;fill:var(--ink)}
+  .diagram .sub{font-size:10.5px;fill:var(--muted)}
+  .diagram .lbl{font-size:10.5px;fill:var(--muted)}
+  .diagram .node{fill:var(--panel2);stroke:var(--line);stroke-width:1.4}
+  .diagram .chip{fill:var(--panel);stroke-width:1.6}
+  .diagram .edge{fill:none;stroke-width:1.6}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--muted);margin-top:6px}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .legend .sw{display:inline-block;width:14px;height:10px;border-radius:3px;border:1.4px solid var(--line)}
+  .cap{color:var(--muted);font-size:12.5px;margin:2px 2px 0}
+  footer{color:var(--muted);font-size:12.5px;padding:26px 0 60px;border-top:1px solid var(--line);margin-top:44px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">B2 <span>· docs</span></div>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="quickstart.html">Quick start</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="indexing.html">Indexing</a>
+      <a href="search-and-similarity.html">Concepts</a>
+      <a href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
+    </div>
+  </div>
+
+  <header class="hero">
+    <div class="kicker">Deep dive · the read paths</div>
+    <h1 class="title">Inside <span class="eq">b2 search</span> &amp; <span class="eq">b2 similar</span></h1>
+    <p class="lead">The two retrieval flows, stage by stage, <b>each stage anchored to the function that
+    implements it</b>. Both adapters — the CLI and the desktop app — call the same <code>Vault</code>
+    façade reads, so the rows a surface shows are computed once, identically. The code is ground truth;
+    this page is a projection of it. New to the ideas? Start with the
+    <a href="search-and-similarity.html">plain-language concepts explainer</a>.</p>
+  </header>
+
+  <!-- ========================================================= -->
+  <section id="two">
+    <h2><span class="num">1</span>Two questions, two postures</h2>
+    <p class="sub">Search and similarity read the same index and end in opposite disclosure rules —
+    deliberately, because they answer different kinds of question.</p>
+    <div class="grid2">
+      <div class="card tight">
+        <div class="kickerlbl" style="color:var(--t3)">Flow ② — search</div>
+        <p style="font-size:13px;margin:6px 0 0"><em>"What in my vault matches this query?"</em> has an
+        honest zero, so a served result is a <b>claim of evidence</b>: a query the vault holds no lexical
+        or semantic evidence for answers <b>"no matches"</b> and serves none of its nearest guesses
+        (invariants D2, <a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0015-a-served-search-result-is-a-claim-of-evidence.md">ADR-0015</a>).</p>
+      </div>
+      <div class="card tight">
+        <div class="kickerlbl" style="color:var(--amber)">Flow ③ — similar</div>
+        <p style="font-size:13px;margin:6px 0 0"><em>"What belongs next to this note that I haven't
+        linked?"</em> is relative — everything in a vault is <em>somewhat</em> related to everything —
+        so the ranked list is <b>always served</b> and no anchor-local statistic gates it
+        (invariants D1, <a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0014-discovery-always-serves-the-ranked-prefix.md">ADR-0014</a>).
+        You are the judge.</p>
+      </div>
+    </div>
+    <p class="cap" style="margin-top:10px">A near-neighbour of both that is neither:
+    <code>graph_filtered_search</code> (<span class="mono">search.rs</span>) is the vector⨝graph
+    <em>scoped-traversal</em> primitive — "nearest chunks whose note is within <em>k</em> typed hops of an
+    anchor" (near <b>∩</b> connected). Discovery is its <em>complement</em> (near <b>∖</b> connected).
+    And <code>vector_only_search</code> is the eval harness's ablation instrument, never an adapter
+    surface.</p>
+  </section>
+
+  <!-- ========================================================= -->
+  <section id="search">
+    <h2><span class="num">2</span>Flow ② — search, from query to served rows</h2>
+    <div class="files">crates/b2-core/src/search.rs · vault.rs — entry: Vault::search_evidence (the CLI's cmd_search adds --exclude via search_evidence_excluding; the desktop's `search` command is the same read)</div>
+    <p class="sub">Hybrid retrieval: BM25 over <code>chunks_fts</code> ⊕ brute-force vector KNN over
+    <code>embeddings</code>, fused by Reciprocal Rank Fusion, resolved from chunks up to notes, and
+    served <b>with</b> the evidence verdict that lets a surface say "no matches" honestly.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1000 620" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="The search pipeline: the query splits into a BM25 leg and a vector leg, both feed provenance and RRF fusion, hits resolve to notes, and the evidence verdict is read beside the ranked rows">
+        <defs>
+          <marker id="q-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+          <marker id="q-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--green)"/></marker>
+          <marker id="q-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--purple)"/></marker>
+          <marker id="q-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
+        </defs>
+
+        <!-- entry -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="18" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="41" text-anchor="middle">Vault::search_evidence_excluding(query, limit, exclude)</text>
+        <text class="sub mono-t" x="500" y="59" text-anchor="middle">hit pool = 3 × max(limit, 1) — headroom for note-dedup + torn reads</text>
+
+        <!-- guard chip -->
+        <rect class="chip" style="stroke:var(--danger);fill:rgba(248,81,73,.05)" x="736" y="96" width="248" height="60" rx="9"/>
+        <text class="title" x="748" y="118" text-anchor="start" style="fill:var(--danger)">fail fast on a model swap</text>
+        <text class="sub mono-t" x="748" y="134" text-anchor="start">ensure_query_space_matches →</text>
+        <text class="sub mono-t" x="748" y="148" text-anchor="start">Error::ModelMismatch — reindex to fix</text>
+
+        <!-- dispatch -->
+        <rect class="node" style="stroke:var(--amber);fill:rgba(210,153,34,.06)" x="280" y="96" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="119" text-anchor="middle">does the embeddings table exist?</text>
+        <text class="sub mono-t" x="500" y="137" text-anchor="middle">db::embedding_space_exists — no → keyword_only_search (the BM25 leg alone)</text>
+
+        <!-- two legs -->
+        <rect class="node" style="stroke:var(--green)" x="60" y="188" width="400" height="74" rx="10"/>
+        <text class="title" x="260" y="210" text-anchor="middle">the keyword leg — BM25</text>
+        <text class="sub mono-t" x="260" y="228" text-anchor="middle">fts5_query: alphanumeric runs, each double-quoted, OR-ed</text>
+        <text class="sub mono-t" x="260" y="243" text-anchor="middle">(punctuation is FTS5 syntax) → chunks_fts MATCH,</text>
+        <text class="sub mono-t" x="260" y="257" text-anchor="middle">porter unicode61 (stemmed — the measured #157 verdict)</text>
+
+        <rect class="node" style="stroke:var(--purple)" x="540" y="188" width="400" height="74" rx="10"/>
+        <text class="title" x="740" y="210" text-anchor="middle">the semantic leg — vector KNN</text>
+        <text class="sub mono-t" x="740" y="228" text-anchor="middle">embedder.embed_query (bge's asymmetric query prefix)</text>
+        <text class="sub mono-t" x="740" y="243" text-anchor="middle">→ db::vector_search — full in-process scan,</text>
+        <text class="sub mono-t" x="740" y="257" text-anchor="middle">embed::l2_sq per chunk vector, nearest first</text>
+
+        <!-- provenance -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="298" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="321" text-anchor="middle">provenance_of — per chunk: bm25_rank · vector_rank · distance</text>
+        <text class="sub mono-t" x="500" y="339" text-anchor="middle">+ best_cos — the absolute signals RRF is about to discard</text>
+
+        <!-- fuse -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="378" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="401" text-anchor="middle">rrf_fuse — score = Σ 1 / (60 + rank + 1) over both lists</text>
+        <text class="sub mono-t" x="500" y="419" text-anchor="middle">RRF_K = 60 · ties break on the dense list's rank (GH #156)</text>
+
+        <!-- resolve -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="458" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="481" text-anchor="middle">resolve to notes — resolve_hits → resolve_note_hits</text>
+        <text class="sub mono-t" x="500" y="499" text-anchor="middle">note-dedup onto the best chunk · query-windowed snippet · stop at limit</text>
+
+        <!-- verdict chip -->
+        <rect class="chip" style="stroke:var(--amber);fill:rgba(210,153,34,.06)" x="12" y="382" width="232" height="118" rx="9"/>
+        <text class="title" x="24" y="404" text-anchor="start" style="fill:var(--amber)">the evidence verdict</text>
+        <text class="sub mono-t" x="24" y="422" text-anchor="start">lexical_evidence: IDF-weighted</text>
+        <text class="sub mono-t" x="24" y="436" text-anchor="start">term coverage · one df per term</text>
+        <text class="sub mono-t" x="24" y="452" text-anchor="start">EvidenceBar::for_model → bar/None</text>
+        <text class="sub mono-t" x="24" y="468" text-anchor="start">vouched = coverage clears it,</text>
+        <text class="sub mono-t" x="24" y="482" text-anchor="start">OR best_cos clears it</text>
+
+        <!-- out -->
+        <rect class="node" style="stroke:var(--green)" x="280" y="540" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="563" text-anchor="middle">SearchEvidenceView — the rows, whole and in fused order</text>
+        <text class="sub mono-t" x="500" y="581" text-anchor="middle">{ results, vouched, chunk_total, terms, best_cos } — never reordered</text>
+
+        <!-- edges -->
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#q-accent)" d="M500,74 L500,94"/>
+        <path class="edge" style="stroke:var(--danger)" d="M720,124 L734,124"/>
+        <path class="edge" style="stroke:var(--green)" marker-end="url(#q-green)" d="M380,152 C320,164 268,172 262,186"/>
+        <path class="edge" style="stroke:var(--purple)" marker-end="url(#q-purple)" d="M620,152 C680,164 732,172 738,186"/>
+        <path class="edge" style="stroke:var(--green)" marker-end="url(#q-accent)" d="M262,262 C270,282 330,290 380,298"/>
+        <path class="edge" style="stroke:var(--purple)" marker-end="url(#q-accent)" d="M738,262 C730,282 670,290 620,298"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#q-accent)" d="M500,354 L500,376"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#q-accent)" d="M500,434 L500,456"/>
+        <path class="edge" style="stroke:var(--amber)" marker-end="url(#q-amber)" d="M244,441 C260,441 268,420 278,410"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#q-green)" d="M500,514 L500,538"/>
+        <path class="edge" style="stroke:var(--amber)" marker-end="url(#q-green)" d="M130,500 C130,552 200,562 278,566"/>
+      </svg>
+      <div class="legend">
+        <span><span class="sw" style="border-color:var(--green)"></span> keyword (BM25)</span>
+        <span><span class="sw" style="border-color:var(--purple)"></span> semantic (vector)</span>
+        <span><span class="sw" style="border-color:var(--amber)"></span> the evidence reading</span>
+        <span><span class="sw" style="border-color:var(--danger)"></span> fail fast</span>
+      </div>
+    </div>
+
+    <ul class="tidy" style="font-size:13.5px">
+      <li><b>Width is a quality knob, not plumbing.</b> The façade asks retrieval for a <em>hit pool</em>
+      over its <code>limit</code>, and each signal widens that again (<code>pool_size</code> = 5×, min 30)
+      before RRF fuses. The note view keeps <b>3×</b> (dedup collapses chunks onto notes); the passage
+      view (<code>search_chunks</code> — chat's retrieve step) keeps only <code>limit + 2</code>, torn-read
+      headroom, because RRF over a wider candidate set returns <em>different</em> answers, not more of
+      them — width moves only on measured relevance (GH #141/#142).</li>
+      <li><b>BM25-only is a smaller projection, never an error.</b> On a projected-but-unembedded vault
+      the vector half is absent; the same fusion runs over the single BM25 list, so scores stay on one
+      scale — and <code>best_cos</code> is honestly <code>None</code>.</li>
+      <li><b><code>--exclude</code> subtracts rows, never evidence.</b> The follow-up-search flag for
+      agent loops removes caller-named paths from the served rows; the verdict and its signals still read
+      the whole vault, and a heavily-excluded query may honestly under-fill.</li>
+    </ul>
+
+    <h3 id="verdict">Three verdict states, three behaviours</h3>
+    <p class="sub">The verdict is <b>lexical OR semantic</b> — two independent signals, because one test
+    cannot tell <em>nothing here matches</em> from <em>everything here matches</em>. The lexical anchor is
+    <b>IDF-weighted term coverage</b> (a stopword is a measurement, never a shipped word-list); the
+    semantic backstop is the best cosine. The bar is calibrated <b>per embedding model</b> in the eval
+    harness; its values live in <code>search::BGE_BASE_EVIDENCE_BAR</code> and are re-justified on every
+    <code>make eval</code> run — deliberately never quoted in prose.</p>
+    <div class="tblwrap">
+    <table>
+      <tr><th>Verdict</th><th>CLI human mode</th><th>CLI <code>--json</code></th><th>Desktop</th></tr>
+      <tr><td><b><code>vouched: true</code></b> — evidence found</td><td>the rows</td><td>the object, rows + verdict</td><td>the rows</td></tr>
+      <tr><td><b><code>vouched: false</code></b> — no evidence</td><td><b>"No matches."</b> and none of the rows — strict: no reveal, no <code>--all</code></td><td>the rows <em>are</em> served, beside <code>vouched: false</code> — an agent handed an explicit verdict can be honest about them</td><td>no rows kept (one boundary: <code>doSearch</code>, <span class="mono">ui/src/main.ts</span>)</td></tr>
+      <tr><td><b><code>vouched: null</code></b> — no calibrated bar for the active model (the fake, or any unmeasured model)</td><td colspan="3">serve as always — <b>no verdict is offered rather than one guessed</b>; folding it into "no evidence" would blank a dev vault</td></tr>
+    </table>
+    </div>
+
+    <h3>Anchors — flow ②</h3>
+    <div class="tblwrap">
+    <table>
+      <tr><th>Stage</th><th>Function</th><th>Source</th></tr>
+      <tr><td>CLI entry, human rendering</td><td class="mono">cmd_search · search_report</td><td class="mono">b2-cli/src/main.rs</td></tr>
+      <tr><td>Desktop entry</td><td class="mono">search (Tauri command)</td><td class="mono">b2-desktop/src/commands.rs</td></tr>
+      <tr><td>Façade read, exclusion, verdict assembly</td><td class="mono">Vault::search_evidence · search_evidence_excluding</td><td class="mono">b2-core/src/vault.rs</td></tr>
+      <tr><td>Hybrid / BM25-only dispatch</td><td class="mono">Vault::retrieve · db::embedding_space_exists</td><td class="mono">vault.rs · db.rs</td></tr>
+      <tr><td>Model-identity fail-fast</td><td class="mono">Vault::ensure_query_space_matches</td><td class="mono">vault.rs · db.rs</td></tr>
+      <tr><td>Query sanitizing</td><td class="mono">fts5_query · query_terms</td><td class="mono">search.rs</td></tr>
+      <tr><td>The two legs</td><td class="mono">keyword_search · db::vector_search · embed::l2_sq</td><td class="mono">search.rs · db.rs · embed.rs</td></tr>
+      <tr><td>Query embedding (bge query prefix)</td><td class="mono">LocalEmbedder::embed_query</td><td class="mono">b2-embed/src/model.rs · config.rs</td></tr>
+      <tr><td>Provenance, fusion, tie policy</td><td class="mono">provenance_of · rrf_fuse · RRF_K</td><td class="mono">search.rs</td></tr>
+      <tr><td>Chunk→note resolution, snippet</td><td class="mono">resolve_hits · Vault::resolve_note_hits · query_snippet</td><td class="mono">search.rs · vault.rs</td></tr>
+      <tr><td>Lexical evidence</td><td class="mono">lexical_evidence · fts_tokens · LexicalEvidence</td><td class="mono">search.rs · db.rs</td></tr>
+      <tr><td>The verdict</td><td class="mono">EvidenceBar::for_model · QueryEvidence::vouched</td><td class="mono">search.rs</td></tr>
+      <tr><td>Frontend boundary</td><td class="mono">doSearch (vouched === false drops the rows once)</td><td class="mono">ui/src/main.ts</td></tr>
+    </table>
+    </div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">search.rs</span>'s suite locks k=60, the
+    dense tie-break, and that a doc in both lists outranks single-list winners;
+    <span class="mono">cli.rs</span> drives the built binary through the three verdict states. Under the
+    fake embedder these prove the <em>plumbing</em>; ranking quality and the bar's values are the
+    out-of-CI <a href="https://github.com/AlteredCraft/B2/blob/main/crates/b2-embed/evals/README.md">eval
+    harness</a>'s to measure.</div>
+  </section>
+
+  <!-- ========================================================= -->
+  <section id="similar">
+    <h2><span class="num">3</span>Flow ③ — similar, the two-stage discovery scan</h2>
+    <div class="files">crates/b2-core/src/discover.rs — candidates · vault.rs — Vault::similar · CLI cmd_similar · desktop Similar pane</div>
+
+    <div class="goodbox">
+      <span class="tag">Free &amp; local</span><br>
+      <b><code>b2 similar</code> makes zero model calls and touches no network.</b>
+      <p>Discovery is a <b>pure read over stored vectors</b>: the anchor is represented by the chunk
+      vectors a prior <a href="indexing.html">reindex</a> wrote — never an <code>embed_query</code> of its
+      text (bge's asymmetric query prefix is the wrong side of the space) — which is why the CLI opens the
+      vault with the fake embedder and still serves real-model rankings. Running it a hundred times costs
+      what running it zero times does. <b>You</b> are the precision gate: there is no suggestion queue and
+      nothing "inert until accepted" — a connection exists only once you write it.</p>
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1000 490" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="The b2 similar pipeline: façade guards, anchor chunk vectors, centroid shortlist minus already-linked neighbours, exact max-sim per note, rank, grade, list top N">
+        <defs>
+          <marker id="s-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+          <marker id="s-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
+          <marker id="s-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--green)"/></marker>
+        </defs>
+
+        <!-- facade -->
+        <rect class="node" style="stroke:var(--t1)" x="280" y="18" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="41" text-anchor="middle">Vault::similar(note_ref, limit)</text>
+        <text class="sub mono-t" x="500" y="59" text-anchor="middle">grade = the RECORDED model id isn't the fake's (db::recorded_embedder)</text>
+
+        <!-- guards chip -->
+        <rect class="chip" style="stroke:var(--danger);fill:rgba(248,81,73,.05)" x="742" y="96" width="242" height="62" rx="9"/>
+        <text class="title" x="754" y="118" text-anchor="start" style="fill:var(--danger)">honest refusals</text>
+        <text class="sub mono-t" x="754" y="134" text-anchor="start">resource anchor → ResourceUnsupported</text>
+        <text class="sub mono-t" x="754" y="148" text-anchor="start">unknown ref → NoteNotFound</text>
+
+        <rect class="node" style="stroke:var(--t1)" x="280" y="96" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="119" text-anchor="middle">anchor note · its stored chunk vectors</text>
+        <text class="sub mono-t" x="500" y="137" text-anchor="middle">db::note_chunk_vectors — read back, never re-embed · centroid in-process</text>
+
+        <!-- graph chip -->
+        <rect class="chip" style="stroke:var(--amber);fill:rgba(210,153,34,.06)" x="30" y="176" width="222" height="50" rx="9"/>
+        <text class="title" x="42" y="197" text-anchor="start" style="fill:var(--amber)">graph · already-linked</text>
+        <text class="sub mono-t" x="42" y="213" text-anchor="start">reachable_within(anchor, 1)</text>
+
+        <rect class="node" style="stroke:var(--t1)" x="280" y="174" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="197" text-anchor="middle">stage 1 — centroid shortlist ∖ already-linked · O(notes)</text>
+        <text class="sub mono-t" x="500" y="215" text-anchor="middle">for_each_note_centroid · excluded up front · keep max(20 × limit, 200)</text>
+
+        <rect class="node" style="stroke:var(--t3)" x="280" y="252" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="275" text-anchor="middle">stage 2 — exact max-sim over the shortlist only</text>
+        <text class="sub mono-t" x="500" y="293" text-anchor="middle">best (smallest L2²) chunk pair · keep the evidence chunk</text>
+
+        <rect class="node" style="stroke:var(--t1)" x="280" y="330" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="353" text-anchor="middle">rank · grade · cap</text>
+        <text class="sub mono-t" x="500" y="371" text-anchor="middle">ties by path · z iff graded (pool ≥ 12, sd &gt; 0) · take(limit)</text>
+
+        <rect class="node" style="stroke:var(--green)" x="280" y="408" width="440" height="56" rx="10"/>
+        <text class="title" x="500" y="431" text-anchor="middle">CandidateNote — path · title · score · evidence · z?</text>
+        <text class="sub mono-t" x="500" y="449" text-anchor="middle">score = −√(best-pair d²) · the z gates nothing — it paints the band</text>
+
+        <!-- edges -->
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,74 L500,94"/>
+        <path class="edge" style="stroke:var(--danger)" d="M720,124 L740,124"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,152 L500,172"/>
+        <path class="edge" style="stroke:var(--amber)" marker-end="url(#s-amber)" d="M252,201 L278,201"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,230 L500,250"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-accent)" d="M500,308 L500,328"/>
+        <path class="edge" style="stroke:var(--accent)" marker-end="url(#s-green)" d="M500,386 L500,406"/>
+      </svg>
+      <div class="legend">
+        <span><span class="sw" style="border-color:var(--accent)"></span> vectors — KNN &amp; max-sim (no model)</span>
+        <span><span class="sw" style="border-color:var(--amber)"></span> graph — the ∖ already-linked exclusion</span>
+        <span><span class="sw" style="border-color:var(--green)"></span> the ranked list you read</span>
+      </div>
+    </div>
+
+    <ul class="tidy" style="font-size:13.5px">
+      <li><b>The shortlist is a recall device, never a quality gate.</b> Stage 1 exists only to avoid
+      scoring the whole vault; on any vault at or below 200 candidate notes the two-stage result is
+      <em>exactly</em> the whole-space scan's, which is what keeps the shape a pure performance device
+      (GH #38, #192).</li>
+      <li><b>The 1-hop exclusion is the graph's only role.</b> The anchor and its direct neighbours are
+      skipped up front, so they never occupy a shortlist slot. A 2-hop note — the triadic-closure
+      candidate, "you linked A–B and B–E but never A–E" — <em>survives</em>, ranked purely by semantic
+      score.</li>
+      <li><b>Max-sim, not centroids, decides the score.</b> A note's centroid shortlists it; its single
+      best chunk-pair ranks it, and that chunk rides along as the <b>evidence passage</b> the surface
+      shows — so one strong section inside a messy note still counts
+      (<a href="search-and-similarity.html#similar">the buried gem</a>).</li>
+      <li><b>The list is served whole, graded where a statistic exists.</b> The ranked list is always
+      served — <code>limit</code> is a cap that under-fills only for want of scorable notes, and no
+      anchor-local statistic ever empties the pane: such a test cannot distinguish <em>nothing is
+      related</em> from <em>everything is related</em> (invariants D1; the measurements are
+      <a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0014-discovery-always-serves-the-ranked-prefix.md">ADR-0014</a>'s
+      record). The per-candidate <b>z</b> is computed against the anchor's own candidate population and
+      <b>gates nothing</b>: it paints the desktop's <a href="search-and-similarity.html#bands">strength
+      band</a>. Under 12 candidates, in a space with no spread, or on a fake-embedded space, no z exists —
+      the list is served <em>ungraded</em>, and the surface says so.</li>
+      <li><b>Empty means "nothing to compare", never "nothing relates".</b> At a nonzero ask, an empty
+      list means no unlinked note has stored vectors yet (or the space isn't semantic) — the CLI's two
+      empty states say exactly that.</li>
+    </ul>
+
+    <h3>Anchors — flow ③</h3>
+    <div class="tblwrap">
+    <table>
+      <tr><th>Stage</th><th>Function</th><th>Source</th></tr>
+      <tr><td>CLI entry, empty states, link nudge</td><td class="mono">cmd_similar</td><td class="mono">b2-cli/src/main.rs</td></tr>
+      <tr><td>Desktop entry</td><td class="mono">similar (Tauri command)</td><td class="mono">b2-desktop/src/commands.rs</td></tr>
+      <tr><td>Façade: grade, guards, ref resolution, view</td><td class="mono">Vault::similar · Vault::resolve_ref</td><td class="mono">b2-core/src/vault.rs</td></tr>
+      <tr><td>Recorded-space identity</td><td class="mono">db::recorded_embedder · embed::FAKE_MODEL_ID</td><td class="mono">db.rs · embed.rs</td></tr>
+      <tr><td>Candidate generation (both stages, z, cap)</td><td class="mono">discover::candidates</td><td class="mono">b2-core/src/discover.rs</td></tr>
+      <tr><td>Anchor + candidate vectors · centroid</td><td class="mono">db::note_chunk_vectors · embed::centroid_of</td><td class="mono">db.rs · embed.rs</td></tr>
+      <tr><td>Exclusion set</td><td class="mono">graph::reachable_within</td><td class="mono">graph.rs</td></tr>
+      <tr><td>Stage-1 centroid stream</td><td class="mono">db::for_each_note_centroid · embed::l2_sq</td><td class="mono">db.rs · embed.rs</td></tr>
+      <tr><td>Evidence snippet</td><td class="mono">db::chunk_text · snippet</td><td class="mono">db.rs · vault.rs</td></tr>
+      <tr><td>Strength band</td><td class="mono">strengthBand</td><td class="mono">ui/src/strength.ts</td></tr>
+      <tr><td>Committing (the human's half)</td><td class="mono">Vault::link · the GUI drag gesture</td><td class="mono">vault.rs · ui/src/droplink.ts</td></tr>
+    </table>
+    </div>
+    <div class="ground"><b>Ground truth:</b> <span class="mono">discover.rs</span> pins the complement —
+    direct neighbour excluded, disconnected near note kept, 2-hop note survives, deterministic ranking
+    (ties by path), empty on no vector space; <span class="mono">discover_surfacing.rs</span> pins
+    always-serve with a purpose-built geometric embedder — the list served with its z on every row, tiny
+    pools band-less but complete, fake spaces statistic-less;
+    <span class="mono">discover_query_count.rs</span> pins the query budget.</div>
+  </section>
+
+  <!-- ========================================================= -->
+  <section id="link">
+    <h2><span class="num">4</span>From the list to a link — <span class="eq">b2 link</span></h2>
+    <div class="files">design/data-model.md §4 · crates/b2-core/src/note.rs — add_relation</div>
+    <p class="sub">The list is candidates, not connections. You commit the ones worth keeping — two ways,
+    both authored in Markdown, and only one can carry a stance.</p>
+
+    <pre><span class="c"># 1 — surface the nearest not-yet-linked notes (free, local, instant)</span>
+b2 similar espresso-extraction.md
+  <span class="n">0.8143</span>  dialing-in-grind (notes/dialing-in-grind.md)
+      Finer grinds raise extraction pressure; past a point the shot chokes and turns bitter…
+  <span class="n">0.7920</span>  brew-temp (notes/brew-temp.md)
+      Temperature stability matters as much as the target — a swing mid-shot muddies the cup…
+<span class="c"># stderr: Commit one with:  b2 link espresso-extraction.md &lt;note&gt; --type &lt;verb&gt;</span>
+
+<span class="c"># 2 — commit the one worth keeping; you pick the type (defaults to `references`)</span>
+b2 link espresso-extraction.md notes/dialing-in-grind.md <span class="a">--type supports</span> \
+        <span class="a">--explanation</span> <span class="g">"grind size sets the extraction pressure"</span></pre>
+
+    <p class="cap">What changed on disk is one line, in the <b>source</b> note's frontmatter — the body is
+    untouched:</p>
+    <pre> <span class="n">b2_relations:</span>
+<span class="g">+  - "supports [[notes/dialing-in-grind.md]] — grind size sets the extraction pressure"</span></pre>
+
+    <div class="invariant"><b>An edge exists iff it's in the Markdown.</b> <code>b2 link</code> appends one
+    typed-link line and re-projects the note, so the edge materializes as <code>origin=frontmatter</code>
+    from the line just written — a projection of an authored line, never an index mutation. A body
+    <code>[[link]]</code> you write yourself is the other way, always untyped <code>references</code>. To
+    undo either, delete the line; it's gone on the next reindex. Re-run <code>b2 similar</code> afterward
+    and the linked note drops off the list — it's connected now, so the exclusion filters it. The verb
+    palette is the closed stance core — <code>references</code> · <code>supports</code> ·
+    <code>contradicts</code> — and a hand-written tail verb is kept verbatim
+    (<a href="https://github.com/AlteredCraft/B2/blob/main/ADRs/0010-typed-graph-two-homes-closed-vocabulary.md">ADR-0010</a>).</div>
+  </section>
+
+  <!-- ========================================================= -->
+  <section id="constants">
+    <h2><span class="num">5</span>The constants in one place</h2>
+    <p class="sub"><b>Structural</b> constants are design choices, quoted here.
+    <b>Distributional</b> constants are measurements keyed to the embedding model — named, never quoted:
+    their values live in the code and their justification is re-derived on every <code>make eval</code>
+    run, never frozen into prose (ADR-0013).</p>
+    <div class="tblwrap">
+    <table>
+      <tr><th>Constant</th><th>Value</th><th>Governs</th><th>Source</th></tr>
+      <tr><td class="mono">RRF_K</td><td class="mono">60</td><td>fusion weighting (qmd heritage)</td><td class="mono">search.rs</td></tr>
+      <tr><td class="mono">pool_size</td><td class="mono">5 × hit pool, min 30</td><td>per-signal candidate depth</td><td class="mono">search.rs</td></tr>
+      <tr><td class="mono">note_hit_pool</td><td class="mono">3 × limit</td><td>note-view headroom (dedup + torn reads)</td><td class="mono">vault.rs</td></tr>
+      <tr><td class="mono">chunk_hit_pool</td><td class="mono">limit + 2</td><td>passage-view headroom (torn reads only)</td><td class="mono">vault.rs</td></tr>
+      <tr><td class="mono">ASK_PASSAGES</td><td class="mono">10</td><td>chat's retrieve depth (flow ④ reads this flow)</td><td class="mono">chat.rs</td></tr>
+      <tr><td class="mono">SHORTLIST_PER_RESULT</td><td class="mono">20</td><td>discovery stage-1 width per asked result</td><td class="mono">discover.rs</td></tr>
+      <tr><td class="mono">SHORTLIST_MIN</td><td class="mono">200</td><td>discovery stage-1 floor</td><td class="mono">discover.rs</td></tr>
+      <tr><td class="mono">EXCLUDE_HOPS</td><td class="mono">1</td><td>discovery's already-connected radius</td><td class="mono">discover.rs</td></tr>
+      <tr><td class="mono">STATS_MIN_POPULATION</td><td class="mono">12</td><td>smallest population a z is claimed over</td><td class="mono">discover.rs</td></tr>
+      <tr><td class="mono">BGE_BASE_EVIDENCE_BAR</td><td><em>named, not quoted</em></td><td>the lexical anchor + the semantic backstop, per model</td><td class="mono">search.rs</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <footer>
+    B2 · the retrieval deep dive · a projection of the spec in
+    <a href="https://github.com/AlteredCraft/B2/tree/main/design"><code>design/</code></a> — invariants
+    D1/D2 govern these flows; the <em>why</em> is
+    <a href="https://github.com/AlteredCraft/B2/tree/main/ADRs">ADR-0008/0009/0014/0015</a>. Back to the
+    <a href="architecture.html">architecture</a>, the <a href="indexing.html">indexing pipeline</a>, or
+    the <a href="search-and-similarity.html">concepts explainer</a>.
+  </footer>
+
+</div>
+</body>
+</html>

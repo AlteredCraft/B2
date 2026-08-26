@@ -9,7 +9,7 @@
 // ids and the lookup throws on a miss.
 //
 // The new worry is the other direction: a chord that exists and is documented *nowhere*.
-// That's the K1 failure that matters (docs/design/invariants.md, GH #78) — an action
+// That's the K1 failure that matters (design/invariants.md, GH #78) — an action
 // reachable from the keyboard but discoverable only by reading main.ts. The coverage
 // check below is what makes adding a binding without a row impossible.
 //

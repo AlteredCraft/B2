@@ -78,7 +78,8 @@
     <div class="links">
       <a href="index.html">Home</a>
       <a href="architecture.html">Architecture</a>
-      <a href="search-and-similarity.html">Search &amp; similarity</a>
+      <a href="retrieval.html">Retrieval</a>
+      <a href="search-and-similarity.html">Concepts</a>
       <a href="https://github.com/AlteredCraft/B2">GitHub&nbsp;↗</a>
     </div>
   </div>
@@ -97,7 +98,7 @@
   <section id="shape">
     <h2><span class="num">1</span>The shape of a reindex</h2>
     <p class="sub">Ingest is the write path that realizes the governing equation
-    <span class="eq">index = projection of (Markdown)</span>. Since 2026-07-07 a reindex composes <b>two
+    <span class="eq">index = projection of (Markdown)</span>. A reindex composes <b>two
     separately-invokable passes</b>: model-free <b>projection</b> (<code>project_vault</code> — notes, chunks,
     FTS, edges), then the <b>embed pass</b> (<code>embed_vault</code> — fill the DB-derived set of chunks still
     missing a vector). Projection itself runs in <b>two phases</b> so link resolution never depends on file
@@ -216,7 +217,7 @@
     fresh embed would reproduce <em>byte-for-byte</em> (the embedder is a pure function of chunk text). So a
     drop-&amp;-rebuild and a long run of incremental reindexes converge on the identical index — the fast path
     is an optimization, never a divergence. <code>reindex</code> reports what it did:
-    <span class="eq">indexed · embedded · stamped</span> (plus any unreadable files it <em>skipped</em>),
+    <span class="eq">indexed · embedded · resources</span> (plus any unreadable files it <em>skipped</em>),
     where <code>embedded</code> is the count that actually re-ran.</div>
 
     <div class="ground"><b>Ground truth:</b>
@@ -247,7 +248,7 @@
     a seven-variant sweep (<span class="mono">make eval-sweep</span>: target sizes 250/350/600, overlaps
     0/0.30, the heading-path toggle) against the hand-labelled corpus and kept
     <span class="mono">ChunkConfig::default()</span> on the paired per-query win/loss readout
-    (GH #44, 2026-08-11). The breadcrumb-prepend knob
+    (GH #44). The breadcrumb-prepend knob
     (<span class="mono">prepend_heading_path</span>) exists and measured rank-neutral twice, so it ships off.</div>
   </section>
 
@@ -272,10 +273,11 @@
       <div class="card tight">
         <div class="kickerlbl" style="color:var(--cyan)">LocalEmbedder — the real model</div>
         <p style="font-size:13px;margin:6px 0 0">A candle-backed BERT sentence embedder
-        (<b>BAAI/bge-base-en-v1.5</b>, 768-dim), pure-Rust inference compiled into the binary. CLS-pool +
+        (<b>BAAI/bge-base-en-v1.5</b>, 768-dim, the default; <b>bge-small</b>, 384-dim, is the supported
+        faster alternative), pure-Rust inference compiled into the binary. CLS-pool +
         L2-normalize (so plain L2 distance, computed in-process, ranks by cosine); an asymmetric query prefix.
-        <code>b2 init</code> downloads + verifies it into a shared XDG cache; loading <b>fails fast</b> if the
-        files are absent — never a surprise mid-command download.</p>
+        <code>b2 init</code> downloads + verifies the configured model into a shared XDG cache; loading
+        <b>fails fast</b> if the files are absent — never a surprise mid-command download.</p>
       </div>
     </div>
 
@@ -313,7 +315,7 @@
 
           <rect class="node" style="stroke:var(--t3)" x="992" y="44" width="128" height="60" rx="9"/>
           <text class="title" x="1056" y="72" text-anchor="middle">embeddings</text>
-          <text class="sub mono-t" x="1056" y="90" text-anchor="middle">vec0 · FLOAT[768]</text>
+          <text class="sub mono-t" x="1056" y="90" text-anchor="middle">BLOB · text_hash key</text>
 
           <path class="edge" style="stroke:var(--cyan)" marker-end="url(#ah-cyan)" d="M184,74 L212,74"/>
           <path class="edge" style="stroke:var(--cyan)" marker-end="url(#ah-cyan)" d="M346,74 L374,74"/>
@@ -371,13 +373,13 @@
 b2 reindex ~/vault
 Indexing /Users/you/vault
   embedding 3/3 · notes/spaced-repetition.md (11 chunks)     <span class="c"># live, in place (TTY only)</span>
-Indexed 1200 notes (<span class="n">3</span> embedded, 0 stamped)
+Indexed 1200 notes (<span class="n">3</span> embedded) and 14 resources
 
 <span class="c"># re-embed everything in place, without deleting the index</span>
 b2 reindex --force</pre>
     <p class="sub" style="margin-top:6px">Timestamps like <code>indexed_at</code> come from SQLite,
-    keeping <code>b2-core</code> free of any wall-clock — the façade is the one boundary where real ids
-    and time enter, exactly as it is for the id generator.</p>
+    keeping <code>b2-core</code> free of any wall-clock — determinism is a hard requirement of the core,
+    and time enters only at its boundaries.</p>
     <div class="ground"><b>Ground truth:</b>
     <span class="mono">reindex_with_progress_reports_cumulative_and_fully_embeds</span> (embed.rs) — progress is
     reported per batch, cumulative and non-decreasing, ending exactly at the chunk total, with every chunk
@@ -387,27 +389,28 @@ b2 reindex --force</pre>
 
   <!-- ========================================================= -->
   <section id="later">
-    <h2><span class="num">7</span>What's deferred (and why it's clean)</h2>
-    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap, and three former entries here have
-    since shipped: the <b>keyword-first progressive index</b> (the projection/embedding split above — FTS lands
-    instantly, vectors stream in behind); on the desktop, a <b>background reindex</b> with live progress and
-    a Cancel button; and, on the CLI, the <b>cross-process background reindex</b> — <code>b2 reindex &amp;</code>
-    detaches through the shell, <code>b2 status</code> reports coverage plus the running process's pid, and
-    <code>b2 reindex --cancel</code> signals that pid onto the <em>same</em> cooperative-cancel path Ctrl-C uses
-    (search/similar read the index live throughout; SQLite WAL already permits one writer + concurrent readers
-    across processes). Self-daemonization was <em>dropped</em>, not deferred: it existed for Windows, which B2
-    doesn't ship to. Still open, tracked in GitHub Issues:</p>
+    <h2><span class="num">7</span>The operator surface, end to end</h2>
+    <p class="sub">Incremental reindex makes the <em>steady state</em> cheap, and the whole pipeline is
+    operable from either adapter: the <b>keyword-first progressive index</b> (the projection/embedding split
+    above — FTS lands instantly, vectors stream in behind); on the desktop, a <b>background reindex</b> with
+    live progress and a Cancel button; and, on the CLI, the <b>cross-process background reindex</b> —
+    <code>b2 reindex &amp;</code> detaches through the shell, <code>b2 status</code> reports coverage plus the
+    running process's pid, and <code>b2 reindex --cancel</code> signals that pid onto the <em>same</em>
+    cooperative-cancel path Ctrl-C uses (search/similar read the index live throughout; SQLite WAL already
+    permits one writer + concurrent readers across processes). Still open, tracked in GitHub Issues:</p>
     <ul class="tidy" style="font-size:13.5px">
-      <li><b>Faster / smaller embedder</b> — bge-small (384-dim) or a quantized/ONNX path behind the same
-      <code>Embedder</code> seam; a raw-speed lever, measured against the eval before it becomes the default.</li>
+      <li><b>A quantized / ONNX embedding path</b> behind the same <code>Embedder</code> seam — a raw-speed
+      lever, measured against the eval before it could become a default.</li>
     </ul>
     <p class="cap">It drops in behind an existing seam or invariant — no schema or flow change needed,
     which is the whole point of the deterministic-seam discipline.</p>
   </section>
 
   <footer>
-    B2 · indexing deep dive · a projection of the spec in <code>docs/design/</code>. Back to the
-    <a href="architecture.html">system architecture</a> or the <a href="index.html">overview</a>.
+    B2 · indexing deep dive · a projection of the spec in
+    <a href="https://github.com/AlteredCraft/B2/tree/main/design"><code>design/</code></a>. Back to the
+    <a href="architecture.html">system architecture</a>, the <a href="retrieval.html">retrieval deep
+    dive</a>, or the <a href="index.html">overview</a>.
   </footer>
 
 </div>

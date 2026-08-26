@@ -11,9 +11,9 @@ changed and why.
 
 Everything here runs **out of CI, on demand** — the repo rule is that `cargo test` stays fast,
 deterministic, and model-free, so model quality can never flake CI
-([`CLAUDE.md`](../../CLAUDE.md), Conventions).
+([`CLAUDE.md`](../../../CLAUDE.md), Conventions).
 
-> **Not the audience for this page?** [**Search & similarity — the explainer**](../search-and-similarity.html)
+> **Not the audience for this page?** [**Search & similarity — the explainer**](../../../docs/search-and-similarity.html)
 > is the plain-language tour of everything these metrics score — chunks, embeddings, hybrid search, the
 > two-stage discovery engine, and the quality floor — written for people *using* B2 rather than measuring
 > it, with a glossary and diagrams.
@@ -49,21 +49,21 @@ the effect is unambiguous rather than a three-chunk edge case.
 
 | Path | Role |
 |---|---|
-| [`crates/b2-embed/examples/eval.rs`](../../crates/b2-embed/examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
-| [`crates/b2-embed/examples/stability.rs`](../../crates/b2-embed/examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
-| [`crates/b2-embed/examples/calibrate.rs`](../../crates/b2-embed/examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; and with `--search`, the **search evidence transfer check** ([#201](https://github.com/AlteredCraft/B2/issues/201)) — every note's own title replayed as a query against the shipped bar, plus built-in nonsense. Process rule 5's transfer check for both axes |
-| [`crates/b2-embed/evals/corpus/`](../../crates/b2-embed/evals/corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
-| [`crates/b2-embed/evals/queries.json`](../../crates/b2-embed/evals/queries.json) | retrieval labels — 44 positive queries (a verbatim `passage` adds chunk-level scoring, n=20; three carry the **date-shaped** block, [#202](https://github.com/AlteredCraft/B2/issues/202)) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate. Seven positives carry **`tail_relevant`** ([#206](https://github.com/AlteredCraft/B2/issues/206)): the per-hit keep-set, **exhaustive by label** for every positive query — a served note in neither `relevant` nor `tail_relevant` is filler by judgement, not by omission — encoded by *note* rather than rank so a reranking change can never invalidate a label |
-| [`crates/b2-embed/evals/similar.json`](../../crates/b2-embed/evals/similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
-| [`crates/b2-embed/evals/corpus-dense/`](../../crates/b2-embed/evals/corpus-dense/) | the **dense single-domain fixture** ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0b): fifteen beekeeping notes, all genuinely inter-related, **no loner** — the vault-level geometry the orthogonal corpus is structurally incapable of expressing; scored in its own throwaway vault, its own `results.jsonl` row (`"corpus": "dense"`), never averaged with the orthogonal rows |
-| [`crates/b2-embed/evals/similar-dense.json`](../../crates/b2-embed/evals/similar-dense.json) | the dense fixture's labels — **rankings only** (expected mates per anchor, per-mate scored); no negative anchors, because in this corpus "nothing relates" is false of every note |
+| [`crates/b2-embed/examples/eval.rs`](../examples/eval.rs) | the harness itself — builds a throwaway vault from the corpus each run, scores everything through the real `Vault` pipeline, appends one JSON row per config |
+| [`crates/b2-embed/examples/stability.rs`](../examples/stability.rs) | the model-free rank-stability probe (`fixtures/test-vault`, ~200 notes — big enough for the pools to bind) |
+| [`crates/b2-embed/examples/calibrate.rs`](../examples/calibrate.rs) | the real-vault calibration instrument ([#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0a): [#196](https://github.com/AlteredCraft/B2/issues/196)'s hand arithmetic as a command — per-anchor pool distributions, replayed-gate vs always-serve, bands; and with `--search`, the **search evidence transfer check** ([#201](https://github.com/AlteredCraft/B2/issues/201)) — every note's own title replayed as a query against the shipped bar, plus built-in nonsense. Process rule 5's transfer check for both axes |
+| [`crates/b2-embed/evals/corpus/`](corpus/) | the hand-written 31-note vault: topic clusters, six long multi-chunk notes, five unambiguous loners, the stemmer-adversarial block, the [#183](https://github.com/AlteredCraft/B2/issues/183) multi-topic family (four notes stitching an on-topic half to a genuinely unrelated one, the shape that makes centroid-vs-best-passage discovery ranking disagree), and — since [#192](https://github.com/AlteredCraft/B2/issues/192) landed [#189](https://github.com/AlteredCraft/B2/issues/189)'s note — `week-log.md`, the journal-shaped dilution extreme (seven unrelated sections, one lava-field gem) |
+| [`crates/b2-embed/evals/queries.json`](queries.json) | retrieval labels — 44 positive queries (a verbatim `passage` adds chunk-level scoring, n=20; three carry the **date-shaped** block, [#202](https://github.com/AlteredCraft/B2/issues/202)) + 5 **negative queries**: empty `relevant` = the labelled answer is *no matches*, the query-side sibling of the negative anchors ([#201](https://github.com/AlteredCraft/B2/issues/201)); excluded from every rank aggregate. Seven positives carry **`tail_relevant`** ([#206](https://github.com/AlteredCraft/B2/issues/206)): the per-hit keep-set, **exhaustive by label** for every positive query — a served note in neither `relevant` nor `tail_relevant` is filler by judgement, not by omission — encoded by *note* rather than rank so a reranking change can never invalidate a label |
+| [`crates/b2-embed/evals/similar.json`](similar.json) | discovery labels — positive anchors with expected mates; **empty `expected` = a negative anchor** whose correct answer is *nothing* |
+| [`crates/b2-embed/evals/corpus-dense/`](corpus-dense/) | the **dense single-domain fixture** ([#196](https://github.com/AlteredCraft/B2/issues/196)/[#197](https://github.com/AlteredCraft/B2/issues/197) Phase 0b): fifteen beekeeping notes, all genuinely inter-related, **no loner** — the vault-level geometry the orthogonal corpus is structurally incapable of expressing; scored in its own throwaway vault, its own `results.jsonl` row (`"corpus": "dense"`), never averaged with the orthogonal rows |
+| [`crates/b2-embed/evals/similar-dense.json`](similar-dense.json) | the dense fixture's labels — **rankings only** (expected mates per anchor, per-mate scored); no negative anchors, because in this corpus "nothing relates" is false of every note |
 | `crates/b2-embed/evals/results.jsonl` | append-only run log (gitignored, local) — every number ever cited traces to a row here |
-| [`../../Makefile`](../../Makefile) | the `##@ Model` section holds every target above |
+| [`Makefile`](../../../Makefile) | the `##@ Model` section holds every target above |
 
 ## What the exit code enforces
 
 `make eval` exits `0` only when the default config clears **all the assertions**
-([`eval.rs`](../../crates/b2-embed/examples/eval.rs), the gate at the end of `run()`) — the set
+([`eval.rs`](../examples/eval.rs), the gate at the end of `run()`) — the set
 re-derived by [#197](https://github.com/AlteredCraft/B2/issues/197) for the always-served surface:
 
 | Assertion | Constant | Direction | Watches |
@@ -617,7 +617,7 @@ The deliberately open thread: the **phishing pair** — a real relation the mode
 three stranger pairs even in the best-passage unit (+1.253 vs strangers to +1.367). Under
 always-serve it is *served*, at best-passage rank 4, so the residue is **ordering quality rather
 than existence** — still the standing evidence for the pair-scorer escalation named in
-[`index-engine.md §3`](../design/index-engine.md), promoted only if real-vault dogfooding
+[`index-engine.md §3`](../../../design/index-engine.md), promoted only if real-vault dogfooding
 demands it. [#206](https://github.com/AlteredCraft/B2/issues/206)'s verdict added search's own
 specimen of the species: 367 labelled filler rows sit below the oracle fold and no admissible
 prefix cut reaches more than 23 of them, because the fused order misplaces the evidence — the
