@@ -89,7 +89,7 @@ and work with a vault in about ten minutes. Then go deeper:
 | [design/data-model.md](design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
 | [design/index-engine.md](design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
 | [ADRs/](ADRs/README.md) | **Architecture Decision Records** — one terse record per key architectural choice: the context, the ruling, and what it costs. The *why* behind the register's entries. |
-| [crates/b2-embed/evals/README.md](crates/b2-embed/evals/README.md) | The **eval harness** — corpora, labels, metrics, process rules, and the record of every measured verdict. Lives beside the corpus it governs. |
+| [crates/b2-embed/evals/README.md](crates/b2-embed/evals/README.md) | The **eval suite guide** — every instrument and how to read it, corpora, labels, the exit gate, process rules, and the record of every measured verdict. Lives beside the corpus it governs. |
 
 Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
 

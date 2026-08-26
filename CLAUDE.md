@@ -20,7 +20,7 @@ constantly (`data-model.md §2`, `index-engine.md §6`, invariant ids like `S2`,
 | [`design/data-model.md`](design/data-model.md) | The *what*: note + connection in Markdown, the two storage tiers, the relation vocabulary. |
 | [`design/index-engine.md`](design/index-engine.md) | The *how*: the SQLite (FTS5 + in-process vector scan) projection, table DDL, data flows. |
 | [`ADRs/`](ADRs/README.md) | **Architecture Decision Records** — why each of the above reads the way it does. Key architectural choices only, terse. Add one when a decision is expensive to reverse and its *why* isn't readable off the code; do **not** add one per feature or bug. |
-| [`crates/b2-embed/evals/README.md`](crates/b2-embed/evals/README.md) | The eval harness overview + its **process rules** — read before touching the corpus, the labels, or the metrics. |
+| [`crates/b2-embed/evals/README.md`](crates/b2-embed/evals/README.md) | The **eval suite guide** — every instrument, how to read its output, the exit gate, the verdict record, and the **process rules**; read before touching the corpus, the labels, or the metrics. |
 | [GitHub Issues](https://github.com/AlteredCraft/B2/issues) | Backlog and planned work. Decision history = the issue that drove a verdict + the commit that shipped it. |
 
 ## Commands
