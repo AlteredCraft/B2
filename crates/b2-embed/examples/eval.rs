@@ -35,12 +35,14 @@
 //! expressing topical concentration, so a run that judges a bar only there judges it on the
 //! geometry it survives.
 //!
-//! What this corpus **cannot** score is *candidate width*: 29 chunks is no more than the
-//! candidates each signal retrieves, so neither list is truncated and every number is
-//! invariant under either view's headroom or `search::pool_size` (GH #141). A run that is
-//! blind that way says so; the property is measured by `--example stability` on a vault big
-//! enough for the pool to bind. `RRF_K` re-weights the *same* lists, so it does move scores
-//! here and needs no separate instrument.
+//! What this corpus mostly **cannot** score is *candidate width*: while its chunk count sits
+//! at or under a signal's candidate pool, that list is never truncated, widening it cannot
+//! add a candidate, and every number is invariant under that view's headroom and
+//! `search::pool_size` (GH #141). The corpus has since grown a few chunks past the narrower
+//! (passage-view) pool (GH #183), so the run reads the live counts and warns (`pool_blind`)
+//! only when blindness actually holds; the property itself is measured by
+//! `--example stability`, on a vault big enough for the pools to bind. `RRF_K` re-weights
+//! the *same* lists, so it does move scores here and needs no separate instrument.
 //!
 //! `--sweep` re-chunks + re-embeds the same vault under variant [`ChunkConfig`]s. `--stemmer`
 //! swaps `chunks_fts` between the shipped `porter unicode61` and the unstemmed ablation over
@@ -110,14 +112,6 @@ const FLOOR_HIT1: f64 = 0.75;
 /// noise floor is 0 and the headroom exists for *corpus* drift. At n = 15 mates one mate
 /// lost from rank 1 costs 1/15, and this floor sits ~2 such losses under the reading.
 const FLOOR_MATE_MRR: f64 = 0.52;
-/// How many labelled mates the shipped surface may fail to serve at all.
-///
-/// **Structurally 0 under always-serve** (ADR-0014): both discovery passes read the one
-/// ranked surface, so nothing can be reachable in one and unserved in the other. Kept as an
-/// assertion at zero, with no headroom, because it is the **tripwire** that re-arms the
-/// moment any Phase-2 existence signal puts a second surface back in the path: a nonzero
-/// value can only mean a gate is suppressing a human-labelled relation again.
-const MAX_MATES_SUPPRESSED: usize = 0;
 /// The floor on the **dense fixture's** per-mate MRR@[`SIM_K`] (ADR-0014, Phase 0b), gated
 /// once its baseline existed — the same measure-then-calibrate order as [`FLOOR_MATE_MRR`].
 ///
@@ -271,29 +265,14 @@ struct SimilarPass {
     /// **In the exit gate** since GH #188, at [`FLOOR_MATE_MRR`]. It shipped reporting-only
     /// for one issue's worth of time on the measure-then-calibrate precedent, and that is
     /// where the baseline came from.
-    mate: Agg,
-    /// [`Self::mate`] measured on the second pass — which since ADR-0014 reads the **same
-    /// always-serve surface** as the first, since `similar` *is* the ranked list.
     ///
-    /// Kept, with [`Self::mate_suppressed`] beside it, as the **tripwire structure**: while
-    /// nothing gates, the two agree by construction and suppression reads a structural 0. If
-    /// a Phase-2 bake-off ever ships an existence signal the passes diverge again and the
-    /// assertion re-arms with no harness change.
-    mate_raw: Agg,
-    /// Labelled mates the second pass reaches that the first never serves —
-    /// a surface suppressing a human-labelled relation outright, as opposed to
-    /// merely ranking it lower. **Structurally 0 under always-serve**
-    /// (GH #197): both passes read one surface, so any nonzero value here
-    /// means an existence gate is back in the path — which is exactly what the
-    /// assertion at [`MAX_MATES_SUPPRESSED`] exists to catch, and why it stays
-    /// asserted apart from [`Self::mate`]: a suppressed *labelled* mate is a
-    /// different (and worse) failure than a demoted one, and an average over
-    /// the mates cannot tell the two apart.
-    mate_suppressed: usize,
-    /// Floored per-mate ranks in label order, so pass 2 can pair each mate's
-    /// unfloored rank with its shipped one. Both passes walk `set.anchors` and
-    /// each `label.expected` in the same order, so the flat index lines up.
-    mate_floored: Vec<Option<usize>>,
+    /// (A pass-vs-pass suppression diff — `mate_raw` / `mate_suppressed`, asserted at zero —
+    /// stood beside this until GH #217: once ADR-0014 retired the existence gate, both
+    /// passes read the *identical* `similar` call, so the diff compared a call against
+    /// itself and could never fire. An existence gate returning to the path is what the
+    /// dense fixture's zero-empty-panes assertion and both per-mate MRR floors catch —
+    /// against ground truth, not against a second read of the same surface.)
+    mate: Agg,
     /// **Strangers**: unlabelled notes the shipped surface serves on a *positive* anchor,
     /// within the same top-`SIM_K` the ranks are read at — `(anchor, path)` per card, so the
     /// smoke alarm comes with the list you argue against it with (process rule 1).
@@ -539,6 +518,21 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let dense_set: SimilarSet = serde_json::from_str(&std::fs::read_to_string(
         evals_dir.join("similar-dense.json"),
     )?)?;
+
+    // Lint the labels against the corpora they claim to describe, before
+    // anything expensive runs. A typo'd label path fails nothing on its own —
+    // it just reads as a permanent miss (a rank of `None`, a served row
+    // downgraded to filler by label) and gets chased as an engine regression —
+    // so the run refuses to score against labels the corpus cannot honour
+    // (exit 1: the run broke, not the gate).
+    lint_labels(
+        &corpus_dir,
+        &evals_dir.join("corpus-dense"),
+        &positives,
+        &negatives,
+        &sim_set,
+        &dense_set,
+    )?;
 
     // Ensure the model is available, then load it. (Provision is idempotent, so an
     // already-installed model is a no-op; a missing one is fetched here.)
@@ -873,28 +867,18 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // The negatives' suppression assertion RETIRED with the gate it watched (ADR-0014):
     // under always-serve a loner anchor serves its ranked nearest — that is the ruling, not
     // a regression. The anchors stay labelled, the strangers instrument keeps counting, and
-    // what the served cards *claim* is the calibration block's band readout.
+    // what the served cards *claim* is the calibration block's band readout. (The
+    // pass-vs-pass suppression assertion retired later, for a different reason: it compared
+    // a call against itself and could never fire — GH #217. A returning existence gate is
+    // the dense zero-empty-panes assertion's and the per-mate floors' to catch.)
     //
     // Discovery **rank** (GH #188). The rank floor sits below its measured reading (corpus
-    // drift headroom, run noise being zero); suppression, next, sits AT its structural zero
-    // — a tripwire, not a budget.
+    // drift headroom, run noise being zero).
     if similar.mate.mrr() < FLOOR_MATE_MRR {
         eprintln!(
             "\n[warn] per-mate MRR@{SIM_K} {:.3} is below the {FLOOR_MATE_MRR:.2} floor — discovery ranking regressed \
              (read the per-mate line's mates, not the aggregate; and do NOT relabel to clear this).",
             similar.mate.mrr()
-        );
-        return Ok(false);
-    }
-    // Suppression is asserted separately rather than folded into the average
-    // above, because a mate going from rank 5 to *absent* is a categorically
-    // worse event than drifting 2 → 3, and a mean over 15 mates hides exactly
-    // that (GH #188). At zero since GH #197 — see MAX_MATES_SUPPRESSED.
-    if similar.mate_suppressed > MAX_MATES_SUPPRESSED {
-        eprintln!(
-            "\n[warn] {} of {} labelled mates suppressed where always-serve permits none — \
-             an existence gate is back in the path (GH #197's tripwire).",
-            similar.mate_suppressed, similar.mate.n
         );
         return Ok(false);
     }
@@ -999,6 +983,137 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Every note in one corpus dir, as `file name → lowercased content` — the
+/// ground the label lint checks against. Lowercased once, so the passage check
+/// matches the way [`score_pass`] will (case-insensitive containment).
+fn corpus_texts(dir: &Path) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    let mut out = HashMap::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            out.insert(
+                entry.file_name().to_string_lossy().into_owned(),
+                std::fs::read_to_string(entry.path())?.to_lowercase(),
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Refuse to score against labels the corpus cannot honour (see the call site).
+///
+/// Checks: every labelled path (`relevant`, `tail_relevant`, `anchor`,
+/// `expected`) names a note in its corpus; every `passage` occurs verbatim
+/// (case-insensitively) in a note the query labels relevant — the containment
+/// chunk scoring will test; and a negative query carries neither a `passage`
+/// nor a `tail_relevant` (its whole list is junk by label already, per the
+/// queries.json rules). Faults are all printed before the run refuses, so one
+/// run names every problem rather than the first.
+fn lint_labels(
+    corpus_dir: &Path,
+    dense_dir: &Path,
+    positives: &[Labelled],
+    negatives: &[Labelled],
+    sim_set: &SimilarSet,
+    dense_set: &SimilarSet,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let corpus = corpus_texts(corpus_dir)?;
+    let dense = corpus_texts(dense_dir)?;
+    let mut faults: Vec<String> = Vec::new();
+
+    for q in positives {
+        for (key, paths) in [
+            ("relevant", &q.relevant),
+            ("tail_relevant", &q.tail_relevant),
+        ] {
+            for p in paths {
+                if !corpus.contains_key(p) {
+                    faults.push(format!(
+                        "queries.json: `{key}` names no corpus note: {p:?} (query {:?})",
+                        q.query
+                    ));
+                }
+            }
+        }
+        if let Some(passage) = &q.passage {
+            // A blank passage is the opposite defect from a typo'd one: every
+            // string contains "", so it would lint clean here and then "match"
+            // every top-K chunk of a relevant note in the chunk scoring —
+            // silently inflating chunk rank instead of reading a miss
+            // (PR #221 review).
+            if passage.trim().is_empty() {
+                faults.push(format!(
+                    "queries.json: `passage` is blank (query {:?}) — it would match every chunk \
+                     and inflate chunk rank",
+                    q.query
+                ));
+            } else {
+                let needle = passage.to_lowercase();
+                let found = q
+                    .relevant
+                    .iter()
+                    .filter_map(|p| corpus.get(p))
+                    .any(|text| text.contains(&needle));
+                if !found {
+                    faults.push(format!(
+                        "queries.json: `passage` {passage:?} is not verbatim in any relevant note \
+                         (query {:?}) — chunk rank would read a permanent miss",
+                        q.query
+                    ));
+                }
+            }
+        }
+    }
+    for q in negatives {
+        if q.passage.is_some() {
+            faults.push(format!(
+                "queries.json: negative query {:?} carries a `passage` — negatives score no rank",
+                q.query
+            ));
+        }
+        if !q.tail_relevant.is_empty() {
+            faults.push(format!(
+                "queries.json: negative query {:?} carries `tail_relevant` — its whole served \
+                 list is junk by label",
+                q.query
+            ));
+        }
+    }
+    for (file, set, texts) in [
+        ("similar.json", sim_set, &corpus),
+        ("similar-dense.json", dense_set, &dense),
+    ] {
+        for label in &set.anchors {
+            if !texts.contains_key(&label.anchor) {
+                faults.push(format!(
+                    "{file}: `anchor` names no corpus note: {:?}",
+                    label.anchor
+                ));
+            }
+            for e in &label.expected {
+                if !texts.contains_key(e) {
+                    faults.push(format!(
+                        "{file}: `expected` names no corpus note: {e:?} (anchor {:?})",
+                        label.anchor
+                    ));
+                }
+            }
+        }
+    }
+    if faults.is_empty() {
+        return Ok(());
+    }
+    for f in &faults {
+        eprintln!("[lint] {f}");
+    }
+    Err(format!(
+        "{} label lint fault(s) — a label the corpus cannot honour scores as a permanent miss \
+         and reads as an engine regression; fix the label file (or the note) before scoring",
+        faults.len()
+    )
+    .into())
 }
 
 /// Score the dense single-domain fixture (GH #196/#197, Phase 0b) in a throwaway
@@ -1481,21 +1596,20 @@ fn score_pass(
     })
 }
 
-/// Score the discovery labels — **two passes, one surface** (GH #197).
+/// Score the discovery labels — **one pass, one surface** (GH #197).
 ///
-/// Both passes read `Vault::similar`, the always-served ranked list. Pass 1
-/// scores the ranks, the strangers, and the negatives' card tally; pass 2
-/// re-reads the same surface for the cosine piles, the per-anchor detail, and
-/// the pass-vs-pass suppression diff — which is structurally 0 while nothing
-/// gates, and is *kept* as the tripwire that re-arms the suppression assertion
-/// the moment a Phase-2 existence signal puts a second surface back
-/// (see [`SimilarPass::mate_raw`]).
+/// Everything reads `Vault::similar`, the always-served ranked list: the ranks,
+/// the strangers, the negatives' card tally, and the cosine piles + per-anchor
+/// detail the calibration blocks consume. (A second pass with a pass-vs-pass
+/// suppression diff existed while the GH #150 existence gate shipped; under
+/// always-serve it re-read the identical call and could never fire, so it
+/// retired — GH #217, and see [`SimilarPass::mate`] for what catches a
+/// returning gate instead.)
 fn score_similar(
     vault: &Vault,
     set: &SimilarSet,
 ) -> Result<SimilarPass, Box<dyn std::error::Error>> {
     let mut pass = SimilarPass::default();
-    // Pass 1 — the shipped surface: ranks, strangers, and the negatives' tally.
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
         let negative = label.expected.is_empty();
@@ -1519,7 +1633,6 @@ fn score_similar(
                     .position(|c| paths_match(&c.path, expected))
                     .map(|p| p + 1);
                 pass.mate.add(mate_rank);
-                pass.mate_floored.push(mate_rank);
             }
             // The precision side of the same list (GH #188 — see
             // `SimilarPass::strangers`): everything served here that no label
@@ -1535,25 +1648,7 @@ fn score_similar(
                 pass.stranger_anchors += 1;
             }
         }
-    }
-    // Pass 2 — the same surface, re-read: the calibration piles + detail, and
-    // the suppression tripwire against pass 1 (see `SimilarPass::mate_raw`).
-    for label in &set.anchors {
-        let candidates = vault.similar(&label.anchor, SIM_K)?;
-        let negative = label.expected.is_empty();
-        if !negative {
-            for expected in &label.expected {
-                let mate_rank = candidates
-                    .iter()
-                    .position(|c| paths_match(&c.path, expected))
-                    .map(|p| p + 1);
-                let floored = pass.mate_floored.get(pass.mate_raw.n).copied().flatten();
-                pass.mate_raw.add(mate_rank);
-                if mate_rank.is_some() && floored.is_none() {
-                    pass.mate_suppressed += 1;
-                }
-            }
-        }
+        // The calibration piles + per-anchor detail, off the same served list.
         let mut ordered = Vec::with_capacity(candidates.len());
         for c in &candidates {
             let related = !negative && label.expected.iter().any(|e| paths_match(&c.path, e));
@@ -1688,12 +1783,11 @@ struct FoldReading {
     rule: FoldRule,
     /// Labelled mates the served prefix reaches but the default view does
     /// **not** vouch for: `(anchor, mate, rank)`. **The fold's own cost**, and
-    /// the quantity GH #200 judges a candidate at zero on — the suppression
-    /// tripwire's disclosure-axis form. Reported rather than gated while
-    /// nothing folds (it reads a structural 0 under always-serve, exactly as
-    /// suppression does) — and GH #202 shipped no fold to charge, so it stays
-    /// reporting-only; it becomes an exit-gate row with the first fold that does
-    /// ship, beside the suppression tripwire that re-arms the same way.
+    /// the quantity GH #200 judges a candidate at zero on — a human-labelled
+    /// relation hidden by default. Reported rather than gated while nothing
+    /// folds (it reads a structural 0 under always-serve) — and GH #202 shipped
+    /// no fold to charge, so it stays reporting-only; it becomes an exit-gate
+    /// row with the first fold that does ship.
     mates_folded: Vec<(String, String, usize)>,
     /// Labelled mates above the fold — the other half of the same count.
     mates_above: usize,
@@ -3879,18 +3973,6 @@ fn print_default_report(
         similar.mate.mrr(),
         similar.mate.n
     );
-    // The pass-vs-pass suppression tripwire (see `SimilarPass::mate_raw`):
-    // silent at its structural 0, loud the day an existence gate is back in
-    // the path. No "unfloored" comparison line any more — both passes read the
-    // one always-serve surface, and a line that cannot move trains skimming.
-    if similar.mate_suppressed > 0 {
-        println!(
-            "   └ {} of {} labelled mates are SUPPRESSED — pass 2 reaches a mate pass 1 never\n\
-             \x20    serves, which under always-serve (GH #197) means an existence gate is back in\n\
-             \x20    the path (GATED at ≤ {MAX_MATES_SUPPRESSED})",
-            similar.mate_suppressed, similar.mate.n
-        );
-    }
     // Discovery's precision side (GH #188) — reported with names, never gated;
     // see `SimilarPass::strangers` for why gating it would reward labelling.
     println!(
@@ -4206,8 +4288,10 @@ fn result_row(
         // again — a new key, never a redefined one, so every older row stays
         // comparable on "similar" itself.
         "similar_per_mate": similar.map(|s| agg(&s.mate)),
-        "similar_per_mate_raw": similar.map(|s| agg(&s.mate_raw)),
-        "similar_mates_suppressed": similar.map(|s| s.mate_suppressed),
+        // `similar_per_mate_raw` / `similar_mates_suppressed` retired with the
+        // pass-vs-pass tripwire (GH #217): under always-serve both passes read
+        // the one surface through the same call, so the diff was a tautology.
+        // Absent from newer rows, never redefined — the row conventions.
         // NEW key (absent from rows before 2026-08-17): discovery's precision
         // side — unlabelled notes served on positive anchors at the ranks' own
         // depth (GH #188). Same convention as every key above: new, never a
@@ -4341,8 +4425,12 @@ fn result_row(
                 "chunk_total": r.chunk_total,
                 "terms": r.terms.iter().map(|(t, df)| serde_json::json!([t, df]))
                     .collect::<Vec<_>>(),
-                "vouched": bar.map(|b| r.anchored(b.min_term_coverage)
-                    || r.best_cos.is_some_and(|c| c >= b.min_cos)),
+                // The ENGINE's verdict, matching the dense row's convention and
+                // what the exit gate asserts — recording the harness's
+                // restatement here instead would mask exactly the drift the
+                // [FAULT] check exists to surface (the restatement is
+                // re-derivable from `terms` + `best_cos` + `bar` regardless).
+                "vouched": r.vouched,
             });
             let (pos_cos, neg_cos) = (best_cos_pile(&e.positives), best_cos_pile(&e.negatives));
             serde_json::json!({

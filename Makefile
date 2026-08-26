@@ -242,44 +242,37 @@ coverage-app: ui-build ## Coverage for the desktop host's own unit tests.
 
 ##@ Model
 
-# The eval harness. Never part of `cargo test` or CI — the scored runs are non-deterministic,
-# need a provisioned model, and append to a gitignored results log. Run these on demand.
-# `stability` is the exception that proves the group: it measures retrieval *sensitivity* rather
-# than model quality, so it is deterministic and needs no model — but it is the other half of
-# the same harness, and you reach for it from the same place (GH #141).
+# The eval suite. Never part of `cargo test` or CI — the scored runs need a provisioned
+# model, append to gitignored results logs, and their numbers are a property of the machine's
+# model/device/build (reproducible per machine, never across machines or devices; `eval-chat`
+# is the genuinely non-deterministic one, since LLM output varies run to run). Run these on
+# demand. `stability` is the exception that proves the group: it measures retrieval
+# *sensitivity* rather than model quality, so it is machine-independent (fake embedder) and
+# needs no model — but it is the other half of the same harness (GH #141).
+#
+# **crates/b2-embed/evals/README.md is the guide**: what each instrument measures, how to
+# read every block it prints, the exit gate, and the process rules that bind any edit to the
+# corpora, the labels, or the metrics. The recipe comments here stay operational only.
 
 init: ## Download + verify bge-base-en-v1.5 into the shared XDG cache (needed for the real embedder).
 	cargo run -p b2-cli -- init
 
-# Scores BM25-only vs hybrid (the semantic lift), passage-level ranks, and `similar`;
-# appends every run to crates/b2-embed/evals/results.jsonl (gitignored). It also prints the
-# three calibration blocks that gate nothing and exist to price the next rule: the discovery z
-# dump (GH #187), the search evidence dump (GH #201), and the fold bake-off (GH #200) — which
-# re-derives a disclosure rule's admissible window from the run rather than quoting a constant.
+# Both labelled corpora through the real pipeline; appends rows to
+# crates/b2-embed/evals/results.jsonl (gitignored); exits non-zero on an exit-gate regression.
 eval: ## Semantic-retrieval + discovery quality eval (real model).
 	cargo run -p b2-embed --example eval
 
 eval-sweep: ## `make eval` plus the in-process chunker A/B (ChunkConfig sweep) — the GH #44 gate.
 	cargo run -p b2-embed --example eval -- --sweep
 
-# One lever, isolated: `Vault::rebuild_fts` swaps chunks_fts between the shipped
-# `porter unicode61` (schema v5 — the GH #157 verdict) and the unstemmed `unicode61` it
-# retired, over the identical chunk rows and vectors — nothing re-chunks or re-embeds, so
-# every rank move is the tokenizer's alone. BM25-only is scored under both tokenizers (the
-# honest lexical ablation), hybrid under both; the dense column doubles as an instrument
-# check (FTS cannot reach it, so movement there means the harness broke). The paired
-# per-query win/loss list is the readout; the standing precision probes
-# (universe/university, the git code-literal queries) guard the stemmed side of the trade.
+# One lever, isolated: chunks_fts rebuilt under each tokenizer over identical chunks and
+# vectors, so every rank move is the tokenizer's alone.
 eval-stemmer: ## `make eval` plus the FTS tokenizer ablation (shipped porter vs unstemmed unicode61) — the GH #157 instrument.
 	cargo run -p b2-embed --example eval -- --stemmer
 
-# What `make eval` mostly cannot see (GH #141): candidate-width. Since GH #183 its corpus
-# (63 chunks) does truncate the 60-chunk passage view by a hair, but the 150-candidate note
-# view is never cut there. This probe asks the same queries at widening pools on a
-# vault big enough for the pool to bind, and diffs the shipped top-10 against a blessed
-# snapshot. Deterministic (fake embedder), so it needs no `make init`. Flags go through ARGS:
-# `make stability ARGS=--verbose` (show the diverging rankings), `ARGS=--model` (real bge
-# magnitude), `ARGS="--vault <path>"` (any vault; `crates/b2-embed/evals/corpus` reproduces the gap).
+# What `make eval` mostly cannot see (GH #141): candidate width. Deterministic (fake
+# embedder), so it needs no `make init`. Flags via ARGS: --verbose (show diverging rankings),
+# --model (real bge magnitude, no baseline), --vault <path> (any vault).
 stability: ## Rank-stability probe on fixtures/test-vault: pool sensitivity + drift vs the blessed baseline (GH #141). Usage: make stability [ARGS="--verbose"]
 	cargo run -p b2-embed --example stability -- $(ARGS)
 
@@ -288,26 +281,11 @@ stability: ## Rank-stability probe on fixtures/test-vault: pool sensitivity + dr
 stability-bless: ## Accept the current ranking as the committed rank-stability baseline.
 	cargo run -p b2-embed --example stability -- --bless
 
-# GH #196's hand arithmetic, promoted into a command (GH #197, Phase 0a): run it against ANY
-# built vault — no labels needed, a pure read over stored vectors — and it prints per-anchor
-# pool distributions (cosine min/med/max, leader cosine + z), what a z existence gate would
-# serve vs what always-serve does, and the strength bands the pane would paint, plus a
-# vault-level summary. This is process rule 5's instrument: a constant derived from a corpus's
-# score *distribution* is invalid until transfer-checked on a real vault, and this is the
-# check. Flags go through ARGS: `--limit N` (pane depth), `--leader-z/--member-z` (replay a
-# candidate gate; defaults are the retired GH #192 constants, so GH #196's dark-vault reading
-# reproduces), `--mutual-k N` (replay GH #200's reciprocity fold at another depth), `--json`
-# (the whole reading as one object).
-#
-# `ARGS=--search` adds the **search-side** transfer check (GH #201): how much this vault's
-# function words weigh beside a word it has never seen (the lexical anchor's whole premise,
-# checked per vault rather than assumed of English), then the evidence bar replayed over every
-# note's own title as a query (the positives — no labels needed, and nothing to relabel) and
-# over built-in nonsense strings (the negatives), and last the per-hit tail families (GH #206)
-# priced on the same title queries — what each family's constant would have to be to hide no
-# title's own note behind a fold. It is the one part of this instrument that is
-# not a pure read — judging the cosine half means embedding a query, so it loads the real
-# model on a real-embedded vault; a fake-embedded one still gets the model-free lexical half.
+# Process rule 5's instrument: a constant derived from a corpus's score *distribution* is
+# invalid until transfer-checked on a real vault, and this is the check — a pure read over
+# stored vectors, no labels needed. Flags via ARGS: --limit N, --leader-z/--member-z,
+# --mutual-k N, --json; ARGS=--search adds the search-side transfer check (GH #201/#206),
+# the one part that loads the real model (to embed the probe queries).
 calibrate: ## Calibration on any built vault: discovery pools/bands (GH #197) and, with ARGS=--search, the evidence bar (GH #201). Usage: make calibrate VAULT=<path> [ARGS=--search]
 	@if [ -z "$(VAULT)" ]; then echo "error: VAULT is required, e.g. make calibrate VAULT=fixtures/test-vault"; exit 1; fi
 	cargo run -p b2-embed --example calibrate -- "$(VAULT)" $(ARGS)
@@ -322,13 +300,9 @@ eval-metal: ## The same eval, embedding on the Metal GPU (GH #40, macOS-only).
 compare-device: ## CPU-vs-Metal embed throughput A/B on a vault (default fixtures/test-vault; GH #40, macOS-only). Usage: make compare-device [VAULT=<path>]
 	scripts/compare-embed-device.sh "$(if $(VAULT),$(VAULT),fixtures/test-vault)"
 
-# The chat seam's out-of-CI half (GH #154), and the second AI seam's answer to `make eval`:
-# it asks the labelled questions in crates/b2-llm/evals/questions.json through the real
-# `Vault::ask` — real embedder to retrieve, real chat model to answer — and scores
-# groundedness, citation accuracy, and refusal on the deliberate negatives. Needs a model
-# server running (`ollama serve`, or point B2_LLM_URL at any OpenAI-compatible one);
-# B2_LLM_MODEL picks the model. Appends one row to crates/b2-llm/evals/results.jsonl
-# (gitignored). Retrieval reach is reported beside the chat numbers, because the model can
-# only cite what retrieval handed it — a miss there is `make eval`'s result, not this one's.
+# The chat seam's out-of-CI half (GH #154): the labelled questions in
+# crates/b2-llm/evals/questions.json through the real `Vault::ask`. Needs a model server
+# (`ollama serve`, or point B2_LLM_URL at any OpenAI-compatible one; B2_LLM_MODEL picks the
+# model). Appends rows to crates/b2-llm/evals/results.jsonl (gitignored).
 eval-chat: ## Grounded-chat quality eval: citation accuracy + refusal over the eval corpus (real model + model server).
 	cargo run -p b2-llm --example groundedness

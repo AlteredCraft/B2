@@ -1,13 +1,14 @@
 //! Rank-stability probe — the **large-corpus** half of the eval harness (GH #141).
 //!
-//! The scored eval runs on 23 notes / 29 chunks, which is smaller than the candidate pool
-//! each signal retrieves — so neither list is truncated, widening the pool cannot add a
-//! candidate, and every number it prints is **invariant under candidate width**. A change to
-//! a hit pool or to `search::pool_size` reads as "no change" there while genuinely reordering
-//! a real vault: GH #140's 3x widening moved 5 of 7 probe top-10s on `fixtures/test-vault`
-//! and printed bit-identical eval numbers. This probe priced that, and GH #142 reverted on
-//! the strength of it. Width is the whole of the gap — `RRF_K` re-weights the *same* lists,
-//! which the scored eval already sees.
+//! The scored eval's corpus is barely bigger than the candidate pools each signal retrieves
+//! (since GH #183 it crosses the narrower passage-view pool by a few chunks; the note view's
+//! not at all) — so at that scale a pool is scarcely ever truncated, widening it can add
+//! almost nothing, and candidate-width changes are mostly **invisible** there. A change to a
+//! hit pool or to `search::pool_size` reads as "no change" on the eval while genuinely
+//! reordering a real vault: GH #140's 3x widening moved 5 of 7 probe top-10s on
+//! `fixtures/test-vault` and printed bit-identical eval numbers. This probe priced that, and
+//! GH #142 reverted on the strength of it. Width is the whole of the gap — `RRF_K`
+//! re-weights the *same* lists, which the scored eval already sees.
 //!
 //! It runs on a vault big enough for the pool to **bind** (~200 notes / ~790 chunks) and
 //! reports two things:

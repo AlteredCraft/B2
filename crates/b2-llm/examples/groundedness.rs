@@ -368,8 +368,13 @@ fn git_short_sha() -> Option<String> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    match s.char_indices().nth(max) {
-        None => s.to_string(),
-        Some((i, _)) => format!("{}…", &s[..i.saturating_sub(1)]),
+    // Counted in chars, cut on a char boundary: the byte-index arithmetic this
+    // used (`&s[..i - 1]`) lands mid-codepoint — and panics — whenever the char
+    // before the cut is multibyte, which question text (em dashes, °C) is.
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{cut}…")
     }
 }
