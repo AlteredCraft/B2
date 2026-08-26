@@ -1038,18 +1038,31 @@ fn lint_labels(
             }
         }
         if let Some(passage) = &q.passage {
-            let needle = passage.to_lowercase();
-            let found = q
-                .relevant
-                .iter()
-                .filter_map(|p| corpus.get(p))
-                .any(|text| text.contains(&needle));
-            if !found {
+            // A blank passage is the opposite defect from a typo'd one: every
+            // string contains "", so it would lint clean here and then "match"
+            // every top-K chunk of a relevant note in the chunk scoring —
+            // silently inflating chunk rank instead of reading a miss
+            // (PR #221 review).
+            if passage.trim().is_empty() {
                 faults.push(format!(
-                    "queries.json: `passage` {passage:?} is not verbatim in any relevant note \
-                     (query {:?}) — chunk rank would read a permanent miss",
+                    "queries.json: `passage` is blank (query {:?}) — it would match every chunk \
+                     and inflate chunk rank",
                     q.query
                 ));
+            } else {
+                let needle = passage.to_lowercase();
+                let found = q
+                    .relevant
+                    .iter()
+                    .filter_map(|p| corpus.get(p))
+                    .any(|text| text.contains(&needle));
+                if !found {
+                    faults.push(format!(
+                        "queries.json: `passage` {passage:?} is not verbatim in any relevant note \
+                         (query {:?}) — chunk rank would read a permanent miss",
+                        q.query
+                    ));
+                }
             }
         }
     }

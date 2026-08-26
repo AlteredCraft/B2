@@ -242,11 +242,13 @@ coverage-app: ui-build ## Coverage for the desktop host's own unit tests.
 
 ##@ Model
 
-# The eval suite. Never part of `cargo test` or CI — the scored runs are non-deterministic,
-# need a provisioned model, and append to gitignored results logs. Run these on demand.
-# `stability` is the exception that proves the group: it measures retrieval *sensitivity*
-# rather than model quality, so it is deterministic and needs no model — but it is the other
-# half of the same harness (GH #141).
+# The eval suite. Never part of `cargo test` or CI — the scored runs need a provisioned
+# model, append to gitignored results logs, and their numbers are a property of the machine's
+# model/device/build (reproducible per machine, never across machines or devices; `eval-chat`
+# is the genuinely non-deterministic one, since LLM output varies run to run). Run these on
+# demand. `stability` is the exception that proves the group: it measures retrieval
+# *sensitivity* rather than model quality, so it is machine-independent (fake embedder) and
+# needs no model — but it is the other half of the same harness (GH #141).
 #
 # **crates/b2-embed/evals/README.md is the guide**: what each instrument measures, how to
 # read every block it prints, the exit gate, and the process rules that bind any edit to the
