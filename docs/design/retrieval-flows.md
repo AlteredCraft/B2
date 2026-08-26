@@ -53,7 +53,7 @@ flowchart TD
     GUI --> SE
 
     subgraph FACADE["Vault façade — b2-core/src/vault.rs"]
-        SE["Vault::search_evidence_excluding(query, limit, exclude)<br>hit pool = note_hit_pool(max(limit,1)) = 3 × limit"]
+        SE["Vault::search_evidence_excluding(query, limit, exclude)<br>hit pool = note_hit_pool(max(limit, 1)) = 3 × max(limit, 1)"]
         RET{"retrieve(query, pool):<br>does the embeddings table exist?<br>db::embedding_space_exists"}
         MM{"ensure_query_space_matches:<br>meta.(embed_model_id, embed_dim)<br>equals the active embedder?"}
         ERR["Error::ModelMismatch — fail fast,<br>never mix vector spaces (ADR-0007);<br>the fix is a reindex"]
