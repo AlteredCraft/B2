@@ -23,6 +23,11 @@ status: active
 > quoted anywhere in this doc — they live in `search::BGE_BASE_EVIDENCE_BAR`
 > ([search.rs](../../crates/b2-core/src/search.rs)) and their justification is re-derived on every
 > `make eval` run, never frozen into prose (ADR-0013; GH #187 is the lesson).
+>
+> Each flowchart is embedded as a committed SVG (`assets/`) so it renders on the GitHub Pages
+> docs site as well as on GitHub, with its **Mermaid source collapsed beneath it as the editable
+> ground truth** (GitHub renders the fence; Pages would not). After editing a source, regenerate
+> the SVGs with [`scripts/render-flow-diagrams.sh`](../../scripts/render-flow-diagrams.sh).
 
 ## 1. Flow ② — search (`b2 search`, the desktop search pane)
 
@@ -33,6 +38,11 @@ lets a surface say "no matches" honestly. Both adapters call the same façade re
 the desktop via its `search` command — so the rows and the verdict are computed once, identically.
 
 ### 1a. From query to ranked notes
+
+![Flowchart: search, from query to ranked notes](assets/search-ranking.svg)
+
+<details>
+<summary>Mermaid source (edit this, then regenerate the SVG with <code>scripts/render-flow-diagrams.sh</code>)</summary>
 
 ```mermaid
 flowchart TD
@@ -76,7 +86,14 @@ flowchart TD
     RES --> OUT["ranked chunk Hits, pool-wide,<br>each carrying its provenance"]
 ```
 
+</details>
+
 ### 1b. From ranked notes to what each surface shows
+
+![Flowchart: search, from ranked notes to the three verdict behaviours](assets/search-verdict.svg)
+
+<details>
+<summary>Mermaid source (edit this, then regenerate the SVG with <code>scripts/render-flow-diagrams.sh</code>)</summary>
 
 ```mermaid
 flowchart TD
@@ -113,6 +130,8 @@ flowchart TD
     VIEW --> CLI2
     VIEW --> GUI1
 ```
+
+</details>
 
 ### Anchors
 
@@ -159,6 +178,11 @@ it, ranked by exact best-passage distance, always served (D1/ADR-0014 — no sta
 membership). A **pure read over stored vectors**: no model call, no `embed_query` — the anchor is
 represented by the chunk vectors a prior reindex stored, which is why the CLI opens the vault with
 the fake embedder and still serves real-model rankings.
+
+![Flowchart: similar, the two-stage discovery scan](assets/similar-discovery.svg)
+
+<details>
+<summary>Mermaid source (edit this, then regenerate the SVG with <code>scripts/render-flow-diagrams.sh</code>)</summary>
 
 ```mermaid
 flowchart TD
@@ -214,6 +238,8 @@ flowchart TD
     VIEW --> CLIOUT
     VIEW --> GUIOUT
 ```
+
+</details>
 
 ### Anchors
 
