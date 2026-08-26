@@ -14,7 +14,7 @@ status: active
 > never the reverse. Companion docs: [invariants.md](invariants.md) (the normative register, cited by
 > id) and [index-engine.md](index-engine.md) (the *how*).
 >
-> **Rationale lives in [`ADRs/`](../../ADRs/README.md)** — why connections live where they do
+> **Rationale lives in [`ADRs/`](../ADRs/README.md)** — why connections live where they do
 > (ADR-0010), why B2 never authors the body (ADR-0004), why identity is the path (ADR-0003), why
 > there is no suggestion queue (ADR-0009). This doc defines the shapes; the ADRs say why.
 
@@ -59,8 +59,8 @@ to **B2-derived** data; the human's own structure is vault material, not B2 stat
 
 ## 0. The central decision — where a connection lives
 
-Ruled by **[ADR-0010](../../ADRs/0010-typed-graph-two-homes-closed-vocabulary.md)** and
-**[ADR-0004](../../ADRs/0004-markdown-is-the-only-surface-b2-writes.md)**. A connection lives in
+Ruled by **[ADR-0010](../ADRs/0010-typed-graph-two-homes-closed-vocabulary.md)** and
+**[ADR-0004](../ADRs/0004-markdown-is-the-only-surface-b2-writes.md)**. A connection lives in
 exactly one of two homes, **by origin** — and the two homes split by *what they can say*, not just
 who writes them:
 
@@ -421,7 +421,7 @@ files round-trip byte-identical; dropping and rebuilding the index reproduces th
 ## 9. Judgment calls — resolved
 
 The data model is **locked**; nothing is open. Every decision and its rejected alternatives are in
-[`ADRs/`](../../ADRs/README.md) — chiefly ADR-0002 (two tiers), ADR-0003 (path identity), ADR-0004
+[`ADRs/`](../ADRs/README.md) — chiefly ADR-0002 (two tiers), ADR-0003 (path identity), ADR-0004
 (write discipline), ADR-0009 (no suggestion queue), and ADR-0010 (the two homes, the dedup rule, and
 the verb core). The normative claims are the invariant register's S, W, L, and G entries.
 

@@ -53,12 +53,12 @@ connected yet** — so the structure of your knowledge grows as you link them, i
 The files stay plain Markdown on your disk, yours forever; B2 is the **intelligence layer over them,
 not a container around them**. Humans and AI agents are both first-class users.
 
-Full motivation, scope, and locked decisions: **[docs/design/invariants.md](docs/design/invariants.md)**.
+Full motivation, scope, and locked decisions: **[design/invariants.md](design/invariants.md)**.
 
 ## How we build it
 
 Two architectural tenets shape every decision (full text:
-[docs/design/invariants.md](docs/design/invariants.md)):
+[design/invariants.md](design/invariants.md)):
 
 - **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
   trim orphans. The index is a pure projection of your vault (drop it, rebuild it identical);
@@ -70,7 +70,7 @@ Two architectural tenets shape every decision (full text:
 
 …in service of five product non-negotiables — plain-Markdown source of truth · local-first · zero
 lock-in · AI-native (not bolted-on) · single binary
-([docs/design/invariants.md](docs/design/invariants.md)).
+([design/invariants.md](design/invariants.md)).
 
 ## The docs
 
@@ -80,14 +80,16 @@ New here? Start with the **[Quick start](https://alteredcraft.github.io/B2/quick
 and work with a vault in about ten minutes. Then go deeper:
 [system architecture](https://alteredcraft.github.io/B2/architecture.html) ·
 [indexing pipeline](https://alteredcraft.github.io/B2/indexing.html) ·
-[connection discovery](https://alteredcraft.github.io/B2/discovery.html).
+[the retrieval deep dive](https://alteredcraft.github.io/B2/retrieval.html) ·
+[search & similarity, in plain language](https://alteredcraft.github.io/B2/search-and-similarity.html).
 
 | Doc | What it owns |
 |---|---|
-| [docs/design/invariants.md](docs/design/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
-| [docs/design/data-model.md](docs/design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
-| [docs/design/index-engine.md](docs/design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
+| [design/invariants.md](design/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
+| [design/data-model.md](design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
+| [design/index-engine.md](design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
 | [ADRs/](ADRs/README.md) | **Architecture Decision Records** — one terse record per key architectural choice: the context, the ruling, and what it costs. The *why* behind the register's entries. |
+| [crates/b2-embed/evals/README.md](crates/b2-embed/evals/README.md) | The **eval harness** — corpora, labels, metrics, process rules, and the record of every measured verdict. Lives beside the corpus it governs. |
 
 Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
 
