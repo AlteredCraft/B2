@@ -211,7 +211,8 @@ tomorrow's model* — made mechanical.
   with no headroom**.
   **The engine now answers it** (GH #201, 2026-08-22): `hybrid_search` carries the discarded
   signals beside the untouched fused order — per hit its rank in each list and its own distance,
-  per query the lexical reading and the best cosine — and the rule over them is *lexical OR
+  per query the best cosine; the lexical reading is read beside it where a verdict is wanted
+  (`Vault::search_evidence`) — and the rule over them is *lexical OR
   semantic*, two independent signals so the test can tell "nothing matches" from "everything
   matches" where a one-signal one could not (D1's own reason, GH #196). The lexical half is
   **IDF-weighted term coverage**: how much of the query's own weight the vault carries, a word in

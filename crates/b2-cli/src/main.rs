@@ -175,7 +175,7 @@ enum Command {
         #[arg(short = 'r', long)]
         recursive: bool,
     },
-    /// Hybrid keyword+semantic+graph search across the vault. A query the vault
+    /// Hybrid keyword+semantic search across the vault. A query the vault
     /// holds no evidence for answers "no matches" rather than serving its nearest
     /// rows (invariants.md D2); `--json` is an **object** — the rows plus that
     /// verdict, which has nowhere to live in a bare list.

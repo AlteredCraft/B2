@@ -141,8 +141,8 @@
     <h3>Step one — your note is cut into passages</h3>
     <p>A long note isn't one idea, it's many. If B2 treated a 4,000-word article as a single lump, a
     paragraph deep inside it about one narrow thing would be drowned out by everything around it. So B2 cuts
-    each note into <b>passages of roughly 450 words' worth of text</b>, preferring to cut at headings, then
-    at paragraph breaks — never in the middle of a code block or a table. Consecutive passages overlap by
+    each note into <b>passages of roughly 450 tokens' worth of text — about 340 words</b>, preferring to cut
+    at headings, then at paragraph breaks — never in the middle of a code block or a table. Consecutive passages overlap by
     about 15%, so an idea that straddles a boundary isn't sliced in half.</p>
     <div class="term"><span class="lbl">the term</span> A passage is called a <b>chunk</b>. The rules for
     where to cut are the <b>chunker</b>. Deep dive: <a href="indexing.html">the indexing pipeline</a>.</div>
@@ -382,9 +382,10 @@
       which is why B2's test suite deliberately includes that trap.</li>
       <li><b>Punctuation in your query is neutralised.</b> Search syntax characters are stripped before your
       words reach the keyword index, so typing a question with apostrophes and quotes can't break it.</li>
-      <li><b>Only a working set is ranked.</b> Each system returns a bounded pool of candidates (60 passages
-      or 150 notes for a normal ten-result search) rather than the entire vault. On a large vault this is
-      what keeps search instant; it also means a note far outside both pools can't be rescued by fusion.</li>
+      <li><b>Only a working set is ranked.</b> Each system returns a bounded pool of candidate passages
+      (for a normal ten-result search, 150 per system; the passage-level view keeps 60) rather than the
+      entire vault. On a large vault this is what keeps search instant; it also means a note far outside
+      both pools can't be rescued by fusion.</li>
     </ul>
   </section>
 
@@ -626,7 +627,7 @@
         <tr><td><b>Fusion</b></td><td>How the two rankings become one</td><td>RRF with a damping constant of
           60; ties break toward the meaning signal</td><td><a href="architecture.html">Architecture</a></td></tr>
         <tr><td><b>Candidate pools</b></td><td>How deep each signal looks before fusing</td>
-          <td>60 passages / 150 notes for a 10-result search</td>
+          <td>Per signal, at a 10-result search: 150 passages (note view) / 60 (passage view)</td>
           <td><a href="architecture.html">Architecture</a></td></tr>
         <tr><td><b>Shortlist (pass 1)</b></td><td>Which notes are worth comparing properly</td>
           <td>20× the requested count, at least 200 notes</td>
@@ -723,6 +724,10 @@
       <div class="card"><div class="kickerlbl">Mechanics</div>
         <p style="margin:0;font-size:13px;color:var(--muted)"><a href="architecture.html">System
         architecture</a> — the whole engine, the seams, and where each flow lives.</p></div>
+      <div class="card"><div class="kickerlbl">Mechanics</div>
+        <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/docs/design/retrieval-flows.md">Retrieval
+        flowcharts</a> — both flows stage by stage, every step anchored to the function that implements
+        it.</p></div>
       <div class="card"><div class="kickerlbl">Evidence</div>
         <p style="margin:0;font-size:13px;color:var(--muted)"><a href="https://github.com/AlteredCraft/B2/blob/main/docs/evals/README.md">The
         eval harness</a> — how every number on this page was measured, and the verdicts it has ruled.</p></div>
