@@ -95,9 +95,9 @@
     </div>
 
     <div class="badges">
-      <span class="badge green"><span class="pip"></span><b>417</b>&nbsp;Rust tests&nbsp;· <b>498</b> UI checks</span>
+      <span class="badge green"><span class="pip"></span>model-free, deterministic test suite — <b>CI runs it verbatim</b></span>
       <span class="badge"><b>Rust</b>&nbsp;· one static binary</span>
-      <span class="badge"><b>4</b> crates · SQLite (FTS5 + in-process vectors)</span>
+      <span class="badge"><b>5</b> crates · SQLite (FTS5 + in-process vectors)</span>
       <span class="badge">status: <b>engine + CLI + desktop app</b> · connection discovery you commit yourself</span>
     </div>
   </header>
@@ -118,10 +118,10 @@
         <li><b>One static binary</b>, no window, no GUI toolchain — fine over SSH or in a cron job.</li>
         <li><b>Explicit</b> by design: indexing is a command you run (<code>b2 reindex</code>), so nothing
           touches the vault you didn't ask for.</li>
-        <li>The whole surface, twelve commands: <code>init</code> · <code>reindex</code> ·
+        <li>The whole surface, fourteen commands: <code>init</code> · <code>reindex</code> ·
           <code>status</code> · <code>search</code> · <code>similar</code> · <code>link</code> ·
           <code>neighbors</code> · <code>explain</code> · <code>add</code> · <code>write</code> ·
-          <code>mv</code> · <code>rm</code>.</li>
+          <code>mv</code> · <code>rm</code> · <code>ask</code> · <code>chat</code>.</li>
       </ul>
     </div>
     <div class="adapter">
@@ -135,6 +135,9 @@
           typed link is one click — plus a graph view of the connections around a note.</li>
         <li><b>An editor</b>: CodeMirror 6 with live preview, autosave, syntax-highlighted fences, and a
           conflict bar when the file changed under you.</li>
+        <li><b>Grounded chat in a pane (⌘J)</b> — ask your vault a question and stream a cited answer;
+          <code>b2 ask</code>/<code>chat</code> are the same flow in the terminal. Nothing about a chat is
+          ever stored.</li>
         <li><b>Keyboard-complete and rebindable</b>, a file tree with drag-in import from Finder, and a
           Settings pane that picks the embedding model and shows the CPU/Metal device.</li>
       </ul>
@@ -191,14 +194,14 @@
     <a href="quickstart.html">🚀 <span>Quick start</span></a>
     <a href="architecture.html">📐 <span>System architecture</span></a>
     <a href="indexing.html">🗂️ <span>Indexing pipeline</span></a>
-    <a href="discovery.html">🔗 <span>Connection discovery</span></a>
+    <a href="retrieval.html">🔗 <span>Retrieval deep dive</span></a>
     <a href="search-and-similarity.html">🧭 <span>Search &amp; similarity explainer</span></a>
     <a href="https://github.com/AlteredCraft/B2">⌂ <span>Source on GitHub</span></a>
-    <a href="https://github.com/AlteredCraft/B2/tree/main/docs/design">📄 <span>Design docs (<span class="mono">docs/design/</span>)</span></a>
+    <a href="https://github.com/AlteredCraft/B2/tree/main/design">📄 <span>Design docs (<span class="mono">design/</span>)</span></a>
   </div>
 
   <footer>
-    B2 · index engine + CLI + desktop app · Rust. The design docs in <code>docs/design/</code> are the source
+    B2 · index engine + CLI + desktop app · Rust. The design docs in <code>design/</code> are the source
     of truth; the code is a projection of the spec. Built in the open.
   </footer>
 
