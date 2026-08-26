@@ -1669,8 +1669,14 @@ body.is-resizing {
    the card; the whole card highlights on hover. The `.card-open` `min-width: 0` is the
    actual overflow fix: without it a flex child refuses to shrink below its longest
    unbroken word and shoves the card past the column edge (the reported bug). */
+/* Only the head of a foldable card acts on click (the chevron folds, `.card-open`
+   navigates) — the body is inert text, so the card as a whole must not inherit `.card`'s
+   `cursor: pointer` and promise an action the path and snippet don't perform. The head's
+   own buttons re-assert `pointer` below; while editing, the draggable rule further down
+   overrides this with `grab`, because then the *whole* card is a drag handle. */
 .card.foldable {
   padding: 0;
+  cursor: default;
 }
 .card-head {
   display: flex;
