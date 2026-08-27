@@ -26,8 +26,9 @@ every committed connection. There is no state anywhere outside your notes.
 
 - **Tier 1, the vault: source of truth.** Notes plus every committed edge, plain `.md`, fully
   usable in Obsidian with no B2. Plus resource peers (PDFs, images, clippings) and the folder
-  tree itself. Stays pristine: B2's only writes are surgical and in frontmatter; the body is
-  100% yours.
+  tree itself. Stays pristine: reading and indexing write nothing, and every file change is a
+  command you ran. `b2 link` appends one frontmatter line, `b2 mv` repairs inbound link paths,
+  and `b2 add`/`b2 write` place content you supplied. B2 never authors your prose (W1 to W3).
 - **Tier 2, `b2.sqlite`: disposable cache.** FTS5, plain vector tables scored in-process, and
   the typed graph. Holds nothing that can't be rebuilt from the vault.
 

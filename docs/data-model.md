@@ -23,7 +23,7 @@ structure into it, because Markdown is the only format whose bytes B2 may write.
 *tier* is the whole vault directory, while the two authored objects stay note plus edge.
 Resources are defined in §10; they change nothing in §0 to §9.
 
-### The two storage tiers
+## The two storage tiers
 
 1. **Markdown: the source of truth for knowledge.** Your notes plus every committed edge, on
    your disk, fully usable with no B2. The files stay pristine, and the body is 100% yours
@@ -37,7 +37,7 @@ ADR-0002). Drop `b2.sqlite`, reindex, get an identical index (S3). No durable B2
 lives outside your notes (S4). A resource (§10) contributes only derived rows, so the
 guarantee is unchanged.
 
-### Folders
+## Folders
 
 Your vault directory carries two kinds of authored material: the Markdown files (content) and
 the directory tree itself (structure). A folder, empty or not, is user-authored exactly like a
@@ -364,9 +364,10 @@ parser/serializer, so it is specified here:
 - Unknown frontmatter keys are preserved verbatim and in order. Body text, whitespace, and
   comment tokens are byte-preserved.
 - The only bytes B2 ever changes are the specific mechanical edits it is asked to make (W3).
-  Exactly one of those touches the body: rewriting an inbound `[[oldpath|title]]` to
-  `[[newpath|title]]` on a move, aliases preserved verbatim. An operation you did not invoke
-  changes no byte at all (W1).
+  Two of those reach the body, and they differ in kind: the editor save splices in body bytes
+  *you* supplied, verbatim, while the move repair is the one body edit B2 composes itself,
+  rewriting an inbound `[[oldpath|title]]` to `[[newpath|title]]`, aliases preserved verbatim
+  (W2). An operation you did not invoke changes no byte at all (W1).
 - Nothing is reformatted, reordered, or normalized in passing. Not YAML quoting style, not
   list indentation, not line endings.
 

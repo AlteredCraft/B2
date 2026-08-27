@@ -25,7 +25,11 @@ drops in without a redesign.
   is the source of truth. `.b2/b2.sqlite` is a disposable cache. Nothing in the index is
   authoritative. ([data-model.md](data-model.md), "The two storage tiers")
 - **S2. The index is a pure projection: `index = projection of (the vault directory)`.** Drop
-  `b2.sqlite`, reindex, and you get an identical index back. Markdown is the vault's only
+  `b2.sqlite`, reindex, and you get an identical index back. Identical means *logically*
+  identical, the standard the projection tests assert: every derived row, vectors and
+  centroids included, excluding only what may differ between two builds of the same files
+  (`indexed_at`, `mtime`, and internal chunk row ids; chunks are keyed by `(note, seq)`).
+  Markdown is the vault's only
   *authored* format: the only format whose bytes B2 may write. Resources contribute derived
   rows only. Folders are never projected at all; B2 reads them live off disk. The projected
   domain is the vault's *managed subtree*: a dot-prefixed name is not vault material, whether
@@ -34,11 +38,13 @@ drops in without a redesign.
   then never see. The file itself stays on disk, untouched, simply outside the projection.
   ([data-model.md](data-model.md) §1, §10, [index-engine.md](index-engine.md) §3,
   [GH #136](https://github.com/AlteredCraft/B2/issues/136))
-- **S3. Full reindex ≡ incremental update, with no exceptions.** Re-deriving one changed note
-  lands on exactly the state a from-scratch rebuild would produce. That includes pruning: a
-  whole-vault pass removes rows for files the walk no longer finds. There is no carve-out.
-  Identity is the path (L1), and the filesystem guarantees one file per path, so "two files
-  with one identity" cannot arise; a copy is just another note at another path.
+- **S3. Full reindex ≡ incremental update.** Re-deriving one changed note lands on exactly
+  the state a from-scratch rebuild would produce for it. Reconciling deletions is scoped to
+  the whole-vault pass: it prunes rows for files the walk no longer finds, while a
+  single-note path touches only its own note's rows and never prunes
+  ([index-engine.md](index-engine.md) §8). There is no identity carve-out: identity is the
+  path (L1), and the filesystem guarantees one file per path, so "two files with one
+  identity" cannot arise; a copy is just another note at another path.
   ([index-engine.md](index-engine.md) §8,
   [GH #170](https://github.com/AlteredCraft/B2/issues/170))
 - **S4. No durable B2-derived state outside the Markdown.** No event log, no sidecar files, no
@@ -55,11 +61,12 @@ drops in without a redesign.
   mechanics of a command you ran (W3). Reading a vault (walking it, projecting it, reindexing
   it) writes nothing. `reindex` runs unchanged on a read-only vault, and a git-versioned vault
   shows no diff from having been indexed. ([data-model.md](data-model.md) §1)
-- **W2. B2 never writes the note body, and never asks it to carry B2 syntax.** The body is
-  100% your document. The one body write is the mechanical move repair: when a note moves, B2
-  rewrites the *path text* inside inbound `[[oldpath|alias]]` links so they keep resolving. It
-  fixes a link you already wrote. It never adds one, and aliases survive verbatim.
-  ([data-model.md](data-model.md) §0)
+- **W2. B2 never authors the note body, and never asks it to carry B2 syntax.** The body is
+  100% your document. The one body edit B2 composes itself is the mechanical move repair:
+  when a note moves, B2 rewrites the *path text* inside inbound `[[oldpath|alias]]` links so
+  they keep resolving. It fixes a link you already wrote. It never adds one, and aliases
+  survive verbatim. (The editor save, `Vault::write`, also replaces the body, but with bytes
+  *you* wrote; B2 is only the carrier, W3.) ([data-model.md](data-model.md) §0)
 - **W3. The on-command writes are a short, closed list:**
   - `b2 link` appends one `b2_relations:` entry (frontmatter, never the body).
   - The move repair of W2.
@@ -152,10 +159,11 @@ drops in without a redesign.
   and re-embeds, and `open` never mutates the vector space.
   ([index-engine.md](index-engine.md) §6,
   [GH #40](https://github.com/AlteredCraft/B2/issues/40))
-- **M3. One embedding space in v1.** Every vault member funnels to *text* through the same
-  model. Multimodal spaces and describers are documented future seams, off by default
+- **M3. One embedding space in v1.** Notes are the embedded members today; the designed
+  resource-content path funnels every member to *text* through the same model when it ships
+  ([data-model.md](data-model.md) §10, designed rather than built). Multimodal spaces and
+  describers are documented future seams, off by default
   ([GH #110](https://github.com/AlteredCraft/B2/issues/110)).
-  ([data-model.md](data-model.md) §10)
 - **M4. Vectors live in plain tables, scored in-process; their existence is the signal; and
   they are keyed by the hash of what was embedded.** The vector tables are created at embed
   time, so "the tables exist" means "this vault has an embedding space". The fallbacks key on
@@ -289,13 +297,15 @@ drops in without a redesign.
 ## C. Concurrency: many readers, one builder
 
 - **C1. Any number of processes may hold one vault's index open at once.** Concurrent
-  *readers* are unrestricted, and a reader is never refused: opening an index already at the
-  current `schema_version` takes no write lock at all, so a running reindex cannot turn a
-  `search` into an error. Creating or rebuilding the projection is the one step that must be
-  atomic and serialized: an `open` observes a complete schema at the current version, or waits
-  out a bounded budget for the opener building one. Never a partial schema. The no-partial
-  half is absolute; the waiting half is deliberately not: past the budget, a stuck writer is
-  reported rather than hung on. "Complete" is checked, not assumed: a current stamp over
+  *readers* are unrestricted, and a reader against a complete schema at the current
+  `schema_version` is never refused: that open takes no write lock at all, so a running
+  reindex cannot turn a `search` into an error. Creating or rebuilding the projection is the
+  one step that must be atomic and serialized: an `open` observes a complete schema at the
+  current version, or waits out a bounded budget for the opener building one. Never a partial
+  schema. The no-partial half is absolute; the waiting half is deliberately not: past the
+  budget, a stuck writer is reported rather than hung on. That report is the one refusal this
+  entry permits, and it names a failure instead of hanging. "Complete" is checked, not
+  assumed: a current stamp over
   missing tables is stale and rebuilt from empty, because surviving rows would look up-to-date
   to an incremental reindex and break S3. The same holds for the vector tables (M4).
   Concurrent *writers* stay single-in-flight through the `reindex` advisory lock, which

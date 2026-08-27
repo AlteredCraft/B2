@@ -163,7 +163,9 @@ pure function of chunk text), so incremental ≡ full rebuild holds (S3). Both p
 rather than accumulate: re-projecting a note deletes its old chunks (FTS triggers fire) and
 all its edges, then re-derives everything from the current Markdown. The whole-vault pass
 owns every *reconciliation*: pruning rows for files the walk no longer met, collecting
-vectors no chunk references. Single-note paths never prune. An interrupted embed heals on the
+vectors no chunk references. Single-note paths never prune. That division of labor is S3's
+stated scope: a single-note path converges for the note it touches, and deletions reconcile
+on the next whole-vault pass. An interrupted embed heals on the
 next reindex, because the embed pass fills whatever chunks lack vectors, whyever they lack
 them.
 

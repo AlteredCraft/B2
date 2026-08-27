@@ -342,9 +342,11 @@ in an issue traces to a row here. Conventions:
   [#197](https://github.com/AlteredCraft/B2/issues/197);
   `similar_per_mate_raw`/`similar_mates_suppressed` with
   [#217](https://github.com/AlteredCraft/B2/issues/217).)
-- **`"corpus"` tags every row** (`"orthogonal"` / `"dense"`). Rows are never averaged across
-  corpora, and the dense row's transfer reading lives under its own `search_transfer` key
-  rather than overloading `search_evidence`.
+- **`"corpus"` tags every current row** (`"orthogonal"` / `"dense"`). Rows written before
+  the key landed (2026-08-18) lack it, and an absent value reads as `"orthogonal"`, so older
+  rows stay comparable. Rows are never averaged across corpora, and the dense row's transfer
+  reading lives under its own `search_transfer` key rather than overloading
+  `search_evidence`.
 - **Re-derivability.** The calibration subtrees (`discovery_z`, `discovery_fold`,
   `search_evidence`, `search_tail`, `search_transfer`) record the raw per-candidate /
   per-row data, so any window, fold depth, or bar can be re-derived from a row without

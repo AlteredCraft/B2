@@ -16,8 +16,10 @@ as source today, as one static binary. macOS and Linux are the tested platforms.
 desktop app (its own section near the end), also install Node + npm and the Tauri CLI. Run
 `make doctor` in the checkout: it checks all of this and prints the fix for anything missing.
 
-One thing is optional, and it is local. B2 makes no network calls and needs no account or API
-key at any point:
+B2 needs no account and no API key. It touches the network only when you ask it to: the
+one-time model download below, and chat against a remote endpoint if you configure one (the
+default chat endpoint is local). Indexing, search, and discovery never use the network. One
+thing is optional:
 
 - **The embedding model.** A one-time download (`b2 init`) of a local model that powers
   semantic search and connection discovery. Two are supported, and you can switch later.
@@ -136,14 +138,18 @@ keeps every key exactly as you wrote it: same bytes, same order, same comments. 
 note by where it sits (its path in the vault is its identity), so there is nothing to stamp
 into the file.
 
-B2 writes to your notes in exactly one place, in frontmatter, and never touches your prose:
+On its own, B2 writes to your notes in exactly one place, in frontmatter, and never touches
+your prose:
 
 - `b2_relations:`, a typed connection, appended only when you commit one (step 8, or a
   click in the desktop app).
 
-That is the whole of B2's write surface, plus the disposable `.b2/` index folder. Links you
-write yourself in the body stay ordinary Markdown: B2 reads them, never edits them, and
-treats each as an untyped `references` edge (labelled `inline`). A typed relation is a
+Everything else that changes a file is a command you run: `b2 add` and `b2 write` place
+content you supply, and `b2 mv` repairs the path inside links that point at the note it
+moves (you'll see it under "Day to day"). That is the whole write surface, plus the
+disposable `.b2/` index folder. Links you write yourself in the body stay ordinary Markdown:
+B2 reads them, treats each as an untyped `references` edge (labelled `inline`), and edits
+only the path text, only when you move the target through B2. A typed relation is a
 frontmatter-only thing (labelled `frontmatter`).
 
 ### 5. Index the vault

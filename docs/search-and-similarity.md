@@ -26,14 +26,16 @@ overlap by about 15%, so an idea that straddles a boundary isn't sliced in half.
 > Deep dive: [index-engine.md §1](index-engine.md).
 
 **Step two: each passage becomes a list of numbers.** B2 feeds every passage to a small
-language model that runs locally on your machine. The model reads the passage and outputs 768
-numbers. That list of numbers is the passage's position on a map of meaning: passages about
-similar things land near each other, passages about different things land far apart. The
-numbers themselves are meaningless to a human; only the distances between them matter.
+language model that runs locally on your machine. The model reads the passage and outputs a
+list of numbers (768 of them with the default model). That list is the passage's position on
+a map of meaning: passages about similar things land near each other, passages about
+different things land far apart. The numbers themselves are meaningless to a human; only the
+distances between them matter.
 
-> The term: the list of numbers is an **embedding**, or a **vector**. The model is
-> `bge-base-en-v1.5`. It runs entirely offline, downloaded once by `b2 init`. "768 numbers"
-> is its **dimension**.
+> The term: the list of numbers is an **embedding**, or a **vector**. How many numbers is
+> the model's **dimension**, so the configured model sets it: the default,
+> `bge-base-en-v1.5`, outputs 768; the smaller supported `bge-small-en-v1.5` outputs 384.
+> Either runs entirely offline, downloaded once by `b2 init`.
 
 One pass, done once. `b2 reindex` walks your vault, cuts each note into chunks, embeds each
 chunk, and files the results three ways: a keyword index (exact words), the vectors
@@ -50,8 +52,8 @@ about espresso end up in one neighborhood, passages about volcanoes in another. 
 "understands" your notes. It only measures how far apart the pins are. Close pins mean the
 model thinks the passages are about similar things.
 
-The real map has 768 directions instead of two, which nobody can picture, but nothing about
-how it works depends on that. Distance is distance.
+The real map has hundreds of directions instead of two (768 with the default model), which
+nobody can picture, but nothing about how it works depends on that. Distance is distance.
 
 B2 measures the closeness of two pins as a number between -1 and 1, where 1 means "pointing
 the same way". Two notes at 0.79 are strongly alike; two at 0.35 have little to do with each
@@ -315,10 +317,13 @@ verdict live in [evals.md](evals.md).
 - **Cosine similarity.** The closeness of two positions on the meaning map, from -1 to 1. 1
   means "identical direction". B2 computes it but never shows it to you raw, because its
   meaning depends entirely on the vault around it.
-- **Embedding** ("vector"). The list of 768 numbers a model produces for a passage: its
-  position on the map of meaning. Passages about similar things get nearby positions.
-- **Embedding model.** The local AI model that produces embeddings. B2 ships with
-  `bge-base-en-v1.5`, downloaded once by `b2 init` and run on your own machine.
+- **Embedding** ("vector"). The list of numbers a model produces for a passage (768 with the
+  default model): its position on the map of meaning. Passages about similar things get
+  nearby positions.
+- **Embedding model.** The local AI model that produces embeddings, and what sets their
+  dimension. B2 ships with `bge-base-en-v1.5` (768) by default and supports
+  `bge-small-en-v1.5` (384); either is downloaded once by `b2 init` and runs on your own
+  machine.
 - **Hybrid search.** Running keyword and meaning search together and merging the results:
   B2's default, because each covers the other's blind spot.
 - **KNN** ("k nearest neighbors"). Finding the k closest positions to a given one. What
