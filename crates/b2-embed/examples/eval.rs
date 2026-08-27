@@ -8,7 +8,7 @@
 //! cargo run -p b2-embed --example eval -- --stemmer  # + FTS tokenizer A/B (the #157 gate)
 //! ```
 //!
-//! **`crates/b2-embed/evals/README.md` is the notebook of record** — the corpus, what the exit code
+//! **`docs/evals.md` is the notebook of record** — the corpus, what the exit code
 //! enforces, every verdict this harness has ruled, and the process rules. Read it before
 //! touching the corpus, the labels, or a constant here. What this comment carries is only
 //! what a reader of *this file* needs:
@@ -824,7 +824,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             );
             // The readout the A/B is actually judged on: at this n every aggregate
             // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
-            // per-query win/loss list is the data (crates/b2-embed/evals/README.md, the
+            // per-query win/loss list is the data (docs/evals.md, the
             // process rules).
             print_rank_moves(&positives, &hybrid, &pass);
             append_result(
@@ -3717,7 +3717,7 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
              (zero headroom — the constant placement the house sizing method forbids), each payoff \
              reads against the oracle ceiling above, and a shipped constant owes process rule 5's \
              real-vault reading besides (`make calibrate VAULT=<vault> ARGS=--search`, the tail block). The ruling of \
-             record lives in crates/b2-embed/evals/README.md."
+             record lives in docs/evals.md."
         );
     } else {
         println!(
@@ -4151,7 +4151,7 @@ fn band_glyph(z: f64) -> &'static str {
 /// judged on. At this corpus's n, every aggregate delta is worth 1–2 queries, so
 /// "hit@1 +0.05" and "these two queries flipped, this one broke" are the same
 /// fact — but only the second form can be argued with, per-query, against the
-/// labels (crates/b2-embed/evals/README.md, the process rules). Prints nothing but a
+/// labels (docs/evals.md, the process rules). Prints nothing but a
 /// no-moves line when the variant reproduced the reference ranking exactly —
 /// which, per the same rules, is itself a claim to verify against a
 /// continuous quantity (the piles), never bare proof of "no effect".

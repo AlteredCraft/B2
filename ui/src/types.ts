@@ -483,7 +483,7 @@ export interface SkippedNote {
 
 /**
  * `Vault::project` — what the fast, model-free projection pass did
- * (design/index-engine.md). Once this resolves, the tree and keyword
+ * (docs/index-engine.md). Once this resolves, the tree and keyword
  * search are live; only vectors are missing. `skipped` names any unreadable files the
  * pass left out — one bad file never aborts the whole reindex (empty on a clean vault).
  */
@@ -503,14 +503,14 @@ export interface EmbedReport {
   /**
    * The embed was cancelled mid-run (the user hit Cancel). The index is still
    * consistent — keyword search + graph are complete, a prefix of notes is embedded —
-   * and re-running finishes the rest (design/index-engine.md).
+   * and re-running finishes the rest (docs/index-engine.md).
    */
   cancelled: boolean;
 }
 
 /**
  * `ingest::ReindexProgress` — one per-batch progress event streamed over a Tauri
- * `Channel` during an embed (design/index-engine.md). The counts describe the notes
+ * `Channel` during an embed (docs/index-engine.md). The counts describe the notes
  * that actually (re)embed this run, not every note (an incremental run reuses most
  * vectors untouched), and are determinate from the first batch.
  */

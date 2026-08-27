@@ -40,7 +40,7 @@ what makes that architecture pay off:
 - **Inherited tests.** A thin host means the façade's existing suite already covers the behavior; this crate
   needs only a few per-command tests (args in → right façade call → view out). Logic here would need its own
   parallel tests that the CLI already has.
-- **The promise stays true.** [invariants.md](../../design/invariants.md) (E3) says the GUI is "a
+- **The promise stays true.** [invariants.md](../../docs/invariants.md) (E3) says the GUI is "a
   second dumb adapter over the same contract, inheriting every test the CLI bought." That is only true while
   this crate stays dumb. Thinness is not tidiness; it's the load-bearing property.
 
@@ -108,7 +108,7 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
 
 ## The keyboard contract (invariant K1)
 
-[invariants.md](../../design/invariants.md) **K1** — *B2 is fully operable from the keyboard; the
+[invariants.md](../../docs/invariants.md) **K1** — *B2 is fully operable from the keyboard; the
 mouse is an accelerator, never a requirement* — names this file as its elaboration home. This is it.
 K1 governs the **GUI**: the `b2` CLI satisfies it by nature, so everything below is about
 `b2-desktop` + [`ui/`](../../ui) ([#78](https://github.com/AlteredCraft/B2/issues/78)).
@@ -293,7 +293,7 @@ Every new surface owes all four. They are cheap while you're building it and exp
 
 ## The rendering trust boundary (invariant E5)
 
-[invariants.md](../../design/invariants.md) **E5** — *note content is untrusted input; rendering is a
+[invariants.md](../../docs/invariants.md) **E5** — *note content is untrusted input; rendering is a
 trust boundary* — names this file as its elaboration home, the way K1 does above. E5 governs the **GUI**:
 the `b2` CLI prints text, so nothing there parses into a document
 ([#77](https://github.com/AlteredCraft/B2/issues/77)).

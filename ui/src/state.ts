@@ -349,7 +349,7 @@ export interface AppState {
   loading: boolean;
   /**
    * A reindex is in flight. Kept **separate** from `loading` so a reindex does NOT
-   * freeze the app (design/index-engine.md) — only the Reindex action is disabled and a
+   * freeze the app (docs/index-engine.md) — only the Reindex action is disabled and a
    * progress + Cancel affordance appears, while reading/searching/navigating stay live.
    */
   reindexing: boolean;

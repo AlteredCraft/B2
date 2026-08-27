@@ -702,7 +702,7 @@ function inTextEntry(): boolean {
 // --- keyboard: focus plumbing (invariant K1, GH #78) --------------------------------
 //
 // B2 is fully operable from the keyboard; the mouse is an accelerator, never a
-// requirement (design/invariants.md K1). Three things make that true and all three
+// requirement (docs/invariants.md K1). Three things make that true and all three
 // live here: the file tree navigates by arrow key (the ARIA `tree` pattern, walking the
 // row order treenav.ts also paints), every overlay takes focus on open and gives it back
 // on close, and every mouse-only gesture — the right-click menu above all — has a key
@@ -2715,7 +2715,7 @@ function trackIndexing(run: Promise<void>): void {
   indexingRun = done;
 }
 
-// Reindex as project → embed, sequenced here (Shape A, design/index-engine.md):
+// Reindex as project → embed, sequenced here (Shape A, docs/index-engine.md):
 // the fast, model-free `project` completes the keyword + graph index, the tree
 // paints immediately, and only then does the slow, cancellable `embed` stream behind
 // it. Deliberately does NOT set `state.loading` — the app stays fully usable

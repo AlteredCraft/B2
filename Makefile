@@ -250,7 +250,7 @@ coverage-app: ui-build ## Coverage for the desktop host's own unit tests.
 # *sensitivity* rather than model quality, so it is machine-independent (fake embedder) and
 # needs no model — but it is the other half of the same harness (GH #141).
 #
-# **crates/b2-embed/evals/README.md is the guide**: what each instrument measures, how to
+# **docs/evals.md is the guide**: what each instrument measures, how to
 # read every block it prints, the exit gate, and the process rules that bind any edit to the
 # corpora, the labels, or the metrics. The recipe comments here stay operational only.
 

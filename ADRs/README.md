@@ -7,7 +7,7 @@ an ADR. Feature history lives in [GitHub Issues](https://github.com/AlteredCraft
 **Keep them terse** — Context / Decision / Consequences, a page at most. When a decision is
 overturned, mark the old ADR `Superseded by ADR-NNNN` and write a new one; never edit history.
 
-Normative detail lives in `design/invariants.md` (the register — it wins on conflict); these
+Normative detail lives in `docs/invariants.md` (the register — it wins on conflict); these
 records say *why* an entry reads the way it does.
 
 | # | Decision |

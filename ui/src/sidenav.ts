@@ -7,7 +7,7 @@
 // once and both sides call them. A pane you can arrow through in a different order than
 // you can see is worse than no arrows at all.
 //
-// Invariant K1 (design/invariants.md, GH #78): discovery is navigable from the
+// Invariant K1 (docs/invariants.md, GH #78): discovery is navigable from the
 // keyboard, following the same ARIA `tree` pattern the file tree does — ↑↓ between visible
 // rows, →← to fold or step in/out, Home/End, and a roving `tabindex` so the whole list is
 // one Tab stop rather than three per card.
