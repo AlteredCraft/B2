@@ -101,6 +101,15 @@ export const api = {
     invoke("explain_resource", { path }),
 
   /**
+   * A resource's bytes, base64 — what the in-app viewer shows in place of the
+   * *No viewer available* card. This carries a copy of the whole file across the IPC,
+   * so ask only for what will actually be displayed; the size is on
+   * `explainResource`'s view before this is called. The host re-validates the path
+   * against the inventory.
+   */
+  readResource: (path: string): Promise<string> => invoke("read_resource", { path }),
+
+  /**
    * *Open in system default* — an OS handoff performed host-side (the webview holds
    * no opener permission); the host validates the path against the inventory first.
    */

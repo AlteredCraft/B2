@@ -100,10 +100,13 @@ import { icon } from "./icons";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes } from "./panes";
 import { reconcileIndex } from "./reconcile";
+import type { ResourceExplainView } from "./types";
 import {
   contextMenuHtml,
   embedBannerHtml,
   escapeHtml,
+  imageDataUrl,
+  IMAGE_VIEWER_MAX_BYTES,
   modalHtml,
   notePaneHtml,
   reindexDisabled,
@@ -541,6 +544,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     const note = await api.readNote(ref);
     state.current = note;
     state.currentResource = null; // one document owns the pane
+    state.resourceImage = null;
     state.fmEditing = false; // a new document ends any drawer edit (guards ran upstream)
     commit(note.path);
     expandAncestors(note.path);
@@ -598,6 +602,25 @@ async function followWikilink(target: string): Promise<void> {
   }
 }
 
+/**
+ * The open resource's picture, or null when there isn't one to show.
+ *
+ * Null for every class without an in-app viewer, for an image too large to hold on
+ * screen (`IMAGE_VIEWER_MAX_BYTES` — the card's size is already in hand, so the decision
+ * costs no IPC), and for a read that failed. That last one is deliberate: the card is the
+ * truth about the file whether or not its bytes can be read, so a failed read falls back
+ * to *Open in system default* rather than failing the navigation and leaving the pane on
+ * the previous document.
+ */
+async function loadResourceImage(r: ResourceExplainView): Promise<string | null> {
+  if (r.class !== "image" || r.size > IMAGE_VIEWER_MAX_BYTES) return null;
+  try {
+    return imageDataUrl(r.path, await api.readResource(r.path));
+  } catch {
+    return null;
+  }
+}
+
 /** The resource sibling of `loadNote` — same core/commit split, for `openResource`
  *  and back/forward. Discovery doesn't apply (resources have no chunks until file-type
  *  slice 3), so the side pane clears. */
@@ -607,6 +630,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
   try {
     const resource = await api.explainResource(path);
     state.currentResource = resource;
+    state.resourceImage = await loadResourceImage(resource);
     state.current = null;
     commit(resource.path);
     expandAncestors(resource.path);
@@ -1593,7 +1617,9 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
       state.current = await api.readNote(openNotePath);
     }
     if (openResourcePath !== null) {
-      state.currentResource = await api.explainResource(openResourcePath);
+      const moved = await api.explainResource(openResourcePath);
+      state.currentResource = moved;
+      state.resourceImage = await loadResourceImage(moved);
     }
     await loadNotes();
     if (openNotePath !== null) await refreshDiscovery(); // backlinks may show new paths
@@ -1701,6 +1727,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
     if (affected) {
       state.current = null;
       state.currentResource = null;
+      state.resourceImage = null;
       state.similar = [];
       state.connections = [];
       state.resourceLinks = [];
@@ -2641,6 +2668,7 @@ async function switchVault(): Promise<void> {
     state.notesTotal = info.notes_total;
     state.current = null;
     state.currentResource = null;
+    state.resourceImage = null;
     state.similar = [];
     state.connections = [];
     state.resourceLinks = [];
@@ -3918,7 +3946,13 @@ async function reconcileExternalChange(): Promise<void> {
     const cur = state.currentResource;
     try {
       const fresh = await api.explainResource(cur.path);
-      if (state.currentResource?.path === cur.path) state.currentResource = fresh;
+      // The bytes are re-read too: an external edit can rewrite the picture in place
+      // without the path ever changing, and a stale `data:` URL would show the old one.
+      const picture = await loadResourceImage(fresh);
+      if (state.currentResource?.path === cur.path) {
+        state.currentResource = fresh;
+        state.resourceImage = picture;
+      }
     } catch {
       if (state.currentResource?.path === cur.path) {
         flash("This file is no longer on disk — it was moved or removed.");

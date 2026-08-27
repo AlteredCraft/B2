@@ -143,6 +143,24 @@ pub fn explain_resource(
     Ok(vault.explain_resource(&path)?)
 }
 
+/// A resource's **bytes**, base64, for the viewer the card shows in place of the
+/// *No viewer available* fallback (an image, today).
+///
+/// base64 because the IPC is JSON and these are arbitrary bytes — the same encoding
+/// [`import_file`] takes in the other direction, and what the webview turns straight
+/// into the `data:` URL the CSP already admits (`img-src 'self' data:`). It carries a
+/// copy of the file, so the frontend asks only for what it will actually display: the
+/// size is on the card's view before this is ever called.
+///
+/// The path is re-validated host-side against the inventory (in the façade), because
+/// the note that authored the link is untrusted input (ADR-0016) — the caller passes,
+/// the host validates, exactly as [`open_resource`] does.
+#[tauri::command(async)]
+pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String, CmdError> {
+    let vault = open_read(state.inner())?;
+    Ok(BASE64.encode(vault.read_resource_bytes(&path)?))
+}
+
 /// *Open in system default* on the fallback card — an **OS handoff**, never
 /// in-webview execution (spec §6 security posture). Host infrastructure like the
 /// folder dialog: the webview holds no opener permission; this command validates

@@ -895,6 +895,26 @@ impl Vault {
         dirs::list_dirs(&self.root)
     }
 
+    /// Read a resource's **bytes** — [`read`](Self::read)'s non-note sibling, for the
+    /// viewers an adapter shows in place of the fallback card (an image, today).
+    ///
+    /// Inventory-checked *before* the filesystem is touched, the same posture the
+    /// desktop's *Open in system default* takes: the path must name a row the walk put
+    /// in `resources`, so this can never be talked into "read any file this process can
+    /// reach" by a link a note authored. Errors with [`Error::ResourceNotFound`]
+    /// otherwise — including for a note, which is not resource inventory.
+    ///
+    /// Reads whole, because every caller wants the whole file; a resource too large for
+    /// a viewer is the *adapter's* judgement (it knows the size from
+    /// [`explain_resource`](Self::explain_resource) before asking), not a rule the
+    /// engine imposes.
+    pub fn read_resource_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let _op = tracing::debug_span!(target: "b2::vault", "read_resource_bytes", path).entered();
+        db::resource_detail(&self.conn, path)?
+            .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
+        Ok(fs::read(self.root.join(path))?)
+    }
+
     /// The fallback card's data for one resource: inventory metadata plus the
     /// backlinks panel, straight off the materialized graph. `path` is vault-relative
     /// (the adapters dispatch here via [`crate::resource::doc_kind`]); errors with

@@ -525,6 +525,40 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert!(matches!(missing, Err(b2_core::Error::ResourceNotFound(_))));
 }
 
+/// The viewer's read: inventoried bytes come back verbatim; anything the walk never
+/// put in the inventory refuses, so the op cannot be steered off the vault.
+#[test]
+fn read_resource_bytes_returns_the_file_and_refuses_the_uninventoried() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    common::golden_vault_copy(tmp.path());
+    let vault = Vault::open(tmp.path()).unwrap();
+    vault.project(false).unwrap();
+
+    let bytes = vault.read_resource_bytes("resources/diagram.png").unwrap();
+    assert_eq!(
+        bytes,
+        fs::read(tmp.path().join("resources/diagram.png")).unwrap(),
+        "the viewer sees exactly the file on disk"
+    );
+
+    // A path the walk never met: no row, no read — whatever is on disk beside it.
+    fs::write(tmp.path().join("resources/unwalked.png"), b"not indexed").unwrap();
+    assert!(matches!(
+        vault.read_resource_bytes("resources/unwalked.png"),
+        Err(b2_core::Error::ResourceNotFound(_))
+    ));
+
+    // A note is not resource inventory, and an escaping path names no row at all.
+    assert!(matches!(
+        vault.read_resource_bytes("notes/alpha.md"),
+        Err(b2_core::Error::ResourceNotFound(_))
+    ));
+    assert!(matches!(
+        vault.read_resource_bytes("../outside.png"),
+        Err(b2_core::Error::ResourceNotFound(_))
+    ));
+}
+
 /// A resource move rewrites inbound links in BOTH syntaxes, each keeping its own
 /// convention (note-relative stays relative, vault-root stays root), moves the
 /// file, and leaves the index equal to a fresh rebuild.
