@@ -2,7 +2,7 @@
 // section shows. Pure data, no DOM, so node runs its test straight off the source
 // (`npm test`), like newentry.ts / move.ts / treenav.ts.
 //
-// Why a table rather than prose in a docs page: invariant K1 (design/invariants.md,
+// Why a table rather than prose in a docs page: invariant K1 (docs/invariants.md,
 // GH #78) promises every mouse action has a keyboard path, and a promise nobody can
 // *find* is not kept. A shortcut that exists only in a button's `title` is discoverable
 // exactly once — by hovering the button you already knew about. This list is the app's

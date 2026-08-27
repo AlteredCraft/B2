@@ -247,7 +247,7 @@ export const api = {
 
   /**
    * Phase 1 of a reindex — the fast, **model-free** projection pass
-   * (design/index-engine.md): notes + keyword index + graph, writing nothing
+   * (docs/index-engine.md): notes + keyword index + graph, writing nothing
    * to the vault. Once it resolves, the tree and keyword search are live; call
    * `embed` to fill the vectors behind it.
    */
@@ -256,7 +256,7 @@ export const api = {
   /**
    * Phase 2 of a reindex — fill the missing vectors (real model) as a cancellable
    * background action. `onProgress` fires per embed batch over a typed Tauri
-   * `Channel` (design/index-engine.md), determinate from the first batch; the returned
+   * `Channel` (docs/index-engine.md), determinate from the first batch; the returned
    * Promise resolves with the final report (its `cancelled` flag set if
    * `cancelReindex` was called mid-run).
    */

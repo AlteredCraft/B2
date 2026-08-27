@@ -1,7 +1,7 @@
 # ADR-0013 — Model quality is measured out of CI, by a labelled harness
 
 - **Status:** Accepted · 2026-07-13
-- **Refs:** invariants E2 · `crates/b2-embed/evals/README.md` (the process rules) · GH #44, #141, #187
+- **Refs:** invariants E2 · `docs/evals.md` (the process rules) · GH #44, #141, #187
 
 ## Context
 

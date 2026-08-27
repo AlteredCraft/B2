@@ -1,7 +1,7 @@
 # ADR-0001 — Design docs are normative; the code is a projection of them
 
 - **Status:** Accepted · 2026-06-28
-- **Refs:** `design/invariants.md`
+- **Refs:** `docs/invariants.md`
 
 ## Context
 
@@ -10,7 +10,7 @@ redefine what the product promises. Prose that merely *describes* the code canno
 
 ## Decision
 
-- `design/invariants.md` is the **normative register** — one testable claim per entry, cited
+- `docs/invariants.md` is the **normative register** — one testable claim per entry, cited
   by id (S2, G2, D1…). **On conflict with any other doc or with the code, the register wins** and
   the other side gets fixed.
 - `data-model.md` is the *what*, `index-engine.md` the *how*. Code comments cite them by section.

@@ -22,7 +22,7 @@ explained connections between them yourself.
 > the fake stays the CI default). **Connection discovery** ships as **`b2 similar`** (surface the
 > nearest *unlinked* notes — local, free, no model call) **+ `b2 link`** (you commit a typed relation
 > to frontmatter) — the human is the precision gate; there is no LLM in the loop. A tour
-> grounded in the test suite: [docs/architecture.html](docs/architecture.html).
+> grounded in the test suite: [docs/architecture.md](docs/architecture.md).
 >
 > **Grounded chat is live in the CLI** — **`b2 ask "…"`** and **`b2 chat`** answer questions *from your
 > notes*, streaming, with `[n]` citations back to the notes the answer came from
@@ -53,12 +53,12 @@ connected yet** — so the structure of your knowledge grows as you link them, i
 The files stay plain Markdown on your disk, yours forever; B2 is the **intelligence layer over them,
 not a container around them**. Humans and AI agents are both first-class users.
 
-Full motivation, scope, and locked decisions: **[design/invariants.md](design/invariants.md)**.
+Full motivation, scope, and locked decisions: **[docs/invariants.md](docs/invariants.md)**.
 
 ## How we build it
 
 Two architectural tenets shape every decision (full text:
-[design/invariants.md](design/invariants.md)):
+[docs/invariants.md](docs/invariants.md)):
 
 - **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
   trim orphans. The index is a pure projection of your vault (drop it, rebuild it identical);
@@ -70,26 +70,26 @@ Two architectural tenets shape every decision (full text:
 
 …in service of five product non-negotiables — plain-Markdown source of truth · local-first · zero
 lock-in · AI-native (not bolted-on) · single binary
-([design/invariants.md](design/invariants.md)).
+([docs/invariants.md](docs/invariants.md)).
 
 ## The docs
 
-### HTML guides — [alteredcraft.github.io/B2](https://alteredcraft.github.io/B2/)
-
-New here? Start with the **[Quick start](https://alteredcraft.github.io/B2/quickstart.html)** — set up
-and work with a vault in about ten minutes. Then go deeper:
-[system architecture](https://alteredcraft.github.io/B2/architecture.html) ·
-[indexing pipeline](https://alteredcraft.github.io/B2/indexing.html) ·
-[the retrieval deep dive](https://alteredcraft.github.io/B2/retrieval.html) ·
-[search & similarity, in plain language](https://alteredcraft.github.io/B2/search-and-similarity.html).
+Everything lives in [docs/](docs/README.md) — one page per topic, and that page is the map.
+New here? Start with the **[Quick start](docs/quickstart.md)** — set up and work with a vault
+in about ten minutes. Then go deeper:
+[architecture](docs/architecture.md) ·
+[search & similarity, in plain language](docs/search-and-similarity.md).
 
 | Doc | What it owns |
 |---|---|
-| [design/invariants.md](design/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
-| [design/data-model.md](design/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
-| [design/index-engine.md](design/index-engine.md) | How the derived index is *built* — SQLite (FTS5 + an in-process vector scan) as a disposable projection. The canonical *how*. |
+| [docs/invariants.md](docs/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
+| [docs/data-model.md](docs/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
+| [docs/index-engine.md](docs/index-engine.md) | How the derived index is *built* and queried — SQLite (FTS5 + an in-process vector scan) as a disposable projection, and the four flows over it. The canonical *how*. |
+| [docs/quickstart.md](docs/quickstart.md) | Set up and use B2: the walkthrough, the command reference, config and every environment variable. |
+| [docs/architecture.md](docs/architecture.md) | How the system is built: the crates, the flows, the seams, the tests. |
+| [docs/search-and-similarity.md](docs/search-and-similarity.md) | What search and the related-notes panel do, in plain language, for everyone who uses B2. |
 | [ADRs/](ADRs/README.md) | **Architecture Decision Records** — one terse record per key architectural choice: the context, the ruling, and what it costs. The *why* behind the register's entries. |
-| [crates/b2-embed/evals/README.md](crates/b2-embed/evals/README.md) | The **eval suite guide** — every instrument and how to read it, corpora, labels, the exit gate, process rules, and the record of every measured verdict. Lives beside the corpus it governs. |
+| [docs/evals.md](docs/evals.md) | The **eval suite guide** — every instrument and how to read it, corpora, labels, the exit gate, process rules, and the record of every measured verdict. |
 
 Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
 
@@ -172,4 +172,4 @@ Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `
 every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,
 `neighbors`, …) fall back to the current dir; commands that write (`reindex`, `add`, `mv`, `link`) require an
 explicit vault and refuse otherwise, so they can't silently touch the wrong place. Full walkthrough:
-**[Quick start](https://alteredcraft.github.io/B2/quickstart.html)**.
+**[Quick start](docs/quickstart.md)**.

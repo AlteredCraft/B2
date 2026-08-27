@@ -7,7 +7,7 @@ Two committed vaults, for two different jobs. This file lives *outside* both —
 
 The small, hand-authored vault the **deterministic integration tests** copy into a tempdir and
 assert against (fixed note *paths* — the identity, L1 — in `crates/b2-core/tests/common/mod.rs`;
-shape per `design/data-model.md §8`). Model-free — the suite runs the `FakeEmbedder`. Change
+shape per `docs/data-model.md §8`). Model-free — the suite runs the `FakeEmbedder`. Change
 it only with the tests.
 
 The copy-to-a-tempdir step is now belt and braces rather than load-bearing: it existed because

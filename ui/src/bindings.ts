@@ -6,7 +6,7 @@
 // Why it exists. A chord used to be spelled twice — once as a modifier test in main.ts's
 // keydown handler (`(e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f"`)
 // and once as a row of display text in shortcuts.ts — with nothing but discipline keeping
-// them equal. K1 (design/invariants.md) promises every mouse action has a keyboard
+// them equal. K1 (docs/invariants.md) promises every mouse action has a keyboard
 // path *and* that the path is findable, so a sheet free to fall behind the wiring is a
 // promise waiting to break. The repo's habit everywhere else is to close that kind of gap
 // by construction rather than by convention (sanitize.ts as marked's `postprocess` hook,

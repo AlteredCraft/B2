@@ -15,7 +15,7 @@
 // diagnostics): a new tab is a row here plus a panel in render.ts, and nothing else moves.
 // Index is the worked example — it arrived as one button that used to live in the top bar.
 //
-// Invariant K1 (design/invariants.md, GH #78) governs the rail like every other
+// Invariant K1 (docs/invariants.md, GH #78) governs the rail like every other
 // surface, so it follows the ARIA `tabs` pattern: a **roving `tabindex`** (the rail is one
 // Tab stop, not one per section), ↑↓ between tabs with wrap, Home/End to the ends. The
 // moves live here rather than in main.ts's keydown for treenav.ts's reason — the paint and

@@ -9,7 +9,7 @@
 // tie-break, so the sort lives here once and both sides call it — a tree you can
 // arrow through in a different order than you can see is worse than no arrows at all.
 //
-// Invariant K1 (design/invariants.md, GH #78): the tree is fully navigable from
+// Invariant K1 (docs/invariants.md, GH #78): the tree is fully navigable from
 // the keyboard, following the ARIA `tree` pattern (up/down between visible rows,
 // right/left to expand/collapse or step in/out, Home/End, first-letter typeahead).
 //
