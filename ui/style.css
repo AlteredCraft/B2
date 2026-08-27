@@ -271,7 +271,7 @@ body {
 
 /* --- reindex progress (async, cancellable indexing) --------------------------- */
 /* A compact inline affordance in the top bar, shown only while a reindex runs. The
-   app stays fully usable behind it (design/index-engine.md) — this is a signal of life,
+   app stays fully usable behind it (docs/index-engine.md) — this is a signal of life,
    not a blocker. */
 .reindex-progress {
   display: flex;
