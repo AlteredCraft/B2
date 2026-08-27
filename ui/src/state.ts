@@ -171,6 +171,13 @@ export interface AppState {
    * selecting either kind clears the other — the note pane shows one document).
    */
   currentResource: ResourceExplainView | null;
+  /**
+   * The open resource's bytes as a `data:` URL, when its class has an in-app viewer and
+   * the read succeeded — otherwise null, and the card shows its *Open in system default*
+   * fallback. Loaded alongside `currentResource` and cleared with it, so the pane can
+   * never paint one document's picture over another's card.
+   */
+  resourceImage: string | null;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
   /**
@@ -379,6 +386,7 @@ export const state: AppState = {
   deleteTarget: null,
   current: null,
   currentResource: null,
+  resourceImage: null,
   frontmatterOpen: false,
   fmEditing: false,
   sourceOpen: false,

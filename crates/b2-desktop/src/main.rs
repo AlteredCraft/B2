@@ -441,6 +441,7 @@ fn main() {
             commands::list_dirs,
             commands::list_resources,
             commands::explain_resource,
+            commands::read_resource,
             commands::open_resource,
             commands::open_external,
             commands::clipboard_text,

@@ -144,10 +144,10 @@ The **one typed API**; the CLI and the desktop host are its only clients (every 
 module is called directly only by integration tests). Surface: lifecycle + indexing (`open` /
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
-`explain_resource` / `search` / `search_evidence` / `similar` / `ask`), writes (`add_note` /
-`create_note` / `create_dir` / `import_file` / `import_path` / `move_note` / `move_resource` /
-`move_dir` / `link` / `write` / `write_frontmatter` / `delete_note` / `delete_resource` /
-`delete_dir`). **Add operations when a command needs them; do not pre-build a broad surface.** The
+`explain_resource` / `read_resource_bytes` / `search` / `search_evidence` / `similar` /
+`ask`), writes (`add_note` / `create_note` / `create_dir` / `import_file` / `import_path` /
+`move_note` / `move_resource` / `move_dir` / `link` / `write` / `write_frontmatter` /
+`delete_note` / `delete_resource` / `delete_dir`). **Add operations when a command needs them; do not pre-build a broad surface.** The
 embedder is injected here: `open` defaults to the fake, `open_with_embedder` wires the real model.
 
 ### Data flows

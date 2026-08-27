@@ -89,21 +89,34 @@ export { escapeHtml };
 // A `[[target]]` / `[[target|label]]` wikilink becomes an in-app anchor carrying the
 // raw target; main.ts delegates a click on `.wikilink` to open that note. This is the
 // MVP's in-app navigation (spec §4) — the buffer stays byte-honest Markdown.
+//
+// `![[target]]` is the **embed** form of the same link — the core reads the `!` as the
+// embed marker and records it on the edge (`link.rs`). B2 has no inline embed viewer, so
+// it renders the link; but the marker is *grammar*, so it must be consumed rather than
+// left beside the anchor as a stray `!`. The `|`-part changes meaning with the marker: on
+// a plain wikilink it is the display label, on an embed it is a display **size**
+// (`![[shot.png|400]]`), which B2 does not support — so an embed labels itself with its
+// target and drops the hint, rather than showing "400" where the filename belongs.
 const wikilink: TokenizerAndRendererExtension = {
   name: "wikilink",
   level: "inline",
   start(src: string) {
     const i = src.indexOf("[[");
-    return i < 0 ? undefined : i;
+    if (i < 0) return undefined;
+    // Back up over the embed marker: this offset is where marked stops emitting plain
+    // text, so anchoring it at the `[[` hands the reader the `!` before we ever tokenize.
+    return i > 0 && src[i - 1] === "!" ? i - 1 : i;
   },
   tokenizer(src: string) {
-    const m = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(src);
+    const m = /^(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(src);
     if (!m) return undefined;
+    const embed = m[1] === "!";
+    const target = m[2].trim();
     return {
       type: "wikilink",
       raw: m[0],
-      target: m[1].trim(),
-      label: (m[2] ?? m[1]).trim(),
+      target,
+      label: embed ? target : (m[3] ?? m[2]).trim(),
     } as Tokens.Generic;
   },
   renderer(token: Tokens.Generic) {
@@ -472,6 +485,50 @@ function noteBarHtml(state: AppState, note: NoteView): string {
     </div>`;
 }
 
+// --- the image viewer (file-type slice 2) ---------------------------------------------
+
+/** Extension → MIME type for the image classes the card renders in place. Extension-only,
+ *  the same rule the core classifies on (`resource.rs`) and the same table of extensions —
+ *  no content sniffing, so a mislabeled file degrades to a broken `<img>` rather than
+ *  being guessed at. **Change it with `ResourceClass::Image`**: a class the core calls an
+ *  image and this table doesn't know reaches the card, asks for its bytes, and then has
+ *  nowhere to put them. */
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+};
+
+/**
+ * How large an image the card will pull across the IPC and hold on screen.
+ *
+ * The bytes cross as base64 (a third larger) and the `data:` URL lives in the webview's
+ * heap for as long as the card is open, so this is a memory bound, not a taste one. Past
+ * it the card keeps the *Open in system default* handoff it has always had, which costs
+ * nothing and shows the file at full fidelity in a real image app. Screenshots — what a
+ * vault actually accumulates — are a couple of megabytes.
+ */
+export const IMAGE_VIEWER_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * A resource's base64 bytes as the `src` an `<img>` can use, or `null` when the
+ * extension names no image this webview renders.
+ *
+ * A `data:` URL rather than a path, because the webview's origin is the *app bundle*,
+ * not the vault: there is no URL by which it could fetch a vault file, and the CSP
+ * admits exactly this one shape (`img-src 'self' data:` in `tauri.conf.json`) — so the
+ * bytes travel through the same command seam as everything else the host lends the UI.
+ */
+export function imageDataUrl(path: string, base64: string): string | null {
+  const ext = path.includes(".") ? (path.split(".").pop() ?? "").toLowerCase() : "";
+  const mime = IMAGE_MIME[ext];
+  return mime ? `data:${mime};base64,${base64}` : null;
+}
+
 /** Human-readable byte count for the card ("67 B", "1.4 KB", "3.2 MB"). */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -479,13 +536,18 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// The resource **fallback card** (file-type slice 1, spec §6): selecting any file in
-// the tree opens *something*. Slice 1 shows the card for every resource class —
+// The resource **card** (spec §6): selecting any file in the tree opens *something* —
 // filename, class, size, modified, content hash — plus the backlinks panel (which
 // notes reference this file, with their authored captions) and one action, *Open in
-// system default* (an OS handoff performed host-side). Per-class viewers replace the
-// card's body in slice 2; the card remains the `binary` catch-all.
-function resourceCardHtml(r: ResourceExplainView): string {
+// system default* (an OS handoff performed host-side).
+//
+// `image` is the one class with a viewer so far: `image` is the bytes main.ts fetched
+// for it, and it *replaces* the "no viewer" line rather than the card, so the metadata,
+// the backlinks and the OS handoff stay put — the handoff is still how you get to a real
+// image app, and it is the whole card when the file is too large to hold on screen
+// (`IMAGE_VIEWER_MAX_BYTES`) or its bytes could not be read. Every other class is still
+// the fallback card, and `binary` is its permanent catch-all.
+function resourceCardHtml(r: ResourceExplainView, image: string | null): string {
   const modified = r.mtime ? new Date(r.mtime * 1000).toLocaleString() : "—";
   const backlinks = r.backlinks.length
     ? `<div class="cards">${r.backlinks
@@ -505,6 +567,12 @@ function resourceCardHtml(r: ResourceExplainView): string {
         .join("")}</div>`
     : `<p class="side-empty">No notes link to this file yet.</p>`;
   const name = r.path.split("/").pop() ?? r.path;
+  // The alt text is the filename: the `<h1>` right above already says it, so a screen
+  // reader that reads both is repeating itself rather than being told nothing — and B2
+  // has no description of the picture to offer that would be truer than its name.
+  const viewer = image
+    ? `<img class="resource-image" src="${escapeHtml(image)}" alt="${escapeHtml(name)}">`
+    : `<p class="resource-no-viewer">No viewer available for this file type yet.</p>`;
   return `<article class="note resource-card">
       <header class="note-head">
         <h1>${escapeHtml(name)}</h1>
@@ -513,7 +581,7 @@ function resourceCardHtml(r: ResourceExplainView): string {
         )} · modified ${escapeHtml(modified)}</div>
       </header>
       <div class="resource-card-body">
-        <p class="resource-no-viewer">No viewer available for this file type yet.</p>
+        ${viewer}
         <button id="resource-open" class="resource-open" data-open-system="${escapeHtml(r.path)}">
           Open in system default
         </button>
@@ -527,7 +595,7 @@ function resourceCardHtml(r: ResourceExplainView): string {
 }
 
 export function notePaneHtml(state: AppState): string {
-  if (state.currentResource) return resourceCardHtml(state.currentResource);
+  if (state.currentResource) return resourceCardHtml(state.currentResource, state.resourceImage);
   const n = state.current;
   if (n && state.graphOpen) return graphPaneHtml(state, n);
   if (n) {
