@@ -22,8 +22,19 @@
 //! macOS. Neither survives here.
 
 use serde::Serialize;
-use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Runtime};
+
+/// The event the host emits when one of B2's **own** menu items is chosen — the View
+/// menu's three zoom lines, today. The payload is the item's [`ItemSpec::id`], and
+/// `ui/src/api.ts` carries the mirror of this string; change the two together.
+///
+/// Why an event at all, rather than the host simply zooming. The *rule* — the ladder of
+/// sizes, its walls, and remembering the choice — lives in `ui/src/zoom.ts`, because a
+/// reading size is a viewing preference and this crate holds no logic (the one rule).
+/// AppKit just happens to be where the keystroke lands, so the host's whole job is to
+/// say which line was chosen and let the frontend decide what that means.
+pub const MENU_COMMAND_EVENT: &str = "menu-command";
 
 /// The native behavior an item delegates to — one variant per [`PredefinedMenuItem`]
 /// constructor B2 uses. An enum rather than a function pointer so [`MENU`] stays a
@@ -47,6 +58,13 @@ enum Item {
     /// macOS's name for `maximize` — the label the platform itself uses.
     Zoom,
     Separator,
+    /// **B2's own**, rather than a native behavior delegated to. The only kind of item
+    /// here that has no `PredefinedMenuItem` behind it: choosing it emits
+    /// [`MENU_COMMAND_EVENT`] carrying the row's id, and the frontend decides what it
+    /// means. Its accelerator is derived from the row's `keys` ([`muda_accelerator`]),
+    /// so — unlike every predefined row above, whose chord muda assigns and this table
+    /// merely restates — this is a chord B2 actually chooses.
+    Command,
 }
 
 /// One line of the menu.
@@ -177,14 +195,42 @@ const MENU: &[SectionSpec] = &[
             },
         ],
     },
+    // The one section with items of B2's own. The three sizes are here rather than in
+    // `ui/src/bindings.ts` for the reason this module exists at all: a menu accelerator
+    // is dispatched before the key window's responder chain, so a chord spelled in both
+    // places is a chord the webview never receives. Since macOS expects Zoom In / Zoom
+    // Out / Actual Size to *be* in the View menu — with their chords printed beside them,
+    // which is where most people find them — the menu is the honest owner, and the
+    // registry stays out of these three keystrokes entirely.
     SectionSpec {
         title: "View",
-        items: &[ItemSpec {
-            id: "view.fullscreen",
-            item: Item::Fullscreen,
-            label: "Toggle Full Screen",
-            keys: Some("Mod-Ctrl-f"),
-        }],
+        items: &[
+            ItemSpec {
+                id: "view.zoom-in",
+                item: Item::Command,
+                label: "Zoom In",
+                keys: Some("Mod-="),
+            },
+            ItemSpec {
+                id: "view.zoom-out",
+                item: Item::Command,
+                label: "Zoom Out",
+                keys: Some("Mod--"),
+            },
+            ItemSpec {
+                id: "view.zoom-reset",
+                item: Item::Command,
+                label: "Actual Size",
+                keys: Some("Mod-0"),
+            },
+            SEPARATOR,
+            ItemSpec {
+                id: "view.fullscreen",
+                item: Item::Fullscreen,
+                label: "Toggle Full Screen",
+                keys: Some("Mod-Ctrl-f"),
+            },
+        ],
     },
     SectionSpec {
         title: "Window",
@@ -236,6 +282,36 @@ pub fn chords() -> Vec<MenuChord> {
         .collect()
 }
 
+/// One chord, translated from the registry's spelling into the one Tauri's accelerator
+/// parser reads (`Mod-Shift-z` → `CmdOrCtrl+Shift+z`).
+///
+/// **Derived rather than written down**, and that is the whole point of the function: an
+/// [`Item::Command`] row would otherwise carry the same chord twice — once for the UI to
+/// mirror and once for muda to bind — with nothing but care keeping them equal. Tauri
+/// takes the accelerator as a string and *silently drops one it can't parse*
+/// (`.parse().ok()`), so the failure mode of a drifted second spelling is not an error
+/// but a menu item that quietly has no shortcut. One source, no drift, no silence.
+///
+/// The split is CodeMirror's own rule, `-(?!$)`, for the reason `parseChord` gives: `-`
+/// is both the separator and a key you can press, so `Mod--` is ⌘ plus the hyphen.
+fn muda_accelerator(chord: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut rest = chord;
+    // Cut at every `-` that isn't the last character; what's left when none remains is
+    // the key. `split` can't express "not at the end", so this walks it.
+    while let Some(i) = rest[..rest.len().saturating_sub(1)].find('-') {
+        parts.push(&rest[..i]);
+        rest = &rest[i + 1..];
+    }
+    let mods = parts.iter().map(|m| match *m {
+        "Mod" => "CmdOrCtrl",
+        other => other,
+    });
+    mods.chain(std::iter::once(rest))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// Build the menu [`MENU`] describes — what `tauri::Builder::menu` installs.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let about = about_metadata(app);
@@ -243,11 +319,31 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     for section in MENU {
         let submenu = Submenu::new(app, section.title, true)?;
         for spec in section.items {
-            submenu.append(&predefined(app, spec, &about)?)?;
+            submenu.append(item_for(app, spec, &about)?.as_ref())?;
         }
         menu.append(&submenu)?;
     }
     Ok(menu)
+}
+
+/// One [`ItemSpec`] as the native item it becomes — predefined for everything the
+/// platform already does, and B2's own for [`Item::Command`].
+///
+/// Boxed because those are two unrelated types and a submenu takes `&dyn IsMenuItem`;
+/// it is one allocation per row, once, at launch.
+fn item_for<R: Runtime>(
+    app: &AppHandle<R>,
+    spec: &ItemSpec,
+    about: &AboutMetadata<'static>,
+) -> tauri::Result<Box<dyn IsMenuItem<R>>> {
+    if spec.item == Item::Command {
+        // `spec.id` is the payload the frontend switches on, so the item's menu id and
+        // the row's id are the same string by construction.
+        let accel = spec.keys.map(muda_accelerator);
+        let item = MenuItem::with_id(app, spec.id, spec.label, true, accel)?;
+        return Ok(Box::new(item));
+    }
+    Ok(Box::new(predefined(app, spec, about)?))
 }
 
 /// The About panel's contents, from the same sources `Menu::default` reads: the
@@ -294,6 +390,10 @@ fn predefined<R: Runtime>(
         Item::Minimize => PredefinedMenuItem::minimize(app, text),
         Item::Zoom => PredefinedMenuItem::maximize(app, text),
         Item::Separator => PredefinedMenuItem::separator(app),
+        // Unreachable: `item_for` takes this branch before calling here. Handled rather
+        // than `unreachable!()` — a panic in the menu builder is a window that never
+        // opens, and a separator is the harmless thing to draw if the two ever disagree.
+        Item::Command => PredefinedMenuItem::separator(app),
     }
 }
 
@@ -319,14 +419,18 @@ mod tests {
     /// accelerator syntax would want) leaking into a table the UI parses with
     /// CodeMirror's. `menukeys.test.ts` runs the real parser over the mirror.
     fn is_registry_chord(spec: &str) -> bool {
-        let mut parts = spec.split('-').collect::<Vec<_>>();
-        let Some(key) = parts.pop() else {
-            return false;
-        };
-        let key_ok = key.len() == 1
-            && key
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        // The same `-(?!$)` cut `muda_accelerator` makes, and for the same reason: `-` is
+        // both the separator and a key, so ⌘- is spelled `Mod--`.
+        let mut parts: Vec<&str> = Vec::new();
+        let mut key = spec;
+        while let Some(i) = key[..key.len().saturating_sub(1)].find('-') {
+            parts.push(&key[..i]);
+            key = &key[i + 1..];
+        }
+        // One character, and never an uppercase one — `parseChord` lowercases what it
+        // reads, so an uppercase key here is a chord that parses to something else.
+        // Symbols are allowed: `=` and `-` are the View menu's.
+        let key_ok = key.len() == 1 && !key.chars().any(|c| c.is_ascii_uppercase());
         key_ok
             && parts
                 .iter()
@@ -390,6 +494,59 @@ mod tests {
         // And the guard has teeth: the spelling this is here to keep out.
         assert!(!is_registry_chord("CmdOrCtrl+C"));
         assert!(!is_registry_chord("Mod-Meh-c"));
+        assert!(!is_registry_chord("Mod-C"));
+        // ...and it accepts the two symbol keys the View menu is spelled with.
+        assert!(is_registry_chord("Mod--"));
+        assert!(is_registry_chord("Mod-="));
+    }
+
+    #[test]
+    fn a_command_item_carries_a_chord_muda_can_actually_parse() {
+        // The one place B2 *chooses* an accelerator rather than restating one macOS
+        // assigned — and Tauri drops an unparseable accelerator silently
+        // (`.parse().ok()`), so a wrong spelling here is a menu line with no shortcut and
+        // no complaint. `muda_accelerator` is the single source; this pins what it emits.
+        assert_eq!(muda_accelerator("Mod-="), "CmdOrCtrl+=");
+        assert_eq!(muda_accelerator("Mod--"), "CmdOrCtrl+-");
+        assert_eq!(muda_accelerator("Mod-0"), "CmdOrCtrl+0");
+        assert_eq!(muda_accelerator("Mod-Shift-z"), "CmdOrCtrl+Shift+z");
+        assert_eq!(muda_accelerator("Mod-Ctrl-f"), "CmdOrCtrl+Ctrl+f");
+        // A bare key keeps its lone self rather than becoming an empty modifier.
+        assert_eq!(muda_accelerator("-"), "-");
+        assert_eq!(muda_accelerator("f"), "f");
+
+        // And every command row in the real table survives the trip: modifiers muda
+        // knows, one key left over, nothing empty.
+        for spec in all_items().filter(|s| s.item == Item::Command) {
+            let keys = spec.keys.unwrap_or_else(|| panic!("{}: no chord", spec.id));
+            let accel = muda_accelerator(keys);
+            let mut tokens = accel.split('+').collect::<Vec<_>>();
+            let key = tokens.pop().unwrap_or_default();
+            assert_eq!(key.chars().count(), 1, "{}: key is {key:?}", spec.id);
+            for t in tokens {
+                assert!(
+                    matches!(t, "CmdOrCtrl" | "Ctrl" | "Shift" | "Alt"),
+                    "{}: muda doesn't know the modifier {t:?}",
+                    spec.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_command_item_is_addressable_and_every_other_item_is_not() {
+        // The event payload is the row's id, so a command row without one is a menu line
+        // the frontend cannot act on. The converse matters just as much: a predefined row
+        // must stay predefined, because those are what route the platform's editing
+        // selectors into the webview (copy and paste work *because* of them).
+        for spec in all_items().filter(|s| s.item == Item::Command) {
+            assert!(!spec.id.is_empty(), "a command item with no id");
+            assert!(
+                spec.keys.is_some(),
+                "{}: a command item with no chord — it would be mouse-only (K1)",
+                spec.id
+            );
+        }
     }
 
     #[test]
@@ -417,6 +574,9 @@ mod tests {
                 "edit.copy Mod-c Copy",
                 "edit.paste Mod-v Paste",
                 "edit.select-all Mod-a Select All",
+                "view.zoom-in Mod-= Zoom In",
+                "view.zoom-out Mod-- Zoom Out",
+                "view.zoom-reset Mod-0 Actual Size",
                 "view.fullscreen Mod-Ctrl-f Toggle Full Screen",
                 "window.minimize Mod-m Minimize",
             ]

@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use watch::VaultWatcher;
 
 /// How often [`AppState::cancel_and_wait_for_reindex`] re-asserts the cancel flag and
@@ -406,6 +406,14 @@ fn main() {
         // — and AppKit dispatches them before the webview sees a key, so the keyboard
         // registry can't observe them either. `menu::MENU` is that list, made data.
         .menu(menu::build)
+        // ...and the handler for the lines in it that are B2's own rather than the
+        // platform's (the View menu's three sizes). The host forwards the chosen id and
+        // stops there: what a size *means* — the ladder, its ends, remembering it — is
+        // `ui/src/zoom.ts`'s, because this crate holds no logic. A predefined item never
+        // arrives here; those are handled natively, which is the point of them.
+        .on_menu_event(|app, event| {
+            let _ = app.emit(menu::MENU_COMMAND_EVENT, event.id().0.as_str());
+        })
         // The dialog plugin backs the native folder picker for `choose_vault`. It is
         // driven host-side only; the webview gets no dialog permission (capabilities/
         // default.json), so it can never open a dialog itself.
@@ -473,6 +481,7 @@ fn main() {
             commands::embed_device,
             commands::embed_stats,
             commands::menu_chords,
+            commands::set_zoom,
             commands::ask,
             commands::cancel_ask,
             commands::chat_setup,

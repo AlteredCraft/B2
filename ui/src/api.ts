@@ -71,6 +71,18 @@ export function isWriteConflict(e: unknown): boolean {
  */
 export const VAULT_CHANGED_EVENT = "vault-changed";
 
+/**
+ * A menu line of **B2's own** was chosen — the View menu's three sizes, today. The payload
+ * is the item's id as `crates/b2-desktop/src/menu.rs` spells it (`view.zoom-in`), which is
+ * the same id `menukeys.ts` mirrors. Must equal the host's `MENU_COMMAND_EVENT`; change
+ * both together.
+ *
+ * The host forwards rather than acts because AppKit is only where the *keystroke* lands:
+ * a menu accelerator never reaches the webview's keydown handler, so this event is how a
+ * chord the menu owns reaches the code that owns what it means (`zoom.ts`).
+ */
+export const MENU_COMMAND_EVENT = "menu-command";
+
 export const api = {
   /** Step 0's seam proof: round-trips a trivial command through the Rust host. */
   ping: (): Promise<string> => invoke("ping"),
@@ -367,11 +379,26 @@ export const api = {
   menuChords: (): Promise<MenuChord[]> => invoke("menu_chords"),
 
   /**
+   * Scale the whole window — WebKit page zoom, what ⌘= / ⌘- / ⌘0 drive (`zoom.ts`).
+   * The host is a pass-through here: `factor` is already a rung off the ladder, because
+   * the ladder and its walls are the frontend's rule, not the host's.
+   */
+  setZoom: (factor: number): Promise<void> => invoke("set_zoom", { factor }),
+
+  /**
    * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once
    * per burst of external Markdown changes; the returned promise resolves to an unlisten
-   * function (unused here — the subscription lives for the window's lifetime). This is the
-   * only `listen` in the app, kept behind the seam like every `invoke`.
+   * function (unused here — the subscription lives for the window's lifetime). Kept
+   * behind the seam like every `invoke`.
    */
   onVaultChanged: (handler: () => void): Promise<UnlistenFn> =>
     listen(VAULT_CHANGED_EVENT, () => handler()),
+
+  /**
+   * Subscribe to B2's own menu lines (the View menu's sizes). `handler` gets the item's
+   * id; an id it doesn't recognize is not an error — the host declares the menu, so the
+   * honest response to a line this build doesn't know about is to ignore it.
+   */
+  onMenuCommand: (handler: (id: string) => void): Promise<UnlistenFn> =>
+    listen<string>(MENU_COMMAND_EVENT, (e) => handler(e.payload)),
 };

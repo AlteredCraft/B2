@@ -98,7 +98,15 @@ import { menuDrift } from "./menukeys";
 import { markdownForPaste } from "./paste";
 import { icon } from "./icons";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
-import { BOUNDS, initPanes } from "./panes";
+import { BOUNDS, initPanes, visiblePanes } from "./panes";
+import {
+  DEFAULT_ZOOM,
+  hiddenNotice,
+  loadZoom,
+  saveZoom,
+  stepZoom,
+  type Direction,
+} from "./zoom";
 import { reconcileIndex } from "./reconcile";
 import type { ResourceExplainView } from "./types";
 import {
@@ -2389,6 +2397,107 @@ function setTheme(theme: ThemePref): void {
   }
   applyTheme();
   render();
+}
+
+// --- text size (View ▸ Zoom In / Zoom Out / Actual Size) ---------------------------
+//
+// The appearance preference's sibling, and stored the same way for the same reason: a
+// reading size is a viewing choice, never vault state. Two things differ.
+//
+// Where it lands: a theme is a `data-theme` attribute the stylesheet reads, but no
+// stylesheet can scale px-sized chrome, so this one leaves the webview and comes back as
+// WebKit page zoom (zoom.ts's header is the argument in full).
+//
+// And where the *keystroke* lands. ⌘= / ⌘- / ⌘0 are not in the registry: they are the
+// View menu's, declared in `crates/b2-desktop/src/menu.rs`, because macOS expects Zoom
+// In / Zoom Out / Actual Size to live there with their chords printed beside them — and
+// an accelerator the menu owns is dispatched before the key window's responder chain, so
+// a keydown for one never arrives here to be dispatched. The host emits the chosen item's
+// id instead, which is what `initMenuCommands` below listens for. The upshot is that these
+// three work from anywhere the window has focus, including mid-edit and behind a dialog,
+// with no guard of their own — a size control you have to leave a text field to reach
+// would be a size control that fails exactly when you need it.
+//
+// Module-local rather than in `state`, and the reason is panes.ts's: nothing renders
+// from it, so putting it in the model would only invite a repaint the zoom already did.
+
+let zoom = DEFAULT_ZOOM;
+
+/** Hand a size to the host and remember it — the one place the IPC call lives, so both
+ *  callers below agree on what "the size is now applied" means.
+ *
+ *  Resolves when the window has actually been scaled, and **never rejects**: a refusal
+ *  can only come from a window that is going away or from running outside Tauri at all,
+ *  and neither is worth a toast about a size the user can plainly see didn't change —
+ *  still less worth failing a boot over. The two callers both wait on it, and a promise
+ *  that can reject would make one of them a hang. */
+function pushZoom(next: number): Promise<void> {
+  zoom = next;
+  saveZoom(next);
+  return api.setZoom(next).catch(() => {
+    // Non-fatal: the app is fully usable at whatever size it is currently drawn.
+  });
+}
+
+/** A size the user just asked for: apply it, then say so if it cost a column.
+ *
+ *  Page zoom narrows the *layout* viewport, so style.css's breakpoints treat a ⌘= exactly
+ *  as they treat dragging the window narrower — and at some size discovery goes, then the
+ *  file tree. That is the responsive layout doing its job, and B2 doesn't refuse the step
+ *  over it (zoom.ts's `hiddenNotice` argues why); it just stops being a surprise.
+ *
+ *  The notice is **measured, not predicted**, because the breakpoints are the
+ *  stylesheet's and this file must not hold a second copy of them — which fixes when it
+ *  can be taken. Not before the host has scaled the window (there would be nothing to
+ *  see), and not on the frame it does (WebKit lays out on one frame and
+ *  `getComputedStyle` can answer on the next). So: the round trip, then two frames. */
+function applyZoom(next: number): void {
+  const before = visiblePanes();
+  void pushZoom(next).then(() =>
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const notice = hiddenNotice(before, visiblePanes());
+        if (notice) flash(notice);
+      }),
+    ),
+  );
+}
+
+/** One rung, in `dir`. Silent at the ends — the ladder's walls are walls, not errors. */
+function nudgeZoom(dir: Direction): void {
+  const next = stepZoom(zoom, dir);
+  if (next !== zoom) applyZoom(next);
+}
+
+/** Read the saved size and hand it to the host — and **wait for it**, which is the whole
+ *  point of this being separate from `applyZoom`.
+ *
+ *  Page zoom changes the CSS viewport, so everything after this in `boot` depends on it
+ *  having landed: `buildShell` + the first `render` would otherwise paint one frame at
+ *  100% and jump, the appearance preference's flash-of-the-wrong-thing in a second form,
+ *  and `initPanes` settles the columns against `clientWidth` — a width that is about to
+ *  change under it. (The resize a zoom fires would eventually correct the columns; it
+ *  can't un-paint the frame.) One IPC round trip of blank window is the cheaper half of
+ *  that trade.
+ *
+ *  No column notice here, and not by accident: at boot there is no shell yet, so "which
+ *  columns were showing before" has no answer, and the honest thing to report about a
+ *  size the user chose in a previous session is nothing at all. */
+async function loadZoomPref(): Promise<void> {
+  const saved = loadZoom();
+  zoom = saved;
+  if (saved !== DEFAULT_ZOOM) await pushZoom(saved);
+}
+
+/** Listen for the menu lines that are B2's own. One `switch`, and an id it doesn't know
+ *  falls through silently: the host declares the menu, so a line from a newer build is
+ *  something to ignore, not something to fail on. */
+function initMenuCommands(): void {
+  void api.onMenuCommand((id) => {
+    if (id === "view.zoom-in") nudgeZoom(1);
+    else if (id === "view.zoom-out") nudgeZoom(-1);
+    else if (id === "view.zoom-reset" && zoom !== DEFAULT_ZOOM) applyZoom(DEFAULT_ZOOM);
+  });
 }
 
 // --- the customizable keyboard (GH #121) ------------------------------------------
@@ -5399,6 +5508,8 @@ async function loadMenuChords(): Promise<void> {
 
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
+  await loadZoomPref(); // and the saved size — awaited, because it changes what "the viewport" means below
+  initMenuCommands(); // View ▸ Zoom In / Zoom Out / Actual Size arrive from the host
   const lostChords = loadKeymap(); // the user's chords, before anything paints or dispatches one
   loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
   buildShell();
