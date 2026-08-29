@@ -2423,34 +2423,43 @@ function setTheme(theme: ThemePref): void {
 
 let zoom = DEFAULT_ZOOM;
 
-/** Ask the host to scale the window, remember the choice, and say so if the new size cost
- *  a column.
+/** Hand a size to the host and remember it — the one place the IPC call lives, so both
+ *  callers below agree on what "the size is now applied" means.
  *
- *  The zoom call itself is fire-and-forget on purpose: the host can only refuse it in a
- *  window that is going away, and a toast about a text size that didn't change would be
- *  noise on top of a size the user can plainly see didn't change.
- *
- *  The column notice is the one thing worth waiting for. Page zoom narrows the *layout*
- *  viewport, so style.css's breakpoints treat a ⌘= exactly as they treat dragging the
- *  window narrower — and at some size discovery goes, then the file tree. That is the
- *  responsive layout doing its job, and B2 doesn't refuse the step over it (zoom.ts's
- *  `hiddenNotice` argues why); it just stops being a surprise. Measured on the far side
- *  of a frame rather than predicted, because the breakpoints are the stylesheet's and
- *  this file must not hold a second copy of them: two frames, since the first is when
- *  WebKit re-lays out and the second is when `getComputedStyle` can see the result. */
-function applyZoom(next: number): void {
-  const before = visiblePanes();
+ *  Resolves when the window has actually been scaled, and **never rejects**: a refusal
+ *  can only come from a window that is going away or from running outside Tauri at all,
+ *  and neither is worth a toast about a size the user can plainly see didn't change —
+ *  still less worth failing a boot over. The two callers both wait on it, and a promise
+ *  that can reject would make one of them a hang. */
+function pushZoom(next: number): Promise<void> {
   zoom = next;
   saveZoom(next);
-  void api.setZoom(next).catch(() => {
-    // Nothing useful to say, and nothing broken: the app is still fully usable at
-    // whatever size it is currently drawn.
+  return api.setZoom(next).catch(() => {
+    // Non-fatal: the app is fully usable at whatever size it is currently drawn.
   });
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      const notice = hiddenNotice(before, visiblePanes());
-      if (notice) flash(notice);
-    }),
+}
+
+/** A size the user just asked for: apply it, then say so if it cost a column.
+ *
+ *  Page zoom narrows the *layout* viewport, so style.css's breakpoints treat a ⌘= exactly
+ *  as they treat dragging the window narrower — and at some size discovery goes, then the
+ *  file tree. That is the responsive layout doing its job, and B2 doesn't refuse the step
+ *  over it (zoom.ts's `hiddenNotice` argues why); it just stops being a surprise.
+ *
+ *  The notice is **measured, not predicted**, because the breakpoints are the
+ *  stylesheet's and this file must not hold a second copy of them — which fixes when it
+ *  can be taken. Not before the host has scaled the window (there would be nothing to
+ *  see), and not on the frame it does (WebKit lays out on one frame and
+ *  `getComputedStyle` can answer on the next). So: the round trip, then two frames. */
+function applyZoom(next: number): void {
+  const before = visiblePanes();
+  void pushZoom(next).then(() =>
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const notice = hiddenNotice(before, visiblePanes());
+        if (notice) flash(notice);
+      }),
+    ),
   );
 }
 
@@ -2460,13 +2469,24 @@ function nudgeZoom(dir: Direction): void {
   if (next !== zoom) applyZoom(next);
 }
 
-/** Read the saved size and hand it to the host. Runs at boot, before the first paint's
- *  measurements matter: page zoom changes the CSS viewport, and panes.ts settles its
- *  columns against `clientWidth`. */
-function loadZoomPref(): void {
+/** Read the saved size and hand it to the host — and **wait for it**, which is the whole
+ *  point of this being separate from `applyZoom`.
+ *
+ *  Page zoom changes the CSS viewport, so everything after this in `boot` depends on it
+ *  having landed: `buildShell` + the first `render` would otherwise paint one frame at
+ *  100% and jump, the appearance preference's flash-of-the-wrong-thing in a second form,
+ *  and `initPanes` settles the columns against `clientWidth` — a width that is about to
+ *  change under it. (The resize a zoom fires would eventually correct the columns; it
+ *  can't un-paint the frame.) One IPC round trip of blank window is the cheaper half of
+ *  that trade.
+ *
+ *  No column notice here, and not by accident: at boot there is no shell yet, so "which
+ *  columns were showing before" has no answer, and the honest thing to report about a
+ *  size the user chose in a previous session is nothing at all. */
+async function loadZoomPref(): Promise<void> {
   const saved = loadZoom();
   zoom = saved;
-  if (saved !== DEFAULT_ZOOM) applyZoom(saved);
+  if (saved !== DEFAULT_ZOOM) await pushZoom(saved);
 }
 
 /** Listen for the menu lines that are B2's own. One `switch`, and an id it doesn't know
@@ -5488,7 +5508,7 @@ async function loadMenuChords(): Promise<void> {
 
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
-  loadZoomPref(); // and the saved size, which changes what "the viewport" means below
+  await loadZoomPref(); // and the saved size — awaited, because it changes what "the viewport" means below
   initMenuCommands(); // View ▸ Zoom In / Zoom Out / Actual Size arrive from the host
   const lostChords = loadKeymap(); // the user's chords, before anything paints or dispatches one
   loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
