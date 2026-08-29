@@ -71,6 +71,10 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::Core(b2_core::Error::NoteNotFound(r)) => {
             format!("Note not found: '{r}'. Check the path, and reindex first.")
         }
+        CmdError::Core(b2_core::Error::IndexTooNew { .. }) => {
+            "This vault's index was built by a newer version of B2 than this app. Open the newer B2 (or update this one) — the index was left untouched, so nothing needs rebuilding."
+                .to_string()
+        }
         CmdError::Core(b2_core::Error::ModelMismatch { .. }) => {
             "This vault's index was built with a different embedding model. Reindex to rebuild it."
                 .to_string()

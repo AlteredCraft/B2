@@ -1477,6 +1477,9 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::NoteNotFound(r)) => format!(
             "Note not found: '{r}'. Check the path, and run `b2 reindex` first."
         ),
+        CliError::Core(b2_core::Error::IndexTooNew { .. }) => {
+            "This vault's index was built by a newer version of B2 than this `b2`. Run the newer B2 (or upgrade this one) — the index was left untouched, so nothing needs rebuilding.".to_string()
+        }
         CliError::Core(b2_core::Error::ModelMismatch { .. }) => {
             "This vault's index was built with a different embedding model. Run `b2 reindex` to rebuild it.".to_string()
         }

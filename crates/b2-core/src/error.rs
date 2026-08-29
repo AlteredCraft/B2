@@ -115,6 +115,16 @@ pub enum Error {
     #[error("not a core relation verb: {0}")]
     InvalidRelation(String),
 
+    /// The index on disk was written by a **newer** `b2` than this binary — its
+    /// `meta.schema_version` is above [`crate::SCHEMA_VERSION`]. Refused rather than
+    /// rebuilt: the migration has no migrations by design (ADR-0002), so its answer to
+    /// an unreadable index is to drop it, and a *newer* index is unreadable for a
+    /// reason that dropping does not fix. An older `b2` left on `PATH` would otherwise
+    /// destroy a complete index on a read-only command. The fix is to run the newer
+    /// `b2`, not to reindex.
+    #[error("index schema {found} was written by a newer b2 (this build reads {supported}); run the newer b2")]
+    IndexTooNew { found: i64, supported: i64 },
+
     /// A resource reference (vault-relative path) did not resolve to any
     /// inventoried resource — the resource sibling of [`Error::NoteNotFound`]
     /// (file-type support slice 1).

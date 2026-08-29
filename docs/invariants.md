@@ -307,7 +307,12 @@ drops in without a redesign.
   entry permits, and it names a failure instead of hanging. "Complete" is checked, not
   assumed: a current stamp over
   missing tables is stale and rebuilt from empty, because surviving rows would look up-to-date
-  to an incremental reindex and break S3. The same holds for the vector tables (M4).
+  to an incremental reindex and break S3. The same holds for the vector tables (M4). The one
+  mismatch that is **not** rebuilt is a stamp *above* this build's `schema_version`: it was
+  written by a newer `b2`, which this build cannot read and is not entitled to discard, so the
+  open is refused and the index left exactly as found. The index is disposable (S1), but only
+  to a `b2` that understands it — otherwise an older binary left on `PATH` wipes a current
+  index on a read-only command.
   Concurrent *writers* stay single-in-flight through the `reindex` advisory lock, which
   readers never take. ([index-engine.md](index-engine.md) §3,
   [GH #111](https://github.com/AlteredCraft/B2/issues/111)/[#114](https://github.com/AlteredCraft/B2/issues/114))

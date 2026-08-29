@@ -28,8 +28,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The B2 index schema version stamped into `meta.schema_version`. Bumping it is the
-/// migration gate: on a mismatch `migrate()` drops the derived tables and lets the
-/// next `reindex` rebuild them — there are no migrations, by design (ADR-0002).
+/// migration gate: on a **stale or unknown** stamp `migrate()` drops the derived tables
+/// and lets the next `reindex` rebuild them — there are no migrations, by design
+/// (ADR-0002). A stamp *above* this is the one mismatch that is not rebuilt: it was
+/// written by a newer `b2`, so the index is refused untouched ([`refuse_if_newer`]).
 ///
 /// **2** dropped the suggestion machinery with the 2026-07-04 relator cut. **3**
 /// replaced the `chunks_vec` vec0 virtual table with plain vector tables (ADR-0006);
@@ -262,17 +264,68 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     if schema_is_current(conn)? {
         return Ok(());
     }
+    // Direction, before the rebuild branch can act on "not mine". Checked here as well as
+    // inside the lock so the common case — a newer index, no contention — is refused
+    // without ever taking a write lock on a database this build has no business writing.
+    refuse_if_newer(conn)?;
     retry_while_locked("schema migration", REBUILD_ATTEMPTS, || {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Re-checked *inside* the write lock, which is the whole point of taking it:
         // if we lost the race we waited on the winner's transaction, and this is where
         // we find its work already committed.
         if !schema_is_current(&tx)? {
+            // The race the outer check cannot cover: the opener we waited on was a
+            // *newer* b2 that rebuilt this index while we queued. Refusing rolls the
+            // transaction back untouched.
+            refuse_if_newer(&tx)?;
             apply_schema(&tx)?;
         }
         tx.commit()?;
         Ok(())
     })
+}
+
+/// Refuse an index stamped **above** [`SCHEMA_VERSION`] — written by a newer `b2` than
+/// this binary — instead of letting [`apply_schema`] drop it ([`Error::IndexTooNew`]).
+///
+/// [`schema_is_current`] asks only whether the stamp *equals* ours, and every way it can
+/// say no used to reach the same unconditional rebuild. That is right for an index of no
+/// known version and wrong for one of a *later* known version: the index is disposable
+/// (ADR-0002), but this build is not the one entitled to dispose of it, and dropping does
+/// not make a shape it predates readable. In the field the cost fell on the user — an
+/// older `b2` on `PATH` (a stale `cargo install`, an unupgraded shell) wiped a complete
+/// index on a **read-only** command, and the only symptom was a whole-vault re-embed.
+///
+/// **The stamp alone decides, deliberately.** A stamp is written only inside
+/// [`apply_schema`]'s transaction, alongside the tables it vouches for, so a stamp above
+/// ours means some newer `b2` committed a complete index here. Gating on our own
+/// [`SCHEMA_TABLES`] as well would be worse than redundant: a future schema may rename or
+/// drop any table on that list, so their absence is evidence of the version gap, not of
+/// damage — and it is not our call to make about a shape we cannot read.
+fn refuse_if_newer(conn: &Connection) -> Result<()> {
+    // `meta` carries the stamp; on an index that has none there is no claim to compare,
+    // and `meta_value` would fault on the missing table.
+    if !table_exists(conn, "meta")? {
+        return Ok(());
+    }
+    match stamped_version(conn)? {
+        Some(found) if found > SCHEMA_VERSION => Err(Error::IndexTooNew {
+            found,
+            supported: SCHEMA_VERSION,
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `name` is a table in this database — the one-table form of the presence check
+/// [`schema_is_current`] makes over the whole list.
+fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [name],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 /// Whether this connection sees a **complete** schema at the current

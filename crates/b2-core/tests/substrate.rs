@@ -385,3 +385,73 @@ fn an_open_of_a_current_index_is_not_refused_by_a_writer() {
 
     writer.execute_batch("ROLLBACK").unwrap();
 }
+
+/// An index stamped **newer** than this binary understands is refused, and its rows are
+/// left untouched — the clobber the drop-and-rebuild branch used to perform on a vault
+/// whose desktop app had already moved on.
+///
+/// The migration's one question was "is the stamp equal to mine?", so a *newer* stamp took
+/// exactly the same branch as a *stale* one: drop everything and rebuild empty. An older
+/// `b2` left on `PATH` — a stale `cargo install`, an unupgraded shell — then destroyed a
+/// complete, current index on a **read-only** command, and the only cost visible to the
+/// user was a fresh embedding run over the whole vault.
+///
+/// Refusing is the only honest answer: the schema is disposable but it is not *ours* to
+/// dispose of, and this binary cannot read a shape it predates. Direction is what the
+/// stamp buys — a stamp is written only inside `apply_schema`'s transaction alongside the
+/// tables it vouches for, so a stamp above ours means a newer `b2` committed a complete
+/// index here. The structural check deliberately does not gate this: a future schema is
+/// free to rename or drop any table in *our* list, so "our tables are missing" is not
+/// evidence of damage in an index we already know we cannot read.
+#[test]
+fn an_index_from_a_newer_b2_is_refused_not_rebuilt() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("b2.sqlite");
+
+    {
+        let conn = open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO notes(path, type, body_hash, indexed_at)
+             VALUES ('kept.md', 'note', 'hash', '2026-08-28T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
+            [(SCHEMA_VERSION + 1).to_string()],
+        )
+        .unwrap();
+    }
+
+    let err = open(&db_path).expect_err("an index from a newer b2 must be refused");
+    assert!(
+        matches!(
+            err,
+            b2_core::Error::IndexTooNew { found, supported }
+                if found == SCHEMA_VERSION + 1 && supported == SCHEMA_VERSION
+        ),
+        "the refusal must name both versions so the adapters can say which b2 to run: {err}"
+    );
+
+    // The assertion with teeth: the refusal cost the index nothing.
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let surviving: i64 = conn
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        surviving, 1,
+        "a refused open must leave the newer index exactly as it found it"
+    );
+    let stamp: String = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        stamp,
+        (SCHEMA_VERSION + 1).to_string(),
+        "a refused open must not restamp the index it declined to read"
+    );
+}
