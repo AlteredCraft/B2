@@ -7,7 +7,7 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{reindexed_vault, MEMORY_PATH};
+use common::{count, index_conn, reindexed_vault, MEMORY_PATH};
 use std::fs;
 
 #[test]
@@ -146,6 +146,7 @@ fn create_note_writes_a_minimal_note_model_free() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     let before = vault.embed_status().unwrap();
+    let vectors_before = count(&index_conn(&root), "embeddings");
 
     let report = vault.create_note("inbox/idea").unwrap();
     assert_eq!(report.path, "inbox/idea.md");
@@ -168,14 +169,27 @@ fn create_note_writes_a_minimal_note_model_free() {
         .iter()
         .any(|n| n.path == "inbox/idea.md"));
 
-    // Model-free: the embedding space is untouched — coverage gains no embedded
-    // note (an empty body has no chunks; a later embed/reindex owns any vectors).
-    let after = vault.embed_status().unwrap();
+    // Model-free: the embedding space is untouched. Measured on the vector table itself
+    // rather than on the coverage fraction, which cannot see this: a body-less note has
+    // no chunks, so it joins the embedded count the moment it is projected — vacuously,
+    // having nothing to wait for — and would hide a vector this call had no business
+    // storing. Any later embed/reindex owns vectors, never `create_note`.
+    let conn = index_conn(&root);
+    assert_eq!(count(&conn, "chunks WHERE note_path = 'inbox/idea.md'"), 0);
     assert_eq!(
-        after.embedded, before.embedded,
+        count(&conn, "embeddings"),
+        vectors_before,
         "create_note must never embed"
     );
+
+    // And the note is in the projection, counted as needing nothing.
+    let after = vault.embed_status().unwrap();
     assert_eq!(after.total, before.total + 1);
+    assert_eq!(
+        after.embedded,
+        before.embedded + 1,
+        "a body-less note waits for no vector, so it must not sit outside the fraction"
+    );
 }
 
 #[test]

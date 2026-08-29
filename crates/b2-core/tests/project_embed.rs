@@ -465,3 +465,68 @@ fn embed_status_reports_the_coverage_fraction() {
         "one note pending vectors: N/M partial"
     );
 }
+
+/// A note with **no body** — frontmatter only, or an empty file — counts as embedded, and
+/// a reindex forecasts no work for it. It has no chunks, so there is no vector it could
+/// ever be waiting for: "embedded" is vacuously true, and the alternative is a note that
+/// reads as forever-pending.
+///
+/// **The bug this pins is a stuck fraction, not a rounding error.** The coverage predicate
+/// required `>= 1 chunk`, so an empty note could never join the numerator. On a real vault
+/// that is a permanent `1183/1188` — five `Untitled.md` and stub entity notes — and the
+/// fraction is not decoration: every UI surface keyed on `embedded < total` read it as
+/// unfinished work. The chat pane said grounding was keyword-first "while this vault
+/// embeds", the graph pane withheld ghost connections pending an embed that would never
+/// come, search wore a permanent "keyword-first" caveat, and `autoIndexOnOpen` plus the
+/// fs-watch's `vectorsPending` scheduled a no-op embed pass on every open and every pulse.
+/// A vault could not reach "done" by any amount of reindexing.
+///
+/// So the assertions come in pairs: the *fraction* is what the user sees, and `would_embed`
+/// is the work it kept commissioning.
+#[test]
+fn a_note_with_no_body_counts_as_embedded_and_forecasts_no_work() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+
+    // The two shapes a real vault produces: a stub note that is all frontmatter (the
+    // entity/`Untitled.md` case), and a file with nothing in it at all.
+    fs::write(root.join("stub.md"), "---\ntags:\n  - People\n---\n").unwrap();
+    fs::write(root.join("blank.md"), "").unwrap();
+
+    let vault = Vault::open(&root).unwrap();
+    let report = vault.reindex().unwrap();
+    assert_eq!(
+        report.indexed, 4,
+        "both empty notes are projected like any other"
+    );
+
+    // Non-vacuity: they really do contribute no chunks, so this is the chunkless case and
+    // not some other note quietly carrying the fraction.
+    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    for path in ["stub.md", "blank.md"] {
+        let chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
+                [path],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(chunks, 0, "{path} has no body, so it has no chunks");
+    }
+
+    let s = vault.embed_status().unwrap();
+    assert_eq!(
+        (s.embedded, s.total),
+        (4, 4),
+        "a vault whose only unembedded notes are empty is fully embedded — the fraction \
+         must be able to reach M/M, or every surface keyed on it is stuck"
+    );
+
+    // And the work the stuck fraction used to commission: none.
+    let plan = vault.plan_reindex(false).unwrap();
+    assert_eq!(
+        plan.would_embed, 0,
+        "an empty note has nothing to embed, so a reindex must not keep re-offering to"
+    );
+}

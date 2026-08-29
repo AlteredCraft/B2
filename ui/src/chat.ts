@@ -195,6 +195,12 @@ export function chatEmptyState(s: {
  * vault answers from keyword matches alone. That is a real difference in answer quality
  * and it must be said, quietly, in place — never as a blocker (E4: chat degrading never
  * degrades anything else, and a degraded chat is still chat).
+ *
+ * **It reports a state, not an activity.** A partial fraction is not evidence that a run
+ * is under way: it is equally the residue of a cancelled or crashed reindex, and it sits
+ * there until someone acts. The note used to read "while this vault embeds", which asked
+ * the reader to wait for something that might never happen — so it names the gap and the
+ * gesture that closes it, the way the search caveat and the ghost hint already do.
  */
 export function retrievalNote(s: {
   semantic: boolean;
@@ -207,7 +213,7 @@ export function retrievalNote(s: {
   if (s.notesEmbedded === 0)
     return "Answers are grounded by keyword search for now — this vault isn’t embedded yet.";
   if (s.notesEmbedded < s.notesTotal)
-    return `Keyword-first grounding while this vault embeds (${s.notesEmbedded}/${s.notesTotal}).`;
+    return `Keyword-first grounding — ${s.notesEmbedded}/${s.notesTotal} notes embedded. Reindex to fill the rest.`;
   return "";
 }
 

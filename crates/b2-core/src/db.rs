@@ -1101,37 +1101,59 @@ pub fn note_body_hash(conn: &Connection, note_path: &str) -> Result<Option<Strin
         .optional()?)
 }
 
-/// Whether every chunk of `note_path` already has a stored vector (and it has at least
-/// one). False after a model swap emptied the vector tables, so an unchanged-body note
-/// is still re-embedded then. Requires the embedding space to exist.
+/// Whether `note_path` has **no chunk awaiting a vector** — the per-note form of
+/// [`embed_progress`]'s predicate, and the incremental fast path's second condition.
+/// False after a model swap emptied the vector tables, so an unchanged-body note is
+/// still re-embedded then. Requires the embedding space to exist.
+///
+/// A note with **no chunks satisfies this vacuously**, and deliberately: an empty body
+/// (frontmatter-only stub, brand-new file) has no vector it could ever be waiting for,
+/// so "still pending" would be a state it can never leave. See [`embed_progress`].
 pub fn note_fully_embedded(conn: &Connection, note_path: &str) -> Result<bool> {
-    let (n_chunks, n_missing): (i64, i64) = conn.query_row(
-        "SELECT COUNT(*), COUNT(*) FILTER (WHERE v.text_hash IS NULL)
+    let n_missing: i64 = conn.query_row(
+        "SELECT COUNT(*)
          FROM chunks c LEFT JOIN embeddings v ON v.text_hash = c.text_hash
-         WHERE c.note_path = ?1",
+         WHERE c.note_path = ?1 AND v.text_hash IS NULL",
         [note_path],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| r.get(0),
     )?;
-    Ok(n_chunks > 0 && n_missing == 0)
+    Ok(n_missing == 0)
 }
 
 /// The vault's embedding coverage as `(notes_embedded, notes_total)` — the honest
-/// "N/M embedded" signal (#26). `notes_embedded` counts notes whose every chunk has a
-/// stored vector; it is `0` before any embed, so this reads cleanly on a
-/// projected-but-unembedded vault. **Model-free:** a pure count over the projection.
+/// "N/M embedded" signal (#26). `notes_embedded` counts notes with **no chunk awaiting a
+/// vector**; it is `0` before any embed on a vault of ordinary notes, so this reads
+/// cleanly on a projected-but-unembedded one. **Model-free:** a pure count over the
+/// projection.
+///
+/// **A note with no chunks counts as embedded** — an empty body: a frontmatter-only stub,
+/// a `Untitled.md` the tree just created, a file with nothing in it. It has no chunk, so
+/// there is no vector it is waiting for, and the older `>= 1 chunk` requirement left it
+/// permanently outside the numerator. That is not a rounding error: this fraction is the
+/// vault's "am I done?" and every consumer treats `embedded < total` as outstanding work
+/// — the chat pane's grounding note, the search caveat, the graph pane's ghost hint, and
+/// the desktop's auto-index-on-open and fs-watch heal, which each scheduled a no-op embed
+/// pass forever. A vault holding one empty note could never read as finished, however
+/// often it was reindexed. Vacuous truth is the honest answer, not a lenient one.
 pub fn embed_progress(conn: &Connection) -> Result<(usize, usize)> {
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
-    // No embeddings table -> nothing is embedded, and the join below would reference a
-    // missing table.
+    // No embeddings table yet: the join below would reference a missing table, so the
+    // same predicate is asked of the projection alone. Only the chunkless notes can
+    // satisfy it here — every chunk in the vault is awaiting a vector by definition.
     if !embedding_space_exists(conn)? {
-        return Ok((0, total as usize));
+        let chunkless: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM notes n
+             WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.note_path = n.path)",
+            [],
+            |r| r.get(0),
+        )?;
+        return Ok((chunkless as usize, total as usize));
     }
-    // A note counts as embedded iff it has >=1 chunk and none lack a vector — the same
-    // predicate as `note_fully_embedded`, aggregated.
+    // A note counts as embedded iff no chunk of it lacks a vector — `note_fully_embedded`,
+    // aggregated. A chunkless note satisfies the NOT EXISTS vacuously, as it should.
     let embedded: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes n
-         WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.note_path = n.path)
-           AND NOT EXISTS (
+         WHERE NOT EXISTS (
              SELECT 1 FROM chunks c
              LEFT JOIN embeddings v ON v.text_hash = c.text_hash
              WHERE c.note_path = n.path AND v.text_hash IS NULL

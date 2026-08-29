@@ -4004,11 +4004,11 @@ async function reconcileExternalChange(): Promise<void> {
     //
     // The gate is the model-free N/M coverage read (#26) — cheap, and it keeps that
     // fraction honest after an external add/remove, which a pulse also left stale. It
-    // is deliberately conservative rather than exact: the count needs a note to have
-    // ≥1 chunk, so a note with an *empty* body (the tree's freshly-created one, until
-    // you type) reads as forever-pending and schedules a no-op embed on each pulse.
-    // That errs the safe way — it can over-fire, never miss, because any chunk
-    // lacking a vector drops its note out of the count.
+    // still errs the safe way (it can over-fire, never miss: any chunk lacking a vector
+    // drops its note out of the count), but it no longer over-fires *forever*. The count
+    // used to require ≥1 chunk, so a note with an empty body — the tree's freshly-created
+    // one, until you type — read as permanently pending and booked a no-op embed on every
+    // single pulse. A chunkless note has nothing to embed, and now counts as embedded.
     vectorsPending: async () => {
       await refreshEmbedStatus(state.vaultRoot);
       return state.notesTotal > 0 && state.notesEmbedded < state.notesTotal;

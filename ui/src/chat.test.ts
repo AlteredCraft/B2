@@ -156,10 +156,18 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
     retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 12 }),
     /keyword search for now/,
   );
-  // Part way through embedding — say how far.
-  assert.match(
-    retrievalNote({ semantic: true, notesEmbedded: 7, notesTotal: 12 }),
-    /Keyword-first grounding while this vault embeds \(7\/12\)/,
+  // Partly embedded — say how far, and what closes the gap. Deliberately NOT phrased as
+  // work in flight ("while this vault embeds"): nothing is necessarily running. The gap
+  // outlives a cancelled or crashed reindex and sits there until someone acts, so a
+  // sentence promising progress would have the user waiting on nothing.
+  const partial = retrievalNote({ semantic: true, notesEmbedded: 7, notesTotal: 12 });
+  assert.match(partial, /Keyword-first grounding/);
+  assert.match(partial, /7\/12/);
+  assert.match(partial, /Reindex/);
+  assert.doesNotMatch(
+    partial,
+    /while this vault embeds|embedding now|in progress/,
+    "the note must not claim a run is under way when none may be",
   );
   // Fully embedded: nothing to caveat.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }), "");

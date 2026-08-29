@@ -161,7 +161,9 @@ pub struct EmbedReport {
 /// `embedded == 0` is a fully keyword-only vault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct EmbedStatus {
-    /// Notes whose every chunk has a stored vector.
+    /// Notes with no chunk awaiting a vector. A note with **no chunks at all** — an empty
+    /// body — counts here: there is no vector it could be waiting for, so it must be able
+    /// to reach the numerator (see [`crate::db::embed_progress`]).
     pub embedded: usize,
     /// Every projected note (the denominator).
     pub total: usize,
