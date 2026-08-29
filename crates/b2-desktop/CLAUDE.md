@@ -225,6 +225,26 @@ Every new surface owes all four. They are cheap while you're building it and exp
   the gate is *not*: `conflicts()` asks a same-scope question, and scope buys nothing here — a menu
   accelerator is taken before the webview is consulted, so `menuOverlaps` compares across every
   scope.
+
+  **One section is B2's own.** View ▸ Zoom In / Zoom Out / Actual Size (⌘= ⌘- ⌘0) are the only rows
+  that are not a `PredefinedMenuItem` restating a chord macOS assigned: they are `Item::Command`,
+  and B2 *chooses* those keystrokes. They live in the menu rather than in `bindings.ts` because
+  macOS expects them there with their chords printed beside them, and an accelerator the menu owns
+  never reaches the webview — a chord spelled in both places is a chord that only ever fires once,
+  from the menu. Two things follow. The host must now *do* something when a menu item fires, so
+  `main.rs` has an `on_menu_event` that emits the item's id (`MENU_COMMAND_EVENT`, mirrored in
+  `ui/src/api.ts`) and stops there — what a size means is `ui/src/zoom.ts`'s, because this crate
+  holds no logic. And the accelerator must be spelled twice, once for the UI's parser and once for
+  muda's; `muda_accelerator` **derives** the second from the first, because Tauri parses an
+  accelerator with `.parse().ok()` and a spelling it can't read becomes a menu line that silently
+  has no shortcut. If you add another `Item::Command`, that derivation and `menukeys.ts` are what
+  must move with it.
+
+  What that trade costs, stated once so nobody re-discovers it as a bug: ⌘⇧= does **not** zoom in.
+  Tauri takes the accelerator as a string and splits it on `+`, so `Key::Character("+")` is
+  unreachable and the item's key equivalent is `=` — which AppKit matches only without ⇧. Zed's
+  View menu is spelled the same way. The fix, if it is ever wanted, is a webview binding for
+  `Mod-+` / `Mod-_` alone: different keystrokes from the menu's, so `menuOverlaps` stays empty.
 - **`ui/src/chat.ts`** — the chat pane's pure logic, and sidenav.ts's client rather than its rival
   ([#155](https://github.com/AlteredCraft/B2/issues/155)). Chat is the right column's *third mode*, so its
   transcript is emitted as the same `SideRow` shape discovery's cards are, and `sideRows` delegates here

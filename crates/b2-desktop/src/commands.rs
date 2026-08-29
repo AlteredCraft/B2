@@ -565,6 +565,24 @@ pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
 }
 
+/// Set the window's **page zoom** — the whole rendering scaled the way ⌘+ does in Safari,
+/// which is what B2's ⌘= / ⌘- / ⌘0 mean (`ui/src/zoom.ts`). WebKit's `pageZoom`, and the
+/// one thing here that is genuinely the host's: a webview cannot zoom itself, and scaling
+/// with CSS would grow the text while the pixel-sized chrome around it stayed put.
+///
+/// A pass-through by design. The ladder, its walls, the snapping of an off-ladder value
+/// and the remembering of the choice are all the UI's, tested there in node — this crate
+/// holds no rule about *which* sizes are allowed, exactly as it holds no rule about which
+/// column widths are. `factor` is a scale, so it is only ever the positive, bounded number
+/// `adoptZoom` produced; the guard here is the type, and anything stranger is a webview
+/// the platform refuses to render, which is what the error variant is for.
+#[tauri::command]
+pub fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), CmdError> {
+    window
+        .set_zoom(factor)
+        .map_err(|e| CmdError::ZoomFailed(e.to_string()))
+}
+
 /// **Flow ④ — one grounded answer**: condense -> retrieve -> assemble -> stream -> cite,
 /// all of it behind `Vault::ask`. The host's whole contribution is the shape of the
 /// *delivery*: Tauri runs the `(async)` body on a worker thread, tokens stream to the

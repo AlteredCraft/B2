@@ -48,6 +48,13 @@ pub enum CmdError {
     /// to the webview.
     #[error("clipboard read failed: {0}")]
     ClipboardFailed(String),
+    /// The webview refused a page-zoom change (`set_zoom`, the ⌘= / ⌘- / ⌘0 family).
+    /// WebKit's `pageZoom` does not fail in practice, so this exists to keep the handler
+    /// honest rather than to describe something a user is likely to see — the same shape
+    /// as [`CmdError::OpenFailed`]: the platform's detail, logged in full server-side,
+    /// generic to the webview.
+    #[error("could not change the window size: {0}")]
+    ZoomFailed(String),
     /// `import_file` was handed a payload that isn't base64 — the drop transport's own
     /// failure, before the façade ever sees bytes. Not something the user did: it means
     /// the frontend's encoder produced something the host can't read, so the message
@@ -147,6 +154,10 @@ pub fn user_message(err: &CmdError) -> String {
         }
         CmdError::ClipboardFailed(_) => {
             "Couldn't read the clipboard. Copy the text again, then paste.".to_string()
+        }
+        CmdError::ZoomFailed(_) => {
+            "Couldn't change the text size. Try again, or press ⌘0 to go back to the default."
+                .to_string()
         }
         CmdError::VaultRequired => {
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."

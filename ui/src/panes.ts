@@ -120,15 +120,31 @@ function shown(el: HTMLElement | null): boolean {
   return !!el && getComputedStyle(el).display !== "none";
 }
 
+/** The pane element the breakpoints act on, by name. */
+function paneEl(pane: Pane): HTMLElement | null {
+  return document.getElementById(pane === "tree" ? "tree-pane" : "side-pane");
+}
+
+/**
+ * Which side columns the stylesheet is drawing right now — **asked, never computed**.
+ *
+ * The breakpoints live in style.css and nothing here knows their widths; this reads the
+ * outcome. Exported because zoom is the other thing that can cross one: page zoom divides
+ * the layout viewport by its scale, so a ⌘= is a window-narrowing as far as the
+ * stylesheet is concerned, and `main.ts` compares this across a step to notice a column
+ * the step cost. A second reader, same measurement — which is the point of it being one
+ * function rather than a width each caller has to know.
+ */
+export function visiblePanes(): Shown {
+  return { tree: shown(paneEl("tree")), side: shown(paneEl("side")) };
+}
+
 /**
  * Wire the gutters and start tracking the layout. Call once, after the shell exists.
  * `root` is the `.layout` grid; it owns the width vars and is what we measure against.
  */
 export function initPanes(root: HTMLElement): void {
-  const paneEl = (pane: Pane): HTMLElement | null =>
-    document.getElementById(pane === "tree" ? "tree-pane" : "side-pane");
-
-  const visible = (): Shown => ({ tree: shown(paneEl("tree")), side: shown(paneEl("side")) });
+  const visible = visiblePanes;
 
   /** What's actually on screen: the request, settled against the window as it is now. */
   const effective = (): PaneWidths => fit(desired, root.clientWidth, visible());

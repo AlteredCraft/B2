@@ -31,7 +31,7 @@
 //     function now switches on a binding id (`tree.row.next`) instead of a key name
 //     ("ArrowDown"). Still one owner per mapping, and now both halves are visible.
 //   - Not here: the app menu bar's chords — ⌘Q ⌘W ⌘M ⌘H ⌥⌘H ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A
-//     ⌃⌘F. Those aren't key → action mappings this file could own at all: the host
+//     ⌃⌘F ⌘= ⌘- ⌘0. Those aren't key → action mappings this file could own at all: the host
 //     declares the menu (crates/b2-desktop/src/menu.rs) and AppKit dispatches its
 //     accelerators before the key window's responder chain, so the webview never gets a
 //     keydown for them. What they are to *this* table is a list of keystrokes a new

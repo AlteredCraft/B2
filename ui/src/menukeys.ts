@@ -46,6 +46,17 @@ export const MENU_CHORDS = [
   { id: "edit.copy", label: "Copy", keys: "Mod-c" },
   { id: "edit.paste", label: "Paste", keys: "Mod-v" },
   { id: "edit.select-all", label: "Select All", keys: "Mod-a" },
+  // The View menu's three are the one part of this list that is **B2's own choice** of
+  // chord rather than a restatement of one macOS assigned. They are here, not in
+  // bindings.ts, for this module's whole reason: a menu accelerator is dispatched before
+  // the key window's responder chain, so a chord in both places is a chord the webview
+  // never receives — and macOS expects these three to live in View, with their keys
+  // printed beside them. Choosing them means the host also has to *do* something when
+  // they fire, which the predefined rows never needed: `menu.rs` emits the item's id and
+  // `zoom.ts` decides what a size means.
+  { id: "view.zoom-in", label: "Zoom In", keys: "Mod-=" },
+  { id: "view.zoom-out", label: "Zoom Out", keys: "Mod--" },
+  { id: "view.zoom-reset", label: "Actual Size", keys: "Mod-0" },
   { id: "view.fullscreen", label: "Toggle Full Screen", keys: "Mod-Ctrl-f" },
   { id: "window.minimize", label: "Minimize", keys: "Mod-m" },
 ] as const satisfies readonly MenuChord[];
