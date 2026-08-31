@@ -662,6 +662,12 @@ async function loadResourceImage(r: ResourceExplainView): Promise<string | null>
 let imagesOwner: string | null = null;
 let imagesBody: string | null = null;
 let imagesInventory: readonly ResourceSummary[] | null = null;
+/** Which plan is the current one. Bumped by every reconcile that gets past the memo, and
+ *  checked again after the reads — a read is only allowed to store what the *latest* plan
+ *  still wants. Without it, a picture deleted from the buffer mid-read comes back after
+ *  the newer plan pruned it, and the memo then holds that stale entry in the map for as
+ *  long as the body doesn't change again: the per-note budget quietly stops bounding. */
+let imagesGeneration = 0;
 /** Debounce for the *buffer* scan while editing — a keystroke can add an embed, and the
  *  answer is worth a moment's wait rather than a scan per character. */
 let imageScanTimer: number | undefined;
@@ -682,13 +688,15 @@ function pushNoteImages(): void {
  * empty pane), which drops every picture.
  *
  * Repaints only when a picture actually arrived, and only after the read — so this is
- * safe to call from the tail of `render()` without re-entering it.
+ * safe to call from the tail of `render()` without re-entering it. A read that a newer
+ * reconcile has superseded stores nothing (`imagesGeneration`).
  */
 async function syncNoteImages(owner: string | null, body: string): Promise<void> {
   if (imagesOwner === owner && imagesBody === body && imagesInventory === state.resources) return;
   imagesOwner = owner;
   imagesBody = owner === null ? null : body;
   imagesInventory = state.resources;
+  const generation = ++imagesGeneration;
   const plan = owner === null ? [] : inlineImagePlan(imageEmbedTargets(body), state.resources);
   const keep = new Set(plan);
   for (const path of [...state.embedImages.keys()]) {
@@ -707,7 +715,9 @@ async function syncNoteImages(owner: string | null, body: string): Promise<void>
       }
     }),
   );
-  if (imagesOwner !== owner) return; // the pane moved on while we were reading
+  // Superseded while we were reading — another note, or another keystroke in this one.
+  // Whatever the newer plan still wants, it asked for itself.
+  if (imagesGeneration !== generation) return;
   let arrived = false;
   for (const [path, url] of loaded) {
     if (url !== null) {
@@ -3445,13 +3455,15 @@ function mountEditor(body: string): void {
       // The note pane is an overflow scroll container; render tooltips fixed on
       // <body> so a menu near the pane's bottom edge isn't clipped by it.
       tooltips({ position: "fixed", parent: document.body }),
+      // The note's loaded pictures, so live preview can draw its `![[image.png]]`
+      // embeds. Outside `lpCompartment` on purpose (livepreview.ts): they are a fact
+      // about the document, and the `</>` swap must not drop them. **Ahead** of the
+      // compartment, because live preview's `blockField` reads this one inside its own
+      // `update` — and a CodeMirror field may only read a field defined before it.
+      embedImagesField,
       lpCompartment.of(livePreviewConf()),
       // Find-in-note (⌘F) match decorations — inert (null) until the bar sets a query.
       findField,
-      // The note's loaded pictures, so live preview can draw its `![[image.png]]`
-      // embeds. Outside `lpCompartment` on purpose (livepreview.ts): they are a fact
-      // about the document, and the `</>` swap must not drop them.
-      embedImagesField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           scheduleAutosave();

@@ -238,25 +238,28 @@ class TaskWidget extends WidgetType {
 // cursor at its start, revealing the raw source for editing. `from` is the table's
 // first-line start.
 //
-// One deliberate gap: it renders with **no pictures**, so an `![[image.png]]` inside a
-// cell reads as its link here while the reading view draws it. The widget is keyed on
-// its Markdown alone, so it wouldn't rebuild when the bytes landed in any case — and an
-// image in a table cell is a corner worth less than a second cache key.
+// It carries the note's pictures too, so an `![[image.png]]` in a *cell* draws there as
+// well — "pixel-identical" has to hold inside a table or it doesn't hold. That is the
+// second key in `eq`: the map is replaced wholesale by each `setEmbedImages` (main.ts
+// snapshots it), so comparing it by identity rebuilds exactly when bytes land and never
+// otherwise.
 class TableWidget extends WidgetType {
   readonly md: string;
   readonly from: number;
-  constructor(md: string, from: number) {
+  readonly images: EmbedImages;
+  constructor(md: string, from: number, images: EmbedImages) {
     super();
     this.md = md;
     this.from = from;
+    this.images = images;
   }
   eq(o: TableWidget): boolean {
-    return o.md === this.md && o.from === this.from;
+    return o.md === this.md && o.from === this.from && o.images === this.images;
   }
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("div");
     wrap.className = "lp-table";
-    wrap.innerHTML = renderMarkdown(this.md);
+    wrap.innerHTML = renderMarkdown(this.md, this.images);
     wrap.addEventListener("mousedown", (e) => {
       // Let a link click fall through to the app's own handlers rather than yanking the
       // caret out from under it: a wikilink to the follow path, a web link to the OS
@@ -565,6 +568,7 @@ export function blockDecorations(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = [];
   const sel = state.selection;
   const doc = state.doc;
+  const images = embedImagesOf(state);
   syntaxTree(state).iterate({
     enter: (node) => {
       if (node.name !== "Table") return; // keep descending to reach any nested table
@@ -575,7 +579,7 @@ export function blockDecorations(state: EditorState): DecorationSet {
       if (!touches(sel, from, to)) {
         decos.push(
           Decoration.replace({
-            widget: new TableWidget(doc.sliceString(from, to), from),
+            widget: new TableWidget(doc.sliceString(from, to), from, images),
             block: true,
           }).range(from, to),
         );
@@ -589,8 +593,11 @@ export function blockDecorations(state: EditorState): DecorationSet {
 const blockField = StateField.define<DecorationSet>({
   create: (state) => blockDecorations(state),
   update(deco, tr) {
-    // Reveal keys on the selection, so a bare cursor move recomputes too.
-    return tr.docChanged || tr.selection ? blockDecorations(tr.state) : deco;
+    // Reveal keys on the selection, so a bare cursor move recomputes too — and on the
+    // note's pictures, which change no text and move no cursor (the ViewPlugin below
+    // watches the same effect, for the same reason).
+    const pictures = tr.effects.some((e) => e.is(setEmbedImages));
+    return tr.docChanged || tr.selection || pictures ? blockDecorations(tr.state) : deco;
   },
   provide: (f) => EditorView.decorations.from(f),
 });

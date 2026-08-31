@@ -72,6 +72,14 @@ function stateOf(doc: string, cursor = doc.length, images?: Map<string, string>)
  *  file wants, which is why it is the default. */
 const PICTURES = new Map([["a/shot.png", "data:image/png;base64,AAAA"]]);
 
+/** Just enough of livepreview.ts's `TableWidget` for the two checks that read one — the
+ *  suite runs off the source, so these are the real objects, not stand-ins. */
+interface TableWidget {
+  md: string;
+  images: Map<string, string>;
+  eq(o: TableWidget): boolean;
+}
+
 interface DecoSpec {
   class?: string;
   attributes?: Record<string, string>;
@@ -124,8 +132,8 @@ function inline(doc: string, cursor?: number, images?: Map<string, string>): str
 
 /** The block decorations (tables) — a separate builder because CM6 forbids a ViewPlugin
  *  from emitting a replace that spans a line break (spec §8). */
-function block(doc: string, cursor?: number): string[] {
-  return show(doc, blockDecorations(stateOf(doc, cursor)));
+function block(doc: string, cursor?: number, images?: Map<string, string>): string[] {
+  return show(doc, blockDecorations(stateOf(doc, cursor, images)));
 }
 
 /** Every node of one name in the real parse tree, as `offset:source`. */
@@ -517,6 +525,27 @@ check("the table widget carries the exact source it hides", () => {
   const md = (spec.widget as unknown as { md: string }).md;
   assertEq(md, doc.slice(it.from, it.to), "the widget's markdown is the replaced range verbatim");
   assertEq([it.from, it.to], [3, 32], "snapped to whole lines — a block replace must be");
+});
+
+check("the table widget carries the note's pictures, and is re-keyed when they change", () => {
+  // A cell can hold an `![[image.png]]`, and "pixel-identical" has to hold inside a table
+  // too — so the widget renders with the same map the reading view draws from. It is a
+  // second key on the widget because the first (the markdown) does not change when bytes
+  // arrive: without it the table would keep the stale render it was built with.
+  const doc = "| a | b |\n| - | - |\n| ![[a/shot.png]] | 2 |\n";
+  const widgetOf = (images?: Map<string, string>): TableWidget => {
+    const it = blockDecorations(stateOf(doc, doc.length, images)).iter();
+    const w = (it.value?.spec as DecoSpec).widget as unknown as TableWidget;
+    assert(w !== undefined, "a table is decorated");
+    return w;
+  };
+  assertEq(
+    widgetOf(PICTURES).images.get("a/shot.png"),
+    "data:image/png;base64,AAAA",
+    "the picture reaches the widget, so `renderMarkdown` can draw it in the cell",
+  );
+  assert(!widgetOf().eq(widgetOf(PICTURES)), "bytes arriving re-key the widget");
+  assert(widgetOf(PICTURES).eq(widgetOf(PICTURES)), "…and an unchanged map does not");
 });
 
 check("the table the cursor is inside stays raw source", () => {
