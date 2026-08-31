@@ -1112,6 +1112,33 @@ body.is-resizing {
   background: var(--accent-soft);
 }
 
+/* The inline image an `![[picture.png]]` embed draws (render.ts). The embed is still a
+   link — clicking it opens the resource card — but the picture *is* the label now, so
+   the link's dashed underline and hover wash come off: they would frame the image
+   rather than mark a word. The accent outline on hover is the same affordance said in
+   the one way that reads over a photograph.
+
+   Never scaled *up*: `|500` sets a width the image is drawn at, `max-width` keeps it
+   inside the column whatever the note asked for, and `height: auto` is what makes the
+   aspect ratio hold in both directions. */
+.note-body a.wikilink:has(> .embed-image),
+.note-body a.wikilink:has(> .embed-image):hover {
+  border-bottom: none;
+  background: none;
+}
+
+.note-body .embed-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  vertical-align: middle;
+}
+
+.note-body a.wikilink:hover > .embed-image {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
 .note-body code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.88em;
@@ -1426,6 +1453,18 @@ body.is-resizing {
   color: var(--accent);
   border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
   cursor: pointer;
+}
+
+/* The same picture in the buffer's place (livepreview.ts). Sized like the reading
+   view's, because read and edit must not disagree about what a note looks like. The
+   text cursor is the honest pointer here: clicking it puts the caret beside the markup
+   and the raw `![[…]]` comes back, exactly as every other concealed construct does. */
+.editor-host .lp-embed-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  vertical-align: middle;
+  cursor: text;
 }
 
 /* Blockquote — the reading view's border + muted, applied per concealed-`>` line. */

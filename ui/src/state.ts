@@ -178,6 +178,18 @@ export interface AppState {
    * never paint one document's picture over another's card.
    */
   resourceImage: string | null;
+  /**
+   * The open **note's** pictures: vault-relative path → `data:` URL, one entry per
+   * `![[image.png]]` embed whose bytes were read (embeds.ts decides which ones are
+   * worth reading — see `inlineImagePlan`). The reading view and the editor's live
+   * preview draw from the same map, so a note looks the same read or edited; an embed
+   * with no entry reads as its link.
+   *
+   * Keyed by path rather than by occurrence because a note that embeds the same picture
+   * twice should cost one read. Cleared when the pane changes document, for
+   * `resourceImage`'s reason: nothing of one note's may ever paint into another's.
+   */
+  embedImages: Map<string, string>;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
   /**
@@ -387,6 +399,7 @@ export const state: AppState = {
   current: null,
   currentResource: null,
   resourceImage: null,
+  embedImages: new Map<string, string>(),
   frontmatterOpen: false,
   fmEditing: false,
   sourceOpen: false,

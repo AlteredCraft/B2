@@ -1,5 +1,6 @@
-// Tests for the resource card's **image viewer** (render.ts) — the `data:` URL rule and
-// what the card shows in each of its states. Run directly:
+// Tests for the resource card's **image viewer** — the `data:` URL rule (embeds.ts,
+// shared with the inline `![[…]]` embed) and what the card shows in each of its states
+// (render.ts). Run directly:
 //   node --experimental-strip-types src/resourceview.test.ts
 // Hand-rolled asserts, the sanitize.test.ts / render.test.ts idiom.
 //
@@ -8,7 +9,8 @@
 // is here for the same reason it is in render.test.ts.
 
 import { JSDOM } from "jsdom";
-import { imageDataUrl, IMAGE_VIEWER_MAX_BYTES, notePaneHtml } from "./render.ts";
+import { imageDataUrl, IMAGE_VIEWER_MAX_BYTES } from "./embeds.ts";
+import { notePaneHtml } from "./render.ts";
 import { state, type AppState } from "./state.ts";
 import type { ResourceExplainView } from "./types.ts";
 
