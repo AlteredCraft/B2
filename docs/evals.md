@@ -294,9 +294,12 @@ defaults are the retired constants, so
 
 `--json` carries both halves ([#219](https://github.com/AlteredCraft/B2/issues/219)): the
 discovery object as before, plus a `search` key — `null` unless `--search` was asked for —
-holding the function-word weights, the bar under test, every probe (its query, coverage,
-best-cos, the **engine's** `vouched`, its own note's rank, and each served row's `path` /
-`bm25_rank` / `cos`), and the derived tail-family edges. It follows the discovery object's
+holding the function-word weights and a `judged` object with the bar under test, every probe
+(its query, coverage, best-cos, the **engine's** `vouched`, its own note's rank, and each
+served row's `path` / `bm25_rank` / `cos`), and the derived tail-family edges. `judged` is
+`null` when the active model has no calibrated bar, since the piles need one to be judged —
+one key to branch on, not four; the function-word reading sits outside it because it is
+model-free and is there either way. It follows the discovery object's
 re-derivability convention: the summaries the table prints are left to the consumer and what
 they were computed *from* is emitted instead, so sweeping the evidence bar or the tail
 families across several real vaults — and joining those readings with `make eval`'s corpus

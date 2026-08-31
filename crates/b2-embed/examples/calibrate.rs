@@ -1287,48 +1287,51 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
                 "idf": r4(*idf),
             })).collect::<Vec<_>>(),
         },
-        // `null` = no calibrated bar for this model, so nothing below it was
-        // read: the piles need one to be judged (M2).
-        "bar": reading.judged.as_ref().map(|j| serde_json::json!({
-            "min_term_coverage": j.bar.min_term_coverage,
-            "min_cos": j.bar.min_cos,
-        })),
-        "positives": reading.judged.as_ref().map(|j| j.positives.iter().map(probe).collect::<Vec<_>>()),
-        "negatives": reading.judged.as_ref().map(|j| j.negatives.iter().map(probe).collect::<Vec<_>>()),
-        "tail": reading.judged.as_ref().map(|j| {
-            let t = &j.tail;
-            serde_json::json!({
-                "own_served": t.own_served,
-                "own_missed": t.own_missed,
-                "dense_only_rows": t.dense_only_rows,
-                "total_rows": t.total_rows,
+        // One key, not four: the bar and the three piles read against it exist
+        // together or not at all, so they nest under the `Option` that decides
+        // it rather than each carrying its own `null` for a consumer to test.
+        // `null` = no calibrated bar for this model, so nothing under it was
+        // read: the piles need one to be judged (M2). The function-word reading
+        // above is model-free and is there either way.
+        "judged": reading.judged.as_ref().map(|j| serde_json::json!({
+            "bar": {
+                "min_term_coverage": j.bar.min_term_coverage,
+                "min_cos": j.bar.min_cos,
+            },
+            "positives": j.positives.iter().map(probe).collect::<Vec<_>>(),
+            "negatives": j.negatives.iter().map(probe).collect::<Vec<_>>(),
+            "tail": {
+                "own_served": j.tail.own_served,
+                "own_missed": j.tail.own_missed,
+                "dense_only_rows": j.tail.dense_only_rows,
+                "total_rows": j.tail.total_rows,
                 "families": {
                     "lexical": {
-                        "hides": t.lex_hidden.len(),
-                        "of": t.own_served,
-                        "hidden": t.lex_hidden.iter().map(|h| serde_json::json!({
+                        "hides": j.tail.lex_hidden.len(),
+                        "of": j.tail.own_served,
+                        "hidden": j.tail.lex_hidden.iter().map(|h| serde_json::json!({
                             "query": h.query,
                             "own_rank": h.own_rank,
                             "dense_only_rank": h.dense_only_rank,
                         })).collect::<Vec<_>>(),
                     },
-                    "cos": match &t.cos_dead {
+                    "cos": match &j.tail.cos_dead {
                         Some(d) => dead(d),
-                        None => edge(&t.cos_edge),
+                        None => edge(&j.tail.cos_edge),
                     },
                     // A dead row that is also dense-only kills the two-signal
                     // family too; one that is not leaves it constrained.
-                    "lex_or_cos": match &t.cos_dead {
+                    "lex_or_cos": match &j.tail.cos_dead {
                         Some(d) if d.dense_only => dead(d),
-                        _ => edge(&t.lexcos_edge),
+                        _ => edge(&j.tail.lexcos_edge),
                     },
-                    "cos_drop": match &t.cos_dead {
+                    "cos_drop": match &j.tail.cos_dead {
                         Some(d) => dead(d),
-                        None => edge(&t.drop_edge),
+                        None => edge(&j.tail.drop_edge),
                     },
                 },
-            })
-        }),
+            },
+        })),
     })
 }
 
