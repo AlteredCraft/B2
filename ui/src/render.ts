@@ -18,6 +18,12 @@ import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked"
 // resolve there. tsc rewrites nothing (noEmit).
 import { escapeHtml } from "./escape.ts";
 import { sanitizeHtml } from "./sanitize.ts";
+import {
+  embedWidth,
+  NO_EMBED_IMAGES,
+  WIKILINK_ANCHORED,
+  type EmbedImages,
+} from "./embeds.ts";
 import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
 import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
@@ -91,12 +97,18 @@ export { escapeHtml };
 // MVP's in-app navigation (spec §4) — the buffer stays byte-honest Markdown.
 //
 // `![[target]]` is the **embed** form of the same link — the core reads the `!` as the
-// embed marker and records it on the edge (`link.rs`). B2 has no inline embed viewer, so
-// it renders the link; but the marker is *grammar*, so it must be consumed rather than
-// left beside the anchor as a stray `!`. The `|`-part changes meaning with the marker: on
-// a plain wikilink it is the display label, on an embed it is a display **size**
-// (`![[shot.png|400]]`), which B2 does not support — so an embed labels itself with its
-// target and drops the hint, rather than showing "400" where the filename belongs.
+// embed marker and records it on the edge (`link.rs`). Where the target is a picture the
+// note has loaded, the embed *shows* it: the anchor stays (so the image is still the
+// link, and clicking it still opens the resource card), and the `<img>` becomes its
+// label. Everything else about an embed is unchanged — with no picture in hand (not an
+// image, not indexed, too large, or simply not read yet) it reads as its link, which is
+// what B2 showed before there was a viewer.
+//
+// The marker is *grammar* either way, so it is consumed rather than left beside the
+// anchor as a stray `!`. The `|`-part changes meaning with it: on a plain wikilink it is
+// the display **label**, on an embed a display **width** (`![[shot.png|500]]`, aspect
+// ratio kept — `embedWidth` in embeds.ts). So an embed never labels itself "500"; it
+// draws itself 500px wide, or falls back to naming its target.
 const wikilink: TokenizerAndRendererExtension = {
   name: "wikilink",
   level: "inline",
@@ -108,23 +120,45 @@ const wikilink: TokenizerAndRendererExtension = {
     return i > 0 && src[i - 1] === "!" ? i - 1 : i;
   },
   tokenizer(src: string) {
-    const m = /^(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(src);
+    const m = WIKILINK_ANCHORED.exec(src);
     if (!m) return undefined;
     const embed = m[1] === "!";
     const target = m[2].trim();
     return {
       type: "wikilink",
       raw: m[0],
+      embed,
       target,
+      width: embed ? embedWidth(m[3]) : null,
       label: embed ? target : (m[3] ?? m[2]).trim(),
     } as Tokens.Generic;
   },
   renderer(token: Tokens.Generic) {
-    return `<a class="wikilink" data-target="${escapeHtml(
-      String(token.target),
-    )}" href="#">${escapeHtml(String(token.label))}</a>`;
+    const target = String(token.target);
+    const anchor = `<a class="wikilink" data-target="${escapeHtml(target)}" href="#">`;
+    const src = token.embed ? renderImages.get(target) : undefined;
+    if (!src) return `${anchor}${escapeHtml(String(token.label))}</a>`;
+    // The alt text is the filename: it is all B2 knows about the picture, and it is what
+    // the embed would have read as had the bytes not arrived (the resource card's viewer
+    // makes the same choice, for the same reason).
+    const name = target.split("/").pop() ?? target;
+    const width = typeof token.width === "number" ? ` width="${token.width}"` : "";
+    return `${anchor}<img class="embed-image" src="${escapeHtml(src)}" alt="${escapeHtml(
+      name,
+    )}"${width}></a>`;
   },
 };
+
+// The pictures the *current* `renderMarkdown` call may draw.
+//
+// A module-local rather than a parameter because `marked`'s extensions are registered
+// once, globally (the `marked.use` below), so the renderer above has no way to be handed
+// per-call data. It is safe to hold it here for exactly one reason, and the reason is
+// worth stating: `marked.parse(…, { async: false })` runs to completion synchronously,
+// so between the assignment and the `finally` no other render can interleave. Every
+// caller still passes its images as an argument — the seam is `renderMarkdown`, and this
+// variable never outlives one of its calls.
+let renderImages: EmbedImages = NO_EMBED_IMAGES;
 
 // Wrap each table in a scroll box so a wide one scrolls *within* its column instead of
 // stretching the pane. The table itself must stay a real `display: table` (the wrapper
@@ -150,9 +184,21 @@ marked.use({
   hooks: { postprocess: (html: string) => sanitizeHtml(wrapTables(html)) },
 });
 
-/** Note body → the HTML the panes write into the DOM. Sanitized (see the hook above). */
-export function renderMarkdown(md: string): string {
-  return marked.parse(md, { async: false }) as string;
+/**
+ * Note body → the HTML the panes write into the DOM. Sanitized (see the hook above).
+ *
+ * `images` is what an `![[picture.png]]` embed draws with — the note's loaded pictures,
+ * keyed by vault-relative path (`state.embedImages`). Omitted, every embed reads as its
+ * link, which is both the honest state before the bytes arrive and what a caller with no
+ * pictures to offer wants.
+ */
+export function renderMarkdown(md: string, images: EmbedImages = NO_EMBED_IMAGES): string {
+  renderImages = images;
+  try {
+    return marked.parse(md, { async: false }) as string;
+  } finally {
+    renderImages = NO_EMBED_IMAGES;
+  }
 }
 
 // --- file tree --------------------------------------------------------------------
@@ -485,49 +531,11 @@ function noteBarHtml(state: AppState, note: NoteView): string {
     </div>`;
 }
 
-// --- the image viewer (file-type slice 2) ---------------------------------------------
-
-/** Extension → MIME type for the image classes the card renders in place. Extension-only,
- *  the same rule the core classifies on (`resource.rs`) and the same table of extensions —
- *  no content sniffing, so a mislabeled file degrades to a broken `<img>` rather than
- *  being guessed at. **Change it with `ResourceClass::Image`**: a class the core calls an
- *  image and this table doesn't know reaches the card, asks for its bytes, and then has
- *  nowhere to put them. */
-const IMAGE_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-  avif: "image/avif",
-};
-
-/**
- * How large an image the card will pull across the IPC and hold on screen.
- *
- * The bytes cross as base64 (a third larger) and the `data:` URL lives in the webview's
- * heap for as long as the card is open, so this is a memory bound, not a taste one. Past
- * it the card keeps the *Open in system default* handoff it has always had, which costs
- * nothing and shows the file at full fidelity in a real image app. Screenshots — what a
- * vault actually accumulates — are a couple of megabytes.
- */
-export const IMAGE_VIEWER_MAX_BYTES = 25 * 1024 * 1024;
-
-/**
- * A resource's base64 bytes as the `src` an `<img>` can use, or `null` when the
- * extension names no image this webview renders.
- *
- * A `data:` URL rather than a path, because the webview's origin is the *app bundle*,
- * not the vault: there is no URL by which it could fetch a vault file, and the CSP
- * admits exactly this one shape (`img-src 'self' data:` in `tauri.conf.json`) — so the
- * bytes travel through the same command seam as everything else the host lends the UI.
- */
-export function imageDataUrl(path: string, base64: string): string | null {
-  const ext = path.includes(".") ? (path.split(".").pop() ?? "").toLowerCase() : "";
-  const mime = IMAGE_MIME[ext];
-  return mime ? `data:${mime};base64,${base64}` : null;
-}
+// --- the resource card + its image viewer (file-type slice 2) ------------------------
+//
+// What an image *is* — the extension table, the `data:` URL, the size bound — moved to
+// embeds.ts when the reading view grew an inline viewer of its own: one answer, three
+// surfaces (the card, the reading view, the editor's live preview).
 
 /** Human-readable byte count for the card ("67 B", "1.4 KB", "3.2 MB"). */
 function formatSize(bytes: number): string {
@@ -545,8 +553,8 @@ function formatSize(bytes: number): string {
 // for it, and it *replaces* the "no viewer" line rather than the card, so the metadata,
 // the backlinks and the OS handoff stay put — the handoff is still how you get to a real
 // image app, and it is the whole card when the file is too large to hold on screen
-// (`IMAGE_VIEWER_MAX_BYTES`) or its bytes could not be read. Every other class is still
-// the fallback card, and `binary` is its permanent catch-all.
+// (`IMAGE_VIEWER_MAX_BYTES`, embeds.ts) or its bytes could not be read. Every other
+// class is still the fallback card, and `binary` is its permanent catch-all.
 function resourceCardHtml(r: ResourceExplainView, image: string | null): string {
   const modified = r.mtime ? new Date(r.mtime * 1000).toLocaleString() : "—";
   const backlinks = r.backlinks.length
@@ -608,7 +616,7 @@ export function notePaneHtml(state: AppState): string {
       : "";
     const body = state.sourceOpen
       ? `<pre class="note-source">${escapeHtml(n.body)}</pre>`
-      : renderMarkdown(n.body);
+      : renderMarkdown(n.body, state.embedImages);
     return `${noteBarHtml(state, n)}
       <article class="note">
         <header class="note-head">

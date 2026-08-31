@@ -57,7 +57,13 @@ import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import { answerMessage, chatHistory, errorMessage, userMessage } from "./chat";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
 import { externalUrl, isInPageAnchor } from "./links";
-import { livePreview, wikilink } from "./livepreview";
+import { embedImagesField, livePreview, setEmbedImages, wikilink } from "./livepreview";
+import {
+  imageDataUrl,
+  imageEmbedTargets,
+  IMAGE_VIEWER_MAX_BYTES,
+  inlineImagePlan,
+} from "./embeds";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
 import { noteTarget, wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
 import {
@@ -108,13 +114,11 @@ import {
   type Direction,
 } from "./zoom";
 import { reconcileIndex } from "./reconcile";
-import type { ResourceExplainView } from "./types";
+import type { ResourceExplainView, ResourceSummary } from "./types";
 import {
   contextMenuHtml,
   embedBannerHtml,
   escapeHtml,
-  imageDataUrl,
-  IMAGE_VIEWER_MAX_BYTES,
   modalHtml,
   notePaneHtml,
   reindexDisabled,
@@ -416,6 +420,9 @@ function render(): void {
   syncOverlayFocus();
   syncFind(noteSwapped);
   if (noteSwapped) void paintCodeHighlights();
+  // The open note's `![[image.png]]` embeds. Skipped while editing — there the buffer,
+  // not the last-saved body, is what the pictures answer to (`scheduleImageScan`).
+  if (!state.editing) void syncNoteImages(state.current?.path ?? null, state.current?.body ?? "");
 }
 
 /** The reading view's half of syntax highlighting (highlight.ts): a post-render pass over
@@ -627,6 +634,101 @@ async function loadResourceImage(r: ResourceExplainView): Promise<string | null>
   } catch {
     return null;
   }
+}
+
+// --- the note's inline pictures (`![[image.png]]`) ---------------------------------
+//
+// An embed draws the file it names (render.ts, livepreview.ts), and the bytes for that
+// come over the same `read_resource` command the resource card uses. What is *here* is
+// the reconciliation: which pictures the open document should be holding, and the reads
+// that close the gap.
+//
+// It is driven off the document rather than off each navigation, for the reason
+// `paintCodeHighlights` is: there are a dozen ways a note's body reaches the pane (open,
+// back/forward, save, an external change, a rename), and a loader wired into each of
+// them is a loader that will be forgotten by the thirteenth. One reconcile at the tail of
+// `render()` covers all of them, and it is cheap because it is memoized on the exact body
+// it last ran against — the repaint an arriving picture *causes* does no work at all.
+//
+// The map is the budget: `inlineImagePlan` (embeds.ts) decides what may be held, and
+// anything the document no longer embeds is dropped, so a long editing session can't
+// accumulate pictures past the bound.
+
+/** The document the held pictures belong to, the exact body they were planned from, and
+ *  the inventory they were planned against — together, the memo that makes the
+ *  `render()`-tail call free. The inventory is in there because the tree's file list
+ *  arrives *after* the first note can be on screen (`loadVault`), and a plan made against
+ *  an empty one has to be made again rather than remembered. */
+let imagesOwner: string | null = null;
+let imagesBody: string | null = null;
+let imagesInventory: readonly ResourceSummary[] | null = null;
+/** Debounce for the *buffer* scan while editing — a keystroke can add an embed, and the
+ *  answer is worth a moment's wait rather than a scan per character. */
+let imageScanTimer: number | undefined;
+const IMAGE_SCAN_MS = 400;
+
+/** Hand the live editor the pictures the note holds now — a no-op when not editing, and
+ *  when the editor is in raw-source mode (the field is there, nothing reads it). */
+function pushNoteImages(): void {
+  // A copy, not the live map: what the editor holds is `EditorState`, and state that
+  // changes under CodeMirror without a transaction is state its decorations can read
+  // twice and get two answers from.
+  editorView?.dispatch({ effects: setEmbedImages.of(new Map(state.embedImages)) });
+}
+
+/**
+ * Reconcile `state.embedImages` against `body` — the open note's, or the editor's live
+ * buffer while editing. A null `owner` means the pane holds no note (a resource card, an
+ * empty pane), which drops every picture.
+ *
+ * Repaints only when a picture actually arrived, and only after the read — so this is
+ * safe to call from the tail of `render()` without re-entering it.
+ */
+async function syncNoteImages(owner: string | null, body: string): Promise<void> {
+  if (imagesOwner === owner && imagesBody === body && imagesInventory === state.resources) return;
+  imagesOwner = owner;
+  imagesBody = owner === null ? null : body;
+  imagesInventory = state.resources;
+  const plan = owner === null ? [] : inlineImagePlan(imageEmbedTargets(body), state.resources);
+  const keep = new Set(plan);
+  for (const path of [...state.embedImages.keys()]) {
+    if (!keep.has(path)) state.embedImages.delete(path);
+  }
+  const missing = plan.filter((path) => !state.embedImages.has(path));
+  if (missing.length === 0) return;
+  // A failed read is not an error the reader needs told about: the embed keeps reading
+  // as its link, which still opens the file. Same posture as `loadResourceImage`.
+  const loaded = await Promise.all(
+    missing.map(async (path) => {
+      try {
+        return [path, imageDataUrl(path, await api.readResource(path))] as const;
+      } catch {
+        return [path, null] as const;
+      }
+    }),
+  );
+  if (imagesOwner !== owner) return; // the pane moved on while we were reading
+  let arrived = false;
+  for (const [path, url] of loaded) {
+    if (url !== null) {
+      state.embedImages.set(path, url);
+      arrived = true;
+    }
+  }
+  if (!arrived) return;
+  pushNoteImages();
+  render();
+}
+
+/** The editing half: a keystroke can add or remove an embed, so the *buffer* — not the
+ *  last-saved body — is what the held pictures are reconciled against. */
+function scheduleImageScan(): void {
+  window.clearTimeout(imageScanTimer);
+  imageScanTimer = window.setTimeout(() => {
+    const n = state.current;
+    if (!n || !editorView) return;
+    void syncNoteImages(n.path, editorView.state.doc.toString());
+  }, IMAGE_SCAN_MS);
 }
 
 /** The resource sibling of `loadNote` — same core/commit split, for `openResource`
@@ -3346,9 +3448,14 @@ function mountEditor(body: string): void {
       lpCompartment.of(livePreviewConf()),
       // Find-in-note (⌘F) match decorations — inert (null) until the bar sets a query.
       findField,
+      // The note's loaded pictures, so live preview can draw its `![[image.png]]`
+      // embeds. Outside `lpCompartment` on purpose (livepreview.ts): they are a fact
+      // about the document, and the `</>` swap must not drop them.
+      embedImagesField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           scheduleAutosave();
+          scheduleImageScan(); // a typed or deleted embed changes what to hold
           // An edit reshapes the match set (the field already recomputed) — keep the
           // bar's count pill in step.
           if (findOpen) syncEditorFind(u.view);
@@ -3358,6 +3465,7 @@ function mountEditor(body: string): void {
     parent: el("editor-host"),
   });
   editorView.focus();
+  pushNoteImages(); // whatever the reading view already loaded, without a second read
   paintEditor();
   // An open find bar carries across the mount (Edit clicked, or a conflict reload):
   // same query, editor engine.
