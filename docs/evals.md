@@ -285,13 +285,23 @@ vault-independent negatives), the ten lowest-cosine positives (where a bar place
 first), and the per-hit tail families priced on the one row a title query certifies with no
 label, its own note. `the bar would cut N/…` is the tripwire direction: D2 permits zero. This
 is the one part of the instrument that is not a pure read (judging the cosine half embeds
-each probe query, so it loads the model); it has no `--json` form yet
-([#219](https://github.com/AlteredCraft/B2/issues/219)).
+each probe query, so it loads the model).
 
 Other flags: `--limit N` (pane depth); `--leader-z`/`--member-z` (replay a different gate;
 defaults are the retired constants, so
 [#196](https://github.com/AlteredCraft/B2/issues/196)'s dark-vault reading reproduces);
-`--mutual-k N`; `--json` (the discovery reading as one object, for scripting sweeps).
+`--mutual-k N`; `--json` (the whole reading as one object, for scripting sweeps).
+
+`--json` carries both halves ([#219](https://github.com/AlteredCraft/B2/issues/219)): the
+discovery object as before, plus a `search` key — `null` unless `--search` was asked for —
+holding the function-word weights, the bar under test, every probe (its query, coverage,
+best-cos, the **engine's** `vouched`, its own note's rank, and each served row's `path` /
+`bm25_rank` / `cos`), and the derived tail-family edges. It follows the discovery object's
+re-derivability convention: the summaries the table prints are left to the consumer and what
+they were computed *from* is emitted instead, so sweeping the evidence bar or the tail
+families across several real vaults — and joining those readings with `make eval`'s corpus
+windows — needs no scraping. Keys are additive: nothing the discovery object already emitted
+moved or changed meaning.
 
 ---
 
