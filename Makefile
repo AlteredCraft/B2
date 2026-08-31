@@ -285,7 +285,8 @@ stability-bless: ## Accept the current ranking as the committed rank-stability b
 # invalid until transfer-checked on a real vault, and this is the check — a pure read over
 # stored vectors, no labels needed. Flags via ARGS: --limit N, --leader-z/--member-z,
 # --mutual-k N, --json; ARGS=--search adds the search-side transfer check (GH #201/#206),
-# the one part that loads the real model (to embed the probe queries).
+# the one part that loads the real model (to embed the probe queries). --json carries both
+# readings, so a sweep across vaults never scrapes the table (GH #219).
 calibrate: ## Calibration on any built vault: discovery pools/bands (GH #197) and, with ARGS=--search, the evidence bar (GH #201). Usage: make calibrate VAULT=<path> [ARGS=--search]
 	@if [ -z "$(VAULT)" ]; then echo "error: VAULT is required, e.g. make calibrate VAULT=fixtures/test-vault"; exit 1; fi
 	cargo run -p b2-embed --example calibrate -- "$(VAULT)" $(ARGS)
