@@ -24,8 +24,11 @@
 //! **The measurement.** The issue asks for before-and-after numbers, and a launch spans
 //! two clocks: the host's and the webview's. [`mark`] and [`webview_mark`] put both on
 //! one axis — Unix epoch milliseconds — in the one JSONL dataset `B2_LOG_FILE` already
-//! collects, under the `b2::launch` target the implied `b2=debug` filter picks up. Read a
-//! launch with:
+//! collects, under the `b2::launch` target the implied `b2=debug` filter picks up.
+//! `epoch_ms` is **when the milestone happened**, on every mark and whichever side timed
+//! it; a webview mark carries the host's receipt separately as `received_epoch_ms`, so
+//! the IPC is a quantity you can read rather than one folded into the gap. Read a launch
+//! with:
 //!
 //! ```text
 //! B2_LOG_FILE=$PWD/logs/launch.jsonl B2_VAULT_PATH=~/notes make app
@@ -74,16 +77,21 @@ pub fn mark(name: &str) {
 
 /// Record a milestone the *webview* timed, at the moment it says it happened.
 ///
-/// The webview's clock is its own (`performance.timeOrigin + performance.now()`), so the
-/// host writes what it was told and stamps its own receipt beside it: `epoch_ms` is when
-/// the mark landed here, `webview_epoch_ms` is when it was taken. The difference is the
-/// IPC, which is exactly the thing that must not be mistaken for the gap being measured.
+/// `epoch_ms` is the webview's own reading (`performance.timeOrigin + performance.now()`),
+/// **not** the host's clock at receipt, so the field means one thing on all five marks and
+/// the query above is honest about every one of them. Put the receipt in `epoch_ms` and
+/// the two marks that matter most would each carry an IPC hop they did not spend — the
+/// instrument reporting its own latency as the app's, which is the one error a timing
+/// probe must not make.
+///
+/// The receipt is kept as `received_epoch_ms` rather than dropped: it is the only evidence
+/// that the hop was ordinary, and a launch where it is not is a launch to distrust.
 pub fn webview_mark(name: &str, webview_epoch_ms: f64) {
     tracing::debug!(
         target: "b2::launch",
         mark = name,
-        epoch_ms = epoch_ms(),
-        webview_epoch_ms,
+        epoch_ms = webview_epoch_ms,
+        received_epoch_ms = epoch_ms(),
         "launch"
     );
 }
