@@ -5626,7 +5626,46 @@ async function loadMenuChords(): Promise<void> {
   }
 }
 
+// --- launch timing (GH #225) ------------------------------------------------------
+//
+// "The window opens blank before the app paints" is a claim about a duration, so it is
+// answered with one. The host brackets what it can see — the window, then the document
+// (`crates/b2-desktop/src/launch.rs`) — and these two marks are the half only the webview
+// can time: when its module graph finished evaluating, and when the app was actually on
+// screen. Both are read on the Unix axis the host stamps, so one launch reads as one
+// ordered list under `B2_LOG_FILE`.
+//
+// Nothing is sent until after the frame being measured, on purpose: an IPC call racing
+// the paint would be latency the instrument itself introduced, which is the one error a
+// timing probe must not make.
+
+/** Unix-epoch milliseconds on this webview's clock — what `launch_mark` expects. */
+function nowEpochMs(): number {
+  return performance.timeOrigin + performance.now();
+}
+
+/** Report the launch, once the first frame is genuinely on screen.
+ *
+ *  Two frames, for the reason `applyZoom` waits two: a `requestAnimationFrame` callback
+ *  runs *before* the frame it belongs to is painted, so the earliest moment that can
+ *  honestly be called "the app is visible" is the start of the frame after it. That
+ *  overshoots by up to one frame's worth and never undershoots, which is the right
+ *  direction to be wrong in when the number is the case for doing more work.
+ *
+ *  Best-effort throughout: outside Tauri, or with no subscriber installed host-side,
+ *  there is nothing to report to and nothing lost by saying so quietly. */
+function reportLaunch(bootAt: number): void {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const frameAt = nowEpochMs();
+      void api.launchMark("boot-start", bootAt).catch(() => {});
+      void api.launchMark("first-frame", frameAt).catch(() => {});
+    }),
+  );
+}
+
 async function boot(): Promise<void> {
+  const bootAt = nowEpochMs(); // the module graph is evaluated; everything below is ours (GH #225)
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
   await loadZoomPref(); // and the saved size — awaited, because it changes what "the viewport" means below
   initMenuCommands(); // View ▸ Zoom In / Zoom Out / Actual Size arrive from the host
@@ -5659,6 +5698,7 @@ async function boot(): Promise<void> {
     flash(`${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`);
   }
   render();
+  reportLaunch(bootAt); // measured after this frame lands, never before it
   // Auto-index on launch (#25): if the startup vault is unindexed or only partly embedded,
   // bring it up to date now instead of waiting behind a manual Reindex click. No-ops when
   // no vault resolved (vaultRoot === null) or the index is already complete.

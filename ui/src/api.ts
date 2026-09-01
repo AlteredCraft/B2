@@ -386,6 +386,15 @@ export const api = {
   setZoom: (factor: number): Promise<void> => invoke("set_zoom", { factor }),
 
   /**
+   * Hand the host one launch milestone the webview timed (GH #225). `epochMs` is
+   * `performance.timeOrigin + performance.now()` — the Unix axis the host stamps its own
+   * marks on, so a launch reads as one ordered list in the `B2_LOG_FILE` dataset rather
+   * than two clocks nobody can join. The host writes it and holds no opinion about it.
+   */
+  launchMark: (mark: string, epochMs: number): Promise<void> =>
+    invoke("launch_mark", { mark, epochMs }),
+
+  /**
    * Subscribe to the host's debounced filesystem-watch pulse (#14). `handler` fires once
    * per burst of external Markdown changes; the returned promise resolves to an unlisten
    * function (unused here — the subscription lives for the window's lifetime). Kept

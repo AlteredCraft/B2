@@ -90,7 +90,10 @@ the vault, because the device is part of the embedding space's identity (ADR-000
   `B2_SLOW_QUERY_MS`, default 100, logged at WARN with `slow=true`), a span per `Vault` op
   (`b2::vault`), and flow milestones (`b2::ingest`, `b2::search`). The core only *emits* — the
   subscriber and its clock live in the adapter (`init_logging` in both), so `b2-core` stays
-  wall-clock-free and the instrumentation is inert unless an adapter opts in.
+  wall-clock-free and the instrumentation is inert unless an adapter opts in. One target is
+  the **adapter's own** for that same reason: `b2::launch` (GH #225, `b2-desktop`'s
+  `launch.rs`) times a desktop launch across the window and the webview — two clocks the
+  core has neither of — as five `mark`s on one Unix-epoch axis.
 
 ## Architecture
 

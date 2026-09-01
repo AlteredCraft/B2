@@ -4,6 +4,47 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>B2</title>
+    <!--
+      The launch ground (GH #225). Tauri shows the window as soon as it exists, which is
+      well before style.css arrives — under `tauri dev` the stylesheet is served *through*
+      the module graph, which widens that gap further — so without this the first paint is
+      the platform's white whatever theme the app is about to draw itself in.
+
+      The host gives the *window* a ground too (`crates/b2-desktop/src/launch.rs`), and
+      this is not that rule twice: that one covers the instant before any HTML exists, and
+      is painted over the moment the webview draws an unstyled document white on top of
+      it. This is the document's own ground, which is what survives the moment it lands.
+
+      This is a deliberate second home for exactly two values, `--bg` light and dark, and
+      it stays that: the ground, not a shell. ground.test.ts fails if either drifts from
+      style.css, which is what makes the duplication safe to have.
+
+      It is CSS with no script on purpose. The CSP (tauri.conf.json) grants
+      `style-src 'unsafe-inline'` but no inline script, and script-src is what a Markdown
+      renderer must never loosen (ADR-0016). So this follows the OS, which is right for
+      the "System" default and right for a pinned theme that agrees with the OS. Someone
+      who pinned *against* their OS still sees one ground change when main.ts's
+      `loadTheme` runs — the pin lives in localStorage, which only script can read — and
+      one ground change is what they get today anyway, on top of the white.
+
+      In a cascade layer so this can never outlive its moment: unlayered rules always beat
+      layered ones regardless of source order, so style.css wins the instant it lands
+      whichever way the bundler emitted it, and `html` here can't shadow its `html, body`.
+    -->
+    <style>
+      @layer launch {
+        html {
+          background: #faf9f7;
+          color-scheme: light;
+        }
+        @media (prefers-color-scheme: dark) {
+          html {
+            background: #16161a;
+            color-scheme: dark;
+          }
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

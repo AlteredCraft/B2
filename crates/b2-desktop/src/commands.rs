@@ -583,6 +583,24 @@ pub fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), CmdErro
         .map_err(|e| CmdError::ZoomFailed(e.to_string()))
 }
 
+/// Record a launch milestone the **webview** timed, onto the host's log (GH #225).
+///
+/// The one thing being measured here spans two clocks — the window is the host's and the
+/// first frame is the webview's — and only one of them has a sink: the tracing subscriber
+/// and its wall clock live in the adapter by deliberate design (`logging.rs`; it is what
+/// keeps `b2-core` clock-free). So the webview reads its own clock and this hands the
+/// reading over; `epoch_ms` is `performance.timeOrigin + performance.now()`, the same Unix
+/// axis `launch::mark` stamps host-side.
+///
+/// Holds no rule about *which* milestones exist or what they mean — `ui/src/main.ts`
+/// decides that, exactly as it decides which zoom rungs are allowed. Infallible and
+/// vault-free: a mark that cannot be written is a log line missing from a debugging run,
+/// never a reason to fail anything the user asked for.
+#[tauri::command]
+pub fn launch_mark(mark: String, epoch_ms: f64) {
+    crate::launch::webview_mark(&mark, epoch_ms);
+}
+
 /// **Flow ④ — one grounded answer**: condense -> retrieve -> assemble -> stream -> cite,
 /// all of it behind `Vault::ask`. The host's whole contribution is the shape of the
 /// *delivery*: Tauri runs the `(async)` body on a worker thread, tokens stream to the

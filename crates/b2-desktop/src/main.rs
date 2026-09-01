@@ -23,6 +23,7 @@ mod chat;
 mod commands;
 mod error;
 mod keychain;
+mod launch;
 mod logging;
 mod menu;
 mod stats;
@@ -430,7 +431,39 @@ fn main() {
         // pure `AppState` machine stays free of an OS watch handle. Started below once the
         // app handle exists, and re-pointed on a vault switch (`choose_vault`).
         .manage(VaultWatcher::default())
+        // The document's two milestones, host-side (GH #225). "The window opens blank
+        // before the app paints" is a claim about a duration, and these are the middle of
+        // it: the webview reports them whether or not the page ever gets as far as
+        // running B2's own code, which is exactly what a launch that goes wrong needs.
+        .on_page_load(|_webview, payload| {
+            launch::mark(match payload.event() {
+                tauri::webview::PageLoadEvent::Started => "page-load-started",
+                // `Finished` is the document, not the app: `boot` has not run, so what
+                // is on screen at this mark is the ground and nothing else.
+                tauri::webview::PageLoadEvent::Finished => "page-load-finished",
+            });
+        })
         .setup(|app| {
+            // What the window shows before the app does (GH #225). Tauri shows a window
+            // as soon as it exists, and the page it will hold does not exist yet — so the
+            // first paint is the platform's white unless the window is given a ground of
+            // its own. This is the half of that gap no frontend change can reach: it
+            // lands before any HTML does, and `ui/index.html` takes it from there.
+            // Neither hides the window; `launch.rs` has why hiding was tried and reverted.
+            //
+            // Best-effort twice over: a window Tauri did not hand us is not something to
+            // fail a launch for, and a platform that refuses the colour leaves the white
+            // it would have left anyway.
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(e) = window.set_background_color(Some(launch::ground(window.theme().ok())))
+                {
+                    tracing::debug!(target: "b2::launch", error = %e, "the window kept its default ground");
+                }
+            }
+            // The host's first observation point: the window exists and is dressed. Every
+            // later mark — the document's two, then the webview's own — is read against
+            // this one (`launch.rs` has the jq line that reads them back).
+            launch::mark("window-ready");
             // Watch the startup vault, if one resolved. Best-effort: `watch` swallows and
             // logs a failure, so a platform without a watch backend still launches (the
             // conflict bar remains the fallback). No vault configured → nothing to watch;
@@ -482,6 +515,7 @@ fn main() {
             commands::embed_stats,
             commands::menu_chords,
             commands::set_zoom,
+            commands::launch_mark,
             commands::ask,
             commands::cancel_ask,
             commands::chat_setup,
