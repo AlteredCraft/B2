@@ -265,22 +265,16 @@ check("search mode's clear button carries an id — the one focusable that isn't
   );
 });
 
-// The Keyboard panel is the K1 promise's *findable* half, and #119 extended it to chords
-// B2 doesn't own — the app menu's, which the host declares and hands over at boot. This is
-// the one line of wiring that carries them into the paint (`shortcuts(state.menuChords)`),
-// and dropping it is invisible: the panel would keep rendering menukeys.ts's mirror and
-// look right until the two came apart.
-check("the Keyboard panel lists the menu bar the host declared, not the mirror", () => {
-  const html = modalHtml(
-    app({
-      settingsOpen: true,
-      settingsTab: "keyboard",
-      menuChords: [{ id: "app.panic", label: "Panic", keys: "Mod-Shift-p" }],
-    }),
-  );
-  assert(html.includes("The menu bar"), "the group is in the sheet");
-  assert(html.includes("<kbd>⇧⌘P</kbd>"), "with the host's chord");
-  assert(!html.includes("Quit B2"), "and none of the mirror's rows");
+// The Keyboard panel is the K1 promise's *findable* half — and, since it became the
+// surface that edits chords too, a table of things the reader can change. The app menu
+// bar's accelerators were a group in it (#119) and are not any more: macOS prints those in
+// the menu bar itself, and nothing here can move them. Asserted rather than assumed,
+// because the group's return would be invisible — it would simply look like more rows.
+check("the Keyboard panel is B2's own chords, not the menu bar's", () => {
+  const html = modalHtml(app({ settingsOpen: true, settingsTab: "keyboard" }));
+  assert(html.includes("Getting around"), "B2's groups are there");
+  assert(!html.includes("The menu bar"), "and the menu bar's group is not");
+  assert(!html.includes("Quit B2"), "nor any of its rows");
 });
 
 // The Keyboard panel is also where chords are *edited* since #121, and the affordance is

@@ -6,7 +6,6 @@ import type { ChatMessage } from "./chat";
 import type {
   ChatSetup,
   EmbedStat,
-  MenuChord,
   ModelChoice,
   NeighborView,
   NoteSummary,
@@ -340,6 +339,15 @@ export interface AppState {
   keyOverrides: Overrides;
   /** The chord recorder, while Settings → Keyboard has one open. Null the rest of the time. */
   recorder: RecorderState | null;
+  /**
+   * The ⌘-hold sheet is up (cmdhold.ts) — ⌘ has been held alone for `HOLD_MS` with no
+   * overlay in the way. Transient by nature: it is set and cleared by the modifier, never
+   * persisted, and nothing else in the app reads it. It lives here rather than as a
+   * variable in main.ts so the sheet's markup can live in render.ts with the rest of the
+   * paint — `render()` projects it like every other view state. (The hold itself repaints
+   * only its own layer; main.ts's `paintCmdSheet` says why.)
+   */
+  cmdSheet: boolean;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
   models: ModelChoice[];
   /** Per-model cumulative embedding time — loaded alongside `models`, shown in Settings. */
@@ -357,13 +365,6 @@ export interface AppState {
   modelsDir: string | null;
   /** Compute device the embedder runs on ("Metal"/"CPU") — loaded with Settings, else null. */
   embedDevice: string | null;
-  /**
-   * The app menu bar's chords, as the **host** declares them (b2-desktop `menu.rs`, #119)
-   * — the keyboard reference's last group. Null until the boot fetch lands, and the sheet
-   * falls back to `menukeys.ts`'s mirror for that window. Fetched once: a menu is
-   * compiled-in data, not something that changes under the app.
-   */
-  menuChords: MenuChord[] | null;
   /** A slow op is in flight. */
   loading: boolean;
   /**
@@ -431,13 +432,13 @@ export const state: AppState = {
   theme: "system",
   keyOverrides: {},
   recorder: null,
+  cmdSheet: false,
   models: [],
   embedStats: [],
   provisioning: false,
   embedReminderDismissed: false,
   modelsDir: null,
   embedDevice: null,
-  menuChords: null,
   loading: false,
   reindexing: false,
   reindexProgress: null,

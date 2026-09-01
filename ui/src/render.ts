@@ -29,6 +29,7 @@ import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
 import { STRENGTH_MIN_CANDIDATES, strengthBand } from "./strength.ts";
 import { type ShortcutKey, shortcuts } from "./shortcuts.ts";
+import { cmdShortcuts } from "./cmdhold.ts";
 import {
   DEFAULT_BINDINGS,
   activeBindings,
@@ -2059,8 +2060,11 @@ function keyboardPanelHtml(state: AppState): string {
   const resetAll = changed
     ? `<button class="btn small" id="keys-reset-all">Reset all (${changed})</button>`
     : "";
+  // The ⌘-hold sheet is a *gesture*, not a chord, so it has no row in the table below —
+  // and a keyboard affordance documented nowhere is the exact failure K1 names. The
+  // reference is where someone looks for it, so the reference is where it is said.
   return `<div class="settings-subhead">Keyboard shortcuts</div>
-      <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement. Click a chord to change it.</p>
+      <p class="settings-detail muted">B2 is fully operable from the keyboard — the mouse is an accelerator, never a requirement. Click a chord to change it. Hold ⌘ on its own anywhere in the app for a quick reminder of the ⌘ chords below.</p>
       <div class="keys-toolbar">${resetAll}</div>
       ${recorderHtml(state)}
       ${shortcutsGridHtml(state)}`;
@@ -2114,14 +2118,13 @@ function recorderHtml(state: AppState): string {
     </div>`;
 }
 
-/** Every chord the app answers to, grouped, from the one table in shortcuts.ts — plus
- *  the menu bar's, which are the host's declaration (`state.menuChords`, #119) rather
- *  than B2 bindings. `null` until the boot fetch lands, and the sheet falls back to
- *  menukeys.ts's mirror for that window.
+/** Every chord the app answers to, grouped, from the one table in shortcuts.ts. The app
+ *  menu bar's chords are *not* here — macOS prints those beside their own menu items and
+ *  nothing in this panel could move them (shortcuts.ts's header says why they left).
  *
  *  A chip that names a command is a `<button>`; everything else — the platform's own
- *  keys, the menu bar's, a chord two commands print alike — stays a `<kbd>`. That split
- *  is the whole affordance: what looks pressable is what B2 can actually move.
+ *  keys, a chord two commands print alike — stays a `<kbd>`. That split is the whole
+ *  affordance: what looks pressable is what B2 can actually move.
  *
  *  Every chip is a Tab stop, and on this section that is forty of them. Deliberate: they
  *  are the controls the section exists to offer, and unlike the file tree's 1500 rows the
@@ -2155,7 +2158,7 @@ function shortcutsGridHtml(state: AppState): string {
     return `<button type="button" class="${cls}" id="keys-chip-${seat}-${escapeHtml(k.id)}"
         data-rebind="${escapeHtml(k.id)}" title="${escapeHtml(hint)}">${text}</button>`;
   };
-  const groups = shortcuts(state.menuChords ?? undefined)
+  const groups = shortcuts()
     .map(
       (g) => `<section class="keys-group">
         <h4>${escapeHtml(g.title)}</h4>
@@ -2166,6 +2169,61 @@ function shortcutsGridHtml(state: AppState): string {
     )
     .join("");
   return `<div class="keys-grid">${groups}</div>`;
+}
+
+/**
+ * The ⌘-hold sheet: what a held ⌘ can do, painted over the app while it is held
+ * (cmdhold.ts owns the machine and the projection; main.ts owns the timer).
+ *
+ * Empty markup when it isn't up, so the layer costs nothing the rest of the time — the
+ * same shape `recorderHtml` and `contextMenuHtml` use. Empty markup too when the
+ * projection has nothing in it, which is reachable: every ⌘ chord is rebindable, so a user
+ * can move the lot off ⌘ and would otherwise get an empty card for their trouble.
+ *
+ * Three things it deliberately isn't. It is not a dialog: nothing here is focusable, focus
+ * does not move to it and does not come back, because the whole gesture is one the user is
+ * already mid-way through — taking the keyboard would cancel the chord they are about to
+ * press. It is `pointer-events: none` in the stylesheet for the same reason on the other
+ * device: ⌘-click and ⌘-drag have to keep landing on the app underneath. And it is
+ * `aria-hidden`, which reads as a strange thing to say about a keyboard aid until you
+ * consider who it would be talking to — a screen-reader user has the whole reference in
+ * Settings → Keyboard, reachable by chord, and what an aria-live region would add here is
+ * a page of chords announced every time a modifier is held a beat too long. The reference
+ * is the accessible surface; this is a glance.
+ */
+export function cmdSheetHtml(state: AppState): string {
+  if (!state.cmdSheet) return "";
+  const groups = cmdShortcuts();
+  if (groups.length === 0) return "";
+  const body = groups
+    .map(
+      (g) => `<section class="keys-group">
+        <h4>${escapeHtml(g.title)}</h4>
+        <dl class="keys-list">${g.items
+          .map(
+            (s) =>
+              `<dt>${s.keys.map((k) => `<kbd>${escapeHtml(k.text)}</kbd>`).join(" ")}</dt>` +
+              `<dd>${escapeHtml(s.action)}</dd>`,
+          )
+          .join("")}</dl>
+      </section>`,
+    )
+    .join("");
+  // The footer says both halves of the contract: how it goes away (the thing a user who
+  // did not mean to summon it needs first), and where the rest of the keyboard lives —
+  // this sheet is the ⌘ slice, and someone reading it is exactly the someone who would
+  // want the whole table.
+  return `<div class="cmdhold" aria-hidden="true">
+      <div class="cmdhold-card">
+        <div class="cmdhold-head">
+          <span class="cmdhold-what"><kbd>⌘</kbd> does this</span>
+          <span class="cmdhold-hint">Let go to dismiss · ${escapeHtml(
+            displayKeys(["settings.toggle"]),
+          )} → Keyboard to change any of them</span>
+        </div>
+        <div class="cmdhold-grid">${body}</div>
+      </div>
+    </div>`;
 }
 
 /** The tab id's element id — the one both the rail and `aria-labelledby` derive from,

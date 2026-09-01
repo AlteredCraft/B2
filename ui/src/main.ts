@@ -101,6 +101,7 @@ import {
 import { capture, PROBE_AFTER_MS, silenceHint } from "./recorder";
 import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
 import { menuDrift } from "./menukeys";
+import { HOLD_MS, type HoldEvent, type HoldPhase, holdStep } from "./cmdhold";
 import { markdownForPaste } from "./paste";
 import { icon } from "./icons";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
@@ -116,6 +117,7 @@ import {
 import { reconcileIndex } from "./reconcile";
 import type { ResourceExplainView, ResourceSummary } from "./types";
 import {
+  cmdSheetHtml,
   contextMenuHtml,
   embedBannerHtml,
   escapeHtml,
@@ -401,6 +403,7 @@ function render(): void {
   el("embed-banner").innerHTML = embedBannerHtml(state);
   el("menu-root").innerHTML = contextMenuHtml(state);
   paintModal();
+  paintCmdSheet();
   el("vault-root").textContent = state.vaultRoot ?? "no vault";
   document.body.classList.toggle("is-loading", state.loading);
   paintReindex();
@@ -1026,6 +1029,97 @@ function dismissOverlays(): void {
   state.moveTarget = null;
   state.deleteTarget = null;
   state.linkTarget = null;
+}
+
+// --- the ⌘-hold sheet ----------------------------------------------------------------
+//
+// cmdhold.ts owns the machine and what the sheet says; this is the DOM half — the one
+// timer it asks for, and the listeners that turn key events into its four inputs.
+//
+// The listeners are **capture phase on `window`, and never call `preventDefault`**. This
+// is a spectator of the keyboard: every handler below sees exactly what it saw before,
+// including the pane handlers that stop propagation on their own rows, and the sheet is
+// never the reason a chord did or didn't fire. Capture rather than bubble for the same
+// reason — an event consumed on the way down is still an event that says the hold is over.
+
+let holdPhase: HoldPhase = "idle";
+let holdTimer: number | null = null;
+
+/** The ⌘ sheet's own paint. No memo and no focus dance: nothing in it is focusable or
+ *  typed into, so a rewrite costs one innerHTML of static markup and can't take anything
+ *  away from the user (render.ts's `cmdSheetHtml` says why it is deliberately not a
+ *  dialog).
+ *
+ *  Called by `render()` as well, so an unrelated repaint can't leave the layer behind —
+ *  but the hold itself calls **only this**. A modifier press has no business rebuilding
+ *  the tree, the note and the right column, and the listeners run in the capture phase of
+ *  a keystroke the app has not handled yet: a full `render()` there would be swapping the
+ *  DOM out from under an event still in flight. */
+function paintCmdSheet(): void {
+  el("cmdhold-root").innerHTML = cmdSheetHtml(state);
+}
+
+/** Feed the machine one event, do what it says with the timer, and paint if the sheet
+ *  actually moved — arming and disarming are invisible, so only `open` changing repaints. */
+function cmdHoldEvent(e: HoldEvent): void {
+  const step = holdStep(holdPhase, e);
+  if (step.timer !== "keep" && holdTimer !== null) {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+  }
+  if (step.timer === "start") {
+    holdTimer = window.setTimeout(() => {
+      holdTimer = null;
+      cmdHoldEvent({ kind: "elapsed" });
+    }, HOLD_MS);
+  }
+  holdPhase = step.phase;
+  const open = step.phase === "open";
+  if (state.cmdSheet === open) return;
+  state.cmdSheet = open;
+  paintCmdSheet();
+}
+
+function wireCmdHold(): void {
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      // A bare ⌘, nothing else down. `metaKey` is already true on ⌘'s own keydown, so the
+      // test that matters is the other three: ⇧⌘ is the front half of a chord being typed,
+      // not a question being asked.
+      //
+      // Refused outright while an overlay owns the keyboard. Settings *is* the reference,
+      // in full and editable; the recorder is a surface you press chords at, and a sheet
+      // that appeared because you held ⌘ at it would be the app answering a question the
+      // recorder was asking. A menu or a modal is someone mid-decision, which is the wrong
+      // moment to paint a page of chords over their choice.
+      if (e.key === "Meta" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        if (currentOverlay() === null) cmdHoldEvent({ kind: "hold", repeat: e.repeat });
+        return;
+      }
+      cmdHoldEvent({ kind: "other" });
+    },
+    true,
+  );
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (e.key === "Meta") cmdHoldEvent({ kind: "release" });
+    },
+    true,
+  );
+  // A ⌘-click or a ⌘-drag is a gesture in its own right, not a pause for thought.
+  window.addEventListener("pointerdown", () => cmdHoldEvent({ kind: "other" }), true);
+  // The releases the keyboard never delivers. macOS stops sending key events to a window
+  // that isn't key, so ⌘⇥ into another app, Spotlight, or Hide takes the ⌘ keyup with it —
+  // and a sheet whose only exit is an event that will never arrive is a sheet stuck on
+  // screen. (A second `blur` listener, deliberately: the one in `wireEvents` is the
+  // editor's flush point and the recorder's silence probe, and stapling an unrelated
+  // third job onto it would hide this one from anyone reading either.)
+  window.addEventListener("blur", () => cmdHoldEvent({ kind: "release" }));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) cmdHoldEvent({ kind: "release" });
+  });
 }
 
 const FOCUSABLE =
@@ -4279,10 +4373,17 @@ function buildShell(): void {
     </main>
     <div id="menu-root"></div>
     <div id="modal-root"></div>
+    <!-- Above the overlay layer in DOM order and in the stylesheet's z-index, because it
+         is the one thing that is never *under* anything: it appears only when no overlay
+         is up — see wireCmdHold — and it must not be painted behind the note pane's own
+         stacking contexts. -->
+    <div id="cmdhold-root"></div>
     <div id="toast" class="toast" role="status" hidden></div>`;
 }
 
 function wireEvents(): void {
+  wireCmdHold(); // hold ⌘ and the app says what ⌘ does — a spectator, so it goes on first
+
   // Remember where the keyboard is, continuously (K1). `syncOverlayFocus` needs the
   // element that *triggered* an overlay, and by the time it runs that element has been
   // swapped out of the DOM — see `lastFocused`. Capture-phase isn't needed (`focusin`
@@ -5590,32 +5691,22 @@ function wireEvents(): void {
 // --- boot -----------------------------------------------------------------------
 
 /**
- * The app menu bar's chords, from the host that declares them (#119) — the last group of
- * the keyboard reference, and the one set of chords the webview never sees a keydown for.
+ * Check the UI's copy of the app menu bar against the host that declares it (#119).
  *
- * It doubles as the mirror's only check. `menukeys.ts` carries an offline copy — the
- * suite's conflict gate reads it, and the sheet paints from it until this resolves — and
- * a copy free to fall behind the menu is precisely what #119 set out to end. A difference
- * goes to the console, not to the user: it means someone edited `menu.rs` without editing
- * the mirror, which is a developer's bug, and the sheet has already switched to the host's
- * own list by the time anyone can open Settings to read it. Nothing here blocks the paint,
- * and a failure costs only the switch from mirror to host.
+ * `menukeys.ts` carries an offline mirror of `menu.rs`, and two things read it: the
+ * conflict gate that runs in the suite with no host to ask, and the recorder's refusal of
+ * a chord the menu takes first. A mirror free to fall behind the menu it mirrors is
+ * precisely what #119 set out to end, and this is its only check — so the fetch stays
+ * even though nothing paints from it any more (the keyboard reference stopped listing the
+ * menu's chords; shortcuts.ts says why).
+ *
+ * A difference goes to the console, not to the user: it means someone edited `menu.rs`
+ * without editing the mirror, which is a developer's bug. Nothing here blocks the paint,
+ * and a failure costs only the check.
  */
-async function loadMenuChords(): Promise<void> {
+async function checkMenuDrift(): Promise<void> {
   try {
-    const chords = await api.menuChords();
-    state.menuChords = chords;
-    // The sheet reads this, so a panel that is already up has to be told. `boot` fires
-    // this fetch without awaiting it and `wireEvents` has already bound ⌘, by then, so
-    // "Settings is open before the host answers" is reachable, and without a repaint the
-    // reader would sit looking at the mirror — the one thing the host list exists to
-    // replace. Guarded rather than unconditional because during boot the answer normally
-    // lands *before* the first `render()`, and painting there would flash the empty shell
-    // ahead of the vault read. In the healthy case the two lists agree, so the HTML is
-    // identical and `paintModal`'s memo skips the swap; the case where the DOM really
-    // changes is drift, which is the case worth showing.
-    if (state.settingsOpen) render();
-    const drift = menuDrift(chords);
+    const drift = menuDrift(await api.menuChords());
     if (drift.length > 0) {
       console.error(
         `[b2] ui/src/menukeys.ts no longer matches the host's menu:\n  ${drift.join("\n  ")}`,
@@ -5639,7 +5730,7 @@ async function boot(): Promise<void> {
   // host only pulses when the *watched* vault's Markdown changes, and re-points the watch
   // on a vault switch, so this single subscription always tracks the active vault.
   void api.onVaultChanged(() => void onVaultChanged());
-  void loadMenuChords(); // the keyboard reference's last group — never blocks the paint
+  void checkMenuDrift(); // menukeys.ts vs. the host's own menu — never blocks the paint
   try {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;
