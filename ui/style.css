@@ -2263,6 +2263,204 @@ body.is-loading {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
+/* --- the ⌘-hold sheet -------------------------------------------------------------
+
+   Hold ⌘ and the ⌘ half of the reference appears over the app (cmdhold.ts). Its whole
+   posture is "here for a moment, then gone", so it takes nothing from the app underneath:
+   `pointer-events: none` on the layer *and* on the card, because a ⌘-click and a ⌘-drag
+   are gestures that must keep landing on what they were aimed at, and the sheet is over
+   the middle of the window where the aiming happens.
+
+   z-index 25 sits it above the overlay layer (20) and below the toast (30). It never
+   actually meets an overlay — it refuses to open while one is up — so the number is about
+   the one thing it does share the screen with: the note pane's own stacking contexts (the
+   find bar at 5, the graph, sticky headers), all of which it must clear.
+
+   Not centred vertically: centred, it lands exactly where the eye is reading, and the
+   thing you are trying to remember a chord *for* is the thing it would cover. Low and
+   central is the same place a HUD volume indicator sits on macOS — present, unmistakably
+   transient, out of the text. */
+.cmdhold {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 24px 7vh;
+  pointer-events: none;
+}
+.cmdhold-card {
+  pointer-events: none;
+  /* A definite width, not a `max-width`: the card is a flex item, so shrink-to-fit would
+     leave the multicol container's inline size indefinite and `columns: <width>` would
+     resolve to a single very tall column — the opposite of what it is here for. */
+  width: min(860px, 100%);
+  padding: 16px 22px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  /* It appears under a finger that is already still — a hard cut reads as a glitch, and
+     anything slower than this reads as the app thinking about it. Fade only, no travel:
+     movement at the bottom of the window pulls the eye down off the note. */
+  animation: cmdhold-in 110ms ease-out;
+}
+@keyframes cmdhold-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmdhold-card {
+    animation: none;
+  }
+}
+.cmdhold-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 11px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.cmdhold-what {
+  font-weight: 600;
+  color: var(--text);
+}
+.cmdhold-what kbd {
+  font: inherit;
+  font-weight: 600;
+}
+.cmdhold-hint {
+  color: var(--muted);
+}
+/* The groups are the reference's own (`.keys-group` / `.keys-list`), so the two surfaces
+   can't drift into looking like different keyboards — what changes here is only the
+   density and the column count, which is what makes it a glance rather than a page.
+
+   A column *width* rather than a count, and no height cap on the card. Both are the same
+   decision: this sheet must never clip. It has no scrollbar to offer — the whole layer is
+   `pointer-events: none` so the app underneath keeps the mouse — so a row past the bottom
+   edge is a row silently gone, which for a reference is the one unacceptable failure. A
+   count of 2 hit that on a narrow window, where the second column has nowhere to go and
+   the list runs off the card. `columns: <width>` instead lets the browser take as many
+   columns as the card is wide enough for, so the sheet answers a smaller window by getting
+   *shorter* rather than by getting taller and losing its tail. */
+.cmdhold-grid {
+  columns: 200px;
+  column-gap: 28px;
+}
+.cmdhold-grid .keys-group h4 {
+  margin: 15px 0 7px;
+}
+.cmdhold-grid .keys-group:first-child h4 {
+  margin-top: 8px;
+}
+.cmdhold-grid .keys-list {
+  gap: 7px 12px;
+}
+.cmdhold-grid .keys-list dd {
+  font-size: 12px;
+}
+
+/* A short window has to be *made* to fit, not merely leaned into: the sheet has no
+   scrollbar to offer — the layer stays out of the pointer's way (above) — so a row past the
+   bottom edge is a row nobody can reach. B2's floor is 720×480 (tauri.conf.json), and at
+   that size the comfortable rhythm above overflows it.
+
+   What gives is the vertical rhythm, and only that: the gaps between rows, the air around
+   the group headings, and the card's own padding. Every row survives; the list just breathes
+   less. A narrower column *width* was the other candidate and is the wrong lever: measured,
+   the descriptions wrap harder than the extra column saves and the card comes out taller.
+   (A narrower column *gap* is a different thing, and is the floor tier's best move — below.)
+
+   The row gap can go this tight here and not in Settings' copy of the same table, because
+   the reason for that floor is absent: over there every chip is a focus ring waiting to
+   happen and a gap under ~8px lets one row's ring touch the next row's chip. Nothing in this
+   sheet is focusable — every chip is a `<kbd>`, and the layer takes no focus at all — so
+   what is left to respect is the reading rhythm, which is what these numbers are.
+
+   `flex-start` stays as the backstop rather than the strategy. The fit is measured, but it
+   is measured against the shipped chords; a user who rebinds many more commands onto ⌘ can
+   still outgrow the window, and if the card must lose an end it should lose its tail and
+   keep the head — the half carrying "let go to dismiss", which is the one line someone who
+   summoned this by accident needs. cmdhold.test.ts guards the other side of that: the
+   shipped sheet stays inside the budget this was measured at. */
+@media (max-height: 640px) {
+  .cmdhold {
+    align-items: flex-start;
+    padding: 2vh 20px;
+  }
+  .cmdhold-card {
+    padding: 11px 18px 13px;
+  }
+  .cmdhold-head {
+    padding-bottom: 7px;
+    margin-bottom: 0;
+  }
+  .cmdhold-grid {
+    column-gap: 22px;
+  }
+  .cmdhold-grid .keys-group h4 {
+    margin: 9px 0 4px;
+  }
+  .cmdhold-grid .keys-group:first-child h4 {
+    margin-top: 3px;
+  }
+  .cmdhold-grid .keys-list {
+    gap: 4px 10px;
+  }
+  /* The largest saving of the lot, and the least visible: most rows here wrap to two lines,
+     so the leading between them is paid ~30 times over. 1.35 is still comfortably above the
+     1.2 where wrapped prose starts to look set solid. */
+  .cmdhold-grid .keys-list dd {
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+  .cmdhold-grid .keys-list kbd {
+    font-size: 11px;
+    padding: 1px 6px;
+  }
+}
+
+/* And the floor itself. Two tiers rather than one set of numbers tuned for 480px, because
+   the two windows want different things: at 520–640 the sheet already fits with room to
+   breathe and should keep the air, and only the shortest window has to spend the last of it.
+   Measured, not guessed — at 720×480, the smallest window B2 will open, the card comes out
+   397px in a 464px budget, and every one of its rows is inside the viewport. */
+@media (max-height: 520px) {
+  .cmdhold {
+    padding: 8px 16px;
+  }
+  .cmdhold-card {
+    padding: 8px 16px 9px;
+  }
+  .cmdhold-head {
+    padding-bottom: 5px;
+  }
+  /* Worth more than every vertical saving in this block put together. At the 720px floor
+     the card is 4px too narrow for a third 200px column, and a third column is what turns
+     a list six rows deep into one four deep. Nothing else here buys 60px. */
+  .cmdhold-grid {
+    column-gap: 18px;
+  }
+  .cmdhold-grid .keys-group h4 {
+    margin: 6px 0 3px;
+  }
+  .cmdhold-grid .keys-group:first-child h4 {
+    margin-top: 1px;
+  }
+  .cmdhold-grid .keys-list {
+    gap: 3px 9px;
+  }
+}
+
 /* --- the chord recorder (GH #121) ---------------------------------------------- */
 .keys-toolbar {
   display: flex;

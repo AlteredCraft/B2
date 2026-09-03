@@ -35,24 +35,27 @@
 // stay spelled out (Esc, Tab, Space, Home/End). That's the split the app's existing
 // tooltips already use ("Close (Esc)"); `displayChord` in bindings.ts now applies it.
 //
-// One group has no ids and no hand-written keys either: the menu bar's (#119). Those
-// chords aren't B2's — they're the app menu's, and AppKit takes them before the webview
-// sees a key — so the sheet lists them from the *host's* declaration, passed in by
-// render.ts (`menukeys.ts` supplies the offline mirror for the first paint and the
-// suite). K1's promise is that a keyboard path is findable, and it says nothing about
-// who authored it.
+// What the sheet deliberately does *not* list is the app menu bar's chords — ⌘Q, ⌘W, ⌘Z,
+// ⌘C and the rest (#119). They were a group here once, on K1's reading that a chord live
+// in the app is B2's to document whoever authored it. The reading was too literal: those
+// chords are already printed beside their items in the menu bar, two centimetres above
+// this window, which is where a macOS user looks for them and the only place they can be
+// *invoked* from with the mouse. Reprinting them bought a reader nothing and cost the
+// sheet its meaning — a table where most rows are chords you can click to change and a
+// dozen are chords nothing here can touch. So the sheet is now exactly the keyboard B2
+// owns. The host still declares the menu, because the two jobs that needed the
+// declaration are untouched: the conflict gate can see those keystrokes (menukeys.ts) and
+// the recorder refuses a chord spelled with one (keymap.ts).
 import { type BindingId, activeBindings, displayChord, findBinding } from "./bindings.ts";
-import { MENU_CHORDS } from "./menukeys.ts";
-import type { MenuChord } from "./types.ts";
 
 /** One chord as the sheet paints it. */
 export interface ShortcutKey {
   /** Display text — "⌘F", "↑", "Esc". */
   text: string;
   /** The command this chip would rebind, when exactly one B2 command produced it and it
-   *  is the registry's to move. Absent for the platform's own keys, for the menu bar's,
-   *  and for the rare chord two commands print identically — a chip that can't say *which*
-   *  command it edits must not offer to edit one. */
+   *  is the registry's to move. Absent for the platform's own keys and for the rare chord
+   *  two commands print identically — a chip that can't say *which* command it edits must
+   *  not offer to edit one. */
   id?: BindingId;
   /** Why this chord can't be changed (`Binding.fixed`), when that's the reason `id` is
    *  absent. The recorder shows it in place of itself. */
@@ -81,9 +84,9 @@ export interface SheetGroup {
   readonly rows: readonly SheetRow[];
 }
 
-/** The groups B2 authors — everything except the menu bar's, which is the host's and is
- *  appended by `sheet()`. */
-const OWN_SHEET: readonly SheetGroup[] = [
+/** The sheet itself. `sheet()` below is the accessor; the constant stays separate so the
+ *  groups read as one table rather than as the body of a function. */
+const SHEET: readonly SheetGroup[] = [
   {
     title: "Getting around",
     rows: [
@@ -227,21 +230,9 @@ const OWN_SHEET: readonly SheetGroup[] = [
   },
 ];
 
-/** The whole sheet, in order.
- *
- *  `menu` is the app menu bar's chords, defaulting to the mirror in `menukeys.ts`;
- *  render.ts passes the **host's own** list once it has arrived, so what the reader sees
- *  is the menu the app installed rather than the UI's copy of it. Its rows are literal
- *  because there are no ids to name: an item's `label` is what the menu itself shows,
- *  which is exactly what the sheet wants to print. */
-export function sheet(menu: readonly MenuChord[] = MENU_CHORDS): readonly SheetGroup[] {
-  return [
-    ...OWN_SHEET,
-    {
-      title: "The menu bar",
-      rows: menu.map((c) => ({ keys: displayChord(c.keys), action: c.label })),
-    },
-  ];
+/** The whole sheet, in order — every chord B2 dispatches, and nothing it doesn't. */
+export function sheet(): readonly SheetGroup[] {
+  return SHEET;
 }
 
 /**
@@ -286,8 +277,8 @@ export function keyChips(ids: readonly BindingId[]): ShortcutKey[] {
 }
 
 /** The sheet as render.ts paints it — every row's chords resolved to chips. */
-export function shortcuts(menu?: readonly MenuChord[]): ShortcutGroup[] {
-  return sheet(menu).map((group) => ({
+export function shortcuts(): ShortcutGroup[] {
+  return sheet().map((group) => ({
     title: group.title,
     items: group.rows.map((row) => ({
       keys: "ids" in row ? keyChips(row.ids) : [{ text: row.keys }],

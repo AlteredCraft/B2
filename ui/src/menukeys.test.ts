@@ -146,34 +146,27 @@ check("the menu takes exactly these chords from CodeMirror", () => {
 
 // --- the sheet ------------------------------------------------------------------------
 
-check("every menu chord has a row in the keyboard reference", () => {
-  // The K1 half of #119: a chord that is live in the app and documented nowhere is the
-  // failure that matters, and an inherited chord is no more findable than an undocumented
-  // one. The group is a projection of MENU_CHORDS, so this holds by construction — it is
-  // asserted so that hand-writing the rows instead would fail rather than quietly drop one.
+check("the keyboard reference leaves the menu bar's chords out", () => {
+  // The sheet listed them once (#119, on K1's "a chord live in the app is B2's to
+  // document"). It doesn't any more: macOS prints ⌘Q beside Quit in the menu bar itself,
+  // and a row in a table of *editable* chords that nothing here can edit is worse than no
+  // row. This is the assertion that keeps the group from drifting back in — the mirror is
+  // still read, by the conflict gate above and by the recorder, just never printed.
   const rows = sheet().flatMap((g) => g.rows);
   for (const c of MENU_CHORDS) {
-    const want = displayChord(c.keys);
+    const shown = displayChord(c.keys);
     assert(
-      rows.some((r) => !("ids" in r) && r.keys === want && r.action === c.label),
-      `${c.id} (${want} — ${c.label}) is in the menu but not in the sheet`,
+      !rows.some((r) => !("ids" in r) && r.keys === shown),
+      `${c.id} (${shown} — ${c.label}) is the menu's, and the sheet reprints it`,
+    );
+    assert(
+      !rows.some((r) => r.action === c.label),
+      `${c.id} (${c.label}) is the menu's, and the sheet has a row for it`,
     );
   }
-});
-
-check("the sheet lists the host's menu when it has one, not the mirror", () => {
-  // render.ts passes `state.menuChords` once the boot fetch lands. If the sheet ignored
-  // it, the mirror could drift and the reader would never know — which is the same
-  // undocumented-chord failure one level up.
-  const host = [{ id: "app.panic", label: "Panic", keys: "Mod-Shift-p" }];
-  const rows = sheet(host).flatMap((g) => g.rows);
   assert(
-    rows.some((r) => !("ids" in r) && r.keys === "⇧⌘P" && r.action === "Panic"),
-    "the host's row",
-  );
-  assert(
-    !rows.some((r) => !("ids" in r) && r.action === "Quit B2"),
-    "and only the host's rows",
+    !sheet().some((g) => g.title.toLowerCase().includes("menu bar")),
+    "and there is no menu-bar group left",
   );
 });
 

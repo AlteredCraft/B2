@@ -327,9 +327,12 @@ drops in without a redesign.
   (`Escape` dismisses, `Enter` confirms, focus is trapped while an overlay is open and
   restored on close). Focus is always visible and follows platform/ARIA conventions. Three
   consequences:
-  - A chord live in the app is B2's to document, whoever authored it. The macOS menu bar's
-    accelerators are declared in `b2-desktop/src/menu.rs` rather than inherited from Tauri's
-    default, so the reference sheet can list them and the conflict gate can see them.
+  - A chord live in the app is B2's to *account for*, whoever authored it. The macOS menu
+    bar's accelerators are declared in `b2-desktop/src/menu.rs` rather than inherited from
+    Tauri's default, so the conflict gate can see them and the recorder can refuse one. The
+    reference sheet does not reprint them: macOS shows those chords beside their own menu
+    items, which is both where a Mac user looks for them and the only place they can be
+    invoked with the mouse — so the sheet is exactly the keyboard B2 owns and can move.
   - The chords are yours, not B2's. Every chord B2 dispatches is re-recordable from
     Settings → Keyboard and stored as a UI preference (`localStorage`, like the theme; never
     vault state, never the index). The one exception is narrow and stated per row
