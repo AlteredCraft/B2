@@ -157,6 +157,38 @@ check("it keeps the rows worth keeping and drops the rest", () => {
   );
 });
 
+check("the sheet stays inside the size it was measured to fit", () => {
+  // The one regression this suite *can* catch about the sheet's size, and the one that
+  // actually happens.
+  //
+  // The layout is verified by measurement, not from here: the card was rendered against
+  // the real stylesheet and every row confirmed inside the viewport from 1600×1000 down to
+  // 720×480, the smallest window B2 will open (tauri.conf.json), where it comes out 397px
+  // in a 464px budget. node has no browser, and putting one in `npm test` to re-measure
+  // that would cost the suite its speed and its independence from the DOM for a number
+  // that only moves when the *content* does.
+  //
+  // So this pins the content. The sheet cannot scroll — the layer is `pointer-events: none`
+  // so the app underneath keeps the mouse — which means a row past the bottom edge is a row
+  // nobody can reach, and the way that happens is not someone editing the CSS: it is a
+  // dozen new ⌘ chords arriving one at a time, each obviously fine on its own. The budget
+  // is the shipped keyboard's, with room for a few more; crossing it means re-measuring the
+  // floor before shipping, and the numbers above say against what.
+  const groups = cmdShortcuts();
+  const rows = groups.flatMap((g) => g.items);
+  assert(rows.length <= 24, `the ⌘ sheet is ${rows.length} rows — measured to fit at 17, budgeted to 24`);
+  assert(groups.length <= 9, `the ⌘ sheet is ${groups.length} groups — each heading costs a row's height`);
+  // Prose is the other half of the height: a row that wraps to four lines is four rows of
+  // card. The longest shipped description is ~60 characters; at the floor's narrowest
+  // column that is two lines.
+  for (const r of rows) {
+    assert(
+      r.action.length <= 90,
+      `"${r.action}" is ${r.action.length} characters — long enough to wrap the card past its budget`,
+    );
+  }
+});
+
 check("a chip still knows the command behind it", () => {
   // The filter rebuilds the rows, and a shallow-copied chip that lost its `id` would be a
   // sheet that can't say what ⌘F is — the projection carries the reference's chips

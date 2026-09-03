@@ -2356,20 +2356,6 @@ body.is-loading {
   columns: 200px;
   column-gap: 28px;
 }
-/* B2's window floor is 720×480 (tauri.conf.json), and at around that size the sheet is
-   taller than the window it is over. Narrower columns don't rescue it — the descriptions
-   wrap harder than the extra column saves, so the card gets *taller* — and it can't scroll,
-   because the layer stays out of the pointer's way (above). What it can do is choose which
-   end goes over the edge: anchored to the bottom, a card that overflows loses its head, and
-   the head is the half carrying "let go to dismiss" — the one line someone who summoned
-   this by accident needs. So a short window anchors it to the top instead, and the tail of
-   the list is what runs off. Every window B2 opens at has room for the whole thing. */
-@media (max-height: 640px) {
-  .cmdhold {
-    align-items: flex-start;
-    padding: 3vh 24px;
-  }
-}
 .cmdhold-grid .keys-group h4 {
   margin: 15px 0 7px;
 }
@@ -2381,6 +2367,98 @@ body.is-loading {
 }
 .cmdhold-grid .keys-list dd {
   font-size: 12px;
+}
+
+/* A short window has to be *made* to fit, not merely leaned into: the sheet has no
+   scrollbar to offer — the layer stays out of the pointer's way (above) — so a row past the
+   bottom edge is a row nobody can reach. B2's floor is 720×480 (tauri.conf.json), and at
+   that size the comfortable rhythm above overflows it.
+
+   What gives is the vertical rhythm, and only that: the gaps between rows, the air around
+   the group headings, and the card's own padding. Every row survives; the list just breathes
+   less. A narrower column *width* was the other candidate and is the wrong lever: measured,
+   the descriptions wrap harder than the extra column saves and the card comes out taller.
+   (A narrower column *gap* is a different thing, and is the floor tier's best move — below.)
+
+   The row gap can go this tight here and not in Settings' copy of the same table, because
+   the reason for that floor is absent: over there every chip is a focus ring waiting to
+   happen and a gap under ~8px lets one row's ring touch the next row's chip. Nothing in this
+   sheet is focusable — every chip is a `<kbd>`, and the layer takes no focus at all — so
+   what is left to respect is the reading rhythm, which is what these numbers are.
+
+   `flex-start` stays as the backstop rather than the strategy. The fit is measured, but it
+   is measured against the shipped chords; a user who rebinds many more commands onto ⌘ can
+   still outgrow the window, and if the card must lose an end it should lose its tail and
+   keep the head — the half carrying "let go to dismiss", which is the one line someone who
+   summoned this by accident needs. cmdhold.test.ts guards the other side of that: the
+   shipped sheet stays inside the budget this was measured at. */
+@media (max-height: 640px) {
+  .cmdhold {
+    align-items: flex-start;
+    padding: 2vh 20px;
+  }
+  .cmdhold-card {
+    padding: 11px 18px 13px;
+  }
+  .cmdhold-head {
+    padding-bottom: 7px;
+    margin-bottom: 0;
+  }
+  .cmdhold-grid {
+    column-gap: 22px;
+  }
+  .cmdhold-grid .keys-group h4 {
+    margin: 9px 0 4px;
+  }
+  .cmdhold-grid .keys-group:first-child h4 {
+    margin-top: 3px;
+  }
+  .cmdhold-grid .keys-list {
+    gap: 4px 10px;
+  }
+  /* The largest saving of the lot, and the least visible: most rows here wrap to two lines,
+     so the leading between them is paid ~30 times over. 1.35 is still comfortably above the
+     1.2 where wrapped prose starts to look set solid. */
+  .cmdhold-grid .keys-list dd {
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+  .cmdhold-grid .keys-list kbd {
+    font-size: 11px;
+    padding: 1px 6px;
+  }
+}
+
+/* And the floor itself. Two tiers rather than one set of numbers tuned for 480px, because
+   the two windows want different things: at 520–640 the sheet already fits with room to
+   breathe and should keep the air, and only the shortest window has to spend the last of it.
+   Measured, not guessed — at 720×480, the smallest window B2 will open, the card comes out
+   397px in a 464px budget, and every one of its rows is inside the viewport. */
+@media (max-height: 520px) {
+  .cmdhold {
+    padding: 8px 16px;
+  }
+  .cmdhold-card {
+    padding: 8px 16px 9px;
+  }
+  .cmdhold-head {
+    padding-bottom: 5px;
+  }
+  /* Worth more than every vertical saving in this block put together. At the 720px floor
+     the card is 4px too narrow for a third 200px column, and a third column is what turns
+     a list six rows deep into one four deep. Nothing else here buys 60px. */
+  .cmdhold-grid {
+    column-gap: 18px;
+  }
+  .cmdhold-grid .keys-group h4 {
+    margin: 6px 0 3px;
+  }
+  .cmdhold-grid .keys-group:first-child h4 {
+    margin-top: 1px;
+  }
+  .cmdhold-grid .keys-list {
+    gap: 3px 9px;
+  }
 }
 
 /* --- the chord recorder (GH #121) ---------------------------------------------- */
