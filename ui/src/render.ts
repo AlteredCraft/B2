@@ -178,10 +178,16 @@ function wrapTables(html: string): string {
 // that happens to the HTML — nothing, not even B2's own table wrapper, is spliced in
 // afterwards — and it holds for every `marked.parse` in the app, so a future second call
 // site cannot render an unsanitized note by forgetting a step.
+//
+// `breaks: true` makes a single newline a `<br>`, the Obsidian reading of a note. The
+// editor shows the file one line per line, and the default CommonMark fold — one newline
+// is a space, only a blank line ends a paragraph — had the reading view disagreeing with
+// it about where the author's lines end (linebreaks.test.ts pins both halves: a break for
+// one newline, a paragraph for two, and neither inside a fence or a list).
 marked.use({
   extensions: [wikilink],
   gfm: true,
-  breaks: false,
+  breaks: true,
   hooks: { postprocess: (html: string) => sanitizeHtml(wrapTables(html)) },
 });
 
