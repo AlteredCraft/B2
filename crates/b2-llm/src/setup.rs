@@ -260,6 +260,33 @@ pub struct ChatSetup {
     pub available: Vec<String>,
     /// The Ollama-native onboarding half; `None` for any other runtime.
     pub ollama: Option<OllamaSetup>,
+    /// The tool-call cap, as a Settings field needs it.
+    pub tool_calls: ToolCallCap,
+}
+
+/// [`LlmConfig::max_tool_calls`] for a surface that edits it: the value in force, plus the
+/// two numbers the field's copy and its validation quote. Carried rather than mirrored in
+/// the frontend, so the panel can never advertise a range the parser would refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ToolCallCap {
+    /// The cap in force — Settings over the environment over the default.
+    pub in_force: usize,
+    /// [`crate::DEFAULT_MAX_TOOL_CALLS`]: what clearing the field returns to (absent
+    /// an environment override).
+    pub default: usize,
+    /// [`crate::MAX_TOOL_CALLS_CEILING`]: the highest value any source may set.
+    pub ceiling: usize,
+}
+
+impl ToolCallCap {
+    /// The cap as `config` resolves it.
+    pub fn of(config: &LlmConfig) -> Self {
+        Self {
+            in_force: config.max_tool_calls,
+            default: crate::DEFAULT_MAX_TOOL_CALLS,
+            ceiling: crate::MAX_TOOL_CALLS_CEILING,
+        }
+    }
 }
 
 impl ChatSetup {
@@ -280,6 +307,7 @@ impl ChatSetup {
             ),
             available: Vec::new(),
             ollama: None,
+            tool_calls: ToolCallCap::of(config),
         }
     }
 }
@@ -333,6 +361,7 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
         message,
         available,
         ollama,
+        tool_calls: ToolCallCap::of(config),
     }
 }
 
@@ -736,9 +765,15 @@ mod tests {
             message: None,
             available: Vec::new(),
             ollama: None,
+            tool_calls: ToolCallCap::of(&config),
         };
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-do-not-serialize-me"), "{json}");
+        // The cap rides along with the two numbers the Settings field quotes.
+        assert!(
+            json.contains("\"tool_calls\":{\"in_force\":64,\"default\":64,\"ceiling\":4096}"),
+            "{json}"
+        );
         assert!(json.contains("\"api_key_source\":\"stored\""), "{json}");
         assert!(json.contains("\"cloud\":true"), "{json}");
     }

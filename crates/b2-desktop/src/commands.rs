@@ -684,6 +684,7 @@ pub fn set_chat_config(
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    max_tool_calls: Option<String>,
 ) -> ChatSetup {
     {
         // One save at a time. `(async)` means Tauri runs these off the main thread and
@@ -696,6 +697,7 @@ pub fn set_chat_config(
             base_url,
             model,
             api_key,
+            max_tool_calls,
             &crate::keychain::Keychain,
         );
         // Persisting lives in the command wrapper, not in the state transition, so the
@@ -718,6 +720,7 @@ fn set_chat_config_impl(
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    max_tool_calls: Option<String>,
     keys: &dyn crate::keychain::KeyStore,
 ) -> ChatPrefs {
     let clean = |v: Option<String>| {
@@ -729,6 +732,7 @@ fn set_chat_config_impl(
     let prefs = ChatPrefs {
         base_url: clean(base_url),
         model: clean(model),
+        max_tool_calls: crate::chat::apply_tool_cap(&state.chat_prefs(), max_tool_calls.as_deref()),
         api_key,
         key_remembered,
     };
@@ -1897,6 +1901,31 @@ mod tests {
         assert!(!answer.cancelled);
     }
 
+    /// The tool-call cap is saved by the same command, under the key's three-state rule:
+    /// a save that doesn't mention it (the setup card's model pick) must not reset it.
+    #[test]
+    fn the_tool_call_cap_is_set_kept_and_cleared_by_a_save() {
+        let state = AppState::new(None);
+        let keys = MemoryStore::empty();
+        let save = |cap: Option<&str>| {
+            set_chat_config_impl(&state, None, None, None, cap.map(str::to_string), &keys);
+            state.chat_prefs().config().max_tool_calls
+        };
+        let default = b2_llm::LlmConfig::from_env().max_tool_calls;
+        assert_eq!(save(Some("128")), 128);
+        assert_eq!(save(None), 128, "a save that doesn't mention it keeps it");
+        assert_eq!(save(Some("0")), 128, "a refused value changes nothing");
+        assert_eq!(
+            save(Some("")),
+            default,
+            "blank returns to the shared resolution"
+        );
+        // And the status the panel is drawn from reports the cap in force.
+        save(Some("32"));
+        let setup = b2_llm::ChatSetup::fake(&state.chat_prefs().config());
+        assert_eq!(setup.tool_calls.in_force, 32);
+    }
+
     /// Chat settings are adapter state: setting them changes what the next ask resolves,
     /// and blank means "unset" (back to the environment/default) rather than an unusable
     /// endpoint. The key is kept when a save doesn't mention it — re-saving the endpoint
@@ -1910,6 +1939,7 @@ mod tests {
             Some("http://localhost:1234/v1".into()),
             Some("qwen2.5".into()),
             Some("sk-a-cloud-key".into()),
+            None,
             &keys,
         );
         let prefs = state.chat_prefs();
@@ -1923,6 +1953,7 @@ mod tests {
             &state,
             Some("http://localhost:1234/v1".into()),
             Some("  ".into()),
+            None,
             None,
             &keys,
         );
@@ -1943,6 +1974,7 @@ mod tests {
             Some("https://api.example.com/v1".into()),
             None,
             Some("sk-remember-me".into()),
+            None,
             &keys,
         );
         assert_eq!(keys.peek().as_deref(), Some("sk-remember-me"));
@@ -1961,14 +1993,21 @@ mod tests {
     fn a_blanked_key_clears_it_everywhere() {
         let state = AppState::new(None);
         let keys = MemoryStore::empty();
-        set_chat_config_impl(&state, None, None, Some("sk-a-cloud-key".into()), &keys);
+        set_chat_config_impl(
+            &state,
+            None,
+            None,
+            Some("sk-a-cloud-key".into()),
+            None,
+            &keys,
+        );
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
             Some("sk-a-cloud-key")
         );
 
         // Absent: untouched, so the key stands — in memory and in the store.
-        set_chat_config_impl(&state, None, None, None, &keys);
+        set_chat_config_impl(&state, None, None, None, None, &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
             Some("sk-a-cloud-key")
@@ -1978,7 +2017,7 @@ mod tests {
         // Blank (what the UI's Remove sends): gone from both. `config()` then resolves
         // the key from the environment alone — `B2_LLM_API_KEY` is the user's own
         // configuration, and Settings never had the standing to clear that.
-        set_chat_config_impl(&state, None, None, Some("   ".into()), &keys);
+        set_chat_config_impl(&state, None, None, Some("   ".into()), None, &keys);
         assert_eq!(state.chat_prefs().api_key, None);
         assert_eq!(
             keys.peek(),
@@ -2000,6 +2039,7 @@ mod tests {
             Some("http://b2-no-such-host.invalid:11434/v1".into()),
             Some("llama3.2".into()),
             Some("sk-live-must-not-cross".into()),
+            None,
             &MemoryStore::empty(),
         );
         let setup = chat_setup_impl(&state);
@@ -2025,6 +2065,7 @@ mod tests {
             Some("https://api.example.com/v1".into()),
             None,
             Some("sk-typed-just-now".into()),
+            None,
             &keys,
         );
         let prefs = state.chat_prefs();

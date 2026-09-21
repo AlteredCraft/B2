@@ -59,6 +59,7 @@ import {
   chatEmptyState,
   chatHistory,
   errorMessage,
+  toolCapInput,
   userMessage,
   whyQuestion,
 } from "./chat";
@@ -2391,8 +2392,20 @@ async function saveChatConfig(): Promise<void> {
   // key is set, so "I didn't retype my key" must never read as "sign me out". Removing a
   // key is `clearChatKey`'s explicit button.
   const key = value("settings-chat-key");
+  // The tool-call cap: judged before anything is sent, so a bad number is a sentence
+  // and the rest of the panel is not saved around it.
+  const capField = document.getElementById("settings-chat-tool-cap") as HTMLInputElement | null;
+  const cap =
+    capField && state.chatSetup
+      ? toolCapInput(capField.value, state.chatSetup.tool_calls)
+      : { send: null };
+  if ("error" in cap) {
+    flash(cap.error);
+    capField?.focus();
+    return;
+  }
   try {
-    state.chatSetup = await api.setChatConfig(url, model, key);
+    state.chatSetup = await api.setChatConfig(url, model, key, cap.send);
     state.chatCloud = state.chatSetup.cloud;
     flash(
       state.chatSetup.state === "ready"

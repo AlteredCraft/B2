@@ -1735,10 +1735,36 @@ function chatPanelHtml(state: AppState): string {
       </label>
       ${chatModelFieldHtml(state, setup)}
       ${key}
+      ${toolCapFieldHtml(setup)}
       <div class="settings-action">
         <button class="btn small primary" id="settings-chat-save">Save and test</button>
       </div>
       ${status}`;
+}
+
+/**
+ * **Tool calls per reply** — the cap on what one model reply may ask B2 to run
+ * (`LlmConfig::max_tool_calls`). A safety bound, not a tuning knob, and the copy says so:
+ * a reply past it is stopped with an error, and the only reason to raise it is a model
+ * that really does ask for that many. Painted from the host's own numbers (`tool_calls`),
+ * saved with the rest of the panel by *Save and test*, validated by chat.ts's
+ * `toolCapInput`.
+ *
+ * `type="text"` with a numeric keypad rather than `type="number"`: `captureModalFocus`
+ * re-selects the focused field's caret across a repaint, and a number input throws on
+ * `setSelectionRange`.
+ */
+function toolCapFieldHtml(setup: ChatSetup | null): string {
+  if (!setup) return "";
+  const cap = setup.tool_calls;
+  return `<label class="field">Tool calls per reply
+        <input id="settings-chat-tool-cap" type="text" inputmode="numeric" autocomplete="off"
+          spellcheck="false" value="${cap.in_force}" placeholder="${cap.default}" />
+      </label>
+      <p class="settings-detail muted">The most B2 tools the chat model may call in one
+        reply when it explains a suggestion. A reply that asks for more is stopped with an
+        error instead of being run. Default ${cap.default}, up to ${cap.ceiling}; clear the
+        field to go back to the default. Overrides <code>B2_LLM_MAX_TOOL_CALLS</code>.</p>`;
 }
 
 /**

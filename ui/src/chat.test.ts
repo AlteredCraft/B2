@@ -12,6 +12,7 @@ import {
   formatModelSize,
   pullCommand,
   retrievalNote,
+  toolCapInput,
   toolsLine,
   turnRowKey,
   userMessage,
@@ -29,6 +30,7 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
   message: null,
   available: [],
   ollama: null,
+  tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
   ...over,
 });
 
@@ -212,6 +214,29 @@ test("an answer says which B2 tools it was built from", () => {
     toolsLine([{ name: "<b>x</b>", arguments: "", seeded: false }]),
     "Looked up with B2 tools: <b>x</b>",
   );
+});
+
+test("the tool-call cap field is untouched, cleared, set, or refused — before it is sent", () => {
+  const cap = { in_force: 64, default: 64, ceiling: 4096 };
+  // Untouched: the field paints the cap in force, so saving it back unchanged must not
+  // *store* it — that would pin today's default over tomorrow's environment variable.
+  assert.deepEqual(toolCapInput("64", cap), { send: null });
+  assert.deepEqual(toolCapInput(" 64 ", cap), { send: null });
+  // Cleared: back to the environment/default, which is the host's `""`.
+  assert.deepEqual(toolCapInput("", cap), { send: "" });
+  assert.deepEqual(toolCapInput("   ", cap), { send: "" });
+  // Set, at both ends of the range the host quoted.
+  assert.deepEqual(toolCapInput("1", cap), { send: "1" });
+  assert.deepEqual(toolCapInput("4096", cap), { send: "4096" });
+  // Refused here, with a sentence, rather than sent to a host that would ignore it and
+  // leave *Save* looking like it did nothing.
+  for (const bad of ["0", "4097", "-2", "6.5", "lots", "1e3", "12abc"]) {
+    const verdict = toolCapInput(bad, cap);
+    assert.ok("error" in verdict, `${bad} should be refused`);
+    assert.match(verdict.error, /1 to 4096/);
+  }
+  // The range is the host's, not a constant here.
+  assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
 });
 
 test("the pull command is spelled in one place", () => {

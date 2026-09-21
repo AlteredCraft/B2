@@ -84,8 +84,11 @@ the vault, because the device is part of the embedding space's identity (ADR-000
   **`B2_LLM_MAX_TOOL_CALLS`** (default 64) caps the tool calls — and the highest call `index` — one
   model reply may carry. It bounds memory a server can make B2 allocate, so a reply past it **fails**
   (`LlmError::TooManyToolCalls` → `b2_core::Error::ToolCallLimit`, typed across the seam, WARN-logged,
-  with its own user message) rather than being trimmed, and `why_similar` never degrades past it. A
-  value that isn't a positive whole number keeps the default and says so at WARN.
+  with its own user message) rather than being trimmed, and `why_similar` never degrades past it.
+  `b2_llm::parse_max_tool_calls` is the **one** judge of a typed cap — a whole number from 1 to
+  `MAX_TOOL_CALLS_CEILING` (4096; a memory bound needs a bound of its own) — shared by the variable
+  and the desktop's Settings → Chat field, which **beats** the variable (the `with_overrides` rule,
+  not the key's). A refused env value keeps the default and says so at WARN.
 - **`B2_LOG`** — structured debug logging as **JSON Lines** (stdout stays pure data), one flat object
   per event, to stderr or to **`B2_LOG_FILE=<path>`** (append mode, so runs accumulate into one
   reportable dataset). The value is a tracing filter (`debug`, `b2::sqlite=debug`, …); `B2_DEBUG` or

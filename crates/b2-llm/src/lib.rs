@@ -28,7 +28,7 @@ use serde::Serialize;
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
     is_local, is_ollama, probe_setup, pull_command, refusal_message, ChatSetup, ChatState,
-    ModelTier, OllamaModel, OllamaSetup, MODEL_TIERS, OLLAMA_INSTALL_URL,
+    ModelTier, OllamaModel, OllamaSetup, ToolCallCap, MODEL_TIERS, OLLAMA_INSTALL_URL,
 };
 
 /// Where the Ollama daemon serves its OpenAI-compatible surface. The *guided*
@@ -60,6 +60,22 @@ pub const ENV_MAX_TOOL_CALLS: &str = "B2_LLM_MAX_TOOL_CALLS";
 /// (B2 runs at most a handful per round), and small enough that the table a reply can
 /// make B2 allocate stays a few kilobytes.
 pub const DEFAULT_MAX_TOOL_CALLS: usize = 64;
+
+/// The highest value [`LlmConfig::max_tool_calls`] accepts, from any source. The cap
+/// exists to bound memory a server can make B2 allocate, so it needs a bound of its own:
+/// at this size the table is a few hundred kilobytes, and no real reply comes near it.
+pub const MAX_TOOL_CALLS_CEILING: usize = 4096;
+
+/// Judge a typed tool-call cap — the **one** parser, shared by [`ENV_MAX_TOOL_CALLS`] and
+/// an adapter's Settings field so the two can never accept different things. A whole
+/// number from 1 (zero would refuse every call) to [`MAX_TOOL_CALLS_CEILING`]; anything
+/// else is `None`.
+pub fn parse_max_tool_calls(raw: &str) -> Option<usize> {
+    raw.trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=MAX_TOOL_CALLS_CEILING).contains(n))
+}
 
 /// Where the bearer token in force came from. A **fact about the key, never the key** —
 /// the half of a cloud configuration that may safely be shown, logged and sent to a
@@ -183,18 +199,15 @@ impl LlmConfig {
         // silently ignored setting is one nobody can debug.
         let max_tool_calls = match read(ENV_MAX_TOOL_CALLS) {
             None => base.max_tool_calls,
-            Some(raw) => match raw.parse::<usize>() {
-                Ok(n) if n > 0 => n,
-                _ => {
-                    tracing::warn!(
-                        target: "b2::llm",
-                        value = raw,
-                        default = base.max_tool_calls,
-                        "{ENV_MAX_TOOL_CALLS} is not a positive whole number; using the default"
-                    );
-                    base.max_tool_calls
-                }
-            },
+            Some(raw) => parse_max_tool_calls(&raw).unwrap_or_else(|| {
+                tracing::warn!(
+                    target: "b2::llm",
+                    value = raw,
+                    default = base.max_tool_calls,
+                    "{ENV_MAX_TOOL_CALLS} is not a whole number from 1 to {MAX_TOOL_CALLS_CEILING}; using the default"
+                );
+                base.max_tool_calls
+            }),
         };
         Self {
             base_url: read(ENV_URL).unwrap_or(base.base_url),
@@ -219,6 +232,19 @@ impl LlmConfig {
         }
         if let Some(model) = model {
             self.model = model.to_string();
+        }
+        self
+    }
+
+    /// Lay an adapter's own tool-call cap over this config — the
+    /// [`with_overrides`](Self::with_overrides) rule: an explicit choice beats the
+    /// environment, `None` keeps what's there. A value outside what
+    /// [`parse_max_tool_calls`] accepts is ignored rather than installed, so a
+    /// hand-edited settings file cannot lift the ceiling the parser enforces.
+    #[must_use]
+    pub fn with_max_tool_calls(mut self, max_tool_calls: Option<usize>) -> Self {
+        if let Some(n) = max_tool_calls.filter(|n| (1..=MAX_TOOL_CALLS_CEILING).contains(n)) {
+            self.max_tool_calls = n;
         }
         self
     }
@@ -355,6 +381,44 @@ mod tests {
         for bad in ["0", "-1", "lots", "6.4", ""] {
             assert_eq!(with(Some(bad)), DEFAULT_MAX_TOOL_CALLS, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn one_parser_judges_the_cap_for_the_environment_and_for_settings() {
+        assert_eq!(parse_max_tool_calls("8"), Some(8));
+        assert_eq!(parse_max_tool_calls(" 256 "), Some(256));
+        assert_eq!(
+            parse_max_tool_calls(&MAX_TOOL_CALLS_CEILING.to_string()),
+            Some(MAX_TOOL_CALLS_CEILING)
+        );
+        // The cap exists to bound memory, so it has a ceiling of its own: a setting
+        // that can be typed up to a billion is not a bound.
+        assert_eq!(
+            parse_max_tool_calls(&(MAX_TOOL_CALLS_CEILING + 1).to_string()),
+            None
+        );
+        for bad in ["0", "-1", "lots", "6.4", ""] {
+            assert_eq!(parse_max_tool_calls(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_adapters_cap_beats_the_environments_and_none_keeps_it() {
+        let env = LlmConfig::resolve(|key| (key == ENV_MAX_TOOL_CALLS).then(|| "8".to_string()));
+        assert_eq!(env.max_tool_calls, 8);
+        // The `with_overrides` convention: an explicit adapter choice beats the env.
+        assert_eq!(
+            env.clone().with_max_tool_calls(Some(128)).max_tool_calls,
+            128
+        );
+        assert_eq!(env.clone().with_max_tool_calls(None).max_tool_calls, 8);
+        // A value no parser would have accepted is not installed by the back door.
+        assert_eq!(env.clone().with_max_tool_calls(Some(0)).max_tool_calls, 8);
+        assert_eq!(
+            env.with_max_tool_calls(Some(MAX_TOOL_CALLS_CEILING + 1))
+                .max_tool_calls,
+            8
+        );
     }
 
     #[test]

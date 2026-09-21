@@ -134,6 +134,7 @@ function chatSetup(over: Partial<ChatSetup> = {}): ChatSetup {
     message: null,
     available: [],
     ollama: null,
+    tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
     ...over,
   };
 }
@@ -990,6 +991,18 @@ check("the card menu carries Why was this suggested? for the keyboard", () => {
     app({ contextMenu: { kind: "tree", x: 10, y: 20, dir: "projects", node: null } }),
   );
   assert(!tree.includes("data-ctx-why"), "the tree's menu has no candidate to explain");
+});
+
+check("Settings → Chat offers the tool-call cap, painted from the host's own numbers", () => {
+  const html = chatTab({ tool_calls: { in_force: 128, default: 64, ceiling: 4096 } });
+  const field = tagWith(html, 'id="settings-chat-tool-cap"');
+  assert(field.startsWith("<input"), `a field: ${field}`);
+  assert(field.includes('value="128"'), `it shows the cap in force: ${field}`);
+  // A text field with a numeric keypad, not `type="number"`: the modal re-selects the
+  // focused field's caret after a repaint, and a number input throws on that.
+  assert(field.includes('type="text"') && field.includes('inputmode="numeric"'), field);
+  assert(html.includes("Default 64") && html.includes("4096"), "the copy quotes the host's range");
+  assert(html.includes("B2_LLM_MAX_TOOL_CALLS"), "and names the variable Settings overrides");
 });
 
 check("an answer built with tools says so, escaped like everything a model names", () => {

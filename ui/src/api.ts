@@ -354,12 +354,18 @@ export const api = {
    * returned setup carries `api_key_source`, not the key (`b2-desktop/src/keychain.rs`
    * argues both halves). Passing `null` keeps whatever is already in force, so re-saving
    * the endpoint can't silently sign you out; `""` is the explicit *clear*.
+   *
+   * `maxToolCalls` follows the key's three-state rule for the same reason — most callers
+   * of this save never mention it: `null` keeps the cap, `""` clears it back to the
+   * environment/default, a number sets it. chat.ts's `toolCapInput` decides which.
    */
   setChatConfig: (
     baseUrl: string | null,
     model: string | null,
     apiKey: string | null,
-  ): Promise<ChatSetup> => invoke("set_chat_config", { baseUrl, model, apiKey }),
+    maxToolCalls: string | null = null,
+  ): Promise<ChatSetup> =>
+    invoke("set_chat_config", { baseUrl, model, apiKey, maxToolCalls }),
 
   /** The embedding models B2 offers, flagged current + installed (Settings picker). */
   listModels: (): Promise<ModelChoice[]> => invoke("list_models"),

@@ -30,7 +30,14 @@
 // human-invoked export, and is not MVP (GH #151's open question 2).
 
 import type { SideRow } from "./sidenav.ts";
-import type { AnswerView, ChatSetup, ChatTurn, Citation, ToolUse } from "./types";
+import type {
+  AnswerView,
+  ChatSetup,
+  ChatTurn,
+  Citation,
+  ToolCallCap,
+  ToolUse,
+} from "./types";
 
 /**
  * One entry in the transcript. A `user` message is what was typed; an `assistant` message
@@ -97,6 +104,33 @@ export function whyQuestion(
 export function toolsLine(tools: readonly ToolUse[] = []): string {
   const names = [...new Set(tools.map((t) => t.name.replace(/^b2_/, "").replaceAll("_", " ")))];
   return names.length === 0 ? "" : `Looked up with B2 tools: ${names.join(", ")}`;
+}
+
+/**
+ * What Settings → Chat's **Tool calls per reply** field should send with a save — the
+ * host's three-state rule (`apply_tool_cap`), decided here so a bad value is a sentence
+ * beside the field rather than a save that appears to do nothing.
+ *
+ *   `{ send: null }`   untouched — the field still shows the cap in force, and storing
+ *                      that would pin today's default over a later environment variable
+ *   `{ send: "" }`     cleared — back to `B2_LLM_MAX_TOOL_CALLS` or the default
+ *   `{ send: "128" }`  set
+ *   `{ error }`        refused: not a whole number in the host's range
+ *
+ * The range is `cap`'s, which the host sent; nothing about it is spelled here.
+ */
+export function toolCapInput(
+  raw: string,
+  cap: ToolCallCap,
+): { send: string | null } | { error: string } {
+  const typed = raw.trim();
+  if (typed === "") return { send: "" };
+  if (typed === String(cap.in_force)) return { send: null };
+  // Digits only: `Number()` would wave through "1e3", " 12 " and "0x10".
+  const n = /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n < 1 || n > cap.ceiling)
+    return { error: `Tool calls per reply must be a whole number from 1 to ${cap.ceiling}.` };
+  return { send: String(n) };
 }
 
 /** A turn that failed — the host's generic message stands in for the answer. */
