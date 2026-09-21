@@ -30,7 +30,14 @@
 // human-invoked export, and is not MVP (GH #151's open question 2).
 
 import type { SideRow } from "./sidenav.ts";
-import type { AnswerView, ChatSetup, ChatTurn, Citation } from "./types";
+import type {
+  AnswerView,
+  ChatSetup,
+  ChatTurn,
+  Citation,
+  ToolCallCap,
+  ToolUse,
+} from "./types";
 
 /**
  * One entry in the transcript. A `user` message is what was typed; an `assistant` message
@@ -49,13 +56,16 @@ export interface ChatMessage {
   citations: Citation[];
   /** The stream was stopped: the text is an honest prefix, and the pane says so. */
   cancelled: boolean;
+  /** The B2 tools the answer was built from; absent or empty for a plain ask or a user
+   *  message. */
+  tools?: ToolUse[];
   /** The generic, actionable failure this turn produced instead of an answer. */
   error?: string;
 }
 
 /** The question the human typed, as a transcript entry. */
 export function userMessage(text: string): ChatMessage {
-  return { role: "user", text, citations: [], cancelled: false };
+  return { role: "user", text, citations: [], cancelled: false, tools: [] };
 }
 
 /** A finished (or stopped) answer, as a transcript entry. */
@@ -65,12 +75,67 @@ export function answerMessage(view: AnswerView): ChatMessage {
     text: view.answer,
     citations: view.citations,
     cancelled: view.cancelled,
+    tools: view.tools ?? [],
   };
+}
+
+/**
+ * The question a click on a *Similar & unlinked* card's **Why?** puts in the transcript.
+ *
+ * Display text, and the turn a follow-up is condensed against — not the prompt. What the
+ * model is actually asked, and the evidence it is handed, is assembled host-side by
+ * `Vault::why_similar` (b2-core's `chat.rs`); this names the two notes the way the pane
+ * names them everywhere else, by title with the path as the fallback.
+ */
+export function whyQuestion(
+  candidate: { path: string; title: string | null },
+  anchor: { path: string; title: string | null },
+): string {
+  const name = (n: { path: string; title: string | null }) => n.title || n.path;
+  return `Why is “${name(candidate)}” suggested as similar to “${name(anchor)}”?`;
+}
+
+/**
+ * The line under an answer that names the B2 tools it was built from, or "" when there
+ * were none. Each tool once, in first-use order, with the `b2_` prefix and underscores
+ * dropped so it reads as words. **Not escaped here**: a tool name is whatever the model
+ * sent, so it is untrusted like the answer, and the paint runs it through `escapeHtml`.
+ */
+export function toolsLine(tools: readonly ToolUse[] = []): string {
+  const names = [...new Set(tools.map((t) => t.name.replace(/^b2_/, "").replaceAll("_", " ")))];
+  return names.length === 0 ? "" : `Looked up with B2 tools: ${names.join(", ")}`;
+}
+
+/**
+ * What Settings → Chat's **Tool calls per reply** field should send with a save — the
+ * host's three-state rule (`apply_tool_cap`), decided here so a bad value is a sentence
+ * beside the field rather than a save that appears to do nothing.
+ *
+ *   `{ send: null }`   untouched — the field still shows the cap in force, and storing
+ *                      that would pin today's default over a later environment variable
+ *   `{ send: "" }`     cleared — back to `B2_LLM_MAX_TOOL_CALLS` or the default
+ *   `{ send: "128" }`  set
+ *   `{ error }`        refused: not a whole number in the host's range
+ *
+ * The range is `cap`'s, which the host sent; nothing about it is spelled here.
+ */
+export function toolCapInput(
+  raw: string,
+  cap: ToolCallCap,
+): { send: string | null } | { error: string } {
+  const typed = raw.trim();
+  if (typed === "") return { send: "" };
+  if (typed === String(cap.in_force)) return { send: null };
+  // Digits only: `Number()` would wave through "1e3", " 12 " and "0x10".
+  const n = /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n < 1 || n > cap.ceiling)
+    return { error: `Tool calls per reply must be a whole number from 1 to ${cap.ceiling}.` };
+  return { send: String(n) };
 }
 
 /** A turn that failed — the host's generic message stands in for the answer. */
 export function errorMessage(error: string): ChatMessage {
-  return { role: "assistant", text: "", citations: [], cancelled: false, error };
+  return { role: "assistant", text: "", citations: [], cancelled: false, tools: [], error };
 }
 
 /**

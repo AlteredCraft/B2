@@ -310,6 +310,25 @@ export const api = {
   },
 
   /**
+   * **Why was this suggested?** — the chat turn behind a *Similar & unlinked* card's
+   * **Why?**. The host gathers B2's own discovery evidence for the pair (the matched
+   * passages, the card's rank and strength, the graph facts) and streams a grounded,
+   * cited explanation — delivered exactly as `ask` is, and stopped by the same
+   * `cancelAsk`. `limit` is the list length the pane showed, so the rank the explanation
+   * quotes is the card's own.
+   */
+  whySimilar: (
+    anchor: string,
+    candidate: string,
+    limit: number,
+    onToken: (text: string) => void,
+  ): Promise<AnswerView> => {
+    const channel = new Channel<string>();
+    channel.onmessage = onToken;
+    return invoke("why_similar", { anchor, candidate, limit, onEvent: channel });
+  },
+
+  /**
    * Stop the streaming answer at its next token — the pane's Esc. Cooperative: the
    * in-flight `ask` resolves normally, with `cancelled` set and the partial text intact,
    * so a stopped answer renders honestly rather than as a failure.
@@ -335,12 +354,18 @@ export const api = {
    * returned setup carries `api_key_source`, not the key (`b2-desktop/src/keychain.rs`
    * argues both halves). Passing `null` keeps whatever is already in force, so re-saving
    * the endpoint can't silently sign you out; `""` is the explicit *clear*.
+   *
+   * `maxToolCalls` follows the key's three-state rule for the same reason — most callers
+   * of this save never mention it: `null` keeps the cap, `""` clears it back to the
+   * environment/default, a number sets it. chat.ts's `toolCapInput` decides which.
    */
   setChatConfig: (
     baseUrl: string | null,
     model: string | null,
     apiKey: string | null,
-  ): Promise<ChatSetup> => invoke("set_chat_config", { baseUrl, model, apiKey }),
+    maxToolCalls: string | null = null,
+  ): Promise<ChatSetup> =>
+    invoke("set_chat_config", { baseUrl, model, apiKey, maxToolCalls }),
 
   /** The embedding models B2 offers, flagged current + installed (Settings picker). */
   listModels: (): Promise<ModelChoice[]> => invoke("list_models"),

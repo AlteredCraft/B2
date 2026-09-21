@@ -12,8 +12,11 @@ import {
   formatModelSize,
   pullCommand,
   retrievalNote,
+  toolCapInput,
+  toolsLine,
   turnRowKey,
   userMessage,
+  whyQuestion,
 } from "./chat.ts";
 import { rovingSideKey, sideArrowMove, sideRowIndex } from "./sidenav.ts";
 import type { ChatSetup } from "./types.ts";
@@ -27,6 +30,7 @@ const setup = (over: Partial<ChatSetup> = {}): ChatSetup => ({
   message: null,
   available: [],
   ollama: null,
+  tool_calls: { in_force: 64, default: 64, ceiling: 4096 },
   ...over,
 });
 
@@ -171,6 +175,68 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
   );
   // Fully embedded: nothing to caveat.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }), "");
+});
+
+test("a why-question names both notes, by title where there is one", () => {
+  assert.equal(
+    whyQuestion(
+      { path: "notes/srs.md", title: "Spaced repetition" },
+      { path: "concepts/memory.md", title: "Memory" },
+    ),
+    "Why is “Spaced repetition” suggested as similar to “Memory”?",
+  );
+  // An untitled note is named by its path — the identity the rest of the app shows.
+  assert.equal(
+    whyQuestion({ path: "a.md", title: null }, { path: "b.md", title: "" }),
+    "Why is “a.md” suggested as similar to “b.md”?",
+  );
+});
+
+test("an answer says which B2 tools it was built from", () => {
+  const view = {
+    answer: "Both cover brewing [1].",
+    citations: [],
+    cancelled: false,
+    tools: [
+      { name: "b2_passage_pairs", arguments: "{}", seeded: false },
+      { name: "b2_read", arguments: '{"note":"a.md"}', seeded: false },
+      { name: "b2_read", arguments: '{"note":"a.md","offset":4}', seeded: false },
+    ],
+  };
+  assert.deepEqual(answerMessage(view).tools, view.tools);
+  // Each tool once, in first-use order, named the way a person would say it.
+  assert.equal(toolsLine(view.tools), "Looked up with B2 tools: passage pairs, read");
+  // A plain ask offers the model no tools; the host omits the field, and the line is empty.
+  assert.deepEqual(answerMessage({ answer: "x", citations: [], cancelled: false }).tools, []);
+  assert.equal(toolsLine([]), "");
+  // A tool name is model output, so an odd one is shown as it came — the paint escapes it.
+  assert.equal(
+    toolsLine([{ name: "<b>x</b>", arguments: "", seeded: false }]),
+    "Looked up with B2 tools: <b>x</b>",
+  );
+});
+
+test("the tool-call cap field is untouched, cleared, set, or refused — before it is sent", () => {
+  const cap = { in_force: 64, default: 64, ceiling: 4096 };
+  // Untouched: the field paints the cap in force, so saving it back unchanged must not
+  // *store* it — that would pin today's default over tomorrow's environment variable.
+  assert.deepEqual(toolCapInput("64", cap), { send: null });
+  assert.deepEqual(toolCapInput(" 64 ", cap), { send: null });
+  // Cleared: back to the environment/default, which is the host's `""`.
+  assert.deepEqual(toolCapInput("", cap), { send: "" });
+  assert.deepEqual(toolCapInput("   ", cap), { send: "" });
+  // Set, at both ends of the range the host quoted.
+  assert.deepEqual(toolCapInput("1", cap), { send: "1" });
+  assert.deepEqual(toolCapInput("4096", cap), { send: "4096" });
+  // Refused here, with a sentence, rather than sent to a host that would ignore it and
+  // leave *Save* looking like it did nothing.
+  for (const bad of ["0", "4097", "-2", "6.5", "lots", "1e3", "12abc"]) {
+    const verdict = toolCapInput(bad, cap);
+    assert.ok("error" in verdict, `${bad} should be refused`);
+    assert.match(verdict.error, /1 to 4096/);
+  }
+  // The range is the host's, not a constant here.
+  assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
 });
 
 test("the pull command is spelled in one place", () => {

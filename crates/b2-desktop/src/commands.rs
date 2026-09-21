@@ -615,6 +615,38 @@ pub fn ask(
     })
 }
 
+/// **Why was this suggested?** — the chat answer behind a click on a *Similar & unlinked*
+/// card: `Vault::why_similar` gathers B2's own discovery evidence for the pair and streams
+/// a grounded, cited explanation. Delivered exactly as [`ask`] is — same channel, same
+/// single answer slot, same `cancel_ask` — because to the pane it *is* a chat turn.
+///
+/// `limit` is the list length the pane showed, so the rank the explanation quotes is the
+/// card's own. Opens the **model-free** vault, as [`similar`] does: every read here is over
+/// stored vectors, and nothing embeds a query.
+#[tauri::command(async)]
+pub fn why_similar(
+    state: State<'_, AppState>,
+    anchor: String,
+    candidate: String,
+    limit: usize,
+    on_event: Channel<String>,
+) -> Result<AnswerView, CmdError> {
+    let state = state.inner();
+    let llm = crate::chat::provider(&state.chat_prefs());
+    let vault = open_read(state)?;
+    why_similar_impl(
+        state,
+        &vault,
+        llm.as_ref(),
+        &anchor,
+        &candidate,
+        limit,
+        &|token| {
+            let _ = on_event.send(token.to_string());
+        },
+    )
+}
+
 /// Ask the streaming answer to stop at its next token — the chat pane's Esc. Runs on a
 /// *different* worker thread than `ask`, so it sets the shared flag while that one reads
 /// it; the token callback sees it and breaks cooperatively. The partial text is not
@@ -652,6 +684,7 @@ pub fn set_chat_config(
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    max_tool_calls: Option<String>,
 ) -> ChatSetup {
     {
         // One save at a time. `(async)` means Tauri runs these off the main thread and
@@ -664,6 +697,7 @@ pub fn set_chat_config(
             base_url,
             model,
             api_key,
+            max_tool_calls,
             &crate::keychain::Keychain,
         );
         // Persisting lives in the command wrapper, not in the state transition, so the
@@ -686,6 +720,7 @@ fn set_chat_config_impl(
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    max_tool_calls: Option<String>,
     keys: &dyn crate::keychain::KeyStore,
 ) -> ChatPrefs {
     let clean = |v: Option<String>| {
@@ -697,6 +732,7 @@ fn set_chat_config_impl(
     let prefs = ChatPrefs {
         base_url: clean(base_url),
         model: clean(model),
+        max_tool_calls: crate::chat::apply_tool_cap(&state.chat_prefs(), max_tool_calls.as_deref()),
         api_key,
         key_remembered,
     };
@@ -728,6 +764,35 @@ fn ask_impl(
     history: &[ChatTurn],
     sink: &dyn Fn(&str),
 ) -> Result<AnswerView, CmdError> {
+    stream_answer(state, sink, |on_token| {
+        vault.ask(llm, question, history, on_token)
+    })
+}
+
+/// The testable core of `why_similar` — [`ask_impl`]'s sibling over the other streaming
+/// façade op, sharing its delivery whole.
+fn why_similar_impl(
+    state: &AppState,
+    vault: &Vault,
+    llm: &dyn LlmProvider,
+    anchor: &str,
+    candidate: &str,
+    limit: usize,
+    sink: &dyn Fn(&str),
+) -> Result<AnswerView, CmdError> {
+    stream_answer(state, sink, |on_token| {
+        vault.why_similar(llm, anchor, candidate, limit, on_token)
+    })
+}
+
+/// The delivery every streamed answer shares: claim the single answer slot, arm the
+/// cancel flag, and run `call` — the one façade op — with a token callback that feeds
+/// `sink` and reads the cancel flag at every token.
+fn stream_answer(
+    state: &AppState,
+    sink: &dyn Fn(&str),
+    call: impl FnOnce(&mut dyn FnMut(&str) -> ControlFlow<()>) -> b2_core::Result<AnswerView>,
+) -> Result<AnswerView, CmdError> {
     // Single-in-flight: two answers at once would share one cancel flag, so the second
     // one's `arm` would quietly un-cancel the first. The pane already refuses a second
     // turn while one is streaming, so this is the belt-and-suspenders half.
@@ -739,7 +804,7 @@ fn ask_impl(
     // the previous turn must not stop this one before its first token).
     state.arm_ask();
 
-    Ok(vault.ask(llm, question, history, &mut |token| {
+    Ok(call(&mut |token| {
         sink(token);
         if state.ask_cancelled() {
             ControlFlow::Break(())
@@ -1787,6 +1852,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn why_similar_streams_like_an_answer_and_shares_its_slot_and_its_esc() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        // Any two notes do: the façade explains a pair whether or not discovery would
+        // list it, and what it says is the engine suite's business (`tests/why.rs`).
+        let notes = vault.list_notes().unwrap();
+        let (anchor, candidate) = (notes[0].path.as_str(), notes[1].path.as_str());
+        let streamed = std::cell::RefCell::new(Vec::<String>::new());
+
+        let answer = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
+            streamed.borrow_mut().push(t.to_string())
+        })
+        .unwrap();
+        assert_eq!(streamed.borrow().concat(), answer.answer);
+        assert!(!answer.cancelled);
+        for c in &answer.citations {
+            assert!(c.path == anchor || c.path == candidate, "{c:?}");
+        }
+
+        // The pane's Esc stops it at the next token, exactly as it stops an `ask`.
+        streamed.borrow_mut().clear();
+        let stopped = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
+            streamed.borrow_mut().push(t.to_string());
+            state.request_ask_cancel();
+        })
+        .unwrap();
+        assert!(stopped.cancelled);
+        assert_eq!(streamed.borrow().len(), 1);
+
+        // One answer slot for both kinds of turn.
+        assert!(state.try_start_ask());
+        let err =
+            why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|_| {}).unwrap_err();
+        assert!(matches!(err, CmdError::AskInFlight));
+    }
+
     /// A stale cancel must not kill the *next* answer: `arm_ask` clears it once the fresh
     /// turn owns the slot, which is the whole reason the flag is armed rather than reset
     /// by whoever set it.
@@ -1797,6 +1899,31 @@ mod tests {
         state.request_ask_cancel(); // …from a turn that already ended
         let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap();
         assert!(!answer.cancelled);
+    }
+
+    /// The tool-call cap is saved by the same command, under the key's three-state rule:
+    /// a save that doesn't mention it (the setup card's model pick) must not reset it.
+    #[test]
+    fn the_tool_call_cap_is_set_kept_and_cleared_by_a_save() {
+        let state = AppState::new(None);
+        let keys = MemoryStore::empty();
+        let save = |cap: Option<&str>| {
+            set_chat_config_impl(&state, None, None, None, cap.map(str::to_string), &keys);
+            state.chat_prefs().config().max_tool_calls
+        };
+        let default = b2_llm::LlmConfig::from_env().max_tool_calls;
+        assert_eq!(save(Some("128")), 128);
+        assert_eq!(save(None), 128, "a save that doesn't mention it keeps it");
+        assert_eq!(save(Some("0")), 128, "a refused value changes nothing");
+        assert_eq!(
+            save(Some("")),
+            default,
+            "blank returns to the shared resolution"
+        );
+        // And the status the panel is drawn from reports the cap in force.
+        save(Some("32"));
+        let setup = b2_llm::ChatSetup::fake(&state.chat_prefs().config());
+        assert_eq!(setup.tool_calls.in_force, 32);
     }
 
     /// Chat settings are adapter state: setting them changes what the next ask resolves,
@@ -1812,6 +1939,7 @@ mod tests {
             Some("http://localhost:1234/v1".into()),
             Some("qwen2.5".into()),
             Some("sk-a-cloud-key".into()),
+            None,
             &keys,
         );
         let prefs = state.chat_prefs();
@@ -1825,6 +1953,7 @@ mod tests {
             &state,
             Some("http://localhost:1234/v1".into()),
             Some("  ".into()),
+            None,
             None,
             &keys,
         );
@@ -1845,6 +1974,7 @@ mod tests {
             Some("https://api.example.com/v1".into()),
             None,
             Some("sk-remember-me".into()),
+            None,
             &keys,
         );
         assert_eq!(keys.peek().as_deref(), Some("sk-remember-me"));
@@ -1863,14 +1993,21 @@ mod tests {
     fn a_blanked_key_clears_it_everywhere() {
         let state = AppState::new(None);
         let keys = MemoryStore::empty();
-        set_chat_config_impl(&state, None, None, Some("sk-a-cloud-key".into()), &keys);
+        set_chat_config_impl(
+            &state,
+            None,
+            None,
+            Some("sk-a-cloud-key".into()),
+            None,
+            &keys,
+        );
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
             Some("sk-a-cloud-key")
         );
 
         // Absent: untouched, so the key stands — in memory and in the store.
-        set_chat_config_impl(&state, None, None, None, &keys);
+        set_chat_config_impl(&state, None, None, None, None, &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
             Some("sk-a-cloud-key")
@@ -1880,7 +2017,7 @@ mod tests {
         // Blank (what the UI's Remove sends): gone from both. `config()` then resolves
         // the key from the environment alone — `B2_LLM_API_KEY` is the user's own
         // configuration, and Settings never had the standing to clear that.
-        set_chat_config_impl(&state, None, None, Some("   ".into()), &keys);
+        set_chat_config_impl(&state, None, None, Some("   ".into()), None, &keys);
         assert_eq!(state.chat_prefs().api_key, None);
         assert_eq!(
             keys.peek(),
@@ -1902,6 +2039,7 @@ mod tests {
             Some("http://b2-no-such-host.invalid:11434/v1".into()),
             Some("llama3.2".into()),
             Some("sk-live-must-not-cross".into()),
+            None,
             &MemoryStore::empty(),
         );
         let setup = chat_setup_impl(&state);
@@ -1927,6 +2065,7 @@ mod tests {
             Some("https://api.example.com/v1".into()),
             None,
             Some("sk-typed-just-now".into()),
+            None,
             &keys,
         );
         let prefs = state.chat_prefs();

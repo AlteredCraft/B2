@@ -97,6 +97,14 @@ add a UI concern to `b2-core`, that's the signal you're putting logic in the wro
   break chat**: the key stays in force for the run and the configuration reads `ApiKeySource::Session`, which
   is the pre-#176 behavior as a fallback rather than a failure. And the key still never crosses back to the
   webview: the status view carries `api_key_source`, never the key.
+  The **tool-call cap** (`LlmConfig::max_tool_calls`, ADR-0022) is the panel's fourth field, *Tool
+  calls per reply*. It persists in `chat.json` beside the endpoint and model and layers the way they
+  do — Settings beats `B2_LLM_MAX_TOOL_CALLS` beats the default — but it is **saved** under the key's
+  three-state rule (`chat::apply_tool_cap`: `None` untouched, blank clear, a value set), because most
+  callers of `set_chat_config` never mention it and must not reset it. This crate judges nothing:
+  the value is parsed by `b2_llm::parse_max_tool_calls`, the variable's own parser, and the range
+  the panel quotes and validates against (`toolCapInput`, `ui/src/chat.ts`) arrives in
+  `ChatSetup.tool_calls` rather than being mirrored in the frontend.
 - **Structured logging installed here, like the CLI.** `logging::init_logging` (called first in `main`)
   is the desktop's opt-in `B2_LOG`/`B2_DEBUG`/`B2_LOG_FILE` subscriber — the GUI sibling of the CLI's, same
   JSONL shape (b2-core only emits; the subscriber + clock live in the adapter, keeping the core
@@ -256,6 +264,14 @@ Every new surface owes all four. They are cheap while you're building it and exp
   markup, so the mouse and ⏎ share one path) and the streaming paint (`paintChatStream`, main.ts — a full
   render per token would swap the pane's `innerHTML` a hundred times an answer and eject the keyboard with
   every one).
+  A candidate card's **Why?** is a chat turn too (`askWhy`, main.ts → the `why_similar` command →
+  `Vault::why_similar`): it takes the column from discovery, shares `ask`'s single answer slot and
+  `cancel_ask`, and its keyboard half is the card menu's *Why was this suggested?* (⇧F10). The
+  transcript's question is `chat.ts`'s `whyQuestion` — display text only; the prompt, the tools the
+  model may call and the loop that runs them are all the core's (ADR-0022). The pane adds two things:
+  the live row's waiting label (`state.chatWaiting` — the first round is lookups, and an empty row
+  reads as a hang) and the *Looked up with B2 tools* line under the answer (`toolsLine`, escaped at
+  the paint because a tool name is model output).
 - **`ui/src/droplink.ts`** — the discovery card's drop into the note: where the link lands, where it
   may not, and the CodeMirror preview that says so before the button comes up. Its own module for
   livepreview.ts's reason — the decisions are pure functions of a line (or of an `EditorState` and a

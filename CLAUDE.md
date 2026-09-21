@@ -81,6 +81,14 @@ the vault, because the device is part of the embedding space's identity (ADR-000
   `B2_LLM_API_KEY` overrides whatever is stored (`b2_llm::ApiKeySource` — `none`/`environment`/
   `stored`/`session` — is what the Settings copy reads; the key never crosses back to the webview).
   Chat config is adapter-level, never vault or index state, so a chat-model swap costs no reindex.
+  **`B2_LLM_MAX_TOOL_CALLS`** (default 64) caps the tool calls — and the highest call `index` — one
+  model reply may carry. It bounds memory a server can make B2 allocate, so a reply past it **fails**
+  (`LlmError::TooManyToolCalls` → `b2_core::Error::ToolCallLimit`, typed across the seam, WARN-logged,
+  with its own user message) rather than being trimmed, and `why_similar` never degrades past it.
+  `b2_llm::parse_max_tool_calls` is the **one** judge of a typed cap — a whole number from 1 to
+  `MAX_TOOL_CALLS_CEILING` (4096; a memory bound needs a bound of its own) — shared by the variable
+  and the desktop's Settings → Chat field, which **beats** the variable (the `with_overrides` rule,
+  not the key's). A refused env value keeps the default and says so at WARN.
 - **`B2_LOG`** — structured debug logging as **JSON Lines** (stdout stays pure data), one flat object
   per event, to stderr or to **`B2_LOG_FILE=<path>`** (append mode, so runs accumulate into one
   reportable dataset). The value is a tracing filter (`debug`, `b2::sqlite=debug`, …); `B2_DEBUG` or
@@ -119,7 +127,10 @@ nothing; every write is the mechanics of a command the human invoked.
   refusal (`LlmError::Refused`), and tolerance is bounded to a 2xx whose body isn't a model list.
   `setup` is the same question asked for a *card*: it never fails, and it is the one deliberately
   **Ollama-native** corner (`GET /api/tags` + a memory-sized pull suggestion) in an otherwise generic
-  `/v1` crate. That asymmetry is by design — guided setup is a per-runtime feature — so it must not
+  `/v1` crate. Tool calls (ADR-0022) ride the same wire: `tools` is omitted when empty, each
+  exchange replays as an assistant `tool_calls` message plus its `tool` result, and the SSE
+  reader assembles `delta.tool_calls` across the three shapes servers send (split by `index`,
+  whole per frame, no `id`). That asymmetry is by design — guided setup is a per-runtime feature — so it must not
   be "generalized" against an abstraction that cannot serve it.
 - **`b2-cli`** — the `b2` binary. A *dumb* adapter (ADR-0012): parse args, inject the embedder and
   chat provider, call `Vault`, print (human-readable, streamed, or `--json` for agents).
@@ -145,7 +156,7 @@ module is called directly only by integration tests). Surface: lifecycle + index
 `open_with_embedder` / `reindex` / `reindex_with_progress` / `plan_reindex` / `project` / `embed`),
 reads (`read` / `list_notes` / `list_resources` / `list_dirs` / `neighbors` / `explain` /
 `explain_resource` / `read_resource_bytes` / `search` / `search_evidence` / `similar` /
-`ask`), writes (`add_note` / `create_note` / `create_dir` / `import_file` / `import_path` /
+`ask` / `why_similar`), writes (`add_note` / `create_note` / `create_dir` / `import_file` / `import_path` /
 `move_note` / `move_resource` / `move_dir` / `link` / `write` / `write_frontmatter` /
 `delete_note` / `delete_resource` / `delete_dir`). **Add operations when a command needs them; do not pre-build a broad surface.** The
 embedder is injected here: `open` defaults to the fake, `open_with_embedder` wires the real model.
@@ -179,6 +190,14 @@ embedder is injected here: `open` defaults to the fake, `open_with_embedder` wir
   is stored, history is session-only, model output is untrusted content. Every surface streams, which
   is why `--json` is a JSONL *event* stream. Both adapters cancel the same way (Ctrl-C / Esc) and
   render what already arrived — `Completion` marks a cut stream rather than failing it.
+  `Vault::why_similar` (`b2 why`, the Similar card's **Why?**) is the one **tool-using** turn
+  (ADR-0022): the model is offered B2's read-only tools (`chat::why_tools` — `b2_passage_pairs`,
+  `b2_similar`, `b2_neighbors`, `b2_read`, each one façade read) and the core runs what it calls,
+  bounded at `MAX_TOOL_ROUNDS`. Round 1's text is never streamed; a model that calls nothing, or
+  has no tool support, degrades to the same evidence in one plain request
+  (`chat::build_why_request`); a skipped pair lookup is appended as `seeded`. Tool calls are
+  untrusted model output — a bad one gets an `error:` result, never a failed turn — and
+  `AnswerView.tools` says what ran. `FakeLlm` scripts the loop off the request's structure.
 - **`graph_filtered_search`** (`search.rs`) — the vector⨝graph join: nearest chunks whose note is
   within *k* typed hops of an anchor. `discover::candidates` is its *complement* (nearest notes *not*
   already connected).

@@ -1229,6 +1229,15 @@ pub fn note_chunks_missing_vectors(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// A note's chunk ids in reading order (`seq`), embedded or not — the unit a reader
+/// walks a note by. Empty for an unknown or empty note.
+pub fn note_chunk_ids(conn: &Connection, note_path: &str) -> Result<Vec<i64>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT id FROM chunks WHERE note_path = ?1 ORDER BY seq")?;
+    let rows = stmt.query_map([note_path], |r| r.get::<_, i64>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// A note's `title` (None if the note is absent or has no title).
 pub fn note_title(conn: &Connection, note_path: &str) -> Result<Option<String>> {
     Ok(conn

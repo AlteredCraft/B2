@@ -199,6 +199,7 @@ impl OpenAiCompatProvider {
         // cancelled.
         let completion = sse::stream_completion(
             BufReader::new(response.into_reader()).take(MAX_STREAM_BYTES),
+            self.config.max_tool_calls,
             on_token,
         )?;
         tracing::debug!(
@@ -247,8 +248,12 @@ impl LlmProvider for OpenAiCompatProvider {
         req: &ChatRequest,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> b2_core::Result<Completion> {
-        self.stream(req, on_token)
-            .map_err(|e| b2_core::Error::Llm(e.to_string()))
+        self.stream(req, on_token).map_err(|e| match e {
+            // The one failure that keeps its type across the seam: a caller that
+            // degrades on a failed tool round must be able to refuse to hide this one.
+            LlmError::TooManyToolCalls { limit } => b2_core::Error::ToolCallLimit { limit },
+            other => b2_core::Error::Llm(other.to_string()),
+        })
     }
 }
 
@@ -337,6 +342,11 @@ struct WireRequest<'a> {
     messages: Vec<WireMessage<'a>>,
     /// Always `true` — streaming is the contract, not an option (GH #151).
     stream: bool,
+    /// The tools offered this round. Omitted entirely when there are none, so a plain
+    /// ask is byte-for-byte the request it always was — and a server with no tool
+    /// support never sees the key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<WireTool<'a>>,
 }
 
 impl<'a> WireRequest<'a> {
@@ -349,6 +359,8 @@ impl<'a> WireRequest<'a> {
         messages.push(WireMessage {
             role: "system",
             content: req.system_message(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         });
         messages.extend(req.turns.iter().map(|t| WireMessage {
             role: match t.role {
@@ -356,11 +368,50 @@ impl<'a> WireRequest<'a> {
                 Role::Assistant => "assistant",
             },
             content: t.content.clone(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }));
+        // A tool-using turn's history: each call as the assistant message that made it,
+        // then its result as a `tool` message answering that id. One call per assistant
+        // message — valid on every server, and it needs no record of which calls shared
+        // a round.
+        for exchange in &req.exchanges {
+            messages.push(WireMessage {
+                role: "assistant",
+                content: String::new(),
+                tool_calls: vec![WireToolCall {
+                    id: &exchange.call.id,
+                    kind: "function",
+                    function: WireFunctionCall {
+                        name: &exchange.call.name,
+                        arguments: &exchange.call.arguments,
+                    },
+                }],
+                tool_call_id: None,
+            });
+            messages.push(WireMessage {
+                role: "tool",
+                content: exchange.result.clone(),
+                tool_calls: Vec::new(),
+                tool_call_id: Some(&exchange.call.id),
+            });
+        }
         Self {
             model,
             messages,
             stream: true,
+            tools: req
+                .tools
+                .iter()
+                .map(|t| WireTool {
+                    kind: "function",
+                    function: WireFunction {
+                        name: &t.name,
+                        description: &t.description,
+                        parameters: &t.parameters,
+                    },
+                })
+                .collect(),
         }
     }
 }
@@ -369,6 +420,41 @@ impl<'a> WireRequest<'a> {
 struct WireMessage<'a> {
     role: &'a str,
     content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<WireToolCall<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+}
+
+/// A call the model made, replayed to it (`messages[].tool_calls[]`).
+#[derive(Debug, Serialize)]
+struct WireToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'a str,
+    function: WireFunctionCall<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireFunctionCall<'a> {
+    name: &'a str,
+    /// JSON **text**, as the wire shape has it and as the seam carries it.
+    arguments: &'a str,
+}
+
+/// A tool offered to the model (`tools[]`).
+#[derive(Debug, Serialize)]
+struct WireTool<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    function: WireFunction<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireFunction<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 /// `GET /models` — only the ids are read.
@@ -461,6 +547,81 @@ mod tests {
         );
         assert_eq!(wire.messages[1].role, "user");
         assert_eq!(wire.messages[2].content, "how does it work?");
+    }
+
+    #[test]
+    fn a_plain_ask_sends_no_tools_key_at_all() {
+        let req = b2_core::chat::build_request("q", &[], Vec::new());
+        let body = serde_json::to_string(&WireRequest::from_chat("llama3.2", &req)).unwrap();
+        assert!(!body.contains("tools"), "{body}");
+        assert!(!body.contains("tool_call"), "{body}");
+    }
+
+    #[test]
+    fn a_tool_turn_offers_the_tools_and_replays_each_call_with_its_result() {
+        use b2_core::llm::{ToolCall, ToolExchange};
+        let facts = b2_core::chat::WhyFacts {
+            anchor_path: "a.md".into(),
+            anchor_title: None,
+            candidate_path: "c.md".into(),
+            candidate_title: None,
+            rank: None,
+            z: None,
+            linked: false,
+            shared_neighbors: Vec::new(),
+            pairs: Vec::new(),
+            embedded: true,
+        };
+        let req = b2_core::chat::build_why_agent_request(
+            &facts,
+            b2_core::chat::why_tools(),
+            vec![ToolExchange {
+                call: ToolCall {
+                    id: "b2_seed_1".into(),
+                    name: b2_core::chat::TOOL_PASSAGE_PAIRS.into(),
+                    arguments: r#"{"note":"a.md"}"#.into(),
+                },
+                result: "[1] a.md\nthe passage\n".into(),
+            }],
+            vec![b2_core::llm::ContextPassage {
+                path: "a.md".into(),
+                heading_path: None,
+                text: "the passage".into(),
+            }],
+        );
+        let body: serde_json::Value =
+            serde_json::to_value(WireRequest::from_chat("llama3.2", &req)).unwrap();
+
+        let tools = body["tools"].as_array().expect("tools offered");
+        assert_eq!(tools.len(), b2_core::chat::why_tools().len());
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "b2_passage_pairs");
+        assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+
+        let messages = body["messages"].as_array().unwrap();
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+        // The ledger's passages reached the model in the tool result, not the system
+        // message — once, not twice.
+        assert!(!messages[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Passages:"));
+        let call = &messages[2]["tool_calls"][0];
+        assert_eq!(call["id"], "b2_seed_1");
+        assert_eq!(call["type"], "function");
+        assert_eq!(
+            call["function"]["arguments"], r#"{"note":"a.md"}"#,
+            "JSON text, not an object"
+        );
+        assert_eq!(messages[3]["tool_call_id"], "b2_seed_1");
+        assert!(messages[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("the passage"));
     }
 
     #[test]

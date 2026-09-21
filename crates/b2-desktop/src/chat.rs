@@ -36,6 +36,10 @@ pub struct ChatPrefs {
     /// The chat model id the user typed, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The tool-call cap the user set, if any (`LlmConfig::max_tool_calls`). `None` is
+    /// "whatever `B2_LLM_MAX_TOOL_CALLS` and the default say", like the two fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<usize>,
     /// The bearer token for a cloud endpoint, as it stands for this run.
     ///
     /// `skip` on both halves, not merely `skip_serializing_if`: this type is what
@@ -61,6 +65,7 @@ impl std::fmt::Debug for ChatPrefs {
         f.debug_struct("ChatPrefs")
             .field("base_url", &self.base_url)
             .field("model", &self.model)
+            .field("max_tool_calls", &self.max_tool_calls)
             .field(
                 "api_key",
                 &match self.api_key {
@@ -81,6 +86,7 @@ impl ChatPrefs {
     pub fn config(&self) -> LlmConfig {
         LlmConfig::from_env()
             .with_overrides(self.base_url.as_deref(), self.model.as_deref())
+            .with_max_tool_calls(self.max_tool_calls)
             .with_api_key(self.api_key.as_deref(), self.api_key_source())
     }
 
@@ -201,6 +207,20 @@ pub fn apply_key(
     }
 }
 
+/// Apply a save's tool-call-cap field — [`apply_key`]'s three-state rule, for the same
+/// reason: a save that doesn't mention the field (the setup card's one-click model pick,
+/// the key's Remove button) must not reset it. `None` is **untouched**, blank is **clear**
+/// (back to the environment/default), a value is **set**. Judging the value is
+/// `b2_llm::parse_max_tool_calls`'s — the environment variable's own parser — and one it
+/// refuses leaves the cap as it stood, which the returned status then shows.
+pub fn apply_tool_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
+    match typed.map(str::trim) {
+        None => prev.max_tool_calls,
+        Some("") => None,
+        Some(raw) => b2_llm::parse_max_tool_calls(raw).or(prev.max_tool_calls),
+    }
+}
+
 /// Remember the endpoint and model. **Best-effort host state**, like the last
 /// opened vault: a write failure is logged and swallowed, never failing the
 /// setting the user just made — the change is already live in memory either way.
@@ -241,6 +261,7 @@ mod tests {
             model: Some("qwen2.5".into()),
             api_key: Some("sk-live-must-not-persist".into()),
             key_remembered: true,
+            ..ChatPrefs::default()
         };
         write_prefs_to(&file, &prefs).unwrap();
 
@@ -258,6 +279,58 @@ mod tests {
             back.api_key, None,
             "the settings file is structurally incapable of carrying a key"
         );
+    }
+
+    #[test]
+    fn the_tool_call_cap_persists_and_layers_over_the_shared_resolution() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("chat.json");
+        let prefs = ChatPrefs {
+            max_tool_calls: Some(128),
+            ..ChatPrefs::default()
+        };
+        write_prefs_to(&file, &prefs).unwrap();
+        let back = read_prefs_from(Some(&file), &MemoryStore::empty());
+        assert_eq!(back.max_tool_calls, Some(128));
+        assert_eq!(back.config().max_tool_calls, 128);
+
+        // Never set: nothing about it reaches the file, and the shared resolution stands.
+        write_prefs_to(&file, &ChatPrefs::default()).unwrap();
+        assert!(!std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("max_tool_calls"));
+        assert_eq!(
+            ChatPrefs::default().config().max_tool_calls,
+            LlmConfig::from_env().max_tool_calls
+        );
+
+        // A hand-edited file cannot lift the ceiling the parser enforces.
+        std::fs::write(&file, r#"{"max_tool_calls": 1000000000}"#).unwrap();
+        let edited = read_prefs_from(Some(&file), &MemoryStore::empty());
+        assert_eq!(
+            edited.config().max_tool_calls,
+            LlmConfig::from_env().max_tool_calls
+        );
+    }
+
+    /// The field's three-state rule, which is the key's: `None` is *untouched*, blank is
+    /// *clear*, a value is *set* — and a value the shared parser refuses changes nothing.
+    #[test]
+    fn the_tool_call_cap_field_is_untouched_cleared_or_set() {
+        let held = ChatPrefs {
+            max_tool_calls: Some(128),
+            ..ChatPrefs::default()
+        };
+        assert_eq!(apply_tool_cap(&held, None), Some(128), "untouched");
+        assert_eq!(apply_tool_cap(&held, Some("  ")), None, "cleared");
+        assert_eq!(apply_tool_cap(&held, Some(" 16 ")), Some(16), "set");
+        for refused in ["0", "lots", "-3", "99999999"] {
+            assert_eq!(
+                apply_tool_cap(&held, Some(refused)),
+                Some(128),
+                "{refused:?}"
+            );
+        }
     }
 
     /// The other half of #176: the key *does* come back, from the store rather
@@ -420,6 +493,7 @@ mod tests {
             model: Some("some-model".into()),
             api_key: Some("sk-live-do-not-log-me".into()),
             key_remembered: true,
+            ..ChatPrefs::default()
         };
         let rendered = format!("{prefs:?}");
         assert!(

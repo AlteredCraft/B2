@@ -1489,6 +1489,51 @@ fn ask_json_streams_tokens_then_the_resolved_answer() {
     }
 }
 
+/// `why` is `ask`'s sibling over the other streaming façade op: the same JSONL event
+/// stream, with citations confined to the two notes the explanation is about.
+#[test]
+fn why_json_streams_an_explanation_cited_to_the_two_notes() {
+    let (_g, root) = reindexed();
+    let (anchor, candidate) = ("concepts/memory.md", "notes/spaced-repetition.md");
+
+    let out = run_chat(&root, &["--json", "why", anchor, candidate], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let events = events(&out);
+    let (last, tokens) = events.split_last().expect("at least the answer event");
+    assert!(tokens.iter().all(|e| e["event"] == "token"), "{tokens:?}");
+    assert_eq!(last["event"], "answer");
+    let streamed: String = tokens
+        .iter()
+        .map(|e| e["text"].as_str().expect("token text"))
+        .collect();
+    assert_eq!(streamed, last["answer"].as_str().expect("answer text"));
+
+    let citations = last["citations"].as_array().expect("citations array");
+    assert!(!citations.is_empty(), "the fake cites every passage it got");
+    for c in citations {
+        let path = c["path"].as_str().expect("citation path");
+        assert!(path == anchor || path == candidate, "{path}");
+    }
+
+    // The turn is tool-using, and the answer says which B2 tools ran — the pair lookup
+    // among them, whoever made it.
+    let tools = last["tools"].as_array().expect("tools array");
+    assert!(
+        tools.iter().any(|t| t["name"] == "b2_passage_pairs"),
+        "{tools:?}"
+    );
+    assert!(tools.iter().all(|t| t["seeded"].is_boolean()));
+
+    // The human surface lists them under the sources.
+    let out = run_chat(&root, &["why", anchor, candidate], None);
+    assert!(stdout(&out).contains("B2 tools used:"), "{}", stdout(&out));
+
+    // An unknown note is the same generic not-found every other command gives.
+    let out = run_chat(&root, &["why", anchor, "nope.md"], None);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("nope.md"), "{}", stderr(&out));
+}
+
 /// The human surface: the answer on stdout as it streams, then its sources. The
 /// fake-provider caveat is a stderr notice — stdout stays the answer, so
 /// `b2 ask … > answer.txt` captures an answer and nothing else.

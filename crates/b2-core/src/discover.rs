@@ -218,3 +218,67 @@ pub fn candidates(
         .collect();
     Ok(out)
 }
+
+/// One matched passage pair between an anchor and a candidate: the candidate's chunk,
+/// the anchor's chunk nearest to it, and how near they are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassagePair {
+    /// The anchor's chunk nearest to `candidate_chunk_id`.
+    pub anchor_chunk_id: i64,
+    /// The candidate's chunk this pair is about.
+    pub candidate_chunk_id: i64,
+    /// Negated L2 distance between the two — higher is nearer, the same unit as
+    /// [`CandidateNote::score`].
+    pub score: f64,
+}
+
+/// The evidence behind one discovery row: up to `limit` passage pairs between `anchor`
+/// and `candidate`, nearest first — **one pair per candidate chunk**, each matched to the
+/// anchor chunk nearest to it. The first pair is exactly the pair [`candidates`] scored
+/// the note on (same distances, same strictly-less tie rule, so the same
+/// `evidence_chunk_id` at the same `score`): an explanation built from these is about
+/// the passage the card showed, never a second ranking that could disagree with it.
+///
+/// [`candidates`] keeps only the winning candidate chunk because a list needs no more;
+/// this is the read for the moment a human asks *why* one row is there, where the
+/// anchor's half of the pair is the other half of the answer. A pure read over stored
+/// vectors, re-embedding nothing. Empty when the vault has no embedding space, when
+/// either note has no stored vectors, or when `limit` is 0.
+pub fn passage_pairs(
+    conn: &Connection,
+    anchor: &str,
+    candidate: &str,
+    limit: usize,
+) -> Result<Vec<PassagePair>> {
+    if limit == 0 || !db::embedding_space_exists(conn)? {
+        return Ok(Vec::new());
+    }
+    let anchor_vecs = db::note_chunk_vectors(conn, anchor)?;
+    let mut pairs: Vec<(f32, i64, i64)> = Vec::new();
+    for (candidate_chunk_id, v) in db::note_chunk_vectors(conn, candidate)? {
+        let mut best: Option<(f32, i64)> = None;
+        for (anchor_chunk_id, a) in &anchor_vecs {
+            let dist_sq = l2_sq(a, &v);
+            if best.is_none_or(|(cur, _)| dist_sq < cur) {
+                best = Some((dist_sq, *anchor_chunk_id));
+            }
+        }
+        if let Some((dist_sq, anchor_chunk_id)) = best {
+            pairs.push((dist_sq, anchor_chunk_id, candidate_chunk_id));
+        }
+    }
+    // Stable, so equal distances keep the candidate's chunk order — the earliest chunk
+    // wins a tie, as it does in `candidates`.
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(pairs
+        .into_iter()
+        .take(limit)
+        .map(
+            |(dist_sq, anchor_chunk_id, candidate_chunk_id)| PassagePair {
+                anchor_chunk_id,
+                candidate_chunk_id,
+                score: -(dist_sq.sqrt() as f64),
+            },
+        )
+        .collect())
+}

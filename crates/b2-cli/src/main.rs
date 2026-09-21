@@ -231,6 +231,23 @@ enum Command {
         #[command(flatten)]
         llm: LlmArgs,
     },
+    /// Explain why CANDIDATE shows up in `b2 similar NOTE` — a grounded, cited answer
+    /// streamed from the chat model, which is given B2's read-only tools (the matched
+    /// passages, the similar list, a note's links, reading a note) and looks up what it
+    /// needs. The answer lists the tools that ran. A model with no tool support is handed
+    /// the matched passages instead. `--json` streams events as `ask` does.
+    /// Needs a model server — Ollama by default (see `--llm-url`).
+    Why {
+        /// The note the list was for: a vault-relative path.
+        note: String,
+        /// The suggested note to explain: a vault-relative path.
+        candidate: String,
+        /// The length of the `similar` list the rank is quoted against.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[command(flatten)]
+        llm: LlmArgs,
+    },
     /// Interactive grounded chat about your vault — the same answers as `ask`, with
     /// follow-up questions that remember the conversation. Ctrl-C stops an answer
     /// mid-stream (the partial text stands); `/exit` or Ctrl-D leaves. History is
@@ -390,6 +407,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             explanation,
         } => cmd_link(cli, src, dst, edge_type, explanation.as_deref()),
         Command::Ask { question, llm } => cmd_ask(cli, question, llm),
+        Command::Why {
+            note,
+            candidate,
+            limit,
+            llm,
+        } => cmd_why(cli, note, candidate, *limit, llm),
         Command::Chat { llm } => cmd_chat(cli, llm),
     }
 }
@@ -1025,6 +1048,29 @@ fn cmd_ask(cli: &Cli, question: &str, llm_args: &LlmArgs) -> Result<(), CliError
     Ok(())
 }
 
+fn cmd_why(
+    cli: &Cli,
+    note: &str,
+    candidate: &str,
+    limit: usize,
+    llm_args: &LlmArgs,
+) -> Result<(), CliError> {
+    let llm = open_llm(llm_args)?;
+    // A pure read over stored vectors, like `similar`: nothing embeds a query, so the
+    // real model is never loaded.
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
+    let json = cli.json;
+    let answer = vault.why_similar(llm.as_ref(), note, candidate, limit, &mut |token| {
+        stream_token(token, json)
+    })?;
+    finish_answer(&answer, json);
+    if !json {
+        note_fake_llm();
+    }
+    Ok(())
+}
+
 fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
     let llm = open_llm(llm_args)?;
     let vault = open_vault(cli.vault_or_cwd(), true)?;
@@ -1117,21 +1163,32 @@ fn ask_streamed(
     json: bool,
 ) -> Result<AnswerView, CliError> {
     let answer = vault.ask(llm, question, history, &mut |token| {
-        if json {
-            print_event(&AskEvent::Token { text: token });
-        } else {
-            print!("{token}");
-            // Streaming is the point: an unflushed line renders in one lump.
-            let _ = std::io::stdout().flush();
-        }
-        cancel_flow()
+        stream_token(token, json)
     })?;
-    if json {
-        print_event(&AskEvent::Answer(&answer));
-    } else {
-        print_answer_tail(&answer);
-    }
+    finish_answer(&answer, json);
     Ok(answer)
+}
+
+/// Render one streamed token — the framing `ask`, `chat` and `why` share — and report
+/// whether Ctrl-C has asked the stream to stop.
+fn stream_token(token: &str, json: bool) -> ControlFlow<()> {
+    if json {
+        print_event(&AskEvent::Token { text: token });
+    } else {
+        print!("{token}");
+        // Streaming is the point: an unflushed line renders in one lump.
+        let _ = std::io::stdout().flush();
+    }
+    cancel_flow()
+}
+
+/// Close a streamed answer: the final `answer` event under `--json`, else the sources.
+fn finish_answer(answer: &AnswerView, json: bool) {
+    if json {
+        print_event(&AskEvent::Answer(answer));
+    } else {
+        print_answer_tail(answer);
+    }
 }
 
 /// One line of the `--json` ask stream. The framing is the CLI's; the payload of
@@ -1166,6 +1223,15 @@ fn print_answer_tail(answer: &AnswerView) {
             if !c.excerpt.is_empty() {
                 println!("      {}", c.excerpt);
             }
+        }
+    }
+    if !answer.tools.is_empty() {
+        println!("\nB2 tools used:");
+        for t in &answer.tools {
+            // A lookup B2 made itself is marked, so the list never overstates what the
+            // model chose to do.
+            let by = if t.seeded { "  (made by B2)" } else { "" };
+            println!("  {} {}{by}", t.name, t.arguments);
         }
     }
     if answer.cancelled {
@@ -1567,6 +1633,12 @@ fn user_message(err: &CliError) -> String {
                 None => ".".to_string(),
             }
         ),
+        // Not the generic chat failure below: the server is up and the model is there,
+        // so that advice would mislead. The cap is the one fix on this side of the wire.
+        CliError::Core(b2_core::Error::ToolCallLimit { limit }) => format!(
+            "The chat model asked for more than {limit} tool calls in one reply, so b2 stopped it. Try again or use another model (--llm-model). If this model really needs more, raise {}.",
+            b2_llm::ENV_MAX_TOOL_CALLS
+        ),
         // Every remaining chat failure — an HTTP refusal at probe time, a malformed
         // stream — is one sentence with one fix, and the detail is a `B2_DEBUG` away.
         CliError::Llm(_) | CliError::Core(b2_core::Error::Llm(_)) => {
@@ -1597,6 +1669,17 @@ fn user_message(err: &CliError) -> String {
 mod tests {
     use super::*;
     use b2_core::vault::{EvidencedResult, SearchResult};
+
+    #[test]
+    fn a_blown_tool_call_cap_names_the_limit_and_the_variable_that_raises_it() {
+        let msg = user_message(&CliError::Core(b2_core::Error::ToolCallLimit { limit: 64 }));
+        assert!(msg.contains("64"), "{msg}");
+        assert!(msg.contains("B2_LLM_MAX_TOOL_CALLS"), "{msg}");
+        assert!(
+            !msg.contains("Check that it's running"),
+            "the server is fine — the generic chat advice would mislead: {msg}"
+        );
+    }
 
     fn view(vouched: Option<bool>, n: usize) -> SearchEvidenceView {
         SearchEvidenceView {

@@ -59,6 +59,18 @@ export interface AnswerView {
   citations: Citation[];
   /** The stream was stopped mid-answer (Esc): `answer` is an honest prefix. */
   cancelled: boolean;
+  /** The B2 tools that ran to produce the answer, in order. The host omits the field
+   *  for a plain `ask`, which offers the model none. */
+  tools?: ToolUse[];
+}
+
+/** One tool run during a tool-using chat turn (`b2-core`'s `ToolUseView`). `name` and
+ *  `arguments` are the model's own for a call it made — untrusted, like its answer. */
+export interface ToolUse {
+  name: string;
+  arguments: string;
+  /** `true` for a lookup B2 made itself; `false` for one the model chose. */
+  seeded: boolean;
 }
 
 /** One resolved `[n]` citation: which marker, which note, and a line of evidence. */
@@ -149,6 +161,19 @@ export interface ChatSetup {
   /** Models the endpoint says it serves, when it said. */
   available: string[];
   ollama: OllamaSetup | null;
+  /** The tool-call cap, with the two numbers the Settings field's copy and validation
+   *  quote — the host's, so the panel can't advertise a range the parser refuses. */
+  tool_calls: ToolCallCap;
+}
+
+/** `b2-llm`'s `ToolCallCap`: the most tool calls one model reply may make. */
+export interface ToolCallCap {
+  /** The cap in force — Settings over `B2_LLM_MAX_TOOL_CALLS` over the default. */
+  in_force: number;
+  /** What clearing the field returns to, absent an environment override. */
+  default: number;
+  /** The highest value any source may set. */
+  ceiling: number;
 }
 
 /**
