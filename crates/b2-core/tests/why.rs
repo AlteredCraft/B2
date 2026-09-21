@@ -680,6 +680,42 @@ fn a_failed_model_call_surfaces_as_an_llm_error() {
     );
 }
 
+/// A provider whose lookup round blows the tool-call cap.
+#[derive(Default)]
+struct OverTheCap {
+    calls: RefCell<usize>,
+}
+
+impl LlmProvider for OverTheCap {
+    fn model_id(&self) -> &str {
+        "over-the-cap"
+    }
+    fn complete(
+        &self,
+        _req: &ChatRequest,
+        _on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
+    ) -> b2_core::Result<Completion> {
+        *self.calls.borrow_mut() += 1;
+        Err(Error::ToolCallLimit { limit: 64 })
+    }
+}
+
+#[test]
+fn a_blown_tool_call_cap_is_surfaced_never_papered_over_by_the_handoff() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, _root) = chain_vault(tmp.path());
+    let llm = OverTheCap::default();
+
+    // A failed lookup round normally degrades to the handoff, because the usual cause
+    // is a model with no tool support. A reply past the cap is not that: it is a broken
+    // or hostile server, and quietly answering anyway would hide it.
+    let err = vault
+        .why_similar(&llm, A, C, 10, &mut keep_streaming())
+        .unwrap_err();
+    assert!(matches!(err, Error::ToolCallLimit { limit: 64 }), "{err:?}");
+    assert_eq!(*llm.calls.borrow(), 1, "no second request was made");
+}
+
 // --- prompt assembly (the pure core logic) ---------------------------------------
 
 #[test]

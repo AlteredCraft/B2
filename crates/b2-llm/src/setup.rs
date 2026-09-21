@@ -725,6 +725,7 @@ mod tests {
             model: "some-model".into(),
             api_key: Some("sk-live-do-not-serialize-me".into()),
             api_key_source: ApiKeySource::Stored,
+            ..LlmConfig::default()
         };
         let setup = ChatSetup {
             base_url: config.base_url.clone(),

@@ -199,6 +199,7 @@ impl OpenAiCompatProvider {
         // cancelled.
         let completion = sse::stream_completion(
             BufReader::new(response.into_reader()).take(MAX_STREAM_BYTES),
+            self.config.max_tool_calls,
             on_token,
         )?;
         tracing::debug!(
@@ -247,8 +248,12 @@ impl LlmProvider for OpenAiCompatProvider {
         req: &ChatRequest,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> b2_core::Result<Completion> {
-        self.stream(req, on_token)
-            .map_err(|e| b2_core::Error::Llm(e.to_string()))
+        self.stream(req, on_token).map_err(|e| match e {
+            // The one failure that keeps its type across the seam: a caller that
+            // degrades on a failed tool round must be able to refuse to hide this one.
+            LlmError::TooManyToolCalls { limit } => b2_core::Error::ToolCallLimit { limit },
+            other => b2_core::Error::Llm(other.to_string()),
+        })
     }
 }
 

@@ -1381,6 +1381,9 @@ impl Vault {
                     return self.why_handoff(llm, &mut facts, desk, tools_used, on_token);
                 }
                 Ok(c) => c,
+                // Never degraded: a reply past the tool-call cap is a broken or hostile
+                // server, and a quiet handoff would hide it.
+                Err(e @ Error::ToolCallLimit { .. }) => return Err(e),
                 // The lookup round failed: most often a model with no tool support.
                 // If the server is simply down, the handoff fails the same way, honestly.
                 Err(e) if round == 1 => {
@@ -2066,7 +2069,7 @@ struct SeededLookup {
 /// the "can't reach the model server" message. Enforced here, not hoped for.
 fn llm_error(e: Error) -> Error {
     match e {
-        Error::Llm(_) => e,
+        Error::Llm(_) | Error::ToolCallLimit { .. } => e,
         other => Error::Llm(other.to_string()),
     }
 }

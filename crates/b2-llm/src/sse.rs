@@ -36,10 +36,11 @@ use std::ops::ControlFlow;
 /// with it the connection — at the next scope exit. That is the whole of cancellation.
 pub(crate) fn stream_completion<R: BufRead>(
     mut reader: R,
+    max_tool_calls: usize,
     on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
 ) -> Result<Completion, LlmError> {
     let mut text = String::new();
-    let mut calls = ToolCallParts::default();
+    let mut calls = ToolCallParts::new(max_tool_calls);
     // The current event's `data:` payload — accumulated across lines, since the
     // spec allows an event to carry several and joins them with newlines.
     let mut data = String::new();
@@ -159,7 +160,7 @@ fn dispatch(
             }
         }
         for part in choice.delta.tool_calls {
-            calls.absorb(part);
+            calls.absorb(part)?;
         }
         if choice.finish_reason.is_some() {
             step = Step::Finished;
@@ -186,13 +187,22 @@ fn cancelled(text: String) -> Completion {
 
 /// Tool calls under assembly, slotted by the wire's `index`. A delta with an index fills
 /// (or extends) that slot; a delta without one is a whole call and takes the next slot.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ToolCallParts {
     slots: Vec<(Option<String>, String, String)>, // (id, name, arguments)
+    /// The most slots this reply may fill ([`crate::LlmConfig::max_tool_calls`]).
+    max: usize,
 }
 
 impl ToolCallParts {
-    fn absorb(&mut self, part: ToolCallDelta) {
+    fn new(max: usize) -> Self {
+        Self {
+            slots: Vec::new(),
+            max,
+        }
+    }
+
+    fn absorb(&mut self, part: ToolCallDelta) -> Result<(), LlmError> {
         let mut at = part.index.unwrap_or(self.slots.len());
         // A *different* id on a slot that already names a call is a new call, whatever
         // the index says: some servers send every whole call as `index: 0`, and merging
@@ -202,16 +212,25 @@ impl ToolCallParts {
                 at = self.slots.len();
             }
         }
+        // The cap is absolute, not a per-frame jump: `MAX_STREAM_BYTES` bounds the bytes
+        // read, not the table a sparse `index` can make of them, and a run of modest
+        // jumps adds up to the same allocation as one large one. Refused loudly, never
+        // trimmed — see [`LlmError::TooManyToolCalls`].
+        if at >= self.max {
+            tracing::warn!(
+                target: "b2::llm",
+                index = at,
+                limit = self.max,
+                "a model reply exceeded the tool-call cap; failing the call"
+            );
+            return Err(LlmError::TooManyToolCalls { limit: self.max });
+        }
         if at >= self.slots.len() {
-            // Bounded by the stream's own byte cap; a sparse index just leaves empty
-            // slots, which `finish` drops.
-            if at > self.slots.len() + 64 {
-                return;
-            }
+            // A sparse index below the cap just leaves empty slots, which `finish` drops.
             self.slots.resize_with(at + 1, Default::default);
         }
         let Some(slot) = self.slots.get_mut(at) else {
-            return;
+            return Ok(());
         };
         if part.id.is_some() {
             slot.0 = part.id;
@@ -228,6 +247,7 @@ impl ToolCallParts {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     /// The assembled calls, in index order. A slot that never got a name is not a call;
@@ -309,11 +329,26 @@ mod tests {
     /// Read a canned stream, collecting the tokens as an adapter would.
     fn read(canned: &str) -> (Result<Completion, LlmError>, Vec<String>) {
         let mut tokens = Vec::new();
-        let result = stream_completion(Cursor::new(canned.as_bytes()), &mut |t| {
+        let result = stream_completion(Cursor::new(canned.as_bytes()), 64, &mut |t| {
             tokens.push(t.to_string());
             ControlFlow::Continue(())
         });
         (result, tokens)
+    }
+
+    /// [`read`] under a chosen tool-call cap.
+    fn read_capped(canned: &str, max_tool_calls: usize) -> Result<Completion, LlmError> {
+        stream_completion(Cursor::new(canned.as_bytes()), max_tool_calls, &mut |_| {
+            ControlFlow::Continue(())
+        })
+    }
+
+    /// One whole tool call in a frame, at `index` when given.
+    fn call_frame(index: Option<usize>, name: &str) -> String {
+        let index = index.map(|i| format!("\"index\":{i},")).unwrap_or_default();
+        format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{{index}\"function\":{{\"name\":\"{name}\",\"arguments\":\"{{}}\"}}}}]}}}}]}}\n\n"
+        )
     }
 
     /// A content frame, as every OpenAI-compatible server sends it.
@@ -458,7 +493,7 @@ mod tests {
             frame(" three")
         );
         let mut tokens = Vec::new();
-        let completion = stream_completion(Cursor::new(canned.as_bytes()), &mut |t| {
+        let completion = stream_completion(Cursor::new(canned.as_bytes()), 64, &mut |t| {
             tokens.push(t.to_string());
             if tokens.len() == 2 {
                 ControlFlow::Break(())
@@ -542,6 +577,54 @@ mod tests {
             .map(|c| c.name)
             .collect();
         assert_eq!(names, ["b2_similar", "b2_neighbors"]);
+    }
+
+    #[test]
+    fn a_sparse_index_past_the_cap_fails_the_call_instead_of_growing_the_table() {
+        // The memory bound `MAX_STREAM_BYTES` cannot give: a ~100-byte frame naming a
+        // huge `index` would otherwise allocate a slot for every index below it. Any
+        // index at or past the cap is refused outright — one frame, or a run of
+        // modest jumps that adds up to the same thing.
+        let err = read_capped(&call_frame(Some(1_000_000), "b2_read"), 64).unwrap_err();
+        assert!(
+            matches!(err, LlmError::TooManyToolCalls { limit: 64 }),
+            "{err:?}"
+        );
+
+        let creeping: String = (1..=7)
+            .map(|i| call_frame(Some(i * 10), "b2_read"))
+            .collect();
+        let err = read_capped(&creeping, 64).unwrap_err();
+        assert!(
+            matches!(err, LlmError::TooManyToolCalls { limit: 64 }),
+            "{err:?}"
+        );
+        // The error says what to do about it.
+        assert!(err.to_string().contains("64"), "{err}");
+        assert!(err.to_string().contains(crate::ENV_MAX_TOOL_CALLS), "{err}");
+    }
+
+    #[test]
+    fn the_cap_is_the_configured_one_and_exactly_that_many_calls_still_pass() {
+        let done = "data: [DONE]\n\n";
+        let calls = |n: usize| -> String {
+            (0..n)
+                .map(|_| call_frame(None, "b2_similar"))
+                .collect::<String>()
+                + done
+        };
+        // At the cap: fine. One past it: refused — under the default-sized cap and
+        // under a small configured one alike.
+        assert_eq!(read_capped(&calls(64), 64).unwrap().tool_calls.len(), 64);
+        assert!(matches!(
+            read_capped(&calls(65), 64).unwrap_err(),
+            LlmError::TooManyToolCalls { limit: 64 }
+        ));
+        assert_eq!(read_capped(&calls(2), 2).unwrap().tool_calls.len(), 2);
+        assert!(matches!(
+            read_capped(&calls(3), 2).unwrap_err(),
+            LlmError::TooManyToolCalls { limit: 2 }
+        ));
     }
 
     #[test]

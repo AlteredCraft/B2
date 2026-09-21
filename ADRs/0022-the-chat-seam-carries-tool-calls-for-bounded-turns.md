@@ -33,6 +33,12 @@ conversation, neither model called anything further in any run.
   model that calls nothing there, or a provider that refuses tools, degrades to the same evidence in
   one plain grounded request. A model that calls tools but skips the pair lookup has it appended,
   marked `seeded`.
+- **One reply's tool calls are capped, and the cap fails loudly.** `LlmConfig::max_tool_calls`
+  (`B2_LLM_MAX_TOOL_CALLS`, default 64) bounds the calls — and the highest call `index` — a reply may
+  carry, because the stream's byte cap does not bound the table a sparse `index` can make of those
+  bytes. Past it the call fails with a typed error (`Error::ToolCallLimit`) that the degrade above
+  must not swallow: a reply this far outside the protocol is a broken or hostile server, not a model
+  without tool support.
 - **Passages are numbered on one ledger per turn**, across every tool result, and `[n]` resolves
   against it — the citation contract of flow ④, unchanged.
 - **The answer says which tools ran** (`AnswerView.tools`, `seeded` distinguishing B2's own call), so

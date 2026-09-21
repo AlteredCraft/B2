@@ -52,6 +52,15 @@ pub const ENV_MODEL: &str = "B2_LLM_MODEL";
 /// history. It is also the **override** — see [`ApiKeySource::Environment`].
 pub const ENV_API_KEY: &str = "B2_LLM_API_KEY";
 
+/// Environment variable capping the tool calls one model reply may make — see
+/// [`LlmConfig::max_tool_calls`].
+pub const ENV_MAX_TOOL_CALLS: &str = "B2_LLM_MAX_TOOL_CALLS";
+
+/// The default for [`LlmConfig::max_tool_calls`]. Far above what a real reply asks for
+/// (B2 runs at most a handful per round), and small enough that the table a reply can
+/// make B2 allocate stays a few kilobytes.
+pub const DEFAULT_MAX_TOOL_CALLS: usize = 64;
+
 /// Where the bearer token in force came from. A **fact about the key, never the key** —
 /// the half of a cloud configuration that may safely be shown, logged and sent to a
 /// webview, which is why it replaced a bare "is one set?" boolean (GH #176).
@@ -98,6 +107,12 @@ pub struct LlmConfig {
     /// *resolver* knows: an adapter that remembers keys has to be told which of
     /// its own sources answered, and the environment's answer outranks it.
     pub api_key_source: ApiKeySource,
+    /// The most tool calls one model reply may make, which is also the highest call
+    /// `index` it may name. A reply past it fails with [`LlmError::TooManyToolCalls`]
+    /// rather than being trimmed. [`DEFAULT_MAX_TOOL_CALLS`] unless
+    /// [`ENV_MAX_TOOL_CALLS`] says otherwise; it bounds memory a server can make B2
+    /// allocate, so it is a ceiling to raise for an unusual model, not a tuning knob.
+    pub max_tool_calls: usize,
 }
 
 /// Hand-written so the key **cannot** be logged. `Debug` is what an adapter
@@ -121,6 +136,7 @@ impl std::fmt::Debug for LlmConfig {
             // Safe, and the useful half: "a key is set, from the environment"
             // is what turns a rejected cloud call into a diagnosis.
             .field("api_key_source", &self.api_key_source)
+            .field("max_tool_calls", &self.max_tool_calls)
             .finish()
     }
 }
@@ -134,26 +150,52 @@ impl Default for LlmConfig {
             model: DEFAULT_MODEL.to_string(),
             api_key: None,
             api_key_source: ApiKeySource::None,
+            max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
         }
     }
 }
 
 impl LlmConfig {
-    /// The defaults overlaid with [`ENV_URL`] / [`ENV_MODEL`] / [`ENV_API_KEY`].
+    /// The defaults overlaid with [`ENV_URL`] / [`ENV_MODEL`] / [`ENV_API_KEY`] /
+    /// [`ENV_MAX_TOOL_CALLS`].
     /// Environment resolution lives **here**, in one place, so both adapters
     /// (the CLI's flags, the desktop's settings) layer their own overrides over
     /// the same base rather than each spelling the variable names themselves.
     /// Blank values are ignored — an exported-but-empty var means "unset" to a
     /// shell user, and honoring it literally would produce an unusable URL.
     pub fn from_env() -> Self {
+        Self::resolve(|key| std::env::var(key).ok())
+    }
+
+    /// [`from_env`](Self::from_env) over any variable source — the process environment
+    /// in production, a closure in tests, so resolution is testable without mutating a
+    /// process-global that parallel tests share.
+    fn resolve(var: impl Fn(&str) -> Option<String>) -> Self {
         let read = |key: &str| {
-            std::env::var(key)
-                .ok()
+            var(key)
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         };
         let base = Self::default();
         let api_key = read(ENV_API_KEY);
+        // A cap that doesn't parse, or parses to zero (which would refuse every tool
+        // call), is a typo rather than a wish: keep the default and say so, since a
+        // silently ignored setting is one nobody can debug.
+        let max_tool_calls = match read(ENV_MAX_TOOL_CALLS) {
+            None => base.max_tool_calls,
+            Some(raw) => match raw.parse::<usize>() {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    tracing::warn!(
+                        target: "b2::llm",
+                        value = raw,
+                        default = base.max_tool_calls,
+                        "{ENV_MAX_TOOL_CALLS} is not a positive whole number; using the default"
+                    );
+                    base.max_tool_calls
+                }
+            },
+        };
         Self {
             base_url: read(ENV_URL).unwrap_or(base.base_url),
             model: read(ENV_MODEL).unwrap_or(base.model),
@@ -162,6 +204,7 @@ impl LlmConfig {
                 None => ApiKeySource::None,
             },
             api_key,
+            max_tool_calls,
         }
     }
 
@@ -271,6 +314,15 @@ pub enum LlmError {
     #[error("malformed model stream: {0}")]
     Stream(String),
 
+    /// One reply asked for more tool calls than [`LlmConfig::max_tool_calls`] allows —
+    /// or named a call `index` past it, which costs the same memory. Refused rather than
+    /// trimmed: a reply this far outside the protocol is a broken or hostile server, and
+    /// running the first N of its calls would pass that off as a normal turn.
+    #[error(
+        "the model asked for more than {limit} tool calls in one reply; raise {ENV_MAX_TOOL_CALLS} if that is expected"
+    )]
+    TooManyToolCalls { limit: usize },
+
     /// The model server reported an error **inside** the stream, after the
     /// headers said 200 — the wire quirk a hand-rolled client has to own.
     #[error("the model server failed mid-answer: {0}")]
@@ -282,12 +334,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_tool_call_cap_comes_from_the_environment_and_a_bad_value_keeps_the_default() {
+        let with = |value: Option<&str>| {
+            LlmConfig::resolve(|key| {
+                (key == ENV_MAX_TOOL_CALLS)
+                    .then(|| value.map(str::to_string))
+                    .flatten()
+            })
+            .max_tool_calls
+        };
+        assert_eq!(with(None), DEFAULT_MAX_TOOL_CALLS);
+        assert_eq!(with(Some("8")), 8);
+        assert_eq!(
+            with(Some(" 256 ")),
+            256,
+            "surrounding whitespace is a shell's, not a value"
+        );
+        // Zero would refuse every tool call, and the rest aren't numbers: a typo keeps
+        // the default rather than configuring an unusable client.
+        for bad in ["0", "-1", "lots", "6.4", ""] {
+            assert_eq!(with(Some(bad)), DEFAULT_MAX_TOOL_CALLS, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn debug_never_prints_the_api_key() {
         let config = LlmConfig {
             base_url: "https://api.example.com/v1".into(),
             model: "some-model".into(),
             api_key: Some("sk-live-do-not-log-me".into()),
             api_key_source: ApiKeySource::Stored,
+            ..LlmConfig::default()
         };
         let rendered = format!("{config:?}");
         assert!(

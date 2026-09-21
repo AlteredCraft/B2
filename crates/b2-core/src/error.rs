@@ -36,6 +36,15 @@ pub enum Error {
     #[error("llm call failed: {0}")]
     Llm(String),
 
+    /// One model reply asked for more tool calls than the provider's configured cap. A
+    /// typed sibling of [`Error::Llm`] rather than a message, because callers treat it
+    /// differently: a tool-using turn degrades on an ordinary failed lookup round (the
+    /// model may simply not support tools), but must **not** degrade on this — a reply
+    /// this far outside the protocol is a broken or hostile server, and answering anyway
+    /// would hide it.
+    #[error("the model asked for more than {limit} tool calls in one reply")]
+    ToolCallLimit { limit: usize },
+
     /// The index's recorded embedding model/dim differs from the active embedder,
     /// so its vectors are incomparable with new query vectors. A read (search)
     /// fails fast with this rather than returning silently wrong results; the fix

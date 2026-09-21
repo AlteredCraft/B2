@@ -179,6 +179,14 @@ pub fn user_message(err: &CmdError) -> String {
         // this case, minus its `(ollama list)` hint: a terminal command is no help to
         // someone in a window, and Settings → Chat is where this adapter shows the same
         // thing — the installed models, from the daemon itself.
+        // Not folded into the generic chat failure below: nothing is wrong with the
+        // server being reachable or the model being installed, so that advice would send
+        // someone to check the two things that are fine. The cap is an environment
+        // setting, named here because it is the only fix on this side of the wire.
+        CmdError::Core(b2_core::Error::ToolCallLimit { limit }) => format!(
+            "The chat model asked for more than {limit} tool calls in one reply, so B2 stopped it. Try again or pick another model in Settings → Chat. If this model really needs more, relaunch with {} set higher.",
+            b2_llm::ENV_MAX_TOOL_CALLS
+        ),
         CmdError::Core(b2_core::Error::Llm(_)) => {
             "The model server couldn't answer. Check that it's running and that the model is installed, then try again."
                 .to_string()
@@ -231,6 +239,17 @@ mod tests {
     /// webview — yields the **generic** user-facing string, never the internal detail.
     /// (It also runs `log_internal`, which writes the full detail to stderr; the
     /// harness captures that, so this exercises the server-log boundary too.)
+    #[test]
+    fn a_blown_tool_call_cap_names_the_limit_and_the_setting_that_raises_it() {
+        let msg = user_message(&CmdError::Core(b2_core::Error::ToolCallLimit { limit: 64 }));
+        assert!(msg.contains("64"), "{msg}");
+        assert!(msg.contains("B2_LLM_MAX_TOOL_CALLS"), "{msg}");
+        assert!(
+            !msg.contains("Check that it's running"),
+            "the server is fine — the generic chat advice would mislead: {msg}"
+        );
+    }
+
     #[test]
     fn serializes_to_the_generic_message_and_hides_internals() {
         // An unmapped Core error is the exact "Something went wrong" case the reindex

@@ -298,3 +298,36 @@ fn probing_catches_a_model_the_server_does_not_serve() {
     }
     server.join().expect("server thread");
 }
+
+/// The tool-call cap is the configured one, and hitting it is a **typed** failure at the
+/// seam — `Error::ToolCallLimit`, not the generic `Error::Llm` — so a caller that
+/// degrades on "the model can't use tools" can tell this apart and refuse to hide it.
+#[test]
+fn a_reply_past_the_configured_tool_call_cap_fails_with_a_typed_error() {
+    let call = |i: usize| {
+        format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":{i},\"id\":\"c{i}\",\"function\":{{\"name\":\"b2_read\",\"arguments\":\"{{}}\"}}}}]}}}}]}}\n\n"
+        )
+    };
+    let three: String = (0..3).map(call).collect::<String>() + "data: [DONE]\n\n";
+    let (url, server) = serve(vec![sse_response(&three), sse_response(&three)]);
+    let capped = |max_tool_calls: usize| {
+        OpenAiCompatProvider::new(LlmConfig {
+            base_url: url.clone(),
+            model: "test-model".to_string(),
+            max_tool_calls,
+            ..LlmConfig::default()
+        })
+    };
+    let req = build_request("q", &[], Vec::new());
+    let mut run = |p: &OpenAiCompatProvider| p.complete(&req, &mut |_| ControlFlow::Continue(()));
+
+    let err = run(&capped(2)).unwrap_err();
+    assert!(
+        matches!(err, b2_core::Error::ToolCallLimit { limit: 2 }),
+        "{err:?}"
+    );
+    // The same reply under a cap that fits it is an ordinary completion.
+    assert_eq!(run(&capped(3)).expect("within the cap").tool_calls.len(), 3);
+    server.join().expect("server thread");
+}

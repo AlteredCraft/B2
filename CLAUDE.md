@@ -81,6 +81,11 @@ the vault, because the device is part of the embedding space's identity (ADR-000
   `B2_LLM_API_KEY` overrides whatever is stored (`b2_llm::ApiKeySource` — `none`/`environment`/
   `stored`/`session` — is what the Settings copy reads; the key never crosses back to the webview).
   Chat config is adapter-level, never vault or index state, so a chat-model swap costs no reindex.
+  **`B2_LLM_MAX_TOOL_CALLS`** (default 64) caps the tool calls — and the highest call `index` — one
+  model reply may carry. It bounds memory a server can make B2 allocate, so a reply past it **fails**
+  (`LlmError::TooManyToolCalls` → `b2_core::Error::ToolCallLimit`, typed across the seam, WARN-logged,
+  with its own user message) rather than being trimmed, and `why_similar` never degrades past it. A
+  value that isn't a positive whole number keeps the default and says so at WARN.
 - **`B2_LOG`** — structured debug logging as **JSON Lines** (stdout stays pure data), one flat object
   per event, to stderr or to **`B2_LOG_FILE=<path>`** (append mode, so runs accumulate into one
   reportable dataset). The value is a tracing filter (`debug`, `b2::sqlite=debug`, …); `B2_DEBUG` or

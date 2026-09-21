@@ -1633,6 +1633,12 @@ fn user_message(err: &CliError) -> String {
                 None => ".".to_string(),
             }
         ),
+        // Not the generic chat failure below: the server is up and the model is there,
+        // so that advice would mislead. The cap is the one fix on this side of the wire.
+        CliError::Core(b2_core::Error::ToolCallLimit { limit }) => format!(
+            "The chat model asked for more than {limit} tool calls in one reply, so b2 stopped it. Try again or use another model (--llm-model). If this model really needs more, raise {}.",
+            b2_llm::ENV_MAX_TOOL_CALLS
+        ),
         // Every remaining chat failure — an HTTP refusal at probe time, a malformed
         // stream — is one sentence with one fix, and the detail is a `B2_DEBUG` away.
         CliError::Llm(_) | CliError::Core(b2_core::Error::Llm(_)) => {
@@ -1663,6 +1669,17 @@ fn user_message(err: &CliError) -> String {
 mod tests {
     use super::*;
     use b2_core::vault::{EvidencedResult, SearchResult};
+
+    #[test]
+    fn a_blown_tool_call_cap_names_the_limit_and_the_variable_that_raises_it() {
+        let msg = user_message(&CliError::Core(b2_core::Error::ToolCallLimit { limit: 64 }));
+        assert!(msg.contains("64"), "{msg}");
+        assert!(msg.contains("B2_LLM_MAX_TOOL_CALLS"), "{msg}");
+        assert!(
+            !msg.contains("Check that it's running"),
+            "the server is fine — the generic chat advice would mislead: {msg}"
+        );
+    }
 
     fn view(vouched: Option<bool>, n: usize) -> SearchEvidenceView {
         SearchEvidenceView {
