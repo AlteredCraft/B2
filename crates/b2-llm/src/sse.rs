@@ -15,10 +15,17 @@
 //! - A **garbled** frame — a `data:` payload that isn't JSON — is an error. Skipping it
 //!   would turn a protocol mismatch into a quietly truncated answer, the one outcome
 //!   nobody can debug.
+//!
+//! A **tool call** arrives on the same stream as `delta.tool_calls`, and servers disagree
+//! about how: OpenAI splits one call across frames (the id and name first, then the
+//! arguments a few characters at a time, all keyed by `index`), Ollama sends each call
+//! whole in one frame, and some send no `id` at all. [`ToolCallParts`] assembles all three
+//! into the seam's [`ToolCall`]; the arguments stay JSON *text*, because they are model
+//! output and parsing them is the judgement of whoever runs the tool.
 
 use crate::provider::ErrorDetail;
 use crate::LlmError;
-use b2_core::llm::Completion;
+use b2_core::llm::{Completion, ToolCall};
 use serde::Deserialize;
 use std::io::BufRead;
 use std::ops::ControlFlow;
@@ -32,6 +39,7 @@ pub(crate) fn stream_completion<R: BufRead>(
     on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
 ) -> Result<Completion, LlmError> {
     let mut text = String::new();
+    let mut calls = ToolCallParts::default();
     // The current event's `data:` payload — accumulated across lines, since the
     // spec allows an event to carry several and joins them with newlines.
     let mut data = String::new();
@@ -48,8 +56,8 @@ pub(crate) fn stream_completion<R: BufRead>(
         if read == 0 {
             // EOF. A pending event has no blank line to close it, so dispatch it
             // before deciding how the stream ended.
-            match dispatch(&data, &mut text, on_token)? {
-                Step::Done => return Ok(completed(text)),
+            match dispatch(&data, &mut text, &mut calls, on_token)? {
+                Step::Done => return Ok(completed(text, calls)),
                 Step::Cancelled => return Ok(cancelled(text)),
                 Step::Finished => finished = true,
                 Step::Continue => {}
@@ -61,17 +69,20 @@ pub(crate) fn stream_completion<R: BufRead>(
                     "the model stream ended without [DONE]; reporting a partial answer"
                 );
             }
-            return Ok(Completion {
-                text,
-                cancelled: !finished,
+            // Tool calls from a stream that was cut off are not run: half a call's
+            // arguments is not a call.
+            return Ok(if finished {
+                completed(text, calls)
+            } else {
+                cancelled(text)
             });
         }
 
         let field = line.trim_end_matches(['\n', '\r']);
         if field.is_empty() {
             // End of event: dispatch what was accumulated, then start the next.
-            match dispatch(&data, &mut text, on_token)? {
-                Step::Done => return Ok(completed(text)),
+            match dispatch(&data, &mut text, &mut calls, on_token)? {
+                Step::Done => return Ok(completed(text, calls)),
                 Step::Cancelled => return Ok(cancelled(text)),
                 Step::Finished => finished = true,
                 Step::Continue => {}
@@ -115,6 +126,7 @@ enum Step {
 fn dispatch(
     payload: &str,
     text: &mut String,
+    calls: &mut ToolCallParts,
     on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
 ) -> Result<Step, LlmError> {
     let payload = payload.trim();
@@ -146,6 +158,9 @@ fn dispatch(
                 }
             }
         }
+        for part in choice.delta.tool_calls {
+            calls.absorb(part);
+        }
         if choice.finish_reason.is_some() {
             step = Step::Finished;
         }
@@ -153,10 +168,11 @@ fn dispatch(
     Ok(step)
 }
 
-fn completed(text: String) -> Completion {
+fn completed(text: String, calls: ToolCallParts) -> Completion {
     Completion {
         text,
         cancelled: false,
+        tool_calls: calls.finish(),
     }
 }
 
@@ -164,6 +180,72 @@ fn cancelled(text: String) -> Completion {
     Completion {
         text,
         cancelled: true,
+        tool_calls: Vec::new(),
+    }
+}
+
+/// Tool calls under assembly, slotted by the wire's `index`. A delta with an index fills
+/// (or extends) that slot; a delta without one is a whole call and takes the next slot.
+#[derive(Debug, Default)]
+struct ToolCallParts {
+    slots: Vec<(Option<String>, String, String)>, // (id, name, arguments)
+}
+
+impl ToolCallParts {
+    fn absorb(&mut self, part: ToolCallDelta) {
+        let mut at = part.index.unwrap_or(self.slots.len());
+        // A *different* id on a slot that already names a call is a new call, whatever
+        // the index says: some servers send every whole call as `index: 0`, and merging
+        // them would run one tool named after two.
+        if let (Some(id), Some((Some(held), name, _))) = (&part.id, self.slots.get(at)) {
+            if held != id && !name.is_empty() {
+                at = self.slots.len();
+            }
+        }
+        if at >= self.slots.len() {
+            // Bounded by the stream's own byte cap; a sparse index just leaves empty
+            // slots, which `finish` drops.
+            if at > self.slots.len() + 64 {
+                return;
+            }
+            self.slots.resize_with(at + 1, Default::default);
+        }
+        let Some(slot) = self.slots.get_mut(at) else {
+            return;
+        };
+        if part.id.is_some() {
+            slot.0 = part.id;
+        }
+        if let Some(function) = part.function {
+            if let Some(name) = function.name {
+                slot.1.push_str(&name);
+            }
+            match function.arguments {
+                Some(serde_json::Value::String(text)) => slot.2.push_str(&text),
+                // Arguments sent as an object rather than as JSON text (Ollama's native
+                // shape, and some `/v1` shims): re-serialize so the seam stays text.
+                Some(other) if !other.is_null() => slot.2.push_str(&other.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    /// The assembled calls, in index order. A slot that never got a name is not a call;
+    /// a call the server gave no id gets a positional one, since the id is only ever
+    /// echoed back beside its result.
+    fn finish(self) -> Vec<ToolCall> {
+        self.slots
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (_, name, _))| !name.is_empty())
+            .map(|(i, (id, name, arguments))| ToolCall {
+                id: id
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| format!("call_{i}")),
+                name,
+                arguments,
+            })
+            .collect()
     }
 }
 
@@ -195,6 +277,28 @@ struct StreamChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallDelta>,
+}
+
+/// One fragment of a tool call. Everything optional: which fields a given frame carries
+/// is exactly what varies between servers.
+#[derive(Debug, Deserialize)]
+struct ToolCallDelta {
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<FunctionDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -366,6 +470,88 @@ mod tests {
         assert_eq!(tokens, ["one", " two"]);
         assert_eq!(completion.text, "one two");
         assert!(completion.cancelled);
+    }
+
+    #[test]
+    fn a_tool_call_split_across_frames_is_assembled_by_index() {
+        // OpenAI's shape: id + name first, then the arguments in pieces; two calls
+        // interleaved by `index`.
+        let canned = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"b2_read\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"b2_neighbors\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"note\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a.md\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (result, tokens) = read(canned);
+        let completion = result.unwrap();
+        assert!(tokens.is_empty(), "a tool call is not answer text");
+        assert!(!completion.cancelled);
+        assert_eq!(
+            completion.tool_calls,
+            vec![
+                ToolCall {
+                    id: "call_a".into(),
+                    name: "b2_read".into(),
+                    arguments: "{\"note\":\"a.md\"}".into(),
+                },
+                ToolCall {
+                    id: "call_b".into(),
+                    name: "b2_neighbors".into(),
+                    arguments: "{}".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_whole_call_in_one_frame_with_no_id_and_object_arguments_still_parses() {
+        // The lenient end: no `index`, no `id`, arguments as an object rather than text.
+        let canned = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"b2_similar\",\"arguments\":{\"note\":\"a.md\"}}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        let completion = read(canned).0.unwrap();
+        assert_eq!(completion.tool_calls.len(), 1);
+        let call = &completion.tool_calls[0];
+        assert_eq!(
+            (call.id.as_str(), call.name.as_str()),
+            ("call_0", "b2_similar")
+        );
+        assert_eq!(call.arguments, "{\"note\":\"a.md\"}");
+    }
+
+    #[test]
+    fn two_whole_calls_sharing_an_index_stay_two_calls() {
+        let frame = |id: &str, name: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"{id}\",\"function\":{{\"name\":\"{name}\",\"arguments\":\"{{}}\"}}}}]}}}}]}}\n\n"
+            )
+        };
+        let canned = format!(
+            "{}{}data: [DONE]\n\n",
+            frame("c1", "b2_similar"),
+            frame("c2", "b2_neighbors")
+        );
+        let names: Vec<String> = read(&canned)
+            .0
+            .unwrap()
+            .tool_calls
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["b2_similar", "b2_neighbors"]);
+    }
+
+    #[test]
+    fn a_stream_cut_off_mid_call_runs_no_tool() {
+        // Half a call's arguments is not a call: a truncated stream reports the partial
+        // text as cancelled, and offers nothing to execute.
+        let canned = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c\",\"function\":{\"name\":\"b2_read\",\"arguments\":\"{\\\"no\"}}]}}]}\n\n";
+        let completion = read(canned).0.unwrap();
+        assert!(completion.cancelled);
+        assert!(completion.tool_calls.is_empty());
     }
 
     #[test]

@@ -75,6 +75,7 @@ import {
   formatModelSize,
   pullCommand,
   retrievalNote,
+  toolsLine,
   turnRowKey,
 } from "./chat.ts";
 import type { ChatSetup, NoteView, ResourceExplainView } from "./types.ts";
@@ -918,7 +919,17 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         : `<div class="card-body">
             <div class="card-path">${escapeHtml(c.path)}</div>
             ${c.evidence ? `<div class="card-snip">${escapeHtml(c.evidence)}</div>` : ""}
+            <button class="card-why linklike" tabindex="-1" data-why="${escapeHtml(
+              c.path,
+            )}" data-why-title="${escapeHtml(
+              c.title ?? "",
+            )}" title="Ask chat why this note was suggested">Why?</button>
           </div>`;
+      // *Why?* hands the pair to chat (main.ts's `askWhy`): the snippet above is the
+      // passage that matched, and this is the question it raises. `tabindex="-1"` keeps
+      // the card one Tab stop; the keyboard reaches the same action through the card
+      // menu's *Why was this suggested?* (⇧F10 — K1).
+      //
       // `data-card-path`/`-title` on the root feed the right-click menu (Open / Link…);
       // the whole card is the target now that the inline Link button is gone. The card is
       // also the keyboard's *row* (`data-side-row`), which is why the whole box — title,
@@ -1131,7 +1142,9 @@ function chatLogHtml(state: AppState, roving: string | null): string {
           roving,
         )} data-side-row="${escapeHtml(STREAMING_ROW_KEY)}" aria-live="polite">
           <div class="chat-role">B2</div>
-          <div class="chat-text" id="chat-stream">${escapeHtml(state.chatStreaming)}</div>
+          <div class="chat-text" id="chat-stream" data-waiting="${escapeHtml(
+            state.chatWaiting,
+          )}">${escapeHtml(state.chatStreaming)}</div>
         </div>`;
   return `<div class="chat-log" id="chat-log" role="tree" aria-label="Conversation">${turns}${live}</div>`;
 }
@@ -1161,6 +1174,10 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
   const stopped = m.cancelled
     ? `<p class="chat-stopped">Stopped — this answer is partial.</p>`
     : "";
+  // Which B2 tools the answer was built from (a *Why?* turn). Tool names are the
+  // model's own words, so they are escaped like every other value in the chrome (E5).
+  const line = toolsLine(m.tools);
+  const used = line ? `<p class="chat-tools">${escapeHtml(line)}</p>` : "";
   const cites = m.citations
     .map(
       (c) => `<button class="chat-cite" role="treeitem" aria-level="2"${sideTab(
@@ -1179,7 +1196,7 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
     row(
       "chat-answer",
       "B2",
-      `<div class="chat-text">${renderMarkdown(m.text)}</div>${stopped}`,
+      `<div class="chat-text">${renderMarkdown(m.text)}</div>${stopped}${used}`,
     ) + cites
   );
 }
@@ -2359,7 +2376,8 @@ export function contextMenuHtml(state: AppState): string {
     // to insert into; the drag is withheld on the same condition (the card's `draggable`).
     items = `${contextItemHtml("data-ctx-open", "Open note", "⏎")}
         ${state.editing ? contextItemHtml("data-ctx-insert", "Insert link at cursor") : ""}
-        ${contextItemHtml("data-ctx-link", "Link…")}`;
+        ${contextItemHtml("data-ctx-link", "Link…")}
+        ${contextItemHtml("data-ctx-why", "Why was this suggested?")}`;
   }
   // `tabindex="-1"` on the menu itself makes the container focusable-by-script but not
   // by Tab: main.ts moves focus to the first item on open and traps ↑↓/⏎/Esc inside.

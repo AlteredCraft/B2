@@ -615,6 +615,38 @@ pub fn ask(
     })
 }
 
+/// **Why was this suggested?** — the chat answer behind a click on a *Similar & unlinked*
+/// card: `Vault::why_similar` gathers B2's own discovery evidence for the pair and streams
+/// a grounded, cited explanation. Delivered exactly as [`ask`] is — same channel, same
+/// single answer slot, same `cancel_ask` — because to the pane it *is* a chat turn.
+///
+/// `limit` is the list length the pane showed, so the rank the explanation quotes is the
+/// card's own. Opens the **model-free** vault, as [`similar`] does: every read here is over
+/// stored vectors, and nothing embeds a query.
+#[tauri::command(async)]
+pub fn why_similar(
+    state: State<'_, AppState>,
+    anchor: String,
+    candidate: String,
+    limit: usize,
+    on_event: Channel<String>,
+) -> Result<AnswerView, CmdError> {
+    let state = state.inner();
+    let llm = crate::chat::provider(&state.chat_prefs());
+    let vault = open_read(state)?;
+    why_similar_impl(
+        state,
+        &vault,
+        llm.as_ref(),
+        &anchor,
+        &candidate,
+        limit,
+        &|token| {
+            let _ = on_event.send(token.to_string());
+        },
+    )
+}
+
 /// Ask the streaming answer to stop at its next token — the chat pane's Esc. Runs on a
 /// *different* worker thread than `ask`, so it sets the shared flag while that one reads
 /// it; the token callback sees it and breaks cooperatively. The partial text is not
@@ -728,6 +760,35 @@ fn ask_impl(
     history: &[ChatTurn],
     sink: &dyn Fn(&str),
 ) -> Result<AnswerView, CmdError> {
+    stream_answer(state, sink, |on_token| {
+        vault.ask(llm, question, history, on_token)
+    })
+}
+
+/// The testable core of `why_similar` — [`ask_impl`]'s sibling over the other streaming
+/// façade op, sharing its delivery whole.
+fn why_similar_impl(
+    state: &AppState,
+    vault: &Vault,
+    llm: &dyn LlmProvider,
+    anchor: &str,
+    candidate: &str,
+    limit: usize,
+    sink: &dyn Fn(&str),
+) -> Result<AnswerView, CmdError> {
+    stream_answer(state, sink, |on_token| {
+        vault.why_similar(llm, anchor, candidate, limit, on_token)
+    })
+}
+
+/// The delivery every streamed answer shares: claim the single answer slot, arm the
+/// cancel flag, and run `call` — the one façade op — with a token callback that feeds
+/// `sink` and reads the cancel flag at every token.
+fn stream_answer(
+    state: &AppState,
+    sink: &dyn Fn(&str),
+    call: impl FnOnce(&mut dyn FnMut(&str) -> ControlFlow<()>) -> b2_core::Result<AnswerView>,
+) -> Result<AnswerView, CmdError> {
     // Single-in-flight: two answers at once would share one cancel flag, so the second
     // one's `arm` would quietly un-cancel the first. The pane already refuses a second
     // turn while one is streaming, so this is the belt-and-suspenders half.
@@ -739,7 +800,7 @@ fn ask_impl(
     // the previous turn must not stop this one before its first token).
     state.arm_ask();
 
-    Ok(vault.ask(llm, question, history, &mut |token| {
+    Ok(call(&mut |token| {
         sink(token);
         if state.ask_cancelled() {
             ControlFlow::Break(())
@@ -1785,6 +1846,43 @@ mod tests {
             user_message(&err),
             "B2 is still answering. Wait for it to finish, or press Esc to stop it."
         );
+    }
+
+    #[test]
+    fn why_similar_streams_like_an_answer_and_shares_its_slot_and_its_esc() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, vault) = ask_state(&tmp);
+        // Any two notes do: the façade explains a pair whether or not discovery would
+        // list it, and what it says is the engine suite's business (`tests/why.rs`).
+        let notes = vault.list_notes().unwrap();
+        let (anchor, candidate) = (notes[0].path.as_str(), notes[1].path.as_str());
+        let streamed = std::cell::RefCell::new(Vec::<String>::new());
+
+        let answer = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
+            streamed.borrow_mut().push(t.to_string())
+        })
+        .unwrap();
+        assert_eq!(streamed.borrow().concat(), answer.answer);
+        assert!(!answer.cancelled);
+        for c in &answer.citations {
+            assert!(c.path == anchor || c.path == candidate, "{c:?}");
+        }
+
+        // The pane's Esc stops it at the next token, exactly as it stops an `ask`.
+        streamed.borrow_mut().clear();
+        let stopped = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
+            streamed.borrow_mut().push(t.to_string());
+            state.request_ask_cancel();
+        })
+        .unwrap();
+        assert!(stopped.cancelled);
+        assert_eq!(streamed.borrow().len(), 1);
+
+        // One answer slot for both kinds of turn.
+        assert!(state.try_start_ask());
+        let err =
+            why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|_| {}).unwrap_err();
+        assert!(matches!(err, CmdError::AskInFlight));
     }
 
     /// A stale cancel must not kill the *next* answer: `arm_ask` clears it once the fresh

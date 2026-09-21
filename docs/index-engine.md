@@ -533,6 +533,35 @@ swapping chat models never touches the index, so a provider swap is a URL or con
 5. **Cite.** `[n]` markers resolve to `(path, excerpt)` in the returned `AnswerView`. A
    hallucinated marker resolves to nothing, and the answer text is never rewritten.
 
+`Vault::why_similar` explains one *Similar & unlinked* row (`b2 why NOTE CANDIDATE`; the
+card's **Why?** in the desktop app). It is the one **tool-using** turn (ADR-0022): instead of
+retrieving for the model, the core offers it B2's read-only tools and runs what it calls.
+
+| Tool | The façade read behind it | Returns |
+|---|---|---|
+| `b2_passage_pairs` | `discover::passage_pairs` at `WHY_PAIRS = 3` | the nearest passage pairs between two notes, with passage text; the first pair is the one `candidates` ranked the row on |
+| `b2_similar` | `similar` at the surface's `limit` | the ranked suggestion list: rank, strength z, evidence excerpt |
+| `b2_neighbors` | `neighbors` | a note's direct links, with relation and direction |
+| `b2_read` | `db::note_chunk_ids` + `chunk_detail` | `READ_PASSAGES = 4` of a note's passages from an offset |
+
+Every argument defaults to the turn's pair, so `{}` is always a valid call. The loop:
+
+1. **Lookup round.** The model sees the question, the row's rank and z, and the tools. Its
+   text this round is never streamed. No tool call, or a provider that refuses tools, degrades
+   to the handoff below.
+2. **Run.** Each call (at most `MAX_CALLS_PER_ROUND = 4`) is one façade read. A call is model
+   output, so a malformed or unknown one gets an `error:` result, never a failed turn. If the
+   round skipped the pair lookup, the core appends it, marked `seeded`.
+3. **Repeat**, streaming now, up to `MAX_TOOL_ROUNDS = 4` model calls; the last offers no tools.
+4. **Cite.** Every passage a tool hands over is numbered once on one ledger for the turn, and
+   `[n]` resolves against it, as in `ask`. `AnswerView.tools` lists the calls that ran.
+
+The **handoff** is the degrade, for a model with no tool support or one that ignored its
+tools: the core makes the pair lookup, renders the graph facts itself (`chat::WhyFacts`), and
+sends one plain grounded request (`build_why_request`) with the passages in the system
+message. A pair with no stored vectors is still answered; with tools the model can `b2_read`
+the notes, without them the answer is the no-evidence sentence.
+
 Two properties follow from the seam's shape. Cancellation is returning early from a blocking
 read loop, so no B2 crate starts an async runtime (ADR-0011): a cut stream is marked
 cancelled, and what already arrived is rendered, never discarded, because a truncated answer

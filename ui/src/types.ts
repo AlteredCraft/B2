@@ -59,6 +59,18 @@ export interface AnswerView {
   citations: Citation[];
   /** The stream was stopped mid-answer (Esc): `answer` is an honest prefix. */
   cancelled: boolean;
+  /** The B2 tools that ran to produce the answer, in order. The host omits the field
+   *  for a plain `ask`, which offers the model none. */
+  tools?: ToolUse[];
+}
+
+/** One tool run during a tool-using chat turn (`b2-core`'s `ToolUseView`). `name` and
+ *  `arguments` are the model's own for a call it made — untrusted, like its answer. */
+export interface ToolUse {
+  name: string;
+  arguments: string;
+  /** `true` for a lookup B2 made itself; `false` for one the model chose. */
+  seeded: boolean;
 }
 
 /** One resolved `[n]` citation: which marker, which note, and a line of evidence. */

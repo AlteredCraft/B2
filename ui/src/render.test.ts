@@ -949,4 +949,82 @@ check("the card menu carries the drag's keyboard half while editing, and not oth
   assert(menu(false).includes("data-ctx-link"), "Link… is unaffected");
 });
 
+// --- asking chat why a candidate was suggested ----------------------------------------
+//
+// Two ways in, one action. The card's *Why?* button is what a pointer clicks; the card
+// menu's item is what the keyboard reaches through ⇧F10 (K1) — and both only name the
+// candidate, because which note it is similar *to* is the open note, read at click time.
+
+check("a candidate card offers Why? as a button that names the candidate", () => {
+  const html = sidePaneHtml(app({ current: note(), semantic: true, similar: [ghost()] }));
+  const why = tagWith(html, "data-why=");
+  assert(why.startsWith("<button"), `a real button, not a clickable div: ${why}`);
+  assert(why.includes(`data-why="${ghost().path}"`), `it names the candidate: ${why}`);
+  assert(why.includes('tabindex="-1"'), "inside the row's roving tabstop, not a stop of its own");
+  assert(why.includes("title="), "and says what it does");
+  // Folded, the card is its title row — the button goes with the body.
+  const folded = sidePaneHtml(
+    app({
+      current: note(),
+      semantic: true,
+      similar: [ghost()],
+      collapsedCards: new Set([`similar:${ghost().path}`]),
+    }),
+  );
+  assert(!folded.includes("data-why"), "a folded card shows its title row and nothing else");
+  const connections = sidePaneHtml(
+    app({ current: note(), semantic: true, connections: [neighbor()] }),
+  );
+  assert(!connections.includes("data-why"), "a linked note was not *suggested* — nothing to explain");
+});
+
+check("the card menu carries Why was this suggested? for the keyboard", () => {
+  const html = contextMenuHtml(
+    app({ contextMenu: { kind: "card", x: 10, y: 20, path: "notes/ghost.md", title: "ghost" } }),
+  );
+  const tag = tagWith(html, "data-ctx-why");
+  assert(tag.includes("context-item"), "a menu item the focus trap collects");
+  assert(tag.includes('role="menuitem"'), "announcing itself as one");
+  assert(html.includes("Why was this suggested?"), "named for the question it asks");
+  const tree = contextMenuHtml(
+    app({ contextMenu: { kind: "tree", x: 10, y: 20, dir: "projects", node: null } }),
+  );
+  assert(!tree.includes("data-ctx-why"), "the tree's menu has no candidate to explain");
+});
+
+check("an answer built with tools says so, escaped like everything a model names", () => {
+  const html = sidePaneHtml(
+    app({
+      chatOpen: true,
+      vaultRoot: "/vault",
+      chatSetup: chatSetup(),
+      chatMessages: [
+        {
+          role: "assistant",
+          text: "Both cover brewing.",
+          citations: [],
+          cancelled: false,
+          tools: [
+            { name: "b2_passage_pairs", arguments: "{}", seeded: false },
+            { name: "<img src=x>", arguments: "{}", seeded: false },
+          ],
+        },
+      ],
+    }),
+  );
+  assert(html.includes("Looked up with B2 tools: passage pairs"), "the tools line is painted");
+  assert(!html.includes("<img src=x>"), "a tool name is model output — never markup");
+  const plain = sidePaneHtml(
+    app({
+      chatOpen: true,
+      vaultRoot: "/vault",
+      chatSetup: chatSetup(),
+      chatMessages: [
+        { role: "assistant", text: "An answer.", citations: [], cancelled: false, tools: [] },
+      ],
+    }),
+  );
+  assert(!plain.includes("chat-tools"), "a plain ask has no tools line");
+});
+
 console.log(`render: ${passed} checks passed`);

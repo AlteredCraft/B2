@@ -30,6 +30,10 @@ explained connections between them yourself.
 > server (`crates/b2-llm`, a hand-rolled sync SSE client — nothing in B2 is async, and the `b2` binary
 > links no tokio); **Ollama** is the guided default, a cloud model is explicit opt-in, and nothing
 > about a chat is written to your notes or the index. The chat pane in the desktop app is next.
+> **`b2 why NOTE CANDIDATE`** (the **Why?** on a *Similar & unlinked* card in the app) asks the same
+> model to explain one suggestion, as a **tool-using agent**: it calls B2's read-only tools (the
+> matched passages, the suggestion list, a note's links, reading a note), says what the two notes
+> have in common, cites it, and lists the tools it used.
 >
 > **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
 > the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri IPC. The

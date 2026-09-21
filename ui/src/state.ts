@@ -276,6 +276,9 @@ export interface AppState {
    * keeps its caret and the pane keeps its scroll while an answer arrives.
    */
   chatStreaming: string | null;
+  /** What the live row says until the first token arrives — a *Why?* turn spends its
+   *  first seconds running B2 tools, and an empty row reads as a hang. */
+  chatWaiting: string;
   /** The chat provider's status — endpoint, model, Local vs Cloud, and the Ollama-native
    *  setup card's data. Null until the first probe lands (the "loading" empty state). */
   chatSetup: ChatSetup | null;
@@ -419,6 +422,7 @@ export const state: AppState = {
   chatOpen: false,
   chatMessages: [],
   chatStreaming: null,
+  chatWaiting: "",
   chatSetup: null,
   chatCloud: false,
   chatModelTyped: false,

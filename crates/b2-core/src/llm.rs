@@ -68,6 +68,39 @@ pub enum RequestKind {
     Condense,
     /// Steps 2–3: answer the question from the numbered passages.
     Chat,
+    /// A tool-using turn ([`ChatRequest::tools`] is what the model may call): the
+    /// passages reach the model inside tool results, so [`ChatRequest::passages`] is
+    /// the *citation ledger* for this kind and is not rendered into the system message.
+    Agent,
+}
+
+/// One B2 tool the model may call — a read-only `Vault` op described for the model.
+/// `parameters` is a JSON Schema object, passed to the provider as is (the OpenAI
+/// `function.parameters` shape).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// One call the model asked for. `arguments` is the model's JSON **text**, unparsed:
+/// it is untrusted output, so whoever runs the tool parses it and answers a malformed
+/// call with an error *result* rather than failing the turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    /// The provider's id for the call, echoed back with its result.
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// A call and what B2 answered — one step of a tool-using turn, replayed to the model
+/// on the next round so it can read what it asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolExchange {
+    pub call: ToolCall,
+    pub result: String,
 }
 
 /// What the grounded prompt instructs the model to say when the passages don't
@@ -107,8 +140,16 @@ pub struct ChatRequest {
     /// The conversation, oldest first; the final turn is the current user
     /// message.
     pub turns: Vec<ChatTurn>,
-    /// The numbered passages grounding a chat answer; empty for condensation.
+    /// The numbered passages grounding a chat answer; empty for condensation. For
+    /// [`RequestKind::Agent`] these are the passages tool results have handed over so
+    /// far — what `[n]` markers resolve against — and are not rendered again.
     pub passages: Vec<ContextPassage>,
+    /// The tools the model may call this round; empty for every non-agent request, and
+    /// for the last round of an agent turn (which must answer).
+    pub tools: Vec<ToolSpec>,
+    /// The calls made so far this turn with their results, oldest first — replayed
+    /// after [`turns`](Self::turns).
+    pub exchanges: Vec<ToolExchange>,
 }
 
 impl ChatRequest {
@@ -119,7 +160,8 @@ impl ChatRequest {
     /// 1-based `[n]`, in passage order.
     pub fn system_message(&self) -> String {
         let mut out = self.system.clone();
-        if self.passages.is_empty() {
+        // An agent turn's passages already reached the model inside tool results.
+        if self.passages.is_empty() || self.kind == RequestKind::Agent {
             return out;
         }
         out.push_str("\n\nPassages:\n");
@@ -147,6 +189,9 @@ pub struct Completion {
     /// `true` when the stream was cut short — by the callback breaking, or by
     /// the provider's own early stop. `text` is then an honest prefix.
     pub cancelled: bool,
+    /// The tools the model asked to run instead of (or before) answering. Empty for a
+    /// plain answer, and always empty when the request offered no tools.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// The chat seam (sibling of `Embedder`; invariant M1). Messages in, streamed
@@ -179,7 +224,9 @@ pub const FAKE_LLM_MODEL_ID: &str = "fake-llm-v1";
 /// citing every passage it was handed, one `[n]` marker per token, so the suite can assert
 /// the whole flow-④ pipeline — and mid-stream cancellation at an exact token — model-free;
 /// handed no passages it answers [`NO_EVIDENCE_ANSWER`]. A **condensation** request echoes
-/// the latest user turn verbatim.
+/// the latest user turn verbatim. An **agent** request is a two-step script read off the
+/// request's structure: while an offered tool that needs no arguments has not been called
+/// yet, call each such tool once with `{}`; after that, answer as a chat request does.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FakeLlm;
 
@@ -195,6 +242,33 @@ impl LlmProvider for FakeLlm {
         req: &ChatRequest,
         on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
     ) -> Result<Completion> {
+        if req.kind == RequestKind::Agent {
+            let tool_calls: Vec<ToolCall> = req
+                .tools
+                .iter()
+                .filter(|t| {
+                    let needs_args = t
+                        .parameters
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .is_some_and(|r| !r.is_empty());
+                    !needs_args && !req.exchanges.iter().any(|e| e.call.name == t.name)
+                })
+                .enumerate()
+                .map(|(i, t)| ToolCall {
+                    id: format!("fake_call_{}", req.exchanges.len() + i + 1),
+                    name: t.name.clone(),
+                    arguments: "{}".to_string(),
+                })
+                .collect();
+            if !tool_calls.is_empty() {
+                return Ok(Completion {
+                    text: String::new(),
+                    cancelled: false,
+                    tool_calls,
+                });
+            }
+        }
         let tokens: Vec<String> = match req.kind {
             RequestKind::Condense => {
                 // Echo the question. One token — cancellation scripting
@@ -214,8 +288,10 @@ impl LlmProvider for FakeLlm {
             }
             // Nothing retrieved, nothing to cite: the grounded prompt's
             // no-evidence response, as a real model would give it.
-            RequestKind::Chat if req.passages.is_empty() => vec![NO_EVIDENCE_ANSWER.to_string()],
-            RequestKind::Chat => {
+            RequestKind::Chat | RequestKind::Agent if req.passages.is_empty() => {
+                vec![NO_EVIDENCE_ANSWER.to_string()]
+            }
+            RequestKind::Chat | RequestKind::Agent => {
                 // A grounded answer citing every passage, marker-per-token.
                 let mut t: Vec<String> = vec!["Grounded".into(), " in".into()];
                 t.extend((1..=req.passages.len()).map(|n| format!(" [{n}]")));
@@ -231,12 +307,14 @@ impl LlmProvider for FakeLlm {
                 return Ok(Completion {
                     text,
                     cancelled: true,
+                    tool_calls: Vec::new(),
                 });
             }
         }
         Ok(Completion {
             text,
             cancelled: false,
+            tool_calls: Vec::new(),
         })
     }
 }

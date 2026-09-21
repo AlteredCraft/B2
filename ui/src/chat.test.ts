@@ -12,8 +12,10 @@ import {
   formatModelSize,
   pullCommand,
   retrievalNote,
+  toolsLine,
   turnRowKey,
   userMessage,
+  whyQuestion,
 } from "./chat.ts";
 import { rovingSideKey, sideArrowMove, sideRowIndex } from "./sidenav.ts";
 import type { ChatSetup } from "./types.ts";
@@ -171,6 +173,45 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
   );
   // Fully embedded: nothing to caveat.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }), "");
+});
+
+test("a why-question names both notes, by title where there is one", () => {
+  assert.equal(
+    whyQuestion(
+      { path: "notes/srs.md", title: "Spaced repetition" },
+      { path: "concepts/memory.md", title: "Memory" },
+    ),
+    "Why is “Spaced repetition” suggested as similar to “Memory”?",
+  );
+  // An untitled note is named by its path — the identity the rest of the app shows.
+  assert.equal(
+    whyQuestion({ path: "a.md", title: null }, { path: "b.md", title: "" }),
+    "Why is “a.md” suggested as similar to “b.md”?",
+  );
+});
+
+test("an answer says which B2 tools it was built from", () => {
+  const view = {
+    answer: "Both cover brewing [1].",
+    citations: [],
+    cancelled: false,
+    tools: [
+      { name: "b2_passage_pairs", arguments: "{}", seeded: false },
+      { name: "b2_read", arguments: '{"note":"a.md"}', seeded: false },
+      { name: "b2_read", arguments: '{"note":"a.md","offset":4}', seeded: false },
+    ],
+  };
+  assert.deepEqual(answerMessage(view).tools, view.tools);
+  // Each tool once, in first-use order, named the way a person would say it.
+  assert.equal(toolsLine(view.tools), "Looked up with B2 tools: passage pairs, read");
+  // A plain ask offers the model no tools; the host omits the field, and the line is empty.
+  assert.deepEqual(answerMessage({ answer: "x", citations: [], cancelled: false }).tools, []);
+  assert.equal(toolsLine([]), "");
+  // A tool name is model output, so an odd one is shown as it came — the paint escapes it.
+  assert.equal(
+    toolsLine([{ name: "<b>x</b>", arguments: "", seeded: false }]),
+    "Looked up with B2 tools: <b>x</b>",
+  );
 });
 
 test("the pull command is spelled in one place", () => {

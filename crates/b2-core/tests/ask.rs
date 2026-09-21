@@ -224,6 +224,7 @@ impl LlmProvider for BrokenCondense {
                 Some(text) => Ok(Completion {
                     text: text.to_string(),
                     cancelled: true,
+                    tool_calls: Vec::new(),
                 }),
             };
         }
@@ -318,12 +319,14 @@ impl LlmProvider for Hallucinating {
                 return Ok(Completion {
                     text,
                     cancelled: true,
+                    tool_calls: Vec::new(),
                 });
             }
         }
         Ok(Completion {
             text,
             cancelled: false,
+            tool_calls: Vec::new(),
         })
     }
 }
@@ -511,6 +514,8 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
         system: CONDENSE_SYSTEM_PROMPT.to_string(),
         turns: req.turns.clone(),
         passages: Vec::new(),
+        tools: Vec::new(),
+        exchanges: Vec::new(),
     };
     assert_eq!(condense.system_message(), CONDENSE_SYSTEM_PROMPT);
 }

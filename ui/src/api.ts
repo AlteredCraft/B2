@@ -310,6 +310,25 @@ export const api = {
   },
 
   /**
+   * **Why was this suggested?** — the chat turn behind a *Similar & unlinked* card's
+   * **Why?**. The host gathers B2's own discovery evidence for the pair (the matched
+   * passages, the card's rank and strength, the graph facts) and streams a grounded,
+   * cited explanation — delivered exactly as `ask` is, and stopped by the same
+   * `cancelAsk`. `limit` is the list length the pane showed, so the rank the explanation
+   * quotes is the card's own.
+   */
+  whySimilar: (
+    anchor: string,
+    candidate: string,
+    limit: number,
+    onToken: (text: string) => void,
+  ): Promise<AnswerView> => {
+    const channel = new Channel<string>();
+    channel.onmessage = onToken;
+    return invoke("why_similar", { anchor, candidate, limit, onEvent: channel });
+  },
+
+  /**
    * Stop the streaming answer at its next token — the pane's Esc. Cooperative: the
    * in-flight `ask` resolves normally, with `cancelled` set and the partial text intact,
    * so a stopped answer renders honestly rather than as a failure.

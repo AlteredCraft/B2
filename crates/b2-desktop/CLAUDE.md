@@ -256,6 +256,14 @@ Every new surface owes all four. They are cheap while you're building it and exp
   markup, so the mouse and ⏎ share one path) and the streaming paint (`paintChatStream`, main.ts — a full
   render per token would swap the pane's `innerHTML` a hundred times an answer and eject the keyboard with
   every one).
+  A candidate card's **Why?** is a chat turn too (`askWhy`, main.ts → the `why_similar` command →
+  `Vault::why_similar`): it takes the column from discovery, shares `ask`'s single answer slot and
+  `cancel_ask`, and its keyboard half is the card menu's *Why was this suggested?* (⇧F10). The
+  transcript's question is `chat.ts`'s `whyQuestion` — display text only; the prompt, the tools the
+  model may call and the loop that runs them are all the core's (ADR-0022). The pane adds two things:
+  the live row's waiting label (`state.chatWaiting` — the first round is lookups, and an empty row
+  reads as a hang) and the *Looked up with B2 tools* line under the answer (`toolsLine`, escaped at
+  the paint because a tool name is model output).
 - **`ui/src/droplink.ts`** — the discovery card's drop into the note: where the link lands, where it
   may not, and the CodeMirror preview that says so before the button comes up. Its own module for
   livepreview.ts's reason — the decisions are pure functions of a line (or of an `EditorState` and a

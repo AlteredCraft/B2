@@ -54,7 +54,14 @@ import {
   type TreeRow,
 } from "./treenav";
 import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
-import { answerMessage, chatHistory, errorMessage, userMessage } from "./chat";
+import {
+  answerMessage,
+  chatEmptyState,
+  chatHistory,
+  errorMessage,
+  userMessage,
+  whyQuestion,
+} from "./chat";
 import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
 import { externalUrl, isInPageAnchor } from "./links";
 import { embedImagesField, livePreview, setEmbedImages, wikilink } from "./livepreview";
@@ -115,7 +122,7 @@ import {
   type Direction,
 } from "./zoom";
 import { reconcileIndex } from "./reconcile";
-import type { ResourceExplainView, ResourceSummary } from "./types";
+import type { AnswerView, ResourceExplainView, ResourceSummary } from "./types";
 import {
   cmdSheetHtml,
   contextMenuHtml,
@@ -1459,11 +1466,11 @@ function toggleCard(key: string): void {
 // the cursor. Anchored at the cursor, but clamped so a menu never spills past the
 // viewport edge (a menu that opens off-screen is unusable).
 const CTX_MENU_W = 168;
-const CARD_MENU_H = 76;
+const CARD_MENU_H = 108; // Open note / Link… / Why was this suggested?
 /** …plus *Insert link at cursor*, which the card's menu grows while a note is being edited
  *  (render.ts). Only the clamp reads these, and it must not *under*-read — a menu opened
  *  near the bottom edge would lose its last item off-screen. */
-const CARD_EDIT_MENU_H = 108;
+const CARD_EDIT_MENU_H = 140;
 const TREE_MENU_H = 132; // the context line + three items
 // + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
 // Only the clamp reads these, so an approximation is fine — but it must not *under*-read,
@@ -2024,7 +2031,7 @@ async function refreshDiscovery(): Promise<void> {
       render();
     });
   const similar = api
-    .similar(n.path, 10)
+    .similar(n.path, SIMILAR_LIMIT)
     .then((cands) => {
       if (!stale()) state.similar = cands;
     })
@@ -2198,19 +2205,78 @@ async function sendChat(question: string): Promise<void> {
   // The history the *next* ask carries is derived from the transcript before this
   // question joins it — the question itself is the `ask` argument, not history.
   const history = chatHistory(state.chatMessages);
+  await runChatTurn(q, true, "Searching your notes…", (onToken) =>
+    api.ask(q, history, onToken),
+  );
+}
+
+/** How long a *Similar & unlinked* list is — asked of `similar`, and quoted back to
+ *  `whySimilar` so the rank an explanation names is the rank the card was shown at. */
+const SIMILAR_LIMIT = 10;
+
+/**
+ * **Why was this suggested?** — a candidate card's *Why?* (or the card menu's item, its
+ * keyboard half). Opens chat beside the note and asks, as one ordinary turn, why
+ * `candidate` is in the open note's *Similar & unlinked* list. The host gathers the
+ * turn as a tool-using one (`Vault::why_similar`: the model calls B2's read-only tools,
+ * and the answer lists which); the transcript gets a question a human can read, and a follow-up typed afterwards is an ordinary `ask` with this turn as context.
+ *
+ * Chat takes the column the card was in (one column, one thing in it — chat.ts), which
+ * is the right trade here: the answer cites passages from both notes, a citation opens
+ * its note in the centre, and ⌘J brings the list back.
+ */
+async function askWhy(candidate: { path: string; title: string | null }): Promise<void> {
+  const anchor = state.current;
+  if (!anchor || state.chatStreaming !== null) {
+    if (state.chatStreaming !== null) flash("B2 is still answering. Press Esc to stop it.");
+    return;
+  }
+  if (!state.chatOpen) {
+    state.chatOpen = true;
+    clearSearch();
+    render();
+  }
+  // The probe first: with no model to answer, the pane's setup card is the useful thing
+  // to show, and a turn sent anyway would only add a failure under it.
+  await refreshChatSetup();
+  const ready =
+    chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup }) === "ready";
+  if (!ready || state.current?.path !== anchor.path) return;
+  // `false`: this turn was not typed, so a question half-written in the composer stays.
+  await runChatTurn(
+    whyQuestion(candidate, anchor),
+    false,
+    "Looking things up with B2 tools…",
+    (onToken) => api.whySimilar(anchor.path, candidate.path, SIMILAR_LIMIT, onToken),
+  );
+}
+
+/**
+ * The shared body of a chat turn, whichever host call answers it: `shown` joins the
+ * transcript, `call` streams tokens into the live row, and the resolved answer (or the
+ * failure) replaces the stream.
+ */
+async function runChatTurn(
+  shown: string,
+  clearComposer: boolean,
+  waiting: string,
+  call: (onToken: (token: string) => void) => Promise<AnswerView>,
+): Promise<void> {
+  if (state.chatStreaming !== null) return;
   // The vault this turn is grounded in. A switch mid-answer clears the transcript (the
   // old vault's paths mean nothing in the new one), so an answer that lands afterwards
   // must be dropped rather than pushed into a conversation it doesn't belong to — the
   // `stale()` guard discovery uses, keyed on the vault instead of the note.
   const askedIn = state.vaultRoot;
-  state.chatMessages.push(userMessage(q));
+  state.chatMessages.push(userMessage(shown));
   state.chatStreaming = "";
+  state.chatWaiting = waiting;
   render();
   const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
-  if (input) input.value = "";
+  if (input && clearComposer) input.value = "";
   scrollChatToEnd();
   try {
-    const view = await api.ask(q, history, (token) => {
+    const view = await call((token) => {
       // Guard against a token arriving after the turn ended (a cancel racing the last
       // frame): appending to a null stream would resurrect the live row.
       if (state.chatStreaming === null) return;
@@ -4479,6 +4545,12 @@ function wireEvents(): void {
         openLinkModal(path, title ?? "");
         return;
       }
+      if (target.closest("[data-ctx-why]")) {
+        const { path, title } = menu;
+        closeContextMenu();
+        void askWhy({ path, title });
+        return;
+      }
       closeContextMenu();
       return;
     }
@@ -4810,6 +4882,14 @@ function wireEvents(): void {
     if (openSystem) {
       const p = openSystem.dataset.openSystem;
       if (p) api.openResource(p).catch((e) => flash(errText(e)));
+      return;
+    }
+
+    // A candidate card's *Why?* — before `data-open`, which the same card also carries.
+    const why = target.closest<HTMLElement>("[data-why]");
+    if (why) {
+      const p = why.dataset.why;
+      if (p) void askWhy({ path: p, title: why.dataset.whyTitle || null });
       return;
     }
 

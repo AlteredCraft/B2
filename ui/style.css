@@ -1702,6 +1702,32 @@ body.is-resizing {
   overflow-wrap: anywhere;
 }
 
+/* Which B2 tools an answer was built from — a quiet provenance line under it. */
+.chat-tools {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+/* The live row before its first token: say what B2 is doing rather than show nothing. */
+#chat-stream:empty::before {
+  content: attr(data-waiting);
+  color: var(--muted);
+}
+
+/* *Why?* — hands the pair to chat. Quiet until the card is hovered or holds the keyboard,
+   so ten cards don't read as ten calls to action. */
+.card-why {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.card:hover .card-why,
+.card:focus .card-why,
+.card-why:focus-visible {
+  opacity: 1;
+}
+
 /* --- foldable discovery cards (Similar & unlinked / Connections) ----------------
    One bordered box = a title row (fold chevron + a clickable open-region) over a
    collapsible body (path + snippet). The head and body are borderless regions inside

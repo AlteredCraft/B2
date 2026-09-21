@@ -483,6 +483,7 @@ fn main() {
             commands::menu_chords,
             commands::set_zoom,
             commands::ask,
+            commands::why_similar,
             commands::cancel_ask,
             commands::chat_setup,
             commands::set_chat_config,
