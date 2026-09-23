@@ -13,8 +13,10 @@ commit a typed link). Indexing writes nothing to your notes. Your prose is never
 
 You need a Rust toolchain ([rustup.rs](https://rustup.rs)) to build the `b2` binary. B2 ships
 as source today, as one static binary. macOS and Linux are the tested platforms. For the
-desktop app (its own section near the end), also install Node + npm and the Tauri CLI. Run
-`make doctor` in the checkout: it checks all of this and prints the fix for anything missing.
+desktop app (its own section near the end), also install Node + npm (Node 18, 20, or 22+;
+`nvm install --lts` is the easy way) and the Tauri CLI (`cargo install tauri-cli --locked`).
+Run `make doctor` in the checkout: it checks all of this and prints the fix for anything
+missing.
 
 B2 needs no account and no API key. It touches the network only when you ask it to: the
 one-time model download below, and chat against a remote endpoint if you configure one (the
@@ -373,6 +375,12 @@ $ B2_VAULT_PATH=~/vault make app
 On first launch with nothing remembered, the window opens with no vault selected. Click the
 vault switcher and pick a folder. After that it reopens whatever you had open last, and
 `B2_VAULT_PATH` is just a way to skip that first pick.
+
+On Apple Silicon, `make app` embeds on the Metal GPU (about 7× faster than CPU on the test
+vault, [GH #40](https://github.com/AlteredCraft/B2/issues/40)) and falls back to CPU if the
+GPU can't start; `make app-cpu` forces CPU. Metal is chosen when the app is built, and CPU and
+Metal produce different vectors, so switching re-embeds the vault once on the next reindex.
+`make compare-device` benchmarks the two on your hardware.
 
 What the window adds over the terminal:
 
