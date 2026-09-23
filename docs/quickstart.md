@@ -278,9 +278,11 @@ $ b2 similar notes/spaced-repetition --explain notes/memory-palace
 It prints where the note stands (its card number, or why it isn't a card: already linked,
 not embedded yet, ranked past the list), its rank judged as a whole note beside its rank by
 its best passage, the notes both already link with, and every passage pair behind the
-match, graded on the same scale as the strength dots. It reads the same numbers the list was
-ranked on, so it can't disagree with it, and it calls no model. `--json` hands an agent the
-whole view.
+match, graded on the same scale as the strength dots when the list is graded (a vault with
+too few notes to compare, or one indexed without the real model, says "Ungraded"). It reads
+the same numbers the list was ranked on, so it agrees with the list you ran at the same
+`--limit`; pass the list's `--limit` when explaining one of its cards. It calls no model, and
+`--json` hands an agent the whole view.
 
 You are the precision gate: B2 finds the candidates; you supply the judgment and the type.
 There is no review queue and nothing "inert until accepted". A connection exists only once

@@ -1076,6 +1076,13 @@ fn cmd_explain_similar(cli: &Cli, note: &str, other: &str, limit: usize) -> Resu
     }
     if !ex.pairs.is_empty() {
         println!("\nPassage pairs, nearest first:");
+        // Pairs carry a grade only when the list does; say why they don't, once, rather
+        // than print bare pairs that read as unmeasured by accident.
+        if ex.pairs.iter().all(|p| p.z.is_none()) {
+            println!(
+                "     Ungraded: too few notes to compare against, or a vault indexed without the real model."
+            );
+        }
     }
     for (i, p) in ex.pairs.iter().enumerate() {
         let grade = p.z.map(|z| format!("  z {z:.2}")).unwrap_or_default();

@@ -1043,6 +1043,12 @@ fn similar_explain_describes_the_served_row() {
     let text = stdout(&human);
     assert!(text.contains("#2"), "says where it stands: {text}");
     assert!(text.contains("alpha"), "shows this note's passage: {text}");
+    // Five notes under the fake embedder: nothing to grade against, and the output says
+    // so rather than printing pairs with no grade and no reason.
+    assert!(
+        text.contains("Ungraded"),
+        "an ungraded explanation says so: {text}"
+    );
 }
 
 #[test]

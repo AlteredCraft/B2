@@ -188,10 +188,11 @@ it. Notes two links away stay in, since a related-but-not-directly-linked note i
 connection worth finding.
 
 **Every card can be explained.** The card's **Explain** (or `b2 similar <note> --explain
-<other>`) shows the evidence the ranking used, read from the same computation, so it can
-never disagree with the list: where the note stands among everything compared, its rank as
-a whole note beside its rank by its best passage (far apart means a buried gem), and every
-one of its passages paired with your note's nearest, each graded on the dots' scale. It
+<other>`, at the same `--limit` as the list) shows the evidence the ranking used, read from
+the same computation, so it can't disagree with the list: where the note stands among
+everything compared, its rank as a whole note beside its rank by its best passage (far apart
+means a buried gem), and every one of its passages paired with your note's nearest, each
+graded on the dots' scale when the list is graded, and marked ungraded when it isn't. It
 also flags the one case where a high rank means little: the best pair is *identical text*,
 such as a daily-note template shared by both notes. No model is involved; **Why?** is the
 chat model's account, and Explain is how you check it.

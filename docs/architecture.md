@@ -89,8 +89,8 @@ an error. Details: [index-engine.md §4](index-engine.md).
 nearest notes you haven't linked yet: a two-stage scan over stored vectors, no model call, no
 network. The machine finds candidates; you supply the judgment and the type (ADR-0009). The
 ranked list is always served; `limit` is a cap, not a promise (D1, ADR-0014). `b2 similar
---explain` (the desktop's **Explain**) reads one note's place in the same computation, so an
-explanation can never disagree with the card it explains. Committing is
+--explain` (the desktop's **Explain**) reads one note's place in the same computation, so at
+the same `limit` it can't disagree with the card; the desktop always passes the list's own. Committing is
 `b2 link`, which appends one typed-link line to the source note's frontmatter and re-projects
 it, or a `[[link]]` you write in the body yourself. Details:
 [index-engine.md §3 and §4](index-engine.md).

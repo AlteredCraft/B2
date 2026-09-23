@@ -73,7 +73,7 @@ export function standingText(v: SimilarExplainView): string {
   switch (s.kind) {
     case "ranked":
       return s.served
-        ? `Card #${s.rank} of the ${v.limit} shown · ${s.of} notes compared`
+        ? `Card #${s.rank} of the ${Math.min(v.limit, s.of)} shown · ${s.of} notes compared`
         : `Ranked #${s.rank} of ${s.of} compared, past the ${v.limit} shown`;
     case "linked":
       return "Already linked, so it isn’t suggested";
