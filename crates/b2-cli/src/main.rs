@@ -1671,7 +1671,7 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::MoveDestination(_)) => {
             "That move destination isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
         }
-        CliError::Core(b2_core::Error::MoveIncomplete(paths)) => format!(
+        CliError::Core(b2_core::Error::MoveIncomplete { paths, .. }) => format!(
             "The move failed, and B2 could not undo its link changes in: {}. Check the links in those files; `b2 reindex` then shows any that no longer resolve.",
             paths.join(", ")
         ),
@@ -1797,11 +1797,15 @@ mod tests {
 
     #[test]
     fn a_move_that_could_not_be_undone_names_the_files_to_check() {
-        let msg = user_message(&CliError::Core(b2_core::Error::MoveIncomplete(vec![
-            "b.md".into(),
-            "notes/c.md".into(),
-        ])));
+        let msg = user_message(&CliError::Core(b2_core::Error::MoveIncomplete {
+            paths: vec!["b.md".into(), "notes/c.md".into()],
+            source: Box::new(b2_core::Error::Io(std::io::Error::other("disk full"))),
+        }));
         assert!(msg.contains("in: b.md, notes/c.md."), "{msg}");
+        assert!(
+            !msg.contains("disk full"),
+            "the cause stays internal: {msg}"
+        );
     }
 
     fn view(vouched: Option<bool>, n: usize) -> SearchEvidenceView {

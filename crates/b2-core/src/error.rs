@@ -67,9 +67,13 @@ pub enum Error {
     /// A move failed part-way and B2 could not put back every file it had already
     /// changed (GH #230). Rare: an ordinary failure is rolled back and surfaces as
     /// its own error. Carries the vault-relative paths still holding the move's
-    /// rewrite, so the user can check those links by hand.
-    #[error("move failed and could not be fully undone: {}", .0.join(", "))]
-    MoveIncomplete(Vec<String>),
+    /// rewrite, so the user can check those links by hand, and the failure that
+    /// started the undo, so the adapters' internal log keeps the root cause.
+    #[error("move failed and could not be fully undone: {} (cause: {source})", paths.join(", "))]
+    MoveIncomplete {
+        paths: Vec<String>,
+        source: Box<Error>,
+    },
 
     /// `b2 mv` was given a source folder that doesn't exist in the vault — the
     /// directory sibling of [`Error::NoteNotFound`] (a folder is a path prefix,

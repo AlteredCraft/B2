@@ -590,7 +590,8 @@ be budgeted, tested, and watched.
   mechanical (the materialized edges name exactly which files and links to touch, Markdown
   first, then the index), but moving a heavily linked note is proportional to its backlink
   count, not O(1). The index side is one cascading `UPDATE` plus re-projection of the
-  inbound sources, bounded by the same count.
+  inbound sources, bounded by the same count. Only the exact files the graph names are
+  touched: a prefix-sharing `[[foo-bar]]` is never rewritten when moving `foo`.
 - **A failed move leaves the vault as it was.** A SQLite transaction can't roll back file
   writes, and reindexing can't repair rewritten link text (it projects whatever the
   Markdown now says), so the vault half carries its own all-or-nothing contract (GH #230):
@@ -608,8 +609,7 @@ be budgeted, tested, and watched.
   - *A crash can't be undone.* The one unguarded window is between the first rewrite and
     the rename: the rewritten links name the destination while the note is still at its
     source, and they surface as dangling (G5). Re-running the same move finishes it,
-    because the rewrites are already done and only the rename is left. Only the exact files the graph names are touched: a
-  prefix-sharing `[[foo-bar]]` is never rewritten when moving `foo`.
+    because the rewrites are already done and only the rename is left.
 - **Out-of-band moves are identified, not repaired, and that is the scope decision.** A
   `git mv` or Finder move is, to a path-keyed index, a delete plus a create: the old path's
   rows prune, the new path projects fresh, and every inbound `[[oldpath]]` becomes a surfaced

@@ -339,8 +339,8 @@ enum Done {
 /// moves the note, resource or folder). If any step fails, undo the earlier ones in
 /// reverse and return the failure; the rename is last, so once it succeeds there is
 /// nothing left to undo. A filesystem has no transaction, so an undo step can fail
-/// too — then [`Error::MoveIncomplete`] names the files still holding a rewrite rather
-/// than pretending the vault is whole.
+/// too — then [`Error::MoveIncomplete`] names the files still holding a rewrite, and
+/// carries the failure that started the undo, rather than pretending the vault is whole.
 fn commit(vault_root: &Path, rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path) -> Result<()> {
     let mut done = Vec::new();
     let Err(err) = apply(rewrites, old_abs, new_abs, &mut done) else {
@@ -350,13 +350,10 @@ fn commit(vault_root: &Path, rewrites: &[Rewrite], old_abs: &Path, new_abs: &Pat
     if unrestored.is_empty() {
         return Err(err);
     }
-    tracing::warn!(
-        target: "b2::mv",
-        error = %err,
-        unrestored = ?unrestored,
-        "move failed and could not be fully undone"
-    );
-    Err(Error::MoveIncomplete(unrestored))
+    Err(Error::MoveIncomplete {
+        paths: unrestored,
+        source: Box::new(err),
+    })
 }
 
 /// [`commit`]'s forward half, recording each change in `done` as it happens.
