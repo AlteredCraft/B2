@@ -280,9 +280,10 @@ Every edge projects to one record. This is the shape the [index-engine.md](index
   `[[path]]` is normalized by the resolver (the wikilink `+ ".md"` ladder) and stored as the
   path it named. `dst_path_raw` keeps the text exactly as written. So an edge stores what you
   authored, and the graph carries no identifier the vault does not. A B2-performed move is
-  therefore one transaction: rewrite the inbound `[[path|title]]` text, re-key the moved
-  note's rows, re-project the inbound sources. That is how L1's "rename keeps every backlink
-  resolving" holds. A move made outside B2 is a delete plus a create, and its inbound links
+  therefore one operation: rewrite the inbound `[[path|title]]` text and rename the file
+  (all or nothing on the vault), then re-key the moved note's rows and re-project the
+  inbound sources ([index-engine.md](index-engine.md) §8). That is how L1's "rename keeps
+  every backlink resolving" holds. A move made outside B2 is a delete plus a create, and its inbound links
   project as surfaced dangling edges (G5).
 - **The edge set is the union of the two homes, deduped** (G2). A frontmatter entry with a
   *different* verb than a body link to the same target is no duplicate; that is the augment

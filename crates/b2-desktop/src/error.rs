@@ -103,6 +103,10 @@ pub fn user_message(err: &CmdError) -> String {
             "That destination isn't valid. Give a vault-relative name like `notes/new-name`."
                 .to_string()
         }
+        CmdError::Core(b2_core::Error::MoveIncomplete { paths, .. }) => format!(
+            "The move failed, and B2 could not undo its link changes in: {}. Check the links in those files, then reindex.",
+            paths.join(", ")
+        ),
         CmdError::Core(b2_core::Error::DirNotFound(p)) => {
             format!("Folder not found: '{p}'. It may have been moved — reindex and try again.")
         }
@@ -283,5 +287,17 @@ mod tests {
 
         let dir = CmdError::Core(b2_core::Error::DirNotFound("old-folder".into()));
         assert!(user_message(&dir).contains("Folder not found: 'old-folder'"));
+
+        let incomplete = CmdError::Core(b2_core::Error::MoveIncomplete {
+            paths: vec!["b.md".into(), "notes/c.md".into()],
+            source: Box::new(b2_core::Error::Io(std::io::Error::other("disk full"))),
+        });
+        let msg = user_message(&incomplete);
+        assert!(msg.contains("in: b.md, notes/c.md."));
+        assert!(!msg.contains("disk full"), "the cause stays internal");
+        assert!(
+            incomplete.to_string().contains("disk full"),
+            "the internal log (`log_internal`) keeps the cause"
+        );
     }
 }

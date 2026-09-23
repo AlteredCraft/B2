@@ -1671,6 +1671,10 @@ fn user_message(err: &CliError) -> String {
         CliError::Core(b2_core::Error::MoveDestination(_)) => {
             "That move destination isn't valid. Give a vault-relative path like `notes/new-name.md`.".to_string()
         }
+        CliError::Core(b2_core::Error::MoveIncomplete { paths, .. }) => format!(
+            "The move failed, and B2 could not undo its link changes in: {}. Check the links in those files; `b2 reindex` then shows any that no longer resolve.",
+            paths.join(", ")
+        ),
         CliError::Core(b2_core::Error::DirNotFound(p)) => format!(
             "Folder not found: '{p}'. Check the path (folders are vault-relative, like `notes/archive`)."
         ),
@@ -1788,6 +1792,19 @@ mod tests {
         assert!(
             !msg.contains("Check that it's running"),
             "the server is fine — the generic chat advice would mislead: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_move_that_could_not_be_undone_names_the_files_to_check() {
+        let msg = user_message(&CliError::Core(b2_core::Error::MoveIncomplete {
+            paths: vec!["b.md".into(), "notes/c.md".into()],
+            source: Box::new(b2_core::Error::Io(std::io::Error::other("disk full"))),
+        }));
+        assert!(msg.contains("in: b.md, notes/c.md."), "{msg}");
+        assert!(
+            !msg.contains("disk full"),
+            "the cause stays internal: {msg}"
         );
     }
 
