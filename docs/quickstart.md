@@ -12,7 +12,8 @@ commit a typed link). Indexing writes nothing to your notes. Your prose is never
 ## Before you start
 
 You need a Rust toolchain ([rustup.rs](https://rustup.rs)) to build the `b2` binary. B2 ships
-as source today, as one static binary. macOS and Linux are the tested platforms. For the
+as source today, as one static binary. macOS is the tested platform: it is where B2 is
+developed and where CI runs. Other platforms are untested. For the
 desktop app (its own section near the end), also install Node + npm (Node 18, 20, or 22+;
 `nvm install --lts` is the easy way) and the Tauri CLI (`cargo install tauri-cli --locked`).
 Run `make doctor` in the checkout: it checks all of this and prints the fix for anything

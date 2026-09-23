@@ -47,8 +47,8 @@ common, how they bear on each other, and what they actually say.
 The build-out is done: the engine, the `b2` CLI, the desktop app and grounded chat all work end
 to end. The next phase is using B2 every day and letting that use decide what comes next. New
 work starts as an [`observed` issue](https://github.com/AlteredCraft/B2/issues?q=label%3Aobserved):
-what I was doing, what I expected, what happened. B2 runs from source today (developed on
-macOS); an installable build is [#23](https://github.com/AlteredCraft/B2/issues/23).
+what I was doing, what I expected, what happened. B2 runs from source on macOS today (the
+one tested platform); an installable build is [#23](https://github.com/AlteredCraft/B2/issues/23).
 
 ## Get started
 

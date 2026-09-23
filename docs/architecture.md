@@ -4,11 +4,12 @@ How the B2 system is built, for anyone working on the code. Read this to orient 
 what the pieces are, how data flows through them, and where each rule is enforced. Then
 follow the links into the two specs for the details.
 
-B2 is a local-first Markdown vault with an AI layer that surfaces semantically similar,
-not-yet-linked notes for you to connect. This repo is the index engine plus its two adapters:
-the `b2` CLI and a Tauri desktop app. A SQLite store is treated as a disposable projection of
-your Markdown, real local AI sits behind two enumerated seams, and both adapters drive the
-same typed `Vault` API. The *why* behind each choice is an [ADR](../ADRs/README.md); the
+B2 is a notes app for research: plain Markdown you own, with an AI layer that surfaces the
+related notes you haven't linked yet, explains them, and answers from your notes with
+citations. This repo is the index engine plus its two adapters: the `b2` CLI and a Tauri
+desktop app. A SQLite store is treated as a disposable projection of your Markdown, real
+local AI sits behind two enumerated seams, and both adapters drive the same typed `Vault`
+API. The *why* behind each choice is an [ADR](../ADRs/README.md); the
 normative spec is [invariants.md](invariants.md), [data-model.md](data-model.md), and
 [index-engine.md](index-engine.md).
 
