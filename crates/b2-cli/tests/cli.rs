@@ -1005,6 +1005,87 @@ fn similar_limit_zero_prints_nothing_rather_than_a_claim() {
     );
 }
 
+/// `b2 similar NOTE --explain OTHER` (GH #236): the model-free explanation of one
+/// card, read from the same computation as the list. JSON names both notes, the
+/// standing (tagged by `kind`), and the passage pairs; the card it explains stands at
+/// the rank the list showed it.
+#[test]
+fn similar_explain_describes_the_served_row() {
+    let (_g, root) = discovery_vault();
+    let list = similar(&root, "alpha.md");
+    let second = list[1]["path"].as_str().unwrap().to_string();
+
+    let out = run_in(
+        &root,
+        &["--json", "similar", "alpha.md", "--explain", &second],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ex: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ex["anchor"]["path"], "alpha.md");
+    assert_eq!(ex["candidate"]["path"], second.as_str());
+    assert_eq!(ex["standing"]["kind"], "ranked");
+    assert_eq!(ex["standing"]["rank"], 2, "the rank the card was shown at");
+    assert_eq!(ex["standing"]["served"], true);
+    assert_eq!(ex["limit"], 10);
+    let pairs = ex["pairs"].as_array().unwrap();
+    assert!(!pairs.is_empty(), "an embedded pair has passages");
+    assert!(pairs[0]["anchor"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("alpha"));
+    assert!(
+        (pairs[0]["score"].as_f64().unwrap() - list[1]["score"].as_f64().unwrap()).abs() < 1e-9
+    );
+
+    // Human: the standing in words, then the pairs.
+    let human = run_in(&root, &["similar", "alpha.md", "--explain", &second]);
+    assert!(human.status.success(), "{}", stderr(&human));
+    let text = stdout(&human);
+    assert!(text.contains("#2"), "says where it stands: {text}");
+    assert!(text.contains("alpha"), "shows this note's passage: {text}");
+    // Five notes under the fake embedder: nothing to grade against, and the output says
+    // so rather than printing pairs with no grade and no reason.
+    assert!(
+        text.contains("Ungraded"),
+        "an ungraded explanation says so: {text}"
+    );
+}
+
+#[test]
+fn similar_explain_says_why_a_linked_note_is_not_a_card() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(
+        &root,
+        &["link", "alpha.md", "beta.md", "--type", "supports"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let out = run_in(
+        &root,
+        &["--json", "similar", "alpha.md", "--explain", "beta.md"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ex: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ex["standing"]["kind"], "linked");
+
+    let human = run_in(&root, &["similar", "alpha.md", "--explain", "beta.md"]);
+    assert!(
+        stdout(&human).to_lowercase().contains("already linked"),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
+fn similar_explain_unknown_note_fails_cleanly() {
+    let (_g, root) = discovery_vault();
+    let out = run_in(&root, &["similar", "alpha.md", "--explain", "nope.md"]);
+    assert!(!out.status.success(), "unknown note must be a nonzero exit");
+    let err = stderr(&out).to_lowercase();
+    assert!(err.contains("not found"), "actionable message: {err}");
+    assert!(!err.contains("panicked"), "no stack trace: {err}");
+}
+
 #[test]
 fn link_writes_frontmatter_and_shows_in_both_directions() {
     let (_g, root) = discovery_vault();

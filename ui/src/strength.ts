@@ -65,11 +65,16 @@ export interface StrengthBand {
   value: string;
 }
 
+/** The ●●● landmark: the labelled-mate population's upper quartile (rounded down). */
+export const STRONG_Z = 2.52;
+/** The ●●○ landmark: where the corpus's labelled leaders read. */
+export const CLEAR_Z = 1.96;
+
 export function strengthBand(z: number | undefined | null): StrengthBand | null {
   if (z === undefined || z === null || !Number.isFinite(z)) return null;
-  const [glyph, label] = z >= 2.52
+  const [glyph, label] = z >= STRONG_Z
     ? ["●●●", "strong match"]
-    : z >= 1.96
+    : z >= CLEAR_Z
       ? ["●●○", "clear match"]
       : ["●○○", "near match"];
   const value = `${z.toFixed(1)}σ`;

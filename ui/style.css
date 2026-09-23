@@ -3598,3 +3598,258 @@ button.move-dest:hover {
 .chat-setup-inline {
   overflow: visible;
 }
+
+/* --- Explain: the Compare view for one Similar card (GH #236) ---------------------
+   The centre pane's fourth mode (render.ts `explainPaneHtml`). A reading column like a
+   note's, under a sticky bar with the one way back. Passages are note text shown as
+   text, so they keep their line breaks and scroll inside a bounded box rather than
+   letting one 11k-token passage push the rest of the view off the page. */
+.card-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.explain-bar {
+  margin: 0 calc(-1 * var(--note-pad-x)) 28px;
+  padding: 10px var(--note-pad-x);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.explain-close {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.explain-kicker {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.explain-standing {
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+.explain-standing .card-score {
+  margin-right: 4px;
+}
+
+.explain-summary {
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.explain-section {
+  margin: 0 0 28px;
+}
+.explain-section h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.explain-section h2 .muted {
+  font-weight: 400;
+  font-size: 13px;
+}
+.explain-caption {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.explain-strip {
+  display: block;
+  width: 100%;
+  height: 44px;
+  overflow: visible;
+}
+.strip-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.strip-mark {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.strip-dot {
+  fill: var(--muted);
+  fill-opacity: 0.45;
+}
+.strip-this {
+  stroke: var(--accent);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+.strip-legend {
+  position: relative;
+  height: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.strip-legend span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+.strip-bands {
+  height: 14px;
+}
+.strip-ticks {
+  font-variant-numeric: tabular-nums;
+}
+.strip-tick {
+  stroke: var(--muted);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The strip's key: the three marks it draws, drawn the same way, so nobody has to guess
+   that the dashed lines are grade cut-offs rather than notes. */
+.strip-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.strip-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.key-this {
+  width: 3px;
+  height: 12px;
+  background: var(--accent);
+}
+.key-mark {
+  width: 0;
+  height: 12px;
+  border-left: 1px dashed var(--muted);
+}
+.key-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.6;
+}
+
+/* The strip's "?": the longer account, one click away rather than printed under it. */
+.explain-h2-help {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.explain-help-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.explain-help-btn:hover,
+.explain-help-btn[aria-expanded="true"] {
+  color: var(--accent);
+}
+.explain-help {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.explain-help p {
+  margin: 0 0 6px;
+}
+.explain-help p:last-child {
+  margin: 0;
+}
+
+.explain-pairs {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.explain-pair {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px 12px;
+}
+.explain-pair-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.explain-pill {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--danger);
+  font-weight: 600;
+}
+.explain-pair-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .explain-pair-body {
+    grid-template-columns: 1fr;
+  }
+}
+.explain-passage {
+  min-width: 0;
+}
+.explain-passage-head {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explain-who {
+  color: var(--text);
+  font-weight: 600;
+}
+.explain-passage-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14em;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.explain-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 40px;
+}

@@ -33,6 +33,7 @@ import type {
   ResourceMoveReport,
   ResourceSummary,
   SearchEvidenceView,
+  SimilarExplainView,
   SimilarView,
   VaultInfo,
   WriteReport,
@@ -148,6 +149,12 @@ export const api = {
    *  nearest, always served (GH #197). */
   similar: (note: string, limit = 10): Promise<SimilarView[]> =>
     invoke("similar", { note, limit }),
+
+  /** **Explain** one Similar card (GH #236): where `candidate` stands in `anchor`'s list
+   *  and the passage pairs behind it. Model-free; `limit` is the list length the pane
+   *  asked `similar` for, so the rank is the card's. */
+  explainSimilar: (anchor: string, candidate: string, limit: number): Promise<SimilarExplainView> =>
+    invoke("explain_similar", { anchor, candidate, limit }),
 
   /** Hybrid keyword+semantic search across the vault, **with its evidence
    *  reading** (invariants.md D2, GH #202): the same rows in the same order, plus

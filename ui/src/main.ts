@@ -30,7 +30,7 @@ import {
   tooltips,
 } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
-import { state, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
+import { state, type AppState, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { systemPath } from "./copypath";
 import { bytesToBase64, importSummary, planImport } from "./importfiles";
@@ -53,7 +53,7 @@ import {
   visibleRows,
   type TreeRow,
 } from "./treenav";
-import { sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
+import { cardRowKey, sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import {
   answerMessage,
   chatEmptyState,
@@ -569,6 +569,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
   try {
     const note = await api.readNote(ref);
     state.current = note;
+    state.explainCard = null; // Explain is about one card of the note it was opened on
     state.currentResource = null; // one document owns the pane
     state.resourceImage = null;
     state.fmEditing = false; // a new document ends any drawer edit (guards ran upstream)
@@ -1467,11 +1468,11 @@ function toggleCard(key: string): void {
 // the cursor. Anchored at the cursor, but clamped so a menu never spills past the
 // viewport edge (a menu that opens off-screen is unusable).
 const CTX_MENU_W = 168;
-const CARD_MENU_H = 108; // Open note / Link… / Why was this suggested?
+const CARD_MENU_H = 140; // Open note / Link… / Explain this suggestion / Why was this suggested?
 /** …plus *Insert link at cursor*, which the card's menu grows while a note is being edited
  *  (render.ts). Only the clamp reads these, and it must not *under*-read — a menu opened
  *  near the bottom edge would lose its last item off-screen. */
-const CARD_EDIT_MENU_H = 140;
+const CARD_EDIT_MENU_H = 172;
 const TREE_MENU_H = 132; // the context line + three items
 // + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
 // Only the clamp reads these, so an approximation is fine — but it must not *under*-read,
@@ -1980,6 +1981,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
 function toggleGraph(): void {
   if (!state.current) return; // the graph anchors on an open note
   if (!fmEditGuard()) return; // the graph takes the pane the mini-editor holds
+  state.explainCard = null; // the graph and Explain share the pane; the toggle picks the graph
   state.graphOpen = !state.graphOpen;
   render();
 }
@@ -2250,6 +2252,55 @@ async function askWhy(candidate: { path: string; title: string | null }): Promis
     "Looking things up with B2 tools…",
     (onToken) => api.whySimilar(anchor.path, candidate.path, SIMILAR_LIMIT, onToken),
   );
+}
+
+/**
+ * **Explain** — a candidate card's model-free explanation (GH #236): the centre pane
+ * compares the open note with `candidate`, from the same computation that ranked the
+ * card (`Vault::explain_similar`). The card's *Explain*, and the card menu's item (its
+ * keyboard half, K1). The pane paints at once with a spinner, and a read that arrives
+ * after the user has moved on is dropped. The keyboard lands on *Back to note*.
+ */
+async function openExplain(candidate: string): Promise<void> {
+  const anchor = state.current;
+  if (!anchor) return;
+  // The note pane belongs to the live editor while editing (the carve-out), so the
+  // Compare view can't take it. Say so rather than drop the click.
+  if (state.editing) {
+    flash(`Leave edit mode (${displayKeys(["edit.toggle"])}) to see Explain.`);
+    return;
+  }
+  if (!fmEditGuard()) return; // the view takes the pane the mini-editor holds
+  const current: NonNullable<AppState["explainCard"]> = {
+    anchor: anchor.path,
+    candidate,
+    view: null,
+    error: null,
+    allPairs: false,
+    help: false,
+  };
+  state.explainCard = current;
+  render();
+  document.getElementById("explain-close")?.focus();
+  try {
+    const view = await api.explainSimilar(anchor.path, candidate, SIMILAR_LIMIT);
+    if (state.explainCard !== current) return; // superseded or closed meanwhile
+    current.view = view;
+  } catch (e) {
+    if (state.explainCard !== current) return;
+    current.error = errText(e);
+  }
+  render();
+}
+
+/** Back out of the Explain view, handing the keyboard back to the card it explained. */
+function closeExplain(): void {
+  const ec = state.explainCard;
+  if (!ec) return;
+  state.explainCard = null;
+  render();
+  const i = state.similar.findIndex((c) => c.path === ec.candidate);
+  if (i >= 0) focusSideRow(cardRowKey("similar", i, ec.candidate));
 }
 
 /**
@@ -3348,6 +3399,7 @@ function enterEdit(): void {
   const n = state.current;
   if (!n || state.editing || state.loading) return;
   if (!fmEditGuard()) return; // one editor at a time — resolve the drawer first
+  state.explainCard = null; // editing takes the pane back to the note
   state.editing = true;
   state.editConflict = false;
   render();
@@ -4558,6 +4610,12 @@ function wireEvents(): void {
         openLinkModal(path, title ?? "");
         return;
       }
+      if (target.closest("[data-ctx-explain]")) {
+        const p = menu.path;
+        closeContextMenu();
+        void openExplain(p);
+        return;
+      }
       if (target.closest("[data-ctx-why]")) {
         const { path, title } = menu;
         closeContextMenu();
@@ -4895,6 +4953,29 @@ function wireEvents(): void {
     if (openSystem) {
       const p = openSystem.dataset.openSystem;
       if (p) api.openResource(p).catch((e) => flash(errText(e)));
+      return;
+    }
+
+    // A candidate card's *Explain*, and the Explain view's own controls — before
+    // `data-open`, which the same card also carries.
+    const explain = target.closest<HTMLElement>("[data-explain]");
+    if (explain) {
+      const p = explain.dataset.explain;
+      if (p) void openExplain(p);
+      return;
+    }
+    if (target.closest("[data-explain-close]")) {
+      closeExplain();
+      return;
+    }
+    if (target.closest("[data-explain-help]")) {
+      if (state.explainCard) state.explainCard.help = !state.explainCard.help;
+      render();
+      return;
+    }
+    if (target.closest("[data-explain-all]")) {
+      if (state.explainCard) state.explainCard.allPairs = !state.explainCard.allPairs;
+      render();
       return;
     }
 
@@ -5518,7 +5599,12 @@ function wireEvents(): void {
         closeChat();
         return;
       }
-      // With nothing else to dismiss, Escape backs out of the graph into reading.
+      // With nothing else to dismiss, Escape backs out of Explain, then the graph,
+      // into reading.
+      if (state.explainCard && !state.editing) {
+        closeExplain();
+        return;
+      }
       if (state.graphOpen && state.current && !state.editing) toggleGraph();
       return;
     }

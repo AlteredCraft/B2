@@ -23,7 +23,7 @@ use b2_core::vault::{
     AnswerView, DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport,
     ExplainView, ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView,
     ProjectReport, ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
-    SearchEvidenceView, SimilarView, Vault, WriteReport,
+    SearchEvidenceView, SimilarExplainView, SimilarView, Vault, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
 use b2_llm::ChatSetup;
@@ -389,6 +389,20 @@ pub fn similar(
     // to route, so the command is the one call it always should have been.
     let vault = open_read(state.inner())?;
     Ok(vault.similar(&note, limit)?)
+}
+
+/// **Explain** one Similar card (GH #236): the model-free Compare view's data, the GUI
+/// sibling of `b2 similar --explain`. `limit` is the list length the side pane asked
+/// `similar` for, so the rank is the card's.
+#[tauri::command(async)]
+pub fn explain_similar(
+    state: State<'_, AppState>,
+    anchor: String,
+    candidate: String,
+    limit: usize,
+) -> Result<SimilarExplainView, CmdError> {
+    let vault = open_read(state.inner())?;
+    Ok(vault.explain_similar(&anchor, &candidate, limit)?)
 }
 
 /// Hybrid search **with its evidence reading** (invariants.md D2, GH #202) — the
