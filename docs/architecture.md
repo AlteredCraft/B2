@@ -96,8 +96,9 @@ it, or a `[[link]]` you write in the body yourself. Details:
 chat pane stream an answer grounded in your notes: condense, retrieve (flow ② at 10
 passages), assemble the grounded prompt, stream (cancellable at token granularity), cite
 (`[n]` markers resolve to path + excerpt). Chat is a reader: nothing model-derived is stored,
-and swapping chat models is a config change, never a reindex. Details:
-[index-engine.md §6](index-engine.md).
+and swapping chat models is a config change, never a reindex. `b2 why` (the **Why?** on a
+Similar card) is the one tool-using turn: the model calls B2's read-only tools, bounded in
+rounds and in calls per reply (ADR-0022). Details: [index-engine.md §6](index-engine.md).
 
 ## The write discipline
 
@@ -158,18 +159,18 @@ ADR-0018). Nothing is `#[ignore]`d: a check that genuinely needs the real model 
 eval harness, which runs on demand and therefore actually runs. Model quality never flakes CI
 (ADR-0013); how it *is* measured is [evals.md](evals.md).
 
-## Not yet built
+## What comes next
 
-What remains is tuning, scale, and packaging, tracked in
-[GitHub Issues](https://github.com/AlteredCraft/B2/issues):
+B2 is past its build-out: the engine, both adapters, and chat work end to end. What comes
+next is using it every day, so new work starts from what that use shows, not from a roadmap.
+An issue labelled `observed` in [GitHub Issues](https://github.com/AlteredCraft/B2/issues)
+says what I was doing, what I expected, and what happened. Ideas that were designed but never needed (a reranker, resource
+content search, scaling levers) stay closed, with their write-ups, until real use asks for
+them. Two things stay true whatever comes next:
 
 - Semantic quality in CI: never. The engine suite proves plumbing on the fake embedder; the
   real model is measured by the out-of-CI harness ([evals.md](evals.md)).
-- A cross-encoder reranker is the likely next seam: post-fusion, it changes ordering, not the
-  store, gated on the eval like everything else. Query expansion sits behind it in priority.
-- Resource content search: resources are inventoried and are graph targets today; chunking
-  and embedding them is designed, not shipped ([data-model.md §10](data-model.md)).
-- Packaging and distribution: B2 ships as source today.
+- Any new AI part arrives behind a seam, measured before it ships.
 
 Source of truth for every claim: `crates/*/src/` and the test suite under each crate's
 `tests/`. The spec is this folder; the *why* is [ADRs/](../ADRs/README.md); the backlog is
