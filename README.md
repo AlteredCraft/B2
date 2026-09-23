@@ -1,179 +1,115 @@
----
-title: "B2 — Read me / map"
-type: note
-tags: [b2, readme, overview, map]
-created: 2026-06-29
-status: draft
----
-
-# B2 — "second brain"
+# B2
 
 [![CI](https://github.com/AlteredCraft/B2/actions/workflows/ci.yml/badge.svg)](https://github.com/AlteredCraft/B2/actions/workflows/ci.yml)
 
-A personal, **local-first** knowledge vault — plain Markdown you fully own — with an AI layer that
-**surfaces the semantically similar notes you haven't linked yet**, so you can commit the typed,
-explained connections between them yourself.
+**A notes app for research.** Plain Markdown in a folder you own, with an AI layer that finds
+the connections you haven't made yet, explains them, and answers questions from your notes
+with citations you can check.
 
-> **Status:** the design is **locked** and the **index engine is built** (`crates/b2-core`: steps 0→5
-> of the index engine). The **`b2` CLI over a typed core API** is
-> live (`crates/b2-cli`): point B2 at a folder and `reindex` / `search` / `neighbors` / `explain` it
-> from the terminal, with `--json` for agents. **Semantic search is real** (`crates/b2-embed`: a
-> candle-backed local embedder behind the one seam; `b2 init` downloads the model into a shared cache;
-> the fake stays the CI default). **Connection discovery** ships as **`b2 similar`** (surface the
-> nearest *unlinked* notes — local, free, no model call) **+ `b2 link`** (you commit a typed relation
-> to frontmatter) — the human is the precision gate; there is no LLM in the loop. A tour
-> grounded in the test suite: [docs/architecture.md](docs/architecture.md).
->
-> **Grounded chat is live in the CLI** — **`b2 ask "…"`** and **`b2 chat`** answer questions *from your
-> notes*, streaming, with `[n]` citations back to the notes the answer came from
-> ([#151](https://github.com/AlteredCraft/B2/issues/151)). It talks to any **OpenAI-compatible** model
-> server (`crates/b2-llm`, a hand-rolled sync SSE client — nothing in B2 is async, and the `b2` binary
-> links no tokio); **Ollama** is the guided default, a cloud model is explicit opt-in, and nothing
-> about a chat is written to your notes or the index. The chat pane in the desktop app is next.
-> **`b2 why NOTE CANDIDATE`** (the **Why?** on a *Similar & unlinked* card in the app) asks the same
-> model to explain one suggestion, as a **tool-using agent**: it calls B2's read-only tools (the
-> matched passages, the suggestion list, a note's links, reading a note), says what the two notes
-> have in common, cites it, and lists the tools it used.
->
-> **The desktop app has shipped** — a **Tauri app** (`crates/b2-desktop`, the *second dumb adapter over
-> the façade*) + a **Vite + vanilla-TS** frontend (`ui/`), talking to the core over Tauri IPC. The
-> **read → discover → link → edit → reconcile** arc is complete: read a note on the left, commit a typed
-> link to its **similar-but-unlinked notes** on the right with a click, edit the body in place
-> (CodeMirror 6 with live preview, autosave, and a revision-guarded conflict bar), and a native fs-watch
-> reconciles external edits live. **Indexing is automatic in the app** — on open, and on every fs-watch pulse —
-> so there is no `reindex` to remember; the manual one lives in Settings as a **cancellable background action**
-> (live progress, a Cancel button, the UI usable throughout). Projection and embedding are decoupled, so
-> a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
-> ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `make app` — pick a vault from the
-> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —
-> slice 1, inventory & graph, is built; the wider backlog lives in
-> [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
+B2 is my daily notes app, built to replace Obsidian. Obsidian is a good place to keep notes
+and a poor place to think with them. B2 keeps what Obsidian gets right (plain files, any
+editor, no lock-in) and adds the part research needs: help seeing what your notes have in
+common, how they bear on each other, and what they actually say.
 
-## What B2 is (the north star)
+## What it does
 
-Point B2 at a folder of Markdown notes and it becomes a second brain that thinks alongside you: it
-reads everything, builds a *typed* graph, and keeps **surfacing the similar notes you haven't
-connected yet** — so the structure of your knowledge grows as you link them, instead of rotting.
-The files stay plain Markdown on your disk, yours forever; B2 is the **intelligence layer over them,
-not a container around them**. Humans and AI agents are both first-class users.
+- **Shows the connections you haven't made.** Beside every note is a ranked list of related
+  notes it isn't linked to yet. Click **Why?** on one and a model explains what the two have
+  in common, citing the passages, using B2's own read-only tools to look things up.
+- **Lets you say how ideas relate.** Link two notes with one click and type the link:
+  `references`, `supports` or `contradicts`. Similarity can tell that two notes are about the
+  same thing; only you know whether one backs the other up or argues against it.
+- **Searches honestly.** Keyword and semantic search together. When the vault holds no
+  evidence for a query, B2 says "no matches" instead of showing its nearest guesses.
+- **Answers from your notes, with sources.** Ask a question and get a streamed answer grounded
+  only in your notes, with each `[n]` pointing back to the passage it came from. Nothing about
+  a chat is stored.
+- **Works with agents.** Every CLI command has a `--json` form, and the vault is plain
+  Markdown on disk, so an agent can search, read and walk the graph the way you do.
+- **Is a real editor.** Live-preview Markdown, `[[wikilink]]` completion, images, a graph
+  view, a file tree over your real folders, and full keyboard control with rebindable keys.
+  Indexing is automatic: the app watches the folder and keeps up with edits made anywhere.
 
-Full motivation, scope, and locked decisions: **[docs/invariants.md](docs/invariants.md)**.
+## What it promises
 
-## How we build it
+- **Your notes stay yours.** The vault is a folder of Markdown that reads fine in Obsidian or
+  any editor. B2's index lives in `.b2/` and can be deleted and rebuilt at any time.
+- **No surprise writes.** Opening, reading and indexing a vault change nothing. B2 writes only
+  when you ask it to (a link, a move, a save), and it never writes into the body of a note on
+  its own.
+- **Local first.** Embeddings run on your machine. Chat uses a local model through Ollama by
+  default; a cloud model is something you choose.
+- **Refactor without fear.** Move or rename a note through B2 and every `[[wikilink]]` to it is
+  rewritten to match.
 
-Two architectural tenets shape every decision (full text:
-[docs/invariants.md](docs/invariants.md)):
+## Status
 
-- **A volatile vault over a disposable index.** Refactor fearlessly — move, split, merge, compress,
-  trim orphans. The index is a pure projection of your vault (drop it, rebuild it identical);
-  **nothing durable B2 derives lives outside your notes** (`index = projection of (the vault directory)`).
-  Idempotency is the mechanism; a vault you can rewrite without fear is the point.
-- **Build for tomorrow's model (the Bitter Lesson).** Every AI part sits behind a swappable seam;
-  we orchestrate the minimum today's model needs and no more — so a more capable model is a drop-in,
-  not a redesign.
+The build-out is done: the engine, the `b2` CLI, the desktop app and grounded chat all work end
+to end. The next phase is using B2 every day and letting that use decide what comes next. New
+work starts as an [`observed` issue](https://github.com/AlteredCraft/B2/issues?q=label%3Aobserved):
+what I was doing, what I expected, what happened. B2 runs from source on macOS today (the
+one tested platform); an installable build is [#23](https://github.com/AlteredCraft/B2/issues/23).
 
-…in service of five product non-negotiables — plain-Markdown source of truth · local-first · zero
-lock-in · AI-native (not bolted-on) · single binary
-([docs/invariants.md](docs/invariants.md)).
+## Get started
 
-## The docs
+```bash
+make doctor                        # checks Rust, Node, the Tauri CLI and the build toolchain
+make init                          # one-time: download the embedding model
+B2_VAULT_PATH=~/notes make app     # open the desktop app on a folder of Markdown
+```
 
-Everything lives in [docs/](docs/README.md) — one page per topic, and that page is the map.
-New here? Start with the **[Quick start](docs/quickstart.md)** — set up and work with a vault
-in about ten minutes. Then go deeper:
-[architecture](docs/architecture.md) ·
-[search & similarity, in plain language](docs/search-and-similarity.md).
+Point it at an existing Obsidian vault or any folder of `.md` files. Without `B2_VAULT_PATH`,
+the app asks you to pick a folder and remembers it. For chat, install
+[Ollama](https://ollama.com) and run `ollama pull llama3.2`.
 
-| Doc | What it owns |
+The same engine runs from the terminal:
+
+```bash
+make install                       # puts `b2` on your PATH
+b2 -C ~/notes search "spaced repetition"
+b2 -C ~/notes similar notes/memory
+b2 -C ~/notes ask "what have I written about sleep and memory?"
+```
+
+The **[Quick start](docs/quickstart.md)** walks through the rest in about ten minutes, and has
+every command, setting and environment variable.
+
+## How it's built
+
+A Rust workspace. `b2-core` is the whole engine: it turns a folder of Markdown into a SQLite
+index (full-text search, vectors and a typed link graph) that is a pure projection of the
+files. The `b2` CLI and the Tauri desktop app are two thin front ends over the same typed API.
+The real models sit behind small seams (`b2-embed` for embeddings, `b2-llm` for chat), so a
+better model drops in without a redesign, and the engine is tested without them.
+
+Two ideas shape every decision:
+
+- **The vault is the truth; the index is disposable.** `index = projection of (the vault
+  directory)`. Drop the index, rebuild it, get the same thing back.
+- **Build for tomorrow's model.** Do the least today's model needs, behind a seam, so the next
+  one is an upgrade rather than a rewrite.
+
+## Docs
+
+| Doc | What it covers |
 |---|---|
-| [docs/invariants.md](docs/invariants.md) | The **invariant register** — the one-page normative list of what must always be true, and the source of *why*, cited by id. On conflict with any other doc, it wins. |
-| [docs/data-model.md](docs/data-model.md) | What a **note** and a **connection** are, in plain Markdown · the two storage tiers · the relation vocabulary · the invariant *definitions*. The canonical *what*. |
-| [docs/index-engine.md](docs/index-engine.md) | How the derived index is *built* and queried — SQLite (FTS5 + an in-process vector scan) as a disposable projection, and the four flows over it. The canonical *how*. |
-| [docs/quickstart.md](docs/quickstart.md) | Set up and use B2: the walkthrough, the command reference, config and every environment variable. |
-| [docs/architecture.md](docs/architecture.md) | How the system is built: the crates, the flows, the seams, the tests. |
-| [docs/search-and-similarity.md](docs/search-and-similarity.md) | What search and the related-notes panel do, in plain language, for everyone who uses B2. |
-| [ADRs/](ADRs/README.md) | **Architecture Decision Records** — one terse record per key architectural choice: the context, the ruling, and what it costs. The *why* behind the register's entries. |
-| [docs/evals.md](docs/evals.md) | The **eval suite guide** — every instrument and how to read it, corpora, labels, the exit gate, process rules, and the record of every measured verdict. |
+| [Quick start](docs/quickstart.md) | Set up and use B2: the walkthrough, commands, config, environment variables. |
+| [Search and similarity](docs/search-and-similarity.md) | What search and the related-notes list do, in plain language. |
+| [Architecture](docs/architecture.md) | The crates, the flows, the seams, and how the tests hold it up. |
+| [Invariants](docs/invariants.md) | What must always be true, cited by id. Wins any conflict. |
+| [Data model](docs/data-model.md) | What a note and a connection are, in plain Markdown. |
+| [Index engine](docs/index-engine.md) | How the index is built and queried. |
+| [Evals](docs/evals.md) | How search, discovery and chat quality are measured, outside CI. |
+| [ADRs](ADRs/README.md) | Why each key decision reads the way it does. |
 
-Planned work and the backlog live in [GitHub Issues](https://github.com/AlteredCraft/B2/issues); shipped build history lives in git.
-
-
-## Build and run
-
-**Stop 0 — check your setup.** On a fresh clone, run `make doctor` first: it checks Rust,
-Node/npm, the Tauri CLI, and the platform build toolchain, and prints the fix for anything
-missing (this is the fastest path to a working `make app` — see the desktop app section below).
+## Develop
 
 ```bash
-make doctor
+make check     # the fast loop: format, lint, engine and frontend tests
+make ci        # exactly what GitHub Actions runs; run it before pushing
+make           # every target, grouped
 ```
 
-```bash
-cargo install --path crates/b2-cli --locked   # installs `b2` to ~/.cargo/bin (on PATH)
-b2 --help
-```
-
-This puts a real `b2` on your PATH. Re-run it (add `--force`) or `make install` to update after code changes.
-
-For engine iteration where you don't want to reinstall each time, `cargo run -p b2-cli -- …` runs in place.
-A `Makefile` wraps this and the other common commands — needs no separate install, `make` ships
-with the platform build toolchain (Xcode Command Line Tools on macOS):
-
-```bash
-make doctor     # sanity-check your local setup — run this first on a fresh clone
-make install    # build + install `b2` onto your PATH (~/.cargo/bin)
-make test       # fast, deterministic, model-free engine suite
-make check      # THE FAST GATE (~3s): fmt-check + clippy (-D warnings) + engine & frontend
-                # tests — the loop you run while working
-make ci         # THE COMPLETE GATE (~18s): the above over the whole workspace, plus the
-                # desktop crate, every test in the repo, and an `npm audit` of ui/.
-                # GitHub Actions runs this exact target, so green here is green there.
-make init       # download + verify the embedding model into the shared cache
-make eval       # semantic-retrieval quality eval (real model; never part of CI)
-make eval-chat  # grounded-chat quality eval (needs a model server; never part of CI)
-make            # list every target, grouped: setup / dev / gates / coverage / model
-```
-
-There is no git hook and none is wanted (`.git/hooks` isn't cloneable) — CI is the enforcement,
-and `make ci` is how you get the same answer before you push.
-
-### The desktop app (`crates/b2-desktop` + `ui/`)
-
-The desktop app. Prerequisites: **Node + npm** (for the `ui/` frontend — Node 18, 20, or 22+;
-that floor comes from vite, [nvm](https://github.com/nvm-sh/nvm) is the easiest way to install
-one: `nvm install --lts`) and the **Tauri CLI** (`cargo install tauri-cli --locked`). Run
-`make doctor` first — it checks both (including the Node version, and whether nvm is
-available if Node is missing), plus the platform build toolchain (Xcode Command Line Tools on
-macOS), and tells you exactly what's missing and how to fix it (this is what catches e.g.
-`make app` failing with `error: no such command: 'tauri'` before it happens).
-
-```bash
-make doctor           # confirm Node, npm, and the Tauri CLI are all in place
-make app              # dev run (Vite HMR + a live window); Metal GPU on Apple Silicon
-make app-cpu          # …same, but force the CPU embedder
-make app-build        # bundle a per-platform app
-make ui-install       # (rarely needed by hand — every recipe above depends on it)
-```
-
-On first launch (nothing remembered yet) the window opens with no vault selected — click the
-vault switcher to pick one; from then on, `make app` reopens whatever vault you had open last.
-`B2_VAULT_PATH` (or a launch argument) is an alternative for that first run, letting you skip
-the picker and jump straight into a vault, e.g. `B2_VAULT_PATH=~/notes make app`. Search or use
-the file tree to open a note, read or edit it on the left (live-preview Markdown, autosave), and
-connect its similar-but-unlinked notes from the right pane. Set `B2_EMBEDDER=fake` for an
-offline, non-semantic dev mode (no `b2 init` needed).
-
-**Embedder device — CPU or Metal GPU.** `make app` senses the platform and embeds on the **Metal GPU**
-on Apple Silicon (measured **~7× faster** than CPU on the test vault — [GH #40](https://github.com/AlteredCraft/B2/issues/40)),
-falling back to CPU automatically if the GPU can't initialize. `make app-cpu` forces the CPU embedder
-(the A/B counterpart, or if you hit a GPU issue). The active device is shown as a subtle badge in
-**Settings (⌘,)**. Metal is a **compile-time** choice, so the recipe you run picks it — and because CPU
-and Metal produce distinct vectors, switching device re-embeds the vault on the next reindex (a one-time
-model swap; `search` refuses to mix the two). See [`fixtures/README.md`](fixtures/README.md) and
-`make compare-device` to benchmark the two on your own hardware.
-
-Point B2 at a vault with `-C <path>` (a.k.a. `--vault`) on any command, or set `B2_VAULT_PATH` once so
-every command finds it without the flag (an explicit `-C` wins). Read-only commands (`search`,
-`neighbors`, …) fall back to the current dir; commands that write (`reindex`, `add`, `mv`, `link`) require an
-explicit vault and refuse otherwise, so they can't silently touch the wrong place. Full walkthrough:
-**[Quick start](docs/quickstart.md)**.
+There is no git hook; CI is the enforcement. Contributor and agent ground rules are in
+[CLAUDE.md](CLAUDE.md), and the desktop crate has its own in
+[crates/b2-desktop/CLAUDE.md](crates/b2-desktop/CLAUDE.md).

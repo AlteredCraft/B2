@@ -1,8 +1,9 @@
 # B2 docs
 
-The documentation for B2: a personal, local-first Markdown vault with an AI layer that
-surfaces semantically similar notes for you to connect. Start here to find the one page that
-answers your question.
+The documentation for B2: a notes app for research, built to replace Obsidian. Your notes stay
+plain Markdown in a folder you own; B2 adds an AI layer that finds the connections you haven't
+made, explains them, and answers questions from your notes with citations. Start here to find
+the one page that answers your question.
 
 Every topic has one home. The specs are normative: the code is a projection of them, and code
 comments cite them by section and by invariant id (`data-model.md §2`, `invariants.md D1`).

@@ -12,9 +12,12 @@ commit a typed link). Indexing writes nothing to your notes. Your prose is never
 ## Before you start
 
 You need a Rust toolchain ([rustup.rs](https://rustup.rs)) to build the `b2` binary. B2 ships
-as source today, as one static binary. macOS and Linux are the tested platforms. For the
-desktop app (its own section near the end), also install Node + npm and the Tauri CLI. Run
-`make doctor` in the checkout: it checks all of this and prints the fix for anything missing.
+as source today, as one static binary. macOS is the tested platform: it is where B2 is
+developed and where CI runs. Other platforms are untested. For the
+desktop app (its own section near the end), also install Node + npm (Node 18, 20, or 22+;
+`nvm install --lts` is the easy way) and the Tauri CLI (`cargo install tauri-cli --locked`).
+Run `make doctor` in the checkout: it checks all of this and prints the fix for anything
+missing.
 
 B2 needs no account and no API key. It touches the network only when you ask it to: the
 one-time model download below, and chat against a remote endpoint if you configure one (the
@@ -374,6 +377,12 @@ On first launch with nothing remembered, the window opens with no vault selected
 vault switcher and pick a folder. After that it reopens whatever you had open last, and
 `B2_VAULT_PATH` is just a way to skip that first pick.
 
+On Apple Silicon, `make app` embeds on the Metal GPU (about 7× faster than CPU on the test
+vault, [GH #40](https://github.com/AlteredCraft/B2/issues/40)) and falls back to CPU if the
+GPU can't start; `make app-cpu` forces CPU. Metal is chosen when the app is built, and CPU and
+Metal produce different vectors, so switching re-embeds the vault once on the next reindex.
+`make compare-device` benchmarks the two on your hardware.
+
 What the window adds over the terminal:
 
 - **You never run reindex.** It indexes the vault on open, and a native fs-watch keeps up
@@ -456,9 +465,10 @@ they are, `search` refuses rather than mixing embedding spaces.
 | `B2_LLM_URL` / `B2_LLM_MODEL` | The OpenAI-compatible chat endpoint + model for `ask`/`chat` (defaults: `http://localhost:11434/v1`, Ollama's, and `llama3.2`). The `--llm-url`/`--llm-model` flags beat the env, which beats the default |
 | `B2_LLM_API_KEY` | Bearer token for a cloud chat endpoint. An env var, never a flag, because a key in a flag is a key in `ps`. The desktop stores its key in the macOS Keychain instead |
 | `B2_LLM=fake` | The deterministic chat provider: `B2_EMBEDDER=fake`'s sibling for `ask`/`chat` |
+| `B2_LLM_MAX_TOOL_CALLS` | The most tool calls one model reply may carry in `b2 why` (default 64, allowed 1 to 4096). A reply over the cap fails with its own message rather than being cut short. An invalid value keeps the default and logs a warning. The desktop's Settings → Chat field overrides it |
 | `B2_DEBUG` | Print internal error detail after the generic user-facing message |
-| `B2_LOG` | Structured debug logging: JSON Lines on stderr (stdout stays pure data), ready for jq/DuckDB/pandas. Takes a tracing filter (`debug`, `b2::sqlite=debug`, `warn`). Includes per-statement SQLite timings; `B2_DEBUG` or `B2_LOG_FILE` alone implies `B2_LOG=debug` |
-| `B2_LOG_FILE` | Write the structured log to this file instead of stderr (append mode, so runs accumulate into one dataset) |
+| `B2_LOG` | Structured debug logging: JSON Lines on stderr (stdout stays pure data), ready for jq/DuckDB/pandas. Takes a tracing filter (`debug`, `b2::sqlite=debug`, `warn`). Includes per-statement SQLite timings; `B2_DEBUG` or `B2_LOG_FILE` alone implies `b2=debug` (B2's own targets only, so Tauri and HTTP records stay out) |
+| `B2_LOG_FILE` | Write the structured log to this file instead of stderr (append mode, so runs accumulate into one dataset). Use an absolute path with `make app`: it runs from `crates/b2-desktop/`, so a relative path lands there |
 | `B2_SLOW_QUERY_MS` | Slow-query threshold in milliseconds (default 100): statements at or over it log at WARN with `slow=true` |
 
 Honest about limits: search snippets and scores come from the index, so reindex first.
