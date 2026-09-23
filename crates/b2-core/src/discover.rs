@@ -83,6 +83,155 @@ pub struct CandidateNote {
     pub z: Option<f64>,
 }
 
+/// The statistic behind the strength band: the mean and spread of the scored
+/// population's best-passage **squared** distances. It grades; it never gates
+/// (ADR-0014). Any distance in the same space can be read against it, which is how a
+/// passage pair in the explain view is graded on the same yardstick as the cards.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Population {
+    /// How many notes were scored: the size of the population the z is read against.
+    pub n: usize,
+    mean: f64,
+    sd: f64,
+}
+
+impl Population {
+    /// The z of one squared distance, oriented so nearer is higher.
+    pub fn z(&self, dist_sq: f32) -> f64 {
+        (self.mean - dist_sq as f64) / self.sd
+    }
+}
+
+/// One anchor's whole discovery field: the stage-1 order, the stage-2 scores, and the
+/// statistic. [`candidates`] serves a prefix of it and [`explain`] reads one note's place
+/// in it, so a card and its explanation are two reads of one computation and can never
+/// disagree.
+struct Field {
+    /// Every unlinked note with a centroid, nearest centroid first (ties by path),
+    /// before the shortlist cut.
+    coarse: Vec<String>,
+    /// How many of `coarse` stage 2 was allowed to score.
+    shortlist: usize,
+    /// Stage 2: `(squared distance, note, evidence chunk)` for every shortlisted note
+    /// with stored vectors, nearest first (ties by path).
+    scored: Vec<(f32, String, i64)>,
+    /// `None` when ungraded: not asked for, a pool under [`STATS_MIN_POPULATION`], or
+    /// zero variance.
+    population: Option<Population>,
+    /// The anchor and its 1-hop neighbours: excluded from discovery.
+    excluded: std::collections::HashSet<String>,
+}
+
+/// Compute `anchor`'s field at the shortlist a `limit`-sized list uses. `None` when
+/// there is nothing to search from: no embedding space, or an anchor with no stored
+/// vectors.
+fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<Option<Field>> {
+    if !db::embedding_space_exists(conn)? {
+        return Ok(None);
+    }
+    // The anchor's own stored vectors, loaded once (re-embeds nothing — index-engine.md §3);
+    // none ⇒ nothing to search from. Its centroid is computed in-process from them
+    // rather than read back, so an anchor mid-embed still discovers from what it has.
+    let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(conn, anchor)?
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
+    let Some(anchor_centroid) = centroid_of(&anchor_vecs) else {
+        return Ok(None);
+    };
+
+    // The only use of the graph in generation: subtract what's already linked — the
+    // anchor and everything within 1 hop (self + direct neighbors).
+    let excluded = graph::reachable_within(conn, anchor, EXCLUDE_HOPS)?;
+
+    // Stage 1 — coarse shortlist over note centroids: one O(notes) scan, excluded
+    // notes skipped up front so they never occupy a shortlist slot.
+    let mut coarse: Vec<(f32, String)> = Vec::new();
+    let mut scratch: Vec<f32> = Vec::new();
+    db::for_each_note_centroid(conn, |note, blob| {
+        if excluded.contains(note) {
+            return; // the anchor or a direct neighbor — already connected
+        }
+        unpack_f32_into(blob, &mut scratch);
+        coarse.push((l2_sq(&anchor_centroid, &scratch), note.to_string()));
+    })?;
+    coarse.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    let coarse: Vec<String> = coarse.into_iter().map(|(_, note)| note).collect();
+
+    // Stage 1 ends here, and nothing judges it: the shortlist is a recall device, never
+    // a quality gate (GH #192). It used to be both — cutting the coarse list on centroid
+    // z meant max-sim could never rescue a candidate whose best passage is far nearer
+    // than its centroid suggests, which is exactly a multi-topic note's shape (ADR-0014).
+    let shortlist = limit
+        .saturating_mul(SHORTLIST_PER_RESULT)
+        .max(SHORTLIST_MIN);
+
+    // Stage 2 — exact max-sim over the whole shortlist: per note, the best (smallest
+    // squared-L2) pair across the anchor's chunks and its own. Squared L2 is the same
+    // ranking key without the per-comparison `sqrt`, applied once per surfaced candidate
+    // by the readers. Strictly-less keeps the earliest chunk on ties. A shortlisted note
+    // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
+    let mut scored: Vec<(f32, String, i64)> = Vec::new();
+    for note_path in coarse.iter().take(shortlist) {
+        let mut best: Option<(f32, i64)> = None;
+        for (chunk_id, v) in db::note_chunk_vectors(conn, note_path)? {
+            for a in &anchor_vecs {
+                let dist_sq = l2_sq(a, &v);
+                if best.is_none_or(|(cur, _)| dist_sq < cur) {
+                    best = Some((dist_sq, chunk_id));
+                }
+            }
+        }
+        if let Some((dist_sq, evidence_chunk_id)) = best {
+            scored.push((dist_sq, note_path.clone(), evidence_chunk_id));
+        }
+    }
+    // Nearest-first, ties by path: the served order, and — because z below is affine in
+    // this squared distance — also descending z. One sort key serves the row order and
+    // the strength band, so the two can never disagree.
+    scored.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    // The statistic, computed AFTER stage 2 on the best-passage distances (GH #192) and
+    // gating nothing (ADR-0014): the population is every scored shortlist note, which on
+    // a personal-scale vault is every unlinked note there is. Above SHORTLIST_MIN it is
+    // the anchor's centroid-nearest slice, a bias the dogfooding obligation owns. z is
+    // oriented so nearer = higher, and travels to the output as the band's input.
+    let mut population = None;
+    if grade && scored.len() >= STATS_MIN_POPULATION {
+        let n = scored.len() as f64;
+        let mean = scored.iter().map(|(d, _, _)| *d as f64).sum::<f64>() / n;
+        let var = scored
+            .iter()
+            .map(|(d, _, _)| (*d as f64 - mean).powi(2))
+            .sum::<f64>()
+            / (n - 1.0);
+        let sd = var.sqrt();
+        if sd > 0.0 {
+            population = Some(Population {
+                n: scored.len(),
+                mean,
+                sd,
+            });
+        }
+    }
+
+    Ok(Some(Field {
+        coarse,
+        shortlist,
+        scored,
+        population,
+        excluded,
+    }))
+}
+
 /// Generate up to `limit` discovery candidates for `anchor`, strongest first by
 /// best-passage distance (ties on `note_path`, for determinism). That is one order with
 /// three names — the stage-2 `score`, the `z`, and the strength band an adapter paints,
@@ -104,118 +253,133 @@ pub fn candidates(
     limit: usize,
     grade: bool,
 ) -> Result<Vec<CandidateNote>> {
-    if limit == 0 || !db::embedding_space_exists(conn)? {
+    if limit == 0 {
         return Ok(Vec::new());
     }
-    // The anchor's own stored vectors, loaded once (re-embeds nothing — index-engine.md §3);
-    // none ⇒ nothing to search from. Its centroid is computed in-process from them
-    // rather than read back, so an anchor mid-embed still discovers from what it has.
-    let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(conn, anchor)?
-        .into_iter()
-        .map(|(_, v)| v)
-        .collect();
-    let Some(anchor_centroid) = centroid_of(&anchor_vecs) else {
+    let Some(field) = field(conn, anchor, limit, grade)? else {
         return Ok(Vec::new());
     };
-
-    // The only use of the graph in generation: subtract what's already linked — the
-    // anchor and everything within 1 hop (self + direct neighbors).
-    let exclude = graph::reachable_within(conn, anchor, EXCLUDE_HOPS)?;
-
-    // Stage 1 — coarse shortlist over note centroids: one O(notes) scan, excluded
-    // notes skipped up front so they never occupy a shortlist slot.
-    let mut coarse: Vec<(f32, String)> = Vec::new();
-    let mut scratch: Vec<f32> = Vec::new();
-    db::for_each_note_centroid(conn, |note, blob| {
-        if exclude.contains(note) {
-            return; // the anchor or a direct neighbor — already connected
-        }
-        unpack_f32_into(blob, &mut scratch);
-        coarse.push((l2_sq(&anchor_centroid, &scratch), note.to_string()));
-    })?;
-    coarse.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.1.cmp(&b.1))
-    });
-
-    // Stage 1 ends here, and nothing judges it: the shortlist is a recall device, never
-    // a quality gate (GH #192). It used to be both — cutting the coarse list on centroid
-    // z meant max-sim could never rescue a candidate whose best passage is far nearer
-    // than its centroid suggests, which is exactly a multi-topic note's shape (ADR-0014).
-    coarse.truncate(
-        limit
-            .saturating_mul(SHORTLIST_PER_RESULT)
-            .max(SHORTLIST_MIN),
-    );
-
-    // Stage 2 — exact max-sim over the whole shortlist: per note, the best (smallest
-    // squared-L2) pair across the anchor's chunks and its own. Squared L2 is the same
-    // ranking key without the per-comparison `sqrt`, applied once per surfaced candidate
-    // below. Strictly-less keeps the earliest chunk on ties. A shortlisted note with no
-    // stored chunk vectors (possible mid-embed) scores nothing and drops out.
-    let mut scored: Vec<(f32, String, i64)> = Vec::new();
-    for (_, note_path) in coarse {
-        let mut best: Option<(f32, i64)> = None;
-        for (chunk_id, v) in db::note_chunk_vectors(conn, &note_path)? {
-            for a in &anchor_vecs {
-                let dist_sq = l2_sq(a, &v);
-                if best.is_none_or(|(cur, _)| dist_sq < cur) {
-                    best = Some((dist_sq, chunk_id));
-                }
-            }
-        }
-        if let Some((dist_sq, evidence_chunk_id)) = best {
-            scored.push((dist_sq, note_path, evidence_chunk_id));
-        }
-    }
-    // Nearest-first, ties by path: the served order, and — because z below is affine in
-    // this squared distance — also descending z. One sort key serves the row order and
-    // the strength band, so the two can never disagree.
-    scored.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.1.cmp(&b.1))
-    });
-
-    // The statistic, computed AFTER stage 2 on the best-passage distances (GH #192) and
-    // gating nothing (ADR-0014): the population is every scored shortlist note, which on
-    // a personal-scale vault is every unlinked note there is. Above SHORTLIST_MIN it is
-    // the anchor's centroid-nearest slice, a bias the dogfooding obligation owns. z is
-    // oriented so nearer = higher, and travels to the output as the band's input.
-    let mut zs: Option<Vec<f64>> = None;
-    if grade && scored.len() >= STATS_MIN_POPULATION {
-        let n = scored.len() as f64;
-        let mean = scored.iter().map(|(d, _, _)| *d as f64).sum::<f64>() / n;
-        let var = scored
-            .iter()
-            .map(|(d, _, _)| (*d as f64 - mean).powi(2))
-            .sum::<f64>()
-            / (n - 1.0);
-        let sd = var.sqrt();
-        if sd > 0.0 {
-            zs = Some(
-                scored
-                    .iter()
-                    .map(|(d, _, _)| (mean - *d as f64) / sd)
-                    .collect(),
-            );
-        }
-    }
-
-    let out = scored
+    let population = field.population;
+    Ok(field
+        .scored
         .into_iter()
-        .enumerate()
         .take(limit)
-        .map(
-            |(i, (dist_sq, note_path, evidence_chunk_id))| CandidateNote {
-                note_path,
-                score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
-                evidence_chunk_id,
-                z: zs.as_ref().and_then(|z| z.get(i)).copied(),
-            },
-        )
+        .map(|(dist_sq, note_path, evidence_chunk_id)| CandidateNote {
+            note_path,
+            score: -(dist_sq.sqrt() as f64), // nearer = higher, matching Hit's -L2
+            evidence_chunk_id,
+            z: population.map(|p| p.z(dist_sq)),
+        })
+        .collect())
+}
+
+/// Where one note stands in an anchor's discovery field, which is the first thing an
+/// explanation says: why it is a card, or why it is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// The candidate is the anchor.
+    SameNote,
+    /// The anchor has no stored vectors, so there is nothing to compare from.
+    AnchorUnembedded,
+    /// Within one link of the anchor: excluded from discovery as already known.
+    Linked,
+    /// The candidate has no stored vectors (or no centroid) yet.
+    Unembedded,
+    /// Its whole-note (centroid) rank fell past the stage-1 shortlist, so stage 2
+    /// never scored it.
+    NotShortlisted { shortlist: usize },
+    /// Scored in stage 2: `rank` (1-based, the served order) among `of` scored notes.
+    Ranked { rank: usize, of: usize },
+}
+
+/// [`PassagePair`] graded on the same yardstick as the cards.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradedPair {
+    pub pair: PassagePair,
+    /// The pair's z against the anchor's population, or `None` when ungraded. The
+    /// winning pair's z is exactly the row's z: the same squared distance, read against
+    /// the same population.
+    pub z: Option<f64>,
+}
+
+/// Everything [`explain`] reads for one (anchor, candidate) pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Explanation {
+    pub standing: Standing,
+    /// The candidate's rank by whole-note centroid in stage 1 (1-based), when it entered
+    /// stage 1 at all. Beside a best-passage rank it shows a buried gem: a note whose
+    /// one section matches far better than the note as a whole.
+    pub centroid_rank: Option<usize>,
+    /// The candidate's z, when it was scored in a graded field.
+    pub z: Option<f64>,
+    /// Every scored note's z in served order (so descending): the field the band is
+    /// relative to. Empty when ungraded.
+    pub population: Vec<f64>,
+    /// One pair per candidate passage, nearest first ([`passage_pairs`]), each graded.
+    pub pairs: Vec<GradedPair>,
+}
+
+/// Explain one note's place in `anchor`'s discovery field, at the shortlist a
+/// `limit`-sized list uses. The same computation [`candidates`] serves from, so a
+/// served row's rank, z and winning pair are exactly the card's. Answers for any note,
+/// not only a served one: a linked, unembedded or unshortlisted note says which, and its
+/// passages are still compared when both sides have vectors. A pure read over stored
+/// vectors, re-embedding nothing.
+pub fn explain(
+    conn: &Connection,
+    anchor: &str,
+    candidate: &str,
+    limit: usize,
+    grade: bool,
+) -> Result<Explanation> {
+    let mut out = Explanation {
+        standing: Standing::SameNote,
+        centroid_rank: None,
+        z: None,
+        population: Vec::new(),
+        pairs: Vec::new(),
+    };
+    if anchor == candidate {
+        return Ok(out);
+    }
+    let Some(field) = field(conn, anchor, limit, grade)? else {
+        out.standing = Standing::AnchorUnembedded;
+        return Ok(out);
+    };
+    let population = field.population;
+    out.population = population
+        .map(|p| field.scored.iter().map(|(d, _, _)| p.z(*d)).collect())
+        .unwrap_or_default();
+    out.pairs = passage_pairs_sq(conn, anchor, candidate, usize::MAX)?
+        .into_iter()
+        .map(|(dist_sq, pair)| GradedPair {
+            pair,
+            z: population.map(|p| p.z(dist_sq)),
+        })
         .collect();
+    out.centroid_rank = field
+        .coarse
+        .iter()
+        .position(|n| n == candidate)
+        .map(|i| i + 1);
+    let scored_at = field.scored.iter().position(|(_, n, _)| n == candidate);
+    out.standing = if field.excluded.contains(candidate) {
+        Standing::Linked
+    } else if let Some(i) = scored_at {
+        out.z = population.map(|p| p.z(field.scored[i].0));
+        Standing::Ranked {
+            rank: i + 1,
+            of: field.scored.len(),
+        }
+    } else if out.centroid_rank.is_some_and(|r| r > field.shortlist) {
+        Standing::NotShortlisted {
+            shortlist: field.shortlist,
+        }
+    } else {
+        // Not scored and not past the shortlist: it has no centroid or no chunk
+        // vectors yet.
+        Standing::Unembedded
+    };
     Ok(out)
 }
 
@@ -250,6 +414,20 @@ pub fn passage_pairs(
     candidate: &str,
     limit: usize,
 ) -> Result<Vec<PassagePair>> {
+    Ok(passage_pairs_sq(conn, anchor, candidate, limit)?
+        .into_iter()
+        .map(|(_, pair)| pair)
+        .collect())
+}
+
+/// [`passage_pairs`] with each pair's squared distance kept beside it, the unit the
+/// population statistic reads.
+fn passage_pairs_sq(
+    conn: &Connection,
+    anchor: &str,
+    candidate: &str,
+    limit: usize,
+) -> Result<Vec<(f32, PassagePair)>> {
     if limit == 0 || !db::embedding_space_exists(conn)? {
         return Ok(Vec::new());
     }
@@ -273,12 +451,15 @@ pub fn passage_pairs(
     Ok(pairs
         .into_iter()
         .take(limit)
-        .map(
-            |(dist_sq, anchor_chunk_id, candidate_chunk_id)| PassagePair {
-                anchor_chunk_id,
-                candidate_chunk_id,
-                score: -(dist_sq.sqrt() as f64),
-            },
-        )
+        .map(|(dist_sq, anchor_chunk_id, candidate_chunk_id)| {
+            (
+                dist_sq,
+                PassagePair {
+                    anchor_chunk_id,
+                    candidate_chunk_id,
+                    score: -(dist_sq.sqrt() as f64),
+                },
+            )
+        })
         .collect())
 }

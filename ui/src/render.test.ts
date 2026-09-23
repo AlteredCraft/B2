@@ -24,6 +24,7 @@ import type {
   OllamaSetup,
   ResourceLink,
   EvidencedResult,
+  SimilarExplainView,
   SimilarView,
   UnresolvedLink,
 } from "./types.ts";
@@ -1038,6 +1039,110 @@ check("an answer built with tools says so, escaped like everything a model names
     }),
   );
   assert(!plain.includes("chat-tools"), "a plain ask has no tools line");
+});
+
+// --- Explain (GH #236) -------------------------------------------------------------------
+
+function explainView(over: Partial<SimilarExplainView> = {}): SimilarExplainView {
+  return {
+    anchor: { path: "notes/anchor.md", title: "anchor" },
+    candidate: { path: "notes/ghost.md", title: "ghost" },
+    limit: 10,
+    standing: { kind: "ranked", rank: 1, of: 20, served: true },
+    z: 2.8,
+    centroid_rank: 7,
+    population: [2.8, 1.0, 0.5, 0.1, -0.2, -0.4, -0.6, -0.8, -1, -1.2, -1.4, -1.6],
+    pairs: [
+      {
+        anchor: { heading_path: "Intro", text: "<img src=x onerror=alert(1)> anchor side" },
+        candidate: { heading_path: null, text: "**not markdown** candidate side" },
+        score: -0.4,
+        z: 2.8,
+        identical: false,
+      },
+    ],
+    shared_neighbors: [{ path: "notes/hub.md", title: "hub" }],
+    ...over,
+  };
+}
+
+const explaining = (over: Partial<AppState> = {}) =>
+  app({
+    current: note(),
+    similar: [ghost()],
+    explainCard: {
+      anchor: "notes/anchor.md",
+      candidate: "notes/ghost.md",
+      view: explainView(),
+      error: null,
+      allPairs: false,
+      help: false,
+    },
+    ...over,
+  });
+
+check("a Similar card offers Explain beside Why?", () => {
+  const html = sidePaneHtml(app({ current: note(), similar: [ghost()] }));
+  assert(html.includes('data-explain="notes/ghost.md"'), "the card's Explain names its note");
+  assert(html.includes('data-why="notes/ghost.md"'), "Why? stays");
+  const menu = contextMenuHtml(
+    app({ contextMenu: { kind: "card", x: 0, y: 0, path: "notes/ghost.md", title: "ghost" } }),
+  );
+  assert(menu.includes("data-ctx-explain"), "the card menu carries Explain: its keyboard half (K1)");
+});
+
+check("Explain takes the note pane, and passages are text, never markup (E5)", () => {
+  const html = notePaneHtml(explaining());
+  assert(html.includes("explain-view"), "the Compare view is painted");
+  assert(!html.includes("<img src=x"), "a passage is note content: escaped");
+  assert(html.includes("&lt;img src=x"), "and still shown");
+  assert(html.includes("**not markdown**"), "shown as text, not rendered as Markdown");
+  assert(html.includes("Card #1 of the 10 shown"), "the standing is in words");
+  assert(html.includes("ranks #7"), "the whole-note rank is pointed out when it differs");
+  assert(html.includes('data-open="notes/hub.md"'), "a shared neighbor opens");
+});
+
+check("Explain's controls carry ids, so a repaint gives focus back", () => {
+  const html = notePaneHtml(explaining());
+  for (const marker of ["data-explain-close", 'data-open="notes/ghost.md"', "data-why"]) {
+    assert(hasId(tagWith(html, marker)), `the Explain view's ${marker} control carries an id`);
+  }
+  const loading = notePaneHtml(
+    explaining({
+      explainCard: {
+        anchor: "notes/anchor.md",
+        candidate: "notes/ghost.md",
+        view: null,
+        error: null,
+        allPairs: false,
+        help: false,
+      },
+    }),
+  );
+  assert(hasId(tagWith(loading, "data-explain-close")), "Back is there while the read runs");
+});
+
+check("Explain belongs to the note it was opened on, and editing takes the pane back", () => {
+  const other = notePaneHtml(explaining({ current: note({ path: "notes/other.md" }) }));
+  assert(!other.includes("explain-view"), "another note never shows a stale explanation");
+  const editing = notePaneHtml(explaining({ editing: true }));
+  assert(!editing.includes("explain-view"), "the editor owns the pane while editing");
+});
+
+check("the strip is labelled in σ, and its longer account waits behind the ?", () => {
+  const closed = notePaneHtml(explaining());
+  assert(closed.includes(">0σ<"), "the average is labelled on the axis");
+  assert(hasId(tagWith(closed, "data-explain-help")), "the ? carries an id for focus");
+  assert(tagWith(closed, "data-explain-help").includes('aria-expanded="false"'), "closed by default");
+  assert(!closed.includes('id="explain-help-text"'), "the account is not painted until asked for");
+  const ec = explaining().explainCard!;
+  const open = notePaneHtml(explaining({ explainCard: { ...ec, help: true } }));
+  assert(tagWith(open, "data-explain-help").includes('aria-expanded="true"'), "says it is open");
+  assert(open.includes('id="explain-help-text"'), "the account is painted");
+  assert(open.includes("standard deviations"), "and says what the axis is");
+  assert(closed.includes("strip-key"), "the strip carries a key for its three marks");
+  assert(closed.includes("where ●●○ and ●●● start"), "the dashed lines are named as cut-offs");
+  assert(closed.includes("The 12 notes closest to anchor"), "the caption says whose strip it is");
 });
 
 console.log(`render: ${passed} checks passed`);

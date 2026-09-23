@@ -12,7 +12,7 @@
 use b2_core::embed::Embedder;
 use b2_core::llm::{ChatTurn, FakeLlm, LlmProvider};
 use b2_core::resource::{doc_kind, DocKind};
-use b2_core::vault::{AnswerView, SearchEvidenceView, Vault};
+use b2_core::vault::{AnswerView, SearchEvidenceView, SimilarStanding, Vault};
 use b2_embed::{provision, EmbedConfig, EmbedError, LocalEmbedder};
 use b2_llm::{
     is_ollama, refusal_message, LlmConfig, LlmError, OpenAiCompatProvider, OLLAMA_INSTALL_URL,
@@ -205,6 +205,11 @@ enum Command {
         /// Maximum number of similar notes to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Explain one note against NOTE's list instead of printing the list: where it
+        /// stands (and why, if it is not a card), and the passage pairs behind it. No
+        /// model call. Read at `--limit`, so the rank is the one the list shows.
+        #[arg(long, value_name = "OTHER")]
+        explain: Option<String>,
     },
     /// Commit a typed connection SRC → DST into SRC's frontmatter `b2_relations:`.
     /// SRC and DST are each a vault-relative path.
@@ -399,7 +404,16 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             limit,
             exclude,
         } => cmd_search(cli, query, *limit, exclude),
-        Command::Similar { note, limit } => cmd_similar(cli, note, *limit),
+        Command::Similar {
+            note,
+            limit,
+            explain: Some(other),
+        } => cmd_explain_similar(cli, note, other, *limit),
+        Command::Similar {
+            note,
+            limit,
+            explain: None,
+        } => cmd_similar(cli, note, *limit),
         Command::Link {
             src,
             dst,
@@ -1001,6 +1015,95 @@ fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
         eprintln!("Commit one with:  b2 link {note} <note> --type <verb>");
     }
     Ok(())
+}
+
+/// Longest passage excerpt `similar --explain` prints per side, so a pair stays readable
+/// in a terminal. `--json` carries the full text.
+const EXPLAIN_EXCERPT_CHARS: usize = 200;
+
+fn cmd_explain_similar(cli: &Cli, note: &str, other: &str, limit: usize) -> Result<(), CliError> {
+    // A pure read over stored vectors, like `similar`: the fake is enough to open with.
+    let vault = open_vault(cli.vault_or_cwd(), false)?;
+    let ex = vault.explain_similar(note, other, limit)?;
+    if cli.json {
+        return print_json(&ex);
+    }
+    let anchor = display_name(ex.anchor.title.as_deref(), &ex.anchor.path);
+    let candidate = display_name(ex.candidate.title.as_deref(), &ex.candidate.path);
+    println!(
+        "{candidate} ({}) against {anchor} ({})",
+        ex.candidate.path, ex.anchor.path
+    );
+    let z = ex.z.map(|z| format!(", z {z:.2}")).unwrap_or_default();
+    let standing = match ex.standing {
+        SimilarStanding::SameNote => "That is the same note.".to_string(),
+        SimilarStanding::AnchorUnembedded => format!(
+            "{anchor} has no stored vectors yet, so there is nothing to compare from. Run `b2 reindex`."
+        ),
+        SimilarStanding::Linked => {
+            "Already linked, so Similar leaves it out: it shows what you haven't connected."
+                .to_string()
+        }
+        SimilarStanding::Unembedded => {
+            "Not embedded yet, so it can't be compared. Run `b2 reindex`.".to_string()
+        }
+        SimilarStanding::NotShortlisted { shortlist } => format!(
+            "Never scored: judged as a whole note it ranks #{}, past the first-pass shortlist of {shortlist}.",
+            ex.centroid_rank.unwrap_or(0)
+        ),
+        SimilarStanding::Ranked {
+            rank,
+            of,
+            served: true,
+        } => format!("Shown at #{rank} of {limit} ({of} notes scored{z})."),
+        SimilarStanding::Ranked {
+            rank,
+            of,
+            served: false,
+        } => format!("Ranked #{rank} of {of} scored{z}: past the {limit} shown."),
+    };
+    println!("{standing}");
+    if let (Some(c), SimilarStanding::Ranked { rank, .. }) = (ex.centroid_rank, ex.standing) {
+        println!("Judged as a whole note it ranks #{c}; by its best passage, #{rank}.");
+    }
+    if !ex.shared_neighbors.is_empty() {
+        let names: Vec<String> = ex
+            .shared_neighbors
+            .iter()
+            .map(|n| format!("{} ({})", display_name(n.title.as_deref(), &n.path), n.path))
+            .collect();
+        println!("Both link with: {}", names.join(", "));
+    }
+    if !ex.pairs.is_empty() {
+        println!("\nPassage pairs, nearest first:");
+    }
+    for (i, p) in ex.pairs.iter().enumerate() {
+        let grade = p.z.map(|z| format!("  z {z:.2}")).unwrap_or_default();
+        let same = if p.identical { "  identical text" } else { "" };
+        println!("{:>3}.{grade}{same}", i + 1);
+        for (side, passage) in [("this", &p.anchor), ("that", &p.candidate)] {
+            let heading = passage
+                .heading_path
+                .as_deref()
+                .map(|h| format!("[{h}] "))
+                .unwrap_or_default();
+            println!(
+                "     {side}: {heading}{}",
+                excerpt(&passage.text, EXPLAIN_EXCERPT_CHARS)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A passage flattened to one line and cut at `max` characters.
+fn excerpt(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        format!("{}…", flat.chars().take(max).collect::<String>().trim_end())
+    }
 }
 
 fn cmd_link(

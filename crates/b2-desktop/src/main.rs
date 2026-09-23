@@ -467,6 +467,7 @@ fn main() {
             commands::delete_resource,
             commands::delete_dir,
             commands::similar,
+            commands::explain_similar,
             commands::search,
             commands::neighbors,
             commands::explain,

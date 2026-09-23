@@ -286,6 +286,47 @@ export interface SimilarView {
   z?: number;
 }
 
+/** One passage as stored in the index. */
+export interface PassageView {
+  heading_path: string | null;
+  text: string;
+}
+
+/** A candidate passage and the anchor passage nearest to it (`Vault::explain_similar`). */
+export interface PassagePairView {
+  anchor: PassageView;
+  candidate: PassageView;
+  score: number;
+  /** The pair's z on the card's yardstick; null when the field is ungraded. */
+  z: number | null;
+  /** Both passages hold the same text (a template, a copy). */
+  identical: boolean;
+}
+
+/** Where a note stands in an anchor's discovery field: why it is a card, or why not. */
+export type SimilarStanding =
+  | { kind: "same_note" }
+  | { kind: "anchor_unembedded" }
+  | { kind: "linked" }
+  | { kind: "unembedded" }
+  | { kind: "not_shortlisted"; shortlist: number }
+  | { kind: "ranked"; rank: number; of: number; served: boolean };
+
+/** `Vault::explain_similar` — the model-free Explain view for one Similar card (GH #236). */
+export interface SimilarExplainView {
+  anchor: NoteSummary;
+  candidate: NoteSummary;
+  limit: number;
+  standing: SimilarStanding;
+  z: number | null;
+  /** Rank judged by whole-note average (stage 1), when it entered stage 1. */
+  centroid_rank: number | null;
+  /** Every scored note's z, nearest first. Empty when ungraded. */
+  population: number[];
+  pairs: PassagePairView[];
+  shared_neighbors: NoteSummary[];
+}
+
 /** `Vault::search` — one hybrid-search hit. */
 export interface SearchResult {
   path: string;

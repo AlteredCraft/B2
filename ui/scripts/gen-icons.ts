@@ -73,6 +73,10 @@ const MANIFEST: Record<string, readonly string[]> = {
   // rather than faults.
   status: ["exclamation-triangle", "info-circle", "stars"],
 
+  // The Explain view's "?" (GH #236): the longer account of a figure, one click away
+  // rather than printed under it.
+  help: ["question-circle"],
+
   // A connection's direction, on the discovery card that names it.
   edges: ["arrow-left", "arrow-right"],
 };

@@ -15,6 +15,7 @@ import type {
   ResourceLink,
   ResourceSummary,
   EvidencedResult,
+  SimilarExplainView,
   SimilarView,
   UnresolvedLink,
 } from "./types";
@@ -226,6 +227,22 @@ export interface AppState {
    */
   graphOpen: boolean;
   /**
+   * The Explain view (GH #236): the centre pane compares the open note with one of its
+   * Similar cards, model-free. Set while it is open; `view` is null while the read is in
+   * flight, `error` holds a failed read's message. Not sticky: any navigation, the graph
+   * toggle and entering edit mode close it, because it explains one card of one note.
+   */
+  explainCard: {
+    anchor: string;
+    candidate: string;
+    view: SimilarExplainView | null;
+    error: string | null;
+    /** Every passage pair shown, not only the first few. */
+    allPairs: boolean;
+    /** The strip's "?" is open: its longer account is shown. */
+    help: boolean;
+  } | null;
+  /**
    * Discovery sections the user has collapsed (foldable headers, Obsidian-style).
    * Sticky across notes — a viewing preference — so a collapsed section stays folded
    * as you browse. Empty ⇒ every section expanded (the default).
@@ -413,6 +430,7 @@ export const state: AppState = {
   connections: [],
   resourceLinks: [],
   graphOpen: false,
+  explainCard: null,
   collapsedSections: new Set<SideSection>(),
   collapsedCards: new Set<string>(),
   contextMenu: null,

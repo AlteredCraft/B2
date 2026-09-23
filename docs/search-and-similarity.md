@@ -187,6 +187,15 @@ connected. Anything one link away from the anchor is excluded, because you alrea
 it. Notes two links away stay in, since a related-but-not-directly-linked note is exactly the
 connection worth finding.
 
+**Every card can be explained.** The card's **Explain** (or `b2 similar <note> --explain
+<other>`) shows the evidence the ranking used, read from the same computation, so it can
+never disagree with the list: where the note stands among everything compared, its rank as
+a whole note beside its rank by its best passage (far apart means a buried gem), and every
+one of its passages paired with your note's nearest, each graded on the dots' scale. It
+also flags the one case where a high rank means little: the best pair is *identical text*,
+such as a daily-note template shared by both notes. No model is involved; **Why?** is the
+chat model's account, and Explain is how you check it.
+
 **B2 suggests; you decide.** Nothing in this panel changes your notes. A connection exists
 only when you author it, with `b2 link` or by dragging a card into your note in the app.
 There is no suggestion queue and no pending state: you are the precision gate.

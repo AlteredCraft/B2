@@ -269,6 +269,19 @@ related, and the top of the list is still the right answer, so B2 serves the ran
 leaves the judgment to you. An empty list (at any nonzero `--limit`) means only that there
 was nothing to compare, not that nothing relates.
 
+To see why one note is on the list, explain it against the note you asked about:
+
+```
+$ b2 similar notes/spaced-repetition --explain notes/memory-palace
+```
+
+It prints where the note stands (its card number, or why it isn't a card: already linked,
+not embedded yet, ranked past the list), its rank judged as a whole note beside its rank by
+its best passage, the notes both already link with, and every passage pair behind the
+match, graded on the same scale as the strength dots. It reads the same numbers the list was
+ranked on, so it can't disagree with it, and it calls no model. `--json` hands an agent the
+whole view.
+
 You are the precision gate: B2 finds the candidates; you supply the judgment and the type.
 There is no review queue and nothing "inert until accepted". A connection exists only once
 you author it.
@@ -394,8 +407,9 @@ What the window adds over the terminal:
   not a command you remember to run: always the ranked nearest, with a strength band grading
   each candidate within the list where a statistic exists (a vault under a dozen candidates
   is served ungraded, and says so), and a one-click typed Link that writes the same
-  `b2_relations:` line `b2 link` does. There is also a graph view of the connections around
-  the open note.
+  `b2_relations:` line `b2 link` does. A card's **Explain** opens a compare view in the
+  centre (the `--explain` read, no model), and **Why?** asks chat to explain it with
+  citations. There is also a graph view of the connections around the open note.
 - **Grounded chat is a pane (⌘J):** the same cited, streamed answers as `b2 ask`, with Esc to
   stop a stream. The model endpoint and its Keychain-held key live in Settings.
 - **An editor.** CodeMirror 6 with live-preview Markdown, autosave, syntax-highlighted code
@@ -427,7 +441,7 @@ your notes. Nothing locks you in.
 | `b2 reindex` | Re-project the vault; incremental. `--dry-run`, `--force`, `--cancel` (stop a run backgrounded with `&`; `b2 status` names its pid) | embeds |
 | `b2 status` | Embedding coverage (is semantic ranking live?) and whether a reindex is running | no |
 | `b2 search <query>` | Hybrid keyword + semantic search. `--limit N`; `--exclude <path>` subtracts already-inspected notes (for agent loops) | embeds query |
-| `b2 similar <note>` | Surface the semantically nearest notes you haven't linked yet: the ranked list, always. `--limit N` | reads vectors |
+| `b2 similar <note>` | Surface the semantically nearest notes you haven't linked yet: the ranked list, always. `--limit N`; `--explain <other>` explains one note against that list instead (where it stands, and the passage pairs behind it) | reads vectors |
 | `b2 link <src> <dst>` | Commit a typed relation into the source note's frontmatter. `--type` (references/supports/contradicts), `--explanation` | re-embeds note |
 | `b2 neighbors <note>` | List a note's links, in and out; flags ones that resolve to nothing | no |
 | `b2 explain <note>` | Every connection with its provenance and "why"; flags orphans | no |

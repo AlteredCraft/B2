@@ -482,6 +482,81 @@ pub struct SimilarView {
     pub z: Option<f64>,
 }
 
+/// **Explain** for a *Similar & unlinked* card (GH #236): where one note stands in an
+/// anchor's discovery field, and the passage pairs behind it. Model-free and read from
+/// the same computation as [`Vault::similar`], so a served row's rank, z and best pair are
+/// exactly the card's. Raw distances are never the point: every grade is a z on the same
+/// yardstick as the strength band.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SimilarExplainView {
+    pub anchor: NoteSummary,
+    pub candidate: NoteSummary,
+    /// The list length the explanation is read at: the surface's own, so `served`
+    /// answers "was this a card?".
+    pub limit: usize,
+    pub standing: SimilarStanding,
+    /// The candidate's z when it was scored in a graded field (the card's band input).
+    pub z: Option<f64>,
+    /// The candidate's rank judged by whole-note average (stage 1), when it entered
+    /// stage 1. Far worse than a ranked standing's `rank` means one section carries the
+    /// match: a buried gem.
+    pub centroid_rank: Option<usize>,
+    /// Every scored note's z, nearest first: the field the band is relative to. Empty
+    /// when ungraded (a fake space, a small pool, no spread).
+    pub population: Vec<f64>,
+    /// One pair per candidate passage, nearest first, each matched to the anchor passage
+    /// nearest to it. Empty when either side has no vectors.
+    pub pairs: Vec<PassagePairView>,
+    /// Notes both sides already link with (either direction).
+    pub shared_neighbors: Vec<NoteSummary>,
+}
+
+/// Where a note stands in an anchor's discovery field: why it is a card, or why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SimilarStanding {
+    /// The candidate is the anchor itself.
+    SameNote,
+    /// The anchor has no stored vectors yet: nothing to compare from.
+    AnchorUnembedded,
+    /// Directly linked (either direction), so discovery leaves it out as already known.
+    Linked,
+    /// The candidate has no stored vectors yet.
+    Unembedded,
+    /// Its whole-note rank fell past the first-pass shortlist of `shortlist` notes, so
+    /// it was never scored passage by passage.
+    NotShortlisted { shortlist: usize },
+    /// Scored: `rank` (1-based) of `of` scored notes; `served` when `rank <= limit`.
+    Ranked {
+        rank: usize,
+        of: usize,
+        served: bool,
+    },
+}
+
+/// One passage pair: a candidate passage and the anchor passage nearest to it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PassagePairView {
+    pub anchor: PassageView,
+    pub candidate: PassageView,
+    /// Negated L2, higher is nearer: [`SimilarView::score`]'s unit.
+    pub score: f64,
+    /// The pair's z on the card's yardstick, `None` when ungraded.
+    pub z: Option<f64>,
+    /// Both passages hold the same text (a template, a copy): a perfect match that says
+    /// nothing about what the notes are about.
+    pub identical: bool,
+}
+
+/// One passage, as stored in the index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PassageView {
+    /// The chunk's heading breadcrumb (`"Fermentation > Vegetables"`), when it has one.
+    pub heading_path: Option<String>,
+    /// The chunk's stored text, verbatim.
+    pub text: String,
+}
+
 /// What [`write`](Vault::write) did: the saved note's path and the **new revision**
 /// (blake3 of the final on-disk bytes) — the token the editor chains its next save
 /// on, so sequential saves never self-conflict.
@@ -1763,14 +1838,9 @@ impl Vault {
     pub fn similar(&self, note_ref: &str, limit: usize) -> Result<Vec<SimilarView>> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "similar", note = note_ref, limit).entered();
-        // Never claim a statistic over a fake-embedded space: hash vectors have no
-        // semantic geometry, so a z there would be noise wearing a band. Judged by the
-        // RECORDED identity — the space being searched — not the injected embedder.
-        // Grading changes what the rows carry, never which rows exist (ADR-0014).
-        let grade = !matches!(
-            db::recorded_embedder(&self.conn)?,
-            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID
-        );
+        // Never claim a statistic over a fake-embedded space (`grades`). Grading changes
+        // what the rows carry, never which rows exist (ADR-0014).
+        let grade = self.grades()?;
         // A resource anchor is honest, not silent: resources become discoverable once
         // they have chunks + centroids. Until then an inventoried resource errs "not
         // yet" — never an empty result — and an unknown path falls through to
@@ -1796,6 +1866,122 @@ impl Vault {
             });
         }
         Ok(out)
+    }
+
+    /// **Explain** one note against an anchor's *Similar & unlinked* list (GH #236):
+    /// where it stands (ranked, past the list, linked, not embedded, not shortlisted),
+    /// its z and whole-note rank, the field's z population, every passage pair graded on
+    /// the card's yardstick, and the neighbors both notes share. `limit` is the list
+    /// length the surface showed, so the rank and z are the card's. Any note can be
+    /// explained, not only a served one. A pure read over stored vectors, no model call.
+    /// [`Error::NoteNotFound`] for an unknown ref on either side;
+    /// [`Error::ResourceUnsupported`] for a resource anchor, as [`similar`](Self::similar).
+    pub fn explain_similar(
+        &self,
+        anchor_ref: &str,
+        candidate_ref: &str,
+        limit: usize,
+    ) -> Result<SimilarExplainView> {
+        let _op = tracing::debug_span!(
+            target: "b2::vault",
+            "explain_similar",
+            anchor = anchor_ref,
+            candidate = candidate_ref,
+            limit
+        )
+        .entered();
+        if crate::resource::doc_kind(anchor_ref) == crate::resource::DocKind::Resource
+            && db::resource_detail(&self.conn, anchor_ref)?.is_some()
+        {
+            return Err(Error::ResourceUnsupported(anchor_ref.to_string()));
+        }
+        let anchor = self.resolve_ref(anchor_ref)?;
+        let candidate = self.resolve_ref(candidate_ref)?;
+        let ex = discover::explain(&self.conn, &anchor, &candidate, limit, self.grades()?)?;
+
+        let standing = match ex.standing {
+            discover::Standing::SameNote => SimilarStanding::SameNote,
+            discover::Standing::AnchorUnembedded => SimilarStanding::AnchorUnembedded,
+            discover::Standing::Linked => SimilarStanding::Linked,
+            discover::Standing::Unembedded => SimilarStanding::Unembedded,
+            discover::Standing::NotShortlisted { shortlist } => {
+                SimilarStanding::NotShortlisted { shortlist }
+            }
+            discover::Standing::Ranked { rank, of } => SimilarStanding::Ranked {
+                rank,
+                of,
+                served: rank <= limit,
+            },
+        };
+        let mut pairs = Vec::with_capacity(ex.pairs.len());
+        for g in ex.pairs {
+            let anchor_side = self.passage(g.pair.anchor_chunk_id)?;
+            let candidate_side = self.passage(g.pair.candidate_chunk_id)?;
+            // A chunk row that vanished mid-read (a concurrent reindex, C1) is skipped
+            // rather than shown half-empty.
+            let (Some(a), Some(c)) = (anchor_side, candidate_side) else {
+                continue;
+            };
+            pairs.push(PassagePairView {
+                identical: a.text == c.text,
+                anchor: a,
+                candidate: c,
+                score: g.pair.score,
+                z: g.z,
+            });
+        }
+        let shared_neighbors = self
+            .shared_neighbors(&anchor, &candidate)?
+            .into_iter()
+            .map(|path| {
+                let title = db::note_title(&self.conn, &path)?;
+                Ok(NoteSummary { path, title })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SimilarExplainView {
+            anchor: NoteSummary {
+                title: db::note_title(&self.conn, &anchor)?,
+                path: anchor,
+            },
+            candidate: NoteSummary {
+                title: db::note_title(&self.conn, &candidate)?,
+                path: candidate,
+            },
+            limit,
+            standing,
+            z: ex.z,
+            centroid_rank: ex.centroid_rank,
+            population: ex.population,
+            pairs,
+            shared_neighbors,
+        })
+    }
+
+    /// Whether this vault's discovery is graded: never over a fake-embedded space, whose
+    /// hash vectors have no semantic geometry for a z to describe. Judged by the RECORDED
+    /// identity (the space being searched), not the injected embedder.
+    fn grades(&self) -> Result<bool> {
+        Ok(!matches!(
+            db::recorded_embedder(&self.conn)?,
+            Some((model, _)) if model == crate::embed::FAKE_MODEL_ID
+        ))
+    }
+
+    /// One stored chunk as a [`PassageView`], `None` if the row is gone.
+    fn passage(&self, chunk_id: i64) -> Result<Option<PassageView>> {
+        Ok(db::chunk_detail(&self.conn, chunk_id)?
+            .map(|(heading_path, text)| PassageView { heading_path, text }))
+    }
+
+    /// The notes both `a` and `b` are linked with, in either direction, by path.
+    fn shared_neighbors(&self, a: &str, b: &str) -> Result<BTreeSet<String>> {
+        let of = |note: &str| -> Result<BTreeSet<String>> {
+            Ok(graph::neighbors(&self.conn, note)?
+                .into_iter()
+                .map(|n| n.other)
+                .collect())
+        };
+        Ok(of(a)?.intersection(&of(b)?).cloned().collect())
     }
 
     /// Commit a typed connection `src --type--> dst` (`b2 link`, flow ③): append a
