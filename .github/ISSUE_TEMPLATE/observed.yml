@@ -1,0 +1,39 @@
+name: Observed in use
+description: Something you ran into while using B2 for real. Start here, not from a design guess.
+labels: ["observed"]
+body:
+  - type: textarea
+    id: doing
+    attributes:
+      label: What I was doing
+      description: The task, not the feature. "Looking for my notes on X", "linking two notes", "writing today's log".
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What I expected
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Screenshots, the exact text on screen, or a `B2_LOG_FILE` excerpt if you have one.
+    validations:
+      required: true
+  - type: dropdown
+    id: often
+    attributes:
+      label: How often
+      options:
+        - Once so far
+        - A few times
+        - Every time I do this
+    validations:
+      required: true
+  - type: textarea
+    id: vault
+    attributes:
+      label: Vault and build
+      description: Optional. Which vault (size is enough), `make app` or the installed build, commit if known.

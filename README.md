@@ -29,7 +29,7 @@ explained connections between them yourself.
 > ([#151](https://github.com/AlteredCraft/B2/issues/151)). It talks to any **OpenAI-compatible** model
 > server (`crates/b2-llm`, a hand-rolled sync SSE client — nothing in B2 is async, and the `b2` binary
 > links no tokio); **Ollama** is the guided default, a cloud model is explicit opt-in, and nothing
-> about a chat is written to your notes or the index. The chat pane in the desktop app is next.
+> about a chat is written to your notes or the index. The desktop app has the same chat in its own pane.
 > **`b2 why NOTE CANDIDATE`** (the **Why?** on a *Similar & unlinked* card in the app) asks the same
 > model to explain one suggestion, as a **tool-using agent**: it calls B2's read-only tools (the
 > matched passages, the suggestion list, a note's links, reading a note), says what the two notes
@@ -45,8 +45,9 @@ explained connections between them yourself.
 > (live progress, a Cancel button, the UI usable throughout). Projection and embedding are decoupled, so
 > a cold vault is browsable/keyword-searchable in seconds while embedding streams behind
 > ([#15](https://github.com/AlteredCraft/B2/issues/15)). Run it with `make app` — pick a vault from the
-> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** file-type support (resources) —
-> slice 1, inventory & graph, is built; the wider backlog lives in
+> in-app switcher, or skip straight to one via `B2_VAULT_PATH`. **Next:** daily use. B2 is now built
+> from what real use shows: an issue starts as an **`observed`** report (what I was doing, what I
+> expected, what happened), not a design guess. The backlog lives in
 > [GitHub Issues](https://github.com/AlteredCraft/B2/issues).
 
 ## What B2 is (the north star)
