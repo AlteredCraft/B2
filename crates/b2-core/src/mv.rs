@@ -12,9 +12,22 @@
 //! they belong to the chunk text, which a move does not change.
 //!
 //! It is **Markdown-first**: rewrite the inbound text, move the file, *then* re-project
-//! from the now-current Markdown, so a crash mid-move leaves the Markdown correct and a
-//! `b2 reindex` recovers. And bounded, not a scan: [`db::inbound_edge_targets`] names
-//! exactly the files to touch, so the cost is O(inbound links).
+//! from the now-current Markdown. And bounded, not a scan: [`db::inbound_edge_targets`]
+//! names exactly the files to touch, so the cost is O(inbound links).
+//!
+//! **The vault half is all or nothing** (GH #230). Reindexing can't repair rewritten
+//! link text (it projects whatever the Markdown says), so a failed move must leave every
+//! file as it was. Three layers: the destination is checked before anything is written
+//! ([`refuse_occupied`], [`refuse_file_ancestor`]); every rewrite is read and computed
+//! in memory before the first write ([`plan_inbound`]); and the writes, the folders the
+//! move creates and the rename run as one [`commit`] that undoes whatever it did if a
+//! later step fails. Once the rename lands the vault is final: a failure re-keying or
+//! re-projecting the index leaves correct Markdown, which `b2 reindex` projects.
+//!
+//! No process can undo a crash, so the one unguarded window is between the first
+//! rewrite and the rename: the rewritten links already name the destination, the note
+//! is still at its source. Re-running the same move finishes it (the rewrites are
+//! already done, so only the rename is left).
 
 use crate::db;
 use crate::error::{Error, Result};
@@ -23,7 +36,8 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// What [`move_note`] did: the note's old and new vault-relative paths, the inbound
 /// files whose link text was rewritten, and the total number of `[[…]]` targets
@@ -55,6 +69,7 @@ pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<Mo
     let old_abs = root.join(old_rel);
     let new_abs = root.join(&new_rel);
     refuse_occupied(&old_abs, &new_abs, &new_rel)?;
+    refuse_file_ancestor(root, &new_rel)?;
 
     // The graph names the bounded inbound set: for each active edge pointing at the
     // moved note, its source file and the exact link text (`dst_path_raw`) written
@@ -77,21 +92,20 @@ pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<Mo
     let inbound: Vec<String> = by_file.keys().cloned().collect();
 
     // 1. Markdown first: rewrite inbound link text in place — the `[[…]]` form, which
-    //    is the one a note move repairs (the `[…](…)` pass is the resource move's).
-    //    A self-link (the moved note links to itself) is rewritten here at its old
-    //    path, before the move.
-    let (rewrote, links_rewritten) = rewrite_inbound(root, &by_file, &ByFile::new())?;
+    //    is the one a note move repairs (the `[…](…)` pass is the resource move's) —
+    //    then move the file on disk, all or nothing. A self-link (the moved note links
+    //    to itself) is rewritten at its old path, before the rename.
+    let plan = plan_inbound(root, &by_file, &ByFile::new())?;
+    commit(root, &plan.rewrites, &old_abs, &new_abs)?;
+    let (rewrote, links_rewritten) = (plan.rewrote(), plan.links_rewritten);
 
-    // 2. Move the file on disk (creating any missing parent directories).
-    rename_with_parents(&old_abs, &new_abs)?;
-
-    // 3. Re-key the index before anything re-projects, so path-based link resolution
+    // 2. Re-key the index before anything re-projects, so path-based link resolution
     //    is independent of re-projection order (the same reason full ingest is
     //    two-phase). One statement; the FK cascades carry the note's chunks,
     //    aliases, centroid and outbound edges with it.
     db::repoint_note_path(conn, old_rel, &new_rel)?;
 
-    // 4. Re-project from the now-current Markdown: the moved note (refreshing its
+    // 3. Re-project from the now-current Markdown: the moved note (refreshing its
     //    filename-derived title and mtime), then every inbound source so its edges
     //    re-resolve at the new path.
     ingest::ingest_file(ctx, &new_rel)?;
@@ -150,6 +164,7 @@ pub fn move_resource(
     let old_abs = root.join(old_rel);
     let new_abs = root.join(&new_rel);
     refuse_occupied(&old_abs, &new_abs, &new_rel)?;
+    refuse_file_ancestor(root, &new_rel)?;
 
     // The graph names the bounded inbound set; each authored target is rewritten in
     // its own convention, fragment intact ([`resource_replacement`]).
@@ -165,19 +180,18 @@ pub fn move_resource(
 
     // 1. Markdown first: rewrite inbound link text in place, both syntaxes — a
     //    resource is linked as `![[img.png]]` *or* `![](img.png)`, so the one map
-    //    feeds both passes.
-    let (rewrote, links_rewritten) = rewrite_inbound(root, &by_file, &by_file)?;
+    //    feeds both passes — then move the file on disk, all or nothing.
+    let plan = plan_inbound(root, &by_file, &by_file)?;
+    commit(root, &plan.rewrites, &old_abs, &new_abs)?;
+    let (rewrote, links_rewritten) = (plan.rewrote(), plan.links_rewritten);
 
-    // 2. Move the file on disk (creating any missing parent directories).
-    rename_with_parents(&old_abs, &new_abs)?;
-
-    // 3. Update the inventory: same bytes at a new path (the hash is untouched;
+    // 2. Update the inventory: same bytes at a new path (the hash is untouched;
     //    class re-derives from the new extension), then drop the old row — its
     //    inbound edges re-dangle (ON DELETE SET NULL) until the re-projection
     //    below re-resolves them at the new path.
     repoint_resource_row(conn, old_rel, &new_rel, &new_abs)?;
 
-    // 4. Re-project the rewritten notes from the now-current Markdown (their
+    // 3. Re-project the rewritten notes from the now-current Markdown (their
     //    changed chunks re-embed inline, exactly like a note move's inbound set).
     for src_path in &rewrote {
         ingest::ingest_file(ctx, src_path)?;
@@ -234,38 +248,173 @@ fn refuse_occupied(old_abs: &Path, new_abs: &Path, new_rel: &str) -> Result<()> 
     Ok(())
 }
 
-/// Move one directory entry on disk, creating any missing destination parents
-/// first — the note, resource, and whole-folder moves all rename exactly once.
-fn rename_with_parents(old_abs: &Path, new_abs: &Path) -> Result<()> {
-    if let Some(parent) = new_abs.parent() {
-        fs::create_dir_all(parent)?;
+/// Refuse a destination beneath a regular file (`blocked/a.md` when `blocked` is a
+/// file): no rename can land there, and finding out *after* the inbound rewrites is
+/// exactly the broken-links failure GH #230 reported. Walks the destination's
+/// ancestors from the vault root down and stops at the first missing one — the
+/// move creates everything below it.
+fn refuse_file_ancestor(vault_root: &Path, new_rel: &str) -> Result<()> {
+    for (i, _) in new_rel.match_indices('/') {
+        let dir = &new_rel[..i];
+        match fs::metadata(vault_root.join(dir)) {
+            Ok(meta) if !meta.is_dir() => {
+                return Err(Error::MoveDestination(format!(
+                    "{dir} is a file, not a folder"
+                )))
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// One inbound file's planned rewrite: the bytes it holds now and the bytes it will
+/// hold. `original` is kept so [`commit`] can put the file back.
+#[derive(Debug)]
+struct Rewrite {
+    rel: String,
+    abs: PathBuf,
+    original: String,
+    rewritten: String,
+}
+
+/// Every inbound rewrite a move will make, computed before the first write.
+#[derive(Debug)]
+struct Plan {
+    /// Sorted by path; only files whose passes change something.
+    rewrites: Vec<Rewrite>,
+    links_rewritten: usize,
+}
+
+impl Plan {
+    /// The rewritten files' vault-relative paths, sorted — every report's `rewrote`.
+    fn rewrote(&self) -> Vec<String> {
+        self.rewrites.iter().map(|r| r.rel.clone()).collect()
+    }
+}
+
+/// Markdown first, for every move: read each inbound file and compute its rewritten
+/// link text, writing nothing. `wiki` holds each file's `[[…]]` replacements and `md`
+/// its `[…](…)` ones; a file whose passes change nothing is left out of the plan, which
+/// is how a relative link between two co-moved files stays a no-op. A file that can't
+/// be read fails the move here, while the vault is still untouched.
+fn plan_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<Plan> {
+    let none = BTreeMap::new();
+    let mut rewrites = Vec::new();
+    let mut links_rewritten = 0usize;
+    let touched: BTreeSet<&str> = wiki.keys().chain(md.keys()).map(String::as_str).collect();
+    for src_path in touched {
+        let abs = vault_root.join(src_path);
+        let original = fs::read_to_string(&abs)?;
+        let (pass1, n1) = rewrite_links(&original, wiki.get(src_path).unwrap_or(&none));
+        let (rewritten, n2) = rewrite_md_targets(&pass1, md.get(src_path).unwrap_or(&none));
+        if n1 + n2 > 0 {
+            rewrites.push(Rewrite {
+                rel: src_path.to_string(),
+                abs,
+                original,
+                rewritten,
+            });
+            links_rewritten += n1 + n2;
+        }
+    }
+    Ok(Plan {
+        rewrites,
+        links_rewritten,
+    })
+}
+
+/// One vault change [`commit`] made, and so must undo if a later step fails.
+#[derive(Debug)]
+enum Done {
+    /// `rewrites[i]` was opened for writing (and so truncated).
+    Wrote(usize),
+    /// A destination folder that did not exist before the move.
+    CreatedDir(PathBuf),
+}
+
+/// Apply a move's vault writes as one unit: write every planned rewrite, create any
+/// missing destination folders, then rename `old_abs` → `new_abs` (the one step that
+/// moves the note, resource or folder). If any step fails, undo the earlier ones in
+/// reverse and return the failure; the rename is last, so once it succeeds there is
+/// nothing left to undo. A filesystem has no transaction, so an undo step can fail
+/// too — then [`Error::MoveIncomplete`] names the files still holding a rewrite rather
+/// than pretending the vault is whole.
+fn commit(vault_root: &Path, rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path) -> Result<()> {
+    let mut done = Vec::new();
+    let Err(err) = apply(rewrites, old_abs, new_abs, &mut done) else {
+        return Ok(());
+    };
+    let unrestored = undo(vault_root, rewrites, &done);
+    if unrestored.is_empty() {
+        return Err(err);
+    }
+    tracing::warn!(
+        target: "b2::mv",
+        error = %err,
+        unrestored = ?unrestored,
+        "move failed and could not be fully undone"
+    );
+    Err(Error::MoveIncomplete(unrestored))
+}
+
+/// [`commit`]'s forward half, recording each change in `done` as it happens.
+fn apply(rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path, done: &mut Vec<Done>) -> Result<()> {
+    for (i, r) in rewrites.iter().enumerate() {
+        // Open (which truncates) before recording: a file that won't open is untouched.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&r.abs)?;
+        done.push(Done::Wrote(i));
+        file.write_all(r.rewritten.as_bytes())?;
+    }
+    // The missing ancestors, outermost first, each created and recorded on its own so
+    // the undo removes exactly the folders this move made.
+    let mut missing: Vec<&Path> = new_abs
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| !dir.exists())
+        .collect();
+    missing.reverse();
+    for dir in missing {
+        fs::create_dir(dir)?;
+        done.push(Done::CreatedDir(dir.to_path_buf()));
     }
     fs::rename(old_abs, new_abs)?;
     Ok(())
 }
 
-/// Markdown first, for every move: rewrite the inbound files' authored link text in
-/// place. `wiki` holds each file's `[[…]]` replacements and `md` its `[…](…)` ones; a
-/// file whose passes change nothing is left untouched *and* unreported, which is how a
-/// relative link between two co-moved files stays a no-op. Returns the rewritten paths
-/// (sorted, deduped) and the total targets replaced.
-fn rewrite_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<(Vec<String>, usize)> {
-    let none = BTreeMap::new();
-    let mut rewrote = Vec::new();
-    let mut links_rewritten = 0usize;
-    let touched: BTreeSet<&str> = wiki.keys().chain(md.keys()).map(String::as_str).collect();
-    for src_path in touched {
-        let abs = vault_root.join(src_path);
-        let raw = fs::read_to_string(&abs)?;
-        let (pass1, n1) = rewrite_links(&raw, wiki.get(src_path).unwrap_or(&none));
-        let (pass2, n2) = rewrite_md_targets(&pass1, md.get(src_path).unwrap_or(&none));
-        if n1 + n2 > 0 {
-            fs::write(&abs, pass2)?;
-            rewrote.push(src_path.to_string());
-            links_rewritten += n1 + n2;
+/// [`commit`]'s undo: reverse `done`, restoring each rewritten file's original bytes
+/// and removing each folder the move created. Returns the vault-relative paths of the
+/// files that could not be restored. A folder that won't go is only logged: it is
+/// empty, so no authored content is lost with it.
+fn undo(vault_root: &Path, rewrites: &[Rewrite], done: &[Done]) -> Vec<String> {
+    let mut unrestored = Vec::new();
+    for step in done.iter().rev() {
+        match step {
+            Done::Wrote(i) => {
+                let Some(r) = rewrites.get(*i) else { continue };
+                if fs::write(&r.abs, r.original.as_bytes()).is_err() {
+                    unrestored.push(r.rel.clone());
+                }
+            }
+            Done::CreatedDir(dir) => {
+                if let Err(e) = fs::remove_dir(dir) {
+                    let rel = dir.strip_prefix(vault_root).unwrap_or(dir);
+                    tracing::warn!(
+                        target: "b2::mv",
+                        folder = %rel.display(),
+                        error = %e,
+                        "could not remove a folder created by a failed move"
+                    );
+                }
+            }
         }
     }
-    Ok((rewrote, links_rewritten))
+    unrestored.sort();
+    unrestored
 }
 
 /// The replacement for a wikilink at a note now living at `new_path`, preserving
@@ -408,6 +557,7 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
         return Err(Error::DirNotFound(from));
     }
     refuse_occupied(&old_abs, &new_abs, &to)?;
+    refuse_file_ancestor(root, &to)?;
 
     let moved_notes = db::notes_under_dir(conn, &from)?;
     let moved_resources = db::resources_under_dir(conn, &from)?;
@@ -457,14 +607,14 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
         }
     }
 
-    // 1. Markdown first: rewrite each inbound file in place at its pre-move path.
-    let (rewrote_old_paths, links_rewritten) = rewrite_inbound(root, &wiki_by_file, &md_by_file)?;
+    // 1. Markdown first: rewrite each inbound file in place at its pre-move path, then
+    //    one rename moves the whole directory (unindexed files travel for free), all
+    //    or nothing.
+    let plan = plan_inbound(root, &wiki_by_file, &md_by_file)?;
+    commit(root, &plan.rewrites, &old_abs, &new_abs)?;
+    let (rewrote_old_paths, links_rewritten) = (plan.rewrote(), plan.links_rewritten);
 
-    // 2. One rename moves the whole directory (unindexed files travel for free),
-    //    creating any missing destination parents.
-    rename_with_parents(&old_abs, &new_abs)?;
-
-    // 3. Repoint the resolver before any re-projection: every moved note's path
+    // 2. Repoint the resolver before any re-projection: every moved note's path
     //    (old and new sets are disjoint — the destination didn't exist — so the
     //    UNIQUE(path) constraint can't trip), then every moved resource's
     //    inventory row (so resource links resolve at their new paths too).
@@ -476,7 +626,7 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
         repoint_resource_row(conn, old_path, &new_path, &root.join(&new_path))?;
     }
 
-    // 4. Re-project from the now-current Markdown: every moved note (refreshes
+    // 3. Re-project from the now-current Markdown: every moved note (refreshes
     //    the filename-derived title, mtime, and its outbound edges — an unchanged
     //    body reuses its vectors), then every touched file outside the moved
     //    set (moved ones were just re-projected at their new paths). "Touched" is
@@ -758,6 +908,122 @@ mod tests {
             resource_replacement("img.png", "dir/img.png", "moved/img.png", "moved"),
             "img.png"
         );
+    }
+
+    // --- the all-or-nothing commit (GH #230) ------------------------------------
+    //
+    // The façade suite (tests/mv.rs) drives a failed rename end to end. These pin the
+    // two failures it can't reach deterministically: a write that fails after an
+    // earlier one landed, and an undo that itself fails.
+
+    /// A planned rewrite of `rel` under `root`, from whatever is on disk now.
+    fn planned(root: &Path, rel: &str, rewritten: &str) -> Rewrite {
+        let abs = root.join(rel);
+        Rewrite {
+            rel: rel.to_string(),
+            original: fs::read_to_string(&abs).unwrap_or_default(),
+            abs,
+            rewritten: rewritten.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_write_failing_after_another_landed_restores_the_first() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("a.md"), "See [[old]].\n").unwrap();
+        fs::write(root.join("old.md"), "Target.\n").unwrap();
+        // `b.md` is a folder, so opening it for writing fails — after `a.md` is written.
+        fs::create_dir(root.join("b.md")).unwrap();
+        let rewrites = vec![
+            planned(root, "a.md", "See [[new]].\n"),
+            planned(root, "b.md", "unused"),
+        ];
+
+        let mut done = Vec::new();
+        let err = apply(
+            &rewrites,
+            &root.join("old.md"),
+            &root.join("new.md"),
+            &mut done,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Io(_)), "{err:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("a.md")).unwrap(),
+            "See [[new]].\n",
+            "the first rewrite landed before the failure"
+        );
+
+        assert!(undo(root, &rewrites, &done).is_empty());
+        assert_eq!(
+            fs::read_to_string(root.join("a.md")).unwrap(),
+            "See [[old]].\n"
+        );
+        assert!(root.join("old.md").exists() && !root.join("new.md").exists());
+    }
+
+    #[test]
+    fn a_failed_rename_undoes_every_write_and_created_folder() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("a.md"), "See [[old]].\n").unwrap();
+        fs::write(root.join("b.md"), "Also [[old|O]].\n").unwrap();
+        let rewrites = vec![
+            planned(root, "a.md", "See [[x/y/new]].\n"),
+            planned(root, "b.md", "Also [[x/y/new|O]].\n"),
+        ];
+
+        // No `old.md` on disk: both writes and both folders land, then the rename fails.
+        let err = commit(
+            root,
+            &rewrites,
+            &root.join("old.md"),
+            &root.join("x/y/new.md"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Io(_)), "{err:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("a.md")).unwrap(),
+            "See [[old]].\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("b.md")).unwrap(),
+            "Also [[old|O]].\n"
+        );
+        assert!(!root.join("x").exists(), "the created folders are removed");
+    }
+
+    #[test]
+    fn an_undo_that_cannot_restore_a_file_names_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        // A "rewritten" path that is now a folder: writing its original back fails.
+        fs::create_dir(root.join("gone.md")).unwrap();
+        let rewrites = vec![Rewrite {
+            rel: "gone.md".to_string(),
+            abs: root.join("gone.md"),
+            original: "See [[old]].\n".to_string(),
+            rewritten: "See [[new]].\n".to_string(),
+        }];
+        assert_eq!(
+            undo(root, &rewrites, &[Done::Wrote(0)]),
+            vec!["gone.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_file_ancestor_is_refused_and_a_missing_one_is_not() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::write(root.join("dir/file"), "x").unwrap();
+        assert!(matches!(
+            refuse_file_ancestor(root, "dir/file/a.md"),
+            Err(Error::MoveDestination(m)) if m == "dir/file is a file, not a folder"
+        ));
+        assert!(refuse_file_ancestor(root, "dir/new/deeper/a.md").is_ok());
+        assert!(refuse_file_ancestor(root, "a.md").is_ok());
     }
 
     #[test]

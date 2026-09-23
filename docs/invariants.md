@@ -94,9 +94,10 @@ drops in without a redesign.
   link homes are already written by path: a body `[[path]]`, or a frontmatter `b2_relations:`
   entry. So an edge stores what you authored, resolved at projection time, with no machine id
   in the file. Consequence: a rename keeps every backlink resolving *when B2 does the move*. A
-  B2 move rewrites the inbound path text and re-keys the moved note's rows in one transaction.
-  A move made outside B2 is a delete plus a create: the inbound links surface as dangling
-  (G5), identified rather than silently dropped.
+  B2 move rewrites the inbound path text and re-keys the moved note's rows as one operation,
+  and a move that fails leaves every file as it was (GH #230). A move made outside B2 is a
+  delete plus a create: the inbound links surface as dangling (G5), identified rather than
+  silently dropped.
   ([data-model.md](data-model.md) §1, §3,
   [GH #170](https://github.com/AlteredCraft/B2/issues/170))
 - **L2. A note's title is its filename.** The frontmatter `title:` key is recognized but

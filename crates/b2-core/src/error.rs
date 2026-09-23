@@ -64,6 +64,13 @@ pub enum Error {
     #[error("move target already exists: {0}")]
     MoveTargetExists(String),
 
+    /// A move failed part-way and B2 could not put back every file it had already
+    /// changed (GH #230). Rare: an ordinary failure is rolled back and surfaces as
+    /// its own error. Carries the vault-relative paths still holding the move's
+    /// rewrite, so the user can check those links by hand.
+    #[error("move failed and could not be fully undone: {}", .0.join(", "))]
+    MoveIncomplete(Vec<String>),
+
     /// `b2 mv` was given a source folder that doesn't exist in the vault — the
     /// directory sibling of [`Error::NoteNotFound`] (a folder is a path prefix,
     /// never an indexed row, so it resolves against the filesystem).

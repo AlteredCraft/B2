@@ -562,3 +562,239 @@ fn note_vectors(conn: &rusqlite::Connection, note_path: &str) -> Vec<Vec<u8>> {
     let rows = stmt.query_map([note_path], |r| r.get(0)).unwrap();
     rows.map(Result::unwrap).collect()
 }
+
+// --- a failed move changes nothing (GH #230) ------------------------------------
+//
+// A move writes the vault in two kinds of step: the inbound files' link text, then the
+// rename. A move that fails must leave every file byte-identical — reindexing cannot
+// repair rewritten link text, because it faithfully projects whatever the Markdown now
+// says. Two routes to a failure: a destination refused up front, and an I/O failure
+// after the rewrites have been written, which must be rolled back.
+
+/// A purpose-built vault under `dir/vault` from `(path, contents)` pairs, reindexed.
+fn small_vault(dir: &Path, files: &[(&str, &str)]) -> (Vault, std::path::PathBuf) {
+    let root = dir.join("vault");
+    for (path, contents) in files {
+        let abs = root.join(path);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(abs, contents).unwrap();
+    }
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+    (vault, root)
+}
+
+/// Every file under `root` (outside `.b2/`) with its bytes, sorted by path — the
+/// whole authored vault, so an assertion on it catches a stray write anywhere.
+fn vault_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if rel == ".b2" {
+                continue;
+            }
+            if path.is_dir() {
+                out.push((format!("{rel}/"), Vec::new()));
+                walk(root, &path, out);
+            } else {
+                out.push((rel, fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn a_move_under_a_file_is_refused_and_changes_nothing() {
+    // The issue's reproduction: `blocked` is a regular file, so `blocked/a.md` can
+    // never exist. The move must be refused before a single inbound link is touched.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("a.md", "Target note.\n"),
+            ("b.md", "See [[a]].\n"),
+            ("c.md", "Also [[ a | the target ]] and [[a.md]].\n"),
+            ("blocked", "a plain file\n"),
+        ],
+    );
+    let before = vault_bytes(&root);
+    let backlinks = inbound(&vault, "a.md");
+    assert_eq!(
+        backlinks,
+        vec![
+            ("referenced-by".to_string(), "b.md".to_string()),
+            ("referenced-by".to_string(), "c.md".to_string()),
+            ("referenced-by".to_string(), "c.md".to_string()),
+        ],
+        "one per authored link: c.md links twice"
+    );
+
+    let err = vault.move_note("a.md", "blocked/a.md").unwrap_err();
+    assert!(matches!(err, Error::MoveDestination(_)), "{err:?}");
+
+    assert_eq!(vault_bytes(&root), before, "every file byte-identical");
+    assert_eq!(inbound(&vault, "a.md"), backlinks, "the index is untouched");
+    // And the Markdown still says what it said: a rebuild resolves the same links.
+    vault.reindex().unwrap();
+    assert_eq!(
+        inbound(&vault, "a.md"),
+        backlinks,
+        "the original links resolve"
+    );
+}
+
+#[test]
+fn a_move_deeper_under_a_file_is_refused_too() {
+    // The blocking file may be any ancestor, not just the immediate parent.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("a.md", "Target note.\n"),
+            ("b.md", "See [[a]].\n"),
+            ("blocked", "a plain file\n"),
+        ],
+    );
+    let before = vault_bytes(&root);
+
+    let err = vault.move_note("a.md", "blocked/deeper/a.md").unwrap_err();
+    assert!(matches!(err, Error::MoveDestination(_)), "{err:?}");
+    assert_eq!(vault_bytes(&root), before);
+}
+
+#[test]
+fn a_move_whose_rename_fails_restores_every_rewritten_file() {
+    // A failure *after* the rewrites: the note vanished from disk (an out-of-band
+    // delete the index hasn't seen), so the destination checks pass, both inbound
+    // files are rewritten, and only then does the rename fail. The rewrites and the
+    // destination folder the move created must all be undone.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("a.md", "Target note.\n"),
+            ("b.md", "See [[a]].\n"),
+            ("c.md", "Also [[ a | the target ]] and [[a.md]].\n"),
+        ],
+    );
+    let backlinks = inbound(&vault, "a.md");
+    fs::remove_file(root.join("a.md")).unwrap();
+    let before = vault_bytes(&root);
+
+    let err = vault.move_note("a.md", "archive/2026/a.md").unwrap_err();
+    assert!(matches!(err, Error::Io(_)), "{err:?}");
+
+    assert_eq!(
+        vault_bytes(&root),
+        before,
+        "inbound files restored, no archive/ folder left behind"
+    );
+    assert_eq!(inbound(&vault, "a.md"), backlinks, "the index is untouched");
+}
+
+#[test]
+fn a_resource_move_under_a_file_is_refused_and_changes_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("img.png", "png bytes"),
+            ("n.md", "![[img.png]] and ![alt](img.png)\n"),
+            ("blocked", "a plain file\n"),
+        ],
+    );
+    let before = vault_bytes(&root);
+
+    let err = vault
+        .move_resource("img.png", "blocked/img.png")
+        .unwrap_err();
+    assert!(matches!(err, Error::MoveDestination(_)), "{err:?}");
+    assert_eq!(vault_bytes(&root), before);
+}
+
+#[test]
+fn a_resource_move_whose_rename_fails_restores_every_rewritten_note() {
+    // The resource arm of the rollback: both link syntaxes are rewritten, then the
+    // rename fails because the file is gone from disk.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("img.png", "png bytes"),
+            ("n.md", "![[img.png|caption]] and ![alt]( img.png )\n"),
+        ],
+    );
+    let backlinks = vault.explain_resource("img.png").unwrap().backlinks;
+    assert_eq!(backlinks.len(), 2);
+    fs::remove_file(root.join("img.png")).unwrap();
+    let before = vault_bytes(&root);
+
+    let err = vault.move_resource("img.png", "media/img.png").unwrap_err();
+    assert!(matches!(err, Error::Io(_)), "{err:?}");
+
+    assert_eq!(
+        vault_bytes(&root),
+        before,
+        "n.md restored, no media/ folder"
+    );
+    assert_eq!(
+        vault.explain_resource("img.png").unwrap().backlinks,
+        backlinks,
+        "the index is untouched"
+    );
+}
+
+#[test]
+fn move_dir_under_a_file_is_refused_and_changes_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[
+            ("docs/x.md", "Inside, see [[docs/y]].\n"),
+            ("docs/y.md", "Also inside.\n"),
+            ("hub.md", "See [[docs/x|X]].\n"),
+            ("blocked", "a plain file\n"),
+        ],
+    );
+    let before = vault_bytes(&root);
+
+    let err = vault.move_dir("docs", "blocked/docs").unwrap_err();
+    assert!(matches!(err, Error::MoveDestination(_)), "{err:?}");
+    assert_eq!(vault_bytes(&root), before);
+}
+
+#[test]
+fn re_running_a_move_interrupted_before_its_rename_finishes_it() {
+    // The one window no undo covers is a crash between the rewrites and the rename:
+    // the inbound links already name the destination, the note is still at its source,
+    // and the index hasn't heard. Simulated by writing that state by hand; re-running
+    // the same move must complete it rather than refuse or double-rewrite.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[("a.md", "Target note.\n"), ("b.md", "See [[a|A]].\n")],
+    );
+    fs::write(root.join("b.md"), "See [[archive/a|A]].\n").unwrap();
+
+    let report = vault.move_note("a.md", "archive/a.md").unwrap();
+    assert_eq!(report.links_rewritten, 0, "the rewrite was already done");
+    assert!(root.join("archive/a.md").exists() && !root.join("a.md").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("b.md")).unwrap(),
+        "See [[archive/a|A]].\n"
+    );
+    assert_eq!(
+        inbound(&vault, "archive/a.md"),
+        vec![("referenced-by".to_string(), "b.md".to_string())],
+        "the link resolves at the destination"
+    );
+}

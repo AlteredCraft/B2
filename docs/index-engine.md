@@ -96,8 +96,8 @@ Why this shape fits B2:
   key; `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path`, and
   `edges.src_path` are `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`. That
   makes a B2-performed move a path re-key rather than a rebuild: `UPDATE notes SET path = …`
-  cascades through every child in one transaction, alongside the inbound link-text rewrite
-  and a re-projection of the inbound sources. `edges.dst_path` is deliberately *not* a
+  cascades through every child in one statement, after the inbound link-text rewrite and
+  before a re-projection of the inbound sources. `edges.dst_path` is deliberately *not* a
   foreign key: it must be allowed to be NULL, the dangling case (G5). "Rename keeps every
   backlink resolving" is therefore a property of the move operation, not of the key; the
   price is that a move made outside B2 is a delete plus a create (§8).
@@ -589,9 +589,26 @@ be budgeted, tested, and watched.
   inbound link text in every file that points at it: an N-file write. It is bounded and
   mechanical (the materialized edges name exactly which files and links to touch, Markdown
   first, then the index), but moving a heavily linked note is proportional to its backlink
-  count, not O(1). The rewrite is transactional, so a partial move never half-updates the
-  vault. The index side is one cascading `UPDATE` plus re-projection of the inbound sources,
-  bounded by the same count. Only the exact files the graph names are touched: a
+  count, not O(1). The index side is one cascading `UPDATE` plus re-projection of the
+  inbound sources, bounded by the same count.
+- **A failed move leaves the vault as it was.** A SQLite transaction can't roll back file
+  writes, and reindexing can't repair rewritten link text (it projects whatever the
+  Markdown now says), so the vault half carries its own all-or-nothing contract (GH #230):
+  - *Refused before any write:* a destination that exists, or that sits beneath a regular
+    file.
+  - *Planned before any write:* every inbound file is read and its rewrite computed in
+    memory, so an unreadable file stops the move with nothing changed.
+  - *Undone on failure:* the rewrites, any destination folders the move creates, and the
+    rename run as one unit. If a step fails, the earlier ones are undone in reverse and
+    the original error is returned, with every file byte-identical. If an undo step
+    itself fails, the move reports the files still holding a rewrite
+    (`Error::MoveIncomplete`) rather than claiming a clean vault.
+  - *After the rename, the vault is final.* A failure re-keying or re-projecting the index
+    leaves correct Markdown and a stale index; `b2 reindex` projects it.
+  - *A crash can't be undone.* The one unguarded window is between the first rewrite and
+    the rename: the rewritten links name the destination while the note is still at its
+    source, and they surface as dangling (G5). Re-running the same move finishes it,
+    because the rewrites are already done and only the rename is left. Only the exact files the graph names are touched: a
   prefix-sharing `[[foo-bar]]` is never rewritten when moving `foo`.
 - **Out-of-band moves are identified, not repaired, and that is the scope decision.** A
   `git mv` or Finder move is, to a path-keyed index, a delete plus a create: the old path's
