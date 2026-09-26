@@ -1,17 +1,15 @@
 //! The relation vocabulary (ADR-0010): a closed three-verb stance core — `references`
 //! (neutral), `supports` (for), `contradicts` (against) — with display-only inverse
-//! labels and symmetry, plus a tolerated tail kept verbatim. The core encodes the one
-//! thing embedding similarity cannot infer: stance. Adding a verb here is the whole
-//! change.
+//! labels, plus a tolerated tail kept verbatim. The core encodes the one thing embedding
+//! similarity cannot infer: stance. Adding a verb here is the whole change.
 
 /// A core relation verb and its display metadata.
 pub struct CoreVerb {
     pub verb: &'static str,
     /// The label shown for an *inbound* edge of this type (display only — the
-    /// edge is stored once, directed).
+    /// edge is stored once, directed). The symmetric verb, `contradicts`, is its own
+    /// inverse (data-model.md §2).
     pub inverse: &'static str,
-    /// Symmetric verbs are their own inverse and traverse both ways.
-    pub symmetric: bool,
 }
 
 /// The closed core (data-model.md §2). Order mirrors the doc's table.
@@ -19,17 +17,14 @@ pub const CORE: &[CoreVerb] = &[
     CoreVerb {
         verb: "references",
         inverse: "referenced-by",
-        symmetric: false,
     },
     CoreVerb {
         verb: "supports",
         inverse: "supported-by",
-        symmetric: false,
     },
     CoreVerb {
         verb: "contradicts",
         inverse: "contradicts",
-        symmetric: true,
     },
 ];
 
@@ -41,12 +36,6 @@ pub fn core(verb: &str) -> Option<&'static CoreVerb> {
 /// Whether `verb` is part of the closed core.
 pub fn is_core(verb: &str) -> bool {
     core(verb).is_some()
-}
-
-/// Whether `verb` is symmetric (its own inverse). Tail verbs are treated as
-/// directed.
-pub fn is_symmetric(verb: &str) -> bool {
-    core(verb).is_some_and(|c| c.symmetric)
 }
 
 /// The display label for an inbound edge of type `verb`. Core verbs map to their
@@ -74,37 +63,27 @@ mod tests {
         }
     }
 
-    /// Stance is the one thing embedding similarity cannot infer, and `contradicts`
-    /// is the only verb that reads the same from both ends. Its symmetry is the
-    /// single non-trivial fact in this module.
-    #[test]
-    fn only_contradicts_is_symmetric_and_tail_verbs_are_directed() {
-        assert!(is_symmetric("contradicts"));
-        assert!(!is_symmetric("references"));
-        assert!(!is_symmetric("supports"));
-        // An unknown verb is opaque, so it is treated as directed — never guessed
-        // symmetric off its spelling.
-        assert!(!is_symmetric("inspired-by"));
-        assert!(!is_symmetric(""));
-    }
-
     /// Inverse labels are display-only (the edge is stored once, directed): each
-    /// core verb has its own, a symmetric verb is its own inverse, and a tail verb
-    /// falls back to itself rather than gaining an invented "-by" form.
+    /// directed core verb has its own, and a tail verb falls back to itself rather
+    /// than gaining an invented "-by" form.
     #[test]
-    fn inverse_labels_cover_core_symmetric_and_tail() {
+    fn inverse_labels_cover_the_directed_core_and_the_tail() {
         assert_eq!(inverse_label("references"), "referenced-by");
         assert_eq!(inverse_label("supports"), "supported-by");
-        assert_eq!(inverse_label("contradicts"), "contradicts");
         assert_eq!(inverse_label("inspired-by"), "inspired-by");
-        // Every core verb's inverse round-trips through the symmetry flag.
-        for c in CORE {
-            assert_eq!(
-                c.symmetric,
-                c.verb == c.inverse,
-                "{}: `symmetric` must agree with the inverse label",
-                c.verb
-            );
-        }
+    }
+
+    /// Stance is the one thing embedding similarity cannot infer, and `contradicts`
+    /// is the only core verb that reads the same from both ends: its inverse is
+    /// itself, and no other core verb's is.
+    #[test]
+    fn only_contradicts_is_its_own_inverse() {
+        assert_eq!(inverse_label("contradicts"), "contradicts");
+        let own_inverse: Vec<&str> = CORE
+            .iter()
+            .filter(|c| c.verb == c.inverse)
+            .map(|c| c.verb)
+            .collect();
+        assert_eq!(own_inverse, vec!["contradicts"]);
     }
 }

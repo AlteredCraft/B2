@@ -98,7 +98,7 @@ mirrored in `ui/src/menukeys.ts` (checked at boot): change the two together.
 repo), and a chat answer is generated from notes by a model. Both are hostile input rendered into
 B2's own window.
 
-- **One Markdown-to-HTML path, and it sanitizes.** `renderMarkdown` (`ui/src/render.ts`) runs
+- **One Markdown-to-HTML path, and it sanitizes.** `renderMarkdown` (`ui/src/markdown.ts`) runs
   DOMPurify (`ui/src/sanitize.ts`) as its last step, so every surface is covered by construction.
 - **Anything that reaches `innerHTML`** comes from `renderMarkdown` (note bodies) or `escapeHtml`
   (every value B2 interpolates into chrome). There is no third option.

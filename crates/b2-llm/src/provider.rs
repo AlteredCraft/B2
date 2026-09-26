@@ -67,12 +67,6 @@ impl OpenAiCompatProvider {
         Self { config, agent }
     }
 
-    /// The configuration this provider speaks to — what an adapter names in its
-    /// "can't reach the model server at …" message.
-    pub fn config(&self) -> &LlmConfig {
-        &self.config
-    }
-
     /// Fail fast, before a human waits: `GET {base}/models` — the `b2 init` posture applied
     /// to the second seam (ADR-0020's "never a surprise mid-command"). It answers two
     /// questions and deliberately no others:
@@ -84,7 +78,7 @@ impl OpenAiCompatProvider {
     ///    cannot be told apart from the far commoner mistake it silently blessed: a wrong
     ///    path (`…:11434/v1X` came back as *Connected* and failed at the first question).
     ///    The tolerance survives where the evidence supports it — a **2xx** whose body isn't
-    ///    a model list — and [`crate::setup`] is where a refusal becomes advice.
+    ///    a model list — and [`crate::refusal_message`] is where a refusal becomes advice.
     /// 2. **Does it serve the configured model?** Checked only when the response *parsed*
     ///    as a non-empty model list, and leniently: the check may only ever catch a real
     ///    mistake, never invent one, because a false refusal would block a working setup.

@@ -11,7 +11,7 @@
 //! daemon isn't running" is the answer the card is asking for. Adapter-level throughout, so
 //! nothing here is recorded in the vault or the index.
 
-use crate::{ApiKeySource, LlmConfig, LlmError, OpenAiCompatProvider};
+use crate::{ApiKeySource, LlmConfig, LlmError, OpenAiCompatProvider, FAKE_NOTICE};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -21,8 +21,8 @@ const TAGS_PATH: &str = "/api/tags";
 
 /// Where a human who has *no* Ollama is sent — the quickstart rather than the product
 /// page: someone reading this has already found out nothing is listening, so they need the
-/// page with the install command on it. One constant because two adapters print it, and a
-/// link that drifts between them is one they get wrong.
+/// page with the install command on it. One constant, printed by [`unreachable_message`]
+/// for both adapters, so the link cannot drift between them.
 pub const OLLAMA_INSTALL_URL: &str = "https://docs.ollama.com/quickstart";
 
 /// The port Ollama serves on. Recognizing it is what decides whether Ollama's own
@@ -39,7 +39,7 @@ const TAGS_TIMEOUT: Duration = Duration::from_secs(5);
 /// decides two things: whether Ollama's own commands belong in an error message, and
 /// whether [`probe_setup`] asks `/api/tags` at all. Deliberately a *guess about the
 /// runtime*, not a security check: being wrong costs one refused request.
-pub fn is_ollama(base_url: &str) -> bool {
+fn is_ollama(base_url: &str) -> bool {
     let endpoint = base_url.to_ascii_lowercase();
     endpoint.contains(OLLAMA_PORT) || endpoint.contains("ollama")
 }
@@ -51,7 +51,7 @@ pub fn is_ollama(base_url: &str) -> bool {
 /// Permissive about *how* loopback is spelled, because guessing "cloud" for a local URL
 /// only shows a warning the user doesn't need, while guessing "local" for a remote one
 /// would hide one they do. So it is a **membership** test: only known loopback spellings.
-pub fn is_local(base_url: &str) -> bool {
+fn is_local(base_url: &str) -> bool {
     let host = host_of(base_url);
     host == "localhost"
         || host == "::1"
@@ -71,21 +71,23 @@ fn is_loopback_v4(host: &str) -> bool {
     matches!(host.parse::<std::net::Ipv4Addr>(), Ok(ip) if ip.is_loopback())
 }
 
+/// A URL's scheme (when it names one) and its authority — everything between `://` and
+/// the first `/`, `?` or `#`. Hand-rolled rather than a URL crate: this crate's whole
+/// posture is one wire shape and no dependency tree, and [`host_of`] and [`origin_of`]
+/// need only these two pieces.
+fn scheme_and_authority(url: &str) -> (Option<&str>, &str) {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (Some(s), r),
+        None => (None, url),
+    };
+    (scheme, rest.split(['/', '?', '#']).next().unwrap_or(""))
+}
+
 /// The host portion of a URL, lowercased and without scheme, port, path or
-/// credentials. Hand-rolled rather than a URL crate: this crate's whole posture
-/// is one wire shape and no dependency tree, and the two callers here need only
-/// the authority's host.
+/// credentials.
 fn host_of(url: &str) -> String {
-    let rest = url
-        .split_once("://")
-        .map(|(_, r)| r)
-        .unwrap_or(url)
-        .to_ascii_lowercase();
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
+    let lowered = scheme_and_authority(url).1.to_ascii_lowercase();
+    let authority = lowered.rsplit_once('@').map(|(_, h)| h).unwrap_or(&lowered);
     // IPv6 literals keep their brackets; everything else drops a `:port`.
     match authority.strip_prefix('[') {
         Some(v6) => format!("[{}]", v6.split(']').next().unwrap_or("")),
@@ -114,12 +116,8 @@ fn ollama_root(base_url: &str) -> String {
 /// `scheme://authority` — the URL with every path segment dropped. A missing
 /// scheme reads as `http`, which is what an Ollama URL without one means.
 fn origin_of(url: &str) -> String {
-    let (scheme, rest) = match url.split_once("://") {
-        Some((s, r)) => (s, r),
-        None => ("http", url),
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    format!("{scheme}://{authority}")
+    let (scheme, authority) = scheme_and_authority(url);
+    format!("{}://{authority}", scheme.unwrap_or("http"))
 }
 
 /// How ready chat is, right now — the setup card's top-level branch.
@@ -199,7 +197,7 @@ pub const MODEL_TIERS: [ModelTier; 3] = [
 /// The rung `ram_gb` sits on — the highest tier whose floor it meets. Total
 /// installed memory, not free: the question is what the machine can host, and a
 /// suggestion that changed with whatever else is open would be noise.
-pub fn tier_for_ram(ram_gb: u64) -> &'static ModelTier {
+fn tier_for_ram(ram_gb: u64) -> &'static ModelTier {
     MODEL_TIERS
         .iter()
         .rev()
@@ -300,11 +298,7 @@ impl ChatSetup {
             cloud: false,
             api_key_source: ApiKeySource::None,
             state: ChatState::Fake,
-            message: Some(
-                "The fake chat provider is in use (B2_LLM=fake) — answers are deterministic test \
-                 scaffolding, not a model."
-                    .to_string(),
-            ),
+            message: Some(FAKE_NOTICE.to_string()),
             available: Vec::new(),
             ollama: None,
             tool_calls: ToolCallCap::of(config),
@@ -346,9 +340,9 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
             )),
             Vec::new(),
         ),
-        Err(e) => (
+        Err(_) => (
             ChatState::Unreachable,
-            Some(unreachable_message(&config.base_url, &e)),
+            Some(unreachable_message(&config.base_url)),
             Vec::new(),
         ),
     };
@@ -365,10 +359,12 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
     }
 }
 
-/// E4's own sentence, and the reason [`is_ollama`] exists: `ollama serve` is the
-/// fix for Ollama and no help whatever for LM Studio, llama.cpp, vLLM or a cloud
-/// endpoint — all of which the same setting points at.
-fn unreachable_message(base_url: &str, _detail: &LlmError) -> String {
+/// E4's own sentence — nothing is listening at `base_url` — and the reason [`is_ollama`]
+/// exists: `ollama serve` is the fix for Ollama and no help whatever for LM Studio,
+/// llama.cpp, vLLM or a cloud endpoint, all of which the same setting points at. Phrased
+/// here so both adapters say it the same way; an adapter appends only its own way of
+/// changing the endpoint (a CLI flag, a Settings field).
+pub fn unreachable_message(base_url: &str) -> String {
     if is_ollama(base_url) {
         format!(
             "Can't reach the model server at {base_url} — is Ollama running? \
@@ -427,11 +423,18 @@ pub fn refusal_message(
     }
 }
 
-fn model_missing_message(model: &str, base_url: &str) -> String {
+/// The server at `base_url` is up but doesn't serve `model` ([`LlmError::ModelMissing`]) —
+/// the most common local-setup mistake. [`unreachable_message`]'s sibling: Ollama gets its
+/// own fix, everything else the general one, and an adapter appends only how *it* picks
+/// another model.
+pub fn model_missing_message(model: &str, base_url: &str) -> String {
     if is_ollama(base_url) {
-        format!("The model server doesn't have '{model}'. Pull it with `ollama pull {model}`.")
+        format!(
+            "The model server doesn't have '{model}'. Pull it with `{}`.",
+            pull_command(model)
+        )
     } else {
-        format!("The model server at {base_url} doesn't serve '{model}'.")
+        format!("The model server at {base_url} doesn't serve '{model}'. Load it there.")
     }
 }
 
@@ -453,7 +456,7 @@ fn ollama_setup(base_url: &str) -> OllamaSetup {
     let ram_gb = system_ram_gb();
     OllamaSetup {
         root,
-        running: installed.is_ok(),
+        running: installed.is_some(),
         installed: installed.unwrap_or_default(),
         ram_gb,
         tiers: MODEL_TIERS.to_vec(),
@@ -485,29 +488,36 @@ struct TagsDetails {
     parameter_size: Option<String>,
 }
 
-/// Every model the daemon at `root` has installed. `Err(())` means the native API didn't
+/// Every model the daemon at `root` has installed. `None` means the native API didn't
 /// answer — not that nothing is installed, which is a different card. Its own agent rather
 /// than the provider's: a different API on a different path, wanted at a shorter timeout,
 /// and it must never send the bearer token a cloud configuration might carry.
-fn installed_models(root: &str) -> Result<Vec<OllamaModel>, ()> {
+fn installed_models(root: &str) -> Option<Vec<OllamaModel>> {
     let url = format!("{root}{TAGS_PATH}");
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(TAGS_TIMEOUT)
         .timeout_read(TAGS_TIMEOUT)
         .build();
-    let body = match agent.get(&url).timeout(TAGS_TIMEOUT).call() {
-        Ok(r) => r.into_string().map_err(|e| {
-            tracing::debug!(target: "b2::llm", error = %e, url, "unreadable model inventory");
-        })?,
-        Err(e) => {
+    let response = agent
+        .get(&url)
+        .timeout(TAGS_TIMEOUT)
+        .call()
+        .map_err(|e| {
             tracing::debug!(target: "b2::llm", error = %e, url, "no native Ollama inventory");
-            return Err(());
-        }
-    };
-    let parsed: TagsResponse = serde_json::from_str(&body).map_err(|e| {
-        tracing::debug!(target: "b2::llm", error = %e, url, "unparseable model inventory");
-    })?;
-    Ok(models_from(parsed))
+        })
+        .ok()?;
+    let body = response
+        .into_string()
+        .map_err(|e| {
+            tracing::debug!(target: "b2::llm", error = %e, url, "unreadable model inventory");
+        })
+        .ok()?;
+    let parsed: TagsResponse = serde_json::from_str(&body)
+        .map_err(|e| {
+            tracing::debug!(target: "b2::llm", error = %e, url, "unparseable model inventory");
+        })
+        .ok()?;
+    Some(models_from(parsed))
 }
 
 /// Ollama's inventory shape, narrowed to the three fields the card shows. Split
@@ -535,7 +545,7 @@ fn models_from(parsed: TagsResponse) -> Vec<OllamaModel> {
 /// bring a tree for one number), and best-effort by construction: the only thing
 /// it feeds is a *non-binding suggestion*, so `None` costs the card its
 /// highlighted row and nothing else.
-pub fn system_ram_gb() -> Option<u64> {
+fn system_ram_gb() -> Option<u64> {
     // Rounded, not truncated. The tiers are floors, and a machine sold as "16 GB"
     // does not always report 16 GiB of usable memory — Linux's `MemTotal` excludes
     // what the firmware reserved, so it reads ~15.6, and truncation would drop such
@@ -713,8 +723,6 @@ mod tests {
         assert_eq!(tier_for_ram(0).model, MODEL_TIERS[0].model);
     }
 
-    /// The setup view is what crosses to a webview, so the one thing it must
-    /// never carry is the bearer token — only whether there is one.
     /// The only real parsing in this module, and the reason `models_from` is split
     /// out of the HTTP call: a nameless entry is dropped rather than painted as a
     /// blank row, and an entry with no `details` keeps its name instead of going
@@ -747,6 +755,8 @@ mod tests {
         assert!(models_from(serde_json::from_str("{}").unwrap()).is_empty());
     }
 
+    /// The setup view is what crosses to a webview, so the one thing it must
+    /// never carry is the bearer token — only whether there is one.
     #[test]
     fn the_setup_view_reports_a_key_without_carrying_it() {
         let config = LlmConfig {
@@ -815,24 +825,12 @@ mod tests {
 
     #[test]
     fn messages_name_ollamas_own_fix_only_for_ollama() {
-        let ollama = unreachable_message(
-            "http://localhost:11434/v1",
-            &LlmError::Unreachable {
-                endpoint: "http://localhost:11434/v1".into(),
-                detail: "connection refused".into(),
-            },
-        );
+        let ollama = unreachable_message("http://localhost:11434/v1");
         assert!(ollama.contains("ollama serve"), "{ollama}");
         // The other half of "nothing is listening": the daemon may not be installed at
         // all, and the fix for that is a page, not a command.
         assert!(ollama.contains(OLLAMA_INSTALL_URL), "{ollama}");
-        let other = unreachable_message(
-            "http://localhost:1234/v1",
-            &LlmError::Unreachable {
-                endpoint: "http://localhost:1234/v1".into(),
-                detail: "connection refused".into(),
-            },
-        );
+        let other = unreachable_message("http://localhost:1234/v1");
         assert!(!other.to_lowercase().contains("ollama"), "{other}");
         assert!(
             model_missing_message("llama3.2", "http://localhost:11434/v1")

@@ -21,7 +21,7 @@ use b2_core::llm::{
 };
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::index_conn;
+use common::{index_conn, keep_streaming, stream_into, write_note};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
@@ -32,14 +32,6 @@ const A: &str = "a.md";
 const B: &str = "b.md";
 const C: &str = "c.md";
 const E: &str = "e.md";
-
-fn write_note(vault: &Path, name: &str, body: &str) {
-    fs::write(
-        vault.join(name),
-        format!("---\ntype: note\ntitle: Note {name}\n---\n{body}\n"),
-    )
-    .unwrap();
-}
 
 /// Several short sections, so a fine chunk target cuts each note into several passages
 /// and "the nearest pairs" is a real ranking rather than a single forced pair.
@@ -94,10 +86,6 @@ impl LlmProvider for Recording {
         self.seen.borrow_mut().push(req.clone());
         FakeLlm.complete(req, on_token)
     }
-}
-
-fn keep_streaming() -> impl FnMut(&str) -> ControlFlow<()> {
-    |_| ControlFlow::Continue(())
 }
 
 // --- the evidence read (discover::passage_pairs) ---------------------------------
@@ -277,10 +265,7 @@ fn a_model_that_ignores_its_tools_is_handed_the_evidence_and_its_first_try_is_ne
 
     let mut streamed = String::new();
     let view = vault
-        .why_similar(&llm, A, C, 10, &mut |t| {
-            streamed.push_str(t);
-            ControlFlow::Continue(())
-        })
+        .why_similar(&llm, A, C, 10, &mut stream_into(&mut streamed))
         .unwrap();
 
     assert_eq!(
@@ -567,10 +552,7 @@ fn citations_resolve_to_the_two_notes_and_the_answer_streams() {
 
     let mut streamed = String::new();
     let view = vault
-        .why_similar(&FakeLlm, A, C, 10, &mut |tok| {
-            streamed.push_str(tok);
-            ControlFlow::Continue(())
-        })
+        .why_similar(&FakeLlm, A, C, 10, &mut stream_into(&mut streamed))
         .unwrap();
 
     assert_eq!(view.answer, streamed);

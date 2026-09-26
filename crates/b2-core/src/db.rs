@@ -1,5 +1,5 @@
 //! Opening the index, the schema migration, and the projection helpers for the
-//! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), the
+//! Markdown-derived tiers: `notes`, `chunks` (+FTS5), the
 //! `embeddings`/`note_centroids` vector tables, and the typed `edges` graph. Every
 //! table here is a derived projection of Markdown — nothing is a source of truth
 //! (ADR-0002).
@@ -22,7 +22,7 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use rusqlite::{
     params, Connection, OptionalExtension, StatementStatus, Transaction, TransactionBehavior,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -39,8 +39,10 @@ use std::time::Duration;
 /// because its module is no longer linked to drop it. **4** added the `resources`
 /// inventory and widened `edges` with resource targets. **5** switched `chunks_fts`
 /// to `porter unicode61` (the GH #157 A/B's verdict). **6** re-keyed the whole index
-/// on the vault-relative path and made `embeddings` content-addressed (GH #170).
-pub const SCHEMA_VERSION: i64 = 6;
+/// on the vault-relative path and made `embeddings` content-addressed (GH #170). **7**
+/// dropped the columns nothing read (`notes.type`, `description`, `updated`) and the
+/// `note_aliases` table.
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
@@ -239,10 +241,9 @@ fn is_locked(err: &Error) -> bool {
 /// concurrent `DROP TABLE` (#114), and dropping a table takes its indexes and triggers
 /// with it, so a missing table is the visible edge of every partial rebuild. The unit
 /// test at the foot of this file pins the list to what the DDL actually creates.
-const SCHEMA_TABLES: [&str; 7] = [
+const SCHEMA_TABLES: [&str; 6] = [
     "meta",
     "notes",
-    "note_aliases",
     "chunks",
     "chunks_fts",
     "resources",
@@ -393,31 +394,19 @@ fn apply_schema(conn: &Connection) -> Result<()> {
          DROP TABLE IF EXISTS embeddings;
          DROP TABLE IF EXISTS chunks_fts;
          DROP TABLE IF EXISTS chunks;
-         DROP TABLE IF EXISTS note_aliases;
+         DROP TABLE IF EXISTS note_aliases; -- schema <= 6
          DROP TABLE IF EXISTS notes;
          DELETE FROM meta;",
     )?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS notes (
            path        TEXT PRIMARY KEY,
-           type        TEXT NOT NULL,
            title       TEXT,
-           description TEXT,
            created     TEXT,
-           updated     TEXT,
            body_hash   TEXT NOT NULL,
            mtime       INTEGER,
            indexed_at  TEXT NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS notes_type_idx ON notes(type);
-
-         CREATE TABLE IF NOT EXISTS note_aliases (
-           note_path TEXT NOT NULL
-                       REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE,
-           alias     TEXT NOT NULL,
-           PRIMARY KEY (note_path, alias)
-         );
-         CREATE INDEX IF NOT EXISTS note_aliases_alias_idx ON note_aliases(alias);
 
          CREATE TABLE IF NOT EXISTS chunks (
            id           INTEGER PRIMARY KEY,
@@ -496,24 +485,21 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// notes + aliases
+// notes
 // ---------------------------------------------------------------------------
 
-/// One note's projection into `notes` (+ its `aliases`). Borrowed view so callers
+/// One note's projection into `notes`. Borrowed view so callers
 /// pass slices of an already-parsed note without extra allocation.
+#[derive(Debug)]
 pub struct NoteRow<'a> {
     pub path: &'a str,
-    pub r#type: &'a str,
     pub title: Option<&'a str>,
-    pub description: Option<&'a str>,
     pub created: Option<&'a str>,
-    pub updated: Option<&'a str>,
     pub body_hash: &'a str,
     pub mtime: Option<i64>,
-    pub aliases: &'a [String],
 }
 
-/// Upsert a note keyed by its vault-relative `path` and replace its aliases.
+/// Upsert a note keyed by its vault-relative `path`.
 /// `indexed_at` is set by SQLite so the projection needs no wall-clock from Rust.
 ///
 /// `ON CONFLICT(path)` is the *whole* of path reconciliation, which is the point of
@@ -521,37 +507,16 @@ pub struct NoteRow<'a> {
 /// so a note deleted and recreated there is simply that path's note now.
 pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
     conn.execute(
-        "INSERT INTO notes
-           (path, type, title, description, created, updated, body_hash, mtime, indexed_at)
-         VALUES
-           (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        "INSERT INTO notes (path, title, created, body_hash, mtime, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
          ON CONFLICT(path) DO UPDATE SET
-           type        = excluded.type,
            title       = excluded.title,
-           description = excluded.description,
            created     = excluded.created,
-           updated     = excluded.updated,
            body_hash   = excluded.body_hash,
            mtime       = excluded.mtime,
            indexed_at  = excluded.indexed_at",
-        params![
-            row.path,
-            row.r#type,
-            row.title,
-            row.description,
-            row.created,
-            row.updated,
-            row.body_hash,
-            row.mtime,
-        ],
+        params![row.path, row.title, row.created, row.body_hash, row.mtime],
     )?;
-    conn.execute("DELETE FROM note_aliases WHERE note_path = ?1", [row.path])?;
-    for alias in row.aliases {
-        conn.execute(
-            "INSERT OR IGNORE INTO note_aliases(note_path, alias) VALUES (?1, ?2)",
-            params![row.path, alias],
-        )?;
-    }
     Ok(())
 }
 
@@ -562,32 +527,85 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 /// `similar` and the graph keep serving, so an incremental reindex diverges from a
 /// from-scratch rebuild (S3).
 ///
-/// Aliases, chunks (FTS in lockstep via the `chunks_ad` trigger), centroid and
+/// Chunks (FTS in lockstep via the `chunks_ad` trigger), centroid and
 /// **outgoing** edges cascade with the row. Vectors no longer do — they are
 /// content-addressed and may be shared, so [`prune_orphan_vectors`] collects them.
 /// **Inbound** edges are the caller's concern: `edges.dst_path` carries no FK (it must
 /// be free to be NULL — the dangling case), so this must run *before* edge derivation,
 /// which then re-dangles the links that pointed here.
 pub fn prune_notes_except(conn: &Connection, seen: &HashSet<&str>) -> Result<usize> {
-    let mut stmt = conn.prepare("SELECT path FROM notes")?;
+    prune_members_except(conn, Members::Notes, |path| seen.contains(path))
+}
+
+/// Drop the `notes` row at `path` — the index half of deleting a note — and return how
+/// many rows went (0 or 1). Everything keyed to the note cascades with the row, as for
+/// [`prune_notes_except`]; inbound edges are the caller's to re-project.
+pub fn delete_note_row(conn: &Connection, path: &str) -> Result<usize> {
+    delete_member(conn, Members::Notes, path)
+}
+
+/// The two path-keyed member tables: a vault path names a note row or a resource row
+/// (L1, L3), and the row-level housekeeping below is the same for both.
+#[derive(Debug, Clone, Copy)]
+enum Members {
+    Notes,
+    Resources,
+}
+
+impl Members {
+    fn table(self) -> &'static str {
+        match self {
+            Members::Notes => "notes",
+            Members::Resources => "resources",
+        }
+    }
+}
+
+/// Delete one member row by path; returns the rows deleted (0 or 1).
+fn delete_member(conn: &Connection, members: Members, path: &str) -> Result<usize> {
+    let sql = format!("DELETE FROM {} WHERE path = ?1", members.table());
+    Ok(conn.execute(&sql, [path])?)
+}
+
+/// Delete every member row whose path `keep` rejects; returns how many went.
+fn prune_members_except(
+    conn: &Connection,
+    members: Members,
+    keep: impl Fn(&str) -> bool,
+) -> Result<usize> {
+    let mut stmt = conn.prepare(&format!("SELECT path FROM {}", members.table()))?;
     let stored = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut pruned = 0;
-    for path in stored {
-        if !seen.contains(path.as_str()) {
-            pruned += conn.execute("DELETE FROM notes WHERE path = ?1", [&path])?;
-        }
+    for path in stored.iter().filter(|p| !keep(p)) {
+        pruned += delete_member(conn, members, path)?;
     }
     Ok(pruned)
 }
 
+/// Every member path under the folder `dir` (vault-relative, no trailing slash),
+/// path-ordered. Prefix-matched with `substr` (not `LIKE`) so a folder name containing
+/// `%`/`_` never wildcards.
+fn members_under_dir(conn: &Connection, members: Members, dir: &str) -> Result<Vec<String>> {
+    let prefix = format!("{dir}/");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT path FROM {}
+         WHERE substr(path, 1, length(?1)) = ?1
+         ORDER BY path",
+        members.table()
+    ))?;
+    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 // ---------------------------------------------------------------------------
-// resources (file-type support slice 1 — data-model.md §10)
+// resources (data-model.md §10)
 // ---------------------------------------------------------------------------
 
 /// One resource's projection into `resources`. Borrowed view like [`NoteRow`] —
 /// passed straight from the walk, never stored.
+#[derive(Debug)]
 pub struct ResourceRow<'a> {
     pub path: &'a str,
     pub class: &'a str,
@@ -646,7 +664,7 @@ pub struct ResourceDetail {
 }
 
 /// Every inventoried resource — [`ResourceListing`] rows, path-ordered — the
-/// file tree's resource half (`Vault::list_resources`, research §9b #10).
+/// file tree's resource half (`Vault::list_resources`).
 pub fn list_resources(conn: &Connection) -> Result<Vec<ResourceListing>> {
     let mut stmt = conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
     let rows = stmt.query_map([], |r| {
@@ -754,19 +772,7 @@ pub fn outbound_resource_edges(conn: &Connection, note_path: &str) -> Result<Vec
 /// rows. The resource sibling of [`inbound_edge_targets`]; ordered for
 /// deterministic rewriting.
 pub fn inbound_resource_edge_targets(conn: &Connection, path: &str) -> Result<Vec<InboundEdge>> {
-    let mut stmt = conn.prepare(
-        "SELECT e.src_path, e.dst_path_raw
-         FROM edges e
-         WHERE e.dst_resource_path = ?1
-         ORDER BY e.src_path, e.dst_path_raw",
-    )?;
-    let rows = stmt.query_map([path], |r| {
-        Ok(InboundEdge {
-            src_path: r.get(0)?,
-            dst_raw: r.get(1)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    inbound_edges_on(conn, "dst_resource_path", path)
 }
 
 /// Delete every `resources` row whose path is not in `seen` (the walk's survivors)
@@ -774,21 +780,51 @@ pub fn inbound_resource_edge_targets(conn: &Connection, path: &str) -> Result<Ve
 /// `edges.dst_resource_path` is `ON DELETE SET NULL`, `dst_path_raw` retained —
 /// so a stale inventory row never outlives its file (the resource half of #31).
 pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Result<usize> {
-    let mut stmt = conn.prepare("SELECT path FROM resources")?;
-    let stored = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut pruned = 0;
-    for path in stored {
-        if !seen.contains(&path) {
-            pruned += conn.execute("DELETE FROM resources WHERE path = ?1", [&path])?;
-        }
-    }
-    Ok(pruned)
+    prune_members_except(conn, Members::Resources, |path| seen.contains(path))
+}
+
+/// Drop the inventory row at `path` — the index half of deleting a resource — and
+/// return how many rows went (0 or 1). Inbound edges re-dangle as for
+/// [`prune_resources_except`].
+pub fn delete_resource_row(conn: &Connection, path: &str) -> Result<usize> {
+    delete_member(conn, Members::Resources, path)
+}
+
+/// Re-key the inventory row at `old_path` to `new_path` — the resource sibling of
+/// [`repoint_note_path`], and the index half of moving one. The bytes are the same, so
+/// `size` and `content_hash` carry over; `class` (from the new extension) and `mtime`
+/// (the moved file's) are the caller's. Returns whether `old_path` was inventoried —
+/// `false` changes nothing.
+///
+/// An upsert of the new row then a delete of the old, not an `UPDATE`:
+/// `edges.dst_resource_path` has no `ON UPDATE CASCADE`, so the old row's inbound edges
+/// re-dangle (`ON DELETE SET NULL`) until the caller re-projects their sources.
+pub fn repoint_resource(
+    conn: &Connection,
+    old_path: &str,
+    new_path: &str,
+    class: &'static str,
+    mtime: Option<i64>,
+) -> Result<bool> {
+    let Some(detail) = resource_detail(conn, old_path)? else {
+        return Ok(false);
+    };
+    upsert_resource(
+        conn,
+        &ResourceRow {
+            path: new_path,
+            class,
+            size: detail.size,
+            mtime,
+            content_hash: &detail.content_hash,
+        },
+    )?;
+    delete_resource_row(conn, old_path)?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
-// chunks (FTS kept in lockstep by the triggers in migrate())
+// chunks (FTS kept in lockstep by the triggers in apply_schema())
 // ---------------------------------------------------------------------------
 
 /// The content address of one chunk's embed input: blake3 of the chunk text. The text
@@ -929,19 +965,14 @@ pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// embeddings — the vector tables are created at embed time, not in migrate():
+// embeddings — the vector tables are created at embed time, not in apply_schema():
 // their *existence* is the "this vault has an embedding space" signal the
 // projected-but-unembedded fallbacks key on (ADR-0006).
 // ---------------------------------------------------------------------------
 
 /// Whether the embedding space (the `embeddings` table) currently exists.
 pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'",
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
+    table_exists(conn, "embeddings")
 }
 
 /// Ensure the vector tables exist, recording `(embed_model_id, embed_dim)` in `meta`. If
@@ -990,8 +1021,10 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
 /// once under the write lock. Identity first: a differing model settles it without the
 /// `sqlite_master` lookup.
 fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Result<bool> {
-    let unchanged = meta_value(conn, "embed_model_id")?.as_deref() == Some(model_id)
-        && meta_value(conn, "embed_dim")?.as_deref() == Some(dim.to_string().as_str());
+    let unchanged = matches!(
+        recorded_embedder(conn)?,
+        Some((m, d)) if m == model_id && d == dim
+    );
     Ok(unchanged && embedding_space_exists(conn)?)
 }
 
@@ -1056,18 +1089,38 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
-/// The whole `chunk_id -> note_path` map in one scan — the bulk form of
-/// [`note_for_chunk`] for loops that resolve *many* hits (graph-filtered search walks
-/// the full ranked space, where a per-hit lookup is the N+1 shape that once made
-/// `b2 similar` a ~130s stall, #37).
-pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
-    let mut stmt = conn.prepare("SELECT id, note_path FROM chunks")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-    Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
+/// A ranked chunk resolved for display in one read: its note, that note's title, and the
+/// chunk's heading breadcrumb and text. One statement, so the note and the chunk come
+/// from the same snapshot: a hit is either whole or `None` (GH #137).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkHit {
+    pub note_path: String,
+    pub title: Option<String>,
+    pub heading_path: Option<String>,
+    pub text: String,
 }
 
-/// A chunk's text (None if the chunk id is unknown) — the search-hit → snippet
-/// resolution the CLI shows.
+/// [`ChunkHit`] for `chunk_id`, `None` if the chunk or its note is gone.
+pub fn chunk_hit(conn: &Connection, chunk_id: i64) -> Result<Option<ChunkHit>> {
+    Ok(conn
+        .query_row(
+            "SELECT c.note_path, n.title, c.heading_path, c.text
+             FROM chunks c JOIN notes n ON n.path = c.note_path
+             WHERE c.id = ?1",
+            [chunk_id],
+            |r| {
+                Ok(ChunkHit {
+                    note_path: r.get(0)?,
+                    title: r.get(1)?,
+                    heading_path: r.get(2)?,
+                    text: r.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// A chunk's text (None if the chunk id is unknown) — a similar card's evidence passage.
 pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT text FROM chunks WHERE id = ?1", [chunk_id], |r| {
@@ -1175,6 +1228,15 @@ pub struct PendingChunk {
     pub text_hash: String,
 }
 
+/// The row mapper both pending-set queries share: `SELECT c.note_path, c.text, c.text_hash`.
+fn pending_chunk(r: &rusqlite::Row) -> rusqlite::Result<PendingChunk> {
+    Ok(PendingChunk {
+        note_path: r.get(0)?,
+        text: r.get(1)?,
+        text_hash: r.get(2)?,
+    })
+}
+
 /// Every chunk still lacking a stored vector, in `(path, seq)` order — the
 /// **DB-derived pending set** the embed pass fills. Deriving it here is what decouples
 /// projection from embedding: nothing is handed between the passes in memory, so any
@@ -1194,13 +1256,7 @@ pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<PendingChunk>> {
          WHERE v.text_hash IS NULL
          ORDER BY c.note_path, c.seq",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(PendingChunk {
-            note_path: r.get(0)?,
-            text: r.get(1)?,
-            text_hash: r.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map([], pending_chunk)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1219,13 +1275,7 @@ pub fn note_chunks_missing_vectors(
          WHERE c.note_path = ?1 AND v.text_hash IS NULL
          ORDER BY c.seq",
     )?;
-    let rows = stmt.query_map([note_path], |r| {
-        Ok(PendingChunk {
-            note_path: r.get(0)?,
-            text: r.get(1)?,
-            text_hash: r.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map([note_path], pending_chunk)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1250,18 +1300,18 @@ pub fn note_title(conn: &Connection, note_path: &str) -> Result<Option<String>> 
         .flatten())
 }
 
-/// A note's `created` date (`None` if absent or unset), resolved from the
-/// projection (GH #22): a neighbor is dated for display without an adapter ever
-/// re-reading the file just for a date.
-pub fn note_created(conn: &Connection, note_path: &str) -> Result<Option<String>> {
+/// A note's `(title, created)` in one read (both `None` if the note is absent), resolved
+/// from the projection (GH #22): a neighbor is titled and dated for display without an
+/// adapter ever re-reading the file.
+pub fn note_header(conn: &Connection, note_path: &str) -> Result<(Option<String>, Option<String>)> {
     Ok(conn
         .query_row(
-            "SELECT created FROM notes WHERE path = ?1",
+            "SELECT title, created FROM notes WHERE path = ?1",
             [note_path],
-            |r| r.get::<_, Option<String>>(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?
-        .flatten())
+        .unwrap_or_default())
 }
 
 /// Every indexed note's `(path, title)`, ordered by `path` — the flat listing
@@ -1402,8 +1452,7 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
 }
 
 /// Every chunk's squared-L2 distance to `query`, sorted nearest first (ties broken by
-/// `chunk_id` for determinism) — the shared scan behind [`vector_search`] /
-/// [`vector_search_all`], computed in-process over the [`for_each_stored_vector`]
+/// `chunk_id` for determinism) — the scan behind [`vector_search`], computed in-process over the [`for_each_stored_vector`]
 /// stream: one sequential statement, one reused decode buffer (ADR-0006).
 fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
     let mut out: Vec<(i64, f32)> = Vec::new();
@@ -1412,11 +1461,7 @@ fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
         crate::embed::unpack_f32_into(blob, &mut scratch);
         out.push((chunk_id, crate::embed::l2_sq(query, &scratch)));
     })?;
-    out.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.0.cmp(&b.0))
-    });
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     Ok(out)
 }
 
@@ -1431,21 +1476,13 @@ pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(
     Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
 }
 
-/// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
-/// nearest first (same scan, same `chunk_id` tie-break). The whole-space caller —
-/// graph-filtered search — ranks the entire vault, so it takes this rather than
-/// pass a sentinel `k`.
-pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
-    let hits = scan_vector_distances(conn, query)?;
-    Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
-}
-
 // ---------------------------------------------------------------------------
 // edges
 // ---------------------------------------------------------------------------
 
 /// One authored edge row, ready to project. Owns its data (built from resolved
 /// links during ingest).
+#[derive(Debug)]
 pub struct EdgeRow {
     pub id: String,
     /// The authoring note's vault-relative path.
@@ -1463,15 +1500,14 @@ pub struct EdgeRow {
     pub explanation: Option<String>,
     /// An embed form (`![alt](…)` / `![[…]]`) — display nicety, not a verb.
     pub embed: bool,
-    /// The authored alt/link/alias text — an image's index text (slice 3).
+    /// The authored alt/link/alias text.
     pub caption: Option<String>,
     pub occurrence_index: i64,
 }
 
 /// Replace a note's edges. Every edge is authored (body links ∪ frontmatter
 /// `b2_relations:`), so this deletes the note's edges and re-inserts them from the
-/// current Markdown (Flow ①) — the whole graph is a projection of Markdown, with no
-/// suggestion rows to preserve.
+/// current Markdown (Flow ①) — the whole graph is a projection of Markdown (G1).
 pub fn replace_authored_edges(conn: &Connection, src_path: &str, edges: &[EdgeRow]) -> Result<()> {
     conn.execute("DELETE FROM edges WHERE src_path = ?1", [src_path])?;
     for e in edges {
@@ -1525,13 +1561,67 @@ pub struct InboundEdge {
 /// materialized graph names the files to touch, so a move never scans the vault
 /// (index-engine.md §8). Ordered for deterministic rewriting.
 pub fn inbound_edge_targets(conn: &Connection, dst_path: &str) -> Result<Vec<InboundEdge>> {
-    let mut stmt = conn.prepare(
+    inbound_edges_on(conn, "dst_path", dst_path)
+}
+
+/// Which member of a set an [`inbound_edges_of`] edge points at: an index into the
+/// note paths or the resource paths the set was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundTarget {
+    Note(usize),
+    Resource(usize),
+}
+
+/// Every edge pointing at one of a set of members — the notes at `notes`, the
+/// resources at `resources` — tagged with the member it targets: the notes' edges
+/// first, then the resources', each member's in [`inbound_edge_targets`] order. The one
+/// graph read a move (which rewrites these links) and a delete (which dangles them)
+/// both start from, bounded by the inbound count rather than a vault scan
+/// (index-engine.md §8).
+pub fn inbound_edges_of(
+    conn: &Connection,
+    notes: &[&str],
+    resources: &[&str],
+) -> Result<Vec<(InboundTarget, InboundEdge)>> {
+    let mut out = Vec::new();
+    for (i, path) in notes.iter().enumerate() {
+        let edges = inbound_edge_targets(conn, path)?;
+        out.extend(edges.into_iter().map(|e| (InboundTarget::Note(i), e)));
+    }
+    for (i, path) in resources.iter().enumerate() {
+        let edges = inbound_resource_edge_targets(conn, path)?;
+        out.extend(edges.into_iter().map(|e| (InboundTarget::Resource(i), e)));
+    }
+    Ok(out)
+}
+
+/// The notes linking into a set of members ([`inbound_edges_of`]), sorted and deduped —
+/// the files whose edges must re-project once the set moves or goes.
+pub fn inbound_sources(
+    conn: &Connection,
+    notes: &[&str],
+    resources: &[&str],
+) -> Result<BTreeSet<String>> {
+    Ok(inbound_edges_of(conn, notes, resources)?
+        .into_iter()
+        .map(|(_, e)| e.src_path)
+        .collect())
+}
+
+/// The edges whose `column` (`dst_path` or `dst_resource_path`) names `path`, as
+/// [`InboundEdge`] rows ordered by source then authored text.
+fn inbound_edges_on(
+    conn: &Connection,
+    column: &'static str,
+    path: &str,
+) -> Result<Vec<InboundEdge>> {
+    let mut stmt = conn.prepare(&format!(
         "SELECT e.src_path, e.dst_path_raw
          FROM edges e
-         WHERE e.dst_path = ?1
-         ORDER BY e.src_path, e.dst_path_raw",
-    )?;
-    let rows = stmt.query_map([dst_path], |r| {
+         WHERE e.{column} = ?1
+         ORDER BY e.src_path, e.dst_path_raw"
+    ))?;
+    let rows = stmt.query_map([path], |r| {
         Ok(InboundEdge {
             src_path: r.get(0)?,
             dst_raw: r.get(1)?,
@@ -1541,36 +1631,20 @@ pub fn inbound_edge_targets(conn: &Connection, dst_path: &str) -> Result<Vec<Inb
 }
 
 /// Every indexed note path under the directory `dir` (vault-relative, no trailing
-/// slash), path-ordered — the moved set a **directory move** operates on.
-/// Prefix-matched with `substr` (not `LIKE`) so a dir name containing `%`/`_` never
-/// wildcards.
+/// slash), path-ordered — the moved (or deleted) set of a **directory** op.
 pub fn notes_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> {
-    let prefix = format!("{dir}/");
-    let mut stmt = conn.prepare(
-        "SELECT path FROM notes
-         WHERE substr(path, 1, length(?1)) = ?1
-         ORDER BY path",
-    )?;
-    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    members_under_dir(conn, Members::Notes, dir)
 }
 
 /// Every inventoried resource path under the directory `dir` — the resource half
 /// of [`notes_under_dir`], same prefix semantics, path-ordered.
 pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> {
-    let prefix = format!("{dir}/");
-    let mut stmt = conn.prepare(
-        "SELECT path FROM resources
-         WHERE substr(path, 1, length(?1)) = ?1
-         ORDER BY path",
-    )?;
-    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    members_under_dir(conn, Members::Resources, dir)
 }
 
 /// Re-key a note from `old_path` to `new_path` — **the** index-side move (ADR-0003).
 ///
-/// One statement, and the FK graph does the rest: `note_aliases`, `chunks`,
+/// One statement, and the FK graph does the rest: `chunks`,
 /// `note_centroids` and `edges.src_path` all declare `ON UPDATE CASCADE`, so every
 /// derived row travels with the note atomically and its chunk *vectors* are never
 /// touched at all — they are content-addressed, so they belong to the text, not the
@@ -1602,7 +1676,7 @@ pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<
 
 /// Resolve a link target against the **resource inventory** — an exact
 /// vault-relative path match (extension-only dispatch decided the target is a
-/// resource before calling this; slice-1 spec §3). Returns the stored path, or
+/// resource before calling this). Returns the stored path, or
 /// `None` for dangling.
 pub fn resolve_resource_target(conn: &Connection, path: &str) -> Result<Option<String>> {
     Ok(conn

@@ -12,21 +12,16 @@
 use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
 
-/// The frontmatter fields B2 projects into the `notes` table. Extraction is
-/// best-effort: unparseable frontmatter still round-trips (raw is preserved); the
-/// fields just come back empty.
+/// The frontmatter fields B2 reads: the ones a reader displays (`type`, `created`,
+/// `updated`, `tags`) and B2's own `b2_relations:`. Extraction is best-effort:
+/// unparseable frontmatter still round-trips (raw is preserved); the fields just come
+/// back empty. Every other key — `title`, `description`, `aliases`, your own — is
+/// round-tripped verbatim and read by nothing (data-model.md §1).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub r#type: Option<String>,
-    /// The frontmatter `title:` value, parsed only so it round-trips and can be
-    /// inspected. It has **no special meaning**: a note's display title is its
-    /// filename ([`display_title`]), and B2 never privileges this field
-    /// (data-model.md §1). Kept recognized so the key is understood, not stripped.
-    pub title: Option<String>,
-    pub description: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
-    pub aliases: Vec<String>,
     pub tags: Vec<String>,
     /// Raw `b2_relations:` entries (typed-link strings, §2) — B2's namespaced
     /// frontmatter home for typed edges, the only place a verb/explanation lives.
@@ -249,11 +244,8 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             Some(doc) => {
                 readable = doc.as_hash().is_some() || matches!(doc, Yaml::Null);
                 f.r#type = doc["type"].as_str().map(str::to_string);
-                f.title = doc["title"].as_str().map(str::to_string);
-                f.description = doc["description"].as_str().map(str::to_string);
                 f.created = scalar_to_string(&doc["created"]);
                 f.updated = scalar_to_string(&doc["updated"]);
-                f.aliases = string_list(&doc["aliases"]);
                 f.tags = string_list(&doc["tags"]);
                 f.relations = string_list(&doc["b2_relations"]);
             }
@@ -335,15 +327,11 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
 /// (`notes/spaced-repetition.md` → `spaced-repetition`). A name that is only an
 /// extension (`.md`) or carries a non-`.md` extension is returned whole.
 pub fn display_title(path: &str) -> String {
-    let base = path.rsplit('/').next().unwrap_or(path);
-    let stem = base.rsplit_once('.').map_or(base, |(stem, ext)| {
-        if ext.eq_ignore_ascii_case("md") && !stem.is_empty() {
-            stem
-        } else {
-            base
-        }
-    });
-    stem.to_string()
+    let name = crate::pathspec::file_name(path);
+    match name.get(..name.len().saturating_sub(".md".len())) {
+        Some(stem) if crate::pathspec::is_md(name) => stem.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// YAML double-quote a string (escaping `\` and `"`), so a value with `[[`, `|`,

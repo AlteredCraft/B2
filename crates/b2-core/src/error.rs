@@ -2,7 +2,7 @@
 //! variants to choose a user-facing message.
 
 /// Errors surfaced by the index engine. Kept internal/structured — user-facing
-/// surfaces (CLI, future GUI) translate these into generic, actionable messages.
+/// surfaces (the CLI, the desktop app) translate these into generic, actionable messages.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("sqlite error: {0}")]
@@ -10,9 +10,6 @@ pub enum Error {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("serialization error: {0}")]
-    Serde(#[from] serde_json::Error),
 
     #[error("frontmatter edit unsupported: {0}")]
     Frontmatter(String),
@@ -146,14 +143,13 @@ pub enum Error {
     IndexTooNew { found: i64, supported: i64 },
 
     /// A resource reference (vault-relative path) did not resolve to any
-    /// inventoried resource — the resource sibling of [`Error::NoteNotFound`]
-    /// (file-type support slice 1).
+    /// inventoried resource — the resource sibling of [`Error::NoteNotFound`].
     #[error("resource not found: {0}")]
     ResourceNotFound(String),
 
     /// The operation exists for notes but not (yet) for resources — e.g.
-    /// `b2 similar <resource>` before slice 3 gives resources chunks and
-    /// centroids. Distinct from [`Error::ResourceNotFound`] so the adapters can
+    /// `b2 similar <resource>`, until resources have chunks and centroids of their
+    /// own. Distinct from [`Error::ResourceNotFound`] so the adapters can
     /// say "not yet" rather than "no such file".
     #[error("not supported for resources yet: {0}")]
     ResourceUnsupported(String),

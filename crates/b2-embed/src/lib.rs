@@ -14,11 +14,33 @@ mod config;
 mod model;
 mod provision;
 
-pub use config::{
-    find_model, EmbedConfig, ModelChoice, ModelInfo, Source, AVAILABLE_MODELS, DEFAULT_MODEL,
-};
+pub use config::{EmbedConfig, ModelChoice, ModelInfo, Source, AVAILABLE_MODELS, DEFAULT_MODEL};
 pub use model::{active_device_label, LocalEmbedder};
 pub use provision::{provision, ProvisionReport};
+
+/// The environment variable that forces the deterministic fake embedder everywhere:
+/// `B2_EMBEDDER=fake`, the offline/dev mode both adapters honour and their suites run
+/// under.
+pub const ENV_EMBEDDER: &str = "B2_EMBEDDER";
+
+/// Whether `B2_EMBEDDER=fake` is in force. Read in one place so the CLI and the desktop
+/// cannot disagree about what the switch means.
+pub fn fake_requested() -> bool {
+    std::env::var_os(ENV_EMBEDDER).is_some_and(|v| v == "fake")
+}
+
+/// The embedder a command should open its vault with — the adapters' one wiring rule.
+///
+/// A command that embeds (`needs_semantic`) gets the real, configured [`LocalEmbedder`],
+/// failing fast with [`EmbedError::NotProvisioned`] ("run `b2 init`") when it is absent.
+/// Everything else — and every command under [`fake_requested`] — gets `None`, which the
+/// caller reads as "open with the core's fake", so no model is needed just to read.
+pub fn embedder_for(needs_semantic: bool) -> Result<Option<LocalEmbedder>> {
+    if !needs_semantic || fake_requested() {
+        return Ok(None);
+    }
+    LocalEmbedder::load(&EmbedConfig::load()?).map(Some)
+}
 
 /// Errors from provisioning/loading the local model. Embed-*time* failures map into
 /// [`b2_core::Error::Embed`] so the index path surfaces one error type; the

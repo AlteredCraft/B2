@@ -1,7 +1,12 @@
 // The install-banner gating (embedreminder.ts), pinned. Pure boolean logic — no DOM —
 // so node runs it straight off the source via its native type-stripping: `npm test`.
 // Dependency-free like newentry.test.ts (hand-rolled assert; no @types/node).
-import { shouldPromptEmbedInstall, type EmbedReminderInputs } from "./embedreminder.ts";
+import {
+  loadReminderOptOut,
+  saveReminderOptOut,
+  shouldPromptEmbedInstall,
+  type EmbedReminderInputs,
+} from "./embedreminder.ts";
 
 let passed = 0;
 
@@ -61,6 +66,30 @@ check("respects a dismissal (session ✕ or persisted opt-out)", () => {
     !shouldPromptEmbedInstall({ ...NEEDS_PROMPT, dismissed: true }),
     "the user asked us to stop",
   );
+});
+
+// --- the opt-out's storage ----------------------------------------------------------
+
+check("no storage at all reads as not opted out, and saving into none is not an error", () => {
+  // node has no `localStorage` — the shape of a browser refusing it in private mode.
+  assert(!loadReminderOptOut(), "the reminder still shows");
+  saveReminderOptOut();
+});
+
+check("an opt-out, once saved, comes back", () => {
+  const store = new Map<string, string>();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+  };
+  try {
+    assert(!loadReminderOptOut(), "nothing saved yet");
+    saveReminderOptOut();
+    assert(loadReminderOptOut(), "saved");
+  } finally {
+    delete g.localStorage;
+  }
 });
 
 console.log(`embedreminder: ${passed} checks passed`);

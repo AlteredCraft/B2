@@ -320,7 +320,7 @@ fn a_reply_past_the_configured_tool_call_cap_fails_with_a_typed_error() {
         })
     };
     let req = build_request("q", &[], Vec::new());
-    let mut run = |p: &OpenAiCompatProvider| p.complete(&req, &mut |_| ControlFlow::Continue(()));
+    let run = |p: &OpenAiCompatProvider| p.complete(&req, &mut |_| ControlFlow::Continue(()));
 
     let err = run(&capped(2)).unwrap_err();
     assert!(

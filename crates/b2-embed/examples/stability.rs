@@ -47,9 +47,12 @@
 //! an unlabelled corpus cannot say whether it improved. Exit status is 0 for any completed
 //! measurement.
 
+mod common;
+
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, ChunkSearchResult, Vault};
-use b2_embed::{provision, EmbedConfig, LocalEmbedder};
+use b2_embed::EmbedConfig;
+use common::{git_short_sha, has_flag, load_or_provision, reject_unknown_flags, truncate};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -75,6 +78,8 @@ const KEY_CHARS: usize = 48;
 /// Report column widths: the probe text, then one column per compared view.
 const PROBE_COL: usize = 44;
 const CELL_COL: usize = 26;
+/// Every flag this probe takes; anything else is refused rather than ignored.
+const KNOWN_FLAGS: [&str; 4] = ["--bless", "--model", "--verbose", "--vault"];
 
 /// The hand-authored probe set (`evals/stability.json`) — plain queries, no labels.
 #[derive(Deserialize)]
@@ -128,7 +133,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let real_model = has_flag(&args, "--model");
     let verbose = has_flag(&args, "--verbose");
     let vault_arg = flag_value(&args, "--vault")?;
-    reject_unknown_flags(&args)?;
+    reject_unknown_flags(&args, &KNOWN_FLAGS, &["--vault"])?;
 
     // A baseline is a *deterministic* artifact over a *committed* vault; blessing
     // one from a real-model run or a private vault would commit a number nobody
@@ -168,8 +173,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (vault, embedder_label) = if real_model {
         let config = EmbedConfig::load()?;
-        provision(&config, |line| eprintln!("[init] {line}"))?;
-        let embedder = LocalEmbedder::load(&config)?;
+        let embedder = load_or_provision(&config)?;
         let label = embedder.model_id().to_string();
         (Vault::open_with_embedder(&root, Box::new(embedder))?, label)
     } else {
@@ -628,10 +632,6 @@ fn copy_dir_all(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn has_flag(args: &[String], name: &str) -> bool {
-    args.iter().any(|a| a == name)
-}
-
 /// `--vault <path>` / `--vault=<path>`, erroring on a flag given without a value
 /// rather than silently probing the default vault under a name the user did not mean.
 fn flag_value(args: &[String], name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
@@ -647,27 +647,6 @@ fn flag_value(args: &[String], name: &str) -> Result<Option<String>, Box<dyn std
         }
     }
     Ok(None)
-}
-
-/// A typo'd flag must not run a *different* measurement than the one asked for.
-fn reject_unknown_flags(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    const KNOWN: [&str; 4] = ["--bless", "--model", "--verbose", "--vault"];
-    let mut skip_next = false;
-    for arg in args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if !arg.starts_with("--") {
-            return Err(format!("unexpected argument {arg:?}").into());
-        }
-        let name = arg.split('=').next().unwrap_or(arg);
-        if !KNOWN.contains(&name) {
-            return Err(format!("unknown flag {arg:?}; known: {}", KNOWN.join(" ")).into());
-        }
-        skip_next = arg == "--vault";
-    }
-    Ok(())
 }
 
 /// Same directory on disk, canonicalized — so `--vault fixtures/test-vault` from the
@@ -702,26 +681,5 @@ fn display_from_repo(path: &Path) -> String {
             .map(|rel| rel.display().to_string())
             .unwrap_or_else(|_| p.display().to_string()),
         None => path.display().to_string(),
-    }
-}
-
-fn git_short_sha() -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max - 1).collect();
-        format!("{cut}…")
     }
 }

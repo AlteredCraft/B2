@@ -467,6 +467,12 @@ which model built your vectors:
 [embedder]
 model = "BAAI/bge-base-en-v1.5"    # default — 768-dim, ~440 MB, the better ranker
 # model = "BAAI/bge-small-en-v1.5" # 384-dim, ~130 MB, faster to download and embed
+# source = "https://hf-mirror.com" # where `b2 init` fetches from: a Hugging Face mirror URL,
+#                                  # or a local folder holding the model files (offline install)
+# cache_dir = "/path/to/models"    # where models are kept (default: <data dir>/b2/models)
+# query_prefix = "..."             # the instruction prepended to search queries only;
+#                                  # "" embeds queries like documents. Leave it unless you
+#                                  # know the model wants a different one
 ```
 
 Those two are the supported models, the same pair the desktop app's Settings → Embedding
@@ -476,8 +482,9 @@ they are, `search` refuses rather than mixing embedding spaces.
 
 | Environment variable | Effect |
 |---|---|
-| `B2_VAULT_PATH` | Vault root, so commands find it without `-C`. An explicit `-C`/`--vault` overrides it. Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`link`) require it explicitly |
+| `B2_VAULT_PATH` | Vault root, so commands find it without `-C`. An explicit `-C`/`--vault` overrides it. Read-only commands fall back to the current dir; commands that write (`reindex`/`add`/`write`/`mv`/`rm`/`link`) require it explicitly |
 | `B2_EMBEDDER=fake` | Offline mode: deterministic non-semantic embedder. Search runs keyword-only |
+| `HF_ENDPOINT` | The standard Hugging Face mirror setting: the endpoint `b2 init` downloads from when the config's `source` names none |
 | `B2_LLM_URL` / `B2_LLM_MODEL` | The OpenAI-compatible chat endpoint + model for `ask`/`chat` (defaults: `http://localhost:11434/v1`, Ollama's, and `llama3.2`). The `--llm-url`/`--llm-model` flags beat the env, which beats the default |
 | `B2_LLM_API_KEY` | Bearer token for a cloud chat endpoint. An env var, never a flag, because a key in a flag is a key in `ps`. The desktop stores its key in the macOS Keychain instead |
 | `B2_LLM=fake` | The deterministic chat provider: `B2_EMBEDDER=fake`'s sibling for `ask`/`chat` |

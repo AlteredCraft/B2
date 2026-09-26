@@ -9,8 +9,8 @@
 //!     remembers the pick. Every command opens a *fresh* vault from the current root,
 //!     exactly as the one-process-per-command CLI does.
 //!   * **Embedder wiring** — pure reads open with the deterministic fake; anything that
-//!     embeds a query or writes vectors opens the real [`LocalEmbedder`] and fails fast
-//!     with "run `b2 init`" if absent. `project` opens the fake, so the first tree paint
+//!     embeds a query or writes vectors opens the real model (`b2_embed::embedder_for`,
+//!     the rule the CLI uses too) and fails fast with "run `b2 init`" if absent. `project` opens the fake, so the first tree paint
 //!     never waits on a model load. `B2_EMBEDDER=fake` forces the fake everywhere.
 //!
 //! And one it hands off: the **menu bar** is declared in [`menu`] rather than inherited, so
@@ -25,25 +25,23 @@ mod error;
 mod keychain;
 mod logging;
 mod menu;
+mod slot;
+mod state_file;
 mod stats;
 mod watch;
 
-use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
-use b2_embed::{EmbedConfig, LocalEmbedder};
+use b2_embed::EmbedConfig;
 use chat::ChatPrefs;
 use error::CmdError;
+use slot::Slot;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri::{Emitter, Manager};
 use watch::VaultWatcher;
 
-/// How often [`AppState::cancel_and_wait_for_reindex`] re-asserts the cancel flag and
-/// re-checks whether the in-flight reindex has wound down. Short enough to feel
-/// instant on a vault switch, long enough not to spin hot.
-const CANCEL_POLL: Duration = Duration::from_millis(25);
+/// The state file remembering the last opened vault (see [`state_file`]).
+const LAST_VAULT_FILE: &str = "last-vault";
 
 /// The host's shared state: the active vault root plus the background-reindex and chat
 /// control bits. The root is resolved once at startup and swappable at runtime by the
@@ -51,27 +49,20 @@ const CANCEL_POLL: Duration = Duration::from_millis(25);
 /// [`Vault`] over the *current* root, the faithful mirror of the CLI opening a fresh vault
 /// per invocation. `None` means no vault is configured.
 ///
-/// The reindex and chat bits are host **infrastructure**, not engine logic: *how the window
-/// drives and interrupts* a long façade op stays here, *what* it computes stays in the
-/// core. `reindex_running` is a single-in-flight guard for the vector-writing embed pass
-/// (the model-free `project` runs outside it by design), and a running embed checks
-/// `reindex_cancel` at each batch boundary. `ask_cancel` is read by the token callback at
-/// every token — the seam's own cancellation checkpoint — and `ask_running` keeps one
-/// turn's stale cancel from killing the next.
+/// The reindex and chat slots are host **infrastructure**, not engine logic: *how the
+/// window drives and interrupts* a long façade op stays here, *what* it computes stays in
+/// the core. Each is a [`Slot`]: single-in-flight, released on every exit path, cancelled
+/// cooperatively from another thread.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
-    /// Set by `cancel_reindex` (and a vault switch); the running reindex closure
-    /// observes it at each batch boundary and returns `ControlFlow::Break`.
-    reindex_cancel: AtomicBool,
-    /// `true` while a reindex is in flight — the single-in-flight guard (a second
-    /// `reindex` is refused; see [`AppState::try_start_reindex`]).
-    reindex_running: AtomicBool,
-    /// Set by `cancel_ask` (the chat pane's Esc); the running answer's token
-    /// callback observes it and returns `ControlFlow::Break`, which the seam
-    /// reports honestly as a cancelled — not failed — completion.
-    ask_cancel: AtomicBool,
-    /// `true` while an answer is streaming — the single-in-flight guard.
-    ask_running: AtomicBool,
+    /// The vector-writing embed pass (the model-free `project` runs outside it by
+    /// design). Cancelled by `cancel_reindex` and by a vault switch; a running embed
+    /// reads it at each batch boundary.
+    pub reindex: Slot,
+    /// The streaming answer (`ask` and `why_similar` share it). Cancelled by
+    /// `cancel_ask` (the chat pane's Esc); the token callback reads it at every token,
+    /// and the seam reports a stop honestly as a cancelled — not failed — completion.
+    pub ask: Slot,
     /// The chat endpoint, model, and the key in force. Behind a `Mutex` for the
     /// vault root's reason: Settings changes it at runtime and every later ask
     /// resolves a fresh provider from it. **Never vault or index state**
@@ -98,10 +89,8 @@ impl AppState {
     pub fn with_chat(root: Option<PathBuf>, chat: ChatPrefs) -> Self {
         Self {
             root: Mutex::new(root),
-            reindex_cancel: AtomicBool::new(false),
-            reindex_running: AtomicBool::new(false),
-            ask_cancel: AtomicBool::new(false),
-            ask_running: AtomicBool::new(false),
+            reindex: Slot::default(),
+            ask: Slot::default(),
             chat: Mutex::new(chat),
             chat_saving: Mutex::new(()),
         }
@@ -110,7 +99,7 @@ impl AppState {
     /// Claim the Settings save for its whole read-modify-write — see
     /// [`chat_saving`](Self::chat_saving). Blocks rather than refusing: a save is
     /// short and a user who pressed Save twice meant both, so the second must
-    /// *follow* the first rather than be dropped (contrast `try_start_ask`,
+    /// *follow* the first rather than be dropped (contrast the `ask` slot,
     /// where two answers at once is a genuine conflict).
     pub fn begin_chat_save(&self) -> std::sync::MutexGuard<'_, ()> {
         lock_recover(&self.chat_saving)
@@ -128,37 +117,6 @@ impl AppState {
         *lock_recover(&self.chat) = prefs;
     }
 
-    /// Claim the single answer slot — [`try_start_reindex`](Self::try_start_reindex)
-    /// for chat. `true` if this call won it (release via [`AskGuard`]).
-    pub fn try_start_ask(&self) -> bool {
-        self.ask_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    /// Release the answer slot (always, even on error — see [`AskGuard`]).
-    pub fn finish_ask(&self) {
-        self.ask_running.store(false, Ordering::SeqCst);
-    }
-
-    /// Clear the cancel flag now that a fresh answer owns the slot, so the Esc
-    /// that stopped the *last* answer can't stop this one before its first token.
-    pub fn arm_ask(&self) {
-        self.ask_cancel.store(false, Ordering::SeqCst);
-    }
-
-    /// Whether the streaming answer has been asked to stop (read at every token).
-    pub fn ask_cancelled(&self) -> bool {
-        self.ask_cancel.load(Ordering::SeqCst)
-    }
-
-    /// Signal the streaming answer to stop at its next token (the `cancel_ask`
-    /// command — the pane's Esc). Cooperative, like the reindex's: the partial
-    /// text stands and is rendered honestly. A no-op if nothing is streaming.
-    pub fn request_ask_cancel(&self) {
-        self.ask_cancel.store(true, Ordering::SeqCst);
-    }
-
     /// The current vault root, cloned out so the lock is **not** held while a command
     /// opens a vault (which may load the model — slow). `None` when unconfigured.
     pub fn current_root(&self) -> Option<PathBuf> {
@@ -171,82 +129,10 @@ impl AppState {
         *self.lock_root() = Some(root.to_path_buf());
     }
 
-    /// Claim the single reindex slot. Returns `true` if this call won the slot (the
-    /// caller must release it via [`finish_reindex`](Self::finish_reindex)), `false`
-    /// if a reindex is already in flight — the belt-and-suspenders half of the
-    /// single-in-flight guard (the UI also disables the button).
-    pub fn try_start_reindex(&self) -> bool {
-        self.reindex_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    /// Release the reindex slot (always, even on error — see [`ReindexGuard`]).
-    /// Idempotent.
-    pub fn finish_reindex(&self) {
-        self.reindex_running.store(false, Ordering::SeqCst);
-    }
-
-    /// Whether a reindex is currently in flight.
-    pub fn reindex_in_flight(&self) -> bool {
-        self.reindex_running.load(Ordering::SeqCst)
-    }
-
-    /// Clear the cancel flag — called once a fresh reindex has claimed the slot, so a
-    /// stale cancel from a previous run (or a prior vault switch) can't kill it.
-    pub fn arm_reindex(&self) {
-        self.reindex_cancel.store(false, Ordering::SeqCst);
-    }
-
-    /// Whether the running reindex has been asked to stop (checked at each batch).
-    pub fn reindex_cancelled(&self) -> bool {
-        self.reindex_cancel.load(Ordering::SeqCst)
-    }
-
-    /// Signal the running reindex to stop at its next batch boundary (the
-    /// `cancel_reindex` command). Cooperative — never a thread kill, so no torn writes.
-    /// A no-op if nothing is running.
-    pub fn request_reindex_cancel(&self) {
-        self.reindex_cancel.store(true, Ordering::SeqCst);
-    }
-
-    /// Cancel any in-flight reindex and **block until it winds down** — used before a
-    /// vault switch so a reindex can never keep writing the vault the app has left.
-    /// Re-asserts the cancel flag on every poll so it wins
-    /// even against a reindex that armed (cleared) it a moment after starting; returns
-    /// immediately when nothing is running.
-    pub fn cancel_and_wait_for_reindex(&self) {
-        loop {
-            self.request_reindex_cancel();
-            if !self.reindex_in_flight() {
-                return;
-            }
-            std::thread::sleep(CANCEL_POLL);
-        }
-    }
-
     /// The critical sections here are a single clone or store — neither can panic —
     /// so the lock can never be poisoned; see [`lock_recover`].
     fn lock_root(&self) -> std::sync::MutexGuard<'_, Option<PathBuf>> {
         lock_recover(&self.root)
-    }
-}
-
-/// Releases the single-in-flight reindex slot on drop, so it is freed on **every**
-/// exit path — normal return, an early `?` (e.g. model-not-provisioned), or a panic.
-pub(crate) struct ReindexGuard<'a>(pub(crate) &'a AppState);
-impl Drop for ReindexGuard<'_> {
-    fn drop(&mut self) {
-        self.0.finish_reindex();
-    }
-}
-
-/// [`ReindexGuard`] for the chat seam: releases the single answer slot on every
-/// exit path — a finished stream, an early `?` (no vault, no model), a panic.
-pub(crate) struct AskGuard<'a>(pub(crate) &'a AppState);
-impl Drop for AskGuard<'_> {
-    fn drop(&mut self) {
-        self.0.finish_ask();
     }
 }
 
@@ -258,38 +144,49 @@ pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Whether the deterministic fake embedder is forced (`B2_EMBEDDER=fake`) — the CLI's
-/// offline/dev switch, honored identically so the two adapters behave the same.
-fn use_fake_embedder() -> bool {
-    matches!(std::env::var("B2_EMBEDDER").ok().as_deref(), Some("fake"))
+/// Open a fresh vault over the configured root with the right embedder — the desktop
+/// mirror of the CLI's `open_vault`, over the same `b2_embed::embedder_for` rule.
+/// `needs_semantic` commands (`search`/`link`/`embed`) load the real model (fail-fast
+/// "run `b2 init`" if absent); pure reads — and `project`, which never touches vectors —
+/// use the fake. Errors with [`CmdError::VaultRequired`] if no vault is set.
+///
+/// Returns the vault and, when the real model was loaded, its configured id — which is
+/// what `embed` attributes its time to, read off the model actually loaded rather than a
+/// second look at a config that may have changed since.
+pub fn open_vault(
+    state: &AppState,
+    needs_semantic: bool,
+) -> Result<(Vault, Option<String>), CmdError> {
+    let root = state.current_root().ok_or(CmdError::VaultRequired)?;
+    open_vault_at(&root, needs_semantic)
 }
 
-/// Open a fresh vault over the configured root with the right embedder — the desktop
-/// mirror of the CLI's `open_vault`. `needs_semantic` commands (`search`/`link`/
-/// `embed`) load the real [`LocalEmbedder`] (fail-fast "run `b2 init`" if absent);
-/// pure reads — and `project`, which never touches vectors — use the fake. Returns
-/// the vault and whether its embedder is semantic (used only for honest UI). Errors
-/// with [`CmdError::VaultRequired`] if no vault is set.
-pub fn open_vault(state: &AppState, needs_semantic: bool) -> Result<(Vault, bool), CmdError> {
-    let root = state.current_root().ok_or(CmdError::VaultRequired)?;
-    if needs_semantic && !use_fake_embedder() {
-        let config = EmbedConfig::load()?;
-        let embedder = LocalEmbedder::load(&config)?;
-        let vault = Vault::open_with_embedder(&root, Box::new(embedder) as Box<dyn Embedder>)?;
-        Ok((vault, true))
-    } else {
-        Ok((Vault::open(&root)?, false))
-    }
+/// [`open_vault`] over an explicit root — for a command that needs the root itself as
+/// well, so the two can't come from either side of a vault switch.
+pub fn open_vault_at(
+    root: &Path,
+    needs_semantic: bool,
+) -> Result<(Vault, Option<String>), CmdError> {
+    Ok(match b2_embed::embedder_for(needs_semantic)? {
+        Some(embedder) => {
+            let model = embedder.configured_model().to_string();
+            (
+                Vault::open_with_embedder(root, Box::new(embedder))?,
+                Some(model),
+            )
+        }
+        None => (Vault::open(root)?, None),
+    })
 }
 
 /// Read-path open: a fresh vault over the fake embedder (no model load), for commands
-/// that never embed. [`open_vault`] with the semantic flag discarded.
+/// that never embed. [`open_vault`] with the model id discarded.
 pub fn open_read(state: &AppState) -> Result<Vault, CmdError> {
     Ok(open_vault(state, false)?.0)
 }
 
 /// Wants-the-real-model open: a fresh vault over the real embedder (fail-fast "run
-/// `b2 init`" if absent), for commands that embed. [`open_vault`] with the flag discarded.
+/// `b2 init`" if absent), for commands that embed. [`open_vault`] with the id discarded.
 pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
     Ok(open_vault(state, true)?.0)
 }
@@ -305,7 +202,7 @@ pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
 /// model reads as `semantic: true` and fails at the first `search`/`reindex` instead, which
 /// is already fail-fast and actionable.
 pub fn semantic_available() -> bool {
-    if use_fake_embedder() {
+    if b2_embed::fake_requested() {
         return false;
     }
     EmbedConfig::load().is_ok_and(|c| c.is_model_provisioned(&c.model))
@@ -339,20 +236,12 @@ fn pick_root(
     arg.or(remembered).or(env)
 }
 
-/// Path of the "last opened vault" state file: `<data-dir>/b2/last-vault` (macOS:
-/// `~/Library/Application Support/b2/…`, Linux: `~/.local/share/b2/…`) — the same
-/// `dirs`-resolved `b2/` vendor dir b2-embed uses for its model cache. `None` only if the
-/// platform has no data dir, in which case remembering is silently skipped.
-fn last_vault_file() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("b2").join("last-vault"))
-}
-
 /// The remembered vault root from the last picker choice, or `None` if there is none,
 /// the file is unreadable/empty, **or the remembered directory no longer exists** (moved
 /// or deleted). Falling through on a stale entry lets startup drop back to the env
 /// default rather than opening a vault whose every command would then error.
 fn read_last_vault() -> Option<PathBuf> {
-    read_last_vault_from(&last_vault_file()?)
+    read_last_vault_from(&state_file::path(LAST_VAULT_FILE)?)
 }
 
 /// [`read_last_vault`] against an explicit file path — the testable core (a tempfile
@@ -365,27 +254,20 @@ fn read_last_vault_from(file: &Path) -> Option<PathBuf> {
 }
 
 /// Remember `root` as the last opened vault so the next launch reopens it. **Best-effort
-/// host state**: a write failure (no data dir, unwritable disk) is logged to stderr and
-/// swallowed — remembering must never fail the vault switch the user just made. Called
-/// only from the `choose_vault` command wrapper (an explicit user pick), never from the
-/// unit-tested state transition, so tests don't touch the real data dir.
+/// host state** ([`state_file::update`]): remembering must never fail the vault switch the
+/// user just made. Called only from the `choose_vault` command wrapper (an explicit user
+/// pick), never from the unit-tested state transition, so tests don't touch the real data
+/// dir.
 fn persist_last_vault(root: &Path) {
-    let Some(file) = last_vault_file() else {
-        eprintln!("[b2] could not remember last vault: no platform data directory");
-        return;
-    };
-    if let Err(e) = persist_last_vault_to(&file, root) {
-        eprintln!("[b2] could not remember last vault: {e}");
-    }
+    state_file::update(LAST_VAULT_FILE, "remember the last vault", |file| {
+        persist_last_vault_to(file, root)
+    });
 }
 
 /// [`persist_last_vault`] against an explicit file path — the testable core. Creates the
 /// parent dir if needed and writes the path as the file's sole line.
 fn persist_last_vault_to(file: &Path, root: &Path) -> std::io::Result<()> {
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(file, root.to_string_lossy().as_bytes())
+    state_file::write(file, root.to_string_lossy().as_bytes())
 }
 
 fn main() {
@@ -400,7 +282,7 @@ fn main() {
     // with no cloud model configured has no Keychain item, so the common launch asks for
     // nothing and prompts for nothing.
     let state = AppState::with_chat(resolve_root(), chat::read_prefs(&keychain::Keychain));
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // The menu bar, declared (#119). Without this call Tauri installs
         // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate
         // — and AppKit dispatches them before the webview sees a key, so the keyboard
@@ -441,7 +323,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::ping,
             commands::vault_info,
             commands::choose_vault,
             commands::read_note,
@@ -469,7 +350,6 @@ fn main() {
             commands::similar,
             commands::explain_similar,
             commands::search,
-            commands::neighbors,
             commands::explain,
             commands::link,
             commands::project,
@@ -489,8 +369,13 @@ fn main() {
             commands::chat_setup,
             commands::set_chat_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the B2 desktop app");
+        .run(tauri::generate_context!());
+    // The one failure left to report is the app itself not starting (no window, no
+    // webview). Say so and exit non-zero — the no-panic rule, even here.
+    if let Err(e) = app {
+        eprintln!("[b2] the desktop app could not start: {e}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]

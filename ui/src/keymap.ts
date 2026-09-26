@@ -26,7 +26,6 @@
 import {
   type Binding,
   DEFAULT_BINDINGS,
-  activeBindings,
   conflicts,
   displayChord,
   findBinding,
@@ -305,9 +304,4 @@ export function saveOverrides(overrides: Overrides): void {
   } catch {
     // Non-fatal: the chords still hold for this session if they can't persist.
   }
-}
-
-/** The live table's chords for one command, for the panel's "currently" column. */
-export function currentKeys(id: string): readonly string[] {
-  return findBinding(activeBindings(), id)?.keys ?? [];
 }

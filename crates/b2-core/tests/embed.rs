@@ -10,7 +10,9 @@ use b2_core::db;
 use b2_core::embed::{Embedder, FakeEmbedder};
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{count, golden_vault_copy, ingest_golden, SRS_PATH};
+use common::{
+    count, golden_vault_copy, index_conn, ingest_golden, opened_vault, reindexed_vault, SRS_PATH,
+};
 use rusqlite::Connection;
 use std::ops::ControlFlow;
 
@@ -33,6 +35,15 @@ fn fake_embedder_is_deterministic() {
     assert_eq!(e.embed("x").unwrap().len(), 16);
 }
 
+/// Constructing the fake is on a production path (`Vault::open`), so a zero
+/// dimension degrades to the smallest real vector rather than panicking.
+#[test]
+fn a_zero_dimension_fake_is_clamped_to_one() {
+    let e = FakeEmbedder::new(0);
+    assert_eq!(e.dim(), 1);
+    assert_eq!(e.embed("x").unwrap().len(), 1);
+}
+
 #[test]
 fn embed_batch_matches_embed_per_element() {
     // The default `embed_batch` (which the fake inherits) must be a faithful map of
@@ -53,7 +64,7 @@ fn embed_batch_matches_embed_per_element() {
 
 #[test]
 fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
-    use b2_core::ingest::{ingest_vault_with_progress, EmbedCtx, ProjectionCtx, ReindexProgress};
+    use b2_core::ingest::{embed_vault, project_vault, ProjectionCtx, ReindexProgress};
 
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
@@ -63,8 +74,8 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     let mut events: Vec<ReindexProgress> = Vec::new();
     let cfg = b2_core::chunk::ChunkConfig::default();
     let embedder = FakeEmbedder::new(64);
-    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
-    ingest_vault_with_progress(ctx, false, &mut |p| {
+    project_vault(ProjectionCtx::new(&conn, &vault, &cfg), false).unwrap();
+    embed_vault(&conn, &embedder, &mut |p| {
         events.push(p);
         ControlFlow::Continue(())
     })
@@ -102,9 +113,7 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
     use b2_core::vault::Vault;
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, root) = opened_vault(tmp.path());
 
     // First index: both notes are new → both embedded.
     let first = vault.reindex().unwrap();
@@ -178,15 +187,11 @@ fn ingest_populates_embeddings_and_records_meta() {
 #[test]
 fn centroids_track_the_stored_chunk_vectors() {
     use b2_core::embed::{centroid_of, pack_f32};
-    use b2_core::vault::Vault;
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
 
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     let assert_centroids_current = |conn: &Connection| {
         let notes_with_vectors: i64 = conn
             .query_row(
@@ -336,8 +341,8 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
         {
             let conn = open(&db_path).unwrap();
             conn.execute(
-                "INSERT INTO notes(path, type, body_hash, indexed_at)
-                 VALUES ('n.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+                "INSERT INTO notes(path, body_hash, indexed_at)
+                 VALUES ('n.md', 'hash', '2026-07-26T00:00:00Z')",
                 [],
             )
             .unwrap();
@@ -415,7 +420,7 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
 
     // `open` left the stored vectors alone (so a misconfigured model can never wipe
     // a vault's embeddings) — the refusal is a query-time guard, not a migration.
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     assert!(count(&conn, "embeddings") > 0, "vectors survive the reopen");
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
     drop(conn);
@@ -423,6 +428,6 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
     // The documented fix: reindex re-creates the space at the new dimension.
     swapped.reindex().unwrap();
     assert!(!swapped.search("forgetting", 5).unwrap().is_empty());
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
 }

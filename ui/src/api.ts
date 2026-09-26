@@ -23,7 +23,6 @@ import type {
   MenuChord,
   ModelChoice,
   MoveReport,
-  NeighborView,
   NoteSummary,
   NoteView,
   ProjectReport,
@@ -85,9 +84,6 @@ export const VAULT_CHANGED_EVENT = "vault-changed";
 export const MENU_COMMAND_EVENT = "menu-command";
 
 export const api = {
-  /** Step 0's seam proof: round-trips a trivial command through the Rust host. */
-  ping: (): Promise<string> => invoke("ping"),
-
   /** The active vault root + whether semantic ranking is live (real model). */
   vaultInfo: (): Promise<VaultInfo> => invoke("vault_info"),
 
@@ -259,8 +255,6 @@ export const api = {
   /** Delete a whole folder and everything inside it (unindexed files go too). */
   deleteDir: (dir: string): Promise<DirDeleteReport> => invoke("delete_dir", { dir }),
 
-  /** A note's typed neighbors (both directions). */
-  neighbors: (note: string): Promise<NeighborView[]> => invoke("neighbors", { note }),
 
   /** A note's connections with their "why" (outbound + inbound). */
   explain: (note: string): Promise<ExplainView> => invoke("explain", { note }),
@@ -405,8 +399,9 @@ export const api = {
    * Every chord the app's **menu bar** takes (#119) — the host declares the menu
    * (b2-desktop `menu.rs`), so this is the authority on chords the webview never sees:
    * AppKit dispatches a menu key equivalent before the key window's responder chain.
-   * The keyboard reference lists them from here, and `menukeys.ts` holds the mirror this
-   * is checked against at boot.
+   * Read once, at boot, to check `menukeys.ts`'s mirror against (main.ts
+   * `checkMenuDrift`); everything else — the recorder's refusal of a menu chord included
+   * — reads that mirror, never this.
    */
   menuChords: (): Promise<MenuChord[]> => invoke("menu_chords"),
 

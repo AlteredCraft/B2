@@ -166,15 +166,23 @@ impl ChatRequest {
         }
         out.push_str("\n\nPassages:\n");
         for (i, p) in self.passages.iter().enumerate() {
-            out.push_str(&format!("\n[{}] {}", i + 1, p.path));
-            if let Some(h) = &p.heading_path {
-                out.push_str(&format!(" — {h}"));
-            }
             out.push('\n');
-            out.push_str(&p.text);
-            out.push('\n');
+            out.push_str(&p.block(i + 1));
         }
         out
+    }
+}
+
+impl ContextPassage {
+    /// The passage as the model reads it, cited as `[marker]`: the marker, the path and
+    /// any heading breadcrumb on one line, then the text. The one layout, whichever way
+    /// a passage reaches the model — the system message's block or a tool result.
+    pub fn block(&self, marker: usize) -> String {
+        let heading = match &self.heading_path {
+            Some(h) => format!(" — {h}"),
+            None => String::new(),
+        };
+        format!("[{marker}] {}{heading}\n{}\n", self.path, self.text)
     }
 }
 

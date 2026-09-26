@@ -148,18 +148,19 @@ Optional keys B2 recognizes:
 
 - **`type`**: what kind of note this is (`note`, `concept`, `source`, `person`, `daily`, …).
   Controlled but extensible; unknown values are tolerated; the OKF entity discriminator (§5).
-  Defaults to `note`. Its only consumer is display, so nothing keys on its presence and the
+  Absent means untyped. Its only consumer is display, so nothing keys on its presence and the
   new-note template does not seed it (GH #80: the template stamps only what cannot be
   reconstructed later). Not `b2`-namespaced on purpose: a courtesy you own, not a key B2
   machines on.
 - **`title`**: recognized but inert (L2). A note's title *is* its filename (basename minus
   `.md`). The key is parsed and round-tripped losslessly like any other, and never drives
   display, link aliases, or search.
-- **`description`**: a one-line summary. Feeds the embedding prompt and OKF export.
+- **`description`**: a one-line summary. Round-tripped; nothing in B2 reads it yet.
 - **`tags`**: a list of strings.
 - **`created` / `updated`**: ISO-8601 date or datetime. `created` is set by B2 at creation
   (`b2 add`); `updated` is yours (or another tool's) to maintain. B2 does not stamp it.
-- **`aliases`**: Obsidian-native additional titles; treated as alternate link aliases.
+- **`aliases`**: Obsidian-native additional titles. Round-tripped; B2 does not yet resolve a
+  link written against an alias (a `[[SRS]]` naming `srs.md` by its alias dangles, G5).
 - **`provenance`**: optional, opt-in note-level authorship:
   `{by: human | agent:<model-id>, source?, confidence?}`. Absent means `{by: human}`. B2
   neither requires nor manages it. Edges carry no provenance (§4).

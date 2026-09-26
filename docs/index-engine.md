@@ -69,9 +69,8 @@ The precise DDL and build order live in `crates/b2-core/src/db.rs` (schema) and 
 b2.sqlite — DISPOSABLE CACHE  (= projection of the vault directory; drop & rebuild any time)
 ├── MIRROR OF THE VAULT (lets us diff vs. disk)
 │   ├── meta(key, value)                          -- schema_version, embed_model_id, embed_dim
-│   ├── notes(path PK, type, title, description,  -- the path IS the identity (L1)
-│   │         created, updated, body_hash, mtime, indexed_at)
-│   ├── note_aliases(note_path, alias)            -- frontmatter `aliases:`
+│   ├── notes(path PK, title, created,            -- the path IS the identity (L1)
+│   │         body_hash, mtime, indexed_at)
 │   └── resources(path PK, class, size, mtime,    -- non-.md peers; class by extension (§10 dm)
 │                 content_hash, indexed_at)
 │
@@ -93,7 +92,7 @@ vault has an embedding space" signal the BM25-only fallbacks key on (M4, ADR-000
 Why this shape fits B2:
 
 - **Everything keys on the vault-relative path** (L1, ADR-0003). `notes.path` is the primary
-  key; `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path`, and
+  key; `chunks.note_path`, `note_centroids.note_path`, and
   `edges.src_path` are `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`. That
   makes a B2-performed move a path re-key rather than a rebuild: `UPDATE notes SET path = …`
   cascades through every child in one statement, after the inbound link-text rewrite and
@@ -110,9 +109,8 @@ Why this shape fits B2:
   There is no `status` column and no suggestion queue: `b2 link` appends a typed-link string
   to the source note's frontmatter and re-projects that note. Committing is the projection of
   an authored line, not an in-place index write.
-- **Hybrid retrieval and graph queries compose in one query.** "Semantic-nearest chunks whose
-  note is within 2 typed hops of note X" is a join across `embeddings`, `chunks`, and
-  `edges`. This is the substrate `b2 similar` runs on.
+- **Vectors and the graph live in one database.** `b2 similar` reads both in one pass:
+  nearest notes by stored vectors, minus the anchor's 1-hop neighbours from `edges`.
 - **Deterministic seams for tests.** A fake embedder writes to `embeddings`, so the whole
   pipeline is assertable with no live model (E2).
 
@@ -401,10 +399,10 @@ prefix is the wrong side of the space). The stages:
 list at a nonzero `limit` means only "nothing to compare": no unlinked note has stored
 vectors yet, or the space is not semantic. The CLI's two empty states say exactly that.
 
-**`graph_filtered_search`** is the near-neighbor of both flows that is neither: the
-vector⨝graph scoped-traversal primitive, "nearest chunks whose note is within k typed hops of
-an anchor" (near ∩ connected). Discovery is its complement (near ∖ connected).
-`vector_only_search` is the eval harness's ablation instrument, never an adapter surface.
+Discovery is near ∖ connected. Its intersection (near ∩ connected, a graph-scoped vector
+search) is not built: no command needs it, and it would arrive as a façade operation when one
+does. `vector_only_search` is the eval harness's ablation instrument, never an adapter
+surface.
 
 ### Does brute force scale to B2?
 
@@ -627,7 +625,7 @@ be budgeted, tested, and watched.
   `db::upsert_note`'s `ON CONFLICT(path)` is the whole of the reconciliation. A note deleted
   with no replacement is reconciled by the whole-vault pass
   ([GH #31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault` prunes every
-  `notes` row whose path the walk did not see this run (aliases, chunks, FTS, centroid, and
+  `notes` row whose path the walk did not see this run (chunks, FTS, centroid, and
   outgoing edges cascade; inbound links re-dangle when phase 2 re-derives edges against the
   pruned resolver), *except* rows whose file was skipped as unreadable: the walk *saw* that
   file, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note

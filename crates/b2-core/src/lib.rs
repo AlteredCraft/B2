@@ -23,6 +23,7 @@ pub mod relation;
 pub mod resource;
 pub mod rm;
 pub mod search;
+mod snippet;
 pub mod vault;
 
 pub use db::{open, SCHEMA_VERSION};

@@ -4,7 +4,7 @@
 //! mislabeled file degrades gracefully. The table is closed with
 //! [`ResourceClass::Binary`] as the total fallback, so *every* file classifies.
 
-/// The closed class table (research §3). Everything that is not a note maps to
+/// The closed class table (data-model.md §10). Everything that is not a note maps to
 /// exactly one of these; `Binary` catches all the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceClass {
@@ -31,11 +31,11 @@ impl ResourceClass {
 
     /// Classify a vault-relative path. `None` means the file is a **note**
     /// (`.md`) and belongs to the note pipeline, not the resource inventory.
-    /// Extensions are case-insensitive; no extension → `Binary`.
+    /// Extensions are case-insensitive and read off the file name (a dotted folder
+    /// lends none); no extension → `Binary`.
     pub fn of_path(path: &str) -> Option<ResourceClass> {
-        let ext = path
-            .rsplit_once('.')
-            .map(|(_, e)| e.to_ascii_lowercase())
+        let ext = crate::pathspec::extension(path)
+            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         Some(match ext.as_str() {
             "md" => return None,
@@ -71,13 +71,8 @@ pub enum DocKind {
 /// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a note ref —
 /// it is still walked, inventoried, and reachable through surfaces that know its kind.
 pub fn doc_kind(arg: &str) -> DocKind {
-    let name = arg.rsplit('/').next().unwrap_or(arg);
-    match name.rsplit_once('.') {
-        Some((stem, ext))
-            if !stem.is_empty() && !ext.is_empty() && !ext.eq_ignore_ascii_case("md") =>
-        {
-            DocKind::Resource
-        }
+    match crate::pathspec::extension(arg) {
+        Some(ext) if !ext.eq_ignore_ascii_case("md") => DocKind::Resource,
         _ => DocKind::Note,
     }
 }

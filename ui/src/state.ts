@@ -164,7 +164,7 @@ export interface AppState {
    * gesture itself is the intent.
    */
   deleteTarget: TreeNodeRef | null;
-  /** The open note (left pane), or null before one is opened. */
+  /** The note the centre pane shows, or null (nothing open yet, or a resource is). */
   current: NoteView | null;
   /**
    * The selected resource's fallback card (mutually exclusive with `current`:
@@ -254,7 +254,8 @@ export interface AppState {
    * the exceptions. Reset on note-open — the keys belong to the note just closed.
    */
   collapsedCards: Set<string>;
-  /** An open right-click menu on a discovery card, or null. */
+  /** An open right-click menu — on a discovery card (or graph ghost), or on the file
+   *  tree — or null. `ContextMenuState` says which. */
   contextMenu: ContextMenuState | null;
   /**
    * The open note's unresolved (dangling) outbound links — a `[[folder]]` or a typo
@@ -336,7 +337,8 @@ export interface AppState {
   linkTarget: LinkTarget | null;
   /** The verb selected in the link modal. */
   linkRelation: string;
-  /** The settings modal (⌘,) is open. */
+  /** Settings is open — a full-window surface over the app, not a floating box
+   *  (settingsview.ts's `settingsScreenHtml` says why). */
   settingsOpen: boolean;
   /**
    * Which section of the settings dialog is showing (settingstabs.ts). Outlives a
@@ -399,6 +401,11 @@ export interface AppState {
   reindexCancelling: boolean;
   /** A transient toast message (success or a generic, actionable error). */
   status: string | null;
+}
+
+/** The path of the document the note pane shows — a note or a resource — or null. */
+export function openDocPath(s: AppState): string | null {
+  return s.current?.path ?? s.currentResource?.path ?? null;
 }
 
 export const state: AppState = {

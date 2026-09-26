@@ -65,7 +65,7 @@ export function lineDrop(lineText: string, target: string): { offset: number; in
 
 /**
  * Is `pos` inside code — a fence, an indented block, or an inline span? The read the rich
- * paste and the list keys make (main.ts's `inCodeContext` delegates here), taking a
+ * paste and the list keys make (editorcmds.ts's `inCodeContext` delegates here), taking a
  * position rather than reading the selection, because a *drop* names a place the cursor
  * isn't.
  */

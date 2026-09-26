@@ -2,7 +2,7 @@
 //!
 //! Resolution order: the TOML at `$XDG_CONFIG_HOME/b2/config.toml` (if present)
 //! over compiled defaults; the `HF_ENDPOINT` env var (the standard Hugging Face
-//! mirror knob) overrides the endpoint on top. A vault with no config file gets a
+//! mirror knob) supplies the endpoint when the file's `source` names none. A vault with no config file gets a
 //! working default — zero-config is the happy path (the fail-fast config rule
 //! applies to the *model files*, via `b2 init`, not to this file).
 
@@ -58,7 +58,7 @@ pub const AVAILABLE_MODELS: &[ModelInfo] = &[
 
 /// The registry entry for `id`, or `None` if it isn't a model B2 supports — the guard
 /// [`EmbedConfig::set_model`] uses to refuse writing a config the loader can't provision.
-pub fn find_model(id: &str) -> Option<&'static ModelInfo> {
+fn find_model(id: &str) -> Option<&'static ModelInfo> {
     AVAILABLE_MODELS.iter().find(|m| m.id == id)
 }
 
@@ -81,6 +81,10 @@ pub struct ModelChoice {
 /// bge's retrieval instruction, prepended to *queries only* (asymmetric retrieval,
 /// index-engine.md §5). Documents are embedded verbatim. Empty ⇒ symmetric.
 pub const DEFAULT_QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
+
+/// The standard Hugging Face mirror knob: the endpoint `b2 init` downloads from when
+/// the config's `source` names none.
+const ENV_HF_ENDPOINT: &str = "HF_ENDPOINT";
 
 /// Where the model files are fetched from when `b2 init` provisions them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +132,8 @@ struct RawEmbedder {
 
 impl EmbedConfig {
     /// Load from the standard config path, falling back to defaults where the file
-    /// (or any field) is absent. `HF_ENDPOINT` overrides the mirror endpoint last.
+    /// (or any field) is absent. `HF_ENDPOINT` supplies the mirror endpoint when the
+    /// file's `source` names none.
     pub fn load() -> Result<Self> {
         let raw = match Self::config_path() {
             Some(p) if p.is_file() => {
@@ -138,17 +143,25 @@ impl EmbedConfig {
             }
             _ => RawFile::default(),
         };
-        Ok(Self::from_raw(raw.embedder))
+        Ok(Self::from_raw(
+            raw.embedder,
+            std::env::var(ENV_HF_ENDPOINT).ok(),
+        ))
     }
 
-    /// The standard config file location: `$XDG_CONFIG_HOME/b2/config.toml`.
+    /// The standard config file location: `$XDG_CONFIG_HOME/b2/config.toml`. Public
+    /// so an adapter can name the file in a "check your config" message.
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("b2").join("config.toml"))
     }
 
-    fn from_raw(e: RawEmbedder) -> Self {
+    /// The file's fields over the defaults. `hf_endpoint` is the `HF_ENDPOINT` value,
+    /// passed in rather than read here so resolution is testable without mutating a
+    /// process-global that parallel tests share (`b2_llm::LlmConfig::resolve`'s reason).
+    /// Blank reads as unset.
+    fn from_raw(e: RawEmbedder, hf_endpoint: Option<String>) -> Self {
         let model = e.model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let endpoint_env = std::env::var("HF_ENDPOINT").ok().filter(|s| !s.is_empty());
+        let endpoint_env = hf_endpoint.filter(|s| !s.trim().is_empty());
         let source = Self::resolve_source(&model, e.source, endpoint_env);
         let cache_dir = e
             .cache_dir
@@ -186,10 +199,17 @@ impl EmbedConfig {
         }
     }
 
-    /// The flat directory the model's files live in under the cache — predictable
-    /// (`<cache_dir>/<sanitized-model>`) so "is it installed?" is a plain file check.
-    pub fn model_dir(&self) -> PathBuf {
-        self.cache_dir.join(sanitize(&self.model))
+    /// The flat directory the configured model's files live in under the cache —
+    /// predictable (`<cache_dir>/<sanitized-model>`) so "is it installed?" is a plain
+    /// file check.
+    pub(crate) fn model_dir(&self) -> PathBuf {
+        self.model_dir_for(&self.model)
+    }
+
+    /// [`model_dir`](Self::model_dir) for any registry id — the one place the cache
+    /// path is joined, so the loader and the picker's installed flag agree.
+    fn model_dir_for(&self, model: &str) -> PathBuf {
+        self.cache_dir.join(sanitize(model))
     }
 
     /// Whether the model with repo id `model` is already provisioned in *this* config's
@@ -198,7 +218,7 @@ impl EmbedConfig {
     /// choices are installed vs. still need `b2 init`. Uses the config's own `cache_dir`
     /// so a custom cache is honored, not just the default.
     pub fn is_model_provisioned(&self, model: &str) -> bool {
-        crate::model::files_present(&self.cache_dir.join(sanitize(model)))
+        crate::model::files_present(&self.model_dir_for(model))
     }
 
     /// The full registry annotated against this config — the data the settings picker
@@ -269,7 +289,7 @@ impl EmbedConfig {
 
 /// Default XDG cache: `~/.local/share/b2/models` (falls back to `./.b2-models` only
 /// if no home/data dir is discoverable, which is not expected on a normal machine).
-pub fn default_cache_dir() -> PathBuf {
+fn default_cache_dir() -> PathBuf {
     dirs::data_dir()
         .map(|d| d.join("b2").join("models"))
         .unwrap_or_else(|| PathBuf::from(".b2-models"))
@@ -280,7 +300,7 @@ fn is_url(s: &str) -> bool {
 }
 
 /// Make a filesystem-safe directory name from a repo id (`a/b` → `a_b`).
-pub fn sanitize(model: &str) -> String {
+fn sanitize(model: &str) -> String {
     model
         .chars()
         .map(|c| {
@@ -299,7 +319,7 @@ mod tests {
 
     #[test]
     fn defaults_when_no_file() {
-        let c = EmbedConfig::from_raw(RawEmbedder::default());
+        let c = EmbedConfig::from_raw(RawEmbedder::default(), None);
         assert_eq!(c.model, DEFAULT_MODEL);
         assert!(matches!(c.source, Source::Hf { endpoint: None, .. }));
         assert!(c.query_prefix.starts_with("Represent"));
@@ -311,7 +331,8 @@ mod tests {
             source: Some("https://hf-mirror.com".into()),
             ..Default::default()
         };
-        let c = EmbedConfig::from_raw(e);
+        // The file's mirror wins over the environment's.
+        let c = EmbedConfig::from_raw(e, Some("https://env-mirror.example".into()));
         assert_eq!(
             c.source,
             Source::Hf {
@@ -322,13 +343,31 @@ mod tests {
     }
 
     #[test]
+    fn hf_endpoint_is_the_mirror_when_the_file_names_none() {
+        let c = EmbedConfig::from_raw(
+            RawEmbedder::default(),
+            Some("https://env-mirror.example".into()),
+        );
+        assert_eq!(
+            c.source,
+            Source::Hf {
+                repo: DEFAULT_MODEL.into(),
+                endpoint: Some("https://env-mirror.example".into())
+            }
+        );
+        // An exported-but-blank variable means unset to a shell user.
+        let blank = EmbedConfig::from_raw(RawEmbedder::default(), Some("  ".into()));
+        assert!(matches!(blank.source, Source::Hf { endpoint: None, .. }));
+    }
+
+    #[test]
     fn alternate_repo_source() {
         let e = RawEmbedder {
             source: Some("BAAI/bge-small-en-v1.5".into()),
             ..Default::default()
         };
         // model id stays what `model` says; source repo is the override.
-        let c = EmbedConfig::from_raw(e);
+        let c = EmbedConfig::from_raw(e, None);
         assert!(matches!(c.source, Source::Hf { repo, .. } if repo == "BAAI/bge-small-en-v1.5"));
     }
 
@@ -358,7 +397,7 @@ mod tests {
     fn model_choices_flag_current_and_installed() {
         let tmp = tempfile::TempDir::new().unwrap();
         // Default model, cache pointed at an empty temp dir → current but not installed.
-        let mut c = EmbedConfig::from_raw(RawEmbedder::default());
+        let mut c = EmbedConfig::from_raw(RawEmbedder::default(), None);
         c.cache_dir = tmp.path().to_path_buf();
         let choices = c.model_choices();
         assert_eq!(choices.len(), AVAILABLE_MODELS.len());

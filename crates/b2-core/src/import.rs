@@ -108,27 +108,39 @@ fn destination_paths(vault_root: &Path, dir: &str, file_name: &str) -> Result<(S
     Ok((rel, abs))
 }
 
-/// Reserve the destination and fill it — or leave nothing behind.
+/// Reserve the import's destination and fill it — [`place_new`], refusing an occupied
+/// destination as [`Error::ImportTargetExists`]. That is also why `import_path` streams
+/// instead of calling `fs::copy`, which would truncate an occupied destination.
+///
+/// The destination is a file B2 created, so it carries ordinary new-file permissions
+/// rather than the source's mode — byte-honesty is about content.
+fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<()>) -> Result<()> {
+    place_new(abs, || Error::ImportTargetExists(rel.to_string()), fill)
+}
+
+/// Create a new file at `abs` (missing parent folders included) and fill it — or leave
+/// nothing behind. Shared by every op that writes a file B2 did not have before: an
+/// import here, and `add`'s new note.
 ///
 /// **`create_new` is the refusal**, not a check before one: "does it exist" and "claim
 /// it" are a single syscall, so a file appearing in between — another window, a sync
-/// client, the CLI — cannot be overwritten. That is also why `import_path` streams
-/// instead of calling `fs::copy`, which would truncate an occupied destination. An
-/// [`io::ErrorKind::AlreadyExists`] *is* [`Error::ImportTargetExists`], so the race and
-/// the ordinary "that name is taken" reach the user as one message.
+/// client, the CLI — cannot be overwritten. An [`io::ErrorKind::AlreadyExists`] *is* the
+/// op's own target-exists error (`taken`), so the race and the ordinary "that name is
+/// taken" reach the user as one message.
 ///
-/// A `fill` that fails partway takes the reserved file with it: half a file is not an
-/// import. The destination is a file B2 created, so it carries ordinary new-file
-/// permissions rather than the source's mode — byte-honesty is about content.
-fn place(rel: &str, abs: &Path, fill: impl FnOnce(&mut fs::File) -> io::Result<()>) -> Result<()> {
+/// A `fill` that fails partway takes the reserved file with it: half a file is not a
+/// new file.
+pub(crate) fn place_new(
+    abs: &Path,
+    taken: impl FnOnce() -> Error,
+    fill: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> Result<()> {
     if let Some(parent) = abs.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut file = match fs::File::create_new(abs) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(Error::ImportTargetExists(rel.to_string()))
-        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(taken()),
         Err(e) => return Err(e.into()),
     };
     if let Err(e) = fill(&mut file) {

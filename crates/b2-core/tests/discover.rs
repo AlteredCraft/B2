@@ -15,7 +15,7 @@ use b2_core::discover::{self, CandidateNote};
 use b2_core::embed::FakeEmbedder;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{ingest_golden, MEMORY_PATH, SRS_PATH};
+use common::{ingest_golden, write_note, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,14 +26,6 @@ const A: &str = "a.md";
 const B: &str = "b.md";
 const C: &str = "c.md";
 const E: &str = "e.md";
-
-fn write_note(vault: &Path, name: &str, body: &str) {
-    fs::write(
-        vault.join(name),
-        format!("---\ntype: note\ntitle: {name}\n---\n{body}\n"),
-    )
-    .unwrap();
-}
 
 /// a → b → e (a links b, b links e); c is disconnected. So within 1 hop of a is
 /// `{a, b}`; e is 2 hops (a triadic-closure candidate that must survive), c is far.
@@ -183,10 +175,9 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
 
     // Exhaustive ground truth: every stored vector, min over the anchor's vectors,
     // best chunk per note (strictly-less keeps the first-seen chunk, as discover does).
-    let chunk_note = db::chunk_note_map(&conn).unwrap();
     let mut best: HashMap<String, (f32, i64)> = HashMap::new();
     db::for_each_stored_vector(&conn, |chunk_id, blob| {
-        let note = &chunk_note[&chunk_id];
+        let note = &db::note_for_chunk(&conn, chunk_id).unwrap().unwrap();
         if note == anchor {
             return; // no links in this vault → the anchor is the whole exclusion set
         }

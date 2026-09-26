@@ -63,22 +63,45 @@ export function renameDestination(path: string, kind: NodeKind, raw: string): st
   return dest === path ? null : dest;
 }
 
+/**
+ * Is `path` the folder `dir` itself or anything inside it? Segment-aware, so a
+ * prefix-sharing sibling (`notes2/x` against `notes`) is not inside. `dir` names a
+ * folder, never the vault root (`""`): nothing is "within" the root in this sense.
+ */
+export function isWithin(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(`${dir}/`);
+}
+
+/** The folder a tree node stands for when something is created, dropped or imported
+ *  "here": a folder is its own context, a file its parent's. */
+export function folderContext(path: string, kind: NodeKind): string {
+  return kind === "folder" ? path : parentDir(path);
+}
+
 /** The destination path for "move `srcPath` into `destDir`" — same name, new folder. */
 export function moveDestination(srcPath: string, destDir: string): string {
   return joinPath(destDir, baseName(srcPath));
 }
 
+/** Why a destination can't take a node: it is already there, or it is the folder
+ *  being moved (or inside it). */
+export type MoveRefusal = "current-folder" | "inside-itself";
+
 /**
- * Whether dropping / moving `srcPath` (of `kind`) into `destDir` is a real move:
- * false for its current folder (a no-op) and, for a folder, for itself or any
- * of its own descendants (the host refuses those too — this keeps the gesture
- * honest before the IPC round-trip).
+ * Why dropping / moving `srcPath` (of `kind`) into `destDir` is not a real move, or
+ * null when it is: its current folder is a no-op, and a folder can't go into itself or
+ * any of its own descendants (the host refuses those too — this keeps the gesture
+ * honest before the IPC round-trip, and lets the Move… modal say which).
  */
+export function moveRefusal(srcPath: string, kind: NodeKind, destDir: string): MoveRefusal | null {
+  if (destDir === parentDir(srcPath)) return "current-folder";
+  if (kind === "folder" && isWithin(destDir, srcPath)) return "inside-itself";
+  return null;
+}
+
+/** Whether moving `srcPath` into `destDir` is a real move (`moveRefusal` has no reason). */
 export function canMoveInto(srcPath: string, kind: NodeKind, destDir: string): boolean {
-  if (destDir === parentDir(srcPath)) return false;
-  if (kind === "folder" && (destDir === srcPath || destDir.startsWith(`${srcPath}/`)))
-    return false;
-  return true;
+  return moveRefusal(srcPath, kind, destDir) === null;
 }
 
 /**

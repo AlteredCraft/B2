@@ -1,4 +1,4 @@
-//! Body chunker — the qmd heuristic (#19).
+//! Body chunker — the qmd heuristic as adapted (docs/index-engine.md §1, GH #19).
 //!
 //! Splits a note body into **size-targeted, overlapping, Markdown-aware** chunks that
 //! each carry a `heading_path` breadcrumb. The shape, borrowed wholesale from
@@ -26,19 +26,20 @@
 //! under `cfg.prepend_heading_path` — an eval knob (default off) that prepends the
 //! breadcrumb into the embedded text, which the range then does not cover.
 
-/// The tuning surface for [`chunk_body`] (spec §3, D5). Every lever that shapes a
+/// The tuning surface for [`chunk_body`] (index-engine.md §1). Every lever that shapes a
 /// cut lives here; `Default` reproduces the shipped values, so adapters pass
-/// `&ChunkConfig::default()` and the Step-3 eval sweeps parameters in one process
-/// (a loop over configs) rather than one recompile per cell. Kept a plain params
-/// struct — no async/generics/traits — so it stays pure, deterministic, model-free.
+/// `&ChunkConfig::default()` and the eval harness (`make eval-sweep`) sweeps parameters
+/// in one process (a loop over configs) rather than one recompile per cell. Kept a plain
+/// params struct — no async/generics/traits — so it stays pure, deterministic,
+/// model-free.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkConfig {
-    /// Target chunk size in *estimated* tokens (D1). Default 450 — headroom under
-    /// bge's 512-token truncation for the D2 proxy's error and any D3 breadcrumb.
+    /// Target chunk size in *estimated* tokens. Default 450 — headroom under bge's
+    /// 512-token truncation for the token proxy's error and any prepended breadcrumb.
     pub target_tokens: usize,
-    /// Fraction of a chunk re-shared with the next one (D4). Default 0.15.
+    /// Fraction of a chunk re-shared with the next one. Default 0.15.
     pub overlap_frac: f32,
-    /// The D2 model-free token proxy: `tokens ≈ chars / chars_per_token`. Default
+    /// The model-free token proxy: `tokens ≈ chars / chars_per_token`. Default
     /// 4.0 (English ≈ 4 chars/token; code and tables run denser — a lever, not a law).
     pub chars_per_token: f32,
     /// How far back (in estimated tokens) the boundary search looks from the target.
@@ -46,8 +47,8 @@ pub struct ChunkConfig {
     pub backscan_tokens: usize,
     /// The Markdown break-point scorer (qmd's H1=100 … list=5).
     pub weights: BreakWeights,
-    /// Prepend `heading_path` into the *embedded* `text` (contextual chunk headers,
-    /// D3). An eval-gated retrieval knob; **default off**. Storing `heading_path` is
+    /// Prepend `heading_path` into the *embedded* `text` (contextual chunk headers).
+    /// An eval-gated retrieval knob, measured rank-neutral; **default off**. Storing `heading_path` is
     /// unconditional — this only controls whether it also seeds the vector.
     pub prepend_heading_path: bool,
 }
@@ -65,7 +66,7 @@ impl Default for ChunkConfig {
     }
 }
 
-/// Markdown break-point weights (qmd's boundary scorer, spec §2). Higher = a cleaner
+/// Markdown break-point weights (qmd's boundary scorer, index-engine.md §1). Higher = a cleaner
 /// place to end a chunk. `heading[i]` is the weight of an H{i+1}; `word` is the
 /// lowest-value fallback that lets a giant single-line paragraph still split.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +104,7 @@ pub struct Chunk {
     pub seq: usize,
     pub char_start: usize,
     pub char_end: usize,
-    /// The D2 token *estimate* (`chars / chars_per_token`) that sized this chunk —
+    /// The token *estimate* (`chars / chars_per_token`) that sized this chunk —
     /// not an exact token count (it was a whitespace word count under the old splitter).
     pub token_count: usize,
     /// The H1 › H2 › H3 breadcrumb the chunk falls under (`"A > B"`), or `None`
@@ -132,8 +133,8 @@ pub fn chunk_body(body: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
 
     // #41: byte ranges (balanced code fences, GFM tables) a boundary must not cut
     // *inside* — a forced cut with no clean break in the window is exactly where a
-    // bisected block would otherwise happen (this dense content is what the D2 proxy
-    // mis-sizes, spec §5).
+    // bisected block would otherwise happen (this dense content is what the chars/4
+    // token proxy mis-sizes).
     let regions = protected_regions(body);
 
     let mut chunks: Vec<Chunk> = Vec::new();
@@ -157,7 +158,7 @@ pub fn chunk_body(body: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
         );
         // If that cut lands inside a fence/table, push it past the block's end so the
         // whole block stays in one chunk. An oversized chunk (the embedder truncates
-        // at 512, D2/§5) is fine; a half-fence / header-less table is not.
+        // at 512 tokens) is fine; a half-fence / header-less table is not.
         let end = snap_past_region(end, &regions);
         push_chunk(&mut chunks, body, &line_paths, start, end, cfg);
         if end >= body_len {
@@ -198,9 +199,9 @@ fn scan(body: &str, w: &BreakWeights) -> (Vec<Break>, Vec<(usize, Option<String>
     for line in body.split_inclusive('\n') {
         let line_start = offset;
         offset += line.len();
-        let content = line.trim_end_matches('\n').trim_end_matches('\r');
+        let content = line_content(line);
         let trimmed = content.trim_start();
-        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        let is_fence = is_fence_line(trimmed);
 
         // Classify the line for its break score, and detect a heading (never inside
         // a fence — a `# comment` in code must not corrupt the breadcrumb).
@@ -242,6 +243,17 @@ fn scan(body: &str, w: &BreakWeights) -> (Vec<Break>, Vec<(usize, Option<String>
     }
 
     (breaks, line_paths)
+}
+
+/// One `split_inclusive('\n')` line without its `\n` / `\r\n` ending.
+fn line_content(line: &str) -> &str {
+    line.trim_end_matches('\n').trim_end_matches('\r')
+}
+
+/// Whether a left-trimmed line opens or closes a fenced code block (```` ``` ```` or
+/// `~~~`) — the one fence rule [`scan`] and [`protected_regions`] both track.
+fn is_fence_line(trimmed: &str) -> bool {
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
 }
 
 /// The ATX heading level (1..=6) if `trimmed` is a heading, else `None`. The `#` run
@@ -415,11 +427,8 @@ fn protected_regions(body: &str) -> Vec<(usize, usize)> {
     for line in body.split_inclusive('\n') {
         let line_start = offset;
         offset += line.len();
-        let trimmed = line
-            .trim_end_matches('\n')
-            .trim_end_matches('\r')
-            .trim_start();
-        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        let trimmed = line_content(line).trim_start();
+        let is_fence = is_fence_line(trimmed);
 
         if is_fence {
             // A fence edge ends any table in progress, then toggles the fence.

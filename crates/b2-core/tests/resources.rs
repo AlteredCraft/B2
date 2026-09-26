@@ -15,7 +15,7 @@ mod common;
 /// `(path, class, size, content_hash)` rows, path-ordered — the comparable
 /// projection of `resources` (mtime/indexed_at are host state, not projection).
 fn resource_rows(root: &Path) -> Vec<(String, String, i64, String)> {
-    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let conn = common::index_conn(root);
     let mut stmt = conn
         .prepare("SELECT path, class, size, content_hash FROM resources ORDER BY path")
         .unwrap();
@@ -84,8 +84,8 @@ fn v3_index_is_dropped_and_rebuilt_at_v4() {
     {
         let conn = open(&db_path).unwrap();
         conn.execute_batch(
-            "INSERT INTO notes(path, type, body_hash, indexed_at)
-               VALUES ('a.md', 'note', 'h', 'now');
+            "INSERT INTO notes(path, body_hash, indexed_at)
+               VALUES ('a.md', 'h', 'now');
              INSERT INTO resources(path, class, size, content_hash, indexed_at)
                VALUES ('img.png', 'image', 3, 'h', 'now');",
         )
@@ -125,8 +125,8 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
     conn.execute_batch(
-        "INSERT INTO notes(path, type, body_hash, indexed_at)
-           VALUES ('a.md', 'note', 'h', 'now');",
+        "INSERT INTO notes(path, body_hash, indexed_at)
+           VALUES ('a.md', 'h', 'now');",
     )
     .unwrap();
 
@@ -345,7 +345,7 @@ type EdgeTuple = (
     Option<String>,
 );
 fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
-    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let conn = common::index_conn(root);
     let mut stmt = conn
         .prepare(
             "SELECT e.dst_path, e.dst_resource_path, e.dst_path_raw, e.type, e.embed, e.caption

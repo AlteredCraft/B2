@@ -5,7 +5,7 @@
 //! `Result<T, CmdError>` hands the webview a safe message and never a sqlite/io/serde
 //! internal. `B2_DEBUG` opts into the raw detail, exactly as the CLI does.
 
-use b2_embed::EmbedError;
+use b2_embed::{EmbedConfig, EmbedError};
 use serde::{Serialize, Serializer};
 
 /// The host's error, composing the crates it drives. Kept internal; it is only ever
@@ -93,8 +93,20 @@ pub fn user_message(err: &CmdError) -> String {
             "The embedding model failed to load. Try downloading it again, or pick a different model in Settings."
                 .to_string()
         }
+        // `config.toml` didn't parse, or its `source` names a folder missing a model file:
+        // the fix is in that one file, so name it.
+        CmdError::Embed(EmbedError::Config(_)) => format!(
+            "B2 couldn't use its embedder settings. Check the [embedder] table in {}, then try again.",
+            EmbedConfig::config_path()
+                .map_or_else(|| "config.toml".to_string(), |p| p.display().to_string())
+        ),
         CmdError::Core(b2_core::Error::InvalidRelation(v)) => format!(
-            "'{v}' isn't a known relation type. Use one of: references, supports, contradicts."
+            "'{v}' isn't a known relation type. Use one of: {}.",
+            b2_core::relation::CORE
+                .iter()
+                .map(|c| c.verb)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         CmdError::Core(b2_core::Error::MoveTargetExists(p)) => format!(
             "Can't move: something already exists at '{p}'. Choose a different name or destination."
@@ -198,7 +210,7 @@ pub fn user_message(err: &CmdError) -> String {
         // Everything else in the two composed crates is an internal (sqlite/io/serde/…)
         // the webview must never see. Spelled out rather than `_` so adding a CmdError
         // variant fails to compile here instead of silently degrading to the catch-all.
-        CmdError::Core(_) | CmdError::Embed(_) => {
+        CmdError::Core(_) | CmdError::Embed(EmbedError::Io(_)) => {
             "Something went wrong. Please check the vault and try again.".to_string()
         }
     };
@@ -268,6 +280,31 @@ mod tests {
             "\"Something went wrong. Please check the vault and try again.\""
         );
         assert!(!json.to_lowercase().contains("utf-8"), "no internal leaks");
+    }
+
+    /// The verb list is `b2_core::relation::CORE`'s, so a verb added there is offered here.
+    #[test]
+    fn an_invalid_relation_lists_every_core_verb() {
+        let msg = user_message(&CmdError::Core(b2_core::Error::InvalidRelation(
+            "refutes".into(),
+        )));
+        for verb in b2_core::relation::CORE {
+            assert!(msg.contains(verb.verb), "{msg}");
+        }
+    }
+
+    /// A config that won't parse used to read as "check the vault" — a vault it never
+    /// involved. It names the settings instead, and keeps the parser's detail internal.
+    #[test]
+    fn a_broken_embedder_config_names_the_settings_not_the_vault() {
+        let msg = user_message(&CmdError::Embed(EmbedError::Config(
+            "config.toml: expected `=`".into(),
+        )));
+        assert!(msg.contains("[embedder]"), "{msg}");
+        assert!(
+            !msg.contains("check the vault") && !msg.contains("expected"),
+            "{msg}"
+        );
     }
 
     /// The move family maps to specific, actionable messages (not the catch-all),

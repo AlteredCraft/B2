@@ -54,39 +54,33 @@ pub(crate) fn stream_completion<R: BufRead>(
         let read = reader
             .read_line(&mut line)
             .map_err(|e| LlmError::Stream(format!("could not read the stream: {e}")))?;
-        if read == 0 {
-            // EOF. A pending event has no blank line to close it, so dispatch it
-            // before deciding how the stream ended.
-            match dispatch(&data, &mut text, &mut calls, on_token)? {
-                Step::Done => return Ok(completed(text, calls)),
-                Step::Cancelled => return Ok(cancelled(text)),
-                Step::Finished => finished = true,
-                Step::Continue => {}
-            }
-            if !finished {
-                tracing::debug!(
-                    target: "b2::llm",
-                    chars = text.len(),
-                    "the model stream ended without [DONE]; reporting a partial answer"
-                );
-            }
-            // Tool calls from a stream that was cut off are not run: half a call's
-            // arguments is not a call.
-            return Ok(if finished {
-                completed(text, calls)
-            } else {
-                cancelled(text)
-            });
-        }
-
+        // EOF closes a pending event exactly as a blank line would: a server that
+        // stops mid-event has still sent that event.
+        let eof = read == 0;
         let field = line.trim_end_matches(['\n', '\r']);
-        if field.is_empty() {
+        if eof || field.is_empty() {
             // End of event: dispatch what was accumulated, then start the next.
             match dispatch(&data, &mut text, &mut calls, on_token)? {
                 Step::Done => return Ok(completed(text, calls)),
                 Step::Cancelled => return Ok(cancelled(text)),
                 Step::Finished => finished = true,
                 Step::Continue => {}
+            }
+            if eof {
+                if !finished {
+                    tracing::debug!(
+                        target: "b2::llm",
+                        chars = text.len(),
+                        "the model stream ended without [DONE]; reporting a partial answer"
+                    );
+                }
+                // Tool calls from a stream that was cut off are not run: half a call's
+                // arguments is not a call.
+                return Ok(if finished {
+                    completed(text, calls)
+                } else {
+                    cancelled(text)
+                });
             }
             data.clear();
             continue;
@@ -185,11 +179,20 @@ fn cancelled(text: String) -> Completion {
     }
 }
 
+/// One tool call under assembly: what the fragments so far have said about it.
+#[derive(Debug, Default)]
+struct PartialCall {
+    id: Option<String>,
+    name: String,
+    /// The arguments as JSON text, concatenated fragment by fragment.
+    arguments: String,
+}
+
 /// Tool calls under assembly, slotted by the wire's `index`. A delta with an index fills
 /// (or extends) that slot; a delta without one is a whole call and takes the next slot.
 #[derive(Debug)]
 struct ToolCallParts {
-    slots: Vec<(Option<String>, String, String)>, // (id, name, arguments)
+    slots: Vec<PartialCall>,
     /// The most slots this reply may fill ([`crate::LlmConfig::max_tool_calls`]).
     max: usize,
 }
@@ -207,8 +210,8 @@ impl ToolCallParts {
         // A *different* id on a slot that already names a call is a new call, whatever
         // the index says: some servers send every whole call as `index: 0`, and merging
         // them would run one tool named after two.
-        if let (Some(id), Some((Some(held), name, _))) = (&part.id, self.slots.get(at)) {
-            if held != id && !name.is_empty() {
+        if let (Some(id), Some(slot)) = (&part.id, self.slots.get(at)) {
+            if slot.id.as_ref().is_some_and(|held| held != id) && !slot.name.is_empty() {
                 at = self.slots.len();
             }
         }
@@ -233,17 +236,17 @@ impl ToolCallParts {
             return Ok(());
         };
         if part.id.is_some() {
-            slot.0 = part.id;
+            slot.id = part.id;
         }
         if let Some(function) = part.function {
             if let Some(name) = function.name {
-                slot.1.push_str(&name);
+                slot.name.push_str(&name);
             }
             match function.arguments {
-                Some(serde_json::Value::String(text)) => slot.2.push_str(&text),
+                Some(serde_json::Value::String(text)) => slot.arguments.push_str(&text),
                 // Arguments sent as an object rather than as JSON text (Ollama's native
                 // shape, and some `/v1` shims): re-serialize so the seam stays text.
-                Some(other) if !other.is_null() => slot.2.push_str(&other.to_string()),
+                Some(other) if !other.is_null() => slot.arguments.push_str(&other.to_string()),
                 _ => {}
             }
         }
@@ -257,13 +260,14 @@ impl ToolCallParts {
         self.slots
             .into_iter()
             .enumerate()
-            .filter(|(_, (_, name, _))| !name.is_empty())
-            .map(|(i, (id, name, arguments))| ToolCall {
-                id: id
+            .filter(|(_, call)| !call.name.is_empty())
+            .map(|(i, call)| ToolCall {
+                id: call
+                    .id
                     .filter(|id| !id.is_empty())
                     .unwrap_or_else(|| format!("call_{i}")),
-                name,
-                arguments,
+                name: call.name,
+                arguments: call.arguments,
             })
             .collect()
     }

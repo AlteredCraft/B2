@@ -138,7 +138,7 @@ check("a line that merely ends in an inline span still accepts", () => {
 });
 
 check("the code check reads a position, not the selection", () => {
-  // main.ts's cursor-shaped `inCodeContext` delegates to this: a drop names a place the
+  // editorcmds.ts's cursor-shaped `inCodeContext` delegates to this: a drop names a place the
   // caret isn't, so the position has to be the argument rather than an implicit read.
   // Unlike the drop's own question, this one counts an inline span — pasted HTML inside
   // one must stay literal (paste.ts), which is a different rule for a different reason.

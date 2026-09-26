@@ -1,5 +1,7 @@
-// Pure gating logic for the "semantic search is off" install banner — no DOM, no IPC —
-// so node runs its test straight off the source (`npm test`), like newentry.ts/panes.ts.
+// The "semantic search is off" install banner's gate, and where its opt-out persists — no
+// DOM, no IPC, so node runs its test straight off the source (`npm test`). The two
+// functions that touch `localStorage` are at the bottom, the shape keymap.ts and zoom.ts
+// use for theirs.
 //
 // The problem it addresses: on a fresh install with no embedding model, opening a vault
 // runs the model-free projection pass (keyword index + graph) and then *silently* stops
@@ -40,4 +42,30 @@ export function shouldPromptEmbedInstall(i: EmbedReminderInputs): boolean {
     !i.dismissed &&
     i.notesTotal > 0
   );
+}
+
+// --- persistence -----------------------------------------------------------------------
+//
+// The "Don't remind me again" opt-out — the persisted half of `dismissed` (the ✕ only
+// hides the banner for the session, which is state, not storage). localStorage, like the
+// theme and the zoom: a viewing choice, never vault state.
+
+const KEY = "b2:embed-reminder-off";
+
+/** Has the user opted out for good? Unavailable storage (private mode) reads as no, so
+ *  the reminder still shows. */
+export function loadReminderOptOut(): boolean {
+  try {
+    return localStorage.getItem(KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveReminderOptOut(): void {
+  try {
+    localStorage.setItem(KEY, "1");
+  } catch {
+    // Non-fatal: the opt-out still holds for this session if it can't persist.
+  }
 }

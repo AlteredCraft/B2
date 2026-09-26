@@ -31,9 +31,7 @@
 // The one signal stronger than silence is `blurred`. Spotlight, the app switcher and Hide
 // all take the key window away, and a window that lost focus mid-recording is positive
 // evidence that something outside B2 answered — not an inference from nothing happening.
-import { type KeyEventLike, canonicalKey, displayChord, isBindableKey, shiftDistinguishes } from "./bindings.ts";
-import { MENU_CHORDS } from "./menukeys.ts";
-import type { MenuChord } from "./types.ts";
+import { type KeyEventLike, canonicalKey, isBindableKey, shiftDistinguishes } from "./bindings.ts";
 
 /** Keys that are only ever *part* of a chord. A keydown for one of these is the user
  *  starting a chord, not finishing one, so the recorder keeps waiting. */
@@ -114,11 +112,4 @@ export function silenceHint(s: Silence): string | null {
     return "Nothing has reached B2 yet. If you did press something, macOS or another app claimed it first — B2 never sees those keys, so it can't be bound to them.";
   }
   return null;
-}
-
-/** The menu bar's chords, as display text — the list the recorder names up front, since
- *  these are the ones guaranteed to arrive as silence (menukeys.ts says why AppKit takes
- *  them first). Enumerable only because #119 made the host declare its own menu. */
-export function reservedChords(menu: readonly MenuChord[] = MENU_CHORDS): string[] {
-  return menu.map((c) => displayChord(c.keys));
 }

@@ -141,6 +141,24 @@ fn add_refuses_to_clobber_an_existing_file() {
     );
 }
 
+/// The refusal is the create itself (one create-new open, no check before it), so it
+/// covers whatever occupies the path — a folder named like the note included.
+#[test]
+fn add_refuses_a_path_a_folder_occupies() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
+    fs::create_dir_all(root.join("notes/taken.md")).unwrap();
+
+    let err = vault
+        .add_note("notes/taken", None, Some("body"))
+        .unwrap_err();
+    assert!(matches!(err, Error::AddTargetExists(p) if p == "notes/taken.md"));
+    assert!(
+        root.join("notes/taken.md").is_dir(),
+        "the folder is untouched"
+    );
+}
+
 #[test]
 fn create_note_writes_a_minimal_note_model_free() {
     let tmp = tempfile::TempDir::new().unwrap();

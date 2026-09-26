@@ -14,6 +14,7 @@ use b2_core::vault::Vault;
 use b2_core::Result;
 use rusqlite::Connection;
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 /// Vault-relative paths of the two golden-vault notes (data-model.md §8) — which
@@ -81,6 +82,45 @@ pub fn index_conn(root: &Path) -> Connection {
 pub fn count(conn: &Connection, table: &str) -> i64 {
     conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
         .unwrap()
+}
+
+/// A note's inbound set as sortable `(label, src_path)` pairs — the shape the graph
+/// exposes, and the thing a move must carry to the destination intact.
+pub fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
+    let mut ns: Vec<(String, String)> = vault
+        .neighbors(note_ref)
+        .unwrap()
+        .into_iter()
+        .filter(|n| n.direction == "inbound")
+        .map(|n| (n.label, n.path))
+        .collect();
+    ns.sort();
+    ns
+}
+
+// --- vault authoring and chat callbacks ------------------------------------------
+
+/// Write a minimal note at `vault/name` with `body` under a small frontmatter.
+pub fn write_note(vault: &Path, name: &str, body: &str) {
+    fs::write(
+        vault.join(name),
+        format!("---\ntype: note\ntitle: {name}\n---\n{body}\n"),
+    )
+    .unwrap();
+}
+
+/// A token callback that keeps streaming and discards every token — the plain,
+/// uncancelled run.
+pub fn keep_streaming() -> impl FnMut(&str) -> ControlFlow<()> {
+    |_| ControlFlow::Continue(())
+}
+
+/// A token callback that keeps streaming and appends every token to `buf`.
+pub fn stream_into(buf: &mut String) -> impl FnMut(&str) -> ControlFlow<()> + '_ {
+    move |tok: &str| {
+        buf.push_str(tok);
+        ControlFlow::Continue(())
+    }
 }
 
 /// Ingest the golden vault into a standalone `dir/b2.sqlite`, for the module-level
