@@ -193,10 +193,11 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
     // Every indexed member under the folder travels to the same place under `to`. A
     // resource keeps its file name, so its class (from the new path) is its old one.
     let rebased = |old: String| pathspec::rebase(&old, &from, &to).map(|new| (old, new));
-    let notes: Vec<(String, String)> = db::notes_under_dir(conn, &from)?
+    let mut notes: Vec<(String, String)> = db::notes_under_dir(conn, &from)?
         .into_iter()
         .filter_map(&rebased)
         .collect();
+    notes.sort(); // `MoveSet::notes` is looked up by old path
     let resources: Vec<ResourceMove> = db::resources_under_dir(conn, &from)?
         .into_iter()
         .filter_map(&rebased)
