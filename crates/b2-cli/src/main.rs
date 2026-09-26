@@ -1,9 +1,10 @@
 //! `b2` — one of the two dumb adapters over the `b2-core` typed API (ADR-0012),
 //! headless-first: "the CLI is the UI before the UI". It holds **no engine logic** — it
-//! parses args, injects the embedder and chat provider, calls the [`Vault`] façade, and
-//! prints (human-readable, or `--json` for agents).
+//! parses args, injects the embedder and chat provider, calls the
+//! [`Vault`](b2_core::vault::Vault) façade, and prints (human-readable, or `--json` for
+//! agents). `dispatch` below routes each subcommand to its domain module.
 //!
-//! The embedder is the real candle-backed [`LocalEmbedder`] by default. It is **not
+//! The embedder is the real candle-backed [`b2_embed::LocalEmbedder`] by default. It is **not
 //! bundled**: `b2 init` downloads it into a shared XDG cache, and `reindex`/`search` fail
 //! fast with "run `b2 init`" if it is absent, never a surprise mid-command download
 //! (ADR-0020). `B2_EMBEDDER=fake` forces the deterministic fake — an offline/dev mode,
@@ -40,8 +41,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// The thin router: each subcommand's whole behavior lives in its `cmd_*` fn below;
-/// this match only destructures the parsed args and forwards them.
+/// The thin router: each subcommand's whole behavior lives in its `cmd_*` fn, in the
+/// module for its domain; this match only destructures the parsed args and forwards them.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Command::Init => cmd_init(cli.json),
@@ -99,4 +100,20 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
 pub fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<(), CliError> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+/// A command's one result, rendered for whoever asked: the value itself as JSON under
+/// `--json`, else `human`'s text. Every single-result command ends here, so the two
+/// renderings can't come from different values.
+pub fn emit<T: serde::Serialize + ?Sized>(
+    json: bool,
+    value: &T,
+    human: impl FnOnce(&T),
+) -> Result<(), CliError> {
+    if json {
+        print_json(value)
+    } else {
+        human(value);
+        Ok(())
+    }
 }

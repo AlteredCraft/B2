@@ -2,8 +2,8 @@
 //! vault, so none can touch the wrong directory.
 
 use crate::args::Cli;
+use crate::emit;
 use crate::error::CliError;
-use crate::print_json;
 use crate::wiring::open_vault;
 use b2_core::resource::{doc_kind, DocKind};
 use std::io::{IsTerminal, Read};
@@ -19,12 +19,9 @@ pub fn cmd_add(
     // (no silent cwd), and it needs the real model like `reindex`/`mv`/`link`.
     let vault = open_vault(cli.require_vault(None)?, true)?;
     let report = vault.add_note(path, title, content)?;
-    if cli.json {
-        print_json(&report)?;
-    } else {
-        println!("Created {}.", report.path);
-    }
-    Ok(())
+    emit(cli.json, &report, |report| {
+        println!("Created {}.", report.path)
+    })
 }
 
 pub fn cmd_write(cli: &Cli, note: &str) -> Result<(), CliError> {
@@ -46,12 +43,9 @@ pub fn cmd_write(cli: &Cli, note: &str) -> Result<(), CliError> {
     // this" (`Vault::write` still keeps the frontmatter bytes untouched).
     let current = vault.read(note)?;
     let report = vault.write(note, &body, &current.revision)?;
-    if cli.json {
-        print_json(&report)?;
-    } else {
+    emit(cli.json, &report, |report| {
         println!("Wrote {} ({} bytes).", report.path, body.len());
-    }
-    Ok(())
+    })
 }
 
 pub fn cmd_mv(cli: &Cli, from: &str, to: &str) -> Result<(), CliError> {
@@ -60,39 +54,28 @@ pub fn cmd_mv(cli: &Cli, from: &str, to: &str) -> Result<(), CliError> {
     // built with, like `reindex`/`add`/`link`.
     let root = cli.require_vault(None)?;
     let vault = open_vault(root, true)?;
-    // Kind dispatch (§9b #8): an existing directory moves as a folder
-    // (every file under it, one rename); otherwise the two file arms
-    // differ only in the report type they print.
-    // The human "Moved" line differs per arm, the rewrite tally is shared.
+    // Kind dispatch (§9b #8): an existing directory moves as a folder (every file
+    // under it, one rename); otherwise the extension picks the file arm. The human
+    // "Moved" line differs per arm; the rewrite tally is shared.
     if is_dir_arg(root, from) {
-        let report = vault.move_dir(from, to)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.move_dir(from, to)?, |report| {
             println!(
                 "Moved {}/ → {}/ ({} note(s), {} file(s))",
                 report.from, report.to, report.moved_notes, report.moved_resources
             );
             print_rewrite_tally(report.links_rewritten, report.rewrote.len());
-        }
+        })
     } else if doc_kind(from) == DocKind::Resource {
-        let report = vault.move_resource(from, to)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.move_resource(from, to)?, |report| {
             println!("Moved {} → {}", report.from, report.to);
             print_rewrite_tally(report.links_rewritten, report.rewrote.len());
-        }
+        })
     } else {
-        let report = vault.move_note(from, to)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.move_note(from, to)?, |report| {
             println!("Moved {} → {}", report.from, report.to);
             print_rewrite_tally(report.links_rewritten, report.rewrote.len());
-        }
+        })
     }
-    Ok(())
 }
 
 pub fn cmd_rm(cli: &Cli, target: &str, recursive: bool) -> Result<(), CliError> {
@@ -108,34 +91,24 @@ pub fn cmd_rm(cli: &Cli, target: &str, recursive: bool) -> Result<(), CliError> 
         if !recursive {
             return Err(CliError::RecursiveRequired(target.to_string()));
         }
-        let report = vault.delete_dir(target)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.delete_dir(target)?, |report| {
             println!(
                 "Deleted {}/ ({} note(s), {} file(s))",
                 report.dir, report.deleted_notes, report.deleted_resources
             );
             print_dangled(&report.dangled);
-        }
+        })
     } else if doc_kind(target) == DocKind::Resource {
-        let report = vault.delete_resource(target)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.delete_resource(target)?, |report| {
             println!("Deleted {}", report.path);
             print_dangled(&report.dangled);
-        }
+        })
     } else {
-        let report = vault.delete_note(target)?;
-        if cli.json {
-            print_json(&report)?;
-        } else {
+        emit(cli.json, &vault.delete_note(target)?, |report| {
             println!("Deleted {}", report.path);
             print_dangled(&report.dangled);
-        }
+        })
     }
-    Ok(())
 }
 
 pub fn cmd_link(
@@ -150,20 +123,19 @@ pub fn cmd_link(
     // was built with (like `add`/`mv`); a frontmatter-only edit won't re-embed.
     let vault = open_vault(cli.require_vault(None)?, true)?;
     let report = vault.link(src, dst, edge_type, explanation)?;
-    if cli.json {
-        print_json(&report)?;
-    } else if report.created {
-        println!(
-            "Linked {} —{}→ {}. Wrote the relation into the source note's frontmatter.",
-            report.src_path, report.relation, report.dst_path
-        );
-    } else {
-        println!(
-            "Already linked {} —{}→ {}. Nothing changed.",
-            report.src_path, report.relation, report.dst_path
-        );
-    }
-    Ok(())
+    emit(cli.json, &report, |report| {
+        if report.created {
+            println!(
+                "Linked {} —{}→ {}. Wrote the relation into the source note's frontmatter.",
+                report.src_path, report.relation, report.dst_path
+            );
+        } else {
+            println!(
+                "Already linked {} —{}→ {}. Nothing changed.",
+                report.src_path, report.relation, report.dst_path
+            );
+        }
+    })
 }
 
 /// Whether a `mv`/`rm` argument names an existing directory under `root` — the

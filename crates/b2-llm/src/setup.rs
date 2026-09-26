@@ -39,7 +39,7 @@ const TAGS_TIMEOUT: Duration = Duration::from_secs(5);
 /// decides two things: whether Ollama's own commands belong in an error message, and
 /// whether [`probe_setup`] asks `/api/tags` at all. Deliberately a *guess about the
 /// runtime*, not a security check: being wrong costs one refused request.
-pub fn is_ollama(base_url: &str) -> bool {
+fn is_ollama(base_url: &str) -> bool {
     let endpoint = base_url.to_ascii_lowercase();
     endpoint.contains(OLLAMA_PORT) || endpoint.contains("ollama")
 }

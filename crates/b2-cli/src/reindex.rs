@@ -2,31 +2,30 @@
 //! cross-process cancel, and `status`.
 
 use crate::args::Cli;
-use crate::cancel::{cancel_flow, CANCEL};
+use crate::cancel::{cancel_flow, install_cancel_on_sigint};
+use crate::emit;
 use crate::error::CliError;
-use crate::print_json;
 use crate::wiring::open_vault;
 use b2_embed::{provision, EmbedConfig};
+use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 
 pub fn cmd_init(json: bool) -> Result<(), CliError> {
     // Global, per-machine setup — no vault involved.
     let config = EmbedConfig::load()?;
     let report = provision(&config, |line| eprintln!("{line}"))?;
-    if json {
-        print_json(&report)?;
-    } else if report.already_present {
-        println!("Model '{}' is already installed.", report.model);
-    } else {
-        println!(
-            "Installed '{}' ({} dims). Run `b2 reindex` to embed your vault.",
-            report.model, report.dim
-        );
-    }
-    Ok(())
+    emit(json, &report, |report| {
+        if report.already_present {
+            println!("Model '{}' is already installed.", report.model);
+        } else {
+            println!(
+                "Installed '{}' ({} dims). Run `b2 reindex` to embed your vault.",
+                report.model, report.dim
+            );
+        }
+    })
 }
 
 pub fn cmd_reindex(
@@ -49,13 +48,7 @@ pub fn cmd_reindex(
         // the fake, like `neighbors`); it's a pure read, so there's no slow
         // embed phase to show progress for.
         let vault = open_vault(root, false)?;
-        let plan = vault.plan_reindex(force)?;
-        if cli.json {
-            print_json(&plan)?;
-        } else {
-            print_reindex_plan(&plan);
-        }
-        return Ok(());
+        return emit(cli.json, &vault.plan_reindex(force)?, print_reindex_plan);
     }
     // Single-in-flight: take an advisory lock *before* the slow model load, so a second
     // `b2 reindex` refuses cleanly instead of two processes writing the same index.
@@ -76,10 +69,8 @@ pub fn cmd_reindex(
     let vault = open_vault(root, true)?;
     // Wire Ctrl-C to the cooperative-cancel flag now that the model is loaded and
     // real embedding is next. (During the model load the default SIGINT still
-    // applies — nothing is written yet, so a hard stop there is safe.) Best-effort:
-    // if the handler can't be installed, Ctrl-C keeps its default (terminate), which
-    // still leaves a consistent index since edges + FTS land before any vectors.
-    let _ = ctrlc::set_handler(|| CANCEL.store(true, Ordering::SeqCst));
+    // applies — nothing is written yet, so a hard stop there is safe.)
+    install_cancel_on_sigint(false);
     // Embedding a large vault on CPU is slow; show a live progress line so it
     // never looks frozen. Only on an interactive stderr (never in --json, and
     // never when piped/captured) so machine output and tests stay clean.
@@ -116,12 +107,7 @@ pub fn cmd_reindex(
         }
         report
     };
-    if cli.json {
-        print_json(&report)?;
-    } else {
-        print_reindex_report(&report);
-    }
-    Ok(())
+    emit(cli.json, &report, print_reindex_report)
 }
 
 /// The human-readable `reindex --dry-run` preview (the `--json` sibling prints the
@@ -179,16 +165,13 @@ pub fn cmd_status(cli: &Cli) -> Result<(), CliError> {
     let vault = open_vault(root, false)?;
     let status = vault.embed_status()?;
     let holder = reindex_holder(root);
-    if cli.json {
-        print_json(&serde_json::json!({
-            "embedded": status.embedded,
-            "total": status.total,
-            "reindex_running": holder.is_some(),
-            // The running process's id — `null` when nothing is running (and
-            // on the sliver of a moment before a fresh holder stamps it).
-            "reindex_pid": holder.as_ref().and_then(|h| h.pid),
-        }))?;
-    } else {
+    let view = StatusView {
+        embedded: status.embedded,
+        total: status.total,
+        reindex_running: holder.is_some(),
+        reindex_pid: holder.and_then(|h| h.pid),
+    };
+    emit(cli.json, &view, |status| {
         if status.total == 0 {
             println!("No notes indexed yet. Run `b2 reindex` to build the index.");
         } else if status.embedded == 0 {
@@ -211,17 +194,37 @@ pub fn cmd_status(cli: &Cli) -> Result<(), CliError> {
         }
         // Name the process, not just the fact: `--cancel` is the supported stop,
         // and the pid keeps a plain `kill -INT` as the documented fallback.
-        match holder.as_ref().map(|h| h.pid) {
-            Some(Some(pid)) => println!(
+        match (status.reindex_running, status.reindex_pid) {
+            (true, Some(pid)) => println!(
                 "A reindex is currently running (pid {pid}). Stop it with `b2 reindex --cancel` (or `kill -INT {pid}`)."
             ),
-            Some(None) => {
+            (true, None) => {
                 println!("A reindex is currently running. Stop it with `b2 reindex --cancel`.")
             }
-            None => {}
+            (false, _) => {}
         }
-    }
-    Ok(())
+    })
+}
+
+/// `b2 status`: embedding coverage, and whether a reindex holds the lock. The `--json`
+/// keys are a contract agents read (`tests/cli.rs` pins them).
+#[derive(Debug, Serialize)]
+struct StatusView {
+    embedded: usize,
+    total: usize,
+    reindex_running: bool,
+    /// The running process's id — `null` when nothing is running (and on the sliver
+    /// of a moment before a fresh holder stamps it).
+    reindex_pid: Option<u32>,
+}
+
+/// `b2 reindex --cancel`'s result. `signalled`, not `cancelled`: the request landed;
+/// the run stops at its next batch boundary and reports the partial work itself (honest
+/// tense, like the dry-run's `would_*` keys).
+#[derive(Debug, Serialize)]
+struct CancelView {
+    signalled: bool,
+    pid: u32,
 }
 
 /// Path to the single-in-flight advisory lock for `reindex`, under the disposable
@@ -311,20 +314,16 @@ fn cancel_reindex(root: &Path, json: bool) -> Result<(), CliError> {
         return Err(CliError::ReindexPidUnknown);
     };
     signal_reindex(pid)?;
-    if json {
-        // `signalled`, not `cancelled`: the request landed; the run stops at its next
-        // batch boundary and reports the partial work itself (honest tense, like the
-        // dry-run's `would_*` keys).
-        print_json(&serde_json::json!({
-            "signalled": true,
-            "pid": pid,
-        }))?;
-    } else {
+    let view = CancelView {
+        signalled: true,
+        pid,
+    };
+    emit(json, &view, |view| {
         println!(
-            "Cancelling the reindex on this vault (pid {pid}). It stops after the current batch, leaving a consistent index — re-run `b2 reindex` to finish."
+            "Cancelling the reindex on this vault (pid {}). It stops after the current batch, leaving a consistent index — re-run `b2 reindex` to finish.",
+            view.pid
         );
-    }
-    Ok(())
+    })
 }
 
 /// Send the cancel signal to a reindex holder. SIGINT, deliberately: the identical

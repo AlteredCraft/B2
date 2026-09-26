@@ -3,10 +3,12 @@
 
 use crate::args::Cli;
 use crate::error::CliError;
-use crate::print_json;
-use crate::wiring::{open_vault, use_fake_embedder};
+use crate::wiring::open_vault;
+use crate::{emit, print_json};
 use b2_core::resource::{doc_kind, DocKind};
-use b2_core::vault::{SearchEvidenceView, SimilarStanding};
+use b2_core::vault::{
+    ExplainView, ResourceExplainView, SearchEvidenceView, SimilarExplainView, SimilarStanding,
+};
 
 pub fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
     // Neighbors is a pure graph query — it never embeds, so don't require
@@ -18,12 +20,12 @@ pub fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
     // resolved-neighbors array contract; the full structured picture,
     // including these, is `b2 explain --json`.
     let unresolved = vault.unresolved_links(note)?;
-    if cli.json {
-        print_json(&neighbors)?;
-    } else if neighbors.is_empty() && unresolved.is_empty() {
-        println!("No neighbors.");
-    } else {
-        for n in &neighbors {
+    emit(cli.json, &neighbors, |neighbors| {
+        if neighbors.is_empty() && unresolved.is_empty() {
+            println!("No neighbors.");
+            return;
+        }
+        for n in neighbors {
             let arrow = arrow(&n.direction);
             let name = display_name(n.title.as_deref(), &n.path);
             let explanation = n
@@ -39,8 +41,7 @@ pub fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
                 u.relation, u.target
             );
         }
-    }
-    Ok(())
+    })
 }
 
 pub fn cmd_explain(cli: &Cli, note: &str) -> Result<(), CliError> {
@@ -50,87 +51,90 @@ pub fn cmd_explain(cli: &Cli, note: &str) -> Result<(), CliError> {
     // Kind dispatch by the argument's own shape (core's one rule, §9b #8):
     // a resource arg gets the fallback card's view — metadata + backlinks.
     if doc_kind(note) == DocKind::Resource {
-        let view = vault.explain_resource(note)?;
-        if cli.json {
-            print_json(&view)?;
-        } else {
-            println!("{} ({}, {} bytes)", view.path, view.class, view.size);
-            if view.backlinks.is_empty() {
-                println!("No backlinks yet.");
-            } else {
-                println!("Backlinks:");
-                for b in &view.backlinks {
-                    let name = display_name(b.title.as_deref(), &b.path);
-                    let mut line = format!("  ← {name} ({})  {}", b.path, b.r#type);
-                    decorate(&mut line, b.embed, b.caption.as_deref());
-                    println!("{line}");
-                }
-            }
-        }
-        return Ok(());
+        return emit(
+            cli.json,
+            &vault.explain_resource(note)?,
+            print_resource_card,
+        );
     }
-    let view = vault.explain(note)?;
-    if cli.json {
-        print_json(&view)?;
+    emit(cli.json, &vault.explain(note)?, print_explanation)
+}
+
+/// `explain` on a resource, for a human: the fallback card's metadata and backlinks.
+fn print_resource_card(view: &ResourceExplainView) {
+    println!("{} ({}, {} bytes)", view.path, view.class, view.size);
+    if view.backlinks.is_empty() {
+        println!("No backlinks yet.");
     } else {
-        let name = display_name(view.title.as_deref(), &view.path);
-        println!("{name} ({})", view.path);
-        if view.connections.is_empty() && view.resources.is_empty() && view.unresolved.is_empty() {
-            // Zero connections at all — nothing links to it and it links to
-            // nothing (an orphan; the kernel only surfaces, never archives).
-            println!("No connections yet.");
-        } else if !view.connections.is_empty() {
-            println!("Connections:");
-            for c in &view.connections {
-                let arrow = arrow(&c.direction);
-                let target = display_name(c.title.as_deref(), &c.path);
-                println!(
-                    "  {arrow} {}  {target} ({})  [{}]",
-                    c.label, c.path, c.origin
-                );
-                if let Some(why) = &c.explanation {
-                    println!("      why: {why}");
-                }
-            }
-            // If nothing points *at* the note, it's an orphan — surfaced, not
-            // acted on (invariants.md; files are only touched when asked).
-            if !view.connections.iter().any(|c| c.direction == "inbound") {
-                println!("No inbound links — this note is an orphan.");
+        println!("Backlinks:");
+        for b in &view.backlinks {
+            let name = display_name(b.title.as_deref(), &b.path);
+            let mut line = format!("  ← {name} ({})  {}", b.path, b.r#type);
+            decorate(&mut line, b.embed, b.caption.as_deref());
+            println!("{line}");
+        }
+    }
+}
+
+/// `explain` on a note, for a human: every connection with its "why", then the links
+/// at resources and the ones that resolve to nothing.
+fn print_explanation(view: &ExplainView) {
+    let name = display_name(view.title.as_deref(), &view.path);
+    println!("{name} ({})", view.path);
+    if view.connections.is_empty() && view.resources.is_empty() && view.unresolved.is_empty() {
+        // Zero connections at all — nothing links to it and it links to
+        // nothing (an orphan; the kernel only surfaces, never archives).
+        println!("No connections yet.");
+    } else if !view.connections.is_empty() {
+        println!("Connections:");
+        for c in &view.connections {
+            let arrow = arrow(&c.direction);
+            let target = display_name(c.title.as_deref(), &c.path);
+            println!(
+                "  {arrow} {}  {target} ({})  [{}]",
+                c.label, c.path, c.origin
+            );
+            if let Some(why) = &c.explanation {
+                println!("      why: {why}");
             }
         }
-        // Outbound links at resources (images, PDFs, …) — the third target
-        // kind an edge can have, shown from the note's side (GH #22).
-        if !view.resources.is_empty() {
-            println!("Resource links:");
-            for r in &view.resources {
-                let mut line = format!(
-                    "  → {}  {} ({})  [{}]",
-                    r.relation, r.path, r.class, r.origin
-                );
-                decorate(&mut line, r.embed, r.caption.as_deref());
-                println!("{line}");
-                if let Some(why) = &r.explanation {
-                    println!("      why: {why}");
-                }
-            }
+        // If nothing points *at* the note, it's an orphan — surfaced, not
+        // acted on (invariants.md; files are only touched when asked).
+        if !view.connections.iter().any(|c| c.direction == "inbound") {
+            println!("No inbound links — this note is an orphan.");
         }
-        // Dangling outbound links (a `[[folder]]` or a typo): a note is one
-        // `.md` file, so these resolve to nothing — shown as broken rather
-        // than silently dropped (GH #12).
-        if !view.unresolved.is_empty() {
-            println!("Unresolved links:");
-            for u in &view.unresolved {
-                println!(
-                    "  ⚠ {}  [[{}]]  (no matching note or file)  [{}]",
-                    u.relation, u.target, u.origin
-                );
-                if let Some(why) = &u.explanation {
-                    println!("      why: {why}");
-                }
+    }
+    // Outbound links at resources (images, PDFs, …) — the third target
+    // kind an edge can have, shown from the note's side (GH #22).
+    if !view.resources.is_empty() {
+        println!("Resource links:");
+        for r in &view.resources {
+            let mut line = format!(
+                "  → {}  {} ({})  [{}]",
+                r.relation, r.path, r.class, r.origin
+            );
+            decorate(&mut line, r.embed, r.caption.as_deref());
+            println!("{line}");
+            if let Some(why) = &r.explanation {
+                println!("      why: {why}");
             }
         }
     }
-    Ok(())
+    // Dangling outbound links (a `[[folder]]` or a typo): a note is one
+    // `.md` file, so these resolve to nothing — shown as broken rather
+    // than silently dropped (GH #12).
+    if !view.unresolved.is_empty() {
+        println!("Unresolved links:");
+        for u in &view.unresolved {
+            println!(
+                "  ⚠ {}  [[{}]]  (no matching note or file)  [{}]",
+                u.relation, u.target, u.origin
+            );
+            if let Some(why) = &u.explanation {
+                println!("      why: {why}");
+            }
+        }
+    }
 }
 
 pub fn cmd_search(
@@ -147,27 +151,24 @@ pub fn cmd_search(
     // `limit` confident-looking results for a query the vault holds nothing for.
     // `--exclude` paths are the caller's subtraction, never the verdict's.
     let view = vault.search_evidence_excluding(query, limit, exclude)?;
-    if cli.json {
-        // The whole view, verdict included. This is an OBJECT where `--json` used to be
-        // an array — a deliberate break (GH #202), because a query-level verdict has
-        // nowhere to live in a list of rows; the rows themselves stay additive.
-        //
-        // The JSON serves the rows even at `vouched: false`, where the human surface below
-        // shows none: an agent handed the rows *plus* an explicit verdict can be honest
-        // about them, where a human handed rows alone cannot.
-        print_json(&view)?;
-    } else {
-        println!("{}", search_report(&view, query));
+    // `--json` is the whole view, verdict included. This is an OBJECT where `--json` used
+    // to be an array — a deliberate break (GH #202), because a query-level verdict has
+    // nowhere to live in a list of rows; the rows themselves stay additive.
+    //
+    // The JSON serves the rows even at `vouched: false`, where the human surface shows
+    // none: an agent handed the rows *plus* an explicit verdict can be honest about them,
+    // where a human handed rows alone cannot.
+    emit(cli.json, &view, |view| {
+        println!("{}", search_report(view, query));
         // Honesty (never overstate): with the fake embedder the vector half
         // isn't semantic. Under the real model it is, so no caveat. Kept on
         // stderr so stdout stays pure results.
-        if use_fake_embedder() {
+        if b2_embed::fake_requested() {
             eprintln!(
                 "note: keyword (BM25) ranking is live; semantic ranking is off (fake embedder)."
             );
         }
-    }
-    Ok(())
+    })
 }
 
 /// The human-mode rendering of a search — ADR-0015's three verdict states as one pure
@@ -264,9 +265,12 @@ pub fn cmd_explain_similar(
     // A pure read over stored vectors, like `similar`: the fake is enough to open with.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     let ex = vault.explain_similar(note, other, limit)?;
-    if cli.json {
-        return print_json(&ex);
-    }
+    emit(cli.json, &ex, |ex| print_similar_explanation(ex, limit))
+}
+
+/// `similar --explain`, for a human: where the candidate stands against the list shown
+/// at `limit` (and why, if it is not a card), then the passage pairs behind it.
+fn print_similar_explanation(ex: &SimilarExplainView, limit: usize) {
     let anchor = display_name(ex.anchor.title.as_deref(), &ex.anchor.path);
     let candidate = display_name(ex.candidate.title.as_deref(), &ex.candidate.path);
     println!(
@@ -339,7 +343,6 @@ pub fn cmd_explain_similar(
             );
         }
     }
-    Ok(())
 }
 
 /// A passage flattened to one line and cut at `max` characters.
@@ -378,8 +381,7 @@ fn decorate(line: &mut String, embed: bool, caption: Option<&str>) {
     }
 }
 
-/// The one unit-tested corner of this adapter: ADR-0015's three verdict states as
-/// rendered by [`search_report`] (GH #202).
+/// ADR-0015's three verdict states as rendered by [`search_report`] (GH #202).
 ///
 /// The integration suite spawns the binary under `B2_EMBEDDER=fake`, whose embedder has no
 /// calibrated bar — so `vouched` there is always `None` and the two states that matter are

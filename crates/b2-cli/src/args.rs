@@ -39,8 +39,9 @@ For agents (--json):
 pub struct Cli {
     /// Vault root (the folder of Markdown). The index lives in `<vault>/.b2/`.
     /// Set it with `-C <path>` or `$B2_VAULT_PATH` (the flag wins). Read-only commands
-    /// fall back to the current dir; commands that write (`reindex`/`add`/`mv`/`rm`/
-    /// `link`) require it explicitly, so they can never silently touch the wrong directory.
+    /// fall back to the current dir; commands that write (`reindex`/`add`/`write`/`mv`/
+    /// `rm`/`link`) require it explicitly, so they can never silently touch the wrong
+    /// directory.
     #[arg(short = 'C', long = "vault", global = true, env = "B2_VAULT_PATH")]
     pub vault: Option<PathBuf>,
 
@@ -243,8 +244,8 @@ impl Cli {
         self.vault.as_deref().unwrap_or_else(|| Path::new("."))
     }
 
-    /// The vault root for commands that **write** (`reindex`, `add`, `mv`, `rm`, `link`):
-    /// `positional` wins, then `-C`/`$B2_VAULT_PATH`; with none, error rather than
+    /// The vault root for commands that **write** (`reindex`, `add`, `write`, `mv`, `rm`,
+    /// `link`): `positional` wins, then `-C`/`$B2_VAULT_PATH`; with none, error rather than
     /// silently mutating the current directory, where a stale binary or mistyped var would
     /// otherwise leave a stray `.b2/`. The write-side counterpart to
     /// [`vault_or_cwd`](Self::vault_or_cwd).

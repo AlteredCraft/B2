@@ -28,9 +28,9 @@ use serde::Serialize;
 
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
-    is_ollama, model_missing_message, probe_setup, pull_command, refusal_message,
-    unreachable_message, ChatSetup, ChatState, ModelTier, OllamaModel, OllamaSetup, ToolCallCap,
-    MODEL_TIERS, OLLAMA_INSTALL_URL,
+    model_missing_message, probe_setup, pull_command, refusal_message, unreachable_message,
+    ChatSetup, ChatState, ModelTier, OllamaModel, OllamaSetup, ToolCallCap, MODEL_TIERS,
+    OLLAMA_INSTALL_URL,
 };
 
 /// The environment variable that swaps in the deterministic [`FakeLlm`]: `B2_LLM=fake`,
