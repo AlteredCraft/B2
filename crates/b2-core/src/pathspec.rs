@@ -107,6 +107,27 @@ pub(crate) fn rebase(path: &str, from: &str, to: &str) -> Option<String> {
     Some(format!("{to}/{rest}"))
 }
 
+/// Join a relative `target` onto `base_dir` (both vault-relative, `/`-separated),
+/// normalizing `.` and `..` segments. `None` when the target escapes the vault
+/// root — such a path can never resolve. The inverse of [`relativize`].
+pub(crate) fn join_relative(base_dir: &str, target: &str) -> Option<String> {
+    let mut segments: Vec<&str> = if base_dir.is_empty() {
+        Vec::new()
+    } else {
+        base_dir.split('/').collect()
+    };
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            s => segments.push(s),
+        }
+    }
+    (!segments.is_empty()).then(|| segments.join("/"))
+}
+
 /// The relative path from the folder `base_dir` (`""` = the vault root) to the vault
 /// path `to_path`: the shared leading folders dropped, one `..` per remaining `base_dir`
 /// segment — the inverse of resolving a note-relative Markdown target.
@@ -193,6 +214,30 @@ mod tests {
         assert_eq!(relativize("notes", "docs/plan.pdf"), "../docs/plan.pdf");
         assert_eq!(relativize("a/b/c", "a/x.png"), "../../x.png");
         assert_eq!(relativize("a/b", "c.png"), "../../c.png");
+    }
+
+    #[test]
+    fn join_relative_normalizes_and_refuses_to_escape_the_vault() {
+        assert_eq!(
+            join_relative("notes", "../docs/./plan.pdf").as_deref(),
+            Some("docs/plan.pdf")
+        );
+        assert_eq!(join_relative("", "a/b.png").as_deref(), Some("a/b.png"));
+        assert_eq!(join_relative("", "../x.png"), None);
+    }
+
+    #[test]
+    fn join_relative_inverts_relativize() {
+        for (base, to) in [
+            ("", "a/b.png"),
+            ("notes", "docs/plan.pdf"),
+            ("a/b/c", "a/x.png"),
+        ] {
+            assert_eq!(
+                join_relative(base, &relativize(base, to)).as_deref(),
+                Some(to)
+            );
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use rusqlite::{
     params, Connection, OptionalExtension, StatementStatus, Transaction, TransactionBehavior,
 };
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -1125,16 +1125,6 @@ pub fn note_for_chunk(conn: &Connection, chunk_id: i64) -> Result<Option<String>
         .optional()?)
 }
 
-/// The whole `chunk_id -> note_path` map in one scan — the bulk form of
-/// [`note_for_chunk`] for loops that resolve *many* hits (graph-filtered search walks
-/// the full ranked space, where a per-hit lookup is the N+1 shape that once made
-/// `b2 similar` a ~130s stall, #37).
-pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
-    let mut stmt = conn.prepare("SELECT id, note_path FROM chunks")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-    Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
-}
-
 /// A ranked chunk resolved for display in one read: its note, that note's title, and the
 /// chunk's heading breadcrumb and text. One statement, so the note and the chunk come
 /// from the same snapshot: a hit is either whole or `None` (GH #137).
@@ -1498,8 +1488,7 @@ pub fn for_each_stored_vector(conn: &Connection, mut f: impl FnMut(i64, &[u8])) 
 }
 
 /// Every chunk's squared-L2 distance to `query`, sorted nearest first (ties broken by
-/// `chunk_id` for determinism) — the shared scan behind [`vector_search`] /
-/// [`vector_search_all`], computed in-process over the [`for_each_stored_vector`]
+/// `chunk_id` for determinism) — the scan behind [`vector_search`], computed in-process over the [`for_each_stored_vector`]
 /// stream: one sequential statement, one reused decode buffer (ADR-0006).
 fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
     let mut out: Vec<(i64, f32)> = Vec::new();
@@ -1520,15 +1509,6 @@ fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
 pub fn vector_search(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
     let mut hits = scan_vector_distances(conn, query)?;
     hits.truncate(k);
-    Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
-}
-
-/// [`vector_search`] without the `k` bound: **every** chunk's distance to `query`,
-/// nearest first (same scan, same `chunk_id` tie-break). The whole-space caller —
-/// graph-filtered search — ranks the entire vault, so it takes this rather than
-/// pass a sentinel `k`.
-pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f32)>> {
-    let hits = scan_vector_distances(conn, query)?;
     Ok(hits.into_iter().map(|(id, d)| (id, d.sqrt())).collect())
 }
 

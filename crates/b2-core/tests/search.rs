@@ -1,10 +1,8 @@
-//! Step 5 — hybrid retrieval (index-engine.md):
-//! BM25 ⊕ vector → RRF fusion (k=60), resolved to notes, plus the graph-filtered
-//! vector⨝edge join (index-engine.md §3) — the substrate connection discovery
-//! runs on.
+//! Hybrid retrieval (flow ②, index-engine.md §4): BM25 ⊕ vector → RRF fusion (k=60),
+//! resolved to notes, and the evidence readings RRF discards.
 //!
 //! Scope: with the deterministic *fake* embedder, vector ranking is not semantic,
-//! so these prove the **plumbing** (fusion math + the join), not model quality —
+//! so these prove the **plumbing** (fusion math + resolution), not model quality —
 //! that is the real-embedder eval suite (testability stack, point 5).
 
 mod common;
@@ -266,7 +264,7 @@ fn vector_only_search_is_the_dense_half_alone() {
         search::vector_only_search(&conn, &FakeEmbedder::new(64), "forgetting curve", 5).unwrap();
     assert!(!hits.is_empty());
     assert!(hits.iter().all(|h| !h.note_path.is_empty()));
-    // Negated-distance scores, best first — the graph_filtered_search convention.
+    // Negated-distance scores, best first — discovery's convention.
     for w in hits.windows(2) {
         assert!(w[0].score >= w[1].score, "scores must be descending");
     }
@@ -309,55 +307,6 @@ fn search_vector_only_dedups_and_refuses_to_impersonate_keywords() {
         );
         assert!(!h.path.is_empty());
     }
-}
-
-#[test]
-fn graph_filtered_search_restricts_to_reachable_notes() {
-    // A 3-note vault: a → b (linked), c disconnected, all share a keyword.
-    let tmp = tempfile::TempDir::new().unwrap();
-    let vault = tmp.path().join("vault");
-    fs::create_dir_all(&vault).unwrap();
-    fs::write(
-        vault.join("a.md"),
-        "---\ntype: note\ntitle: A\n---\nshared topic alpha. See [[b]].\n",
-    )
-    .unwrap();
-    fs::write(
-        vault.join("b.md"),
-        "---\ntype: note\ntitle: B\n---\nshared topic beta.\n",
-    )
-    .unwrap();
-    fs::write(
-        vault.join("c.md"),
-        "---\ntype: note\ntitle: C\n---\nshared topic gamma.\n",
-    )
-    .unwrap();
-
-    let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
-    ingest_vault(&conn, &vault, &FakeEmbedder::new(64)).unwrap();
-
-    // Within 1 hop of A: {A, B}. C is disconnected and must be excluded even
-    // though its text matches the query.
-    let hits =
-        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "shared topic", "a.md", 1, 10)
-            .unwrap();
-
-    let notes = note_set(&hits);
-    assert!(!notes.is_empty());
-    assert!(
-        !notes.contains("c.md"),
-        "disconnected note must be filtered out"
-    );
-    assert!(notes.iter().all(|n| n == "a.md" || n == "b.md"));
-
-    // …and `limit` genuinely truncates that reachable set. This is the complement of
-    // tests/vector_pool_scale.rs, which pins the other side — that a limit *above*
-    // what is reachable returns everything rather than a silently capped prefix.
-    assert!(hits.len() > 1, "the fixture must have room to truncate");
-    let capped =
-        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "shared topic", "a.md", 1, 1)
-            .unwrap();
-    assert_eq!(capped.len(), 1, "the scan stops at the limit");
 }
 
 /// A result's `snippet` must **window around the matched term**, not just show the
@@ -550,16 +499,6 @@ fn a_zero_limit_returns_no_hits() {
             .hits
             .is_empty()
     );
-    assert!(search::graph_filtered_search(
-        &conn,
-        &FakeEmbedder::new(64),
-        "brain",
-        MEMORY_PATH,
-        1,
-        0
-    )
-    .unwrap()
-    .is_empty());
 }
 
 /// …and it gets there without *doing* anything. The observable proof is the
@@ -601,18 +540,6 @@ fn a_zero_limit_search_does_no_retrieval_work() {
         .search_vector_only("forgetting", 0)
         .unwrap()
         .is_empty());
-}
-
-#[test]
-fn graph_filter_with_zero_hops_is_just_the_anchor() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
-
-    // 0 hops from memory → only memory's own chunks are eligible.
-    let hits =
-        search::graph_filtered_search(&conn, &FakeEmbedder::new(64), "brain", MEMORY_PATH, 0, 10)
-            .unwrap();
-    assert!(hits.iter().all(|h| h.note_path == MEMORY_PATH));
 }
 
 // ---------------------------------------------------------------------------

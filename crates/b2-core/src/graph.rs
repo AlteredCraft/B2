@@ -129,9 +129,8 @@ pub fn unresolved_outbound(conn: &Connection, note_path: &str) -> Result<Vec<Unr
 
 /// The set of notes within `hops` typed hops of `anchor` (inclusive of `anchor`),
 /// traversing `active` edges **undirected** — a note related to the anchor either
-/// way is reachable. Two readers: discovery subtracts the anchor's 1-hop set (what is
-/// already linked) from its candidates, and graph-filtered search keeps only hits
-/// inside the `hops` set. `hops = 0` is just the anchor.
+/// way is reachable. Discovery subtracts the anchor's 1-hop set (what is already linked)
+/// from its candidates. `hops = 0` is just the anchor.
 pub fn reachable_within(conn: &Connection, anchor: &str, hops: usize) -> Result<HashSet<String>> {
     let mut seen = HashSet::from([anchor.to_string()]);
     let mut frontier = vec![anchor.to_string()];

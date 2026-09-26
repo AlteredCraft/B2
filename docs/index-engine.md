@@ -110,9 +110,8 @@ Why this shape fits B2:
   There is no `status` column and no suggestion queue: `b2 link` appends a typed-link string
   to the source note's frontmatter and re-projects that note. Committing is the projection of
   an authored line, not an in-place index write.
-- **Hybrid retrieval and graph queries compose in one query.** "Semantic-nearest chunks whose
-  note is within 2 typed hops of note X" is a join across `embeddings`, `chunks`, and
-  `edges`. This is the substrate `b2 similar` runs on.
+- **Vectors and the graph live in one database.** `b2 similar` reads both in one pass:
+  nearest notes by stored vectors, minus the anchor's 1-hop neighbours from `edges`.
 - **Deterministic seams for tests.** A fake embedder writes to `embeddings`, so the whole
   pipeline is assertable with no live model (E2).
 
@@ -401,10 +400,10 @@ prefix is the wrong side of the space). The stages:
 list at a nonzero `limit` means only "nothing to compare": no unlinked note has stored
 vectors yet, or the space is not semantic. The CLI's two empty states say exactly that.
 
-**`graph_filtered_search`** is the near-neighbor of both flows that is neither: the
-vector⨝graph scoped-traversal primitive, "nearest chunks whose note is within k typed hops of
-an anchor" (near ∩ connected). Discovery is its complement (near ∖ connected).
-`vector_only_search` is the eval harness's ablation instrument, never an adapter surface.
+Discovery is near ∖ connected. Its intersection (near ∩ connected, a graph-scoped vector
+search) is not built: no command needs it, and it would arrive as a façade operation when one
+does. `vector_only_search` is the eval harness's ablation instrument, never an adapter
+surface.
 
 ### Does brute force scale to B2?
 

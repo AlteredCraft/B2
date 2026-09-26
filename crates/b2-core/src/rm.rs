@@ -75,10 +75,9 @@ pub fn delete_note(ctx: ProjectionCtx, rel: &str) -> Result<DeleteReport> {
 /// Delete the resource at `rel` — the note delete minus the identity step: file
 /// off disk, inventory row off the index (inbound edges' `dst_resource_path` is
 /// `ON DELETE SET NULL`), then re-project the inbound linkers so their edges
-/// re-key to the raw-path (dangling) ids a rebuild derives. Errors with
-/// [`Error::ResourceNotFound`] for a path not in the inventory.
+/// re-key to the raw-path (dangling) ids a rebuild derives. The façade checked the
+/// inventory, as it does for every resource op.
 pub fn delete_resource(ctx: ProjectionCtx, rel: &str) -> Result<ResourceDeleteReport> {
-    db::resource_detail(ctx.conn, rel)?.ok_or_else(|| Error::ResourceNotFound(rel.to_string()))?;
     let dangled = delete_set(ctx, &[], &[rel], || {
         remove_file_if_present(&ctx.root.join(rel))
     })?;

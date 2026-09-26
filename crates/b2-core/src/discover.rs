@@ -4,9 +4,7 @@
 //! that reads the graph.
 //!
 //! A candidate is a note **semantically near the anchor but not already connected** —
-//! the *complement* of the graph, not the intersection (that is
-//! [`crate::search::graph_filtered_search`], a scoped-traversal primitive and the wrong
-//! tool here). Generation is deliberately **recall-oriented**, and the **ranked list is
+//! the *complement* of the graph, not the intersection. Generation is deliberately **recall-oriented**, and the **ranked list is
 //! always served**: no statistic gates membership, and `limit` under-fills only for want
 //! of scorable notes. ADR-0014 carries the retired existence gate's whole evidence trail
 //! — including why an anchor-local statistic cannot tell *nothing is related* from

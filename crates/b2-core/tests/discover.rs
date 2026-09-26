@@ -175,10 +175,9 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
 
     // Exhaustive ground truth: every stored vector, min over the anchor's vectors,
     // best chunk per note (strictly-less keeps the first-seen chunk, as discover does).
-    let chunk_note = db::chunk_note_map(&conn).unwrap();
     let mut best: HashMap<String, (f32, i64)> = HashMap::new();
     db::for_each_stored_vector(&conn, |chunk_id, blob| {
-        let note = &chunk_note[&chunk_id];
+        let note = &db::note_for_chunk(&conn, chunk_id).unwrap().unwrap();
         if note == anchor {
             return; // no links in this vault → the anchor is the whole exclusion set
         }

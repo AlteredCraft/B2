@@ -16,7 +16,7 @@
 use crate::chat::ChatPrefs;
 use crate::error::CmdError;
 use crate::watch::VaultWatcher;
-use crate::{open_read, open_semantic, open_vault, open_vault_at, AppState};
+use crate::{open_read, open_semantic, open_vault, AppState};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::llm::{ChatTurn, LlmProvider};
@@ -176,16 +176,13 @@ pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String,
 /// the path against the inventory (so only an indexed vault file can be opened)
 /// and hands the absolute path to the OS.
 ///
-/// The root is read **once**, so the check and the path handed to the OS are the same
-/// vault's even if a switch lands in between. The check borrows `explain_resource` (it
-/// also reads backlinks nobody needs here); a `Vault::resource_abs_path` façade op would
-/// make this the one call it should be.
+/// The vault resolves the path against its own root, so the check and the path handed
+/// to the OS are the same vault's even if a switch lands in between.
 #[tauri::command(async)]
 pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), CmdError> {
-    let root = state.current_root().ok_or(CmdError::VaultRequired)?;
-    let (vault, _) = open_vault_at(&root, false)?;
-    vault.explain_resource(&path)?; // inventory check: unknown paths refuse, never open
-    tauri_plugin_opener::open_path(root.join(&path), None::<&str>)
+    // Inventory-checked by the façade: an unknown path refuses, never opens.
+    let abs = read_op(state.inner(), |v| v.resource_path(&path))?;
+    tauri_plugin_opener::open_path(abs, None::<&str>)
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 

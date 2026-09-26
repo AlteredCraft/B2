@@ -10,8 +10,8 @@
 //! cannot recur without reintroducing `sqlite-vec`.
 //!
 //! So this asserts the property that actually matters — **exhaustiveness / no silent
-//! truncation** — directly on the cap-bearing primitive, and proves the discovery and
-//! graph-filtered paths return complete results on a modest, fast vault. Scope: the
+//! truncation** — directly on the cap-bearing primitive, and proves discovery and hybrid
+//! search return complete results on a modest, fast vault. Scope: the
 //! deterministic fake embedder, so this proves plumbing, not model quality.
 
 mod common;
@@ -58,20 +58,10 @@ fn chunk_count(conn: &Connection) -> i64 {
         .unwrap()
 }
 
-fn note_chunk_count(conn: &Connection, note_path: &str) -> i64 {
-    conn.query_row(
-        "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
-        [note_path],
-        |r| r.get(0),
-    )
-    .unwrap()
-}
-
 /// The retired `vec0` store errored on `k > 4096`; the in-process scan cannot. Proven
 /// **directly on the primitive that would carry any such cap**, cheaply — with no
-/// oversized fixture and no magic number: `vector_search_all` returns *every* stored
-/// vector, and `vector_search(k)` returns exactly `min(k, N)` for `k` below, at, and
-/// far past `N` (where the old store crashed).
+/// oversized fixture and no magic number: `vector_search(k)` returns exactly `min(k, N)`
+/// for `k` below, at, and far past `N` (where the old store crashed).
 #[test]
 fn vector_search_is_exhaustive_and_truncates_only_to_k() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -85,12 +75,6 @@ fn vector_search_is_exhaustive_and_truncates_only_to_k() {
         .embed_query("shared topic alpha")
         .unwrap();
 
-    // No `k`: the scan ranks the ENTIRE space — one vector per stored chunk.
-    assert_eq!(
-        db::vector_search_all(&conn, &probe).unwrap().len(),
-        n,
-        "the whole-space scan returns every stored vector"
-    );
     // `k` below N is honoured exactly…
     assert_eq!(
         db::vector_search(&conn, &probe, n / 2).unwrap().len(),
@@ -132,38 +116,6 @@ fn similar_returns_the_full_candidate_set_without_a_silent_cap() {
     assert!(
         all.iter().all(|c| c.note_path != ids[0]),
         "the anchor is never its own candidate"
-    );
-}
-
-/// `graph_filtered_search` scans the *whole* ranked space and keeps the reachable
-/// notes — so a `limit` above the reachable chunk count returns **every** reachable
-/// chunk, wherever it ranks, un-truncated (and nothing unreachable).
-#[test]
-fn graph_filtered_search_returns_every_reachable_chunk_without_a_silent_cap() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (conn, ids) = big_vault(tmp.path(), 50, 90);
-
-    // No links: within any hop count the anchor reaches only itself. Its chunks all
-    // match the query; asking for more than it has must return all of them — proof
-    // the scan considers the entire ranked space, not just a capped prefix.
-    let anchor_chunks = note_chunk_count(&conn, &ids[0]);
-    let hits = search::graph_filtered_search(
-        &conn,
-        &FakeEmbedder::new(64),
-        "shared topic",
-        &ids[0],
-        1,
-        (anchor_chunks as usize) + 100,
-    )
-    .unwrap();
-    assert_eq!(
-        hits.len() as i64,
-        anchor_chunks,
-        "every one of the disconnected anchor's chunks comes back, un-truncated"
-    );
-    assert!(
-        hits.iter().all(|h| h.note_path == ids[0]),
-        "only the (disconnected) anchor is reachable"
     );
 }
 

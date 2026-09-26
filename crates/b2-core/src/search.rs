@@ -2,14 +2,10 @@
 //! retrieved in parallel and fused by RRF, then resolved up from chunks to notes
 //! (ADR-0008). A served result is a claim of evidence, which is what
 //! [`lexical_evidence`] and [`EvidenceBar`] are for (ADR-0015).
-//!
-//! [`graph_filtered_search`] is the vector-graph join B2 exists for: "nearest chunks
-//! whose note is within k typed hops of note X".
 
 use crate::db;
 use crate::embed::Embedder;
 use crate::error::Result;
-use crate::graph;
 use std::collections::HashMap;
 
 /// The RRF constant, k=60 (index-engine.md §1).
@@ -481,7 +477,7 @@ pub fn keyword_only_search(
 /// Hybrid search: BM25 ⊕ vector(query) -> RRF -> top `limit`, resolved to notes
 /// (ADR-0008). A `limit` of 0 returns before the query is embedded — with the real model
 /// that call is the expensive part, and asking for no results should cost none. The same
-/// guard opens [`keyword_only_search`] and [`graph_filtered_search`].
+/// guard opens [`keyword_only_search`].
 pub fn hybrid_search(
     conn: &rusqlite::Connection,
     embedder: &dyn Embedder,
@@ -542,7 +538,7 @@ pub fn cosine_of_distance(distance: f32) -> f64 {
 /// **An ablation instrument, not a product surface** (ADR-0013, GH #158): the eval scores
 /// it beside bm25-only and hybrid on every run, so fusion has a measured single-signal
 /// baseline to answer to. Scores are negated L2 distance (closer = higher), the same
-/// convention as [`graph_filtered_search`] and **not** commensurable with RRF scores. A
+/// convention as discovery's, and **not** commensurable with RRF scores. A
 /// vault with no embedding space yields no hits — there are no vectors to scan, and
 /// pretending otherwise would rank on nothing.
 pub fn vector_only_search(
@@ -570,7 +566,7 @@ pub fn vector_only_search(
     resolve_hits(conn, ranked, &provenance, limit)
 }
 
-/// The shared tail of the three retrieval entry points: resolve the ranked
+/// The shared tail of the retrieval entry points: resolve the ranked
 /// `(chunk_id, score)` list to [`Hit`]s, best first, keeping the first `limit` **that
 /// still resolve** to a note.
 ///
@@ -579,8 +575,7 @@ pub fn vector_only_search(
 /// when a concurrent reindex replaced its note's chunks mid-query, the posture C1
 /// promises. Taking the top `limit` *first* would let a dead chunk hold a slot a live
 /// candidate could fill, so search would quietly under-fill during that window; steady
-/// state is unchanged. Per-hit resolution is fine here because the loop stops at `limit`
-/// — contrast [`graph_filtered_search`], which walks the full space and needs the bulk map.
+/// state is unchanged. Per-hit resolution is fine here because the loop stops at `limit`.
 fn resolve_hits(
     conn: &rusqlite::Connection,
     fused: Vec<(i64, f64)>,
@@ -601,54 +596,6 @@ fn resolve_hits(
                 note_path,
                 score,
                 provenance: provenance.get(&chunk_id).copied().unwrap_or_default(),
-            });
-        }
-    }
-    Ok(hits)
-}
-
-/// Graph-filtered vector search: the `limit` nearest chunks whose note is within `hops`
-/// typed hops of `anchor` — the vector-graph discovery join. Reachability is undirected
-/// over the authored edges. Filtering scans the full ranked space and keeps reachable
-/// notes, exact at vault scale; chunk-to-note resolution is one bulk map load, not a
-/// per-row query, because the walk can visit the whole vault when a small neighbourhood
-/// ranks deep — the N+1 shape that once stalled `b2 similar` (#37).
-pub fn graph_filtered_search(
-    conn: &rusqlite::Connection,
-    embedder: &dyn Embedder,
-    query: &str,
-    anchor: &str,
-    hops: usize,
-    limit: usize,
-) -> Result<Vec<Hit>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-    let reachable = graph::reachable_within(conn, anchor, hops)?;
-    let chunk_note = db::chunk_note_map(conn)?;
-
-    let mut hits = Vec::new();
-    for (chunk_id, distance) in db::vector_search_all(conn, &embedder.embed_query(query)?)? {
-        // Before the push, not after: an after-the-push test can never fire at a
-        // limit the loop starts below, which is what the entry guard above covers.
-        if hits.len() == limit {
-            break;
-        }
-        let Some(note_path) = chunk_note.get(&chunk_id) else {
-            continue;
-        };
-        if reachable.contains(note_path) {
-            hits.push(Hit {
-                chunk_id,
-                note_path: note_path.clone(),
-                score: -(distance as f64), // closer = higher
-                // One list walked in rank order, so `hits.len()` is this chunk's rank
-                // among the reachable ones — the only rank this path has.
-                provenance: HitProvenance {
-                    bm25_rank: None,
-                    vector_rank: Some(hits.len()),
-                    distance: Some(distance),
-                },
             });
         }
     }

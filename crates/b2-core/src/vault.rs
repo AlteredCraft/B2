@@ -18,6 +18,7 @@ use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::import;
+use crate::link;
 use crate::mv;
 use crate::rm;
 use crate::snippet::{query_snippet, snippet};
@@ -549,6 +550,17 @@ impl Vault {
         Ok(fs::read(self.root.join(path))?)
     }
 
+    /// The absolute path of an inventoried resource, for an adapter that hands the file
+    /// to the OS (*Open in system default*). Inventory-checked like
+    /// [`read_resource_bytes`](Self::read_resource_bytes), so a path a note authored can
+    /// never name a file outside the vault's resources. [`Error::ResourceNotFound`]
+    /// otherwise.
+    pub fn resource_path(&self, path: &str) -> Result<PathBuf> {
+        let _op = tracing::debug_span!(target: "b2::vault", "resource_path", path).entered();
+        self.require_resource(path)?;
+        Ok(self.root.join(path))
+    }
+
     /// The fallback card's data for one resource: inventory metadata plus the
     /// backlinks panel, straight off the materialized graph. `path` is vault-relative
     /// (the adapters dispatch here via [`crate::resource::doc_kind`]); errors with
@@ -1055,11 +1067,7 @@ impl Vault {
 
         // The spec targets the dst's path. A note's title is its filename, so a bare
         // `[[path]]` already reads as the title — B2 writes no alias.
-        let link = format!("[[{dst_path}]]");
-        let spec = match explanation {
-            Some(e) => format!("{edge_type} {link} — {e}"),
-            None => format!("{edge_type} {link}"),
-        };
+        let spec = link::render_relation(edge_type, &dst_path, explanation);
 
         // 1. Markdown first: append to frontmatter b2_relations: (never the body, §0).
         let abs = self.root.join(&src_path);
@@ -1127,6 +1135,7 @@ impl Vault {
     /// Errors with [`Error::ResourceNotFound`] for a path not in the inventory.
     pub fn delete_resource(&self, path: &str) -> Result<ResourceDeleteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "rm_resource", path).entered();
+        self.require_resource(path)?;
         rm::delete_resource(self.ctx(), path)
     }
 

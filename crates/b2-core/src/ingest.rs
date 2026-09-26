@@ -360,10 +360,7 @@ fn project_edges(
 
     // The source note's directory — the base for a Markdown-form relative target, read
     // straight off the path now that the path *is* the identity (ADR-0003).
-    let src_dir = src_path
-        .rsplit_once('/')
-        .map(|(dir, _)| dir)
-        .unwrap_or_default();
+    let src_dir = crate::pathspec::parent_dir(src_path);
 
     // Resolve targets; record which (target, type) the frontmatter authors.
     let mut fm_keys: HashSet<(String, String)> = HashSet::new();
@@ -431,7 +428,7 @@ fn resolve_target(
     // wikilink habit); wikilinks are vault-root only, as today.
     let mut candidates: Vec<String> = Vec::with_capacity(2);
     if link.md_form {
-        if let Some(joined) = join_vault_relative(src_dir, lookup) {
+        if let Some(joined) = crate::pathspec::join_relative(src_dir, lookup) {
             candidates.push(joined);
         }
     }
@@ -452,27 +449,6 @@ fn resolve_target(
         }
     }
     Ok((None, None))
-}
-
-/// Join a relative `target` onto `base_dir` (both vault-relative, `/`-separated),
-/// normalizing `.` and `..` segments. `None` when the target escapes the vault
-/// root — such a path can never resolve, and the vault-root fallback still runs.
-fn join_vault_relative(base_dir: &str, target: &str) -> Option<String> {
-    let mut segments: Vec<&str> = if base_dir.is_empty() {
-        Vec::new()
-    } else {
-        base_dir.split('/').collect()
-    };
-    for seg in target.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                segments.pop()?;
-            }
-            s => segments.push(s),
-        }
-    }
-    (!segments.is_empty()).then(|| segments.join("/"))
 }
 
 /// Deterministic id for an authored edge from its identity tuple (ADR-0010): stable
