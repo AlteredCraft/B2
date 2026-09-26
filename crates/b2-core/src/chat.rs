@@ -343,14 +343,11 @@ pub fn pair_line(
     )
 }
 
-/// One numbered passage as tool-result text — [`ChatRequest::system_message`]'s own
-/// layout, so a passage looks the same whichever way it reached the model.
+/// One numbered passage as tool-result text — [`ContextPassage::block`], the layout
+/// [`ChatRequest::system_message`] uses too, so a passage looks the same whichever way
+/// it reached the model.
 pub fn passage_block(marker: usize, p: &ContextPassage) -> String {
-    let heading = match &p.heading_path {
-        Some(h) => format!(" — {h}"),
-        None => String::new(),
-    };
-    format!("[{marker}] {}{heading}\n{}\n", p.path, p.text)
+    p.block(marker)
 }
 
 /// The facts block, one line per finding, each naming the B2 read it came from so the

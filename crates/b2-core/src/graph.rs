@@ -29,9 +29,10 @@ pub struct Neighbor {
     /// (data-model.md §2). Symmetric verbs read the same both ways.
     pub label: String,
     pub explanation: Option<String>,
-    /// Edge provenance — `inline` (human body link), `frontmatter` (a relation B2
-    /// accepted, or a human/importer authored) (data-model.md §0). `b2 explain`
-    /// surfaces this so a human body link reads distinctly from a B2-committed one.
+    /// Edge provenance — which of the two homes authored it (data-model.md §0):
+    /// `inline` (a body link) or `frontmatter` (a `b2_relations:` entry, whether
+    /// `b2 link` wrote it on the human's command or they wrote it by hand). `b2 explain`
+    /// surfaces this so a plain body link reads distinctly from a typed relation.
     pub origin: String,
 }
 
@@ -128,8 +129,9 @@ pub fn unresolved_outbound(conn: &Connection, note_path: &str) -> Result<Vec<Unr
 
 /// The set of notes within `hops` typed hops of `anchor` (inclusive of `anchor`),
 /// traversing `active` edges **undirected** — a note related to the anchor either
-/// way is reachable. This is the hop set the graph-filtered discovery join uses
-/// (index-engine.md §3). `hops = 0` is just the anchor.
+/// way is reachable. Two readers: discovery subtracts the anchor's 1-hop set (what is
+/// already linked) from its candidates, and graph-filtered search keeps only hits
+/// inside the `hops` set. `hops = 0` is just the anchor.
 pub fn reachable_within(conn: &Connection, anchor: &str, hops: usize) -> Result<HashSet<String>> {
     let mut seen = HashSet::from([anchor.to_string()]);
     let mut frontier = vec![anchor.to_string()];

@@ -41,17 +41,19 @@ pub trait Embedder {
 
 /// Deterministic, content-addressed embedder for tests/dev: identical text →
 /// identical vector, so KNN is reproducible and drop-&-rebuild yields the same
-/// vectors. It is **not** semantic — it stands in for a real local model behind
-/// the seam (testability stack, point 4) until that model lands.
+/// vectors. It is **not** semantic — it stands in for `b2-embed`'s real local model
+/// behind the same seam, so the engine suite runs offline (`B2_EMBEDDER=fake`,
+/// docs/architecture.md).
 #[derive(Debug, Clone, Copy)]
 pub struct FakeEmbedder {
     dim: usize,
 }
 
 impl FakeEmbedder {
+    /// A fake of dimension `dim`. A vector has at least one component, so a `dim` of 0
+    /// is clamped to 1 rather than refused.
     pub fn new(dim: usize) -> Self {
-        assert!(dim > 0, "embedding dimension must be positive");
-        Self { dim }
+        Self { dim: dim.max(1) }
     }
 }
 
@@ -97,8 +99,9 @@ impl Embedder for FakeEmbedder {
 }
 
 /// Pack a vector as a compact little-endian float32 BLOB — the stored form of every
-/// vector in the index (`embeddings.vector`, `note_centroids.centroid`; build spec
-/// §1.2). The query side packs the same way so an exact match has distance 0.
+/// vector in the index (`embeddings.vector`, `note_centroids.centroid`;
+/// index-engine.md §3). The query side packs the same way so an exact match has
+/// distance 0.
 pub fn pack_f32(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
     for x in v {
@@ -113,10 +116,9 @@ pub fn pack_f32(v: &[f32]) -> Vec<u8> {
 /// for a vector written by [`pack_f32`], so a non-multiple-of-4 length is simply
 /// truncated rather than treated as an error.
 pub fn unpack_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect()
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    unpack_f32_into(bytes, &mut out);
+    out
 }
 
 /// [`unpack_f32`] into a caller-owned scratch buffer, reusing its capacity. The

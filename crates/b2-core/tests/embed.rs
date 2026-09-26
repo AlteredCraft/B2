@@ -33,6 +33,15 @@ fn fake_embedder_is_deterministic() {
     assert_eq!(e.embed("x").unwrap().len(), 16);
 }
 
+/// Constructing the fake is on a production path (`Vault::open`), so a zero
+/// dimension degrades to the smallest real vector rather than panicking.
+#[test]
+fn a_zero_dimension_fake_is_clamped_to_one() {
+    let e = FakeEmbedder::new(0);
+    assert_eq!(e.dim(), 1);
+    assert_eq!(e.embed("x").unwrap().len(), 1);
+}
+
 #[test]
 fn embed_batch_matches_embed_per_element() {
     // The default `embed_batch` (which the fake inherits) must be a faithful map of
