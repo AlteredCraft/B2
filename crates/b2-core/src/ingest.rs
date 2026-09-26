@@ -1,4 +1,4 @@
-//! Ingest (flow ①): parse -> project into `notes`/`note_aliases`, `chunks` (+FTS) and
+//! Ingest (flow ①): parse -> project into `notes`, `chunks` (+FTS) and
 //! the typed `edges` graph, all keyed by the note's vault-relative path (ADR-0003).
 //! **Ingest writes nothing to the vault** (ADR-0004) — it is a pure read of it.
 //!
@@ -202,16 +202,10 @@ fn project_note_and_chunks(
         conn,
         &NoteRow {
             path: rel_path,
-            // `type` is required by the model; default the projection to "note"
-            // for the rare untyped file (the file itself is never modified).
-            r#type: fields.r#type.as_deref().unwrap_or("note"),
             title: Some(title.as_str()),
-            description: fields.description.as_deref(),
             created: fields.created.as_deref(),
-            updated: fields.updated.as_deref(),
             body_hash: &body_hash,
             mtime,
-            aliases: &fields.aliases,
         },
     )?;
 

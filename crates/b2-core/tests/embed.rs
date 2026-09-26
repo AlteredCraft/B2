@@ -341,8 +341,8 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
         {
             let conn = open(&db_path).unwrap();
             conn.execute(
-                "INSERT INTO notes(path, type, body_hash, indexed_at)
-                 VALUES ('n.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+                "INSERT INTO notes(path, body_hash, indexed_at)
+                 VALUES ('n.md', 'hash', '2026-07-26T00:00:00Z')",
                 [],
             )
             .unwrap();

@@ -21,10 +21,9 @@ use std::time::Duration;
 /// and doesn't need to be. A table added there and forgotten here only makes the
 /// assertions in *this* file weaker, never wrong — the completeness check that actually
 /// guards the index reads the pinned list, not this one.
-const SCHEMA_TABLES: [&str; 7] = [
+const SCHEMA_TABLES: [&str; 6] = [
     "meta",
     "notes",
-    "note_aliases",
     "chunks",
     "chunks_fts",
     "resources",
@@ -286,8 +285,8 @@ fn an_index_stamped_current_but_missing_a_table_is_rebuilt() {
         let conn = open(&db_path).unwrap();
         // A note the index believes is projected — the row that must not outlive the repair.
         conn.execute(
-            "INSERT INTO notes(path, type, body_hash, indexed_at)
-             VALUES ('kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            "INSERT INTO notes(path, body_hash, indexed_at)
+             VALUES ('kept.md', 'hash', '2026-07-26T00:00:00Z')",
             [],
         )
         .unwrap();
@@ -325,8 +324,8 @@ fn an_index_with_its_schema_stamp_missing_is_rebuilt() {
     {
         let conn = open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO notes(path, type, body_hash, indexed_at)
-             VALUES ('kept.md', 'note', 'hash', '2026-07-26T00:00:00Z')",
+            "INSERT INTO notes(path, body_hash, indexed_at)
+             VALUES ('kept.md', 'hash', '2026-07-26T00:00:00Z')",
             [],
         )
         .unwrap();
@@ -411,8 +410,8 @@ fn an_index_from_a_newer_b2_is_refused_not_rebuilt() {
     {
         let conn = open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO notes(path, type, body_hash, indexed_at)
-             VALUES ('kept.md', 'note', 'hash', '2026-08-28T00:00:00Z')",
+            "INSERT INTO notes(path, body_hash, indexed_at)
+             VALUES ('kept.md', 'hash', '2026-08-28T00:00:00Z')",
             [],
         )
         .unwrap();

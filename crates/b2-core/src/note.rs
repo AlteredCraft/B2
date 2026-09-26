@@ -12,19 +12,16 @@
 use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
 
-/// The frontmatter fields B2 projects into the `notes` table. Extraction is
-/// best-effort: unparseable frontmatter still round-trips (raw is preserved); the
-/// fields just come back empty.
+/// The frontmatter fields B2 reads: the ones a reader displays (`type`, `created`,
+/// `updated`, `tags`) and B2's own `b2_relations:`. Extraction is best-effort:
+/// unparseable frontmatter still round-trips (raw is preserved); the fields just come
+/// back empty. Every other key — `title`, `description`, `aliases`, your own — is
+/// round-tripped verbatim and read by nothing (data-model.md §1).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub r#type: Option<String>,
-    // No `title`: a note's display title is its filename ([`display_title`]), and a
-    // frontmatter `title:` key is inert (data-model.md §1) — round-tripped verbatim
-    // with the raw bytes like any key B2 does not project.
-    pub description: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
-    pub aliases: Vec<String>,
     pub tags: Vec<String>,
     /// Raw `b2_relations:` entries (typed-link strings, §2) — B2's namespaced
     /// frontmatter home for typed edges, the only place a verb/explanation lives.
@@ -247,10 +244,8 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             Some(doc) => {
                 readable = doc.as_hash().is_some() || matches!(doc, Yaml::Null);
                 f.r#type = doc["type"].as_str().map(str::to_string);
-                f.description = doc["description"].as_str().map(str::to_string);
                 f.created = scalar_to_string(&doc["created"]);
                 f.updated = scalar_to_string(&doc["updated"]);
-                f.aliases = string_list(&doc["aliases"]);
                 f.tags = string_list(&doc["tags"]);
                 f.relations = string_list(&doc["b2_relations"]);
             }

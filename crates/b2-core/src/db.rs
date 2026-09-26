@@ -1,5 +1,5 @@
 //! Opening the index, the schema migration, and the projection helpers for the
-//! Markdown-derived tiers: `notes`/`note_aliases`, `chunks` (+FTS5), the
+//! Markdown-derived tiers: `notes`, `chunks` (+FTS5), the
 //! `embeddings`/`note_centroids` vector tables, and the typed `edges` graph. Every
 //! table here is a derived projection of Markdown — nothing is a source of truth
 //! (ADR-0002).
@@ -40,7 +40,7 @@ use std::time::Duration;
 /// inventory and widened `edges` with resource targets. **5** switched `chunks_fts`
 /// to `porter unicode61` (the GH #157 A/B's verdict). **6** re-keyed the whole index
 /// on the vault-relative path and made `embeddings` content-addressed (GH #170).
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`
 /// overrides; see [`slow_query_threshold`]).
@@ -239,10 +239,9 @@ fn is_locked(err: &Error) -> bool {
 /// concurrent `DROP TABLE` (#114), and dropping a table takes its indexes and triggers
 /// with it, so a missing table is the visible edge of every partial rebuild. The unit
 /// test at the foot of this file pins the list to what the DDL actually creates.
-const SCHEMA_TABLES: [&str; 7] = [
+const SCHEMA_TABLES: [&str; 6] = [
     "meta",
     "notes",
-    "note_aliases",
     "chunks",
     "chunks_fts",
     "resources",
@@ -393,31 +392,19 @@ fn apply_schema(conn: &Connection) -> Result<()> {
          DROP TABLE IF EXISTS embeddings;
          DROP TABLE IF EXISTS chunks_fts;
          DROP TABLE IF EXISTS chunks;
-         DROP TABLE IF EXISTS note_aliases;
+         DROP TABLE IF EXISTS note_aliases; -- schema <= 6
          DROP TABLE IF EXISTS notes;
          DELETE FROM meta;",
     )?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS notes (
            path        TEXT PRIMARY KEY,
-           type        TEXT NOT NULL,
            title       TEXT,
-           description TEXT,
            created     TEXT,
-           updated     TEXT,
            body_hash   TEXT NOT NULL,
            mtime       INTEGER,
            indexed_at  TEXT NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS notes_type_idx ON notes(type);
-
-         CREATE TABLE IF NOT EXISTS note_aliases (
-           note_path TEXT NOT NULL
-                       REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE,
-           alias     TEXT NOT NULL,
-           PRIMARY KEY (note_path, alias)
-         );
-         CREATE INDEX IF NOT EXISTS note_aliases_alias_idx ON note_aliases(alias);
 
          CREATE TABLE IF NOT EXISTS chunks (
            id           INTEGER PRIMARY KEY,
@@ -496,25 +483,21 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// notes + aliases
+// notes
 // ---------------------------------------------------------------------------
 
-/// One note's projection into `notes` (+ its `aliases`). Borrowed view so callers
+/// One note's projection into `notes`. Borrowed view so callers
 /// pass slices of an already-parsed note without extra allocation.
 #[derive(Debug)]
 pub struct NoteRow<'a> {
     pub path: &'a str,
-    pub r#type: &'a str,
     pub title: Option<&'a str>,
-    pub description: Option<&'a str>,
     pub created: Option<&'a str>,
-    pub updated: Option<&'a str>,
     pub body_hash: &'a str,
     pub mtime: Option<i64>,
-    pub aliases: &'a [String],
 }
 
-/// Upsert a note keyed by its vault-relative `path` and replace its aliases.
+/// Upsert a note keyed by its vault-relative `path`.
 /// `indexed_at` is set by SQLite so the projection needs no wall-clock from Rust.
 ///
 /// `ON CONFLICT(path)` is the *whole* of path reconciliation, which is the point of
@@ -522,37 +505,16 @@ pub struct NoteRow<'a> {
 /// so a note deleted and recreated there is simply that path's note now.
 pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
     conn.execute(
-        "INSERT INTO notes
-           (path, type, title, description, created, updated, body_hash, mtime, indexed_at)
-         VALUES
-           (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        "INSERT INTO notes (path, title, created, body_hash, mtime, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
          ON CONFLICT(path) DO UPDATE SET
-           type        = excluded.type,
            title       = excluded.title,
-           description = excluded.description,
            created     = excluded.created,
-           updated     = excluded.updated,
            body_hash   = excluded.body_hash,
            mtime       = excluded.mtime,
            indexed_at  = excluded.indexed_at",
-        params![
-            row.path,
-            row.r#type,
-            row.title,
-            row.description,
-            row.created,
-            row.updated,
-            row.body_hash,
-            row.mtime,
-        ],
+        params![row.path, row.title, row.created, row.body_hash, row.mtime],
     )?;
-    conn.execute("DELETE FROM note_aliases WHERE note_path = ?1", [row.path])?;
-    for alias in row.aliases {
-        conn.execute(
-            "INSERT OR IGNORE INTO note_aliases(note_path, alias) VALUES (?1, ?2)",
-            params![row.path, alias],
-        )?;
-    }
     Ok(())
 }
 
@@ -563,7 +525,7 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 /// `similar` and the graph keep serving, so an incremental reindex diverges from a
 /// from-scratch rebuild (S3).
 ///
-/// Aliases, chunks (FTS in lockstep via the `chunks_ad` trigger), centroid and
+/// Chunks (FTS in lockstep via the `chunks_ad` trigger), centroid and
 /// **outgoing** edges cascade with the row. Vectors no longer do — they are
 /// content-addressed and may be shared, so [`prune_orphan_vectors`] collects them.
 /// **Inbound** edges are the caller's concern: `edges.dst_path` carries no FK (it must
@@ -1680,7 +1642,7 @@ pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> 
 
 /// Re-key a note from `old_path` to `new_path` — **the** index-side move (ADR-0003).
 ///
-/// One statement, and the FK graph does the rest: `note_aliases`, `chunks`,
+/// One statement, and the FK graph does the rest: `chunks`,
 /// `note_centroids` and `edges.src_path` all declare `ON UPDATE CASCADE`, so every
 /// derived row travels with the note atomically and its chunk *vectors* are never
 /// touched at all — they are content-addressed, so they belong to the text, not the

@@ -438,15 +438,9 @@ fn dump(root: &Path) -> Vec<String> {
     let sections: &[(&str, &str, usize)] = &[
         (
             "note",
-            "SELECT path, type, ifnull(title,''), ifnull(description,''),
-                    ifnull(created,''), ifnull(updated,''), body_hash
+            "SELECT path, ifnull(title,''), ifnull(created,''), body_hash
              FROM notes ORDER BY path",
-            7,
-        ),
-        (
-            "alias",
-            "SELECT note_path, alias FROM note_aliases ORDER BY note_path, alias",
-            2,
+            4,
         ),
         (
             "chunk",

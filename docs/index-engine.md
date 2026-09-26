@@ -69,9 +69,8 @@ The precise DDL and build order live in `crates/b2-core/src/db.rs` (schema) and 
 b2.sqlite — DISPOSABLE CACHE  (= projection of the vault directory; drop & rebuild any time)
 ├── MIRROR OF THE VAULT (lets us diff vs. disk)
 │   ├── meta(key, value)                          -- schema_version, embed_model_id, embed_dim
-│   ├── notes(path PK, type, title, description,  -- the path IS the identity (L1)
-│   │         created, updated, body_hash, mtime, indexed_at)
-│   ├── note_aliases(note_path, alias)            -- frontmatter `aliases:`
+│   ├── notes(path PK, title, created,            -- the path IS the identity (L1)
+│   │         body_hash, mtime, indexed_at)
 │   └── resources(path PK, class, size, mtime,    -- non-.md peers; class by extension (§10 dm)
 │                 content_hash, indexed_at)
 │
@@ -93,7 +92,7 @@ vault has an embedding space" signal the BM25-only fallbacks key on (M4, ADR-000
 Why this shape fits B2:
 
 - **Everything keys on the vault-relative path** (L1, ADR-0003). `notes.path` is the primary
-  key; `chunks.note_path`, `note_aliases.note_path`, `note_centroids.note_path`, and
+  key; `chunks.note_path`, `note_centroids.note_path`, and
   `edges.src_path` are `REFERENCES notes(path) ON DELETE CASCADE ON UPDATE CASCADE`. That
   makes a B2-performed move a path re-key rather than a rebuild: `UPDATE notes SET path = …`
   cascades through every child in one statement, after the inbound link-text rewrite and
