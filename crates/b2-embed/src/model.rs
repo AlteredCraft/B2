@@ -214,18 +214,18 @@ fn l2_normalize(v: &[f32]) -> Vec<f32> {
 /// Try to open the Metal GPU — only when compiled `--features metal` (candle's
 /// `metal_is_available()` is literally `cfg!(feature = "metal")`), and never a hard
 /// requirement: any failure returns `None` and the caller uses the CPU (GH #40). `announce`
-/// gates the fallback warning (a `b2::embed` tracing event) so the load path can warn while
-/// the cheap capability probe ([`active_device_label`]) stays silent. No `unwrap`: a failed `new_metal` is a soft
+/// gates the fallback notice so the load path can say it while the cheap capability probe
+/// ([`active_device_label`]) stays silent. The notice goes to stderr rather than a log
+/// event on purpose: it explains a user-visible consequence (a CPU-tagged embedding space,
+/// so a Metal-built index reads as a model change), and a log is off unless asked for. No `unwrap`: a failed `new_metal` is a soft
 /// degrade (no-panic rule), not a load error.
 fn open_metal(announce: bool) -> Option<Device> {
     if candle_core::utils::metal_is_available() {
         match Device::new_metal(0) {
             Ok(d) => return Some(d),
-            Err(e) if announce => tracing::warn!(
-                target: "b2::embed",
-                error = %e,
-                "Metal GPU unavailable; embedding on CPU"
-            ),
+            Err(e) if announce => {
+                eprintln!("note: Metal GPU unavailable ({e}); embedding on CPU")
+            }
             Err(_) => {}
         }
     }

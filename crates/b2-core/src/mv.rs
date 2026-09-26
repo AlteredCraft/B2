@@ -6,7 +6,7 @@
 //! bounded by the moved set's backlink count: the human-facing copy — the link text in
 //! every file linking *at* a moved member, rewritten in place — and the index: each moved
 //! note re-keyed by one [`db::repoint_note_path`] whose `ON UPDATE CASCADE` FKs carry
-//! chunks, aliases, centroid and outbound edges atomically, each moved resource by one
+//! chunks, centroid and outbound edges atomically, each moved resource by one
 //! [`db::repoint_resource`], then a re-projection of the inbound sources so their edges
 //! (`edges.dst_path` has no FK — it must be free to dangle) point at the new paths. A
 //! moved note's **vectors are not touched at all**: content-addressed (ADR-0006), they
@@ -18,7 +18,10 @@
 //! rename on disk, *then* re-project from the now-current Markdown. And bounded, not a
 //! scan: [`db::inbound_edges_of`] names exactly the files to touch, so the cost is
 //! O(inbound links). The link text is found by [`crate::link`]'s own scanner, so a move
-//! rewrites exactly the links ingest projected.
+//! reads links exactly as ingest does. Known gap: within one inbound file the rewrite is
+//! keyed by a link's *written* text, so a second link with the same text that resolves
+//! elsewhere (a note-relative Markdown link and a vault-root wikilink both written
+//! `img.png`, naming two different files) is rewritten too.
 //!
 //! **The vault half is all or nothing** (GH #230). Reindexing can't repair rewritten
 //! link text (it projects whatever the Markdown says), so a failed move must leave every
@@ -73,8 +76,8 @@ pub struct MoveReport {
 ///
 /// Only the `[[…]]` form is rewritten at a note. A Markdown-form link at one
 /// (`[x](notes/a.md)`) keeps its text, but its source is re-projected like every inbound
-/// source, so the edge dangles exactly as a rebuild would project it rather than keep
-/// naming a path that no longer exists.
+/// source, so its edge is exactly what a rebuild would project — dangling, or resolved to
+/// whatever note that text now names — rather than keep naming a path that is gone.
 pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<MoveReport> {
     let new_rel = pathspec::normalize_rel_md(new_rel_input).map_err(Error::MoveDestination)?;
     refuse_same_path(&new_rel, old_rel, "note")?;
@@ -493,8 +496,9 @@ fn plan_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<Plan> {
 /// Only the target token changes: every other byte (the brackets, the `|alias`, the
 /// link text, whitespace around the target) is preserved, and a target merely sharing a
 /// prefix with a key is never touched. The links are the ones [`link::link_spans`]
-/// finds — the scanner ingest projects edges from — so a move rewrites exactly the links
-/// that point at it. Returns the rewritten text and the count of targets replaced.
+/// finds — the scanner ingest projects edges from — matched by their written text (see
+/// the module doc's known gap). Returns the rewritten text and the count of targets
+/// replaced.
 fn rewrite_targets(raw: &str, wiki: &Targets, md: &Targets) -> (String, usize) {
     let mut out = String::with_capacity(raw.len());
     let (mut copied, mut count) = (0usize, 0usize);

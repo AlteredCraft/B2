@@ -791,9 +791,9 @@ fn re_running_a_move_interrupted_before_its_rename_finishes_it() {
 // one pipeline, so what a move repairs is what ingest projected, and each kind leaves
 // the index a rebuild would produce.
 
-/// Every projected edge and inventory row, sorted — the index state a move must leave
-/// equal to a from-scratch rebuild (S3). Edge ids are derived from the resolved
-/// target, so a wrongly (un)resolved edge shows up here too.
+/// Every projected note, chunk, edge and inventory row, sorted — the index state a move
+/// must leave equal to a from-scratch rebuild (S3). Edge ids are derived from the
+/// resolved target, so a wrongly (un)resolved edge shows up here too.
 fn projection(root: &Path) -> Vec<String> {
     let conn = common::index_conn(root);
     let mut rows: Vec<String> = Vec::new();
@@ -814,6 +814,39 @@ fn projection(root: &Path) -> Vec<String> {
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+    );
+    let mut notes = conn
+        .prepare("SELECT path, ifnull(title, ''), ifnull(created, ''), body_hash FROM notes")
+        .unwrap();
+    rows.extend(
+        notes
+            .query_map([], |r| {
+                Ok(format!(
+                    "note {} {} {} {}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+    );
+    let mut chunks = conn
+        .prepare("SELECT note_path, seq, text_hash FROM chunks")
+        .unwrap();
+    rows.extend(
+        chunks
+            .query_map([], |r| {
+                Ok(format!(
+                    "chunk {} {} {}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
                 ))
             })
             .unwrap()

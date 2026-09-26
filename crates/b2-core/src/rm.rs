@@ -58,7 +58,7 @@ pub struct DirDeleteReport {
 }
 
 /// Delete the note at `rel`: file off disk, projection rows off the index
-/// (chunks/FTS/centroid/aliases/outbound edges cascade with the `notes` row), then
+/// (chunks/FTS/centroid/outbound edges cascade with the `notes` row), then
 /// re-project the inbound linkers so their edges re-dangle. The façade resolved the ref.
 /// The note's chunk **vectors** deliberately do not cascade — content-addressed and
 /// possibly shared (ADR-0006), they are collected by the whole-vault pass.

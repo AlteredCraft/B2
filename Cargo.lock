@@ -402,7 +402,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers",
  "toml 0.8.23",
- "tracing",
 ]
 
 [[package]]

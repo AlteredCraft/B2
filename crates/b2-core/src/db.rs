@@ -39,7 +39,9 @@ use std::time::Duration;
 /// because its module is no longer linked to drop it. **4** added the `resources`
 /// inventory and widened `edges` with resource targets. **5** switched `chunks_fts`
 /// to `porter unicode61` (the GH #157 A/B's verdict). **6** re-keyed the whole index
-/// on the vault-relative path and made `embeddings` content-addressed (GH #170).
+/// on the vault-relative path and made `embeddings` content-addressed (GH #170). **7**
+/// dropped the columns nothing read (`notes.type`, `description`, `updated`) and the
+/// `note_aliases` table.
 pub const SCHEMA_VERSION: i64 = 7;
 
 /// Statements at or over this take the slow-query WARN path (`B2_SLOW_QUERY_MS`

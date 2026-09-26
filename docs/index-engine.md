@@ -625,7 +625,7 @@ be budgeted, tested, and watched.
   `db::upsert_note`'s `ON CONFLICT(path)` is the whole of the reconciliation. A note deleted
   with no replacement is reconciled by the whole-vault pass
   ([GH #31](https://github.com/AlteredCraft/B2/issues/31)): `project_vault` prunes every
-  `notes` row whose path the walk did not see this run (aliases, chunks, FTS, centroid, and
+  `notes` row whose path the walk did not see this run (chunks, FTS, centroid, and
   outgoing edges cascade; inbound links re-dangle when phase 2 re-derives edges against the
   pruned resolver), *except* rows whose file was skipped as unreadable: the walk *saw* that
   file, so evicting it would lie. Single-note ingest (`add`/`mv`/`write`) touches one note
