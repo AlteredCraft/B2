@@ -10,19 +10,20 @@
 //! synchronous (ADR-0011); `(async)` is only the "don't block the UI" knob.
 //!
 //! The thin `*_impl` split lets the command layer be unit-tested against a real vault
-//! without a Tauri runtime.
+//! without a Tauri runtime, and [`read_op`] / [`semantic_op`] are the whole of "open a
+//! fresh vault, make one façade call, map its error" — so a command body is one line.
 
 use crate::chat::ChatPrefs;
 use crate::error::CmdError;
 use crate::watch::VaultWatcher;
-use crate::{open_read, open_semantic, open_vault, AppState, AskGuard, ReindexGuard};
+use crate::{open_read, open_semantic, open_vault, open_vault_at, AppState};
 use b2_core::add::AddReport;
 use b2_core::ingest::ReindexProgress;
 use b2_core::llm::{ChatTurn, LlmProvider};
 use b2_core::vault::{
     AnswerView, DeleteReport, DirCreateReport, DirDeleteReport, DirMoveReport, EmbedReport,
-    ExplainView, ImportReport, LinkReport, MoveReport, NeighborView, NoteSummary, NoteView,
-    ProjectReport, ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
+    ExplainView, ImportReport, LinkReport, MoveReport, NoteSummary, NoteView, ProjectReport,
+    ResourceDeleteReport, ResourceExplainView, ResourceMoveReport, ResourceSummary,
     SearchEvidenceView, SimilarExplainView, SimilarView, Vault, WriteReport,
 };
 use b2_embed::{EmbedConfig, ModelChoice};
@@ -49,11 +50,22 @@ pub struct VaultInfo {
     pub notes_total: usize,
 }
 
-/// Step 0's seam-proving command: the frontend `invoke('ping')` round-trips this to
-/// confirm the Rust↔JS bridge before any real surface exists.
-#[tauri::command]
-pub fn ping() -> &'static str {
-    "pong"
+/// One façade call over a fresh **read-path** vault (the fake embedder, no model load) —
+/// the whole body of a model-free command. The call's own error is mapped once, here.
+fn read_op<T>(
+    state: &AppState,
+    op: impl FnOnce(&Vault) -> b2_core::Result<T>,
+) -> Result<T, CmdError> {
+    Ok(op(&open_read(state)?)?)
+}
+
+/// [`read_op`] over the **real** model, for a command that embeds a query or re-projects
+/// with the model the index was built with (fail-fast "run `b2 init`" when absent).
+fn semantic_op<T>(
+    state: &AppState,
+    op: impl FnOnce(&Vault) -> b2_core::Result<T>,
+) -> Result<T, CmdError> {
+    Ok(op(&open_semantic(state)?)?)
 }
 
 #[tauri::command(async)]
@@ -110,8 +122,7 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdErr
 /// per-kind composition the locked design prefers over a union type (research §9b #10).
 #[tauri::command(async)]
 pub fn list_resources(state: State<'_, AppState>) -> Result<Vec<ResourceSummary>, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(vault.list_resources()?)
+    read_op(state.inner(), |v| v.list_resources())
 }
 
 /// The file tree's structure half: every folder in the vault, **empty ones
@@ -139,8 +150,7 @@ pub fn explain_resource(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<ResourceExplainView, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(vault.explain_resource(&path)?)
+    read_op(state.inner(), |v| v.explain_resource(&path))
 }
 
 /// A resource's **bytes**, base64, for the viewer the card shows in place of the
@@ -157,8 +167,7 @@ pub fn explain_resource(
 /// the host validates, exactly as [`open_resource`] does.
 #[tauri::command(async)]
 pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(BASE64.encode(vault.read_resource_bytes(&path)?))
+    read_op(state.inner(), |v| v.read_resource_bytes(&path)).map(|bytes| BASE64.encode(bytes))
 }
 
 /// *Open in system default* on the fallback card — an **OS handoff**, never
@@ -166,11 +175,16 @@ pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String,
 /// folder dialog: the webview holds no opener permission; this command validates
 /// the path against the inventory (so only an indexed vault file can be opened)
 /// and hands the absolute path to the OS.
+///
+/// The root is read **once**, so the check and the path handed to the OS are the same
+/// vault's even if a switch lands in between. The check borrows `explain_resource` (it
+/// also reads backlinks nobody needs here); a `Vault::resource_abs_path` façade op would
+/// make this the one call it should be.
 #[tauri::command(async)]
 pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), CmdError> {
-    let vault = open_read(state.inner())?;
-    vault.explain_resource(&path)?; // inventory check: unknown paths refuse, never open
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
+    let (vault, _) = open_vault_at(&root, false)?;
+    vault.explain_resource(&path)?; // inventory check: unknown paths refuse, never open
     tauri_plugin_opener::open_path(root.join(&path), None::<&str>)
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
@@ -387,8 +401,7 @@ pub fn similar(
 ) -> Result<Vec<SimilarView>, CmdError> {
     // The ranked list is what the façade serves (GH #197) — no raw/floored mode
     // to route, so the command is the one call it always should have been.
-    let vault = open_read(state.inner())?;
-    Ok(vault.similar(&note, limit)?)
+    read_op(state.inner(), |v| v.similar(&note, limit))
 }
 
 /// **Explain** one Similar card (GH #236): the model-free Compare view's data, the GUI
@@ -401,8 +414,9 @@ pub fn explain_similar(
     candidate: String,
     limit: usize,
 ) -> Result<SimilarExplainView, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(vault.explain_similar(&anchor, &candidate, limit)?)
+    read_op(state.inner(), |v| {
+        v.explain_similar(&anchor, &candidate, limit)
+    })
 }
 
 /// Hybrid search **with its evidence reading** (invariants.md D2, GH #202) — the
@@ -418,20 +432,12 @@ pub fn search(
     limit: usize,
 ) -> Result<SearchEvidenceView, CmdError> {
     // Semantic: the query is embedded, so this opens the real model (fail-fast if absent).
-    let vault = open_semantic(state.inner())?;
-    Ok(vault.search_evidence(&query, limit)?)
-}
-
-#[tauri::command(async)]
-pub fn neighbors(state: State<'_, AppState>, note: String) -> Result<Vec<NeighborView>, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(vault.neighbors(&note)?)
+    semantic_op(state.inner(), |v| v.search_evidence(&query, limit))
 }
 
 #[tauri::command(async)]
 pub fn explain(state: State<'_, AppState>, note: String) -> Result<ExplainView, CmdError> {
-    let vault = open_read(state.inner())?;
-    Ok(vault.explain(&note)?)
+    read_op(state.inner(), |v| v.explain(&note))
 }
 
 #[tauri::command(async)]
@@ -443,8 +449,9 @@ pub fn link(
     explanation: Option<String>,
 ) -> Result<LinkReport, CmdError> {
     // Re-projects the source note → opens the same real model the index was built with.
-    let vault = open_semantic(state.inner())?;
-    Ok(vault.link(&src, &dst, &relation, explanation.as_deref())?)
+    semantic_op(state.inner(), |v| {
+        v.link(&src, &dst, &relation, explanation.as_deref())
+    })
 }
 
 /// The **projection pass** — the fast, model-free half of a reindex. One façade call over
@@ -483,7 +490,7 @@ pub fn embed(
 /// writes. A no-op if nothing is running.
 #[tauri::command(async)]
 pub fn cancel_reindex(state: State<'_, AppState>) {
-    state.request_reindex_cancel();
+    state.reindex.cancel();
 }
 
 /// The settings picker's model list: every model B2 offers ([`b2_embed::AVAILABLE_MODELS`]),
@@ -537,36 +544,12 @@ pub fn embed_device() -> &'static str {
     b2_embed::active_device_label()
 }
 
-/// One model's cumulative embedding cost, for the Settings pane (`stats.rs`). Flat view
-/// over [`crate::stats::ModelStat`] so it crosses IPC as a plain payload.
-#[derive(Debug, Clone, Serialize)]
-pub struct EmbedStat {
-    pub model: String,
-    pub total_ms: u64,
-    pub chunks: u64,
-    pub runs: u64,
-}
-
-impl From<(String, crate::stats::ModelStat)> for EmbedStat {
-    fn from((model, s): (String, crate::stats::ModelStat)) -> Self {
-        Self {
-            model,
-            total_ms: s.total_ms,
-            chunks: s.chunks,
-            runs: s.runs,
-        }
-    }
-}
-
 /// The per-model embedding-time ledger (`stats.rs`) — what the Settings pane renders so a
 /// model swap can be judged on real speed. Infallible: no data / an unreadable ledger is
 /// an empty list, never an error (the totals are diagnostic, never load-bearing).
 #[tauri::command(async)]
-pub fn embed_stats() -> Vec<EmbedStat> {
+pub fn embed_stats() -> Vec<crate::stats::EmbedStat> {
     crate::stats::read_all()
-        .into_iter()
-        .map(EmbedStat::from)
-        .collect()
 }
 
 /// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI folds
@@ -669,7 +652,7 @@ pub fn why_similar(
 /// streaming.
 #[tauri::command(async)]
 pub fn cancel_ask(state: State<'_, AppState>) {
-    state.request_ask_cancel();
+    state.ask.cancel();
 }
 
 /// What the chat surface needs to draw itself before a question is asked: the endpoint and
@@ -759,7 +742,7 @@ fn set_chat_config_impl(
 /// same note), else one probe of the configured endpoint.
 fn chat_setup_impl(state: &AppState) -> ChatSetup {
     let config = state.chat_prefs().config();
-    if crate::chat::use_fake_llm() {
+    if b2_llm::fake_requested() {
         ChatSetup::fake(&config)
     } else {
         b2_llm::probe_setup(&config)
@@ -799,66 +782,45 @@ fn why_similar_impl(
     })
 }
 
-/// The delivery every streamed answer shares: claim the single answer slot, arm the
-/// cancel flag, and run `call` — the one façade op — with a token callback that feeds
-/// `sink` and reads the cancel flag at every token.
+/// The delivery every streamed answer shares: claim the answer slot and run `call` — the
+/// one façade op — with a token callback that feeds `sink` and reads the slot's cancel at
+/// every token.
 fn stream_answer(
     state: &AppState,
     sink: &dyn Fn(&str),
     call: impl FnOnce(&mut dyn FnMut(&str) -> ControlFlow<()>) -> b2_core::Result<AnswerView>,
 ) -> Result<AnswerView, CmdError> {
     // Single-in-flight: two answers at once would share one cancel flag, so the second
-    // one's `arm` would quietly un-cancel the first. The pane already refuses a second
+    // one's claim would quietly un-cancel the first. The pane already refuses a second
     // turn while one is streaming, so this is the belt-and-suspenders half.
-    if !state.try_start_ask() {
-        return Err(CmdError::AskInFlight);
-    }
-    let _guard = AskGuard(state);
-    // Clear any stale cancel now that *this* answer owns the slot (the Esc that stopped
-    // the previous turn must not stop this one before its first token).
-    state.arm_ask();
-
+    let _held = state.ask.try_claim().ok_or(CmdError::AskInFlight)?;
     Ok(call(&mut |token| {
         sink(token);
-        if state.ask_cancelled() {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
+        state.ask.flow()
     })?)
 }
 
 /// The testable core of `project`: one façade call over the fake vault (projection
 /// is model-free by construction — it never touches the embedding space).
 fn project_impl(state: &AppState) -> Result<ProjectReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.project(false)?)
+    read_op(state, |v| v.project(false))
 }
 
-/// The testable core of `embed`, split from the Tauri `State` wrapper. Guards
-/// single-in-flight, arms the cancel flag, opens the real-model vault, and streams
-/// progress while consulting the cancel flag at each batch.
+/// The testable core of `embed`, split from the Tauri `State` wrapper. Claims the
+/// reindex slot, opens the real-model vault, and streams progress while consulting the
+/// slot's cancel at each batch.
 fn embed_impl(
     state: &AppState,
     on_event: &Channel<ReindexProgress>,
 ) -> Result<EmbedReport, CmdError> {
     // Single-in-flight: refuse a second embed rather than race two writers on one DB.
     // The UI also disables the button, so this is rarely hit.
-    if !state.try_start_reindex() {
-        return Err(CmdError::ReindexInFlight);
-    }
-    let _guard = ReindexGuard(state);
-    // Clear any stale cancel now that *this* run owns the slot (a prior switch/cancel
-    // must not kill a fresh embed).
-    state.arm_reindex();
+    let _held = state.reindex.try_claim().ok_or(CmdError::ReindexInFlight)?;
 
-    // Fills missing vectors → needs the real model. `semantic` is false only under
-    // `B2_EMBEDDER=fake` (dev/offline): don't attribute fake-embed time to the real model.
-    let (vault, semantic) = open_vault(state, true)?;
-    // Attribute the time to whatever model this vault embeds with (config.toml / default).
-    let model = EmbedConfig::load()
-        .map(|c| c.model)
-        .unwrap_or_else(|_| b2_embed::DEFAULT_MODEL.to_string());
+    // Fills missing vectors → needs the real model. `model` is the id of the model this
+    // open actually loaded, and `None` only under `B2_EMBEDDER=fake` (dev/offline) —
+    // fake-embed time is never attributed to a real model.
+    let (vault, model) = open_vault(state, true)?;
     // Time the embed pass itself — the clock starts *after* the model load above, so the
     // recorded total is embedding throughput, not one-time setup. `chunks_done` is
     // cumulative, so its last value is this run's chunk count.
@@ -869,15 +831,11 @@ fn embed_impl(
         // Forward progress to the webview; a send error (the window navigated/closed)
         // is not fatal to the index — keep embedding.
         let _ = on_event.send(p);
-        if state.reindex_cancelled() {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
+        state.reindex.flow()
     })?;
     // Record the run's cost (best-effort). Skip when nothing embedded (an up-to-date
     // vault) or under the fake embedder, so the ledger stays clean and correctly attributed.
-    if semantic && chunks_this_run > 0 {
+    if let Some(model) = model.filter(|_| chunks_this_run > 0) {
         crate::stats::record(&model, start.elapsed().as_millis() as u64, chunks_this_run);
     }
     Ok(report)
@@ -892,8 +850,7 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     // `semantic` is a file *probe* (`semantic_available`), not a model load: it stays
     // "is a model installed", while `notes_embedded/total` is the precise fraction the
     // UI flags keyword-only from.
-    let vault = open_read(state)?;
-    let status = vault.embed_status()?;
+    let status = read_op(state, |v| v.embed_status())?;
     Ok(VaultInfo {
         root: root.display().to_string(),
         semantic: crate::semantic_available(),
@@ -907,29 +864,25 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
 /// first**, waiting for it to wind down before repointing the root, so a reindex can never
 /// keep writing the vault the app has left.
 fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdError> {
-    state.cancel_and_wait_for_reindex();
+    state.reindex.cancel_and_wait();
     state.set_root(root);
     vault_info_impl(state)
 }
 
 fn read_note_impl(state: &AppState, note: &str) -> Result<NoteView, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.read(note)?)
+    read_op(state, |v| v.read(note))
 }
 
 fn list_notes_impl(state: &AppState) -> Result<Vec<NoteSummary>, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.list_notes()?)
+    read_op(state, |v| v.list_notes())
 }
 
 fn list_dirs_impl(state: &AppState) -> Result<Vec<String>, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.list_dirs()?)
+    read_op(state, |v| v.list_dirs())
 }
 
 fn create_dir_impl(state: &AppState, dir: &str) -> Result<DirCreateReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.create_dir(dir)?)
+    read_op(state, |v| v.create_dir(dir))
 }
 
 fn write_note_impl(
@@ -938,8 +891,7 @@ fn write_note_impl(
     body: &str,
     base_revision: &str,
 ) -> Result<WriteReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.write(note, body, base_revision)?)
+    read_op(state, |v| v.write(note, body, base_revision))
 }
 
 fn write_frontmatter_impl(
@@ -948,13 +900,13 @@ fn write_frontmatter_impl(
     frontmatter: &str,
     base_revision: &str,
 ) -> Result<WriteReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.write_frontmatter(note, frontmatter, base_revision)?)
+    read_op(state, |v| {
+        v.write_frontmatter(note, frontmatter, base_revision)
+    })
 }
 
 fn create_note_impl(state: &AppState, path: &str) -> Result<AddReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.create_note(path)?)
+    read_op(state, |v| v.create_note(path))
 }
 
 fn import_file_impl(
@@ -966,18 +918,15 @@ fn import_file_impl(
     let bytes = BASE64
         .decode(data)
         .map_err(|e| CmdError::ImportPayload(e.to_string()))?;
-    let vault = open_read(state)?;
-    Ok(vault.import_file(dir, name, &bytes)?)
+    read_op(state, |v| v.import_file(dir, name, &bytes))
 }
 
 fn import_path_impl(state: &AppState, dir: &str, source: &str) -> Result<ImportReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.import_path(dir, Path::new(source))?)
+    read_op(state, |v| v.import_path(dir, Path::new(source)))
 }
 
 fn move_note_impl(state: &AppState, note: &str, to: &str) -> Result<MoveReport, CmdError> {
-    let vault = open_semantic(state)?;
-    Ok(vault.move_note(note, to)?)
+    semantic_op(state, |v| v.move_note(note, to))
 }
 
 fn move_resource_impl(
@@ -985,28 +934,23 @@ fn move_resource_impl(
     path: &str,
     to: &str,
 ) -> Result<ResourceMoveReport, CmdError> {
-    let vault = open_semantic(state)?;
-    Ok(vault.move_resource(path, to)?)
+    semantic_op(state, |v| v.move_resource(path, to))
 }
 
 fn move_dir_impl(state: &AppState, from: &str, to: &str) -> Result<DirMoveReport, CmdError> {
-    let vault = open_semantic(state)?;
-    Ok(vault.move_dir(from, to)?)
+    semantic_op(state, |v| v.move_dir(from, to))
 }
 
 fn delete_note_impl(state: &AppState, note: &str) -> Result<DeleteReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.delete_note(note)?)
+    read_op(state, |v| v.delete_note(note))
 }
 
 fn delete_resource_impl(state: &AppState, path: &str) -> Result<ResourceDeleteReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.delete_resource(path)?)
+    read_op(state, |v| v.delete_resource(path))
 }
 
 fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdError> {
-    let vault = open_read(state)?;
-    Ok(vault.delete_dir(dir)?)
+    read_op(state, |v| v.delete_dir(dir))
 }
 
 /// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against the
@@ -1228,11 +1172,6 @@ mod tests {
     }
 
     #[test]
-    fn ping_round_trips() {
-        assert_eq!(ping(), "pong");
-    }
-
-    #[test]
     fn list_models_returns_the_registry() {
         // Global config, no vault needed. Deterministic w.r.t. ambient config only in the
         // ways asserted: the picker offers exactly the registry, by id (the current flag
@@ -1282,25 +1221,12 @@ mod tests {
     // suite covers the cancel *behavior*; here we prove the host's control bits).
 
     #[test]
-    fn reindex_slot_is_single_in_flight() {
-        let state = AppState::new(None);
-        assert!(state.try_start_reindex(), "first claim wins the slot");
-        assert!(state.reindex_in_flight());
-        assert!(
-            !state.try_start_reindex(),
-            "second claim is refused while running"
-        );
-        state.finish_reindex();
-        assert!(!state.reindex_in_flight());
-        assert!(state.try_start_reindex(), "slot is reusable once released");
-    }
-
-    #[test]
     fn a_second_embed_is_refused_before_touching_the_model() {
         // With the slot already held, `embed_impl` must refuse *before* opening the
         // real-model vault — so this needs no model and can't hang on one.
         let state = AppState::new(None);
-        assert!(state.try_start_reindex()); // stand in for a running embed
+        let running = state.reindex.try_claim(); // stand in for a running embed
+        assert!(running.is_some());
         let channel = Channel::<ReindexProgress>::new(|_| Ok(()));
         let err = embed_impl(&state, &channel).unwrap_err();
         assert!(matches!(err, CmdError::ReindexInFlight));
@@ -1370,7 +1296,7 @@ mod tests {
         assert_eq!(report.path, "resources/dropped.png");
         assert!(!report.note); // a non-`.md` file is routed as a resource
         assert_eq!(fs::read(root.join("resources/dropped.png")).unwrap(), bytes);
-        let listed = open_read(&state).unwrap().list_resources().unwrap();
+        let listed = read_op(&state, |v| v.list_resources()).unwrap();
         assert!(listed.iter().any(|r| r.path == "resources/dropped.png"));
     }
 
@@ -1644,7 +1570,8 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        assert!(state.try_start_reindex()); // stand in for an in-flight embed
+        let running = state.reindex.try_claim(); // stand in for an in-flight embed
+        assert!(running.is_some());
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         write_note_impl(
             &state,
@@ -1671,7 +1598,8 @@ mod tests {
 
         // Hold the slot (a stand-in for an in-flight embed): `project` is deliberately
         // unguarded (index-engine.md) and must still run.
-        assert!(state.try_start_reindex());
+        let running = state.reindex.try_claim();
+        assert!(running.is_some());
         let report = project_impl(&state).unwrap();
         assert_eq!(report.indexed, 2);
 
@@ -1745,19 +1673,6 @@ mod tests {
     }
 
     #[test]
-    fn arm_clears_a_stale_cancel_but_request_sets_it() {
-        let state = AppState::new(None);
-        state.request_reindex_cancel();
-        assert!(state.reindex_cancelled());
-        // A fresh run arming the slot clears a cancel left by a prior switch/cancel…
-        state.arm_reindex();
-        assert!(!state.reindex_cancelled());
-        // …and a new cancel request is then observable again.
-        state.request_reindex_cancel();
-        assert!(state.reindex_cancelled());
-    }
-
-    #[test]
     fn vault_switch_cancels_and_waits_for_the_inflight_reindex() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
@@ -1765,17 +1680,18 @@ mod tests {
         let state = AppState::new(Some(root.clone()));
 
         // Simulate a reindex holding the slot.
-        assert!(state.try_start_reindex());
-        assert!(state.reindex_in_flight());
+        let held = state.reindex.try_claim().expect("the slot is free");
+        assert!(state.reindex.in_flight());
 
         std::thread::scope(|s| {
             // A stand-in reindex worker: spin until asked to cancel, then wind down —
-            // exactly what the real embed-loop closure does at a batch boundary.
+            // exactly what the real embed-loop closure does at a batch boundary, where
+            // returning drops the guard.
             s.spawn(|| {
-                while !state.reindex_cancelled() {
+                while !state.reindex.cancelled() {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                state.finish_reindex();
+                drop(held);
             });
 
             // Switching vaults must request cancel AND block until the worker released
@@ -1783,7 +1699,7 @@ mod tests {
             let info = set_vault_root_impl(&state, &root).unwrap();
             assert_eq!(info.root, root.display().to_string());
             // If the switch returned, the in-flight run has already wound down.
-            assert!(!state.reindex_in_flight());
+            assert!(!state.reindex.in_flight());
         });
     }
 
@@ -1824,7 +1740,7 @@ mod tests {
             "the fake cites every passage it was handed: {answer:?}"
         );
         // The slot is released on the way out, so the next turn can claim it.
-        assert!(state.try_start_ask());
+        assert!(state.ask.try_claim().is_some());
     }
 
     #[test]
@@ -1837,7 +1753,7 @@ mod tests {
         // from another thread; setting it inside the sink is that race, made deterministic.
         let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
             streamed.borrow_mut().push(t.to_string());
-            state.request_ask_cancel();
+            state.ask.cancel();
         })
         .unwrap();
 
@@ -1856,7 +1772,8 @@ mod tests {
         let (state, vault) = ask_state(&tmp);
         // Stand in for an answer already streaming (the real one holds the slot for the
         // duration of its call).
-        assert!(state.try_start_ask());
+        let streaming = state.ask.try_claim();
+        assert!(streaming.is_some());
 
         let err = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap_err();
         assert!(matches!(err, CmdError::AskInFlight));
@@ -1890,27 +1807,28 @@ mod tests {
         streamed.borrow_mut().clear();
         let stopped = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
             streamed.borrow_mut().push(t.to_string());
-            state.request_ask_cancel();
+            state.ask.cancel();
         })
         .unwrap();
         assert!(stopped.cancelled);
         assert_eq!(streamed.borrow().len(), 1);
 
         // One answer slot for both kinds of turn.
-        assert!(state.try_start_ask());
+        let streaming = state.ask.try_claim();
+        assert!(streaming.is_some());
         let err =
             why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|_| {}).unwrap_err();
         assert!(matches!(err, CmdError::AskInFlight));
     }
 
-    /// A stale cancel must not kill the *next* answer: `arm_ask` clears it once the fresh
-    /// turn owns the slot, which is the whole reason the flag is armed rather than reset
-    /// by whoever set it.
+    /// A stale cancel must not kill the *next* answer: claiming the slot clears it once the
+    /// fresh turn owns it, which is the whole reason the flag is cleared on claim rather
+    /// than reset by whoever set it.
     #[test]
     fn a_stale_cancel_does_not_stop_the_next_answer() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
-        state.request_ask_cancel(); // …from a turn that already ended
+        state.ask.cancel(); // …from a turn that already ended
         let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap();
         assert!(!answer.cancelled);
     }

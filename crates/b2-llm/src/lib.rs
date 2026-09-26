@@ -4,10 +4,10 @@
 //! never sees it — flow ④ is built and tested against `FakeLlm`.
 //!
 //! Decisions (GH #151, cut as GH #154):
-//! - **Build our own.** The MVP wire surface is *one* endpoint shape —
+//! - **Build our own.** The wire surface is *one* endpoint shape —
 //!   `POST {base}/chat/completions` with `stream: true`, SSE frames until `[DONE]` — so a
-//!   client library would buy a dependency tree, not leverage. The question re-opens
-//!   *inside this crate*, behind the unchanged trait, when the agent loop is cut.
+//!   client library would buy a dependency tree, not leverage. Tool calls (ADR-0022) rode
+//!   in on that same stream as `delta.tool_calls`, so they did not change the answer.
 //! - **Sync end-to-end, over `ureq`** (ADR-0011): no runtime, no async-to-sync bridge, and
 //!   **cancellation is just returning early from a blocking read loop**.
 //! - **Any OpenAI-compatible URL.** Ollama is the *guided* default; LM Studio, llama.cpp,
@@ -20,16 +20,56 @@
 //! nothing is cached, and swapping models never touches the index.
 
 mod provider;
-pub mod setup;
+mod setup;
 mod sse;
 
+use b2_core::llm::{FakeLlm, LlmProvider};
 use serde::Serialize;
 
 pub use provider::OpenAiCompatProvider;
 pub use setup::{
-    is_local, is_ollama, probe_setup, pull_command, refusal_message, ChatSetup, ChatState,
-    ModelTier, OllamaModel, OllamaSetup, ToolCallCap, MODEL_TIERS, OLLAMA_INSTALL_URL,
+    model_missing_message, probe_setup, pull_command, refusal_message, unreachable_message,
+    ChatSetup, ChatState, ModelTier, OllamaModel, OllamaSetup, ToolCallCap, MODEL_TIERS,
+    OLLAMA_INSTALL_URL,
 };
+
+/// The environment variable that swaps in the deterministic [`FakeLlm`]: `B2_LLM=fake`,
+/// `B2_EMBEDDER=fake`'s sibling for the chat seam.
+pub const ENV_LLM: &str = "B2_LLM";
+
+/// What an adapter says when [`fake_requested`] is in force — never overstate what
+/// answered. One sentence, so the CLI's stderr note and the desktop's setup card agree.
+pub const FAKE_NOTICE: &str = "The fake chat provider is in use (B2_LLM=fake) — answers are \
+                               deterministic test scaffolding, not a model.";
+
+/// Whether `B2_LLM=fake` is in force. Read in one place so the two adapters cannot
+/// disagree about what the switch means.
+pub fn fake_requested() -> bool {
+    std::env::var_os(ENV_LLM).is_some_and(|v| v == "fake")
+}
+
+/// The provider a chat command talks to: the fake under [`fake_requested`], else the real
+/// client over `config`. **No probe** — for a caller that has already checked the endpoint
+/// (the desktop probes once, when its chat surface opens) or wants none.
+pub fn provider(config: LlmConfig) -> Box<dyn LlmProvider> {
+    if fake_requested() {
+        Box::new(FakeLlm)
+    } else {
+        Box::new(OpenAiCompatProvider::new(config))
+    }
+}
+
+/// [`provider`], **probed** before it is returned — the `b2 init` posture applied to chat:
+/// a stopped server is an [`LlmError`] before the question, never a surprise after it. The
+/// fake has nothing to probe.
+pub fn probed_provider(config: LlmConfig) -> Result<Box<dyn LlmProvider>, LlmError> {
+    if fake_requested() {
+        return Ok(Box::new(FakeLlm));
+    }
+    let provider = OpenAiCompatProvider::new(config);
+    provider.probe()?;
+    Ok(Box::new(provider))
+}
 
 /// Where the Ollama daemon serves its OpenAI-compatible surface. The *guided*
 /// default per GH #151: local-first, no key, and the runtime B2's onboarding
@@ -74,7 +114,14 @@ pub fn parse_max_tool_calls(raw: &str) -> Option<usize> {
     raw.trim()
         .parse::<usize>()
         .ok()
-        .filter(|n| (1..=MAX_TOOL_CALLS_CEILING).contains(n))
+        .filter(|&n| is_valid_tool_call_cap(n))
+}
+
+/// The range every tool-call cap must fall in, from any source: 1 (zero would refuse every
+/// call) to [`MAX_TOOL_CALLS_CEILING`]. Shared by the parser and
+/// [`LlmConfig::with_max_tool_calls`], so the two can never accept different values.
+fn is_valid_tool_call_cap(n: usize) -> bool {
+    (1..=MAX_TOOL_CALLS_CEILING).contains(&n)
 }
 
 /// Where the bearer token in force came from. A **fact about the key, never the key** —
@@ -243,7 +290,7 @@ impl LlmConfig {
     /// hand-edited settings file cannot lift the ceiling the parser enforces.
     #[must_use]
     pub fn with_max_tool_calls(mut self, max_tool_calls: Option<usize>) -> Self {
-        if let Some(n) = max_tool_calls.filter(|n| (1..=MAX_TOOL_CALLS_CEILING).contains(n)) {
+        if let Some(n) = max_tool_calls.filter(|&n| is_valid_tool_call_cap(n)) {
             self.max_tool_calls = n;
         }
         self
@@ -310,7 +357,7 @@ pub enum LlmError {
     /// 404 here is a base URL that isn't a chat API (the `…/v1X` typo), while a 404
     /// mid-answer is the server's own "model not found". An adapter that had to guess would
     /// give the wrong fix half the time, so the distinction is carried in the type — and
-    /// turned into a sentence once, by [`crate::setup::refusal_message`].
+    /// turned into a sentence once, by [`crate::refusal_message`].
     #[error("the model server at {endpoint} refused a probe (HTTP {status}): {message}")]
     Refused {
         endpoint: String,
