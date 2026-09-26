@@ -19,10 +19,14 @@
 //!   resolver's; this adapter states its sources and doesn't rank them.
 
 use crate::keychain::KeyStore;
-use b2_core::llm::{FakeLlm, LlmProvider};
-use b2_llm::{ApiKeySource, LlmConfig, OpenAiCompatProvider};
+use crate::state_file;
+use b2_core::llm::LlmProvider;
+use b2_llm::{ApiKeySource, LlmConfig};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// The state file holding the persisted half of [`ChatPrefs`] (see [`state_file`]).
+const PREFS_FILE: &str = "chat.json";
 
 /// The desktop's chat preferences: the Settings section's two persisted fields,
 /// plus the key in force. `None` means "whatever the environment and the
@@ -102,33 +106,22 @@ impl ChatPrefs {
     }
 }
 
-/// Whether the deterministic fake chat provider is forced (`B2_LLM=fake`) — the
-/// `B2_EMBEDDER=fake` sibling, honored identically to the CLI so the two adapters
-/// behave the same offline.
-pub fn use_fake_llm() -> bool {
-    matches!(std::env::var("B2_LLM").ok().as_deref(), Some("fake"))
-}
-
-/// Pick + wire the chat provider — `main.rs`'s `open_vault` for the second seam.
+/// Pick + wire the chat provider — `main.rs`'s `open_vault` for the second seam, over the
+/// same `b2_llm::provider` rule the CLI uses (`B2_LLM=fake` or the configured endpoint).
 ///
 /// Unlike the CLI's `open_llm` this does **not** probe: the desktop probes once when the
 /// chat surface opens, and a round trip per turn would be a per-question tax on a cloud
 /// endpoint. A server that dies between the probe and the question surfaces as the same
 /// actionable message from `Error::Llm`.
 pub fn provider(prefs: &ChatPrefs) -> Box<dyn LlmProvider> {
-    if use_fake_llm() {
-        return Box::new(FakeLlm);
-    }
-    Box::new(OpenAiCompatProvider::new(prefs.config()))
+    b2_llm::provider(prefs.config())
 }
 
-/// Where the persisted half lives: `<data-dir>/b2/chat.json`, beside the
-/// remembered vault (`main.rs`'s `last_vault_file`) and under the same `b2/`
-/// vendor dir as the model cache. `None` only if the platform has no data dir,
-/// in which case remembering is silently skipped — chat still works, it just
-/// forgets the endpoint at quit.
+/// Where the persisted half lives: `<data-dir>/b2/chat.json`, beside the remembered vault
+/// ([`state_file`]). `None` only if the platform has no data dir — chat still works, it
+/// just forgets the endpoint at quit.
 pub fn prefs_file() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("b2").join("chat.json"))
+    state_file::path(PREFS_FILE)
 }
 
 /// The preferences this launch starts from: the endpoint and model out of the
@@ -225,25 +218,18 @@ pub fn apply_tool_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
 /// opened vault: a write failure is logged and swallowed, never failing the
 /// setting the user just made — the change is already live in memory either way.
 pub fn persist_prefs(prefs: &ChatPrefs) {
-    let Some(file) = prefs_file() else {
-        eprintln!("[b2] could not remember chat settings: no platform data directory");
-        return;
-    };
-    if let Err(e) = write_prefs_to(&file, prefs) {
-        eprintln!("[b2] could not remember chat settings: {e}");
-    }
+    state_file::update(PREFS_FILE, "remember chat settings", |file| {
+        write_prefs_to(file, prefs)
+    });
 }
 
 /// [`persist_prefs`] against an explicit path — the testable core. Creates the
 /// parent dir if needed. The API key is `#[serde(skip)]`, so what lands on disk
 /// is the endpoint and the model and nothing else.
 pub fn write_prefs_to(file: &Path, prefs: &ChatPrefs) -> std::io::Result<()> {
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_string_pretty(prefs)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(file, json)
+    state_file::write(file, json.as_bytes())
 }
 
 #[cfg(test)]

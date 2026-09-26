@@ -36,9 +36,9 @@ pub fn init_logging() -> Option<WorkerGuard> {
     let log_file = std::env::var_os("B2_LOG_FILE");
     let directive = match std::env::var("B2_LOG") {
         Ok(v) if !v.trim().is_empty() => v,
-        // Implied default scoped to the kernel's targets (`b2::sqlite`/`vault`/`ingest`/
-        // `search`) — not the CLI's bare `debug` — so Tauri/wry/hyper tracing doesn't
-        // pollute the file. See the module doc for why this one knob diverges.
+        // Implied default scoped to B2's own targets (`b2::sqlite`/`vault`/`ingest`/
+        // `search`/`llm`/`embed`) — the same scoping the CLI uses — so Tauri/wry/hyper
+        // tracing doesn't pollute the file (see the module doc).
         _ if std::env::var_os("B2_DEBUG").is_some() || log_file.is_some() => "b2=debug".to_string(),
         _ => return None,
     };

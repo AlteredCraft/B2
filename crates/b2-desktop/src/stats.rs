@@ -9,9 +9,13 @@
 //! corpus (ADR-0007) and the ledger must restart with the vectors. Purely diagnostic and
 //! best-effort — a read/write failure never fails an embed.
 
+use crate::state_file;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+/// The ledger's state file, `<data-dir>/b2/embed-stats.json` (see [`state_file`]).
+const STATS_FILE: &str = "embed-stats.json";
 
 /// One model's accumulated embedding cost. `total_ms / chunks` is the throughput the
 /// Settings pane shows; `runs` counts the embed passes that contributed.
@@ -27,27 +31,34 @@ pub struct ModelStat {
     pub runs: u64,
 }
 
+/// One model's row as the Settings pane reads it (`embed_stats`, `ui/src/types.ts`'s
+/// `EmbedStat`): the id beside its [`ModelStat`] fields, flattened, so the IPC payload is
+/// the ledger's own bucket rather than a hand-copied mirror of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EmbedStat {
+    pub model: String,
+    #[serde(flatten)]
+    pub stat: ModelStat,
+}
+
 /// The on-disk ledger: model id → its cumulative stat.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct StatsFile {
     models: BTreeMap<String, ModelStat>,
 }
 
-/// The ledger's path: `<data-dir>/b2/embed-stats.json` (the same vendor dir as
-/// `last-vault` and the model cache). `None` when the platform has no data dir, in which
-/// case recording is silently skipped.
-fn stats_file() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("b2").join("embed-stats.json"))
-}
-
-/// The whole ledger, one `(model_id, stat)` per model, or empty when there's no data dir
-/// / no file / an unreadable-or-corrupt file — stats are never load-bearing, so a bad
-/// file degrades cleanly to "no history" rather than surfacing an error.
-pub fn read_all() -> Vec<(String, ModelStat)> {
-    let Some(path) = stats_file() else {
+/// The whole ledger, one row per model, or empty when there's no data dir / no file / an
+/// unreadable-or-corrupt file — stats are never load-bearing, so a bad file degrades
+/// cleanly to "no history" rather than surfacing an error.
+pub fn read_all() -> Vec<EmbedStat> {
+    let Some(path) = state_file::path(STATS_FILE) else {
         return Vec::new();
     };
-    read_from(&path).models.into_iter().collect()
+    read_from(&path)
+        .models
+        .into_iter()
+        .map(|(model, stat)| EmbedStat { model, stat })
+        .collect()
 }
 
 /// [`read_all`] against an explicit path — the testable core. A missing or malformed file
@@ -60,24 +71,20 @@ fn read_from(path: &Path) -> StatsFile {
 }
 
 /// Serialize the ledger and rewrite it at `path` — the shared write tail of
-/// [`record_to`] and [`reset_in`]. Creating the parent dir stays the caller's job:
-/// only [`record_to`] may create the file (a no-op reset must not).
+/// [`record_to`] and [`reset_in`]. Only a write that has something to say reaches here
+/// (a no-op reset returns before it), so creating the parent dir on the way is safe.
 fn write_ledger(path: &Path, file: &StatsFile) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(file).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
+    state_file::write(path, text.as_bytes())
 }
 
 /// Add one embed run's `(elapsed_ms, chunks)` to `model`'s running total. Best-effort:
 /// a missing data dir or a write failure is logged to stderr and swallowed — recording a
 /// measurement must never fail the embed the user actually asked for.
 pub fn record(model: &str, elapsed_ms: u64, chunks: u64) {
-    let Some(path) = stats_file() else {
-        eprintln!("[b2] embed stats: no platform data directory; not recording");
-        return;
-    };
-    if let Err(e) = record_to(&path, model, elapsed_ms, chunks) {
-        eprintln!("[b2] embed stats: could not record ({e})");
-    }
+    state_file::update(STATS_FILE, "record embed stats", |path| {
+        record_to(path, model, elapsed_ms, chunks)
+    });
 }
 
 /// [`record`] against an explicit path — the testable core. Read-modify-write: load the
@@ -89,9 +96,6 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
     entry.total_ms = entry.total_ms.saturating_add(elapsed_ms);
     entry.chunks = entry.chunks.saturating_add(chunks);
     entry.runs = entry.runs.saturating_add(1);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     write_ledger(path, &file)
 }
 
@@ -102,12 +106,9 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
 /// the switched-to model is touched, so the others' history survives for comparison.
 /// Best-effort like [`record`].
 pub fn reset(model: &str) {
-    let Some(path) = stats_file() else {
-        return; // no data dir ⇒ nothing was ever recorded ⇒ nothing to reset
-    };
-    if let Err(e) = reset_in(&path, model) {
-        eprintln!("[b2] embed stats: could not reset ({e})");
-    }
+    state_file::update(STATS_FILE, "reset embed stats", |path| {
+        reset_in(path, model)
+    });
 }
 
 /// [`reset`] against an explicit path — the testable core. Drops `model`'s bucket and
@@ -200,6 +201,24 @@ mod tests {
             read_from(&path).models["m/base"].chunks,
             40,
             "an unrelated bucket is intact after a no-op reset"
+        );
+    }
+
+    /// The Settings pane reads these four keys (`ui/src/types.ts`'s `EmbedStat`), so the
+    /// flattened row must serialize exactly as the hand-written mirror it replaced.
+    #[test]
+    fn a_ledger_row_crosses_ipc_with_the_ui_field_names() {
+        let row = EmbedStat {
+            model: "m/base".into(),
+            stat: ModelStat {
+                total_ms: 3500,
+                chunks: 100,
+                runs: 2,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&row).unwrap(),
+            serde_json::json!({"model": "m/base", "total_ms": 3500, "chunks": 100, "runs": 2})
         );
     }
 
