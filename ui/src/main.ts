@@ -74,6 +74,8 @@ import {
   type SettingsTabId,
 } from "./settingstabs";
 import { reindexMeterHtml } from "./widgets";
+import { isThemePref, loadThemePref, saveThemePref, themeAttr } from "./theme";
+import { loadReminderOptOut, saveReminderOptOut } from "./embedreminder";
 import { externalUrl, isInPageAnchor } from "./links";
 import { embedImagesField, livePreview, setEmbedImages, wikilink } from "./livepreview";
 import {
@@ -664,8 +666,7 @@ function adoptResource(resource: ResourceExplainView, picture: string | null): v
 // the editor — and the user's buffer — alive instead. A successful load records the
 // document in the history stack (#52); back/forward call `loadNote` directly.
 async function openNote(ref: string): Promise<void> {
-  if (!fmEditGuard()) return;
-  if (!(await closeEditor())) return;
+  if (!(await leaveEdits())) return;
   await loadNote(ref, (path) => navPush({ kind: "note", path }));
 }
 
@@ -835,8 +836,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
 // openNote — same edit-mode flush, same one-document-owns-the-pane rule, same
 // history push.
 async function openResource(path: string): Promise<void> {
-  if (!fmEditGuard()) return;
-  if (!(await closeEditor())) return;
+  if (!(await leaveEdits())) return;
   await loadResource(path, (p) => navPush({ kind: "resource", path: p }));
 }
 
@@ -921,9 +921,21 @@ const TREE_ROW = ".tree-row[data-tree-row]";
 /** The DOM row for a vault path. Looked up by data attribute rather than by CSS
  *  selector because a filename may contain anything a selector would choke on. */
 function treeRowEl(path: string | null): HTMLElement | null {
-  if (path === null) return null;
-  const rows = el("tree-pane").querySelectorAll<HTMLElement>(TREE_ROW);
-  for (const row of rows) if (row.dataset.treeRow === path) return row;
+  return findByData<HTMLElement>(el("tree-pane"), TREE_ROW, "treeRow", path);
+}
+
+/** The first element under `root` matching `selector` whose `data-*` field `key` is
+ *  exactly `value` (null finds nothing). Iterated rather than put in the selector: the
+ *  value is a path or a key carrying one, and a path may contain anything a selector
+ *  would choke on. */
+function findByData<E extends HTMLElement | SVGElement>(
+  root: Element,
+  selector: string,
+  key: string,
+  value: string | null,
+): E | null {
+  if (value === null) return null;
+  for (const node of root.querySelectorAll<E>(selector)) if (node.dataset[key] === value) return node;
   return null;
 }
 
@@ -973,20 +985,14 @@ function focusTreeRow(path: string): void {
 
 /** The DOM row for a `sidenav.ts` row key. */
 function sideRowEl(key: string | null): HTMLElement | null {
-  if (key === null) return null;
-  const rows = el("side-pane").querySelectorAll<HTMLElement>("[data-side-row]");
-  for (const row of rows) if (row.dataset.sideRow === key) return row;
-  return null;
+  return findByData<HTMLElement>(el("side-pane"), "[data-side-row]", "sideRow", key);
 }
 
 /** The graph node for a scene id (graph.ts `GraphNode.id`) — the note pane's `sideRowEl`,
  *  and iterating rather than selecting for the same reason: a node id carries a vault
  *  path, and a path may contain anything a selector would choke on. */
 function gnodeEl(id: string | null): SVGElement | null {
-  if (id === null) return null;
-  const nodes = el("note-pane").querySelectorAll<SVGElement>("[data-gnode]");
-  for (const node of nodes) if (node.dataset.gnode === id) return node;
-  return null;
+  return findByData<SVGElement>(el("note-pane"), "[data-gnode]", "gnode", id);
 }
 
 /** The row carrying the roving tabstop, as painted (sidenav.ts `rovingSideKey`). */
@@ -1319,8 +1325,7 @@ async function navGo(delta: -1 | 1): Promise<void> {
   if (state.loading) return;
   // The guards first (closeEditor can await a save flush); the cursor math after,
   // against whatever the stack is once navigation is actually allowed to proceed.
-  if (!fmEditGuard()) return;
-  if (!(await closeEditor())) return;
+  if (!(await leaveEdits())) return;
   const target = navCursor + delta;
   if (target < 0 || target >= navStack.length) return;
   const entry = navStack[target];
@@ -1768,11 +1773,7 @@ function droppedFiles(dt: DataTransfer | null): DroppedFile[] {
 /** Shared refusal gate: an import writes, so it queues behind the same runs a move does. */
 function canImportNow(): boolean {
   if (importInFlight || state.vaultRoot === null) return false;
-  if (state.reindexing) {
-    flash("Indexing is running — try the import again when it finishes.");
-    return false;
-  }
-  return true;
+  return !refusedWhileIndexing("import");
 }
 
 /** The drop half: send each accepted file's bytes, then report once. */
@@ -1863,6 +1864,14 @@ async function finishImport(dir: string, imported: string[], refused: string[]):
 // reconcileExternalChange re-reads the open note by path, so if it still pointed at
 // the old path it would flash "moved or removed" for a move we made ourselves.
 
+/** Refuse a write while an index run is live, and say so — true when refused. The run
+ *  and the write would race the same index. */
+function refusedWhileIndexing(what: string): boolean {
+  if (!state.reindexing) return false;
+  flash(`Indexing is running — try the ${what} again when it finishes.`);
+  return true;
+}
+
 /** A move/rename is in flight — further gestures are ignored (no queueing in v1). */
 let moveInFlight = false;
 
@@ -1911,40 +1920,32 @@ function openMoveModal(node: TreeNodeRef): void {
  */
 async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   if (moveInFlight) return false;
-  if (state.reindexing) {
-    flash("Indexing is running — try the move again when it finishes.");
-    return false;
-  }
+  if (refusedWhileIndexing("move")) return false;
   // If the open document is affected, flush and close the editor first so the save
   // chain never targets the old path (a conflict keeps the editor and aborts the move).
   const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
     (node.nodeKind === "folder" ? remapPath(curPath, node.path, to) !== null : curPath === node.path);
+  // Not `leaveEdits`: with no editor open this must not yield before the in-flight flag
+  // is set below, or a second gesture could slip past it.
   if (affected && !fmEditGuard()) return false;
   if (affected && state.editing && !(await closeEditor())) return false;
 
   moveInFlight = true;
   if (node.nodeKind === "folder") flash(`Moving ${node.path}/…`);
   try {
-    let from: string;
-    let rewritten: number;
-    if (node.nodeKind === "note") {
-      const r = await api.moveNote(node.path, to);
-      from = r.from;
-      to = r.to; // the host normalizes (e.g. appends .md)
-      rewritten = r.links_rewritten;
-    } else if (node.nodeKind === "resource") {
-      const r = await api.moveResource(node.path, to);
-      from = r.from;
-      to = r.to;
-      rewritten = r.links_rewritten;
-    } else {
-      const r = await api.moveDir(node.path, to);
-      from = r.from;
-      to = r.to;
-      rewritten = r.links_rewritten;
-    }
+    // One report shape for all three kinds.
+    const move =
+      node.nodeKind === "note"
+        ? api.moveNote
+        : node.nodeKind === "resource"
+          ? api.moveResource
+          : api.moveDir;
+    const r = await move(node.path, to);
+    const from = r.from;
+    to = r.to; // the host normalizes (e.g. appends .md)
+    const rewritten = r.links_rewritten;
 
     // Re-point open/tree state through the move before the watcher pulse re-reads it.
     state.expandedDirs = new Set(
@@ -2007,6 +2008,15 @@ function requestDelete(node: TreeNodeRef): void {
   render();
 }
 
+/** Commit the folder-delete confirm — its button and its ⏎ alike: the dialog closes and
+ *  the delete runs. */
+function confirmDelete(): void {
+  const node = state.deleteTarget;
+  if (!node) return;
+  state.deleteTarget = null;
+  void executeDelete(node);
+}
+
 /** Forget tree state pointing into a deleted folder subtree. */
 function dropDirState(dir: string): void {
   const gone = (d: string) => isWithin(d, dir);
@@ -2021,10 +2031,7 @@ function dropDirState(dir: string): void {
  */
 async function executeDelete(node: TreeNodeRef): Promise<void> {
   if (deleteInFlight) return;
-  if (state.reindexing) {
-    flash("Indexing is running — try the delete again when it finishes.");
-    return;
-  }
+  if (refusedWhileIndexing("delete")) return;
   // If the open document dies with the delete, close the editor first so no save
   // chain targets a file that's about to be removed (a conflict aborts the delete,
   // keeping the buffer alive — the executeMove posture).
@@ -2032,6 +2039,8 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
   const affected =
     curPath !== null &&
     (node.nodeKind === "folder" ? isWithin(curPath, node.path) : curPath === node.path);
+  // Not `leaveEdits`: with no editor open this must not yield before the in-flight flag
+  // is set below, or a second gesture could slip past it.
   if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
 
@@ -2046,17 +2055,14 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
   try {
     let what: string;
     let dangled: number;
-    if (node.nodeKind === "note") {
-      const r = await api.deleteNote(node.path);
-      what = r.path;
-      dangled = r.dangled.length;
-    } else if (node.nodeKind === "resource") {
-      const r = await api.deleteResource(node.path);
-      what = r.path;
-      dangled = r.dangled.length;
-    } else {
+    if (node.nodeKind === "folder") {
       const r = await api.deleteDir(node.path);
       what = `${r.dir}/`;
+      dangled = r.dangled.length;
+    } else {
+      // A note and a resource report alike.
+      const r = await (node.nodeKind === "note" ? api.deleteNote : api.deleteResource)(node.path);
+      what = r.path;
       dangled = r.dangled.length;
     }
 
@@ -2234,9 +2240,14 @@ function resetSearch(): void {
   state.searchVouched = null;
 }
 
+/** The top bar's vault-search box. */
+function searchInput(): HTMLInputElement | null {
+  return document.getElementById("search-input") as HTMLInputElement | null;
+}
+
 function clearSearch(): void {
   resetSearch();
-  const input = document.getElementById("search-input") as HTMLInputElement | null;
+  const input = searchInput();
   if (input) input.value = "";
   render();
 }
@@ -2798,28 +2809,17 @@ async function copyPath(path: string): Promise<void> {
 // `data-theme` attribute on <html> that those rules' overrides key on. Persisted in
 // localStorage — a viewing choice, never vault state, so it doesn't touch the host.
 
-const THEME_KEY = "b2:theme";
-
-function isThemePref(v: string | null): v is ThemePref {
-  return v === "system" || v === "light" || v === "dark";
-}
-
 /** Reflect `state.theme` onto <html>: absent attribute ⇒ follow the OS. */
 function applyTheme(): void {
   const root = document.documentElement;
-  if (state.theme === "system") root.removeAttribute("data-theme");
-  else root.setAttribute("data-theme", state.theme);
+  const attr = themeAttr(state.theme);
+  if (attr === null) root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", attr);
 }
 
 /** Read the saved preference into state and apply it (once, first thing on boot). */
 function loadTheme(): void {
-  let saved: string | null = null;
-  try {
-    saved = localStorage.getItem(THEME_KEY);
-  } catch {
-    // localStorage can be unavailable (e.g. private mode) — fall back to System.
-  }
-  state.theme = isThemePref(saved) ? saved : "system";
+  state.theme = loadThemePref();
   applyTheme();
 }
 
@@ -2827,11 +2827,7 @@ function loadTheme(): void {
 function setTheme(theme: ThemePref): void {
   if (state.theme === theme) return;
   state.theme = theme;
-  try {
-    localStorage.setItem(THEME_KEY, theme);
-  } catch {
-    // Non-fatal: the choice still applies for this session if it can't persist.
-  }
+  saveThemePref(theme);
   applyTheme();
   render();
 }
@@ -3112,28 +3108,16 @@ function resetAllChords(): void {
 // persists the opt-out so a keyword-only user isn't pestered. Same localStorage idiom as
 // the appearance preference above (a viewing choice, never vault state).
 
-const EMBED_REMINDER_KEY = "b2:embed-reminder-off";
-
 /** Read the persisted "don't remind me" opt-out into state (once, on boot). */
 function loadEmbedReminderPref(): void {
-  try {
-    state.embedReminderDismissed = localStorage.getItem(EMBED_REMINDER_KEY) === "1";
-  } catch {
-    // localStorage unavailable (e.g. private mode): default to showing the reminder.
-  }
+  state.embedReminderDismissed = loadReminderOptOut();
 }
 
 /** Turn the banner off. `persist` writes the opt-out so it survives relaunch (the
  *  checkbox); the bare ✕ passes false and only hides it for this session. */
 function dismissEmbedReminder(persist: boolean): void {
   state.embedReminderDismissed = true;
-  if (persist) {
-    try {
-      localStorage.setItem(EMBED_REMINDER_KEY, "1");
-    } catch {
-      // Non-fatal: the opt-out still holds for this session if it can't persist.
-    }
-  }
+  if (persist) saveReminderOptOut();
   render();
 }
 
@@ -3197,8 +3181,7 @@ async function switchVault(): Promise<void> {
   // Flush + leave edit mode before the picker (same hook as openNote); then drop any
   // pending trailing embed — it belongs to the vault we may be about to leave, and
   // its DB-derived pending set heals on that vault's next embed/reindex anyway.
-  if (!fmEditGuard()) return;
-  if (!(await closeEditor())) return;
+  if (!(await leaveEdits())) return;
   if (embedTimer !== undefined) {
     clearTimeout(embedTimer);
     embedTimer = undefined;
@@ -3231,7 +3214,7 @@ async function switchVault(): Promise<void> {
     state.dirs = []; // loadNotes below re-lists the new vault's structure
     state.treeCreate = null;
     navClear(); // history is per-vault: the old stack's paths mean nothing here
-    const input = document.getElementById("search-input") as HTMLInputElement | null;
+    const input = searchInput();
     if (input) input.value = "";
     state.loading = true;
     render();
@@ -3841,10 +3824,7 @@ async function conflictReload(): Promise<void> {
   try {
     const fresh = await api.readNote(cur.path);
     state.current = fresh;
-    editorView?.destroy();
-    editorView = null;
-    trailingDirty = false;
-    autosavePaused = false;
+    teardownEditor();
     state.editConflict = false;
     mountEditor(fresh.body);
     void refreshConnections(); // the external edit may have changed edges too
@@ -3873,6 +3853,35 @@ async function conflictKeepMine(): Promise<void> {
   }
 }
 
+/** Destroy the live editor and forget its save-chain flags — what a remount (Reload) and
+ *  a close share. */
+function teardownEditor(): void {
+  editorView?.destroy();
+  editorView = null;
+  trailingDirty = false;
+  autosavePaused = false;
+}
+
+/** Does the live editor hold text the open note on disk doesn't — a flush that failed? */
+function bufferUnsaved(): boolean {
+  return (
+    editorView !== null &&
+    state.current !== null &&
+    editorView.state.doc.toString() !== state.current.body
+  );
+}
+
+/**
+ * Resolve both editors before the pane changes what it shows: the frontmatter drawer must
+ * be settled (`fmEditGuard`), and the body editor flushed and closed. False when either
+ * holds the user back — a conflict, a failed save, a drawer edit to resolve first — and
+ * the caller abandons whatever triggered it rather than drop an edit.
+ */
+async function leaveEdits(): Promise<boolean> {
+  if (!fmEditGuard()) return false;
+  return closeEditor();
+}
+
 /**
  * Flush and leave edit mode. Returns false when the buffer could not be saved — a
  * conflict (the bar is up) or a failed save — so the caller must abandon whatever
@@ -3882,16 +3891,13 @@ async function closeEditor(): Promise<boolean> {
   if (!state.editing) return true;
   await saveNow();
   if (state.editConflict) return false;
-  if (editorView && state.current && editorView.state.doc.toString() !== state.current.body)
-    return false; // the flush failed (its error already toasted) — keep the buffer alive
+  // The flush failed (its error already toasted) — keep the buffer alive.
+  if (bufferUnsaved()) return false;
   if (autosaveTimer !== undefined) {
     clearTimeout(autosaveTimer);
     autosaveTimer = undefined;
   }
-  editorView?.destroy();
-  editorView = null;
-  trailingDirty = false;
-  autosavePaused = false;
+  teardownEditor();
   state.editing = false;
   state.editConflict = false;
   return true;
@@ -3972,8 +3978,7 @@ async function commitDroppedLink(card: DraggedCard): Promise<void> {
   // (already toasted). The link stays in the buffer either way — it is the user's edit —
   // but nothing may claim it landed, and the card stays where it is.
   if (state.editConflict) return;
-  if (editorView && state.current && editorView.state.doc.toString() !== state.current.body)
-    return;
+  if (bufferUnsaved()) return;
   if (state.current?.path !== src.path) return; // navigated away while the save ran
   // By the card, not by either of its strings: `withoutCard` is keyed on the path, and
   // taking the pair is what stops the target being handed to a path comparison (the review
@@ -4222,7 +4227,7 @@ function syncFind(noteSwapped: boolean): void {
 
 /** ⇧⌘F: hand the keyboard to the global vault-search box in the top bar. */
 function focusGlobalSearch(): void {
-  const input = document.getElementById("search-input") as HTMLInputElement | null;
+  const input = searchInput();
   input?.focus();
   input?.select();
 }
@@ -4711,9 +4716,7 @@ function wireClicks(): void {
     }
     // The folder-delete confirm: the Delete button commits and closes it.
     if (target.closest("#delete-confirm") && state.deleteTarget) {
-      const node = state.deleteTarget;
-      state.deleteTarget = null;
-      void executeDelete(node);
+      confirmDelete();
       return;
     }
     // The Move… modal: clicking a destination row commits the move and closes it.
@@ -5065,8 +5068,7 @@ function wireForms(): void {
   document.addEventListener("submit", (e) => {
     if ((e.target as HTMLElement).id === "search-form") {
       e.preventDefault();
-      const input = document.getElementById("search-input") as HTMLInputElement | null;
-      void doSearch(input?.value ?? "");
+      void doSearch(searchInput()?.value ?? "");
     }
     // The chat composer is a form so its Ask button is a submit button — the platform's
     // own "this field's default action", which is what makes ⏎ work in it without B2
@@ -5365,9 +5367,7 @@ function wireChords(): void {
     // Enter commits the folder-delete confirm (its keyboard sibling of the button).
     if (state.deleteTarget && isBound(e, "delete.confirm")) {
       e.preventDefault();
-      const node = state.deleteTarget;
-      state.deleteTarget = null;
-      void executeDelete(node);
+      confirmDelete();
       return;
     }
     // ⏎ / Space on a focused graph node. SVG has no native button activation, so the

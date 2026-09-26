@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS_TAB,
   SETTINGS_TABS,
   isSettingsTab,
+  tabDomId,
   tabMove,
   tabNavFor,
   tabStep,
@@ -108,6 +109,12 @@ check("a key the rail has no move for is left alone", () => {
     tabNavFor({ key: "Tab", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }) === null,
     "⌃Tab belongs to settings.section.next",
   );
+});
+
+check("every tab has its own element id, the one the rail paints and focus returns to", () => {
+  const ids = SETTINGS_TABS.map((t) => tabDomId(t.id));
+  assert(new Set(ids).size === ids.length, "unique");
+  assert(tabDomId("keyboard") === "settings-tab-keyboard", "and spelled as main.ts looks for it");
 });
 
 console.log(`settingstabs: ${passed} checks passed`);
