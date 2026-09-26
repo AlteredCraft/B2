@@ -8,6 +8,9 @@
 //! cargo run -p b2-embed --example eval -- --stemmer  # + FTS tokenizer A/B (the #157 gate)
 //! ```
 //!
+//! Any other argument is refused (exit 1) rather than ignored: a typo'd `--swep` would
+//! otherwise score only the default config while the reader believes the A/B ran.
+//!
 //! **`docs/evals.md` is the notebook of record** — the corpus, what the exit code
 //! enforces, every verdict this harness has ruled, and the process rules. Read it before
 //! touching the corpus, the labels, or a constant here. What this comment carries is only
@@ -67,8 +70,8 @@ use b2_core::search::EvidenceBar;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use common::{
-    append_result, cosine_of, git_short_sha, passage_z, pile_stats, term_coverage, title_query,
-    truncate, Band, ScratchVault,
+    append_result, cosine_of, git_short_sha, has_flag, passage_z, pile_stats, reject_unknown_flags,
+    term_coverage, title_query, truncate, Band, ScratchVault,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -498,8 +501,14 @@ fn main() {
 
 /// Returns whether the default-config hybrid pass cleared the reference floor.
 fn run() -> Result<bool, Box<dyn std::error::Error>> {
-    let sweep = std::env::args().any(|a| a == "--sweep");
-    let stemmer = std::env::args().any(|a| a == "--stemmer");
+    // A bare `--` is dropped rather than refused (`make stability`'s posture: a pasted
+    // `cargo run … -- --sweep` must not fail on its own separator); anything else
+    // unrecognised is refused, since a typo'd flag would otherwise run the default
+    // measurement while the reader believes an A/B ran.
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--").collect();
+    reject_unknown_flags(&args, &["--sweep", "--stemmer"], &[])?;
+    let sweep = has_flag(&args, "--sweep");
+    let stemmer = has_flag(&args, "--stemmer");
     let evals_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("evals");
     let corpus_dir = evals_dir.join("corpus");
     let results_path = evals_dir.join("results.jsonl");
