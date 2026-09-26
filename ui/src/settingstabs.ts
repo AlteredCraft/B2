@@ -69,6 +69,12 @@ export const SETTINGS_TABS: SettingsTab[] = [
 /** The default section — what ⌘, opens on the first time in a session. */
 export const DEFAULT_SETTINGS_TAB: SettingsTabId = "general";
 
+/** A tab's element id — the one the rail paints, `aria-labelledby` points at, and
+ *  main.ts re-focuses a tab by after the surface repaints. */
+export function tabDomId(id: SettingsTabId): string {
+  return `settings-tab-${id}`;
+}
+
 /** Whether an untrusted string (a `data-settings-tab` attribute, a stored preference)
  *  names a real section. */
 export function isSettingsTab(value: unknown): value is SettingsTabId {

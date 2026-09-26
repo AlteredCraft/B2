@@ -30,11 +30,13 @@
 // human-invoked export, and is not MVP (GH #151's open question 2).
 
 import type { SideRow } from "./sidenav.ts";
+import { coverage } from "./coverage.ts";
 import type {
   AnswerView,
   ChatSetup,
   ChatTurn,
   Citation,
+  OllamaModel,
   ToolCallCap,
   ToolUse,
 } from "./types";
@@ -252,6 +254,23 @@ export function chatEmptyState(s: {
   }
 }
 
+/** The app's side of `chatEmptyState`: the vault and the probe, read off the app state. */
+export function chatStateOf(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): ChatEmptyState {
+  return chatEmptyState({ hasVault: s.vaultRoot !== null, setup: s.chatSetup });
+}
+
+/** Can a question be asked right now? What the composer's presence and *Why?* both wait on. */
+export function chatReady(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): boolean {
+  return chatStateOf(s) === "ready";
+}
+
+/** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
+ *  the only place the frontend spells it: the Endpoint field's placeholder, and its seed
+ *  when the user presses *Local* after typing a cloud URL. The host's
+ *  `b2_llm::DEFAULT_BASE_URL` is the authority (it is what an unset endpoint resolves
+ *  to) — change them together. */
+export const LOCAL_CHAT_ENDPOINT = "http://localhost:11434/v1";
+
 /**
  * The honest note about *retrieval* under the composer, or "" when there is nothing to
  * say — the search caveat (#26) applied to chat.
@@ -272,14 +291,18 @@ export function retrievalNote(s: {
   notesEmbedded: number;
   notesTotal: number;
 }): string {
-  if (s.notesTotal === 0) return "";
-  if (!s.semantic)
+  const c = coverage(s);
+  if (c.embedded === "empty") return "";
+  if (!c.model)
     return "Answers are grounded by keyword search only — the embedding model isn’t installed.";
-  if (s.notesEmbedded === 0)
-    return "Answers are grounded by keyword search for now — this vault isn’t embedded yet.";
-  if (s.notesEmbedded < s.notesTotal)
-    return `Keyword-first grounding — ${s.notesEmbedded}/${s.notesTotal} notes embedded. Reindex to fill the rest.`;
-  return "";
+  switch (c.embedded) {
+    case "none":
+      return "Answers are grounded by keyword search for now — this vault isn’t embedded yet.";
+    case "partial":
+      return `Keyword-first grounding — ${c.n}/${c.m} notes embedded. Reindex to fill the rest.`;
+    case "all":
+      return "";
+  }
 }
 
 /** The one command the setup card tells a human to run, spelled here so the label, the
@@ -308,6 +331,12 @@ export const OLLAMA_QUICKSTART_URL = "https://docs.ollama.com/quickstart";
  *  offered where that decision is made. Named rather than defaulted to: picking a
  *  provider is the explicit act M5 is about, so this is a link, never a pre-filled URL. */
 export const OLLAMA_CLOUD_URL = "https://docs.ollama.com/cloud";
+
+/** An installed model's one-line detail — its parameter label and size, whichever it
+ *  has ("3.2B · 2.0 GB") — as both the setup card and the Settings picker print it. */
+export function modelDetail(m: OllamaModel): string {
+  return [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · ");
+}
 
 /** A model's on-disk size, for the installed list. Whole GB past a gigabyte, one decimal
  *  below — an inventory line, not a measurement. */

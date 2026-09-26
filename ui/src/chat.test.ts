@@ -5,11 +5,14 @@ import {
   STREAMING_ROW_KEY,
   answerMessage,
   chatEmptyState,
+  chatReady,
+  chatStateOf,
   chatHistory,
   chatRows,
   citationRowKey,
   errorMessage,
   formatModelSize,
+  modelDetail,
   pullCommand,
   retrievalNote,
   toolCapInput,
@@ -147,6 +150,15 @@ test("the empty state is chosen once, from the vault and the probe", () => {
   assert.equal(chatEmptyState({ hasVault: true, setup: setup({ state: "fake" }) }), "ready");
 });
 
+test("the app asks the same question off its own state", () => {
+  assert.equal(chatStateOf({ vaultRoot: null, chatSetup: setup() }), "no-vault");
+  assert.equal(chatStateOf({ vaultRoot: "/v", chatSetup: null }), "loading");
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup() }), true);
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "fake" }) }), true);
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "unreachable" }) }), false);
+  assert.equal(chatReady({ vaultRoot: null, chatSetup: setup() }), false);
+});
+
 test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
   // Nothing indexed yet: the tree's own empty state covers it, so chat says nothing.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 0 }), "");
@@ -248,4 +260,11 @@ test("a model's size reads as an inventory line", () => {
   assert.equal(formatModelSize(21_474_836_480), "20 GB");
   assert.equal(formatModelSize(500_000_000), "477 MB");
   assert.equal(formatModelSize(0), "");
+});
+
+test("an installed model's detail is its parameters and size, whichever it has", () => {
+  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: "3.2B" }), "3.2B · 1.9 GB");
+  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: null }), "1.9 GB");
+  assert.equal(modelDetail({ name: "m", size: 0, parameters: "3.2B" }), "3.2B");
+  assert.equal(modelDetail({ name: "m", size: 0, parameters: null }), "");
 });

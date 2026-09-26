@@ -5,7 +5,10 @@ import {
   allDirs,
   baseName,
   canMoveInto,
+  folderContext,
+  isWithin,
   moveDestination,
+  moveRefusal,
   refKind,
   remapPath,
   renameDestination,
@@ -139,6 +142,40 @@ check("a #fragment is dropped before classifying", () => {
 
 check("a leading-dot dotfile has no stem, so it is a note ref", () => {
   equal(refKind(".gitignore"), "note", "dotfile: empty stem");
+});
+
+// --- isWithin / folderContext / moveRefusal ------------------------------------------
+
+check("a path is within a folder when it is the folder or under it — by segment", () => {
+  assert(isWithin("a/b", "a/b"), "the folder itself");
+  assert(isWithin("a/b/c.md", "a/b"), "a file inside");
+  assert(isWithin("a/b/c/d", "a/b"), "deep inside");
+  assert(!isWithin("a/bc", "a/b"), "a prefix-sharing sibling is not inside");
+  assert(!isWithin("a", "a/b"), "the parent is not inside");
+});
+
+check("a folder is its own context; a file's is its parent's", () => {
+  equal(folderContext("a/b", "folder"), "a/b", "folder");
+  equal(folderContext("a/b/c.md", "note"), "a/b", "note");
+  equal(folderContext("img/p.png", "resource"), "img", "resource");
+  equal(folderContext("root.md", "note"), "", "a root file's context is the root");
+});
+
+check("a refused move says why, and canMoveInto is exactly its absence", () => {
+  equal(moveRefusal("concepts/memory.md", "note", "concepts"), "current-folder", "own parent");
+  equal(moveRefusal("a/b", "folder", "a"), "current-folder", "a folder's own parent");
+  equal(moveRefusal("a/b", "folder", "a/b"), "inside-itself", "into itself");
+  equal(moveRefusal("a/b", "folder", "a/b/c"), "inside-itself", "into a descendant");
+  equal(moveRefusal("a/b", "folder", "a/bc"), null, "a prefix-sharing sibling");
+  equal(moveRefusal("a/b.md", "note", "a/b"), null, "a note never refuses as inside-itself");
+  for (const [src, kind, dest] of [
+    ["a/b", "folder", "a/b"],
+    ["a/b", "folder", "c"],
+    ["x.md", "note", ""],
+    ["x.md", "note", "d"],
+  ] as const) {
+    assert(canMoveInto(src, kind, dest) === (moveRefusal(src, kind, dest) === null), `${src} → ${dest}`);
+  }
 });
 
 console.log(`move.test: ${passed} checks passed`);

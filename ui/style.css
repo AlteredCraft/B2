@@ -2165,14 +2165,7 @@ body.is-loading {
   color: var(--muted);
 }
 /* --- the keyboard reference (?) --------------------------------------------------
-   The discoverable half of K1: every chord in one place. It lives in Settings' Keyboard
-   section now, but the two-column pack is the same, and `.modal-wide` is still what the
-   anomaly panel is built on. */
-.modal-wide {
-  max-width: 720px;
-  max-height: calc(100vh - 96px);
-  overflow-y: auto;
-}
+   The discoverable half of K1: every chord in one place, in Settings' Keyboard section. */
 /* CSS multi-column, not a grid: the groups are wildly different lengths, and a grid
    would leave a short column stranded beside a long one (rows align, so every group
    pays for the tallest in its row). Columns flow, so the page packs. */
