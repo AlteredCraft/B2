@@ -79,8 +79,10 @@ import {
   OLLAMA_CLOUD_URL,
   OLLAMA_QUICKSTART_URL,
   PULL_PLACEHOLDER,
+  LOCAL_CHAT_ENDPOINT,
   STREAMING_ROW_KEY,
-  chatEmptyState,
+  chatReady,
+  chatStateOf,
   citationRowKey,
   formatModelSize,
   pullCommand,
@@ -1116,15 +1118,13 @@ function chatPaneHtml(state: AppState, roving: string | null): string {
   // No composer until there is something to answer with: a disabled field under a card
   // that says why is chrome with nothing behind it, and one more stop for a keyboard user
   // to walk past on the way to the fix the card is pointing at.
-  const ready =
-    chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup }) === "ready";
-  return head + chatStageHtml(state, roving) + (ready ? chatComposerHtml(state) : "");
+  return head + chatStageHtml(state, roving) + (chatReady(state) ? chatComposerHtml(state) : "");
 }
 
 /** The conversation, or the state that stands in for one (chat.ts's `chatEmptyState`
  *  makes that choice once, so the paint doesn't re-derive it branch by branch). */
 function chatStageHtml(state: AppState, roving: string | null): string {
-  switch (chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup })) {
+  switch (chatStateOf(state)) {
     case "no-vault":
       return `<p class="side-empty">Open a vault to chat with your notes.</p>`;
     case "loading":
@@ -1932,7 +1932,7 @@ function chatPanelHtml(state: AppState): string {
       </div>
       <label class="field">Endpoint
         <input id="settings-chat-url" type="text" autocomplete="off" spellcheck="false"
-          value="${escapeHtml(setup?.base_url ?? "")}" placeholder="http://localhost:11434/v1" />
+          value="${escapeHtml(setup?.base_url ?? "")}" placeholder="${LOCAL_CHAT_ENDPOINT}" />
       </label>
       ${chatModelFieldHtml(state, setup)}
       ${key}

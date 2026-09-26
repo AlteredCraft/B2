@@ -56,9 +56,10 @@ import {
 import { cardRowKey, sideArrowMove, sideNavFor, sideRowIndex, sideRows } from "./sidenav";
 import {
   answerMessage,
-  chatEmptyState,
   chatHistory,
+  chatReady,
   errorMessage,
+  LOCAL_CHAT_ENDPOINT,
   toolCapInput,
   userMessage,
   whyQuestion,
@@ -124,7 +125,14 @@ import {
   type Direction,
 } from "./zoom";
 import { reconcileIndex } from "./reconcile";
-import type { AnswerView, ResourceExplainView, ResourceSummary } from "./types";
+import type {
+  AnswerView,
+  ChatSetup,
+  ExplainView,
+  ResourceExplainView,
+  ResourceSummary,
+  VaultInfo,
+} from "./types";
 import {
   cmdSheetHtml,
   contextMenuHtml,
@@ -574,20 +582,10 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     state.currentResource = null; // one document owns the pane
     state.resourceImage = null;
     state.fmEditing = false; // a new document ends any drawer edit (guards ran upstream)
-    commit(note.path);
-    expandAncestors(note.path);
-    state.selectedDir = parentDir(note.path); // the create context follows the selection
-    resetSearch();
     // Paint the note the instant its body is read — the body is already in hand.
     // Discovery (`similar` + `explain`) is a slower, independent side-pane read; gating
     // the middle pane on it made note-open feel as slow as the whole discovery scan.
-    // Clear the prior note's discovery so its cards don't linger under the new note.
-    state.similar = [];
-    state.connections = [];
-    state.resourceLinks = [];
-    state.unresolved = [];
-    state.collapsedCards.clear(); // per-note fold state belongs to the note we just left
-    state.contextMenu = null;
+    enterDocument(note.path, commit);
     state.loading = false;
     state.discoveringSimilar = true;
     state.discoveringConnections = true;
@@ -604,6 +602,50 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     state.loading = false;
     render();
   }
+}
+
+/**
+ * What entering any document does beyond putting it in the pane — the part `loadNote`
+ * and `loadResource` share: record it in history (`commit`, with the canonical path),
+ * reveal it in the tree, point the create context at its folder, and clear the previous
+ * document's side pane so its cards don't linger under the new one.
+ */
+function enterDocument(path: string, commit: (path: string) => void): void {
+  commit(path);
+  expandAncestors(path);
+  state.selectedDir = parentDir(path); // the create context follows the selection
+  resetSearch();
+  clearDiscovery();
+  state.collapsedCards.clear(); // per-note fold state belongs to the note we just left
+  state.contextMenu = null;
+}
+
+/** Forget the side pane's discovery — the Similar list and the `explain` read. */
+function clearDiscovery(): void {
+  state.similar = [];
+  clearConnections();
+}
+
+/** Forget the `explain` half of discovery: connections, resource links, unresolved. */
+function clearConnections(): void {
+  state.connections = [];
+  state.resourceLinks = [];
+  state.unresolved = [];
+}
+
+/** Adopt a note's `explain` read into the Connections section. */
+function adoptExplain(explain: ExplainView): void {
+  state.connections = explain.connections;
+  state.resourceLinks = explain.resources;
+  state.unresolved = explain.unresolved;
+}
+
+/** Put a resource card in the pane, with its picture (null when there is none to show —
+ *  `loadResourceImage`). The two travel together so the card never shows another
+ *  file's picture. */
+function adoptResource(resource: ResourceExplainView, picture: string | null): void {
+  state.currentResource = resource;
+  state.resourceImage = picture;
 }
 
 // User navigation to a note (tree, wikilink, backlink, similar card, search result).
@@ -762,19 +804,9 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
   render();
   try {
     const resource = await api.explainResource(path);
-    state.currentResource = resource;
-    state.resourceImage = await loadResourceImage(resource);
+    adoptResource(resource, await loadResourceImage(resource));
     state.current = null;
-    commit(resource.path);
-    expandAncestors(resource.path);
-    state.selectedDir = parentDir(resource.path); // the create context follows the selection
-    resetSearch();
-    state.similar = [];
-    state.connections = [];
-    state.resourceLinks = [];
-    state.unresolved = [];
-    state.collapsedCards.clear();
-    state.contextMenu = null;
+    enterDocument(resource.path, commit);
     state.discoveringSimilar = false;
     state.discoveringConnections = false;
     return true;
@@ -1842,8 +1874,7 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
     }
     if (openResourcePath !== null) {
       const moved = await api.explainResource(openResourcePath);
-      state.currentResource = moved;
-      state.resourceImage = await loadResourceImage(moved);
+      adoptResource(moved, await loadResourceImage(moved));
     }
     await loadNotes();
     if (openNotePath !== null) await refreshDiscovery(); // backlinks may show new paths
@@ -1952,10 +1983,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
       state.current = null;
       state.currentResource = null;
       state.resourceImage = null;
-      state.similar = [];
-      state.connections = [];
-      state.resourceLinks = [];
-      state.unresolved = [];
+      clearDiscovery();
       state.discoveringSimilar = false;
       state.discoveringConnections = false;
     }
@@ -2015,17 +2043,11 @@ async function refreshDiscovery(): Promise<void> {
   const connections = api
     .explain(n.path)
     .then((explain) => {
-      if (!stale()) {
-        state.connections = explain.connections;
-        state.resourceLinks = explain.resources;
-        state.unresolved = explain.unresolved;
-      }
+      if (!stale()) adoptExplain(explain);
     })
     .catch((e) => {
       if (!stale()) {
-        state.connections = [];
-        state.resourceLinks = [];
-        state.unresolved = [];
+        clearConnections();
         flash(errText(e));
       }
     })
@@ -2155,16 +2177,21 @@ function toggleChat(): void {
     closeChat();
     return;
   }
-  state.chatOpen = true;
-  // Chat and search both own the whole column, one at a time (chat.ts's header).
-  clearSearch();
-  // Explicitly, rather than leaning on `clearSearch`'s own repaint: `focusChatInput`
-  // needs the composer to exist, and a paint that happens only as somebody else's side
-  // effect is one refactor away from not happening. The panes are memoized, so a second
-  // render over identical HTML costs nothing.
-  render();
+  openChat();
   focusChatInput();
   void refreshChatSetup();
+}
+
+/** Open the pane. Chat and search both own the whole column, one at a time (chat.ts's
+ *  header), so search goes. The render is explicit, rather than leaning on
+ *  `clearSearch`'s own repaint: a caller that focuses the composer next needs it to
+ *  exist, and a paint that happens only as somebody else's side effect is one refactor
+ *  away from not happening. The panes are memoized, so a second render over identical
+ *  HTML costs nothing. */
+function openChat(): void {
+  state.chatOpen = true;
+  clearSearch();
+  render();
 }
 
 /** Close the pane. A streaming answer is stopped first — a pane you can't see must not
@@ -2188,8 +2215,7 @@ function focusChatInput(): void {
  *  pane down with it: an unknown setup reads as the "loading" state, which is honest. */
 async function refreshChatSetup(): Promise<void> {
   try {
-    state.chatSetup = await api.chatSetup();
-    state.chatCloud = state.chatSetup.cloud;
+    adoptChatSetup(await api.chatSetup());
   } catch (e) {
     flash(errText(e));
     return;
@@ -2235,17 +2261,11 @@ async function askWhy(candidate: { path: string; title: string | null }): Promis
     if (state.chatStreaming !== null) flash("B2 is still answering. Press Esc to stop it.");
     return;
   }
-  if (!state.chatOpen) {
-    state.chatOpen = true;
-    clearSearch();
-    render();
-  }
+  if (!state.chatOpen) openChat();
   // The probe first: with no model to answer, the pane's setup card is the useful thing
   // to show, and a turn sent anyway would only add a failure under it.
   await refreshChatSetup();
-  const ready =
-    chatEmptyState({ hasVault: state.vaultRoot !== null, setup: state.chatSetup }) === "ready";
-  if (!ready || state.current?.path !== anchor.path) return;
+  if (!chatReady(state) || state.current?.path !== anchor.path) return;
   // `false`: this turn was not typed, so a question half-written in the composer stays.
   await runChatTurn(
     whyQuestion(candidate, anchor),
@@ -2423,12 +2443,6 @@ function setChatModelTyped(typed: boolean): void {
   document.getElementById("settings-chat-model")?.focus();
 }
 
-/** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
- *  the only place the frontend spells it. The host's `b2_llm::DEFAULT_BASE_URL` is the
- *  authority (it is what an unset endpoint resolves to); this is the field's seed when the
- *  user presses *Local* after typing a cloud URL. */
-const LOCAL_CHAT_ENDPOINT = "http://localhost:11434/v1";
-
 /** Settings → Chat: save the endpoint/model/key and re-probe, so "Save and test" is one
  *  act. The key is sent only when the user typed one — an untouched field must not clear
  *  a key that is already in force (the host applies the same rule). */
@@ -2456,18 +2470,11 @@ async function saveChatConfig(): Promise<void> {
     capField?.focus();
     return;
   }
-  try {
-    state.chatSetup = await api.setChatConfig(url, model, key, cap.send);
-    state.chatCloud = state.chatSetup.cloud;
-    flash(
-      state.chatSetup.state === "ready"
-        ? `Chat model saved — connected to ${state.chatSetup.model}.`
-        : (state.chatSetup.message ?? "Chat settings saved."),
-    );
-  } catch (e) {
-    flash(errText(e));
-  }
-  render();
+  await applyChatConfig(url, model, key, cap.send, (setup) =>
+    setup.state === "ready"
+      ? `Chat model saved — connected to ${setup.model}.`
+      : (setup.message ?? "Chat settings saved."),
+  );
 }
 
 /** The setup card's installed-model list: pick one and it becomes the configured model.
@@ -2478,7 +2485,13 @@ async function useChatModel(model: string): Promise<void> {
   // an emptied field returns to the environment's value — so sending it here would
   // quietly reset a configured endpoint back to the default as a side effect of picking
   // a model off the card. The key is `null` in the other sense: untouched, so kept.
-  await applyChatConfig(state.chatSetup?.base_url ?? null, model, null, `Chat model set to ${model}.`);
+  await applyChatConfig(
+    state.chatSetup?.base_url ?? null,
+    model,
+    null,
+    null,
+    () => `Chat model set to ${model}.`,
+  );
 }
 
 /**
@@ -2493,47 +2506,49 @@ async function useChatModel(model: string): Promise<void> {
  * the copy beside the button says so.
  */
 async function clearChatKey(): Promise<void> {
-  try {
-    state.chatSetup = await api.setChatConfig(
-      state.chatSetup?.base_url ?? null,
-      state.chatSetup?.model ?? null,
-      "",
-    );
-    state.chatCloud = state.chatSetup.cloud;
+  await applyChatConfig(
+    state.chatSetup?.base_url ?? null,
+    state.chatSetup?.model ?? null,
+    "",
+    null,
     // Removal is all-or-nothing host-side, so the returned source *is* the
     // outcome — no separate success flag to keep in step. A key still reported
     // as stored/session means the Keychain refused to let go, and saying
     // "removed" there would be the one lie this button must never tell: the key
     // would be back at the next launch. (`environment` is neither outcome — B2
     // never had standing over that key, and the panel's copy says so.)
-    const source = state.chatSetup.api_key_source;
-    flash(
-      source === "stored" || source === "session"
+    (setup) =>
+      setup.api_key_source === "stored" || setup.api_key_source === "session"
         ? "Couldn’t remove the key — your Keychain refused. It is still saved."
         : "API key removed.",
-    );
+  );
+}
+
+/** Save a chat configuration, re-probe, and say what happened — the shared tail of every
+ *  path that changes it (Save, the card's model picker, Remove key). `said` words the
+ *  outcome from the setup the host sends back; a refusal says the host's own sentence. */
+async function applyChatConfig(
+  baseUrl: string | null,
+  model: string | null,
+  apiKey: string | null,
+  maxToolCalls: string | null,
+  said: (setup: ChatSetup) => string,
+): Promise<void> {
+  try {
+    const setup = await api.setChatConfig(baseUrl, model, apiKey, maxToolCalls);
+    adoptChatSetup(setup);
+    flash(said(setup));
   } catch (e) {
     flash(errText(e));
   }
   render();
 }
 
-/** Save a chat configuration, re-probe, and say what happened — the shared tail of every
- *  path that changes it (Save, the card's model picker, Remove key). */
-async function applyChatConfig(
-  baseUrl: string | null,
-  model: string | null,
-  apiKey: string | null,
-  ok: string,
-): Promise<void> {
-  try {
-    state.chatSetup = await api.setChatConfig(baseUrl, model, apiKey);
-    state.chatCloud = state.chatSetup.cloud;
-    flash(ok);
-  } catch (e) {
-    flash(errText(e));
-  }
-  render();
+/** Adopt what the host says the chat provider is now. The Local/Cloud switch follows the
+ *  configuration — it is a view of it, until the user flips it to start another. */
+function adoptChatSetup(setup: ChatSetup): void {
+  state.chatSetup = setup;
+  state.chatCloud = setup.cloud;
 }
 
 function openLinkModal(path: string, title: string): void {
@@ -3112,16 +3127,11 @@ async function switchVault(): Promise<void> {
     // flag and bail. Not awaited here: the UI reset below must not block on a wind-down.
     const departing = indexingRun;
     state.vaultRoot = info.root; // set now so the departing run's guards bail promptly
-    state.semantic = info.semantic;
-    state.notesEmbedded = info.notes_embedded;
-    state.notesTotal = info.notes_total;
+    adoptCoverage(info);
     state.current = null;
     state.currentResource = null;
     state.resourceImage = null;
-    state.similar = [];
-    state.connections = [];
-    state.resourceLinks = [];
-    state.unresolved = [];
+    clearDiscovery();
     resetSearch();
     // The conversation is grounded in the vault we just left — every citation in it
     // names a path that means nothing here (a note's identity is its path, L1). Dropping
@@ -3166,12 +3176,19 @@ async function refreshEmbedStatus(forRoot: string | null): Promise<void> {
   try {
     const info = await api.vaultInfo();
     if (state.vaultRoot !== forRoot) return;
-    state.semantic = info.semantic;
-    state.notesEmbedded = info.notes_embedded;
-    state.notesTotal = info.notes_total;
+    adoptCoverage(info);
   } catch {
     // ignore — coverage is a hint, never worth surfacing an error over
   }
+}
+
+/** Adopt a `VaultInfo`'s embedding coverage: whether semantic ranking is live, and how
+ *  many notes are embedded of how many. The root is the caller's to set — only a boot or
+ *  a switch changes it. */
+function adoptCoverage(info: VaultInfo): void {
+  state.semantic = info.semantic;
+  state.notesEmbedded = info.notes_embedded;
+  state.notesTotal = info.notes_total;
 }
 
 // The in-flight background index — a manual Reindex (`doReindex`), an auto-index on
@@ -3192,6 +3209,36 @@ function trackIndexing(run: Promise<void>): void {
   indexingRun = done;
 }
 
+/** Start an index run: the meter comes up empty, with no cancel pending. The caller
+ *  picks the repaint (a full one, or just the meter). */
+function beginIndexRun(): void {
+  state.reindexing = true;
+  state.reindexProgress = null;
+  state.reindexCancelling = false;
+}
+
+/** End an index run — every run's `finally`: the meter goes, and the app repaints. */
+function endIndexRun(): void {
+  state.reindexing = false;
+  state.reindexProgress = null;
+  state.reindexCancelling = false;
+  render();
+}
+
+/**
+ * After a run: the open note's vectors exist now, so refresh discovery for `similar` to
+ * rank with — and re-read the note first, unless an editor (body or frontmatter) holds
+ * it: adopting a fresh revision under an open buffer could regress the save chain into a
+ * false conflict, or let its save clobber what changed on disk.
+ */
+async function refreshOpenNoteAfterIndex(): Promise<void> {
+  if (!state.current) return;
+  if (!state.editing && !state.fmEditing) {
+    state.current = await api.readNote(state.current.path);
+  }
+  await refreshDiscovery();
+}
+
 // Reindex as project → embed, sequenced here (Shape A, docs/index-engine.md):
 // the fast, model-free `project` completes the keyword + graph index, the tree
 // paints immediately, and only then does the slow, cancellable `embed` stream behind
@@ -3202,9 +3249,7 @@ function trackIndexing(run: Promise<void>): void {
 async function doReindex(): Promise<void> {
   if (state.reindexing) return; // single-in-flight (the host also guards embed)
   const startedRoot = state.vaultRoot; // guard against a vault switch mid-run
-  state.reindexing = true;
-  state.reindexProgress = null;
-  state.reindexCancelling = false;
+  beginIndexRun();
   render();
   try {
     // Phase 1 — projection (fast, no model): notes, keyword index, and graph are
@@ -3260,24 +3305,11 @@ async function doReindex(): Promise<void> {
         ? `Embedded ${r.embedded}/${p.indexed} note(s) — cancelled. Re-run to finish the rest.${skipped}`
         : `Indexed ${p.indexed} note(s) — ${r.embedded} embedded.${skipped}`,
     );
-    if (state.current) {
-      // Projection may have stamped the open note on disk; re-read it, and refresh
-      // discovery now that vectors exist for `similar` to rank with. Not mid-edit:
-      // the editor's revision chain owns the note then (an indexed note is already
-      // stamped), and adopting a re-read racing an in-flight save could regress the
-      // chain into a false conflict.
-      if (!state.editing && !state.fmEditing) {
-        state.current = await api.readNote(state.current.path);
-      }
-      await refreshDiscovery();
-    }
+    await refreshOpenNoteAfterIndex();
   } catch (e) {
     if (state.vaultRoot === startedRoot) flash(errText(e));
   } finally {
-    state.reindexing = false;
-    state.reindexProgress = null;
-    state.reindexCancelling = false;
-    render();
+    endIndexRun();
   }
 }
 
@@ -3304,9 +3336,7 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
   // one still gets its keyword + graph index below (project is model-free).
   if (!needsProject && !state.semantic) return;
 
-  state.reindexing = true;
-  state.reindexProgress = null;
-  state.reindexCancelling = false;
+  beginIndexRun();
   render();
   try {
     if (needsProject) {
@@ -3325,23 +3355,15 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
     // switch reloads the new vault, so leave the one we're departing untouched (spec §6).
     if (r.cancelled && !state.reindexCancelling) return;
     await refreshEmbedStatus(startedRoot);
-    // If the user opened a note while embedding ran, its vectors exist now — re-read it
-    // (projection may have stamped it) and refresh discovery so `similar` can rank. Not
-    // under a live editor (body or frontmatter): adopting a fresh revision beneath an
-    // open buffer would let its save silently clobber what changed on disk — the same
-    // carve-out as reconcile and doReindex.
-    if (state.current && !state.editing && !state.fmEditing) {
-      state.current = await api.readNote(state.current.path);
-      await refreshDiscovery();
-    }
+    // If the user opened a note while embedding ran, its vectors exist now. Unlike
+    // doReindex this skips discovery too while an editor is open — the run was unasked
+    // for, so it leaves a pane someone is working in entirely alone.
+    if (!state.editing && !state.fmEditing) await refreshOpenNoteAfterIndex();
   } catch {
     // Silent by design (§7.2): the user didn't ask for this run, so a missing model or a
     // lost race just leaves the vault keyword-first; the pending set heals on the next run.
   } finally {
-    state.reindexing = false;
-    state.reindexProgress = null;
-    state.reindexCancelling = false;
-    render();
+    endIndexRun();
   }
 }
 
@@ -3807,9 +3829,7 @@ async function refreshConnections(): Promise<void> {
   try {
     const explain = await api.explain(cur.path);
     if (state.current?.path !== cur.path) return; // navigated away meanwhile
-    state.connections = explain.connections;
-    state.resourceLinks = explain.resources;
-    state.unresolved = explain.unresolved;
+    adoptExplain(explain);
     render();
   } catch {
     // deliberately silent
@@ -3836,9 +3856,7 @@ async function runTrailingEmbed(): Promise<void> {
   // missing-vector set is DB-derived, so any later embed/reindex heals it (split §7.2).
   if (state.reindexing || state.vaultRoot === null) return;
   const startedRoot = state.vaultRoot;
-  state.reindexing = true;
-  state.reindexProgress = null;
-  state.reindexCancelling = false;
+  beginIndexRun();
   paintReindex();
   try {
     await embedWithProgress(startedRoot);
@@ -3848,10 +3866,7 @@ async function runTrailingEmbed(): Promise<void> {
     // Refused (ReindexInFlight race) or failed (e.g. no model provisioned): skip
     // silently — the user didn't ask for this run, and the pending set heals.
   } finally {
-    state.reindexing = false;
-    state.reindexProgress = null;
-    state.reindexCancelling = false;
-    render();
+    endIndexRun();
   }
 }
 
@@ -4407,10 +4422,7 @@ async function reconcileExternalChange(): Promise<void> {
       // The bytes are re-read too: an external edit can rewrite the picture in place
       // without the path ever changing, and a stale `data:` URL would show the old one.
       const picture = await loadResourceImage(fresh);
-      if (state.currentResource?.path === cur.path) {
-        state.currentResource = fresh;
-        state.resourceImage = picture;
-      }
+      if (state.currentResource?.path === cur.path) adoptResource(fresh, picture);
     } catch {
       if (state.currentResource?.path === cur.path) {
         flash("This file is no longer on disk — it was moved or removed.");
@@ -5926,9 +5938,7 @@ async function boot(): Promise<void> {
   try {
     const info = await api.vaultInfo();
     state.vaultRoot = info.root;
-    state.semantic = info.semantic;
-    state.notesEmbedded = info.notes_embedded;
-    state.notesTotal = info.notes_total;
+    adoptCoverage(info);
     // Populate the file tree so the vault is navigable before anything is opened.
     await loadNotes();
   } catch (e) {

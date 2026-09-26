@@ -252,6 +252,23 @@ export function chatEmptyState(s: {
   }
 }
 
+/** The app's side of `chatEmptyState`: the vault and the probe, read off the app state. */
+export function chatStateOf(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): ChatEmptyState {
+  return chatEmptyState({ hasVault: s.vaultRoot !== null, setup: s.chatSetup });
+}
+
+/** Can a question be asked right now? What the composer's presence and *Why?* both wait on. */
+export function chatReady(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): boolean {
+  return chatStateOf(s) === "ready";
+}
+
+/** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
+ *  the only place the frontend spells it: the Endpoint field's placeholder, and its seed
+ *  when the user presses *Local* after typing a cloud URL. The host's
+ *  `b2_llm::DEFAULT_BASE_URL` is the authority (it is what an unset endpoint resolves
+ *  to) — change them together. */
+export const LOCAL_CHAT_ENDPOINT = "http://localhost:11434/v1";
+
 /**
  * The honest note about *retrieval* under the composer, or "" when there is nothing to
  * say — the search caveat (#26) applied to chat.

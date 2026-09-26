@@ -5,6 +5,8 @@ import {
   STREAMING_ROW_KEY,
   answerMessage,
   chatEmptyState,
+  chatReady,
+  chatStateOf,
   chatHistory,
   chatRows,
   citationRowKey,
@@ -145,6 +147,15 @@ test("the empty state is chosen once, from the vault and the probe", () => {
   // The fake provider answers, so chat is usable — the pane says *what* is answering
   // rather than blocking on it.
   assert.equal(chatEmptyState({ hasVault: true, setup: setup({ state: "fake" }) }), "ready");
+});
+
+test("the app asks the same question off its own state", () => {
+  assert.equal(chatStateOf({ vaultRoot: null, chatSetup: setup() }), "no-vault");
+  assert.equal(chatStateOf({ vaultRoot: "/v", chatSetup: null }), "loading");
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup() }), true);
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "fake" }) }), true);
+  assert.equal(chatReady({ vaultRoot: "/v", chatSetup: setup({ state: "unreachable" }) }), false);
+  assert.equal(chatReady({ vaultRoot: null, chatSetup: setup() }), false);
 });
 
 test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
