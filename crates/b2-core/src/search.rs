@@ -91,8 +91,7 @@ pub fn rrf_fuse(ranked_lists: &[Vec<i64>], k: usize) -> Vec<(i64, f64)> {
     let rank_of = |id: i64| tiebreak.get(&id).copied().unwrap_or(usize::MAX);
     let mut out: Vec<(i64, f64)> = scores.into_iter().collect();
     out.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.1.total_cmp(&a.1)
             .then(rank_of(a.0).cmp(&rank_of(b.0)))
             .then(a.0.cmp(&b.0))
     });
@@ -428,6 +427,16 @@ pub struct Retrieval {
     pub best_cos: Option<f64>,
 }
 
+impl Retrieval {
+    /// No hits and no dense reading: what a zero `limit` asks for.
+    fn empty() -> Self {
+        Self {
+            hits: Vec::new(),
+            best_cos: None,
+        }
+    }
+}
+
 /// How wide a pool to pull from each signal before fusing (qmd keeps ~30).
 ///
 /// `pub(crate)` because a *measurement* needs it: the façade's two candidate-pool
@@ -456,10 +465,7 @@ pub fn keyword_only_search(
     limit: usize,
 ) -> Result<Retrieval> {
     if limit == 0 {
-        return Ok(Retrieval {
-            hits: Vec::new(),
-            best_cos: None,
-        });
+        return Ok(Retrieval::empty());
     }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
@@ -469,11 +475,7 @@ pub fn keyword_only_search(
         pool,
         "keyword-only retrieval (no embedding space yet)"
     );
-    let provenance = provenance_of(&bm25, &[]);
-    Ok(Retrieval {
-        hits: resolve_hits(conn, rrf_fuse(&[bm25], RRF_K), &provenance, limit)?,
-        best_cos: None,
-    })
+    fuse(conn, bm25, &[], limit)
 }
 
 /// Hybrid search: BM25 ⊕ vector(query) -> RRF -> top `limit`, resolved to notes
@@ -487,30 +489,41 @@ pub fn hybrid_search(
     limit: usize,
 ) -> Result<Retrieval> {
     if limit == 0 {
-        return Ok(Retrieval {
-            hits: Vec::new(),
-            best_cos: None,
-        });
+        return Ok(Retrieval::empty());
     }
     let pool = pool_size(limit);
     let bm25 = keyword_search(conn, query, pool)?;
     let dense = db::vector_search(conn, &embedder.embed_query(query)?, pool)?;
-    let vector: Vec<i64> = dense.iter().map(|&(id, _)| id).collect();
-    // The dense list is nearest-first, so its head *is* the best cosine — the
-    // absolute reading RRF is about to reduce to "rank 0".
-    let best_cos = dense.first().map(|&(_, d)| cosine_of_distance(d));
     tracing::debug!(
         target: "b2::search",
         bm25_hits = bm25.len(),
-        vector_hits = vector.len(),
-        best_cos,
+        vector_hits = dense.len(),
         pool,
         "hybrid retrieval fusing BM25 ⊕ vector via RRF"
     );
+    fuse(conn, bm25, &dense, limit)
+}
 
-    let provenance = provenance_of(&bm25, &dense);
+/// The shared tail of both retrievals: fuse the BM25 list with the dense one (if any)
+/// by RRF, keep each chunk's provenance, resolve the first `limit` to notes, and carry
+/// the dense half's absolute reading. With no dense list this is the single-list RRF
+/// the keyword-only fallback has always served, and `best_cos` is `None`.
+fn fuse(
+    conn: &rusqlite::Connection,
+    bm25: Vec<i64>,
+    dense: &[(i64, f32)],
+    limit: usize,
+) -> Result<Retrieval> {
+    let provenance = provenance_of(&bm25, dense);
+    // The dense list is nearest-first, so its head *is* the best cosine — the absolute
+    // reading RRF is about to reduce to "rank 0".
+    let best_cos = dense.first().map(|&(_, d)| cosine_of_distance(d));
+    let mut lists = vec![bm25];
+    if !dense.is_empty() {
+        lists.push(dense.iter().map(|&(id, _)| id).collect());
+    }
     Ok(Retrieval {
-        hits: resolve_hits(conn, rrf_fuse(&[bm25, vector], RRF_K), &provenance, limit)?,
+        hits: resolve_hits(conn, rrf_fuse(&lists, RRF_K), &provenance, limit)?,
         best_cos,
     })
 }

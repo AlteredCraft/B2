@@ -88,16 +88,14 @@ pub struct CandidateNote {
 /// (ADR-0014). Any distance in the same space can be read against it, which is how a
 /// passage pair in the explain view is graded on the same yardstick as the cards.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Population {
-    /// How many notes were scored: the size of the population the z is read against.
-    pub n: usize,
+struct Population {
     mean: f64,
     sd: f64,
 }
 
 impl Population {
     /// The z of one squared distance, oriented so nearer is higher.
-    pub fn z(&self, dist_sq: f32) -> f64 {
+    fn z(&self, dist_sq: f32) -> f64 {
         (self.mean - dist_sq as f64) / self.sd
     }
 }
@@ -132,10 +130,8 @@ fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<O
     // The anchor's own stored vectors, loaded once (re-embeds nothing — index-engine.md §3);
     // none ⇒ nothing to search from. Its centroid is computed in-process from them
     // rather than read back, so an anchor mid-embed still discovers from what it has.
-    let anchor_vecs: Vec<Vec<f32>> = db::note_chunk_vectors(conn, anchor)?
-        .into_iter()
-        .map(|(_, v)| v)
-        .collect();
+    let (anchor_ids, anchor_vecs): (Vec<i64>, Vec<Vec<f32>>) =
+        db::note_chunk_vectors(conn, anchor)?.into_iter().unzip();
     let Some(anchor_centroid) = centroid_of(&anchor_vecs) else {
         return Ok(None);
     };
@@ -155,11 +151,7 @@ fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<O
         unpack_f32_into(blob, &mut scratch);
         coarse.push((l2_sq(&anchor_centroid, &scratch), note.to_string()));
     })?;
-    coarse.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.1.cmp(&b.1))
-    });
+    coarse.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     let coarse: Vec<String> = coarse.into_iter().map(|(_, note)| note).collect();
 
     // Stage 1 ends here, and nothing judges it: the shortlist is a recall device, never
@@ -171,33 +163,28 @@ fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<O
         .max(SHORTLIST_MIN);
 
     // Stage 2 — exact max-sim over the whole shortlist: per note, the best (smallest
-    // squared-L2) pair across the anchor's chunks and its own. Squared L2 is the same
-    // ranking key without the per-comparison `sqrt`, applied once per surfaced candidate
-    // by the readers. Strictly-less keeps the earliest chunk on ties. A shortlisted note
-    // with no stored chunk vectors (possible mid-embed) scores nothing and drops out.
+    // squared-L2) of its [`nearest_pairs`] — the same kernel the explanation reads, so
+    // the card's evidence is by construction the explanation's first pair. The earliest
+    // chunk wins a tie. A shortlisted note with no stored chunk vectors (possible
+    // mid-embed) scores nothing and drops out.
     let mut scored: Vec<(f32, String, i64)> = Vec::new();
     for note_path in coarse.iter().take(shortlist) {
-        let mut best: Option<(f32, i64)> = None;
-        for (chunk_id, v) in db::note_chunk_vectors(conn, note_path)? {
-            for a in &anchor_vecs {
-                let dist_sq = l2_sq(a, &v);
-                if best.is_none_or(|(cur, _)| dist_sq < cur) {
-                    best = Some((dist_sq, chunk_id));
-                }
-            }
-        }
-        if let Some((dist_sq, evidence_chunk_id)) = best {
+        let pairs = nearest_pairs(
+            &anchor_ids,
+            &anchor_vecs,
+            db::note_chunk_vectors(conn, note_path)?,
+        );
+        let best = pairs
+            .into_iter()
+            .reduce(|best, p| if p.0 < best.0 { p } else { best });
+        if let Some((dist_sq, _, evidence_chunk_id)) = best {
             scored.push((dist_sq, note_path.clone(), evidence_chunk_id));
         }
     }
     // Nearest-first, ties by path: the served order, and — because z below is affine in
     // this squared distance — also descending z. One sort key serves the row order and
     // the strength band, so the two can never disagree.
-    scored.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.1.cmp(&b.1))
-    });
+    scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     // The statistic, computed AFTER stage 2 on the best-passage distances (GH #192) and
     // gating nothing (ADR-0014): the population is every scored shortlist note, which on
@@ -215,11 +202,7 @@ fn field(conn: &Connection, anchor: &str, limit: usize, grade: bool) -> Result<O
             / (n - 1.0);
         let sd = var.sqrt();
         if sd > 0.0 {
-            population = Some(Population {
-                n: scored.len(),
-                mean,
-                sd,
-            });
+            population = Some(Population { mean, sd });
         }
     }
 
@@ -431,23 +414,16 @@ fn passage_pairs_sq(
     if limit == 0 || !db::embedding_space_exists(conn)? {
         return Ok(Vec::new());
     }
-    let anchor_vecs = db::note_chunk_vectors(conn, anchor)?;
-    let mut pairs: Vec<(f32, i64, i64)> = Vec::new();
-    for (candidate_chunk_id, v) in db::note_chunk_vectors(conn, candidate)? {
-        let mut best: Option<(f32, i64)> = None;
-        for (anchor_chunk_id, a) in &anchor_vecs {
-            let dist_sq = l2_sq(a, &v);
-            if best.is_none_or(|(cur, _)| dist_sq < cur) {
-                best = Some((dist_sq, *anchor_chunk_id));
-            }
-        }
-        if let Some((dist_sq, anchor_chunk_id)) = best {
-            pairs.push((dist_sq, anchor_chunk_id, candidate_chunk_id));
-        }
-    }
+    let (anchor_ids, anchor_vecs): (Vec<i64>, Vec<Vec<f32>>) =
+        db::note_chunk_vectors(conn, anchor)?.into_iter().unzip();
+    let mut pairs = nearest_pairs(
+        &anchor_ids,
+        &anchor_vecs,
+        db::note_chunk_vectors(conn, candidate)?,
+    );
     // Stable, so equal distances keep the candidate's chunk order — the earliest chunk
     // wins a tie, as it does in `candidates`.
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
     Ok(pairs
         .into_iter()
         .take(limit)
@@ -462,4 +438,28 @@ fn passage_pairs_sq(
             )
         })
         .collect())
+}
+
+/// Discovery's max-sim kernel: for each candidate chunk, in order, the anchor chunk
+/// nearest to it, as `(squared distance, anchor chunk, candidate chunk)`. Strictly-less
+/// keeps the earliest anchor chunk on a tie. Stage 2 takes the minimum of this and the
+/// explanation sorts it, so a card and its explanation read one computation. Squared L2
+/// is the ranking key without the per-comparison `sqrt`; the readers take it once per
+/// surfaced pair. Empty when either side has no vectors.
+fn nearest_pairs(
+    anchor_ids: &[i64],
+    anchor_vecs: &[Vec<f32>],
+    candidate: Vec<(i64, Vec<f32>)>,
+) -> Vec<(f32, i64, i64)> {
+    candidate
+        .into_iter()
+        .filter_map(|(candidate_chunk_id, v)| {
+            anchor_ids
+                .iter()
+                .zip(anchor_vecs)
+                .map(|(id, a)| (l2_sq(a, &v), *id))
+                .reduce(|best, p| if p.0 < best.0 { p } else { best })
+                .map(|(dist_sq, anchor_chunk_id)| (dist_sq, anchor_chunk_id, candidate_chunk_id))
+        })
+        .collect()
 }

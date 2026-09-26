@@ -206,15 +206,24 @@ impl Vault {
         on_progress: &mut dyn FnMut(ingest::ReindexProgress) -> ControlFlow<()>,
     ) -> Result<ReindexReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "reindex", force).entered();
-        let ingested = ingest::ingest_vault_with_progress(self.embed_ctx(), force, on_progress)?;
+        // Projection completes before embedding starts, so a cancelled run is still
+        // consistent: keyword search and the graph are complete, a prefix is embedded.
+        let projected = ingest::project_vault(self.ctx(), force)?;
+        let embed = ingest::embed_vault(&self.conn, self.embedder.as_ref(), on_progress)?;
+        // A note counts as embedded this run iff the embed pass fully filled it.
+        let filled: BTreeSet<&str> = embed.embedded.iter().map(String::as_str).collect();
         Ok(ReindexReport {
-            indexed: ingested.notes.len(),
-            embedded: ingested.notes.iter().filter(|i| i.embedded).count(),
-            cancelled: ingested.cancelled,
-            skipped: ingested.skipped,
-            notes_pruned: ingested.notes_pruned,
-            resources_indexed: ingested.resources_indexed,
-            resources_pruned: ingested.resources_pruned,
+            indexed: projected.notes.len(),
+            embedded: projected
+                .notes
+                .iter()
+                .filter(|p| filled.contains(p.as_str()))
+                .count(),
+            cancelled: embed.cancelled,
+            skipped: projected.skipped,
+            notes_pruned: projected.notes_pruned,
+            resources_indexed: projected.resources_indexed,
+            resources_pruned: projected.resources_pruned,
         })
     }
 
@@ -262,10 +271,10 @@ impl Vault {
     /// note. A pure read, so it needs no model.
     pub fn plan_reindex(&self, force: bool) -> Result<ReindexPlan> {
         let _op = tracing::debug_span!(target: "b2::vault", "plan_reindex", force).entered();
-        let planned = ingest::plan_reindex(&self.conn, &self.root, force)?;
+        let plan = ingest::plan_reindex(&self.conn, &self.root, force)?;
         Ok(ReindexPlan {
-            would_index: planned.len(),
-            would_embed: planned.iter().filter(|p| p.would_embed).count(),
+            would_index: plan.notes,
+            would_embed: plan.would_embed,
         })
     }
 

@@ -501,6 +501,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 
 /// One note's projection into `notes` (+ its `aliases`). Borrowed view so callers
 /// pass slices of an already-parsed note without extra allocation.
+#[derive(Debug)]
 pub struct NoteRow<'a> {
     pub path: &'a str,
     pub r#type: &'a str,
@@ -583,11 +584,12 @@ pub fn prune_notes_except(conn: &Connection, seen: &HashSet<&str>) -> Result<usi
 }
 
 // ---------------------------------------------------------------------------
-// resources (file-type support slice 1 — data-model.md §10)
+// resources (data-model.md §10)
 // ---------------------------------------------------------------------------
 
 /// One resource's projection into `resources`. Borrowed view like [`NoteRow`] —
 /// passed straight from the walk, never stored.
+#[derive(Debug)]
 pub struct ResourceRow<'a> {
     pub path: &'a str,
     pub class: &'a str,
@@ -646,7 +648,7 @@ pub struct ResourceDetail {
 }
 
 /// Every inventoried resource — [`ResourceListing`] rows, path-ordered — the
-/// file tree's resource half (`Vault::list_resources`, research §9b #10).
+/// file tree's resource half (`Vault::list_resources`).
 pub fn list_resources(conn: &Connection) -> Result<Vec<ResourceListing>> {
     let mut stmt = conn.prepare("SELECT path, class, size, mtime FROM resources ORDER BY path")?;
     let rows = stmt.query_map([], |r| {
@@ -788,7 +790,7 @@ pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Resu
 }
 
 // ---------------------------------------------------------------------------
-// chunks (FTS kept in lockstep by the triggers in migrate())
+// chunks (FTS kept in lockstep by the triggers in apply_schema())
 // ---------------------------------------------------------------------------
 
 /// The content address of one chunk's embed input: blake3 of the chunk text. The text
@@ -929,7 +931,7 @@ pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// embeddings — the vector tables are created at embed time, not in migrate():
+// embeddings — the vector tables are created at embed time, not in apply_schema():
 // their *existence* is the "this vault has an embedding space" signal the
 // projected-but-unembedded fallbacks key on (ADR-0006).
 // ---------------------------------------------------------------------------
@@ -1202,6 +1204,15 @@ pub struct PendingChunk {
     pub text_hash: String,
 }
 
+/// The row mapper both pending-set queries share: `SELECT c.note_path, c.text, c.text_hash`.
+fn pending_chunk(r: &rusqlite::Row) -> rusqlite::Result<PendingChunk> {
+    Ok(PendingChunk {
+        note_path: r.get(0)?,
+        text: r.get(1)?,
+        text_hash: r.get(2)?,
+    })
+}
+
 /// Every chunk still lacking a stored vector, in `(path, seq)` order — the
 /// **DB-derived pending set** the embed pass fills. Deriving it here is what decouples
 /// projection from embedding: nothing is handed between the passes in memory, so any
@@ -1221,13 +1232,7 @@ pub fn chunks_missing_vectors(conn: &Connection) -> Result<Vec<PendingChunk>> {
          WHERE v.text_hash IS NULL
          ORDER BY c.note_path, c.seq",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(PendingChunk {
-            note_path: r.get(0)?,
-            text: r.get(1)?,
-            text_hash: r.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map([], pending_chunk)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1246,13 +1251,7 @@ pub fn note_chunks_missing_vectors(
          WHERE c.note_path = ?1 AND v.text_hash IS NULL
          ORDER BY c.seq",
     )?;
-    let rows = stmt.query_map([note_path], |r| {
-        Ok(PendingChunk {
-            note_path: r.get(0)?,
-            text: r.get(1)?,
-            text_hash: r.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map([note_path], pending_chunk)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1439,11 +1438,7 @@ fn scan_vector_distances(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
         crate::embed::unpack_f32_into(blob, &mut scratch);
         out.push((chunk_id, crate::embed::l2_sq(query, &scratch)));
     })?;
-    out.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.0.cmp(&b.0))
-    });
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     Ok(out)
 }
 
@@ -1473,6 +1468,7 @@ pub fn vector_search_all(conn: &Connection, query: &[f32]) -> Result<Vec<(i64, f
 
 /// One authored edge row, ready to project. Owns its data (built from resolved
 /// links during ingest).
+#[derive(Debug)]
 pub struct EdgeRow {
     pub id: String,
     /// The authoring note's vault-relative path.
@@ -1490,15 +1486,14 @@ pub struct EdgeRow {
     pub explanation: Option<String>,
     /// An embed form (`![alt](…)` / `![[…]]`) — display nicety, not a verb.
     pub embed: bool,
-    /// The authored alt/link/alias text — an image's index text (slice 3).
+    /// The authored alt/link/alias text.
     pub caption: Option<String>,
     pub occurrence_index: i64,
 }
 
 /// Replace a note's edges. Every edge is authored (body links ∪ frontmatter
 /// `b2_relations:`), so this deletes the note's edges and re-inserts them from the
-/// current Markdown (Flow ①) — the whole graph is a projection of Markdown, with no
-/// suggestion rows to preserve.
+/// current Markdown (Flow ①) — the whole graph is a projection of Markdown (G1).
 pub fn replace_authored_edges(conn: &Connection, src_path: &str, edges: &[EdgeRow]) -> Result<()> {
     conn.execute("DELETE FROM edges WHERE src_path = ?1", [src_path])?;
     for e in edges {
@@ -1629,7 +1624,7 @@ pub fn resolve_link_target(conn: &Connection, link_path: &str) -> Result<Option<
 
 /// Resolve a link target against the **resource inventory** — an exact
 /// vault-relative path match (extension-only dispatch decided the target is a
-/// resource before calling this; slice-1 spec §3). Returns the stored path, or
+/// resource before calling this). Returns the stored path, or
 /// `None` for dangling.
 pub fn resolve_resource_target(conn: &Connection, path: &str) -> Result<Option<String>> {
     Ok(conn

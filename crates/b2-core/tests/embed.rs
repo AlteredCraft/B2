@@ -53,7 +53,7 @@ fn embed_batch_matches_embed_per_element() {
 
 #[test]
 fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
-    use b2_core::ingest::{ingest_vault_with_progress, EmbedCtx, ProjectionCtx, ReindexProgress};
+    use b2_core::ingest::{embed_vault, project_vault, ProjectionCtx, ReindexProgress};
 
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
@@ -63,8 +63,8 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     let mut events: Vec<ReindexProgress> = Vec::new();
     let cfg = b2_core::chunk::ChunkConfig::default();
     let embedder = FakeEmbedder::new(64);
-    let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
-    ingest_vault_with_progress(ctx, false, &mut |p| {
+    project_vault(ProjectionCtx::new(&conn, &vault, &cfg), false).unwrap();
+    embed_vault(&conn, &embedder, &mut |p| {
         events.push(p);
         ControlFlow::Continue(())
     })
