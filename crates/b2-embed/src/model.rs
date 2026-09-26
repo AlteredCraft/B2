@@ -9,7 +9,7 @@ use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use tokenizers::{
-    PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection, TruncationParams,
+    Encoding, PaddingParams, PaddingStrategy, Tokenizer, TruncationDirection, TruncationParams,
     TruncationStrategy,
 };
 
@@ -34,6 +34,10 @@ pub struct LocalEmbedder {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
+    /// The configured repo id (`config.model`), untagged by device — what the
+    /// adapters attribute embedding cost to.
+    configured_model: String,
+    /// The id recorded as `meta.embed_model_id`: the repo id, tagged by device.
     model_id: String,
     dim: usize,
     query_prefix: String,
@@ -103,35 +107,35 @@ impl LocalEmbedder {
             model,
             tokenizer,
             device,
+            configured_model: config.model.clone(),
             model_id,
             dim,
             query_prefix: config.query_prefix.clone(),
         })
     }
 
-    /// The pooled, L2-normalized embedding of `text`. CLS pooling (row 0) — what
-    /// bge is trained for; normalized so the index's L2 distance ranks by cosine.
+    /// The configured model's repo id, **without** the device tag
+    /// [`model_id`](Embedder::model_id) carries — the id the config and the settings
+    /// picker speak, so an adapter's per-model bookkeeping keys on the same name.
+    pub fn configured_model(&self) -> &str {
+        &self.configured_model
+    }
+
+    /// The pooled, L2-normalized embedding of one `text`: a single, unpadded encode
+    /// through [`forward_cls`](Self::forward_cls). Deliberately not a batch of one — a
+    /// query takes the plain single-sequence path.
     fn embed_inner(&self, text: &str) -> candle_core::Result<Vec<f32>> {
         let enc = self
             .tokenizer
             .encode(text, true)
             .map_err(|e| candle_core::Error::Msg(format!("tokenize: {e}")))?;
-        let ids = enc.get_ids();
-        let input_ids = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
-        let token_type_ids = input_ids.zeros_like()?;
-        let attention_mask = Tensor::new(enc.get_attention_mask(), &self.device)?.unsqueeze(0)?;
-        // [1, seq, hidden] → CLS token → [hidden]
-        let hidden = self
-            .model
-            .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
-        let cls = hidden.i((0, 0))?;
-        let v: Vec<f32> = cls.to_vec1()?;
-        Ok(l2_normalize(&v))
+        self.forward_cls(std::slice::from_ref(&enc))?
+            .pop()
+            .ok_or_else(|| candle_core::Error::Msg("the model returned no embedding".into()))
     }
 
-    /// Embed a batch in one forward pass: tokenize+pad to the batch's longest, run
-    /// `[B, L]` through BERT, take each row's CLS token (position 0, unaffected by
-    /// right-padding), and L2-normalize. One matmul over `B` texts is far cheaper on
+    /// Embed a batch in one forward pass: tokenize+pad to the batch's longest, then
+    /// [`forward_cls`](Self::forward_cls). One matmul over `B` texts is far cheaper on
     /// CPU than `B` single passes — the reindex win. Equivalent, per row, to
     /// [`embed_inner`](Self::embed_inner).
     fn embed_batch_inner(&self, texts: &[&str]) -> candle_core::Result<Vec<Vec<f32>>> {
@@ -142,12 +146,21 @@ impl LocalEmbedder {
             .tokenizer
             .encode_batch(texts.to_vec(), true)
             .map_err(|e| candle_core::Error::Msg(format!("tokenize: {e}")))?;
+        self.forward_cls(&encs)
+    }
+
+    /// The step both paths share: stack same-length encodings into `[B, L]`, run them
+    /// through BERT, take each row's CLS token (position 0 — what bge is trained for, and
+    /// unaffected by right-padding), and L2-normalize so the index's L2 distance ranks by
+    /// cosine.
+    fn forward_cls(&self, encs: &[Encoding]) -> candle_core::Result<Vec<Vec<f32>>> {
         let batch = encs.len();
-        // Padding made every encoding the same length.
+        // A single encode is unpadded; a batch was padded to its longest. Either way
+        // every encoding here has the same length.
         let seq = encs.first().map_or(0, |e| e.get_ids().len());
         let mut ids = Vec::with_capacity(batch * seq);
         let mut mask = Vec::with_capacity(batch * seq);
-        for e in &encs {
+        for e in encs {
             ids.extend_from_slice(e.get_ids());
             mask.extend_from_slice(e.get_attention_mask());
         }
@@ -158,8 +171,7 @@ impl LocalEmbedder {
         let hidden = self
             .model
             .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
-        let cls = hidden.i((.., 0))?;
-        let rows: Vec<Vec<f32>> = cls.to_vec2()?;
+        let rows: Vec<Vec<f32>> = hidden.i((.., 0))?.to_vec2()?;
         Ok(rows.iter().map(|r| l2_normalize(r)).collect())
     }
 }
@@ -202,14 +214,18 @@ fn l2_normalize(v: &[f32]) -> Vec<f32> {
 /// Try to open the Metal GPU — only when compiled `--features metal` (candle's
 /// `metal_is_available()` is literally `cfg!(feature = "metal")`), and never a hard
 /// requirement: any failure returns `None` and the caller uses the CPU (GH #40). `announce`
-/// gates the one-line fallback notice so the load path can warn while the cheap capability
-/// probe ([`active_device_label`]) stays silent. No `unwrap`: a failed `new_metal` is a soft
+/// gates the fallback warning (a `b2::embed` tracing event) so the load path can warn while
+/// the cheap capability probe ([`active_device_label`]) stays silent. No `unwrap`: a failed `new_metal` is a soft
 /// degrade (no-panic rule), not a load error.
 fn open_metal(announce: bool) -> Option<Device> {
     if candle_core::utils::metal_is_available() {
         match Device::new_metal(0) {
             Ok(d) => return Some(d),
-            Err(e) if announce => eprintln!("note: Metal GPU unavailable ({e}); embedding on CPU"),
+            Err(e) if announce => tracing::warn!(
+                target: "b2::embed",
+                error = %e,
+                "Metal GPU unavailable; embedding on CPU"
+            ),
             Err(_) => {}
         }
     }
