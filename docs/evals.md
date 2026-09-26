@@ -174,8 +174,8 @@ as "no effect"; `make stability` is the instrument.
 
 ### The exit gate
 
-`make eval` exits `0` only when the default config clears **all** assertions (the gate at the
-end of `run()` in [`eval.rs`](../crates/b2-embed/examples/eval.rs)):
+`make eval` exits `0` only when the default config clears **all** assertions (the gate is
+`passes()` in [`eval/gate.rs`](../crates/b2-embed/examples/eval/gate.rs)):
 
 | Assertion | Constant | Direction | When it goes red, the fix is… |
 |---|---|---|---|

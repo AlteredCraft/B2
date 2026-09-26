@@ -39,8 +39,11 @@
 //! reproduces GH #196's finding on its reporting vault: 16 of 17 anchors dark. It is a
 //! **simulation** — the shipped surface gates nothing.
 
+mod common;
+
 use b2_core::vault::{SimilarView, Vault};
 use b2_embed::{EmbedConfig, LocalEmbedder};
+use common::{cosine_of, passage_z, pile_stats, term_coverage, title_query, truncate, Band};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -50,15 +53,10 @@ use std::path::PathBuf;
 /// prefix; anything a personal vault holds fits far under this.
 const SCAN_LIMIT: usize = 100_000;
 /// The replayed gate is inert under this population — `discover.rs`'s statistics
-/// guard, restated here because the replay must match the rule it prices.
+/// guard, restated here because the replay must match the rule it prices. (The
+/// strength bands the pane paints are [`common::BAND_STRONG_Z`]'s, shared with
+/// `make eval`'s calibration block, where their values are re-measured.)
 const MIN_POPULATION: usize = 12;
-/// The strength-band landmarks the desktop paints (`ui/src/strength.ts`, GH #182):
-/// `●●●` at or above the labelled-mate population's upper quartile, `●●○` at or
-/// above the retired leader bar. Restated constants, not imports — the bands are
-/// UI copy, and `make eval`'s calibration block is where their values are
-/// re-measured.
-const BAND_STRONG_Z: f64 = 2.52;
-const BAND_CLEAR_Z: f64 = 1.96;
 
 /// The z existence gate being replayed — GH #197 retired it from the engine; the
 /// instrument keeps it (and any variant the flags name) priceable.
@@ -81,14 +79,10 @@ struct AnchorReading {
 impl AnchorReading {
     fn from_candidates(path: &str, cands: &[SimilarView]) -> Self {
         let d2: Vec<f64> = cands.iter().map(|c| c.score * c.score).collect();
+        // The harness's own z (never the engine's), gated at the replayed rule's
+        // population floor before the shared restatement's own inertness guard.
         let z = (d2.len() >= MIN_POPULATION)
-            .then(|| {
-                let n = d2.len() as f64;
-                let mean = d2.iter().sum::<f64>() / n;
-                let var = d2.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0);
-                let sd = var.sqrt();
-                (sd > 0.0).then(|| d2.iter().map(|d| (mean - d) / sd).collect::<Vec<f64>>())
-            })
+            .then(|| passage_z(&d2))
             .flatten();
         Self {
             path: path.to_string(),
@@ -130,12 +124,10 @@ impl AnchorReading {
         let z = self.z.as_ref()?;
         let (mut strong, mut clear, mut near) = (0, 0, 0);
         for &v in z.iter().take(limit) {
-            if v >= BAND_STRONG_Z {
-                strong += 1;
-            } else if v >= BAND_CLEAR_Z {
-                clear += 1;
-            } else {
-                near += 1;
+            match Band::of(v) {
+                Band::Strong => strong += 1,
+                Band::Clear => clear += 1,
+                Band::Near => near += 1,
             }
         }
         Some((strong, clear, near))
@@ -165,26 +157,6 @@ impl AnchorReading {
             .filter(|(_, _, engine)| engine.is_some())
             .count()
     }
-}
-
-/// `similar` scores are negated L2 over unit vectors: `cos = 1 − d²/2`.
-fn cosine_of(score: f64) -> f64 {
-    1.0 - (score * score) / 2.0
-}
-
-fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
-    if pile.is_empty() {
-        return None;
-    }
-    let mut sorted = pile.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = sorted.len() / 2;
-    let median = if sorted.len().is_multiple_of(2) {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
-    } else {
-        sorted[mid]
-    };
-    Some((sorted[0], median, sorted[sorted.len() - 1]))
 }
 
 /// **Candidate 2** of GH #200's bake-off, replayed: an *authored-edge reference bar*. It
@@ -572,19 +544,11 @@ fn read_search_transfer(
                 own_path: Option<String>|
      -> Result<SearchProbe, Box<dyn std::error::Error>> {
         let view = vault.search_evidence(query, limit)?;
-        let idf = |df: usize| ((view.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln();
-        let total: f64 = view.terms.iter().map(|t| idf(t.df)).sum();
-        let coverage = (total > f64::EPSILON).then(|| {
-            view.terms
-                .iter()
-                .filter(|t| t.df >= 1)
-                .map(|t| idf(t.df))
-                .fold(0.0, |a, b| a + b)
-                / total
-        });
         Ok(SearchProbe {
             query: query.to_string(),
-            coverage,
+            // The engine's own term weights — `make eval`'s labelled bake-off is
+            // where the formula is independently restated and drift-checked.
+            coverage: term_coverage(&view),
             best_cos: view.best_cos,
             // The engine's own verdict, not a restatement of it: this bench
             // prices what would actually ship.
@@ -607,13 +571,7 @@ fn read_search_transfer(
         if titles.len() == MAX_TITLE_QUERIES {
             break;
         }
-        let title = note.title.clone().unwrap_or_else(|| {
-            std::path::Path::new(&note.path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
-                .unwrap_or_default()
-        });
-        if !title.trim().is_empty() {
+        if let Some(title) = title_query(&note) {
             titles.push((title, note.path));
         }
     }
@@ -1340,13 +1298,4 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
 /// meant to be diffed.
 fn r4(x: f64) -> f64 {
     (x * 1e4).round() / 1e4
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max - 1).collect();
-        format!("{cut}…")
-    }
 }
