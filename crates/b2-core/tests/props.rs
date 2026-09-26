@@ -14,8 +14,11 @@
 //! run explores the identical case sequence and a failure reproduces exactly. To explore new
 //! ground change `SEED` locally; commit any find as a regular regression test.
 
+mod common;
+
 use b2_core::note::parse;
 use b2_core::vault::Vault;
+use common::inbound;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 use rusqlite::Connection;
@@ -431,7 +434,7 @@ fn apply(m: &Mutation, lv: &mut LiveVault) {
 /// here by their identity `(note, seq)`). Vectors and centroids are included —
 /// the FakeEmbedder is content-addressed, so they too must be pure projections.
 fn dump(root: &Path) -> Vec<String> {
-    let conn = b2_core::open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = common::index_conn(root);
     let sections: &[(&str, &str, usize)] = &[
         (
             "note",
@@ -560,20 +563,6 @@ fn incremental_reindex_equals_full_rebuild() {
 }
 
 // --- invariant 3: rename keeps every backlink resolving --------------------------
-
-/// A note's inbound set as sortable `(label, src_path)` pairs — the thing a move
-/// must leave unchanged (same helper shape as tests/mv.rs).
-fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
-    let mut ns: Vec<(String, String)> = vault
-        .neighbors(note_ref)
-        .unwrap()
-        .into_iter()
-        .filter(|n| n.direction == "inbound")
-        .map(|n| (n.label, n.path))
-        .collect();
-    ns.sort();
-    ns
-}
 
 #[test]
 fn rename_keeps_every_backlink_resolving() {

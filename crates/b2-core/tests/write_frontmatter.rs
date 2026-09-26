@@ -8,9 +8,8 @@
 
 mod common;
 
-use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{count, golden_vault_copy, index_conn, reindexed_vault};
+use common::{count, index_conn, opened_vault, reindexed_vault};
 use rusqlite::Connection;
 use std::fs;
 
@@ -210,9 +209,7 @@ fn needs_no_embedding_space() {
     // A projected-only vault (no vector tables, no model anywhere): the drawer
     // save works — the same model-free posture as `Vault::write`.
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, root) = opened_vault(tmp.path());
     vault.project(false).unwrap();
 
     let note = vault.read(SRS_PATH).unwrap();

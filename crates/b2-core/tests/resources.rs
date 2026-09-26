@@ -15,7 +15,7 @@ mod common;
 /// `(path, class, size, content_hash)` rows, path-ordered — the comparable
 /// projection of `resources` (mtime/indexed_at are host state, not projection).
 fn resource_rows(root: &Path) -> Vec<(String, String, i64, String)> {
-    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let conn = common::index_conn(root);
     let mut stmt = conn
         .prepare("SELECT path, class, size, content_hash FROM resources ORDER BY path")
         .unwrap();
@@ -345,7 +345,7 @@ type EdgeTuple = (
     Option<String>,
 );
 fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
-    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let conn = common::index_conn(root);
     let mut stmt = conn
         .prepare(
             "SELECT e.dst_path, e.dst_resource_path, e.dst_path_raw, e.type, e.embed, e.caption

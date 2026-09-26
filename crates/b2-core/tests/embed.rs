@@ -10,7 +10,9 @@ use b2_core::db;
 use b2_core::embed::{Embedder, FakeEmbedder};
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{count, golden_vault_copy, ingest_golden, SRS_PATH};
+use common::{
+    count, golden_vault_copy, index_conn, ingest_golden, opened_vault, reindexed_vault, SRS_PATH,
+};
 use rusqlite::Connection;
 use std::ops::ControlFlow;
 
@@ -111,9 +113,7 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
     use b2_core::vault::Vault;
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, root) = opened_vault(tmp.path());
 
     // First index: both notes are new → both embedded.
     let first = vault.reindex().unwrap();
@@ -187,15 +187,11 @@ fn ingest_populates_embeddings_and_records_meta() {
 #[test]
 fn centroids_track_the_stored_chunk_vectors() {
     use b2_core::embed::{centroid_of, pack_f32};
-    use b2_core::vault::Vault;
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
-    vault.reindex().unwrap();
+    let (vault, root) = reindexed_vault(tmp.path());
 
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     let assert_centroids_current = |conn: &Connection| {
         let notes_with_vectors: i64 = conn
             .query_row(
@@ -424,7 +420,7 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
 
     // `open` left the stored vectors alone (so a misconfigured model can never wipe
     // a vault's embeddings) — the refusal is a query-time guard, not a migration.
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     assert!(count(&conn, "embeddings") > 0, "vectors survive the reopen");
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
     drop(conn);
@@ -432,6 +428,6 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
     // The documented fix: reindex re-creates the space at the new dimension.
     swapped.reindex().unwrap();
     assert!(!swapped.search("forgetting", 5).unwrap().is_empty());
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
 }

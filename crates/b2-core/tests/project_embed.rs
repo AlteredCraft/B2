@@ -14,7 +14,7 @@ use b2_core::ingest::{
 };
 use b2_core::open;
 use b2_core::vault::Vault;
-use common::{count, golden_vault_copy};
+use common::{count, golden_vault_copy, index_conn, opened_vault};
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -88,7 +88,7 @@ struct Observable {
 type EdgeKey = (String, String, Option<String>, String, String, i64);
 
 fn observable_state(root: &Path) -> Observable {
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(root);
     let notes = count(&conn, "notes");
     let chunk_texts = {
         let mut stmt = conn
@@ -287,7 +287,7 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
     assert!(candidates.iter().all(|c| c.path != "bar.md"));
     drop(vault);
 
-    let conn = open(&root.join(".b2").join("b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     // FTS stayed in lockstep through the cascade (no ghost text in the index)…
     assert_eq!(count(&conn, "chunks_fts"), count(&conn, "chunks"));
     // …and foo's `[[bar]]` re-dangled: phase 2 re-resolved it against the pruned
@@ -400,9 +400,7 @@ fn reindex_completes_and_reports_skipped_files() {
 #[test]
 fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, _) = opened_vault(tmp.path());
     vault.project(false).unwrap();
 
     // Keyword search answers before any embedding — BM25-only, no model touched.
@@ -429,9 +427,7 @@ fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
 #[test]
 fn embed_status_reports_the_coverage_fraction() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, root) = opened_vault(tmp.path());
 
     // Projected but unembedded: every note counts toward the total, none is embedded, and
     // the embedding space doesn't exist yet — reads as 0/M, no error (the query short-
@@ -503,7 +499,7 @@ fn a_note_with_no_body_counts_as_embedded_and_forecasts_no_work() {
 
     // Non-vacuity: they really do contribute no chunks, so this is the chunkless case and
     // not some other note quietly carrying the fraction.
-    let conn = open(&root.join(".b2/b2.sqlite")).unwrap();
+    let conn = index_conn(&root);
     for path in ["stub.md", "blank.md"] {
         let chunks: i64 = conn
             .query_row(

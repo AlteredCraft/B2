@@ -7,23 +7,9 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{reindexed_vault, MEMORY_PATH, SRS_PATH};
+use common::{inbound, reindexed_vault, MEMORY_PATH, SRS_PATH};
 use std::fs;
 use std::path::Path;
-
-/// The inbound set of a note, as sortable `(label, src_path)` pairs — the shape the
-/// graph exposes and the thing a move must carry to the destination intact.
-fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
-    let mut ns: Vec<(String, String)> = vault
-        .neighbors(note_ref)
-        .unwrap()
-        .into_iter()
-        .filter(|n| n.direction == "inbound")
-        .map(|n| (n.label, n.path))
-        .collect();
-    ns.sort();
-    ns
-}
 
 #[test]
 fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {

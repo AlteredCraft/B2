@@ -13,7 +13,10 @@ use b2_core::embed::FakeEmbedder;
 use b2_core::ingest::ingest_vault;
 use b2_core::search::{self, RRF_K};
 use b2_core::{open, search::Hit};
-use common::{count, golden_vault_copy, index_conn, ingest_golden, MEMORY_PATH, SRS_PATH};
+use common::{
+    count, golden_vault_copy, index_conn, ingest_golden, opened_vault, reindexed_vault,
+    MEMORY_PATH, SRS_PATH,
+};
 use std::fs;
 
 fn note_set(hits: &[Hit]) -> std::collections::BTreeSet<String> {
@@ -85,10 +88,7 @@ fn the_passage_view_retrieves_a_narrower_pool_than_the_note_view() {
 #[test]
 fn a_corpus_no_bigger_than_the_pool_ranks_the_same_at_any_depth() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, vault_dir) = reindexed_vault(tmp.path());
 
     // The premise is about the *corpus*, not the result count, so it is counted on
     // the chunk rows themselves — 2 results would sit inside any pool regardless.
@@ -123,10 +123,7 @@ fn an_absurd_limit_saturates_the_pool_instead_of_overflowing_it() {
     assert_eq!(b2_core::vault::chunk_candidate_pool(usize::MAX), usize::MAX);
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, vault_dir) = reindexed_vault(tmp.path());
 
     // The whole corpus, once, rather than a panic or a truncated-by-wraparound page.
     let hits = vault.search("memory", usize::MAX).unwrap();
@@ -289,9 +286,7 @@ fn vector_only_search_is_the_dense_half_alone() {
 #[test]
 fn search_vector_only_dedups_and_refuses_to_impersonate_keywords() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
+    let (vault, _) = opened_vault(tmp.path());
 
     // Projection only: no embedding space yet. The hybrid view falls back to
     // BM25; the ablation view must return nothing rather than do the same.
@@ -431,10 +426,7 @@ fn search_chunks_exposes_passage_level_hits() {
     // dedup, each hit resolved to its note path + heading breadcrumb + the chunk's
     // FULL text — containment-scorable, unlike `SearchResult`'s display snippet.
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, _) = reindexed_vault(tmp.path());
 
     let hits = vault.search_chunks("forgetting curve", 10).unwrap();
     assert!(!hits.is_empty());
@@ -521,15 +513,12 @@ fn search_chunks_still_fills_limit_when_a_ranked_chunk_is_dead() {
     const DEAD_CHUNK: i64 = 999_999;
 
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, vault_dir) = reindexed_vault(tmp.path());
 
     let healthy = vault.search_chunks("memory", 2).unwrap();
     assert_eq!(healthy.len(), 2);
 
-    let conn = open(&vault_dir.join(".b2/b2.sqlite")).unwrap();
+    let conn = index_conn(&vault_dir);
     conn.execute(
         "INSERT INTO chunks_fts(rowid, text) VALUES (?1, 'memory')",
         rusqlite::params![DEAD_CHUNK],
@@ -894,10 +883,7 @@ fn the_keyword_only_fallback_reports_no_dense_evidence() {
 #[test]
 fn search_evidence_serves_exactly_what_search_serves() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, _) = reindexed_vault(tmp.path());
 
     let plain = vault.search("memory", 5).unwrap();
     let view = vault.search_evidence("memory", 5).unwrap();
@@ -921,10 +907,7 @@ fn search_evidence_serves_exactly_what_search_serves() {
 #[test]
 fn a_zero_limit_evidence_read_still_reads_the_evidence() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, _) = reindexed_vault(tmp.path());
 
     let view = vault.search_evidence("memory", 0).unwrap();
     assert!(view.results.is_empty(), "a zero limit serves no rows");
@@ -942,10 +925,7 @@ fn a_zero_limit_evidence_read_still_reads_the_evidence() {
 #[test]
 fn excluding_a_served_note_backfills_from_the_same_ranking() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, _) = reindexed_vault(tmp.path());
 
     // Both golden notes carry "memory", so the full read serves two rows and there
     // is a next-ranked note for the exclusion to backfill with.
@@ -981,10 +961,7 @@ fn excluding_a_served_note_backfills_from_the_same_ranking() {
 #[test]
 fn exclusion_subtracts_rows_never_the_evidence() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let vault = b2_core::Vault::open(&vault_dir).unwrap();
-    vault.reindex().unwrap();
+    let (vault, _) = reindexed_vault(tmp.path());
 
     let full = vault.search_evidence("memory", 5).unwrap();
     let excluded = vault
