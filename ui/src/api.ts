@@ -399,8 +399,9 @@ export const api = {
    * Every chord the app's **menu bar** takes (#119) — the host declares the menu
    * (b2-desktop `menu.rs`), so this is the authority on chords the webview never sees:
    * AppKit dispatches a menu key equivalent before the key window's responder chain.
-   * The keyboard reference lists them from here, and `menukeys.ts` holds the mirror this
-   * is checked against at boot.
+   * Read once, at boot, to check `menukeys.ts`'s mirror against (main.ts
+   * `checkMenuDrift`); everything else — the recorder's refusal of a menu chord included
+   * — reads that mirror, never this.
    */
   menuChords: (): Promise<MenuChord[]> => invoke("menu_chords"),
 
