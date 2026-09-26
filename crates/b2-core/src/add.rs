@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::ingest::{self, EmbedCtx, ProjectionCtx};
 use crate::note::yaml_quote;
 use serde::Serialize;
-use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 /// What [`add_note`] did: the created note's vault-relative path
@@ -26,7 +26,7 @@ pub struct AddReport {
 /// Create a new note at `path_input` (a `.md` suffix is optional and added if missing)
 /// with a minimal, valid frontmatter and `content` as its body, then project it.
 ///
-/// Refuses to clobber: [`Error::AddTargetExists`] if a file already sits there,
+/// Refuses to clobber: [`Error::AddTargetExists`] if anything already sits there,
 /// [`Error::AddDestination`] for an empty/absolute/vault-escaping path. Missing parent
 /// directories are created, mirroring `mv`. Projection **embeds** the new note's chunks,
 /// so the caller must open with the embedder the index was built with.
@@ -75,15 +75,14 @@ fn write_new_note(
     created: &str,
 ) -> Result<String> {
     let rel = crate::pathspec::normalize_rel_md(path_input).map_err(Error::AddDestination)?;
-    let abs = vault_root.join(&rel);
-    if abs.exists() {
-        return Err(Error::AddTargetExists(rel));
-    }
     let doc = render_note(title, content, created);
-    if let Some(parent) = abs.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&abs, doc)?;
+    // The refusal is the create itself, never a check before it: a file appearing at
+    // `rel` in between is refused rather than clobbered.
+    crate::import::place_new(
+        &vault_root.join(&rel),
+        || Error::AddTargetExists(rel.clone()),
+        |file| file.write_all(doc.as_bytes()),
+    )?;
     Ok(rel)
 }
 
