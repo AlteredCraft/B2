@@ -22,7 +22,7 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 use rusqlite::{
     params, Connection, OptionalExtension, StatementStatus, Transaction, TransactionBehavior,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -569,17 +569,69 @@ pub fn upsert_note(conn: &Connection, row: &NoteRow) -> Result<()> {
 /// be free to be NULL — the dangling case), so this must run *before* edge derivation,
 /// which then re-dangles the links that pointed here.
 pub fn prune_notes_except(conn: &Connection, seen: &HashSet<&str>) -> Result<usize> {
-    let mut stmt = conn.prepare("SELECT path FROM notes")?;
+    prune_members_except(conn, Members::Notes, |path| seen.contains(path))
+}
+
+/// Drop the `notes` row at `path` — the index half of deleting a note — and return how
+/// many rows went (0 or 1). Everything keyed to the note cascades with the row, as for
+/// [`prune_notes_except`]; inbound edges are the caller's to re-project.
+pub fn delete_note_row(conn: &Connection, path: &str) -> Result<usize> {
+    delete_member(conn, Members::Notes, path)
+}
+
+/// The two path-keyed member tables: a vault path names a note row or a resource row
+/// (L1, L3), and the row-level housekeeping below is the same for both.
+#[derive(Debug, Clone, Copy)]
+enum Members {
+    Notes,
+    Resources,
+}
+
+impl Members {
+    fn table(self) -> &'static str {
+        match self {
+            Members::Notes => "notes",
+            Members::Resources => "resources",
+        }
+    }
+}
+
+/// Delete one member row by path; returns the rows deleted (0 or 1).
+fn delete_member(conn: &Connection, members: Members, path: &str) -> Result<usize> {
+    let sql = format!("DELETE FROM {} WHERE path = ?1", members.table());
+    Ok(conn.execute(&sql, [path])?)
+}
+
+/// Delete every member row whose path `keep` rejects; returns how many went.
+fn prune_members_except(
+    conn: &Connection,
+    members: Members,
+    keep: impl Fn(&str) -> bool,
+) -> Result<usize> {
+    let mut stmt = conn.prepare(&format!("SELECT path FROM {}", members.table()))?;
     let stored = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut pruned = 0;
-    for path in stored {
-        if !seen.contains(path.as_str()) {
-            pruned += conn.execute("DELETE FROM notes WHERE path = ?1", [&path])?;
-        }
+    for path in stored.iter().filter(|p| !keep(p)) {
+        pruned += delete_member(conn, members, path)?;
     }
     Ok(pruned)
+}
+
+/// Every member path under the folder `dir` (vault-relative, no trailing slash),
+/// path-ordered. Prefix-matched with `substr` (not `LIKE`) so a folder name containing
+/// `%`/`_` never wildcards.
+fn members_under_dir(conn: &Connection, members: Members, dir: &str) -> Result<Vec<String>> {
+    let prefix = format!("{dir}/");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT path FROM {}
+         WHERE substr(path, 1, length(?1)) = ?1
+         ORDER BY path",
+        members.table()
+    ))?;
+    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -754,19 +806,7 @@ pub fn outbound_resource_edges(conn: &Connection, note_path: &str) -> Result<Vec
 /// rows. The resource sibling of [`inbound_edge_targets`]; ordered for
 /// deterministic rewriting.
 pub fn inbound_resource_edge_targets(conn: &Connection, path: &str) -> Result<Vec<InboundEdge>> {
-    let mut stmt = conn.prepare(
-        "SELECT e.src_path, e.dst_path_raw
-         FROM edges e
-         WHERE e.dst_resource_path = ?1
-         ORDER BY e.src_path, e.dst_path_raw",
-    )?;
-    let rows = stmt.query_map([path], |r| {
-        Ok(InboundEdge {
-            src_path: r.get(0)?,
-            dst_raw: r.get(1)?,
-        })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    inbound_edges_on(conn, "dst_resource_path", path)
 }
 
 /// Delete every `resources` row whose path is not in `seen` (the walk's survivors)
@@ -774,17 +814,47 @@ pub fn inbound_resource_edge_targets(conn: &Connection, path: &str) -> Result<Ve
 /// `edges.dst_resource_path` is `ON DELETE SET NULL`, `dst_path_raw` retained —
 /// so a stale inventory row never outlives its file (the resource half of #31).
 pub fn prune_resources_except(conn: &Connection, seen: &HashSet<String>) -> Result<usize> {
-    let mut stmt = conn.prepare("SELECT path FROM resources")?;
-    let stored = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut pruned = 0;
-    for path in stored {
-        if !seen.contains(&path) {
-            pruned += conn.execute("DELETE FROM resources WHERE path = ?1", [&path])?;
-        }
-    }
-    Ok(pruned)
+    prune_members_except(conn, Members::Resources, |path| seen.contains(path))
+}
+
+/// Drop the inventory row at `path` — the index half of deleting a resource — and
+/// return how many rows went (0 or 1). Inbound edges re-dangle as for
+/// [`prune_resources_except`].
+pub fn delete_resource_row(conn: &Connection, path: &str) -> Result<usize> {
+    delete_member(conn, Members::Resources, path)
+}
+
+/// Re-key the inventory row at `old_path` to `new_path` — the resource sibling of
+/// [`repoint_note_path`], and the index half of moving one. The bytes are the same, so
+/// `size` and `content_hash` carry over; `class` (from the new extension) and `mtime`
+/// (the moved file's) are the caller's. Returns whether `old_path` was inventoried —
+/// `false` changes nothing.
+///
+/// An upsert of the new row then a delete of the old, not an `UPDATE`:
+/// `edges.dst_resource_path` has no `ON UPDATE CASCADE`, so the old row's inbound edges
+/// re-dangle (`ON DELETE SET NULL`) until the caller re-projects their sources.
+pub fn repoint_resource(
+    conn: &Connection,
+    old_path: &str,
+    new_path: &str,
+    class: &'static str,
+    mtime: Option<i64>,
+) -> Result<bool> {
+    let Some(detail) = resource_detail(conn, old_path)? else {
+        return Ok(false);
+    };
+    upsert_resource(
+        conn,
+        &ResourceRow {
+            path: new_path,
+            class,
+            size: detail.size,
+            mtime,
+            content_hash: &detail.content_hash,
+        },
+    )?;
+    delete_resource_row(conn, old_path)?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,13 +1595,67 @@ pub struct InboundEdge {
 /// materialized graph names the files to touch, so a move never scans the vault
 /// (index-engine.md §8). Ordered for deterministic rewriting.
 pub fn inbound_edge_targets(conn: &Connection, dst_path: &str) -> Result<Vec<InboundEdge>> {
-    let mut stmt = conn.prepare(
+    inbound_edges_on(conn, "dst_path", dst_path)
+}
+
+/// Which member of a set an [`inbound_edges_of`] edge points at: an index into the
+/// note paths or the resource paths the set was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundTarget {
+    Note(usize),
+    Resource(usize),
+}
+
+/// Every edge pointing at one of a set of members — the notes at `notes`, the
+/// resources at `resources` — tagged with the member it targets: the notes' edges
+/// first, then the resources', each member's in [`inbound_edge_targets`] order. The one
+/// graph read a move (which rewrites these links) and a delete (which dangles them)
+/// both start from, bounded by the inbound count rather than a vault scan
+/// (index-engine.md §8).
+pub fn inbound_edges_of(
+    conn: &Connection,
+    notes: &[&str],
+    resources: &[&str],
+) -> Result<Vec<(InboundTarget, InboundEdge)>> {
+    let mut out = Vec::new();
+    for (i, path) in notes.iter().enumerate() {
+        let edges = inbound_edge_targets(conn, path)?;
+        out.extend(edges.into_iter().map(|e| (InboundTarget::Note(i), e)));
+    }
+    for (i, path) in resources.iter().enumerate() {
+        let edges = inbound_resource_edge_targets(conn, path)?;
+        out.extend(edges.into_iter().map(|e| (InboundTarget::Resource(i), e)));
+    }
+    Ok(out)
+}
+
+/// The notes linking into a set of members ([`inbound_edges_of`]), sorted and deduped —
+/// the files whose edges must re-project once the set moves or goes.
+pub fn inbound_sources(
+    conn: &Connection,
+    notes: &[&str],
+    resources: &[&str],
+) -> Result<BTreeSet<String>> {
+    Ok(inbound_edges_of(conn, notes, resources)?
+        .into_iter()
+        .map(|(_, e)| e.src_path)
+        .collect())
+}
+
+/// The edges whose `column` (`dst_path` or `dst_resource_path`) names `path`, as
+/// [`InboundEdge`] rows ordered by source then authored text.
+fn inbound_edges_on(
+    conn: &Connection,
+    column: &'static str,
+    path: &str,
+) -> Result<Vec<InboundEdge>> {
+    let mut stmt = conn.prepare(&format!(
         "SELECT e.src_path, e.dst_path_raw
          FROM edges e
-         WHERE e.dst_path = ?1
-         ORDER BY e.src_path, e.dst_path_raw",
-    )?;
-    let rows = stmt.query_map([dst_path], |r| {
+         WHERE e.{column} = ?1
+         ORDER BY e.src_path, e.dst_path_raw"
+    ))?;
+    let rows = stmt.query_map([path], |r| {
         Ok(InboundEdge {
             src_path: r.get(0)?,
             dst_raw: r.get(1)?,
@@ -1541,31 +1665,15 @@ pub fn inbound_edge_targets(conn: &Connection, dst_path: &str) -> Result<Vec<Inb
 }
 
 /// Every indexed note path under the directory `dir` (vault-relative, no trailing
-/// slash), path-ordered — the moved set a **directory move** operates on.
-/// Prefix-matched with `substr` (not `LIKE`) so a dir name containing `%`/`_` never
-/// wildcards.
+/// slash), path-ordered — the moved (or deleted) set of a **directory** op.
 pub fn notes_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> {
-    let prefix = format!("{dir}/");
-    let mut stmt = conn.prepare(
-        "SELECT path FROM notes
-         WHERE substr(path, 1, length(?1)) = ?1
-         ORDER BY path",
-    )?;
-    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    members_under_dir(conn, Members::Notes, dir)
 }
 
 /// Every inventoried resource path under the directory `dir` — the resource half
 /// of [`notes_under_dir`], same prefix semantics, path-ordered.
 pub fn resources_under_dir(conn: &Connection, dir: &str) -> Result<Vec<String>> {
-    let prefix = format!("{dir}/");
-    let mut stmt = conn.prepare(
-        "SELECT path FROM resources
-         WHERE substr(path, 1, length(?1)) = ?1
-         ORDER BY path",
-    )?;
-    let rows = stmt.query_map([&prefix], |r| r.get(0))?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    members_under_dir(conn, Members::Resources, dir)
 }
 
 /// Re-key a note from `old_path` to `new_path` — **the** index-side move (ADR-0003).
