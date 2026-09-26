@@ -9,7 +9,7 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{golden_vault_copy, reindexed_vault, MEMORY_PATH, SRS_PATH};
+use common::{golden_vault_copy, opened_vault, reindexed_vault, MEMORY_PATH, SRS_PATH};
 use std::fs;
 
 #[test]
@@ -27,9 +27,7 @@ fn open_creates_the_b2_dir_and_index() {
 #[test]
 fn reindex_reports_counts_and_is_idempotent() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, root) = opened_vault(tmp.path());
 
     let before: Vec<String> = ["concepts/memory.md", "notes/spaced-repetition.md"]
         .iter()
@@ -163,9 +161,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
 #[test]
 fn reads_before_reindex_are_empty_not_errors() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, _) = opened_vault(tmp.path());
 
     assert!(vault.search("forgetting", 10).unwrap().is_empty());
     assert!(vault.list_notes().unwrap().is_empty());

@@ -5,16 +5,19 @@
 //! nothing to rewrite them to — exactly the state an external `rm` plus a full reindex
 //! produces. That equivalence is the correctness bar (S3).
 //!
-//! The single-note projection paths never prune, so each op drops its rows directly, then
-//! re-projects the **surviving** inbound files: their edges re-derive against the pruned
-//! tables and re-key to the dangling edge id a rebuild would derive. Bodies are untouched,
-//! so re-projection re-chunks nothing and the ops are **model-free**.
+//! The single-note projection paths never prune, so every delete runs one pipeline
+//! ([`delete_set`]): read the inbound linkers off the graph, remove from disk, drop the
+//! rows directly, then re-project the **surviving** linkers — their edges re-derive
+//! against the pruned tables and re-key to the dangling edge id a rebuild would derive.
+//! Bodies are untouched, so re-projection re-chunks nothing and the ops are
+//! **model-free**.
 
 use crate::db;
 use crate::error::{Error, Result};
 use crate::ingest::{self, ProjectionCtx};
+use crate::pathspec;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -54,72 +57,34 @@ pub struct DirDeleteReport {
     pub dangled: Vec<String>,
 }
 
-/// Remove one file, tolerating a file already gone: an external delete that raced
-/// us leaves exactly the state we are reconciling toward, so the projection
-/// cleanup must still run rather than abort.
-fn remove_file_if_present(abs: &Path) -> Result<()> {
-    match fs::remove_file(abs) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Re-project each surviving inbound file (bodies unchanged, so nothing
-/// re-chunks and no vector is touched): their edges re-derive against the
-/// pruned tables, re-dangling the links that pointed at the deleted target with
-/// the raw-path-keyed edge ids a full rebuild would derive.
-fn reproject_dangled(ctx: ProjectionCtx, dangled: &BTreeSet<String>) -> Result<()> {
-    for src in dangled {
-        ingest::project_file(ctx, src)?;
-    }
-    Ok(())
-}
-
 /// Delete the note at `rel`: file off disk, projection rows off the index
 /// (chunks/FTS/centroid/aliases/outbound edges cascade with the `notes` row), then
 /// re-project the inbound linkers so their edges re-dangle. The façade resolved the ref.
 /// The note's chunk **vectors** deliberately do not cascade — content-addressed and
 /// possibly shared (ADR-0006), they are collected by the whole-vault pass.
 pub fn delete_note(ctx: ProjectionCtx, rel: &str) -> Result<DeleteReport> {
-    let (conn, root) = (ctx.conn, ctx.root);
-    // The graph names the bounded inbound set before the rows go. A self-link's
-    // source is the note itself — it dies with the file, so it is not re-projected.
-    let dangled: BTreeSet<String> = db::inbound_edge_targets(conn, rel)?
-        .into_iter()
-        .map(|e| e.src_path)
-        .filter(|p| p != rel)
-        .collect();
-
-    remove_file_if_present(&root.join(rel))?;
-    conn.execute("DELETE FROM notes WHERE path = ?1", [rel])?;
-    reproject_dangled(ctx, &dangled)?;
-
+    let dangled = delete_set(ctx, &[rel], &[], || {
+        remove_file_if_present(&ctx.root.join(rel))
+    })?;
     Ok(DeleteReport {
         path: rel.to_string(),
-        dangled: dangled.into_iter().collect(),
+        dangled,
     })
 }
 
 /// Delete the resource at `rel` — the note delete minus the identity step: file
 /// off disk, inventory row off the index (inbound edges' `dst_resource_path` is
 /// `ON DELETE SET NULL`), then re-project the inbound linkers so their edges
-/// re-key to the raw-path (dangling) ids a rebuild derives.
+/// re-key to the raw-path (dangling) ids a rebuild derives. Errors with
+/// [`Error::ResourceNotFound`] for a path not in the inventory.
 pub fn delete_resource(ctx: ProjectionCtx, rel: &str) -> Result<ResourceDeleteReport> {
-    let (conn, root) = (ctx.conn, ctx.root);
-    db::resource_detail(conn, rel)?.ok_or_else(|| Error::ResourceNotFound(rel.to_string()))?;
-    let dangled: BTreeSet<String> = db::inbound_resource_edge_targets(conn, rel)?
-        .into_iter()
-        .map(|e| e.src_path)
-        .collect();
-
-    remove_file_if_present(&root.join(rel))?;
-    conn.execute("DELETE FROM resources WHERE path = ?1", [rel])?;
-    reproject_dangled(ctx, &dangled)?;
-
+    db::resource_detail(ctx.conn, rel)?.ok_or_else(|| Error::ResourceNotFound(rel.to_string()))?;
+    let dangled = delete_set(ctx, &[], &[rel], || {
+        remove_file_if_present(&ctx.root.join(rel))
+    })?;
     Ok(ResourceDeleteReport {
         path: rel.to_string(),
-        dangled: dangled.into_iter().collect(),
+        dangled,
     })
 }
 
@@ -129,52 +94,75 @@ pub fn delete_resource(ctx: ProjectionCtx, rel: &str) -> Result<ResourceDeleteRe
 /// surviving linkers *outside* the folder. Errors with [`Error::DirNotFound`]
 /// for a missing (or invalid) source folder.
 pub fn delete_dir(ctx: ProjectionCtx, dir_input: &str) -> Result<DirDeleteReport> {
-    let (conn, root) = (ctx.conn, ctx.root);
     // The UI only sends tree-derived paths, so an invalid input (empty, absolute,
     // escaping, a dotfolder) is refused as "no such folder" rather than growing a
     // delete-specific destination error.
-    let dir = crate::pathspec::normalize_rel_dir(dir_input)
+    let dir = pathspec::normalize_rel_dir(dir_input)
         .map_err(|_| Error::DirNotFound(dir_input.trim().to_string()))?;
-    let abs = root.join(&dir);
+    let abs = ctx.root.join(&dir);
     if !abs.is_dir() {
         return Err(Error::DirNotFound(dir));
     }
 
-    let notes = db::notes_under_dir(conn, &dir)?;
-    let resources = db::resources_under_dir(conn, &dir)?;
-
-    // Inbound linkers that survive the delete — sources inside the folder die
-    // with it and must not be re-projected (their files are gone).
-    let prefix = format!("{dir}/");
-    let mut dangled: BTreeSet<String> = BTreeSet::new();
-    for note_path in &notes {
-        for e in db::inbound_edge_targets(conn, note_path)? {
-            if !e.src_path.starts_with(&prefix) {
-                dangled.insert(e.src_path);
-            }
-        }
-    }
-    for path in &resources {
-        for e in db::inbound_resource_edge_targets(conn, path)? {
-            if !e.src_path.starts_with(&prefix) {
-                dangled.insert(e.src_path);
-            }
-        }
-    }
-
-    fs::remove_dir_all(&abs)?;
-    for note_path in &notes {
-        conn.execute("DELETE FROM notes WHERE path = ?1", [note_path])?;
-    }
-    for path in &resources {
-        conn.execute("DELETE FROM resources WHERE path = ?1", [path])?;
-    }
-    reproject_dangled(ctx, &dangled)?;
+    let notes = db::notes_under_dir(ctx.conn, &dir)?;
+    let resources = db::resources_under_dir(ctx.conn, &dir)?;
+    let dangled = delete_set(
+        ctx,
+        &notes.iter().map(String::as_str).collect::<Vec<_>>(),
+        &resources.iter().map(String::as_str).collect::<Vec<_>>(),
+        || Ok(fs::remove_dir_all(&abs)?),
+    )?;
 
     Ok(DirDeleteReport {
         dir,
         deleted_notes: notes.len(),
         deleted_resources: resources.len(),
-        dangled: dangled.into_iter().collect(),
+        dangled,
     })
+}
+
+/// The one delete pipeline: the indexed `notes` and `resources` leave the disk (by
+/// `remove`, which takes the whole set — one file or a folder) and the index, and the
+/// surviving inbound linkers re-project so their links re-dangle. A linker that is
+/// itself one of the deleted notes (a self-link, or a linker inside a deleted folder)
+/// died with it and is not re-projected. Returns the survivors, sorted.
+fn delete_set(
+    ctx: ProjectionCtx,
+    notes: &[&str],
+    resources: &[&str],
+    remove: impl FnOnce() -> Result<()>,
+) -> Result<Vec<String>> {
+    let conn = ctx.conn;
+    // The graph names the bounded inbound set before the rows go.
+    let dying: HashSet<&str> = notes.iter().copied().collect();
+    let dangled: Vec<String> = db::inbound_sources(conn, notes, resources)?
+        .into_iter()
+        .filter(|src| !dying.contains(src.as_str()))
+        .collect();
+
+    remove()?;
+    for path in notes {
+        db::delete_note_row(conn, path)?;
+    }
+    for path in resources {
+        db::delete_resource_row(conn, path)?;
+    }
+    // Bodies unchanged, so nothing re-chunks and no vector is touched: the edges
+    // re-derive against the pruned tables, re-dangling the links that pointed at the
+    // deleted members with the raw-path-keyed edge ids a full rebuild would derive.
+    for src in &dangled {
+        ingest::project_file(ctx, src)?;
+    }
+    Ok(dangled)
+}
+
+/// Remove one file, tolerating a file already gone: an external delete that raced
+/// us leaves exactly the state we are reconciling toward, so the projection
+/// cleanup must still run rather than abort.
+fn remove_file_if_present(abs: &Path) -> Result<()> {
+    match fs::remove_file(abs) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }

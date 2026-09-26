@@ -7,23 +7,9 @@ mod common;
 
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{reindexed_vault, MEMORY_PATH, SRS_PATH};
+use common::{inbound, reindexed_vault, MEMORY_PATH, SRS_PATH};
 use std::fs;
 use std::path::Path;
-
-/// The inbound set of a note, as sortable `(label, src_path)` pairs — the shape the
-/// graph exposes and the thing a move must carry to the destination intact.
-fn inbound(vault: &Vault, note_ref: &str) -> Vec<(String, String)> {
-    let mut ns: Vec<(String, String)> = vault
-        .neighbors(note_ref)
-        .unwrap()
-        .into_iter()
-        .filter(|n| n.direction == "inbound")
-        .map(|n| (n.label, n.path))
-        .collect();
-    ns.sort();
-    ns
-}
 
 #[test]
 fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
@@ -796,5 +782,208 @@ fn re_running_a_move_interrupted_before_its_rename_finishes_it() {
         inbound(&vault, "archive/a.md"),
         vec![("referenced-by".to_string(), "b.md".to_string())],
         "the link resolves at the destination"
+    );
+}
+
+// --- one grammar, one pipeline -------------------------------------------------
+//
+// The move reads link text with ingest's own scanner and runs every kind of move through
+// one pipeline, so what a move repairs is what ingest projected, and each kind leaves
+// the index a rebuild would produce.
+
+/// Every projected edge and inventory row, sorted — the index state a move must leave
+/// equal to a from-scratch rebuild (S3). Edge ids are derived from the resolved
+/// target, so a wrongly (un)resolved edge shows up here too.
+fn projection(root: &Path) -> Vec<String> {
+    let conn = common::index_conn(root);
+    let mut rows: Vec<String> = Vec::new();
+    let mut edges = conn
+        .prepare(
+            "SELECT id, src_path, dst_path, dst_resource_path, dst_path_raw, type
+             FROM edges",
+        )
+        .unwrap();
+    rows.extend(
+        edges
+            .query_map([], |r| {
+                Ok(format!(
+                    "edge {} {} {:?} {:?} {} {}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+    );
+    let mut resources = conn
+        .prepare("SELECT path, class, size, content_hash FROM resources")
+        .unwrap();
+    rows.extend(
+        resources
+            .query_map([], |r| {
+                Ok(format!(
+                    "resource {} {} {} {}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap),
+    );
+    rows.sort();
+    rows
+}
+
+/// Assert the index at `root` equals what dropping it and rebuilding from the Markdown
+/// alone produces.
+fn assert_matches_a_rebuild(vault: Vault, root: &Path) {
+    let after_move = projection(root);
+    drop(vault);
+    fs::remove_dir_all(root.join(".b2")).unwrap();
+    Vault::open(root).unwrap().reindex().unwrap();
+    assert_eq!(projection(root), after_move);
+}
+
+/// A vault linking one note and one resource from both syntaxes and both
+/// conventions, with a self-link and a linker in a subfolder.
+fn linked_vault(dir: &Path) -> (Vault, std::path::PathBuf) {
+    small_vault(
+        dir,
+        &[
+            ("a.md", "Me: [[a]]. Pic: ![p](img.png)\n"),
+            ("img.png", "png bytes"),
+            (
+                "b.md",
+                "See [[a|A]] and [a](a.md).\n![[img.png|cap]] and ![alt](img.png)\n",
+            ),
+            (
+                "sub/c.md",
+                "Up: ![x](../img.png) and [[img.png]] and [[a.md#Part]].\n",
+            ),
+        ],
+    )
+}
+
+#[test]
+fn a_move_rewrites_a_link_after_a_stray_open_bracket() {
+    // Ingest scans per line, so `see [[a]]` is an edge even though an earlier line
+    // left a `[[` open. The move used to scan the whole file, pair that stray `[[`
+    // with the `]]` below, miss the link, and leave the backlink dangling.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = small_vault(
+        tmp.path(),
+        &[("a.md", "Target.\n"), ("b.md", "broken [[x\nsee [[a]]\n")],
+    );
+
+    let report = vault.move_note("a.md", "archive/a.md").unwrap();
+    assert_eq!(report.links_rewritten, 1);
+    assert_eq!(
+        fs::read_to_string(root.join("b.md")).unwrap(),
+        "broken [[x\nsee [[archive/a]]\n"
+    );
+    assert_eq!(
+        inbound(&vault, "archive/a.md"),
+        vec![("referenced-by".to_string(), "b.md".to_string())],
+        "the backlink resolves at the destination"
+    );
+}
+
+#[test]
+fn a_self_linking_note_is_reported_under_its_new_path() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+
+    let report = vault.move_note("a.md", "z/a.md").unwrap();
+    assert_eq!(
+        report.rewrote,
+        vec![
+            "b.md".to_string(),
+            "sub/c.md".to_string(),
+            "z/a.md".to_string()
+        ],
+        "every rewritten file is named where it is after the move"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("z/a.md")).unwrap(),
+        "Me: [[z/a]]. Pic: ![p](img.png)\n",
+        "the self-link follows the note"
+    );
+}
+
+#[test]
+fn a_heading_link_keeps_its_fragment_across_a_move() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+
+    vault.move_note("a.md", "z/a.md").unwrap();
+    let c = fs::read_to_string(root.join("sub/c.md")).unwrap();
+    assert!(c.contains("[[z/a.md#Part]]"), "{c}");
+}
+
+#[test]
+fn a_note_move_leaves_the_index_a_rebuild_would_project() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+    vault.move_note("a.md", "z/a.md").unwrap();
+    assert_matches_a_rebuild(vault, &root);
+}
+
+#[test]
+fn a_resource_move_leaves_the_index_a_rebuild_would_project() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+
+    let report = vault.move_resource("img.png", "media/img.png").unwrap();
+    assert_eq!(
+        report.rewrote,
+        vec![
+            "a.md".to_string(),
+            "b.md".to_string(),
+            "sub/c.md".to_string()
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("sub/c.md")).unwrap(),
+        "Up: ![x](../media/img.png) and [[media/img.png]] and [[a.md#Part]].\n",
+        "each syntax keeps its own convention"
+    );
+    assert_matches_a_rebuild(vault, &root);
+}
+
+#[test]
+fn a_folder_move_leaves_the_index_a_rebuild_would_project() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+    vault.move_dir("sub", "deep/er").unwrap();
+    assert_matches_a_rebuild(vault, &root);
+}
+
+#[test]
+fn a_resource_move_to_a_note_path_is_refused_and_changes_nothing() {
+    // A `.md` path names a note: the moved bytes would be indexed as one by the next
+    // rebuild, so the resource would silently stop being a resource.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = linked_vault(tmp.path());
+    let before = vault_bytes(&root);
+    let backlinks = vault.explain_resource("img.png").unwrap().backlinks;
+
+    for dest in ["img.md", "media/IMG.MD"] {
+        let err = vault.move_resource("img.png", dest).unwrap_err();
+        assert!(
+            matches!(&err, Error::MoveDestination(m) if m.contains("note path")),
+            "{dest}: {err:?}"
+        );
+    }
+    assert_eq!(vault_bytes(&root), before);
+    assert_eq!(
+        vault.explain_resource("img.png").unwrap().backlinks,
+        backlinks,
+        "the index is untouched"
     );
 }

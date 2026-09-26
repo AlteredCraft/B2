@@ -8,7 +8,7 @@ use b2_core::chunk::{chunk_body, BreakWeights, ChunkConfig};
 use b2_core::embed::FakeEmbedder;
 use b2_core::ingest::ingest_vault;
 use b2_core::open;
-use common::{golden_vault_copy, SRS_PATH};
+use common::{golden_vault_copy, index_conn, opened_vault, SRS_PATH};
 
 #[test]
 fn chunks_are_projected_for_each_note() {
@@ -76,13 +76,11 @@ fn vault_chunk_config_reaches_projection() {
     // `project(force)` on the same vault re-chunks under the new policy, so a
     // much finer target yields more chunks than the default did. Model-free.
     let tmp = tempfile::TempDir::new().unwrap();
-    let vault_dir = tmp.path().join("vault");
-    golden_vault_copy(&vault_dir);
-    let mut vault = b2_core::Vault::open(&vault_dir).unwrap();
+    let (mut vault, vault_dir) = opened_vault(tmp.path());
     vault.project(false).unwrap();
 
     let chunk_count = || -> i64 {
-        let conn = open(&vault_dir.join(".b2").join("b2.sqlite")).unwrap();
+        let conn = index_conn(&vault_dir);
         conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
             .unwrap()
     };

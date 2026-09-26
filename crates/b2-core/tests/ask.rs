@@ -13,19 +13,11 @@ use b2_core::llm::{
 };
 use b2_core::vault::Vault;
 use b2_core::Error;
-use common::{opened_vault, reindexed_vault};
+use common::{keep_streaming, opened_vault, reindexed_vault, stream_into};
 use std::cell::Cell;
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
-
-/// A callback that keeps streaming: the plain, uncancelled ask.
-fn stream_all(buf: &mut String) -> impl FnMut(&str) -> ControlFlow<()> + '_ {
-    move |tok: &str| {
-        buf.push_str(tok);
-        ControlFlow::Continue(())
-    }
-}
 
 /// Wraps a provider and counts its calls — how the suite observes whether the
 /// condensation step ran without reaching into the orchestration.
@@ -88,7 +80,7 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
             &FakeLlm,
             "forgetting curve",
             &[],
-            &mut stream_all(&mut streamed),
+            &mut stream_into(&mut streamed),
         )
         .unwrap();
 
@@ -177,7 +169,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "forgetting curve",
             &[],
-            &mut stream_all(&mut sink),
+            &mut stream_into(&mut sink),
         )
         .unwrap();
     assert_eq!(counting.calls.get(), 1, "no condensation on a single turn");
@@ -194,7 +186,7 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
             &counting,
             "tell me more about that",
             &history,
-            &mut stream_all(&mut sink),
+            &mut stream_into(&mut sink),
         )
         .unwrap();
     assert_eq!(counting.calls.get(), 2, "condense, then answer");
@@ -248,7 +240,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
-            &mut stream_all(&mut sink),
+            &mut stream_into(&mut sink),
         )
         .unwrap();
     assert!(!view.citations.is_empty());
@@ -267,7 +259,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
             },
             "quokka",
             &history,
-            &mut stream_all(&mut sink),
+            &mut stream_into(&mut sink),
         )
         .unwrap();
     assert_eq!(
@@ -286,7 +278,7 @@ fn ask_answers_bm25_only_on_a_projected_but_unembedded_vault() {
     // grounding passages are the actual term matches, and chat still works.
     let mut streamed = String::new();
     let view = vault
-        .ask(&FakeLlm, "forgetting", &[], &mut stream_all(&mut streamed))
+        .ask(&FakeLlm, "forgetting", &[], &mut stream_into(&mut streamed))
         .unwrap();
     assert!(!view.cancelled);
     assert!(!view.citations.is_empty(), "chat keeps working unembedded");
@@ -342,7 +334,7 @@ fn a_hallucinated_marker_resolves_to_nothing_and_stays_in_the_text() {
             &Hallucinating,
             "forgetting curve",
             &[],
-            &mut stream_all(&mut sink),
+            &mut stream_into(&mut sink),
         )
         .unwrap();
 
@@ -371,7 +363,7 @@ fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
             &FakeLlm,
             "anything at all",
             &[],
-            &mut stream_all(&mut streamed),
+            &mut stream_into(&mut streamed),
         )
         .unwrap();
 
@@ -417,7 +409,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
-            &mut |_| ControlFlow::Continue(()),
+            &mut keep_streaming(),
         )
         .unwrap_err();
     assert!(matches!(err, Error::Llm(_)));
@@ -431,7 +423,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
             },
             "forgetting curve",
             &[],
-            &mut |_| ControlFlow::Continue(()),
+            &mut keep_streaming(),
         )
         .unwrap_err();
     assert!(
@@ -455,9 +447,7 @@ fn ask_shares_searchs_model_mismatch_fail_fast() {
 
     let swapped = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
     let err = swapped
-        .ask(&FakeLlm, "forgetting", &[], &mut |_| {
-            ControlFlow::Continue(())
-        })
+        .ask(&FakeLlm, "forgetting", &[], &mut keep_streaming())
         .unwrap_err();
     assert!(matches!(err, Error::ModelMismatch { .. }));
 }

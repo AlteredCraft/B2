@@ -11,8 +11,7 @@ use b2_core::chunk::ChunkConfig;
 use b2_core::embed::FakeEmbedder;
 use b2_core::ingest::{embed_vault, project_vault, ProjectionCtx};
 use b2_core::open;
-use b2_core::vault::Vault;
-use common::{count, golden_vault_copy};
+use common::{count, golden_vault_copy, opened_vault};
 use std::ops::ControlFlow;
 
 #[test]
@@ -67,9 +66,7 @@ fn cancel_after_first_batch_leaves_a_consistent_resumable_index() {
 #[test]
 fn facade_report_is_honest_about_a_cancelled_run() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().join("vault");
-    golden_vault_copy(&root);
-    let vault = Vault::open(&root).unwrap();
+    let (vault, _) = opened_vault(tmp.path());
 
     // Cancel at the first batch: fewer notes embed than are indexed, and `cancelled`
     // is set — the counts describe the partial work truthfully (§3).

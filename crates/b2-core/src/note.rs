@@ -18,11 +18,9 @@ use yaml_rust2::{Yaml, YamlLoader};
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub r#type: Option<String>,
-    /// The frontmatter `title:` value, parsed only so it round-trips and can be
-    /// inspected. It has **no special meaning**: a note's display title is its
-    /// filename ([`display_title`]), and B2 never privileges this field
-    /// (data-model.md §1). Kept recognized so the key is understood, not stripped.
-    pub title: Option<String>,
+    // No `title`: a note's display title is its filename ([`display_title`]), and a
+    // frontmatter `title:` key is inert (data-model.md §1) — round-tripped verbatim
+    // with the raw bytes like any key B2 does not project.
     pub description: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
@@ -249,7 +247,6 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             Some(doc) => {
                 readable = doc.as_hash().is_some() || matches!(doc, Yaml::Null);
                 f.r#type = doc["type"].as_str().map(str::to_string);
-                f.title = doc["title"].as_str().map(str::to_string);
                 f.description = doc["description"].as_str().map(str::to_string);
                 f.created = scalar_to_string(&doc["created"]);
                 f.updated = scalar_to_string(&doc["updated"]);
@@ -335,15 +332,11 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
 /// (`notes/spaced-repetition.md` → `spaced-repetition`). A name that is only an
 /// extension (`.md`) or carries a non-`.md` extension is returned whole.
 pub fn display_title(path: &str) -> String {
-    let base = path.rsplit('/').next().unwrap_or(path);
-    let stem = base.rsplit_once('.').map_or(base, |(stem, ext)| {
-        if ext.eq_ignore_ascii_case("md") && !stem.is_empty() {
-            stem
-        } else {
-            base
-        }
-    });
-    stem.to_string()
+    let name = crate::pathspec::file_name(path);
+    match name.get(..name.len().saturating_sub(".md".len())) {
+        Some(stem) if crate::pathspec::is_md(name) => stem.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// YAML double-quote a string (escaping `\` and `"`), so a value with `[[`, `|`,

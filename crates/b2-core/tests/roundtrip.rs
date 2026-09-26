@@ -54,7 +54,12 @@ fn extracts_queryable_fields_without_disturbing_raw() {
     let n = parse(&raw);
     let f = n.fields();
     assert_eq!(f.r#type.as_deref(), Some("concept"));
-    // title is the logical value (quotes are a serialization detail kept in raw).
-    assert_eq!(f.title.as_deref(), Some("Spaced repetition"));
     assert_eq!(f.created.as_deref(), Some("2026-06-20"));
+    // A relation is the logical value (the YAML quotes are a serialization detail
+    // kept in raw).
+    assert_eq!(
+        f.relations,
+        vec!["supports [[concepts/memory|Human memory]] — applies the forgetting curve"]
+    );
+    assert!(n.as_str().contains("  - \"supports [[concepts/memory|"));
 }
