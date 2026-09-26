@@ -46,7 +46,7 @@ import {
   WIKILINK_EXACT,
   type EmbedImages,
 } from "./embeds.ts";
-import { renderMarkdown } from "./render.ts";
+import { renderMarkdown } from "./markdown.ts";
 
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
 //

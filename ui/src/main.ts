@@ -65,7 +65,15 @@ import {
   userMessage,
   whyQuestion,
 } from "./chat";
-import { isSettingsTab, tabMove, tabNavFor, tabStep, type SettingsTabId } from "./settingstabs";
+import {
+  isSettingsTab,
+  tabDomId,
+  tabMove,
+  tabNavFor,
+  tabStep,
+  type SettingsTabId,
+} from "./settingstabs";
+import { reindexMeterHtml } from "./widgets";
 import { externalUrl, isInPageAnchor } from "./links";
 import { embedImagesField, livePreview, setEmbedImages, wikilink } from "./livepreview";
 import {
@@ -2711,7 +2719,7 @@ async function openSettings(tab?: SettingsTabId): Promise<void> {
     // `paintModal` restores focus to the tab that had it, which is no longer the
     // selected one, and a roving tabstop that disagrees with the highlight is worse
     // than no tabstop. The reads below are skipped too: nothing about the host changed.
-    if (tab) document.getElementById(`settings-tab-${tab}`)?.focus();
+    if (tab) document.getElementById(tabDomId(tab))?.focus();
     return;
   }
   try {
@@ -2762,7 +2770,7 @@ function selectSettingsTab(tab: SettingsTabId, focusTab: boolean): void {
   if (state.settingsTab === tab && !focusTab) return;
   state.settingsTab = tab;
   render();
-  if (focusTab) document.getElementById(`settings-tab-${tab}`)?.focus();
+  if (focusTab) document.getElementById(tabDomId(tab))?.focus();
 }
 
 /**
@@ -4368,11 +4376,7 @@ function buildShell(): void {
           <span id="vault-root" class="vault-root" title="Active vault"></span>
           <!-- Classes, not ids: this is one of those two meters, and paintReindex writes
                the same values into every one on screen. -->
-          <div class="reindex-progress" hidden aria-live="polite">
-            <div class="reindex-track"><div class="reindex-fill"></div></div>
-            <span class="reindex-label"></span>
-            <button class="btn ghost small" data-cancel-reindex>Cancel</button>
-          </div>
+          ${reindexMeterHtml({ hidden: true, indeterminate: false })}
         </div>
         <button id="open-chat" class="btn ghost icon-btn" aria-label="Ask your notes">
           ${icon("chat-dots", { size: 15 })}

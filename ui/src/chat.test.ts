@@ -12,6 +12,7 @@ import {
   citationRowKey,
   errorMessage,
   formatModelSize,
+  modelDetail,
   pullCommand,
   retrievalNote,
   toolCapInput,
@@ -259,4 +260,11 @@ test("a model's size reads as an inventory line", () => {
   assert.equal(formatModelSize(21_474_836_480), "20 GB");
   assert.equal(formatModelSize(500_000_000), "477 MB");
   assert.equal(formatModelSize(0), "");
+});
+
+test("an installed model's detail is its parameters and size, whichever it has", () => {
+  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: "3.2B" }), "3.2B · 1.9 GB");
+  assert.equal(modelDetail({ name: "m", size: 2_019_393_189, parameters: null }), "1.9 GB");
+  assert.equal(modelDetail({ name: "m", size: 0, parameters: "3.2B" }), "3.2B");
+  assert.equal(modelDetail({ name: "m", size: 0, parameters: null }), "");
 });

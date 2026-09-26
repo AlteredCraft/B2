@@ -36,6 +36,7 @@ import type {
   ChatSetup,
   ChatTurn,
   Citation,
+  OllamaModel,
   ToolCallCap,
   ToolUse,
 } from "./types";
@@ -330,6 +331,12 @@ export const OLLAMA_QUICKSTART_URL = "https://docs.ollama.com/quickstart";
  *  offered where that decision is made. Named rather than defaulted to: picking a
  *  provider is the explicit act M5 is about, so this is a link, never a pre-filled URL. */
 export const OLLAMA_CLOUD_URL = "https://docs.ollama.com/cloud";
+
+/** An installed model's one-line detail — its parameter label and size, whichever it
+ *  has ("3.2B · 2.0 GB") — as both the setup card and the Settings picker print it. */
+export function modelDetail(m: OllamaModel): string {
+  return [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · ");
+}
 
 /** A model's on-disk size, for the installed list. Whole GB past a gigabyte, one decimal
  *  below — an inventory line, not a measurement. */
