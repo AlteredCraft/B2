@@ -5,25 +5,16 @@
 // flow, never engine logic.
 
 import "../style.css";
-import {
-  autocompletion,
-  type CompletionContext,
-  type CompletionResult,
-} from "@codemirror/autocomplete";
+import { autocompletion } from "@codemirror/autocomplete";
 import { history } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { syntaxHighlighting } from "@codemirror/language";
 import {
   Compartment,
-  EditorSelection,
-  type EditorState,
   StateEffect,
-  StateField,
   type Extension,
 } from "@codemirror/state";
 import {
-  Decoration,
-  type DecorationSet,
   EditorView,
   type KeyBinding,
   keymap,
@@ -34,6 +25,7 @@ import {
   openDocPath,
   state,
   type AppState,
+  type ContextMenuState,
   type SideSection,
   type ThemePref,
   type TreeNodeRef,
@@ -83,19 +75,18 @@ import {
   inlineImagePlan,
 } from "./embeds";
 import { b2Highlighter, highlightCodeBlocks, resolveLang } from "./highlight";
-import { noteTarget, wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete";
+import { noteTarget } from "./wikicomplete";
 import {
   CARD_DRAG_MIME,
   cardDrop,
   type DraggedCard,
-  inCodeAt,
   insertDrop,
   planDrop,
   setDropTarget,
   withoutCard,
 } from "./droplink";
-import { FORMATS, insertTable, toggleInline, type InlineFormat } from "./format";
-import { indentList, outdentList, type ListEdit } from "./list";
+import { FORMATS } from "./format";
+import { indentList, outdentList } from "./list";
 import {
   activeBindings,
   canonicalKey,
@@ -120,10 +111,17 @@ import { capture, PROBE_AFTER_MS, silenceHint } from "./recorder";
 import { STOCK_EDITOR_KEYMAP } from "./editorkeys";
 import { menuDrift } from "./menukeys";
 import { HOLD_MS, type HoldEvent, type HoldPhase, holdStep } from "./cmdhold";
-import { markdownForPaste } from "./paste";
+import {
+  richPaste,
+  runFormat,
+  runInsertTable,
+  runListShift,
+  wikiCompletionSource,
+} from "./editorcmds";
 import { icon } from "./icons";
 import { editDoneTitle, shellHints } from "./hints";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
+import { findField, setFindEffect } from "./findfield";
 import { BOUNDS, initPanes, visiblePanes } from "./panes";
 import {
   DEFAULT_ZOOM,
@@ -900,8 +898,8 @@ function inTextEntry(): boolean {
 // live here: the file tree navigates by arrow key (the ARIA `tree` pattern, walking the
 // row order treenav.ts also paints), every overlay takes focus on open and gives it back
 // on close, and every mouse-only gesture — the right-click menu above all — has a key
-// that reaches it. The chords themselves are wired in the global keydown handler at the
-// bottom of `wireEvents`; what's here is the focus bookkeeping they share.
+// that reaches it. The chords themselves are wired in the global keydown handler,
+// `wireChords`; what's here is the focus bookkeeping they share.
 
 /** Every row the tree currently paints, in paint order — the list the arrows walk. */
 function treeRows(): TreeRow[] {
@@ -1164,7 +1162,7 @@ function wireCmdHold(): void {
   // The releases the keyboard never delivers. macOS stops sending key events to a window
   // that isn't key, so ⌘⇥ into another app, Spotlight, or Hide takes the ⌘ keyup with it —
   // and a sheet whose only exit is an event that will never arrive is a sheet stuck on
-  // screen. (A second `blur` listener, deliberately: the one in `wireEvents` is the
+  // screen. (A second `blur` listener, deliberately: the one in `wireWindowBlur` is the
   // editor's flush point and the recorder's silence probe, and stapling an unrelated
   // third job onto it would hide this one from anyone reading either.)
   window.addEventListener("blur", () => cmdHoldEvent({ kind: "release" }));
@@ -1205,7 +1203,7 @@ function overlayFocusables(): HTMLElement[] {
  * gone: `render()` swaps `#modal-root`/`#menu-root` wholesale, so `document.activeElement`
  * has fallen back to `<body>` and the trigger is unrecoverable. `focusin` fires long
  * before that, and *destroying* a focused node fires no `focusin` (only blur), so this
- * still names the trigger at the moment we come to remember it. Set in `wireEvents`.
+ * still names the trigger at the moment we come to remember it. Set in `wireFocusMemory`.
  */
 let lastFocused: HTMLElement | SVGElement | null = null;
 
@@ -1550,6 +1548,78 @@ function closeContextMenu(): void {
   render();
 }
 
+/**
+ * One right-click menu item: the attribute its button carries, and what choosing it does.
+ * `closeFirst` is for an act that would leave the menu up over its result — a copy whose
+ * confirmation is the status line, an OS picker, a navigation — so the menu goes before
+ * it runs. An act that opens a surface of its own (rename, Move…, a create, a delete)
+ * clears the menu itself. The act's argument is read off the menu before it closes.
+ */
+interface MenuItem<A> {
+  readonly attr: string;
+  readonly closeFirst: boolean;
+  readonly act: (arg: A) => void;
+}
+
+type CardMenu = Extract<ContextMenuState, { kind: "card" }>;
+
+/** The tree menu's items that act on the row it was opened over. */
+const TREE_ROW_ITEMS: readonly MenuItem<TreeNodeRef>[] = [
+  { attr: "data-ctx-rename", closeFirst: false, act: startTreeRename },
+  { attr: "data-ctx-move", closeFirst: false, act: openMoveModal },
+  { attr: "data-ctx-copy-vault-path", closeFirst: true, act: (node) => void copyPath(node.path) },
+  {
+    attr: "data-ctx-copy-system-path",
+    closeFirst: true,
+    // Both entry points refuse to open this menu without a vault, so the root is set
+    // here — but the absolute path is the root's to give, and inventing one for a
+    // vault-less window is not this item's call.
+    act: (node) => {
+      if (state.vaultRoot !== null) void copyPath(systemPath(state.vaultRoot, node.path));
+    },
+  },
+  { attr: "data-ctx-delete", closeFirst: false, act: requestDelete },
+];
+
+/** The tree menu's items that act on the folder it was opened in. */
+const TREE_DIR_ITEMS: readonly MenuItem<string>[] = [
+  { attr: "data-ctx-new-note", closeFirst: false, act: (dir) => startTreeCreate("note", dir) },
+  { attr: "data-ctx-new-folder", closeFirst: false, act: (dir) => startTreeCreate("folder", dir) },
+  // The picker is modal to the OS — the menu goes first.
+  { attr: "data-ctx-import", closeFirst: true, act: (dir) => void pickAndImport(dir) },
+];
+
+/** A discovery card's (or graph ghost's) items. */
+const CARD_ITEMS: readonly MenuItem<CardMenu>[] = [
+  { attr: "data-ctx-open", closeFirst: true, act: (m) => void openNote(m.path) },
+  // The drag's keyboard half — aimed at the caret's line.
+  { attr: "data-ctx-insert", closeFirst: true, act: (m) => insertCardLink(m.path) },
+  { attr: "data-ctx-link", closeFirst: true, act: (m) => openLinkModal(m.path, m.title ?? "") },
+  { attr: "data-ctx-explain", closeFirst: true, act: (m) => void openExplain(m.path) },
+  { attr: "data-ctx-why", closeFirst: true, act: (m) => void askWhy({ path: m.path, title: m.title }) },
+];
+
+/** A click while a right-click menu is up: its own items act; any other click only
+ *  dismisses it. */
+function contextMenuClick(target: HTMLElement): void {
+  const menu = state.contextMenu;
+  if (!menu) return;
+  const chose = <A>(items: readonly MenuItem<A>[], arg: A): boolean => {
+    const item = items.find((i) => target.closest(`[${i.attr}]`) !== null);
+    if (!item) return false;
+    if (item.closeFirst) closeContextMenu();
+    item.act(arg);
+    return true;
+  };
+  if (menu.kind === "tree") {
+    if (menu.node && chose(TREE_ROW_ITEMS, menu.node)) return;
+    if (chose(TREE_DIR_ITEMS, menu.dir)) return;
+  } else if (chose(CARD_ITEMS, menu)) {
+    return;
+  }
+  closeContextMenu();
+}
+
 // --- tree creation: new note / new folder (left nav) ------------------------------
 //
 // The create affordances: the tree-head icons, ⌘N / ⇧⌘N, and the tree's right-click
@@ -1635,7 +1705,7 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
 // --- tree import: files from outside the vault ------------------------------------
 //
 // Two gestures, one outcome: drag files from Finder onto a folder row (the pointer
-// path, wired in wireEvents) or pick them in an OS dialog from the tree's right-click
+// path, wired in wireDrags) or pick them in an OS dialog from the tree's right-click
 // menu (the keyboard path — K1: a drag is pointer-only, so it can't be the only way
 // in). Both place the files through `Vault::import_file`/`import_path`, which copies
 // the bytes verbatim and projects them — adding nothing to either: a `.md` lands as a
@@ -3439,97 +3509,9 @@ function enterEdit(): void {
   mountEditor(n.body);
 }
 
-// Wikilink completion (the Obsidian gesture): typing `[[` opens a picker over the
-// vault's notes + files. The logic — trigger detection, ranking, bracket-closing —
-// is the pure wikicomplete.ts; this is only the CodeMirror adapter. `filter: false`
-// because the ranking is ours (title-prefix > title > path), and no `validFor` so
-// each keystroke re-queries it — the lists live in `state` and are already loaded,
-// so a query is just an in-memory scan.
-function wikiSource(ctx: CompletionContext): CompletionResult | null {
-  const line = ctx.state.doc.lineAt(ctx.pos);
-  const found = wikiQueryAt(line.text.slice(0, ctx.pos - line.from));
-  if (!found) return null;
-  const options = wikiCandidates(state.notes, state.resources, found.query).map((c) => ({
-    label: c.label,
-    detail: c.detail,
-    apply: (view: EditorView, _completion: unknown, from: number, to: number) => {
-      const { insert, cursor } = wikiInsertion(c.target, view.state.sliceDoc(to, to + 2));
-      view.dispatch({
-        changes: { from, to, insert },
-        selection: { anchor: from + cursor },
-      });
-    },
-  }));
-  return { from: line.from + found.from, options, filter: false };
-}
+// `[[` completion over the vault's lists as they stand (editorcmds.ts).
+const wikiSource = wikiCompletionSource(() => state);
 
-// Formatting chords (⌘B/⌘I, …) — the CodeMirror adapter over the pure format.ts
-// engine. The keymap derives from the `FORMATS` table paired with each row's chord from
-// the keyboard registry (`format.<id>`, bindings.ts), so adding a format is one new row
-// in each and no wiring here. `changeByRange` runs the toggle per selection range and
-// maps the coordinates, so multi-cursor edits come free.
-function runFormat(view: EditorView, fmt: InlineFormat): boolean {
-  const doc = view.state.doc.toString();
-  view.dispatch(
-    view.state.changeByRange((range) => {
-      const r = toggleInline(doc, range.from, range.to, fmt);
-      return { changes: r.changes, range: EditorSelection.range(r.selFrom, r.selTo) };
-    }),
-  );
-  return true;
-}
-
-/**
- * Tab / ⇧Tab — nest or lift out the list item(s) the selection covers. The engine is
- * list.ts; this is the CodeMirror half, the `runFormat` pattern one construct up.
- *
- * Declining matters twice over. A `null` from the engine usually means the caret is not
- * in a list, and returning false there is what leaves Tab walking the focus ring through
- * the rest of the app — the reason this isn't `indentWithTab`, which claims the key
- * outright and takes the keyboard's way out of the buffer with it. The one exception is
- * a list the engine can't see — `inListItem` below gives the syntax tree the last word,
- * so the no-ejection contract holds there too. And a caret inside code declines before
- * the engine is asked at all: a `- item` line in a fence is text, not structure, and
- * `inCodeContext` is the same read the rich paste makes to keep its hands off code.
- *
- * One range rather than `changeByRange`: an indent moves every offset after it, so a
- * second cursor's edit would be computed against a document the first has already
- * shifted. Multi-cursor nesting is a gesture nobody makes; ⌘B's is one they do.
- */
-function runListShift(
-  view: EditorView,
-  shift: (doc: string, from: number, to: number) => ListEdit | null,
-): boolean {
-  if (inCodeContext(view.state)) return false;
-  const { from, to } = view.state.selection.main;
-  const r = shift(view.state.doc.toString(), from, to);
-  if (!r) return inListItem(view.state);
-  // Claimed but inert — the first item of a list has nothing to nest under. Swallowing
-  // the key is the point (list.ts's header): a gesture that sometimes ejects you from
-  // the buffer is worse than one that sometimes does nothing.
-  if (r.changes.length > 0) {
-    view.dispatch({
-      changes: r.changes,
-      selection: EditorSelection.range(r.selFrom, r.selTo),
-      scrollIntoView: true,
-    });
-  }
-  return true;
-}
-
-/** Is the cursor inside a list item the *scanner* can't see? list.ts reads only lists at
- *  the top level of the note — `> - a` is a bullet behind a container prefix it doesn't
- *  parse — so on its null the tree gets the last word before the key is handed back to
- *  the focus ring. Claimed-but-inert there: the caret is visibly on a list item, and
- *  ejecting from it would break the gesture's contract even where the edit itself isn't
- *  built yet (list.ts's header). */
-function inListItem(state: EditorState): boolean {
-  const at = syntaxTree(state).resolveInner(state.selection.main.from, -1);
-  for (let n: typeof at | null = at; n; n = n.parent) {
-    if (n.name === "ListItem") return true;
-  }
-  return false;
-}
 
 /**
  * B2's own chords inside the editor, read from the **live** registry each time.
@@ -3580,52 +3562,7 @@ function b2EditorKeymap(): KeyBinding[] {
 const keysCompartment = new Compartment();
 const editorKeymap = (): Extension => keymap.of([...b2EditorKeymap(), ...STOCK_EDITOR_KEYMAP]);
 
-// ⌘T — drop a fresh 3-column table (header + two rows) at the cursor, caret in the
-// first cell. Block insert, not an inline toggle, so it's its own binding over the pure
-// `insertTable` (format.ts).
-function runInsertTable(view: EditorView): boolean {
-  const { from, to } = view.state.selection.main;
-  const r = insertTable(view.state.doc.toString(), from, to);
-  view.dispatch({
-    changes: r.changes,
-    selection: EditorSelection.range(r.selFrom, r.selTo),
-    scrollIntoView: true,
-  });
-  return true;
-}
 
-// Rich paste — the CodeMirror adapter over the pure paste.ts. A copy from a web page
-// carries a `text/html` flavor next to `text/plain`; CodeMirror's own paste takes the
-// plain one, which is why every heading, bold and list used to vanish on the way in.
-// This converts the HTML to Markdown instead, and *declines* in two cases, leaving
-// CodeMirror's paste to run untouched:
-//   - the cursor sits in code, where pasted text must stay literal;
-//   - the HTML carried no formatting the plain flavor didn't already have (paste.ts's
-//     `markdownForPaste` returns null) — pasting escaped Markdown there would be a loss.
-// The third way out is the ⌘⇧V chord below, which does its own plain paste.
-
-/** Is the cursor inside code — a fenced block, an indented block, or an inline span?
- *  The read itself is droplink.ts's (by position, since a *drop* names a place the cursor
- *  isn't); this is the cursor's spelling of the same question. */
-function inCodeContext(state: EditorState): boolean {
-  return inCodeAt(state, state.selection.main.from);
-}
-
-function handlePaste(event: ClipboardEvent, view: EditorView): boolean {
-  const data = event.clipboardData;
-  if (!data || inCodeContext(view.state)) return false;
-  const md = markdownForPaste(data.getData("text/html"), data.getData("text/plain"));
-  if (md === null) return false;
-  event.preventDefault();
-  view.dispatch({
-    ...view.state.replaceSelection(md),
-    scrollIntoView: true,
-    userEvent: "input.paste",
-  });
-  return true;
-}
-
-const richPaste = EditorView.domEventHandlers({ paste: handlePaste });
 
 /**
  * ⌘⇧V — paste as plain text, the escape hatch from the conversion above.
@@ -3699,7 +3636,7 @@ function mountEditor(body: string): void {
       // order decides who wins.
       keysCompartment.of(editorKeymap()),
       EditorView.lineWrapping,
-      // Web-page formatting survives the clipboard (see `richPaste` above); an
+      // Web-page formatting survives the clipboard (editorcmds.ts `richPaste`); an
       // unformatted paste still takes CodeMirror's own path.
       richPaste,
       // A discovery card dragged in from the right column — the drop preview and the
@@ -4081,46 +4018,7 @@ let findRanges: globalThis.Range[] = [];
 /** The doc the bar is bound to — navigating anywhere else closes it (syncFind). */
 let findDocKey: string | null = null;
 
-// The editor engine: match state lives in a StateField so the decorations re-derive on
-// every doc change — typing with the bar open keeps the highlights honest, with no
-// listener→dispatch round-trip.
-type EditorFind = { query: string; matches: Match[]; active: number };
-const setFindEffect = StateEffect.define<{ query: string; active: number } | null>();
-const findMark = Decoration.mark({ class: "find-match" });
-const findMarkActive = Decoration.mark({ class: "find-match is-active" });
-const findField = StateField.define<EditorFind | null>({
-  create: () => null,
-  update(value, tr) {
-    let next = value;
-    for (const ef of tr.effects) {
-      if (ef.is(setFindEffect))
-        next = ef.value && { query: ef.value.query, matches: [], active: ef.value.active };
-    }
-    if (!next) return null;
-    if (next === value && !tr.docChanged) return value;
-    const matches = findMatches(tr.newDoc.toString(), next.query);
-    const active =
-      next !== value || value === null
-        ? matches.length === 0
-          ? -1
-          : Math.max(0, Math.min(next.active, matches.length - 1))
-        : // A doc edit: re-anchor on where the old active match ended up.
-          activeAfter(
-            matches,
-            value.active >= 0 && value.matches[value.active]
-              ? tr.changes.mapPos(value.matches[value.active].from)
-              : 0,
-          );
-    return { query: next.query, matches, active };
-  },
-  provide: (f) =>
-    EditorView.decorations.from(f, (v): DecorationSet => {
-      if (!v) return Decoration.none;
-      return Decoration.set(
-        v.matches.map((m, i) => (i === v.active ? findMarkActive : findMark).range(m.from, m.to)),
-      );
-    }),
-});
+// The editor engine is findfield.ts's StateField.
 
 /** What the note pane is showing, as an identity — null means "nothing findable"
  *  (empty pane, or the graph, which has no text to find in). */
@@ -4544,9 +4442,124 @@ function paintShellHints(): void {
   }
 }
 
+/**
+ * A click inside Settings. Every branch here is Settings' own, and the caller returns
+ * after it whatever happened: a click inside the surface does nothing else.
+ */
+function settingsClick(target: HTMLElement): void {
+  const tab = target.closest<HTMLElement>("[data-settings-tab]");
+  if (tab) {
+    const id = tab.dataset.settingsTab ?? null;
+    if (isSettingsTab(id)) selectSettingsTab(id, false);
+    return;
+  }
+  if (target.closest("#settings-provision")) {
+    void provisionModel();
+    return;
+  }
+  // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (render.ts
+  // says why), so pressing one rewrites the URL field to that configuration's starting
+  // point and shows or hides the key + its privacy copy — the consent moment is the
+  // configuration moment (M5).
+  const chatMode = target.closest<HTMLElement>("[data-chat-mode]");
+  if (chatMode) {
+    setChatMode(chatMode.dataset.chatMode === "cloud");
+    return;
+  }
+  if (target.closest("#settings-chat-save")) {
+    void saveChatConfig();
+    return;
+  }
+  // The Model field's two shapes (render.ts's `chatModelFieldHtml`). Neither saves:
+  // this only decides whether the field is a list of what the daemon has or a box for
+  // a name it doesn't have yet.
+  if (target.closest("[data-chat-model-custom]")) {
+    setChatModelTyped(true);
+    return;
+  }
+  if (target.closest("[data-chat-model-pick]")) {
+    setChatModelTyped(false);
+    return;
+  }
+  const useModel = target.closest<HTMLElement>("[data-chat-use-model]");
+  if (useModel) {
+    void useChatModel(useModel.dataset.chatUseModel ?? "");
+    return;
+  }
+  if (target.closest("[data-chat-clear-key]")) {
+    void clearChatKey();
+    return;
+  }
+  // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
+  // in here because this branch returns unconditionally — a click inside the dialog
+  // never reaches the shell's handlers below. The dialog deliberately stays open: the
+  // run's meter and its Cancel are in the top bar, one Esc away, and closing a dialog
+  // out from under the button you just pressed hides the result of pressing it.
+  if (target.closest("#reindex")) {
+    trackIndexing(doReindex());
+    return;
+  }
+  // …and the Cancel beside it while a run is live. It is the top bar's Cancel in a
+  // second place, not a second behaviour — the bar itself is behind this surface now.
+  if (target.closest("[data-cancel-reindex]")) {
+    void cancelReindex();
+    return;
+  }
+  const themeBtn = target.closest<HTMLElement>("[data-theme-choice]");
+  if (themeBtn) {
+    const choice = themeBtn.dataset.themeChoice ?? null;
+    if (isThemePref(choice)) setTheme(choice);
+    return;
+  }
+  // Settings → Keyboard: a chord chip opens the recorder on that command; the strip's
+  // own buttons commit, back out, or restore a default. Checked before Done/backdrop
+  // so a click inside the strip is never read as "close the dialog".
+  const chip = target.closest<HTMLElement>("[data-rebind]");
+  if (chip) {
+    const id = chip.dataset.rebind ?? "";
+    if (findBinding(activeBindings(), id)) startRecording(id as BindingId);
+    return;
+  }
+  if (target.closest("#keys-save")) {
+    commitRecording();
+    return;
+  }
+  if (target.closest("#keys-cancel")) {
+    stopRecording();
+    return;
+  }
+  if (target.closest("#keys-reset-one")) {
+    if (state.recorder) resetChord(state.recorder.id);
+    return;
+  }
+  if (target.closest("#keys-reset-all")) {
+    resetAllChords();
+    return;
+  }
+  if (target.closest("[data-settings-close]")) closeSettings();
+}
+
+/** Every listener the app registers, in registration order — which matters only where two
+ *  share an event and a target (`wireCmdHold`'s keydown before `wireChords`'), but is kept
+ *  exactly as it was everywhere, so a split never reorders what a user can feel. */
 function wireEvents(): void {
   wireCmdHold(); // hold ⌘ and the app says what ⌘ does — a spectator, so it goes on first
+  wireFocusMemory();
+  wireFmErrorClear();
+  wireClicks();
+  wireContextMenu();
+  wireTreeKeys();
+  wireSideKeys();
+  wireMenuDismissal();
+  wireFindBar();
+  wireForms();
+  wireChords();
+  wireMouseHistory();
+  wireWindowBlur();
+  wireDrags();
+}
 
+function wireFocusMemory(): void {
   // Remember where the keyboard is, continuously (K1). `syncOverlayFocus` needs the
   // element that *triggered* an overlay, and by the time it runs that element has been
   // swapped out of the DOM — see `lastFocused`. Capture-phase isn't needed (`focusin`
@@ -4557,7 +4570,9 @@ function wireEvents(): void {
       lastFocused = t;
     }
   });
+}
 
+function wireFmErrorClear(): void {
   // Typing in the frontmatter mini-editor clears its inline error — the message
   // belonged to the save attempt that failed. Delegated (like the clicks below)
   // because the textarea renders dynamically.
@@ -4566,7 +4581,9 @@ function wireEvents(): void {
       hideFmError();
     }
   });
+}
 
+function wireClicks(): void {
   // Delegated clicks for everything that renders dynamically.
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
@@ -4574,87 +4591,7 @@ function wireEvents(): void {
     // An open right-click menu owns the next click: its own items act, any other
     // click merely dismisses it (a menu-dismissing click isn't also a card click).
     if (state.contextMenu) {
-      const menu = state.contextMenu;
-      if (menu.kind === "tree") {
-        if (menu.node && target.closest("[data-ctx-rename]")) {
-          startTreeRename(menu.node); // clears the menu itself
-          return;
-        }
-        if (menu.node && target.closest("[data-ctx-move]")) {
-          openMoveModal(menu.node);
-          return;
-        }
-        // The two copy actions. Both close the menu first — the copy is instant and
-        // its confirmation is the status line, so leaving the menu up over it would
-        // be the only thing hiding the answer.
-        if (menu.node && target.closest("[data-ctx-copy-vault-path]")) {
-          const p = menu.node.path;
-          closeContextMenu();
-          void copyPath(p);
-          return;
-        }
-        if (menu.node && target.closest("[data-ctx-copy-system-path]")) {
-          const p = menu.node.path;
-          const root = state.vaultRoot;
-          closeContextMenu();
-          // Both entry points refuse to open this menu without a vault, so `root` is
-          // set here — but the absolute path is the root's to give, and inventing one
-          // for a vault-less window is not this handler's call.
-          if (root !== null) void copyPath(systemPath(root, p));
-          return;
-        }
-        if (menu.node && target.closest("[data-ctx-delete]")) {
-          requestDelete(menu.node); // clears the menu itself
-          return;
-        }
-        if (target.closest("[data-ctx-new-note]")) {
-          startTreeCreate("note", menu.dir); // clears the menu itself
-          return;
-        }
-        if (target.closest("[data-ctx-new-folder]")) {
-          startTreeCreate("folder", menu.dir);
-          return;
-        }
-        if (target.closest("[data-ctx-import]")) {
-          const dir = menu.dir;
-          closeContextMenu(); // the picker is modal to the OS — let the menu go first
-          void pickAndImport(dir);
-          return;
-        }
-        closeContextMenu();
-        return;
-      }
-      if (target.closest("[data-ctx-open]")) {
-        const p = menu.path;
-        closeContextMenu();
-        void openNote(p);
-        return;
-      }
-      if (target.closest("[data-ctx-insert]")) {
-        const p = menu.path;
-        closeContextMenu();
-        insertCardLink(p); // the drag's keyboard half — aimed at the caret's line
-        return;
-      }
-      if (target.closest("[data-ctx-link]")) {
-        const { path, title } = menu;
-        closeContextMenu();
-        openLinkModal(path, title ?? "");
-        return;
-      }
-      if (target.closest("[data-ctx-explain]")) {
-        const p = menu.path;
-        closeContextMenu();
-        void openExplain(p);
-        return;
-      }
-      if (target.closest("[data-ctx-why]")) {
-        const { path, title } = menu;
-        closeContextMenu();
-        void askWhy({ path, title });
-        return;
-      }
-      closeContextMenu();
+      contextMenuClick(target);
       return;
     }
 
@@ -4751,96 +4688,7 @@ function wireEvents(): void {
     // up. There is no click-outside to close on any more — the surface is the whole window
     // (render.ts) — so the ways out are Done and Escape.
     if (state.settingsOpen) {
-      const tab = target.closest<HTMLElement>("[data-settings-tab]");
-      if (tab) {
-        const id = tab.dataset.settingsTab ?? null;
-        if (isSettingsTab(id)) selectSettingsTab(id, false);
-        return;
-      }
-      if (target.closest("#settings-provision")) {
-        void provisionModel();
-        return;
-      }
-      // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (render.ts
-      // says why), so pressing one rewrites the URL field to that configuration's starting
-      // point and shows or hides the key + its privacy copy — the consent moment is the
-      // configuration moment (M5).
-      const chatMode = target.closest<HTMLElement>("[data-chat-mode]");
-      if (chatMode) {
-        setChatMode(chatMode.dataset.chatMode === "cloud");
-        return;
-      }
-      if (target.closest("#settings-chat-save")) {
-        void saveChatConfig();
-        return;
-      }
-      // The Model field's two shapes (render.ts's `chatModelFieldHtml`). Neither saves:
-      // this only decides whether the field is a list of what the daemon has or a box for
-      // a name it doesn't have yet.
-      if (target.closest("[data-chat-model-custom]")) {
-        setChatModelTyped(true);
-        return;
-      }
-      if (target.closest("[data-chat-model-pick]")) {
-        setChatModelTyped(false);
-        return;
-      }
-      const useModel = target.closest<HTMLElement>("[data-chat-use-model]");
-      if (useModel) {
-        void useChatModel(useModel.dataset.chatUseModel ?? "");
-        return;
-      }
-      if (target.closest("[data-chat-clear-key]")) {
-        void clearChatKey();
-        return;
-      }
-      // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
-      // in here because this branch returns unconditionally — a click inside the dialog
-      // never reaches the shell's handlers below. The dialog deliberately stays open: the
-      // run's meter and its Cancel are in the top bar, one Esc away, and closing a dialog
-      // out from under the button you just pressed hides the result of pressing it.
-      if (target.closest("#reindex")) {
-        trackIndexing(doReindex());
-        return;
-      }
-      // …and the Cancel beside it while a run is live. It is the top bar's Cancel in a
-      // second place, not a second behaviour — the bar itself is behind this surface now.
-      if (target.closest("[data-cancel-reindex]")) {
-        void cancelReindex();
-        return;
-      }
-      const themeBtn = target.closest<HTMLElement>("[data-theme-choice]");
-      if (themeBtn) {
-        const choice = themeBtn.dataset.themeChoice ?? null;
-        if (isThemePref(choice)) setTheme(choice);
-        return;
-      }
-      // Settings → Keyboard: a chord chip opens the recorder on that command; the strip's
-      // own buttons commit, back out, or restore a default. Checked before Done/backdrop
-      // so a click inside the strip is never read as "close the dialog".
-      const chip = target.closest<HTMLElement>("[data-rebind]");
-      if (chip) {
-        const id = chip.dataset.rebind ?? "";
-        if (findBinding(activeBindings(), id)) startRecording(id as BindingId);
-        return;
-      }
-      if (target.closest("#keys-save")) {
-        commitRecording();
-        return;
-      }
-      if (target.closest("#keys-cancel")) {
-        stopRecording();
-        return;
-      }
-      if (target.closest("#keys-reset-one")) {
-        if (state.recorder) resetChord(state.recorder.id);
-        return;
-      }
-      if (target.closest("#keys-reset-all")) {
-        resetAllChords();
-        return;
-      }
-      if (target.closest("[data-settings-close]")) closeSettings();
+      settingsClick(target);
       return; // clicks inside Settings do nothing else
     }
 
@@ -5051,7 +4899,9 @@ function wireEvents(): void {
       return;
     }
   });
+}
 
+function wireContextMenu(): void {
   // Right-click surfaces. The file tree's default menu is taken over wholesale:
   // New note / New folder, contextual on the row under the cursor — a folder row
   // targets itself, a file row its parent folder, the pane's empty space the vault
@@ -5076,7 +4926,9 @@ function wireEvents(): void {
     e.preventDefault();
     openCardMenu(e.clientX, e.clientY, card.dataset.cardPath ?? "", card.dataset.cardTitle ?? "");
   });
+}
 
+function wireTreeKeys(): void {
   // The file tree's own keyboard, the ARIA `tree` pattern (K1, GH #78). Bound to the
   // pane rather than the document so it answers *before* the global chords below, and
   // only while the keyboard is actually on a row. The moves themselves are pure and
@@ -5122,7 +4974,9 @@ function wireEvents(): void {
       }
     }
   });
+}
 
+function wireSideKeys(): void {
   // Discovery's own keyboard — the *same* ARIA `tree` pattern as the file tree (K1, GH #78),
   // bound to the pane so it answers before the global chords. The moves are pure and tested
   // (sidenav.ts `sideArrowMove`); this half is the DOM and the folding, plus one wrinkle the
@@ -5175,13 +5029,17 @@ function wireEvents(): void {
       open.click();
     }
   });
+}
 
+function wireMenuDismissal(): void {
   // The floating menu is positioned at fixed viewport coords, so any scroll or resize
   // strands it — dismiss rather than let it hover over the wrong card. Capture-phase so
   // a scroll inside the side pane (which doesn't bubble) is still caught.
   document.addEventListener("scroll", closeContextMenu, true);
   window.addEventListener("resize", closeContextMenu);
+}
 
+function wireFindBar(): void {
   // The find bar is static shell chrome — direct listeners, not delegation. mousedown
   // preventDefault keeps focus in the find input across button clicks, so Enter keeps
   // stepping without a re-click.
@@ -5196,7 +5054,9 @@ function wireEvents(): void {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
     btn.addEventListener("click", act);
   }
+}
 
+function wireForms(): void {
   // Search on submit (Enter).
   document.addEventListener("submit", (e) => {
     if ((e.target as HTMLElement).id === "search-form") {
@@ -5247,7 +5107,9 @@ function wireEvents(): void {
       void commitTreeRename((t as HTMLInputElement).value);
     }
   });
+}
 
+function wireChords(): void {
   // The app's chords. Every `isBound(e, …)` below asks the keyboard registry
   // (bindings.ts) whether this keystroke is that command — the registry owns *what* the
   // chord is, and the sheet in Settings → Keyboard is projected from the same table, so
@@ -5652,7 +5514,9 @@ function wireEvents(): void {
       void navGo(back ? -1 : 1);
     }
   });
+}
 
+function wireMouseHistory(): void {
   // Mouse back/forward buttons (W3C numbering: 3 back, 4 forward) walk the history
   // too. `auxclick` fires only for non-primary buttons, so this never doubles the
   // click delegation above.
@@ -5661,7 +5525,9 @@ function wireEvents(): void {
     e.preventDefault();
     void navGo(e.button === 3 ? -1 : 1);
   });
+}
 
+function wireWindowBlur(): void {
   // Losing window focus is a flush point: the buffer lands on disk before the user
   // looks at (or edits in) anything else.
   //
@@ -5678,7 +5544,9 @@ function wireEvents(): void {
       render();
     }
   });
+}
 
+function wireDrags(): void {
   // --- tree drag-and-drop ---------------------------------------------------------
   //
   // Two drags land here, and they are told apart by `treeDrag` being set: a **tree
