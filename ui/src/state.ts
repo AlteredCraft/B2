@@ -401,6 +401,11 @@ export interface AppState {
   status: string | null;
 }
 
+/** The path of the document the note pane shows — a note or a resource — or null. */
+export function openDocPath(s: AppState): string | null {
+  return s.current?.path ?? s.currentResource?.path ?? null;
+}
+
 export const state: AppState = {
   vaultRoot: null,
   semantic: true,

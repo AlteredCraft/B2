@@ -24,8 +24,8 @@ import {
   WIKILINK_ANCHORED,
   type EmbedImages,
 } from "./embeds.ts";
-import { RELATION_VERBS, type AppState, type SideSection } from "./state.ts";
-import { allDirs, canMoveInto, renamePrefill } from "./move.ts";
+import { RELATION_VERBS, openDocPath, type AppState, type SideSection } from "./state.ts";
+import { allDirs, baseName, moveRefusal, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
 import { STRENGTH_MIN_CANDIDATES, strengthBand } from "./strength.ts";
 import {
@@ -155,7 +155,7 @@ const wikilink: TokenizerAndRendererExtension = {
     // The alt text is the filename: it is all B2 knows about the picture, and it is what
     // the embed would have read as had the bytes not arrived (the resource card's viewer
     // makes the same choice, for the same reason).
-    const name = target.split("/").pop() ?? target;
+    const name = baseName(target);
     const width = typeof token.width === "number" ? ` width="${token.width}"` : "";
     return `${anchor}<img class="embed-image" src="${escapeHtml(src)}" alt="${escapeHtml(
       name,
@@ -423,7 +423,7 @@ export function treePaneHtml(state: AppState): string {
   const roving = rovingPath(
     visibleRows(tree, state.expandedDirs),
     state.treeFocus,
-    state.current?.path ?? state.currentResource?.path ?? null,
+    openDocPath(state),
   );
   const body = treeChildrenHtml(tree, state, 0, roving);
   if (!body)
@@ -604,7 +604,7 @@ function resourceCardHtml(r: ResourceExplainView, image: string | null): string 
         })
         .join("")}</div>`
     : `<p class="side-empty">No notes link to this file yet.</p>`;
-  const name = r.path.split("/").pop() ?? r.path;
+  const name = baseName(r.path);
   // The alt text is the filename: the `<h1>` right above already says it, so a screen
   // reader that reads both is repeating itself rather than being told nothing — and B2
   // has no description of the picture to offer that would be truer than its name.
@@ -2628,11 +2628,9 @@ function moveModalHtml(state: AppState): string {
   const rows = dirs
     .map((dir) => {
       const label = dir === "" ? "vault root" : `${dir}/`;
-      if (!canMoveInto(t.path, t.nodeKind, dir)) {
-        const why =
-          t.nodeKind === "folder" && (dir === t.path || dir.startsWith(`${t.path}/`))
-            ? "inside the folder being moved"
-            : "current folder";
+      const refusal = moveRefusal(t.path, t.nodeKind, dir);
+      if (refusal !== null) {
+        const why = refusal === "inside-itself" ? "inside the folder being moved" : "current folder";
         return `<div class="move-dest is-disabled">${escapeHtml(label)}<span class="muted"> — ${why}</span></div>`;
       }
       return `<button class="move-dest" data-move-dest="${escapeHtml(dir)}">${escapeHtml(label)}</button>`;

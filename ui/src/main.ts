@@ -30,13 +30,22 @@ import {
   tooltips,
 } from "@codemirror/view";
 import { api, errText, isWriteConflict } from "./api";
-import { state, type AppState, type SideSection, type ThemePref, type TreeNodeRef } from "./state";
+import {
+  openDocPath,
+  state,
+  type AppState,
+  type SideSection,
+  type ThemePref,
+  type TreeNodeRef,
+} from "./state";
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry";
 import { systemPath } from "./copypath";
 import { bytesToBase64, importSummary, planImport } from "./importfiles";
 import {
   baseName,
   canMoveInto,
+  folderContext,
+  isWithin,
   moveDestination,
   type NodeKind,
   refKind,
@@ -529,15 +538,11 @@ function flash(msg: string): void {
 
 // --- actions --------------------------------------------------------------------
 
-// Expand every folder on the way to `path` so the file tree reveals it — used when a
-// note is opened from search/wikilink/discovery, not just by clicking it in the tree.
-function expandAncestors(path: string): void {
-  const parts = path.split("/");
-  let dir = "";
-  for (const seg of parts.slice(0, -1)) {
-    dir = dir ? `${dir}/${seg}` : seg;
-    state.expandedDirs.add(dir);
-  }
+/** Unfold every folder down to and including `dir`, so the file tree shows what is in
+ *  it — a document opened from search, a wikilink or discovery, a fresh create, a
+ *  rename's input, a move's destination. */
+function revealDir(dir: string): void {
+  for (const d of dirChain(dir)) state.expandedDirs.add(d);
 }
 
 // Load the vault listing for the file tree — all three lists fetched before any
@@ -612,7 +617,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
  */
 function enterDocument(path: string, commit: (path: string) => void): void {
   commit(path);
-  expandAncestors(path);
+  revealDir(parentDir(path));
   state.selectedDir = parentDir(path); // the create context follows the selection
   resetSearch();
   clearDiscovery();
@@ -903,11 +908,15 @@ function treeRows(): TreeRow[] {
   return visibleRows(buildTree(state.notes, state.resources, state.dirs), state.expandedDirs);
 }
 
+/** What a file-tree row is, as a selector: every row carries its vault path in
+ *  `data-tree-row` (render.ts), whatever kind of node it is. */
+const TREE_ROW = ".tree-row[data-tree-row]";
+
 /** The DOM row for a vault path. Looked up by data attribute rather than by CSS
  *  selector because a filename may contain anything a selector would choke on. */
 function treeRowEl(path: string | null): HTMLElement | null {
   if (path === null) return null;
-  const rows = el("tree-pane").querySelectorAll<HTMLElement>(".tree-row[data-tree-row]");
+  const rows = el("tree-pane").querySelectorAll<HTMLElement>(TREE_ROW);
   for (const row of rows) if (row.dataset.treeRow === path) return row;
   return null;
 }
@@ -921,7 +930,7 @@ function rovingRowEl(): HTMLElement | null {
 function focusedTreeRow(): HTMLElement | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement)) return null;
-  return active.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
+  return active.closest<HTMLElement>(`#tree-pane ${TREE_ROW}`);
 }
 
 /** A tree row element as the node ref that rename / move / delete all speak. */
@@ -1214,7 +1223,7 @@ function captureReturnFocus(): (() => void) | null {
   // Unscoped on purpose: `active` is usually *detached* by now, so an ancestor-matching
   // selector (`#tree-pane .tree-row`) would find nothing. `data-tree-row` is emitted by
   // the tree and nowhere else, so it identifies a row on its own.
-  const row = active.closest<HTMLElement>(".tree-row[data-tree-row]");
+  const row = active.closest<HTMLElement>(TREE_ROW);
   if (row) {
     const path = row.dataset.treeRow ?? null;
     return () => (treeRowEl(path) ?? rovingRowEl())?.focus();
@@ -1562,7 +1571,7 @@ function startTreeCreate(kind: "note" | "folder", dir: string): void {
   if (state.vaultRoot === null) return;
   state.contextMenu = null;
   state.treeCreate = { kind, dir };
-  for (const d of dirChain(dir)) state.expandedDirs.add(d); // reveal the target folder
+  revealDir(dir); // reveal the target folder
   render(); // paintTree focuses the fresh input
 }
 
@@ -1592,7 +1601,7 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
     try {
       const report = await api.createDir(path);
       const refreshed = await loadNotes(); // re-lists structure from disk — the folder is real
-      for (const d of dirChain(report.dir)) state.expandedDirs.add(d);
+      revealDir(report.dir);
       state.selectedDir = report.dir; // the natural next step is a note inside it
       if (refreshed) flash(`Created ${report.dir}/.`);
       else render(); // the refresh failure already toasted; still repaint the expansion
@@ -1754,7 +1763,7 @@ async function pickAndImport(dir: string): Promise<void> {
  */
 async function finishImport(dir: string, imported: string[], refused: string[]): Promise<void> {
   if (imported.length > 0) {
-    for (const d of dirChain(dir)) state.expandedDirs.add(d);
+    revealDir(dir);
     state.selectedDir = dir;
     await loadNotes();
     void refreshEmbedStatus(state.vaultRoot); // the N/M denominator grew (#26)
@@ -1782,7 +1791,7 @@ let moveInFlight = false;
 function startTreeRename(node: TreeNodeRef): void {
   state.contextMenu = null;
   state.treeRename = node;
-  for (const d of dirChain(parentDir(node.path))) state.expandedDirs.add(d);
+  revealDir(parentDir(node.path));
   render(); // paintTree focuses the input and selects the prefilled name
 }
 
@@ -1830,7 +1839,7 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   }
   // If the open document is affected, flush and close the editor first so the save
   // chain never targets the old path (a conflict keeps the editor and aborts the move).
-  const curPath = state.current?.path ?? state.currentResource?.path ?? null;
+  const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
     (node.nodeKind === "folder" ? remapPath(curPath, node.path, to) !== null : curPath === node.path);
@@ -1864,7 +1873,7 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
       [...state.expandedDirs].map((d) => remapPath(d, from, to) ?? d),
     );
     state.selectedDir = remapPath(state.selectedDir, from, to) ?? state.selectedDir;
-    for (const d of dirChain(parentDir(to))) state.expandedDirs.add(d);
+    revealDir(parentDir(to));
     const openNotePath = state.current ? remapPath(state.current.path, from, to) : null;
     const openResourcePath = state.currentResource
       ? remapPath(state.currentResource.path, from, to)
@@ -1922,7 +1931,7 @@ function requestDelete(node: TreeNodeRef): void {
 
 /** Forget tree state pointing into a deleted folder subtree. */
 function dropDirState(dir: string): void {
-  const gone = (d: string) => d === dir || d.startsWith(`${dir}/`);
+  const gone = (d: string) => isWithin(d, dir);
   state.expandedDirs = new Set([...state.expandedDirs].filter((d) => !gone(d)));
   if (gone(state.selectedDir)) state.selectedDir = parentDir(dir);
 }
@@ -1941,12 +1950,10 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
   // If the open document dies with the delete, close the editor first so no save
   // chain targets a file that's about to be removed (a conflict aborts the delete,
   // keeping the buffer alive — the executeMove posture).
-  const curPath = state.current?.path ?? state.currentResource?.path ?? null;
+  const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
-    (node.nodeKind === "folder"
-      ? curPath === node.path || curPath.startsWith(`${node.path}/`)
-      : curPath === node.path);
+    (node.nodeKind === "folder" ? isWithin(curPath, node.path) : curPath === node.path);
   if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
 
@@ -5055,25 +5062,11 @@ function wireEvents(): void {
     const target = e.target as HTMLElement;
     if (target.closest("#tree-pane") && state.vaultRoot !== null) {
       e.preventDefault();
-      const dirRow = target.closest<HTMLElement>("[data-dir]");
-      const fileRow = target.closest<HTMLElement>("[data-open], [data-open-resource]");
-      const dir = dirRow
-        ? (dirRow.dataset.dir ?? "")
-        : fileRow
-          ? parentDir(fileRow.dataset.open ?? fileRow.dataset.openResource ?? "")
-          : "";
-      // Over a concrete row, the menu also targets that node (Rename / Move…).
-      const node: TreeNodeRef | null = dirRow
-        ? { path: dirRow.dataset.dir ?? "", nodeKind: "folder", label: baseName(dirRow.dataset.dir ?? "") }
-        : fileRow?.dataset.open
-          ? { path: fileRow.dataset.open, nodeKind: "note", label: baseName(fileRow.dataset.open) }
-          : fileRow?.dataset.openResource
-            ? {
-                path: fileRow.dataset.openResource,
-                nodeKind: "resource",
-                label: baseName(fileRow.dataset.openResource),
-              }
-            : null;
+      // Over a concrete row, the menu also targets that node (Rename / Move…); over the
+      // pane's empty space, only the vault root.
+      const row = target.closest<HTMLElement>(TREE_ROW);
+      const node = row ? treeRowRef(row) : null;
+      const dir = node ? folderContext(node.path, node.nodeKind) : "";
       state.selectedDir = dir;
       openTreeMenu(e.clientX, e.clientY, dir, node && node.path ? node : null);
       return;
@@ -5096,7 +5089,7 @@ function wireEvents(): void {
     // The inline create/rename inputs live in this pane but are text entry — they own
     // their keys (Enter/Escape), handled with the other text surfaces below.
     if (e.target instanceof HTMLInputElement) return;
-    const row = (e.target as HTMLElement).closest<HTMLElement>(".tree-row[data-tree-row]");
+    const row = (e.target as HTMLElement).closest<HTMLElement>(TREE_ROW);
     if (!row) return;
     const path = row.dataset.treeRow ?? "";
     const rows = treeRows();
@@ -5433,7 +5426,7 @@ function wireEvents(): void {
       if (row) {
         e.preventDefault();
         const node = treeRowRef(row);
-        const dir = node.nodeKind === "folder" ? node.path : parentDir(node.path);
+        const dir = folderContext(node.path, node.nodeKind);
         state.selectedDir = dir;
         const box = row.getBoundingClientRect();
         openTreeMenu(box.left + 12, box.bottom, dir, node.path ? node : null);
@@ -5725,12 +5718,10 @@ function wireEvents(): void {
   const dropTargetOf = (target: HTMLElement): { el: Element; dir: string } | null => {
     const pane = target.closest("#tree-pane");
     if (!pane) return null;
-    const dirRow = target.closest<HTMLElement>("[data-dir]");
-    if (dirRow) return { el: dirRow, dir: dirRow.dataset.dir ?? "" };
-    const fileRow = target.closest<HTMLElement>("[data-open], [data-open-resource]");
-    if (fileRow)
-      return { el: fileRow, dir: parentDir(fileRow.dataset.open ?? fileRow.dataset.openResource ?? "") };
-    return { el: pane, dir: "" };
+    const row = target.closest<HTMLElement>(TREE_ROW);
+    if (!row) return { el: pane, dir: "" };
+    const node = treeRowRef(row);
+    return { el: row, dir: folderContext(node.path, node.nodeKind) };
   };
 
   document.addEventListener("dragstart", (e) => {
@@ -5753,20 +5744,9 @@ function wireEvents(): void {
       return;
     }
     if (!target.closest("#tree-pane")) return;
-    const dirRow = target.closest<HTMLElement>("[data-dir]");
-    const noteRow = target.closest<HTMLElement>("[data-open]");
-    const resRow = target.closest<HTMLElement>("[data-open-resource]");
-    treeDrag = dirRow?.dataset.dir
-      ? { path: dirRow.dataset.dir, nodeKind: "folder", label: baseName(dirRow.dataset.dir) }
-      : noteRow?.dataset.open
-        ? { path: noteRow.dataset.open, nodeKind: "note", label: baseName(noteRow.dataset.open) }
-        : resRow?.dataset.openResource
-          ? {
-              path: resRow.dataset.openResource,
-              nodeKind: "resource",
-              label: baseName(resRow.dataset.openResource),
-            }
-          : null;
+    const row = target.closest<HTMLElement>(TREE_ROW);
+    const node = row ? treeRowRef(row) : null;
+    treeDrag = node && node.path ? node : null;
     if (!treeDrag) return;
     if (e.dataTransfer) {
       e.dataTransfer.setData("text/plain", treeDrag.path);
