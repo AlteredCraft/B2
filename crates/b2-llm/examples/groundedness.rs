@@ -41,9 +41,9 @@ use b2_core::chat::{cited_markers, ASK_PASSAGES};
 use b2_core::embed::Embedder;
 use b2_core::llm::{LlmProvider, NO_EVIDENCE_ANSWER};
 use b2_core::vault::Vault;
-use b2_embed::{provision, EmbedConfig, LocalEmbedder};
+use b2_embed::EmbedConfig;
 use b2_llm::{LlmConfig, OpenAiCompatProvider};
-use common::{append_result, git_short_sha, truncate, ScratchVault};
+use common::{append_result, git_short_sha, load_or_provision, truncate, ScratchVault};
 use serde::Deserialize;
 use std::error::Error;
 use std::ops::ControlFlow;
@@ -128,8 +128,7 @@ fn run() -> Result<bool, Box<dyn Error>> {
     );
 
     let embed_config = EmbedConfig::load()?;
-    provision(&embed_config, |line| eprintln!("[init] {line}"))?;
-    let embedder = LocalEmbedder::load(&embed_config)?;
+    let embedder = load_or_provision(&embed_config)?;
     let embed_model = embedder.model_id().to_string();
     eprintln!("[eval] embedder = {embed_model}");
 

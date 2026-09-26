@@ -90,13 +90,15 @@ use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
-use b2_embed::{provision, EmbedConfig, LocalEmbedder};
-use common::{append_result, git_short_sha, has_flag, reject_unknown_flags, ScratchVault};
+use b2_embed::EmbedConfig;
+use common::{
+    append_result, git_short_sha, has_flag, load_or_provision, reject_unknown_flags, ScratchVault,
+};
 use dense::{dense_row, print_dense_report, score_dense};
 use discovery::{score_floor_z, score_similar};
 use evidence::{bake_off, print_search_bakeoff, print_search_evidence, score_search_evidence};
 use fold::{print_fold_bench, score_fold};
-use instrument::{check_batch_matches_single, timed_embed, warn_if_pool_blind};
+use instrument::{check_batch_matches_single, timed_embed, warn_if_pool_blind, SharedEmbedder};
 use labels::{lint_labels, Labelled, QuerySet, SimilarSet};
 use report::{print_default_report, result_row, Calibration, RowInputs, RunId};
 use retrieval::{score_pass, Retrieval};
@@ -171,11 +173,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         &dense_set,
     )?;
 
-    // Ensure the model is available, then load it. (Provision is idempotent, so an
-    // already-installed model is a no-op; a missing one is fetched here.)
+    // Ensure the model is available and load it — once for the whole run: both
+    // corpora's vaults share this one copy (a missing model is fetched here first).
     let config = EmbedConfig::load()?;
-    provision(&config, |line| eprintln!("[init] {line}"))?;
-    let embedder = LocalEmbedder::load(&config)?;
+    let embedder = SharedEmbedder::new(load_or_provision(&config)?);
     let model_id = embedder.model_id().to_string();
     let dim = embedder.dim();
     eprintln!("[eval] model = {model_id} (dim {dim})\n");
@@ -187,7 +188,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     // Build a throwaway vault from the corpus.
     let scratch = ScratchVault::copy_flat(&corpus_dir)?;
     let vault_root = scratch.root();
-    let mut vault = Vault::open_with_embedder(vault_root, Box::new(embedder))?;
+    let mut vault = Vault::open_with_embedder(vault_root, Box::new(embedder.clone()))?;
 
     // ---- Phase 1: projection only → the BM25-only baseline. ------------------
     // The vector space does not exist yet, so `search`/`search_chunks` run
@@ -278,10 +279,10 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     )?;
 
     // ---- Phase 3: the dense single-domain fixture (GH #196/#197, Phase 0b). --
-    // Its own throwaway vault, its own model load, its own results row (corpus
+    // Its own throwaway vault (sharing the loaded model), its own results row (corpus
     // id `dense`) — the fixture measures a *vault-level* geometry, so nothing
     // about it may share state with the orthogonal corpus's run above.
-    let dense = score_dense(&evals_dir, &dense_set)?;
+    let dense = score_dense(&evals_dir, &dense_set, embedder)?;
     print_dense_report(&dense);
     print_fold_bench(&dense.fold);
     append_result(&results_path, &dense_row(run_id, &dense))?;

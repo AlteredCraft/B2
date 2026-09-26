@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use b2_core::vault::{NoteSummary, SearchEvidenceView};
+use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
@@ -162,6 +163,22 @@ impl ScratchVault {
     pub fn root(&self) -> &Path {
         &self.root
     }
+}
+
+/// Load the configured embedding model, provisioning it first only when it is
+/// not already loadable.
+///
+/// `provision`'s idempotent fast path *is* a full model load, so calling it and
+/// then loading again pays for the model twice on every warm run. Loading first
+/// is the same decision in the other order: a model that loads is exactly what
+/// the fast path would have accepted, and one that doesn't goes through
+/// `provision` (fetch + verify) before the load that follows.
+pub fn load_or_provision(config: &EmbedConfig) -> Result<LocalEmbedder, Box<dyn Error>> {
+    if let Ok(embedder) = LocalEmbedder::load(config) {
+        return Ok(embedder);
+    }
+    provision(config, |line| eprintln!("[init] {line}"))?;
+    Ok(LocalEmbedder::load(config)?)
 }
 
 /// Whether `name` was passed as a bare flag.

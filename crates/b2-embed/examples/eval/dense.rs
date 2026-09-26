@@ -7,7 +7,7 @@ use crate::discovery::AnchorDetail;
 use crate::evidence::ServedRow;
 use crate::fold::{fold_json, score_fold, FoldBench};
 use crate::gate::FLOOR_DENSE_MATE_MRR;
-use crate::instrument::timed_embed;
+use crate::instrument::{timed_embed, SharedEmbedder};
 use crate::labels::SimilarSet;
 use crate::metrics::{paths_match, rank_str_at, Agg};
 use crate::report::{unix_secs, RunId};
@@ -15,7 +15,6 @@ use crate::tail::{dense_tail_json, print_dense_tail};
 use crate::{K, SIM_K};
 use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
-use b2_embed::{EmbedConfig, LocalEmbedder};
 use std::path::Path;
 
 /// Score the dense single-domain fixture (GH #196/#197, Phase 0b) in a throwaway
@@ -26,12 +25,12 @@ use std::path::Path;
 pub fn score_dense(
     evals_dir: &Path,
     set: &SimilarSet,
+    embedder: SharedEmbedder,
 ) -> Result<DensePass, Box<dyn std::error::Error>> {
     let corpus_dir = evals_dir.join("corpus-dense");
-    // A second model load rather than sharing the first vault's: the embedder was
-    // moved into that vault, and the fixture's whole point is an isolated run.
-    let config = EmbedConfig::load()?;
-    let embedder = LocalEmbedder::load(&config)?;
+    // The run's one loaded model, shared rather than reloaded: the fixture's whole
+    // point is an isolated run, and that isolation is the vault's — its own
+    // throwaway copy, its own index — not a second copy of the same weights.
     let model_id = embedder.model_id().to_string();
     let scratch = ScratchVault::copy_flat(&corpus_dir)?;
     let vault = Vault::open_with_embedder(scratch.root(), Box::new(embedder))?;

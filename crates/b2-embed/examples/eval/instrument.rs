@@ -6,7 +6,45 @@ use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::LocalEmbedder;
 use std::ops::ControlFlow;
+use std::rc::Rc;
 use std::time::Instant;
+
+/// One loaded model serving every throwaway vault of the run.
+///
+/// `Vault::open_with_embedder` takes its embedder by value, so without this each vault
+/// (the orthogonal corpus's, the dense fixture's) loaded its own copy of the same
+/// weights — a full model load apiece. The model is read-only and deterministic
+/// (`&self` throughout), so sharing it costs the fixture none of its isolation: that
+/// is a property of the *vault*, which stays its own. Every [`Embedder`] method
+/// forwards, including the ones with trait defaults `LocalEmbedder` overrides (the
+/// query prefix, the batched forward pass) — a method added to the trait later must
+/// be forwarded here too, or the shared model silently runs the default instead.
+#[derive(Clone)]
+pub struct SharedEmbedder(Rc<LocalEmbedder>);
+
+impl SharedEmbedder {
+    pub fn new(model: LocalEmbedder) -> Self {
+        Self(Rc::new(model))
+    }
+}
+
+impl Embedder for SharedEmbedder {
+    fn model_id(&self) -> &str {
+        self.0.model_id()
+    }
+    fn dim(&self) -> usize {
+        self.0.dim()
+    }
+    fn embed(&self, text: &str) -> b2_core::Result<Vec<f32>> {
+        self.0.embed(text)
+    }
+    fn embed_query(&self, text: &str) -> b2_core::Result<Vec<f32>> {
+        self.0.embed_query(text)
+    }
+    fn embed_batch(&self, texts: &[&str]) -> b2_core::Result<Vec<Vec<f32>>> {
+        self.0.embed_batch(texts)
+    }
+}
 
 /// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding short rows
 /// to the batch's longest and masking them out has to leave each row's CLS vector unchanged.
@@ -16,7 +54,7 @@ use std::time::Instant;
 /// It lives in the eval rather than `cargo test` because it needs the provisioned model,
 /// which the fast suite deliberately never touches (ADR-0013). Running it here means it
 /// actually runs, instead of sitting behind an `#[ignore]` nobody passes `--ignored` to.
-pub fn check_batch_matches_single(model: &LocalEmbedder) -> Result<(), Box<dyn std::error::Error>> {
+pub fn check_batch_matches_single(model: &dyn Embedder) -> Result<(), Box<dyn std::error::Error>> {
     // Deliberately varied lengths, so batching pads the short rows to the longest.
     let texts = [
         "Spaced repetition schedules reviews at increasing intervals.",

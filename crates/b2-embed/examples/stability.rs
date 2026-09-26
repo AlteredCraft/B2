@@ -51,8 +51,8 @@ mod common;
 
 use b2_core::embed::Embedder;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, ChunkSearchResult, Vault};
-use b2_embed::{provision, EmbedConfig, LocalEmbedder};
-use common::{git_short_sha, has_flag, reject_unknown_flags, truncate};
+use b2_embed::EmbedConfig;
+use common::{git_short_sha, has_flag, load_or_provision, reject_unknown_flags, truncate};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -173,8 +173,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (vault, embedder_label) = if real_model {
         let config = EmbedConfig::load()?;
-        provision(&config, |line| eprintln!("[init] {line}"))?;
-        let embedder = LocalEmbedder::load(&config)?;
+        let embedder = load_or_provision(&config)?;
         let label = embedder.model_id().to_string();
         (Vault::open_with_embedder(&root, Box::new(embedder))?, label)
     } else {
