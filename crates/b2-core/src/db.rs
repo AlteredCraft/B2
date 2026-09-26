@@ -936,12 +936,7 @@ pub fn rebuild_fts(conn: &Connection, tokenizer: FtsTokenizer) -> Result<()> {
 
 /// Whether the embedding space (the `embeddings` table) currently exists.
 pub fn embedding_space_exists(conn: &Connection) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'",
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
+    table_exists(conn, "embeddings")
 }
 
 /// Ensure the vector tables exist, recording `(embed_model_id, embed_dim)` in `meta`. If
@@ -990,8 +985,10 @@ pub fn ensure_embedding_space(conn: &Connection, model_id: &str, dim: usize) -> 
 /// once under the write lock. Identity first: a differing model settles it without the
 /// `sqlite_master` lookup.
 fn embedding_space_matches(conn: &Connection, model_id: &str, dim: usize) -> Result<bool> {
-    let unchanged = meta_value(conn, "embed_model_id")?.as_deref() == Some(model_id)
-        && meta_value(conn, "embed_dim")?.as_deref() == Some(dim.to_string().as_str());
+    let unchanged = matches!(
+        recorded_embedder(conn)?,
+        Some((m, d)) if m == model_id && d == dim
+    );
     Ok(unchanged && embedding_space_exists(conn)?)
 }
 
@@ -1066,8 +1063,38 @@ pub fn chunk_note_map(conn: &Connection) -> Result<HashMap<i64, String>> {
     Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
 }
 
-/// A chunk's text (None if the chunk id is unknown) — the search-hit → snippet
-/// resolution the CLI shows.
+/// A ranked chunk resolved for display in one read: its note, that note's title, and the
+/// chunk's heading breadcrumb and text. One statement, so the note and the chunk come
+/// from the same snapshot: a hit is either whole or `None` (GH #137).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkHit {
+    pub note_path: String,
+    pub title: Option<String>,
+    pub heading_path: Option<String>,
+    pub text: String,
+}
+
+/// [`ChunkHit`] for `chunk_id`, `None` if the chunk or its note is gone.
+pub fn chunk_hit(conn: &Connection, chunk_id: i64) -> Result<Option<ChunkHit>> {
+    Ok(conn
+        .query_row(
+            "SELECT c.note_path, n.title, c.heading_path, c.text
+             FROM chunks c JOIN notes n ON n.path = c.note_path
+             WHERE c.id = ?1",
+            [chunk_id],
+            |r| {
+                Ok(ChunkHit {
+                    note_path: r.get(0)?,
+                    title: r.get(1)?,
+                    heading_path: r.get(2)?,
+                    text: r.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// A chunk's text (None if the chunk id is unknown) — a similar card's evidence passage.
 pub fn chunk_text(conn: &Connection, chunk_id: i64) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT text FROM chunks WHERE id = ?1", [chunk_id], |r| {
@@ -1250,18 +1277,18 @@ pub fn note_title(conn: &Connection, note_path: &str) -> Result<Option<String>> 
         .flatten())
 }
 
-/// A note's `created` date (`None` if absent or unset), resolved from the
-/// projection (GH #22): a neighbor is dated for display without an adapter ever
-/// re-reading the file just for a date.
-pub fn note_created(conn: &Connection, note_path: &str) -> Result<Option<String>> {
+/// A note's `(title, created)` in one read (both `None` if the note is absent), resolved
+/// from the projection (GH #22): a neighbor is titled and dated for display without an
+/// adapter ever re-reading the file.
+pub fn note_header(conn: &Connection, note_path: &str) -> Result<(Option<String>, Option<String>)> {
     Ok(conn
         .query_row(
-            "SELECT created FROM notes WHERE path = ?1",
+            "SELECT title, created FROM notes WHERE path = ?1",
             [note_path],
-            |r| r.get::<_, Option<String>>(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?
-        .flatten())
+        .unwrap_or_default())
 }
 
 /// Every indexed note's `(path, title)`, ordered by `path` — the flat listing

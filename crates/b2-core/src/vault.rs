@@ -9,8 +9,7 @@
 //! (ADR-0005). Under the fake, `search`'s BM25 half is still real but the vector
 //! half is not semantic — callers must not overstate it.
 
-use crate::add::{self, AddReport};
-use crate::chat;
+use crate::add;
 use crate::chunk::ChunkConfig;
 use crate::db;
 use crate::dirs;
@@ -19,22 +18,27 @@ use crate::embed::{Embedder, FakeEmbedder};
 use crate::error::{Error, Result};
 use crate::graph::{self, Direction};
 use crate::import;
-use crate::llm::{ChatRequest, ChatTurn, ContextPassage, LlmProvider, ToolCall, ToolExchange};
 use crate::mv;
 use crate::rm;
+use crate::snippet::{query_snippet, snippet};
 use crate::{ingest, note, relation, search};
 use rusqlite::Connection;
-use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+mod chat;
+mod views;
+
+pub use views::*;
+
 // Report types the façade returns — re-exported so adapters name them through the
 // one typed contract.
+pub use crate::add::AddReport;
 pub use crate::dirs::DirCreateReport;
 pub use crate::import::ImportReport;
-pub use crate::ingest::SkippedNote;
+pub use crate::ingest::{ReindexProgress, SkippedNote};
 pub use crate::mv::DirMoveReport;
 pub use crate::mv::{MoveReport, ResourceMoveReport};
 pub use crate::rm::{DeleteReport, DirDeleteReport, ResourceDeleteReport};
@@ -42,9 +46,6 @@ pub use crate::rm::{DeleteReport, DirDeleteReport, ResourceDeleteReport};
 /// Embedding dimension of the *fake* embedder ([`Vault::open`]). The real model
 /// brings its own (768); a model or dim swap re-embeds on `reindex` (ADR-0007).
 const EMBED_DIM: usize = 64;
-
-/// Longest snippet (in chars) shown for a search hit, so a result stays one line.
-const SNIPPET_CHARS: usize = 160;
 
 /// Headroom [`Vault::search_chunks`] keeps over `limit`. A small constant, because
 /// façade headroom is multiplied: each unit buys [`search::pool_size`] more
@@ -109,472 +110,6 @@ pub struct Vault {
     /// guarantee is doc-enforced instead: the change must pair with
     /// `project(force)`. The retrieval eval is the only client that overrides it.
     chunk_config: ChunkConfig,
-}
-
-/// What `reindex` did: notes projected, and how many were actually (re)embedded
-/// (the rest reused their vectors). It reports no vault writes because there are
-/// none — a reindex reads (ADR-0004).
-///
-/// `cancelled` marks a cooperative cancel of the embed phase; the counts then
-/// describe the partial work truthfully and the index is still consistent (keyword
-/// and graph complete, a prefix embedded). Always `false` for
-/// [`reindex`](Vault::reindex).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ReindexReport {
-    pub indexed: usize,
-    pub embedded: usize,
-    pub cancelled: bool,
-    /// Files skipped as unreadable this run — one bad file never fails the pass.
-    pub skipped: Vec<SkippedNote>,
-    /// Ghost rows pruned: notes whose files were deleted outside b2 (#31), so
-    /// incremental equals a from-scratch rebuild.
-    pub notes_pruned: usize,
-    pub resources_indexed: usize,
-    pub resources_pruned: usize,
-}
-
-/// What [`project`](Vault::project) did — the model-free half of a reindex. No
-/// embed counts: projection never touches vectors.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ProjectReport {
-    pub indexed: usize,
-    /// Files skipped as unreadable this pass, so an adapter can say which and why.
-    pub skipped: Vec<SkippedNote>,
-    /// Ghost rows pruned: notes whose files were deleted outside b2 (#31).
-    pub notes_pruned: usize,
-    pub resources_indexed: usize,
-    pub resources_pruned: usize,
-}
-
-/// What [`embed`](Vault::embed) did — the model-bound half of a reindex: notes
-/// whose missing vectors were filled, and whether a cooperative cancel cut the pass
-/// short (the counts stay truthful, and a re-run embeds exactly the remainder).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct EmbedReport {
-    pub embedded: usize,
-    pub cancelled: bool,
-}
-
-/// The vault's embedding coverage — the honest "N/M embedded" signal (#26).
-/// Model-free: a pure count over the projection, so an adapter can say
-/// "keyword-only for now" precisely without loading a model. `embedded < total`
-/// means [`search`](Vault::search) is running keyword-first over the remainder;
-/// `embedded == 0` is a fully keyword-only vault.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct EmbedStatus {
-    /// Notes with no chunk awaiting a vector. A note with **no chunks at all** — an empty
-    /// body — counts here: there is no vector it could be waiting for, so it must be able
-    /// to reach the numerator (see [`crate::db::embed_progress`]).
-    pub embedded: usize,
-    /// Every projected note (the denominator).
-    pub total: usize,
-}
-
-/// What a reindex **would** do — the `reindex --dry-run` preview, computed
-/// read-only. The `would_*` keys are the honesty signal: this is a forecast.
-///
-/// It forecasts work and nothing else. The dry-run's old columns (which notes would
-/// be stamped, which files collide) existed because a real run wrote to the vault;
-/// it no longer does (ADR-0004), so only the embedding is left to size.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ReindexPlan {
-    /// Notes a real reindex would project (every `.md` file the walk collects).
-    pub would_index: usize,
-    /// …of which this many would be (re)embedded.
-    pub would_embed: usize,
-}
-
-/// One neighbor of a note, resolved for display: the note at the other end of an
-/// edge, with its path + title, so the adapter stays a dumb printer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NeighborView {
-    /// The other note's vault-relative path — its identity (ADR-0003).
-    pub path: String,
-    pub title: Option<String>,
-    /// The stored relation verb (outbound direction of the edge).
-    pub relation: String,
-    /// `"outbound"` (this note → other) or `"inbound"`.
-    pub direction: String,
-    /// Display label: the verb outbound, its inverse inbound (ADR-0010).
-    pub label: String,
-    pub explanation: Option<String>,
-    /// Edge origin: `"inline"` (a body link) or `"frontmatter"` (ADR-0010).
-    pub origin: String,
-    /// The other note's `created` date, resolved from the projection (GH #22).
-    pub created: Option<String>,
-}
-
-/// One outbound link a note authors at a **resource** (an image, a PDF — any
-/// non-`.md` vault file), resolved for display. Surfaced on [`ExplainView`] so a
-/// note's file links are visible from the note's side, not only as the resource's
-/// backlinks (GH #22). Distinct from [`NeighborView`]: a resource has no title and
-/// authors no edges, so these are always outbound.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ResourceLinkView {
-    pub path: String,
-    /// Its inventory class (`image`/`pdf`/`html`/`text`/`media`/`binary`).
-    pub class: String,
-    pub relation: String,
-    pub origin: String,
-    /// The authored caption (alt text / `|caption`), if any.
-    pub caption: Option<String>,
-    /// Whether the link is an embed (`![…]` / `![[…]]`).
-    pub embed: bool,
-    pub explanation: Option<String>,
-}
-
-/// One outbound link a note authored that resolves to **nothing** — no note and no
-/// resource at its target (a `[[Hermes]]` naming a *folder*, or a typo). A note is
-/// one `.md` file, so a folder is never a valid target; rather than drop such a link
-/// B2 surfaces it as unresolved, so it reads as broken rather than missing (GH #12).
-/// It has no `path` — that is the whole point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UnresolvedLink {
-    /// The target exactly as written in the Markdown (`[[target]]`).
-    pub target: String,
-    pub relation: String,
-    pub origin: String,
-    pub explanation: Option<String>,
-}
-
-/// A note's full connection picture for `b2 explain`: the note itself, every active
-/// connection with its "why", its outbound resource links, and any unresolved
-/// outbound links. A thin header over [`NeighborView`] — it reuses the per-edge
-/// shape `neighbors` returns rather than a parallel one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ExplainView {
-    pub path: String,
-    pub title: Option<String>,
-    /// Outbound edges first, then inbound (as [`graph::neighbors`] orders them).
-    pub connections: Vec<NeighborView>,
-    /// Outbound links at resources — the third target kind (GH #22).
-    pub resources: Vec<ResourceLinkView>,
-    /// Outbound links that resolved to nothing (GH #12).
-    pub unresolved: Vec<UnresolvedLink>,
-}
-
-/// A note's content + display metadata for a reader. Carries the note's identity,
-/// the frontmatter fields worth showing a human, and the **raw Markdown body read
-/// from disk** (the source of truth, not the projection) so an adapter renders
-/// Markdown itself. A pure read — no embedding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NoteView {
-    pub path: String,
-    pub title: Option<String>,
-    pub r#type: Option<String>,
-    pub created: Option<String>,
-    pub updated: Option<String>,
-    pub tags: Vec<String>,
-    /// The note's Markdown body (frontmatter stripped), verbatim from disk.
-    pub body: String,
-    /// The raw frontmatter YAML **verbatim** (the text between the `---` fences,
-    /// fences excluded), not a re-serialization of the projected fields above — so
-    /// `b2_relations:` and any keys B2 doesn't model show as written.
-    pub frontmatter: Option<String>,
-    /// Whether that block *reads* as YAML metadata
-    /// ([`note::ParsedNote::frontmatter_readable`]): `false` means the raw bytes
-    /// above are shown verbatim but the projected fields came back empty. Every
-    /// read passes through here, so an external hand-edit surfaces the same warning
-    /// as an in-app save (GH #79).
-    pub frontmatter_readable: bool,
-    /// blake3 of the **raw file bytes** at read time — the save-guard token
-    /// [`write`](Vault::write) validates, so a save can never silently clobber an
-    /// external edit. Whole-file, so *any* out-of-band change conflicts honestly.
-    pub revision: String,
-}
-
-/// One note's identity for a listing — `path` + `title`, with **no body**: enough
-/// to show and open a note, cheap enough to fetch the whole vault at once. The body
-/// is a separate [`read`](Vault::read) when a note is opened.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NoteSummary {
-    pub path: String,
-    pub title: Option<String>,
-}
-
-/// One resource's identity for the file tree — the per-kind sibling of
-/// [`NoteSummary`], never a union type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ResourceSummary {
-    pub path: String,
-    pub class: String,
-    pub size: i64,
-    pub mtime: Option<i64>,
-}
-
-/// The resource fallback card's data: inventory metadata plus inbound backlinks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ResourceExplainView {
-    pub path: String,
-    pub class: String,
-    pub size: i64,
-    pub mtime: Option<i64>,
-    pub content_hash: String,
-    pub backlinks: Vec<ResourceBacklink>,
-}
-
-/// One note that links at a resource, with the edge's authored context.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ResourceBacklink {
-    pub path: String,
-    pub title: Option<String>,
-    pub r#type: String,
-    pub caption: Option<String>,
-    pub embed: bool,
-}
-
-/// One search hit, resolved to the note it belongs to with a text snippet.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SearchResult {
-    pub path: String,
-    pub title: Option<String>,
-    /// Fused relevance score; higher is better.
-    pub score: f64,
-    /// A one-line excerpt of the matched chunk.
-    pub snippet: String,
-}
-
-/// A search's evidence reading — [`Vault::search_evidence`]'s return, and what a
-/// surface needs to decide what it vouches for (ADR-0015).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SearchEvidenceView {
-    /// The served results, whole and in fused order — evidence never reorders or
-    /// removes a row.
-    pub results: Vec<EvidencedResult>,
-    /// Does the vault hold positive evidence for this query at the active model's
-    /// bar? `None` = no calibrated bar for this embedder, so no verdict is offered
-    /// rather than one guessed.
-    pub vouched: Option<bool>,
-    /// Chunks in the index — the scale every term's weight is read against.
-    pub chunk_total: usize,
-    /// Every query term with its document frequency, in query order.
-    pub terms: Vec<QueryTermView>,
-    /// Best cosine between the query and any chunk vector — the dense half's
-    /// absolute claim. `None` on a projected-but-unembedded vault.
-    pub best_cos: Option<f64>,
-}
-
-/// One served result with the provenance RRF discarded — which lists ranked its
-/// chunk, and how near its vector actually was.
-///
-/// The query-level verdict on [`SearchEvidenceView`] is what ADR-0015's "no matches"
-/// rests on; **this** is what the per-hit tail bake-off is argued from (GH #206).
-/// That bake-off has run — the labels carry the per-hit depth (`tail_relevant`) —
-/// and **no tail fold shipped**: the fused order is not an evidence order, so every
-/// admissible prefix cut proved vacuous, and the tail complaint is ordering work
-/// (the reranker seam), not disclosure work. This stays an instrument reading,
-/// re-priced on every `make eval` run.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct EvidencedResult {
-    #[serde(flatten)]
-    pub result: SearchResult,
-    /// 0-based rank in the BM25 list; `None` = the lexical half never ranked it.
-    pub bm25_rank: Option<usize>,
-    /// 0-based rank in the dense list; `None` = the vector half never ranked it,
-    /// or never ran.
-    pub vector_rank: Option<usize>,
-    /// This chunk's cosine to the query; `None` whenever `vector_rank` is.
-    pub cos: Option<f64>,
-}
-
-/// One query term's lexical reading (see [`SearchEvidenceView`]).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct QueryTermView {
-    pub term: String,
-    /// Chunks matching this term alone; `0` = the vault has never seen the word.
-    pub df: usize,
-    /// This term's weight in the coverage reading — `ln((chunks+1)/(df+1))`; near
-    /// zero for a ubiquitous word, largest for one the vault has never seen.
-    pub idf: f64,
-}
-
-/// One **chunk-level** search hit — the sub-note view of [`search`](Vault::search).
-/// Same retrieval, but ranked chunks are returned as-is instead of deduped up to
-/// notes, so a caller can see *which passage* matched and at what rank. The client
-/// is the out-of-CI retrieval eval (ADR-0013): note-rank scoring is blind to
-/// sub-note quality, which is exactly what chunking levers move. Carries the chunk's
-/// **full text**, which the eval's containment scoring anchors on.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ChunkSearchResult {
-    pub path: String,
-    /// The chunk's heading breadcrumb (`"Fermentation > Vegetables"`), when the
-    /// chunker recorded one.
-    pub heading_path: Option<String>,
-    /// Fused relevance score; higher is better.
-    pub score: f64,
-    /// The chunk's stored text, verbatim.
-    pub text: String,
-}
-
-/// The answer to one grounded-chat ask — flow ④'s display view: the model's
-/// streamed text with its `[n]` citation markers resolved back to the vault.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AnswerView {
-    /// The answer, verbatim as streamed — including any marker that did *not*
-    /// resolve. Model output is untrusted content, but it is never rewritten here;
-    /// an unmatched marker is simply absent from `citations`.
-    pub answer: String,
-    /// The resolved citations, ascending by marker; one entry per **distinct**
-    /// marker that names a real passage.
-    pub citations: Vec<Citation>,
-    /// `true` when the caller's callback broke the stream mid-answer: `answer` then
-    /// holds the partial text honestly, and citations resolve over what arrived.
-    pub cancelled: bool,
-    /// The B2 tools that ran to produce this answer, in order — empty for a plain
-    /// [`ask`](Vault::ask), which retrieves once and offers the model none. Serialized
-    /// only when present, so existing JSON consumers see no change.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<ToolUseView>,
-}
-
-/// One tool run during a tool-using chat turn — shown beside the answer so a human can
-/// see what the explanation was built from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ToolUseView {
-    /// The tool's name (`b2_passage_pairs`, `b2_read`, …).
-    pub name: String,
-    /// The call's arguments, as JSON text — the model's own, verbatim, for a call it made.
-    pub arguments: String,
-    /// `true` for the lookup B2 made itself before asking the model anything; `false`
-    /// for a call the model chose.
-    pub seeded: bool,
-}
-
-/// One resolved `[n]` citation: the passage's note, plus a one-line excerpt of the
-/// cited passage as display evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Citation {
-    /// The marker as it appears in the answer text (1-based passage number).
-    pub marker: usize,
-    /// Vault-relative path of the cited note — its identity (ADR-0003), and what an
-    /// adapter opens on click. A note renamed between answer and click goes stale,
-    /// exactly as any path handle does.
-    pub path: String,
-    /// A one-line excerpt of the cited passage (its head, length-bounded).
-    pub excerpt: String,
-}
-
-/// One semantically-similar candidate for `b2 similar`: a note near the anchor in
-/// embedding space that is **not** already connected to it, resolved for display
-/// with the passage that made it similar. The machine finds the candidate, the human
-/// decides whether to `link` it (ADR-0009).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SimilarView {
-    pub path: String,
-    pub title: Option<String>,
-    /// Best chunk-pair similarity to the anchor; higher is nearer.
-    pub score: f64,
-    /// A one-line excerpt of the candidate chunk that achieved `score` — the
-    /// evidence for *why* it surfaced.
-    pub evidence: String,
-    /// How far this candidate stands above the anchor's own candidate population —
-    /// its best-passage z (GH #192), and the one honest input for a displayed
-    /// *strength* band (GH #150). Non-increasing down the row order, so the band
-    /// never contradicts the ranking. It **gates nothing** (ADR-0014): the band is a
-    /// within-list grading, never a verdict on existence. The unit is load-bearing —
-    /// a band calibrated in the retired centroid unit grades every card down
-    /// (GH #182) — so a surface reads its landmarks off `make eval`'s calibration
-    /// block. `None` when no statistic was computed (a fake-embedded space, a pool
-    /// under the statistics minimum, or zero variance), which is the adapters' cue
-    /// to say the list is *ungraded* rather than let bare cards read as uniformly
-    /// weak; serialized only when present, so older JSON consumers see no change.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub z: Option<f64>,
-}
-
-/// **Explain** for a *Similar & unlinked* card (GH #236): where one note stands in an
-/// anchor's discovery field, and the passage pairs behind it. Model-free and read from
-/// the same computation as [`Vault::similar`], so a served row's rank, z and best pair are
-/// exactly the card's. Raw distances are never the point: every grade is a z on the same
-/// yardstick as the strength band.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SimilarExplainView {
-    pub anchor: NoteSummary,
-    pub candidate: NoteSummary,
-    /// The list length the explanation is read at: the surface's own, so `served`
-    /// answers "was this a card?".
-    pub limit: usize,
-    pub standing: SimilarStanding,
-    /// The candidate's z when it was scored in a graded field (the card's band input).
-    pub z: Option<f64>,
-    /// The candidate's rank judged by whole-note average (stage 1), when it entered
-    /// stage 1. Far worse than a ranked standing's `rank` means one section carries the
-    /// match: a buried gem.
-    pub centroid_rank: Option<usize>,
-    /// Every scored note's z, nearest first: the field the band is relative to. Empty
-    /// when ungraded (a fake space, a small pool, no spread).
-    pub population: Vec<f64>,
-    /// One pair per candidate passage, nearest first, each matched to the anchor passage
-    /// nearest to it. Empty when either side has no vectors.
-    pub pairs: Vec<PassagePairView>,
-    /// Notes both sides already link with (either direction).
-    pub shared_neighbors: Vec<NoteSummary>,
-}
-
-/// Where a note stands in an anchor's discovery field: why it is a card, or why not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SimilarStanding {
-    /// The candidate is the anchor itself.
-    SameNote,
-    /// The anchor has no stored vectors yet: nothing to compare from.
-    AnchorUnembedded,
-    /// Directly linked (either direction), so discovery leaves it out as already known.
-    Linked,
-    /// The candidate has no stored vectors yet.
-    Unembedded,
-    /// Its whole-note rank fell past the first-pass shortlist of `shortlist` notes, so
-    /// it was never scored passage by passage.
-    NotShortlisted { shortlist: usize },
-    /// Scored: `rank` (1-based) of `of` scored notes; `served` when `rank <= limit`.
-    Ranked {
-        rank: usize,
-        of: usize,
-        served: bool,
-    },
-}
-
-/// One passage pair: a candidate passage and the anchor passage nearest to it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct PassagePairView {
-    pub anchor: PassageView,
-    pub candidate: PassageView,
-    /// Negated L2, higher is nearer: [`SimilarView::score`]'s unit.
-    pub score: f64,
-    /// The pair's z on the card's yardstick, `None` when ungraded.
-    pub z: Option<f64>,
-    /// Both passages hold the same text (a template, a copy): a perfect match that says
-    /// nothing about what the notes are about.
-    pub identical: bool,
-}
-
-/// One passage, as stored in the index.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PassageView {
-    /// The chunk's heading breadcrumb (`"Fermentation > Vegetables"`), when it has one.
-    pub heading_path: Option<String>,
-    /// The chunk's stored text, verbatim.
-    pub text: String,
-}
-
-/// What [`write`](Vault::write) did: the saved note's path and the **new revision**
-/// (blake3 of the final on-disk bytes) — the token the editor chains its next save
-/// on, so sequential saves never self-conflict.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WriteReport {
-    pub path: String,
-    pub revision: String,
-}
-
-/// What `b2 link` did: the committed typed edge, resolved for display. `created` is
-/// `false` when the directed `(src, dst, type)` edge already existed, so nothing was
-/// written (the command is idempotent).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LinkReport {
-    pub src_path: String,
-    pub dst_path: String,
-    pub relation: String,
-    pub created: bool,
 }
 
 impl Vault {
@@ -750,8 +285,7 @@ impl Vault {
     fn neighbors_of(&self, note_path: &str) -> Result<Vec<NeighborView>> {
         let mut out = Vec::new();
         for n in graph::neighbors(&self.conn, note_path)? {
-            let title = db::note_title(&self.conn, &n.other)?;
-            let created = db::note_created(&self.conn, &n.other)?;
+            let (title, created) = db::note_header(&self.conn, &n.other)?;
             out.push(NeighborView {
                 path: n.other,
                 title,
@@ -876,29 +410,10 @@ impl Vault {
     /// an external write trips the guard.
     pub fn write(&self, note_ref: &str, body: &str, base_revision: &str) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write", note = note_ref).entered();
-        let path = self.resolve_ref(note_ref)?;
-        let abs = self.root.join(&path);
-        let raw = fs::read_to_string(&abs)?;
-
-        // The guard: the bytes the edit was based on must still be the bytes on disk.
-        if revision_of(&raw) != base_revision {
-            return Err(Error::WriteConflict(path));
-        }
-
-        // Markdown first: the byte-honest splice (frontmatter bytes untouched).
-        let mut parsed = note::parse(&raw);
-        parsed.replace_body(body);
-        fs::write(&abs, parsed.as_str())?;
-
-        // Re-project model-free, through the ordinary path.
-        ingest::project_file(self.ctx(), &path)?;
-
-        // Read the final bytes back rather than assume them: the revision the editor
-        // chains on must describe the file, not our intent.
-        let final_raw = fs::read_to_string(&abs)?;
-        Ok(WriteReport {
-            path,
-            revision: revision_of(&final_raw),
+        // The byte-honest splice: frontmatter bytes untouched.
+        self.save_guarded(note_ref, base_revision, |parsed| {
+            parsed.replace_body(body);
+            Ok(())
         })
     }
 
@@ -923,28 +438,43 @@ impl Vault {
     ) -> Result<WriteReport> {
         let _op = tracing::debug_span!(target: "b2::vault", "write_frontmatter", note = note_ref)
             .entered();
+        self.save_guarded(note_ref, base_revision, |parsed| {
+            if frontmatter
+                .lines()
+                .any(|l| l.trim_end_matches('\r') == "---")
+            {
+                return Err(Error::Frontmatter(
+                    "a `---` line inside frontmatter would end the block early".into(),
+                ));
+            }
+            parsed.replace_frontmatter(frontmatter);
+            Ok(())
+        })
+    }
+
+    /// The shared shape of the two editor saves: resolve, check that the file on disk
+    /// still hashes to `base_revision` (else [`Error::WriteConflict`], nothing written),
+    /// apply `splice` (which may refuse, also before any byte reaches disk), write, and
+    /// re-project **model-free** through the ordinary path.
+    ///
+    /// The returned revision is read back from disk rather than assumed: the token the
+    /// editor chains its next save on must describe the file, not our intent.
+    fn save_guarded(
+        &self,
+        note_ref: &str,
+        base_revision: &str,
+        splice: impl FnOnce(&mut note::ParsedNote) -> Result<()>,
+    ) -> Result<WriteReport> {
         let path = self.resolve_ref(note_ref)?;
         let abs = self.root.join(&path);
         let raw = fs::read_to_string(&abs)?;
-
-        // The guard: the bytes the edit was based on must still be the bytes on disk.
         if revision_of(&raw) != base_revision {
             return Err(Error::WriteConflict(path));
         }
-        if frontmatter
-            .lines()
-            .any(|l| l.trim_end_matches('\r') == "---")
-        {
-            return Err(Error::Frontmatter(
-                "a `---` line inside frontmatter would end the block early".into(),
-            ));
-        }
-
         let mut parsed = note::parse(&raw);
-        parsed.replace_frontmatter(frontmatter);
+        splice(&mut parsed)?;
         fs::write(&abs, parsed.as_str())?;
         ingest::project_file(self.ctx(), &path)?;
-
         let final_raw = fs::read_to_string(&abs)?;
         Ok(WriteReport {
             path,
@@ -1006,8 +536,7 @@ impl Vault {
     /// engine imposes.
     pub fn read_resource_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let _op = tracing::debug_span!(target: "b2::vault", "read_resource_bytes", path).entered();
-        db::resource_detail(&self.conn, path)?
-            .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
+        self.require_resource(path)?;
         Ok(fs::read(self.root.join(path))?)
     }
 
@@ -1017,8 +546,7 @@ impl Vault {
     /// [`Error::ResourceNotFound`] when it is not inventoried.
     pub fn explain_resource(&self, path: &str) -> Result<ResourceExplainView> {
         let _op = tracing::debug_span!(target: "b2::vault", "explain_resource", path).entered();
-        let detail = db::resource_detail(&self.conn, path)?
-            .ok_or_else(|| Error::ResourceNotFound(path.to_string()))?;
+        let detail = self.require_resource(path)?;
         let backlinks = db::inbound_resource_edges(&self.conn, path)?
             .into_iter()
             .map(|b| ResourceBacklink {
@@ -1047,9 +575,7 @@ impl Vault {
     pub fn move_resource(&self, path: &str, to: &str) -> Result<ResourceMoveReport> {
         let _op =
             tracing::debug_span!(target: "b2::vault", "mv_resource", from = path, to).entered();
-        if db::resource_detail(&self.conn, path)?.is_none() {
-            return Err(Error::ResourceNotFound(path.to_string()));
-        }
+        self.require_resource(path)?;
         mv::move_resource(self.embed_ctx(), path, to)
     }
 
@@ -1060,8 +586,8 @@ impl Vault {
     /// **Keyword-first fallback:** when the vector space does not exist yet — a
     /// projected-but-unembedded vault — this runs BM25-only rather than returning
     /// nothing, so a vault is searchable the moment [`project`](Self::project)
-    /// finishes. A never-indexed vault yields no hits and no error; callers should
-    /// consult the `semantic` flag to present keyword-only results honestly.
+    /// finishes. A never-indexed vault yields no hits and no error; callers read
+    /// [`embed_status`](Self::embed_status) to present keyword-only results honestly.
     ///
     /// A `limit` of 0 short-circuits ahead of [`retrieve`](Self::retrieve), so it
     /// costs no query embedding and no [`Error::ModelMismatch`] either: that guard
@@ -1072,11 +598,7 @@ impl Vault {
             return Ok(Vec::new());
         }
         let hits = self.retrieve(query, note_hit_pool(limit))?.hits;
-        Ok(self
-            .resolve_note_hits(hits, query, limit)?
-            .into_iter()
-            .map(|(result, _)| result)
-            .collect())
+        self.note_results(hits, query, limit)
     }
 
     /// [`search`](Self::search)'s dense half alone — vector KNN resolved to notes,
@@ -1102,11 +624,7 @@ impl Vault {
             query,
             note_hit_pool(limit),
         )?;
-        Ok(self
-            .resolve_note_hits(hits, query, limit)?
-            .into_iter()
-            .map(|(result, _)| result)
-            .collect())
+        self.note_results(hits, query, limit)
     }
 
     /// [`search`](Self::search) with the **evidence behind it** (ADR-0015): the same
@@ -1208,8 +726,23 @@ impl Vault {
         })
     }
 
-    /// The note-resolution tail shared by [`search`](Self::search) and
-    /// [`search_vector_only`](Self::search_vector_only): dedup chunk hits to their
+    /// [`resolve_note_hits`](Self::resolve_note_hits) without the provenance — the
+    /// shared tail of [`search`](Self::search) and
+    /// [`search_vector_only`](Self::search_vector_only).
+    fn note_results(
+        &self,
+        hits: Vec<search::Hit>,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        Ok(self
+            .resolve_note_hits(hits, query, limit)?
+            .into_iter()
+            .map(|(result, _)| result)
+            .collect())
+    }
+
+    /// The note-resolution tail of every note-level search: dedup chunk hits to their
     /// best-scoring note, resolve path + title + query-windowed snippet, stop at
     /// `limit`.
     fn resolve_note_hits(
@@ -1226,22 +759,18 @@ impl Vault {
             if out.iter().any(|(r, _)| r.path == hit.note_path) {
                 continue; // note already represented by a higher-scoring chunk
             }
-            // The note row can only be missing on a torn read; drop the hit rather
-            // than name a note that is gone — the pool has headroom to backfill it
-            // (GH #137).
-            if !db::note_exists(&self.conn, &hit.note_path)? {
+            // The chunk or its note can only be missing on a torn read; drop the hit
+            // rather than name a note that is gone — the pool has headroom to backfill
+            // it (GH #137).
+            let Some(found) = db::chunk_hit(&self.conn, hit.chunk_id)? else {
                 continue;
-            }
-            let title = db::note_title(&self.conn, &hit.note_path)?;
-            let snippet = db::chunk_text(&self.conn, hit.chunk_id)?
-                .map(|t| query_snippet(&t, query))
-                .unwrap_or_default();
+            };
             out.push((
                 SearchResult {
-                    path: hit.note_path,
-                    title,
+                    snippet: query_snippet(&found.text, query),
+                    path: found.note_path,
+                    title: found.title,
                     score: hit.score,
-                    snippet,
                 },
                 hit.provenance,
             ));
@@ -1266,528 +795,25 @@ impl Vault {
             if out.len() == limit {
                 break;
             }
-            // Either lookup can miss only on an inconsistent index; drop such a hit
-            // rather than emit a half-resolved one — a rank slot with an empty path
-            // would read as a real result. The pool backfills it (GH #137).
-            if !db::note_exists(&self.conn, &hit.note_path)? {
-                continue;
-            }
-            let Some((heading_path, text)) = db::chunk_detail(&self.conn, hit.chunk_id)? else {
+            // The lookup misses only on a torn read; drop such a hit rather than emit a
+            // half-resolved one — a rank slot with an empty path would read as a real
+            // result. The pool backfills it (GH #137).
+            let Some(found) = db::chunk_hit(&self.conn, hit.chunk_id)? else {
                 continue;
             };
             out.push(ChunkSearchResult {
-                path: hit.note_path,
-                heading_path,
+                path: found.note_path,
+                heading_path: found.heading_path,
                 score: hit.score,
-                text,
+                text: found.text,
             });
         }
         Ok(out)
     }
 
-    /// Flow ④ — grounded chat over the vault: condense → retrieve → assemble →
-    /// stream → cite, orchestrated here over the core logic in [`crate::chat`]. The
-    /// provider is injected **per call**: chat is its sole consumer and, unlike the
-    /// embedder, it carries no index identity (contrast ADR-0007), so nothing about
-    /// it belongs on the open vault.
-    ///
-    /// - **Condense** (multi-turn only): one provider call rewrites the follow-up
-    ///   into a standalone retrieval query; on failure it degrades to the raw
-    ///   question, so that step can never break chat.
-    /// - **Retrieve**: [`search_chunks`](Self::search_chunks) at
-    ///   [`chat::ASK_PASSAGES`], holding `search`'s posture — chat is a reader.
-    /// - **Stream**: tokens flow up through `on_token` as they arrive; returning
-    ///   `ControlFlow::Break(())` cancels at token granularity and the result reports
-    ///   it ([`AnswerView::cancelled`]).
-    /// - **Cite**: distinct `[n]` markers resolve to `(path, excerpt)`; a
-    ///   hallucinated marker resolves to nothing, and the text is never rewritten.
-    ///
-    /// Nothing model-derived is stored anywhere, and history is the caller's,
-    /// session-only. Errors: retrieval as `search` raises it; a failed *answer* call
-    /// as [`Error::Llm`](crate::Error::Llm).
-    pub fn ask(
-        &self,
-        llm: &dyn LlmProvider,
-        question: &str,
-        history: &[ChatTurn],
-        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
-    ) -> Result<AnswerView> {
-        let _op = tracing::debug_span!(
-            target: "b2::vault",
-            "ask",
-            question,
-            multi_turn = !history.is_empty()
-        )
-        .entered();
-        let query = if history.is_empty() {
-            question.to_string()
-        } else {
-            chat::condense_query(llm, question, history)
-        };
-        let passages: Vec<ContextPassage> = self
-            .search_chunks(&query, chat::ASK_PASSAGES)?
-            .into_iter()
-            .map(|c| ContextPassage {
-                path: c.path,
-                heading_path: c.heading_path,
-                text: c.text,
-            })
-            .collect();
-        tracing::debug!(
-            target: "b2::chat",
-            passages = passages.len(),
-            "retrieved grounding passages"
-        );
-        let req = chat::build_request(question, history, passages);
-        self.stream_answer(llm, &req, on_token)
-    }
-
-    /// **Why was this suggested?** — the chat answer behind one *Similar & unlinked*
-    /// row: explain, grounded and cited, why `candidate_ref` surfaced for `anchor_ref`.
-    ///
-    /// A **tool-using** turn (ADR-0022). The model is offered B2's read-only tools
-    /// ([`chat::why_tools`]: `b2_passage_pairs`, `b2_similar`, `b2_neighbors`, `b2_read`)
-    /// and makes the lookups itself; each call is one read on this façade, run here and
-    /// replayed to the model with its result. Every argument defaults to this turn's
-    /// pair, so `{}` is always a valid call. Three things bound that:
-    ///
-    /// - **Round 1 is the lookup round.** Its text is never streamed: a model that
-    ///   answers there answered from nothing. If it calls no tool — or the call fails,
-    ///   most often a model with no tool support — the turn degrades to
-    ///   [`chat::build_why_request`]: B2 makes the pair lookup and hands the evidence over
-    ///   in one plain grounded request. If it calls tools but skips the pair lookup, B2
-    ///   appends that call itself (`seeded`), because the matched pairs are what the row
-    ///   was ranked on and no explanation is written without them.
-    /// - **The loop is bounded** at [`chat::MAX_TOOL_ROUNDS`] model calls and
-    ///   [`chat::MAX_CALLS_PER_ROUND`] tool calls each, and the last round offers no
-    ///   tools, so it can only answer.
-    /// - **The row's position rides in the prompt** — rank and strength from
-    ///   [`similar`](Self::similar) at the `limit` the surface showed, so the explanation
-    ///   describes the card that was clicked.
-    ///
-    /// One consequence of the hidden first round: a cancel lands when the first visible
-    /// token arrives, not during the lookups.
-    ///
-    /// A tool call is model output, so it is untrusted: an unknown tool, malformed
-    /// arguments or an unknown note is answered with an `error:` *result* the model can
-    /// read, never a failed turn. Every passage a tool hands over is numbered once on one
-    /// ledger, and the answer's `[n]` markers resolve against it. Streaming, cancellation
-    /// and the [`Error::Llm`] normalization are [`ask`](Self::ask)'s — chat is a reader
-    /// here too, and nothing is stored. [`Error::NoteNotFound`] for an unknown ref on
-    /// either side.
-    pub fn why_similar(
-        &self,
-        llm: &dyn LlmProvider,
-        anchor_ref: &str,
-        candidate_ref: &str,
-        limit: usize,
-        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
-    ) -> Result<AnswerView> {
-        let _op = tracing::debug_span!(
-            target: "b2::vault",
-            "why_similar",
-            anchor = anchor_ref,
-            candidate = candidate_ref,
-            limit
-        )
-        .entered();
-        let anchor = self.resolve_ref(anchor_ref)?;
-        let candidate = self.resolve_ref(candidate_ref)?;
-
-        // The row as the surface showed it: same call, same limit, so the same rank + z.
-        let served = self.similar(&anchor, limit)?;
-        let row = served.iter().position(|s| s.path == candidate);
-        let anchor_neighbors: BTreeSet<String> = graph::neighbors(&self.conn, &anchor)?
-            .into_iter()
-            .map(|n| n.other)
-            .collect();
-        let candidate_neighbors: BTreeSet<String> = graph::neighbors(&self.conn, &candidate)?
-            .into_iter()
-            .map(|n| n.other)
-            .collect();
-
-        let mut desk = ToolDesk {
-            anchor: anchor.clone(),
-            candidate: candidate.clone(),
-            limit,
-            chunk_ids: Vec::new(),
-            passages: Vec::new(),
-        };
-        let mut facts = chat::WhyFacts {
-            anchor_title: db::note_title(&self.conn, &anchor)?,
-            candidate_title: db::note_title(&self.conn, &candidate)?,
-            rank: row.map(|i| (i + 1, served.len())),
-            z: row.and_then(|i| served.get(i)).and_then(|s| s.z),
-            linked: anchor_neighbors.contains(&candidate),
-            shared_neighbors: anchor_neighbors
-                .intersection(&candidate_neighbors)
-                .cloned()
-                .collect(),
-            // The handoff's half, filled only if the turn degrades to it.
-            embedded: true,
-            pairs: Vec::new(),
-            anchor_path: anchor,
-            candidate_path: candidate,
-        };
-
-        let mut req =
-            chat::build_why_agent_request(&facts, chat::why_tools(), Vec::new(), Vec::new());
-        let mut tools_used: Vec<ToolUseView> = Vec::new();
-        let mut answer = String::new();
-        let mut cancelled = false;
-        for round in 1..=chat::MAX_TOOL_ROUNDS {
-            if round == chat::MAX_TOOL_ROUNDS {
-                req.tools.clear(); // nothing left to do but answer
-            }
-            // Round 1 is the lookup round, and its text is never shown: a model that
-            // answers there has answered from nothing, and one that calls tools says at
-            // most "let me check". From round 2 on, tokens stream as they arrive.
-            let completion = if round == 1 {
-                llm.complete(&req, &mut |_| ControlFlow::Continue(()))
-            } else {
-                llm.complete(&req, on_token)
-            };
-            let completion = match completion {
-                Ok(c) if round == 1 && c.tool_calls.is_empty() => {
-                    tracing::debug!(
-                        target: "b2::chat",
-                        "the model called no tool; handing the evidence over instead"
-                    );
-                    return self.why_handoff(llm, &mut facts, desk, tools_used, on_token);
-                }
-                Ok(c) => c,
-                // Never degraded: a reply past the tool-call cap is a broken or hostile
-                // server, and a quiet handoff would hide it.
-                Err(e @ Error::ToolCallLimit { .. }) => return Err(e),
-                // The lookup round failed: most often a model with no tool support.
-                // If the server is simply down, the handoff fails the same way, honestly.
-                Err(e) if round == 1 => {
-                    tracing::debug!(
-                        target: "b2::chat",
-                        error = %e,
-                        "the tool round failed; handing the evidence over without tools"
-                    );
-                    return self.why_handoff(llm, &mut facts, desk, tools_used, on_token);
-                }
-                Err(e) => return Err(llm_error(e)),
-            };
-            if round > 1 {
-                answer.push_str(&completion.text);
-            }
-            if completion.cancelled {
-                cancelled = true;
-                break;
-            }
-            if completion.tool_calls.is_empty() || req.tools.is_empty() {
-                break;
-            }
-            for call in completion
-                .tool_calls
-                .into_iter()
-                .take(chat::MAX_CALLS_PER_ROUND)
-            {
-                let result = self.run_tool(&mut desk, &call);
-                tracing::debug!(
-                    target: "b2::chat",
-                    tool = call.name,
-                    failed = result.starts_with("error:"),
-                    "ran a tool for the model"
-                );
-                tools_used.push(ToolUseView {
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                    seeded: false,
-                });
-                req.exchanges.push(ToolExchange { call, result });
-            }
-            // Whatever the model chose to look up, the matched pairs for *this* pair are
-            // what the row was ranked on. If the lookup round skipped them, B2 makes that
-            // call itself, so no explanation is written without them on the desk.
-            if round == 1 && desk.passages.is_empty() {
-                let seeded = self.seed_pairs(&mut desk, &facts)?;
-                tools_used.push(ToolUseView {
-                    name: seeded.call.name.clone(),
-                    arguments: seeded.call.arguments.clone(),
-                    seeded: true,
-                });
-                req.exchanges.push(ToolExchange {
-                    call: seeded.call,
-                    result: seeded.result,
-                });
-            }
-            req.passages.clone_from(&desk.passages);
-        }
-        Ok(AnswerView {
-            citations: cite(&answer, &desk.passages),
-            answer,
-            cancelled,
-            tools: tools_used,
-        })
-    }
-
-    /// B2's own `b2_passage_pairs` call for the turn's pair, as the exchange it is.
-    fn seed_pairs(&self, desk: &mut ToolDesk, facts: &chat::WhyFacts) -> Result<SeededLookup> {
-        let call = ToolCall {
-            id: "b2_seed_1".to_string(),
-            name: chat::TOOL_PASSAGE_PAIRS.to_string(),
-            arguments: serde_json::json!({
-                "note": facts.anchor_path,
-                "candidate": facts.candidate_path,
-            })
-            .to_string(),
-        };
-        let (result, pairs) =
-            self.tool_passage_pairs(desk, &facts.anchor_path, &facts.candidate_path)?;
-        Ok(SeededLookup {
-            call,
-            result,
-            pairs,
-        })
-    }
-
-    /// The degrade of a tool-using why-turn: B2 makes the pair lookup itself and hands
-    /// the evidence over in one plain grounded request — for a model with no tool
-    /// support, and for one that was offered tools and used none.
-    fn why_handoff(
-        &self,
-        llm: &dyn LlmProvider,
-        facts: &mut chat::WhyFacts,
-        mut desk: ToolDesk,
-        mut tools_used: Vec<ToolUseView>,
-        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
-    ) -> Result<AnswerView> {
-        let seeded = self.seed_pairs(&mut desk, facts)?;
-        tools_used.push(ToolUseView {
-            name: seeded.call.name,
-            arguments: seeded.call.arguments,
-            seeded: true,
-        });
-        facts.embedded = !seeded.pairs.is_empty();
-        facts.pairs = seeded.pairs;
-        let req = chat::build_why_request(facts, desk.passages);
-        let mut view = self.stream_answer(llm, &req, on_token)?;
-        view.tools = tools_used;
-        Ok(view)
-    }
-
-    /// Run one tool call for the model and render its result as text. Infallible by
-    /// design: the call is model output, so every failure — an unknown tool, arguments
-    /// that aren't a JSON object, a note that doesn't exist, an index error — becomes an
-    /// `error:` result the model reads, and the turn carries on.
-    fn run_tool(&self, desk: &mut ToolDesk, call: &ToolCall) -> String {
-        let args: serde_json::Value = if call.arguments.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            match serde_json::from_str(&call.arguments) {
-                Ok(v @ serde_json::Value::Object(_)) => v,
-                _ => return "error: the arguments were not a JSON object".to_string(),
-            }
-        };
-        let text_arg = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::to_string);
-        let note = text_arg("note");
-        let ran = match call.name.as_str() {
-            chat::TOOL_PASSAGE_PAIRS => {
-                let note = note.unwrap_or_else(|| desk.anchor.clone());
-                let candidate = text_arg("candidate").unwrap_or_else(|| desk.candidate.clone());
-                self.resolve_ref(&note).and_then(|n| {
-                    let c = self.resolve_ref(&candidate)?;
-                    Ok(self.tool_passage_pairs(desk, &n, &c)?.0)
-                })
-            }
-            chat::TOOL_SIMILAR => {
-                let note = note.unwrap_or_else(|| desk.anchor.clone());
-                self.tool_similar(&note, desk.limit)
-            }
-            chat::TOOL_NEIGHBORS => {
-                let note = note.unwrap_or_else(|| desk.anchor.clone());
-                self.tool_neighbors(&note)
-            }
-            chat::TOOL_READ => {
-                // The open note is already on the human's screen; the one worth reading
-                // by default is the suggestion.
-                let note = note.unwrap_or_else(|| desk.candidate.clone());
-                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-                self.tool_read(desk, &note, offset as usize)
-            }
-            other => return format!("error: unknown tool `{other}`"),
-        };
-        ran.unwrap_or_else(|e| match e {
-            Error::NoteNotFound(n) => format!("error: note not found: {n}"),
-            // Internals stay out of the model's context as they stay out of the UI.
-            _ => "error: B2 could not run that lookup".to_string(),
-        })
-    }
-
-    /// `b2_passage_pairs`: the matched pairs between two notes, then each passage they
-    /// name that the ledger had not handed over yet. Also returns the pairs over the
-    /// ledger's numbering, which the seeded call's facts need.
-    fn tool_passage_pairs(
-        &self,
-        desk: &mut ToolDesk,
-        note: &str,
-        candidate: &str,
-    ) -> Result<(String, Vec<chat::MarkedPair>)> {
-        let mut pairs = Vec::new();
-        let mut fresh = Vec::new();
-        for pair in discover::passage_pairs(&self.conn, note, candidate, chat::WHY_PAIRS)? {
-            let a = self.ledger_marker(desk, pair.anchor_chunk_id, note, &mut fresh)?;
-            let c = self.ledger_marker(desk, pair.candidate_chunk_id, candidate, &mut fresh)?;
-            // A miss means a torn read against a concurrent reindex; skip the pair rather
-            // than name a passage with no text.
-            if let (Some(a), Some(c)) = (a, c) {
-                pairs.push((a, c, pair.score));
-            }
-        }
-        if pairs.is_empty() {
-            return Ok((
-                format!(
-                    "No matched passages: {note} or {candidate} has no stored vectors to \
-                     compare yet. A reindex fills them."
-                ),
-                pairs,
-            ));
-        }
-        let mut out: Vec<String> = pairs
-            .iter()
-            .enumerate()
-            .map(|(i, (a, c, score))| chat::pair_line(i + 1, *a, *c, *score))
-            .collect();
-        out.push(String::new());
-        out.extend(self.fresh_blocks(desk, &fresh));
-        Ok((out.join("\n"), pairs))
-    }
-
-    /// `b2_similar`: the ranked list for a note, as `similar` serves it.
-    fn tool_similar(&self, note: &str, limit: usize) -> Result<String> {
-        let rows = self.similar(note, limit)?;
-        if rows.is_empty() {
-            return Ok(format!(
-                "B2 has no similar unlinked notes to suggest for {note}."
-            ));
-        }
-        Ok(rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                let strength =
-                    r.z.map(|z| format!(", strength z = {z:.2}"))
-                        .unwrap_or_default();
-                format!("#{} {}{strength} — {}", i + 1, r.path, r.evidence)
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
-    }
-
-    /// `b2_neighbors`: a note's direct links, as `neighbors` serves them.
-    fn tool_neighbors(&self, note: &str) -> Result<String> {
-        let rows = self.neighbors(note)?;
-        if rows.is_empty() {
-            return Ok(format!("{note} is not linked to any note."));
-        }
-        Ok(rows
-            .iter()
-            .map(|n| {
-                let why = n
-                    .explanation
-                    .as_deref()
-                    .map(|e| format!(" — {e}"))
-                    .unwrap_or_default();
-                format!("{} {} ({}){why}", n.label, n.path, n.direction)
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
-    }
-
-    /// `b2_read`: up to [`chat::READ_PASSAGES`] of a note's passages from `offset`, each
-    /// numbered on the ledger so the model can cite what it read.
-    fn tool_read(&self, desk: &mut ToolDesk, note: &str, offset: usize) -> Result<String> {
-        let path = self.resolve_ref(note)?;
-        let ids = db::note_chunk_ids(&self.conn, &path)?;
-        let mut fresh = Vec::new();
-        let mut markers = Vec::new();
-        for id in ids.iter().skip(offset).take(chat::READ_PASSAGES) {
-            if let Some(m) = self.ledger_marker(desk, *id, &path, &mut fresh)? {
-                markers.push(m);
-            }
-        }
-        if markers.is_empty() {
-            return Ok(format!("{path} has no passages at offset {offset}."));
-        }
-        let mut out = vec![format!(
-            "{path}: passages {}–{} of {}, numbered {}.",
-            offset + 1,
-            offset + markers.len(),
-            ids.len(),
-            markers
-                .iter()
-                .map(|m| format!("[{m}]"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )];
-        out.push(String::new());
-        out.extend(self.fresh_blocks(desk, &fresh));
-        Ok(out.join("\n"))
-    }
-
-    /// The ledger number of a chunk, handing it over (and recording it in `fresh`) the
-    /// first time it is seen. `None` when the chunk's row is gone.
-    fn ledger_marker(
-        &self,
-        desk: &mut ToolDesk,
-        chunk_id: i64,
-        path: &str,
-        fresh: &mut Vec<usize>,
-    ) -> Result<Option<usize>> {
-        if let Some(i) = desk.chunk_ids.iter().position(|id| *id == chunk_id) {
-            return Ok(Some(i + 1));
-        }
-        let Some((heading_path, text)) = db::chunk_detail(&self.conn, chunk_id)? else {
-            return Ok(None);
-        };
-        desk.chunk_ids.push(chunk_id);
-        desk.passages.push(ContextPassage {
-            path: path.to_string(),
-            heading_path,
-            text,
-        });
-        fresh.push(desk.passages.len());
-        Ok(Some(desk.passages.len()))
-    }
-
-    /// The text of the passages a tool call handed over for the first time. A passage
-    /// already on the ledger is named by its marker only — the model has its text.
-    fn fresh_blocks(&self, desk: &ToolDesk, fresh: &[usize]) -> Vec<String> {
-        fresh
-            .iter()
-            .filter_map(|m| {
-                Some(chat::passage_block(
-                    *m,
-                    desk.passages.get(m.checked_sub(1)?)?,
-                ))
-            })
-            .collect()
-    }
-
-    /// The shared tail of [`ask`](Self::ask) and the handoff half of
-    /// [`why_similar`](Self::why_similar): stream the completion, then resolve the
-    /// answer's `[n]` markers against the request's own passages.
-    fn stream_answer(
-        &self,
-        llm: &dyn LlmProvider,
-        req: &ChatRequest,
-        on_token: &mut dyn FnMut(&str) -> ControlFlow<()>,
-    ) -> Result<AnswerView> {
-        let completion = llm.complete(req, on_token).map_err(llm_error)?;
-        Ok(AnswerView {
-            citations: cite(&completion.text, &req.passages),
-            answer: completion.text,
-            cancelled: completion.cancelled,
-            tools: Vec::new(),
-        })
-    }
-
-    /// The shared retrieval core of [`search`](Self::search) and
-    /// [`search_chunks`](Self::search_chunks): hybrid when the embedding space
+    /// The shared retrieval core of [`search`](Self::search),
+    /// [`search_chunks`](Self::search_chunks) and
+    /// [`search_evidence_excluding`](Self::search_evidence_excluding): hybrid when the embedding space
     /// exists (failing fast on a model mismatch), BM25-only on a
     /// projected-but-unembedded vault.
     fn retrieve(&self, query: &str, pool: usize) -> Result<search::Retrieval> {
@@ -1841,15 +867,7 @@ impl Vault {
         // Never claim a statistic over a fake-embedded space (`grades`). Grading changes
         // what the rows carry, never which rows exist (ADR-0014).
         let grade = self.grades()?;
-        // A resource anchor is honest, not silent: resources become discoverable once
-        // they have chunks + centroids. Until then an inventoried resource errs "not
-        // yet" — never an empty result — and an unknown path falls through to
-        // not-found.
-        if crate::resource::doc_kind(note_ref) == crate::resource::DocKind::Resource
-            && db::resource_detail(&self.conn, note_ref)?.is_some()
-        {
-            return Err(Error::ResourceUnsupported(note_ref.to_string()));
-        }
+        self.refuse_resource_anchor(note_ref)?;
         let anchor = self.resolve_ref(note_ref)?;
         let mut out = Vec::new();
         for c in discover::candidates(&self.conn, &anchor, limit, grade)? {
@@ -1890,11 +908,7 @@ impl Vault {
             limit
         )
         .entered();
-        if crate::resource::doc_kind(anchor_ref) == crate::resource::DocKind::Resource
-            && db::resource_detail(&self.conn, anchor_ref)?.is_some()
-        {
-            return Err(Error::ResourceUnsupported(anchor_ref.to_string()));
-        }
+        self.refuse_resource_anchor(anchor_ref)?;
         let anchor = self.resolve_ref(anchor_ref)?;
         let candidate = self.resolve_ref(candidate_ref)?;
         let ex = discover::explain(&self.conn, &anchor, &candidate, limit, self.grades()?)?;
@@ -1933,20 +947,11 @@ impl Vault {
         let shared_neighbors = self
             .shared_neighbors(&anchor, &candidate)?
             .into_iter()
-            .map(|path| {
-                let title = db::note_title(&self.conn, &path)?;
-                Ok(NoteSummary { path, title })
-            })
+            .map(|path| self.note_summary(path))
             .collect::<Result<Vec<_>>>()?;
         Ok(SimilarExplainView {
-            anchor: NoteSummary {
-                title: db::note_title(&self.conn, &anchor)?,
-                path: anchor,
-            },
-            candidate: NoteSummary {
-                title: db::note_title(&self.conn, &candidate)?,
-                path: candidate,
-            },
+            anchor: self.note_summary(anchor)?,
+            candidate: self.note_summary(candidate)?,
             limit,
             standing,
             z: ex.z,
@@ -1973,15 +978,27 @@ impl Vault {
             .map(|(heading_path, text)| PassageView { heading_path, text }))
     }
 
+    /// A resolved note path with its title, for a view that names a note.
+    fn note_summary(&self, path: String) -> Result<NoteSummary> {
+        let title = db::note_title(&self.conn, &path)?;
+        Ok(NoteSummary { path, title })
+    }
+
+    /// Every note `note` is directly linked with, in either direction, by path.
+    fn neighbor_paths(&self, note: &str) -> Result<BTreeSet<String>> {
+        Ok(graph::neighbors(&self.conn, note)?
+            .into_iter()
+            .map(|n| n.other)
+            .collect())
+    }
+
     /// The notes both `a` and `b` are linked with, in either direction, by path.
     fn shared_neighbors(&self, a: &str, b: &str) -> Result<BTreeSet<String>> {
-        let of = |note: &str| -> Result<BTreeSet<String>> {
-            Ok(graph::neighbors(&self.conn, note)?
-                .into_iter()
-                .map(|n| n.other)
-                .collect())
-        };
-        Ok(of(a)?.intersection(&of(b)?).cloned().collect())
+        Ok(self
+            .neighbor_paths(a)?
+            .intersection(&self.neighbor_paths(b)?)
+            .cloned()
+            .collect())
     }
 
     /// Commit a typed connection `src --type--> dst` (`b2 link`, flow ③): append a
@@ -2196,6 +1213,27 @@ impl Vault {
             .query_row("SELECT strftime('%Y-%m-%d','now')", [], |r| r.get(0))?)
     }
 
+    /// The inventory row for `path`, or [`Error::ResourceNotFound`]: the one existence
+    /// check every resource op makes before touching the filesystem, so a path a note
+    /// authored can never talk B2 into reading or moving a file outside the inventory.
+    fn require_resource(&self, path: &str) -> Result<db::ResourceDetail> {
+        db::resource_detail(&self.conn, path)?
+            .ok_or_else(|| Error::ResourceNotFound(path.to_string()))
+    }
+
+    /// Discovery's anchor guard. A resource anchor is honest, not silent: resources
+    /// become discoverable once they have chunks + centroids. Until then an inventoried
+    /// resource errs "not yet" ([`Error::ResourceUnsupported`]) — never an empty result —
+    /// and an unknown path falls through to the caller's not-found.
+    fn refuse_resource_anchor(&self, anchor_ref: &str) -> Result<()> {
+        if crate::resource::doc_kind(anchor_ref) == crate::resource::DocKind::Resource
+            && db::resource_detail(&self.conn, anchor_ref)?.is_some()
+        {
+            return Err(Error::ResourceUnsupported(anchor_ref.to_string()));
+        }
+        Ok(())
+    }
+
     /// Resolve a note reference to the indexed note's vault-relative path — which *is*
     /// its identity (ADR-0003), so this is one canonicalization rather than the
     /// two-step "is it an id? is it a path?" it replaced. The ref may be written with
@@ -2211,108 +1249,4 @@ impl Vault {
 /// (capture) and `write` (validate + return) can never drift.
 fn revision_of(raw: &str) -> String {
     blake3::hash(raw.as_bytes()).to_hex().to_string()
-}
-
-/// Flatten a chunk's text to a single whitespace-collapsed line.
-fn flatten(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// The head of a flattened chunk, bounded to one line.
-fn head_snippet(flat: &str) -> String {
-    if flat.chars().count() <= SNIPPET_CHARS {
-        flat.to_string()
-    } else {
-        let cut: String = flat.chars().take(SNIPPET_CHARS).collect();
-        format!("{}…", cut.trim_end())
-    }
-}
-
-/// Collapse a chunk's text to a single-line, length-bounded snippet (its head). Used
-/// where there is no query to center on (e.g. `similar`'s evidence passage).
-/// The state one tool-using turn carries between calls: whose turn it is (what `{}`
-/// arguments default to) and the **passage ledger** — every passage a tool has handed
-/// the model, numbered once in first-seen order, which is what `[n]` resolves against.
-struct ToolDesk {
-    anchor: String,
-    candidate: String,
-    limit: usize,
-    /// Parallel to `passages`: the chunk behind each, so a passage is never numbered twice.
-    chunk_ids: Vec<i64>,
-    passages: Vec<ContextPassage>,
-}
-
-/// B2's own pair lookup: the call as the model would have made it, its result text, and
-/// the pairs over the ledger's numbering.
-struct SeededLookup {
-    call: ToolCall,
-    result: String,
-    pairs: Vec<chat::MarkedPair>,
-}
-
-/// Normalize a provider failure: the trait returns the crate-wide `Result`, but every
-/// failure of a model call is a failed model call, and adapters match [`Error::Llm`] for
-/// the "can't reach the model server" message. Enforced here, not hoped for.
-fn llm_error(e: Error) -> Error {
-    match e {
-        Error::Llm(_) | Error::ToolCallLimit { .. } => e,
-        other => Error::Llm(other.to_string()),
-    }
-}
-
-/// Resolve an answer's distinct `[n]` markers against the passages it was grounded in.
-fn cite(answer: &str, passages: &[ContextPassage]) -> Vec<Citation> {
-    chat::cited_markers(answer, passages.len())
-        .into_iter()
-        .filter_map(|marker| {
-            // 1-based marker to 0-based passage; skip rather than index, so even a
-            // broken invariant degrades to a missing citation.
-            let p = passages.get(marker.checked_sub(1)?)?;
-            Some(Citation {
-                marker,
-                path: p.path.clone(),
-                excerpt: snippet(&p.text),
-            })
-        })
-        .collect()
-}
-
-fn snippet(text: &str) -> String {
-    head_snippet(&flatten(text))
-}
-
-/// Like [`snippet`] but windows the excerpt around the first query-term match, so a
-/// section-sized chunk still surfaces the matched text instead of only its head.
-/// Falls back to the head when no term matches or the match is already in view — a
-/// pure vector hit keeps the head.
-fn query_snippet(text: &str, query: &str) -> String {
-    let flat = flatten(text);
-    if flat.chars().count() <= SNIPPET_CHARS {
-        return flat;
-    }
-    let lower = flat.to_lowercase();
-    let match_pos = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.chars().count() >= 2)
-        .filter_map(|t| {
-            let byte = lower.find(&t.to_lowercase())?;
-            Some(lower[..byte].chars().count())
-        })
-        .min();
-    // A little lead-in so the match is not flush against the ellipsis.
-    const LEAD: usize = 24;
-    let Some(pos) = match_pos.filter(|p| *p > LEAD) else {
-        return head_snippet(&flat);
-    };
-    let chars: Vec<char> = flat.chars().collect();
-    // `pos` indexes the lowercased text, whose length can differ from `flat` for
-    // exotic Unicode; clamp so the slice below can never go out of range.
-    let start = (pos - LEAD).min(chars.len());
-    let end = (start + SNIPPET_CHARS).min(chars.len());
-    let mut out = String::from("…");
-    out.extend(&chars[start..end]);
-    if end < chars.len() {
-        out.push('…');
-    }
-    out
 }
