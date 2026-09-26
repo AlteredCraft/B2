@@ -27,6 +27,7 @@ import {
 import { RELATION_VERBS, openDocPath, type AppState, type SideSection } from "./state.ts";
 import { allDirs, baseName, moveRefusal, renamePrefill } from "./move.ts";
 import { shouldPromptEmbedInstall } from "./embedreminder.ts";
+import { coverage } from "./coverage.ts";
 import { STRENGTH_MIN_CANDIDATES, strengthBand } from "./strength.ts";
 import {
   EXPLAIN_PAIRS_SHOWN,
@@ -706,14 +707,17 @@ function sideTab(key: string, roving: string | null): string {
 //   • model, partly embedded   → "keyword-first (N/M embedded)" (vector half still filling)
 //   • model, fully embedded    → "" (ranking is fully semantic; no caveat)
 function searchCaveat(state: AppState): string {
-  if (!state.semantic)
-    return " · keyword only (run <code>b2 init</code> for semantic)";
-  const n = state.notesEmbedded;
-  const m = state.notesTotal;
-  if (m === 0 || n >= m) return ""; // empty vault, or every note embedded — semantic is live
-  return n === 0
-    ? ` · keyword-only for now (0/${m} embedded — Reindex)`
-    : ` · keyword-first (${n}/${m} embedded)`;
+  const c = coverage(state);
+  if (!c.model) return " · keyword only (run <code>b2 init</code> for semantic)";
+  switch (c.embedded) {
+    case "empty":
+    case "all":
+      return ""; // empty vault, or every note embedded — semantic is live
+    case "none":
+      return ` · keyword-only for now (0/${c.m} embedded — Reindex)`;
+    case "partial":
+      return ` · keyword-first (${c.n}/${c.m} embedded)`;
+  }
 }
 
 // The install banner — the prominent, persistent counterpart to the small search caveat
@@ -919,7 +923,7 @@ function similarSectionHtml(state: AppState, roving: string | null): string {
         head +
         `<div class="side-empty" role="status" aria-label="Finding similar notes"><span class="spinner"></span></div>`
       );
-    if (!state.semantic)
+    if (!coverage(state).model)
       return (
         head +
         `<p class="side-empty">Semantic similarity is off — run <code>b2 init</code> then Reindex.</p>`
@@ -1534,15 +1538,16 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
     </g>`;
 }
 
-/** The honest ghost-halo caveat (mirrors `searchCaveat`'s tiers, #26): why there are
+/** The honest ghost-halo caveat (coverage.ts's tiers, like `searchCaveat`, #26): why there are
  *  no ghosts right now, or null when there are (or when silence is the honest state). */
 function ghostHintHtml(state: AppState): string {
   if (state.similar.length > 0) return "";
   if (state.discoveringSimilar)
     return `<div class="graph-hint is-scanning"><span class="spinner"></span>scanning for latent connections…</div>`;
-  if (!state.semantic)
+  const c = coverage(state);
+  if (!c.model)
     return `<div class="graph-hint">ghost connections need the semantic model — run <code>b2 init</code>, then Reindex</div>`;
-  if (state.notesTotal > 0 && state.notesEmbedded < state.notesTotal)
+  if (c.embedded === "none" || c.embedded === "partial")
     return `<div class="graph-hint">ghosts appear once the vault is embedded — Reindex</div>`;
   return "";
 }
@@ -2186,16 +2191,16 @@ function indexPanelHtml(state: AppState): string {
   const disabled = reindexDisabled(state);
   // The same honesty as the search caveat (#26): "indexed" and "embedded" are two different
   // states, and a projected-but-unembedded vault must never read as finished.
-  const coverage = ((): string => {
+  const summary = ((): string => {
     if (state.vaultRoot === null) return "No vault is open.";
-    if (state.notesTotal === 0)
-      return "Nothing indexed yet — B2 indexes a vault when you open it.";
-    const n = state.notesTotal;
-    if (!state.semantic)
-      return `${n} note${n === 1 ? "" : "s"} indexed for keyword search. The embedding model isn’t installed, so none are embedded.`;
-    return state.notesEmbedded >= n
-      ? `${n} note${n === 1 ? "" : "s"} indexed, all embedded.`
-      : `${n} note${n === 1 ? "" : "s"} indexed · ${state.notesEmbedded}/${n} embedded.`;
+    const c = coverage(state);
+    if (c.embedded === "empty") return "Nothing indexed yet — B2 indexes a vault when you open it.";
+    const notes = `${c.m} note${c.m === 1 ? "" : "s"}`;
+    if (!c.model)
+      return `${notes} indexed for keyword search. The embedding model isn’t installed, so none are embedded.`;
+    return c.embedded === "all"
+      ? `${notes} indexed, all embedded.`
+      : `${notes} indexed · ${c.n}/${c.m} embedded.`;
   })();
   // While a run is live the panel carries the meter itself. It used to point at the top
   // bar's ("Progress and Cancel are in the top bar"), which was true while Settings was a
@@ -2213,7 +2218,7 @@ function indexPanelHtml(state: AppState): string {
     : `<span class="muted">Rarely needed — B2 indexes on open and as you save.</span>`;
   return `<div class="settings-subhead">Vault index</div>
       <p class="settings-detail muted">The index is a disposable projection of your Markdown — delete it and a reindex rebuilds it identically.</p>
-      <p class="settings-coverage">${escapeHtml(coverage)}</p>
+      <p class="settings-coverage">${escapeHtml(summary)}</p>
       <div class="settings-action">
         <button class="btn small" id="reindex"${disabled ? " disabled" : ""}
           title="Re-project the vault into the index">${escapeHtml(reindexLabel(state))}</button>

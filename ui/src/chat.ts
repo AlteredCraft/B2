@@ -30,6 +30,7 @@
 // human-invoked export, and is not MVP (GH #151's open question 2).
 
 import type { SideRow } from "./sidenav.ts";
+import { coverage } from "./coverage.ts";
 import type {
   AnswerView,
   ChatSetup,
@@ -289,14 +290,18 @@ export function retrievalNote(s: {
   notesEmbedded: number;
   notesTotal: number;
 }): string {
-  if (s.notesTotal === 0) return "";
-  if (!s.semantic)
+  const c = coverage(s);
+  if (c.embedded === "empty") return "";
+  if (!c.model)
     return "Answers are grounded by keyword search only — the embedding model isn’t installed.";
-  if (s.notesEmbedded === 0)
-    return "Answers are grounded by keyword search for now — this vault isn’t embedded yet.";
-  if (s.notesEmbedded < s.notesTotal)
-    return `Keyword-first grounding — ${s.notesEmbedded}/${s.notesTotal} notes embedded. Reindex to fill the rest.`;
-  return "";
+  switch (c.embedded) {
+    case "none":
+      return "Answers are grounded by keyword search for now — this vault isn’t embedded yet.";
+    case "partial":
+      return `Keyword-first grounding — ${c.n}/${c.m} notes embedded. Reindex to fill the rest.`;
+    case "all":
+      return "";
+  }
 }
 
 /** The one command the setup card tells a human to run, spelled here so the label, the
