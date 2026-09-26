@@ -391,11 +391,13 @@ function treeChildrenHtml(
  *  selection's folder, named in the tooltip so ⌘N is never a surprise. */
 function treeActionsHtml(state: AppState): string {
   const ctx = state.selectedDir ? `in ${state.selectedDir}/` : "in the vault root";
+  const note = escapeHtml(`New note ${ctx} (${displayKeys(["tree.new-note"])})`);
+  const folder = escapeHtml(`New folder ${ctx} (${displayKeys(["tree.new-folder"])})`);
   return `<span class="tree-actions">
-      <button class="tree-action" data-new-note title="New note ${escapeHtml(ctx)} (⌘N)" aria-label="New note">
+      <button class="tree-action" data-new-note title="${note}" aria-label="New note">
         ${icon("file-earmark-plus")}
       </button>
-      <button class="tree-action" data-new-folder title="New folder ${escapeHtml(ctx)} (⇧⌘N)" aria-label="New folder">
+      <button class="tree-action" data-new-folder title="${folder}" aria-label="New folder">
         ${icon("folder-plus")}
       </button>
     </span>`;
@@ -427,8 +429,20 @@ export function treePaneHtml(state: AppState): string {
   return (
     head +
     `<div class="tree" role="tree" aria-label="Vault files"
-       title="↑↓ move · →← expand/collapse · ⏎ open · F2 rename · ⇧F10 menu">${body}</div>`
+       title="${escapeHtml(treeTitle())}">${body}</div>`
   );
+}
+
+/** The tree's keyboard crib, out of the live registry — every chord in it is rebindable
+ *  (⏎ is the row button's own activation, so it stays a word). */
+function treeTitle(): string {
+  return [
+    `${displayKeys(["tree.row.prev", "tree.row.next"], "/")} move`,
+    `${displayKeys(["tree.row.in", "tree.row.out"], "/")} expand/collapse`,
+    "⏎ open",
+    `${displayKeys(["tree.rename"])} rename`,
+    `${displayKeys(["menu.open"])} menu`,
+  ].join(" · ");
 }
 
 // --- pane builders --------------------------------------------------------------
@@ -496,7 +510,9 @@ function noteBarHtml(state: AppState, note: NoteView): string {
           </span>
         </div>
         <div class="fm-actions">
-          <span class="fm-hint">This block is yours — B2 changes nothing in it · ⌘⏎ saves · Esc cancels</span>
+          <span class="fm-hint">This block is yours — B2 changes nothing in it · ${escapeHtml(
+            displayKeys(["fm.save"]),
+          )} saves · ${escapeHtml(displayKeys(["dismiss"]))} cancels</span>
           <button id="fm-cancel" class="btn small">Cancel</button>
           <button id="fm-save" class="btn small primary">Save</button>
         </div>
@@ -536,13 +552,7 @@ function noteBarHtml(state: AppState, note: NoteView): string {
           <button id="source-toggle" class="source-toggle${source ? " is-active" : ""}" data-toggle-source
             aria-pressed="${source}" aria-label="${sourceLabel}"
             title="${sourceLabel} — ${sourceChord}">${icon("code-slash")}</button>
-          <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
-            state.loading || editing ? " disabled" : ""
-          } title="${
-            editing
-              ? "Finish the frontmatter edit first"
-              : "Edit this note — ⌘E (autosaves as you type)"
-          }">Edit</button>
+          ${editToggleHtml(state.loading || editing, editing ? "Finish the frontmatter edit first" : undefined)}
         </div>
       </div>
       ${body}
@@ -1372,6 +1382,16 @@ function graphToggleHtml(active: boolean): string {
       }">${icon("diagram-3")}</button>`;
 }
 
+/** The Edit chip, shared by the reading bar and the graph bar. Its chord comes out of the
+ *  live registry for `graphToggleHtml`'s reason; `title` overrides the tooltip when the
+ *  chip is disabled for a reason worth naming. */
+function editToggleHtml(disabled: boolean, title?: string): string {
+  const hint = title ?? `Edit this note — ${displayKeys(["edit.toggle"])} (autosaves as you type)`;
+  return `<button id="edit-toggle" class="edit-toggle" data-toggle-edit${
+    disabled ? " disabled" : ""
+  } title="${escapeHtml(hint)}">Edit</button>`;
+}
+
 /** Fixed-point SVG coordinate — keeps the markup compact and diff-stable. */
 function px(v: number): string {
   return (Math.round(v * 10) / 10).toString();
@@ -1431,7 +1451,7 @@ function nodeTitle(n: GraphNode): string {
       // unavailable — an ungraded candidate was never measured at all.
       return `${n.full} — similar but not linked${
         n.sub ? ` (${n.sub} above this note's other candidates)` : ""
-      }. Click or ⏎ to link it; right-click (or ⇧F10) for more.`;
+      }. Click or ⏎ to link it; right-click (or ${displayKeys(["menu.open"])}) for more.`;
     case "dangling":
       return `${n.full} resolves to no note or file — fix the link in the note.`;
     case "resource":
@@ -1606,9 +1626,7 @@ function graphPaneHtml(state: AppState, n: NoteView): string {
       <div class="graph-bar">
         <div class="note-bar-actions">
           ${graphToggleHtml(true)}
-          <button id="edit-toggle" class="edit-toggle" data-toggle-edit${
-            state.loading ? " disabled" : ""
-          } title="Edit this note — ⌘E (autosaves as you type)">Edit</button>
+          ${editToggleHtml(state.loading)}
         </div>
       </div>
       <div class="graph-stage">
@@ -2522,16 +2540,21 @@ function settingsScreenHtml(state: AppState): string {
         </div>
       </div>
       <div class="settings-foot">
-        <span class="modal-hint">↑↓ picks a section · ⌃Tab cycles · Esc closes</span>
+        <span class="modal-hint">${escapeHtml(
+          `${displayKeys(["settings.tab.prev", "settings.tab.next"], "/")} picks a section · ${displayKeys([
+            "settings.section.next",
+          ])} cycles · ${displayKeys(["dismiss"])} closes`,
+        )}</span>
         <button class="btn primary" id="settings-done" data-settings-close>Done</button>
       </div>
     </div>`;
 }
 
 /** One menu row. `chord` names the direct shortcut where one exists — a menu is where
- *  a keyboard user *learns* the chord that lets them skip the menu next time. */
+ *  a keyboard user *learns* the chord that lets them skip the menu next time — so it
+ *  comes out of the live registry (`displayKeys`), never spelled here. */
 function contextItemHtml(attr: string, label: string, chord = "", danger = false): string {
-  const hint = chord ? `<span class="context-chord">${chord}</span>` : "";
+  const hint = chord ? `<span class="context-chord">${escapeHtml(chord)}</span>` : "";
   return `<button class="context-item${
     danger ? " is-danger" : ""
   }" ${attr} role="menuitem" tabindex="-1">${label}${hint}</button>`;
@@ -2561,11 +2584,11 @@ export function contextMenuHtml(state: AppState): string {
     // muted text, and the system path is nowhere in the UI at all.
     const node = m.node
       ? `<div class="context-label">${escapeHtml(m.node.path)}</div>
-        ${contextItemHtml("data-ctx-rename", "Rename", "F2")}
+        ${contextItemHtml("data-ctx-rename", "Rename", displayKeys(["tree.rename"]))}
         ${contextItemHtml("data-ctx-move", "Move…")}
         ${contextItemHtml("data-ctx-copy-vault-path", "Copy vault path")}
         ${contextItemHtml("data-ctx-copy-system-path", "Copy system path")}
-        ${contextItemHtml("data-ctx-delete", "Delete", "⌘⌫", true)}
+        ${contextItemHtml("data-ctx-delete", "Delete", displayKeys(["delete.focused"]), true)}
         <div class="context-sep" role="separator"></div>`
       : `<div class="context-label">${escapeHtml(m.dir ? `${m.dir}/` : "vault root")}</div>`;
     // Import files… is the drop gesture's keyboard half (K1): dragging a file in from
@@ -2574,8 +2597,8 @@ export function contextMenuHtml(state: AppState): string {
     // folder context like the create pair, so it reads as the third way to put
     // something in this folder.
     items = `${node}
-        ${contextItemHtml("data-ctx-new-note", "New note", "⌘N")}
-        ${contextItemHtml("data-ctx-new-folder", "New folder", "⇧⌘N")}
+        ${contextItemHtml("data-ctx-new-note", "New note", displayKeys(["tree.new-note"]))}
+        ${contextItemHtml("data-ctx-new-folder", "New folder", displayKeys(["tree.new-folder"]))}
         ${contextItemHtml("data-ctx-import", "Import files…")}`;
   } else {
     // *Insert link at cursor* is the card drag's keyboard half (K1), the same shape

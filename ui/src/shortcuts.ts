@@ -46,7 +46,13 @@
 // owns. The host still declares the menu, because the two jobs that needed the
 // declaration are untouched: the conflict gate can see those keystrokes (menukeys.ts) and
 // the recorder refuses a chord spelled with one (keymap.ts).
-import { type BindingId, activeBindings, displayChord, findBinding } from "./bindings.ts";
+import {
+  type BindingId,
+  activeBindings,
+  displayChord,
+  displayKeys,
+  findBinding,
+} from "./bindings.ts";
 
 /** One chord as the sheet paints it. */
 export interface ShortcutKey {
@@ -81,6 +87,9 @@ export type SheetRow =
 
 export interface SheetGroup {
   readonly title: string;
+  /** A chord the heading names after its title — "Settings (⌘,)" — resolved against the
+   *  live keyboard like every row, so a rebind moves the heading too. */
+  readonly titleIds?: readonly BindingId[];
   readonly rows: readonly SheetRow[];
 }
 
@@ -214,7 +223,8 @@ const SHEET: readonly SheetGroup[] = [
   // the kind of thing that ends up mouse-only if its moves aren't written down: the
   // sections are visibly *there*, so nobody thinks to look for a chord.
   {
-    title: "Settings (⌘,)",
+    title: "Settings",
+    titleIds: ["settings.toggle"],
     rows: [
       {
         ids: ["settings.tab.prev", "settings.tab.next"],
@@ -279,7 +289,7 @@ export function keyChips(ids: readonly BindingId[]): ShortcutKey[] {
 /** The sheet as render.ts paints it — every row's chords resolved to chips. */
 export function shortcuts(): ShortcutGroup[] {
   return sheet().map((group) => ({
-    title: group.title,
+    title: group.titleIds ? `${group.title} (${displayKeys(group.titleIds)})` : group.title,
     items: group.rows.map((row) => ({
       keys: "ids" in row ? keyChips(row.ids) : [{ text: row.keys }],
       action: row.action,

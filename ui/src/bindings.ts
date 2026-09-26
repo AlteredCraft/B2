@@ -796,8 +796,10 @@ export function displayChord(spec: string): string {
 /** The chords for a row of the sheet, printed as one cell: "⌘G / ⇧⌘G".
  *
  *  Distinct renderings only, so a row covering two commands that share a chord — ⏎
- *  commits the link dialog *and* the delete confirm — reads "⏎" rather than "⏎ / ⏎". */
-export function displayKeys(ids: readonly string[]): string {
+ *  commits the link dialog *and* the delete confirm — reads "⏎" rather than "⏎ / ⏎".
+ *  `sep` is for the tight spots — a tooltip's "↑/↓ move" — where the sheet's spaced
+ *  slash would read as two separate hints. */
+export function displayKeys(ids: readonly string[], sep = " / "): string {
   const out: string[] = [];
   for (const id of ids) {
     for (const spec of binding(id).keys) {
@@ -805,5 +807,5 @@ export function displayKeys(ids: readonly string[]): string {
       if (!out.includes(text)) out.push(text);
     }
   }
-  return out.join(" / ");
+  return out.join(sep);
 }

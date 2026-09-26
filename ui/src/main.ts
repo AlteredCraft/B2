@@ -112,6 +112,7 @@ import { menuDrift } from "./menukeys";
 import { HOLD_MS, type HoldEvent, type HoldPhase, holdStep } from "./cmdhold";
 import { markdownForPaste } from "./paste";
 import { icon } from "./icons";
+import { editDoneTitle, shellHints } from "./hints";
 import { activeAfter, countLabel, FIND_CAP, findMatches, locate, stepActive, type Match } from "./findbar";
 import { BOUNDS, initPanes, visiblePanes } from "./panes";
 import {
@@ -2877,6 +2878,9 @@ function setOverrides(next: Overrides): void {
   saveOverrides(next);
   installKeymap();
   render();
+  // The two surfaces `render()` doesn't rebuild: the shell, and the live editor's bar.
+  paintShellHints();
+  paintEditor();
 }
 
 // The recorder. `state.recorder` is the whole of its state; these five actions are the
@@ -3634,7 +3638,7 @@ function mountEditor(body: string): void {
           }" data-toggle-source aria-pressed="${state.sourceOpen}" title="${escapeHtml(
             editorSourceTitle(),
           )}">&lt;/&gt;</button>
-          <button id="edit-done" class="btn small primary" title="Save and return to reading — ⌘E (⌘S flushes anytime)">Done</button>
+          <button id="edit-done" class="btn small primary" title="${escapeHtml(editDoneTitle())}">Done</button>
         </div>
       </div>
       <div id="edit-conflict" class="conflict-bar" hidden>
@@ -4423,16 +4427,15 @@ function buildShell(): void {
     <header class="topbar">
       <div class="brand">B2</div>
       <div class="nav-history">
-        <button id="nav-back" class="btn ghost icon-btn" title="Back (⌘[)" aria-label="Back" disabled>
+        <button id="nav-back" class="btn ghost icon-btn" aria-label="Back" disabled>
           ${icon("chevron-left", { size: 15 })}
         </button>
-        <button id="nav-forward" class="btn ghost icon-btn" title="Forward (⌘])" aria-label="Forward" disabled>
+        <button id="nav-forward" class="btn ghost icon-btn" aria-label="Forward" disabled>
           ${icon("chevron-right", { size: 15 })}
         </button>
       </div>
       <form id="search-form" class="search" autocomplete="off">
-        <input id="search-input" type="search" placeholder="Search the vault…  ⇧⌘F" aria-label="Search"
-               title="Search the vault — ⇧⌘F (⌘F finds inside the open note)" />
+        <input id="search-input" type="search" aria-label="Search" />
       </form>
       <div class="topbar-right">
         <!-- The vault and its indexing state, as one group: a progress meter is *about*
@@ -4454,15 +4457,13 @@ function buildShell(): void {
             <button class="btn ghost small" data-cancel-reindex>Cancel</button>
           </div>
         </div>
-        <button id="open-chat" class="btn ghost icon-btn" title="Ask your notes (${escapeHtml(
-          displayKeys(["chat.toggle"]),
-        )})" aria-label="Ask your notes">
+        <button id="open-chat" class="btn ghost icon-btn" aria-label="Ask your notes">
           ${icon("chat-dots", { size: 15 })}
         </button>
         <button id="switch-vault" class="btn ghost icon-btn" title="Switch vault — choose another folder" aria-label="Switch vault">
           ${icon("folder", { size: 15 })}
         </button>
-        <button id="open-settings" class="btn ghost icon-btn" title="Settings (⌘,)" aria-label="Settings">
+        <button id="open-settings" class="btn ghost icon-btn" aria-label="Settings">
           ${icon("gear", { size: 16 })}
         </button>
       </div>
@@ -4489,15 +4490,13 @@ function buildShell(): void {
           <input id="find-input" type="text" placeholder="Find…" autocomplete="off" spellcheck="false" aria-label="Find in note" />
           <span id="find-count" class="find-count" aria-live="polite" hidden></span>
         </div>
-        <button id="find-prev" class="btn ghost icon-btn" title="Previous match (⇧Enter)" aria-label="Previous match">
+        <button id="find-prev" class="btn ghost icon-btn" aria-label="Previous match">
           ${icon("chevron-up", { size: 15 })}
         </button>
-        <button id="find-next" class="btn ghost icon-btn" title="Next match (Enter)" aria-label="Next match">
+        <button id="find-next" class="btn ghost icon-btn" aria-label="Next match">
           ${icon("chevron-down", { size: 15 })}
         </button>
-        <button id="find-close" class="btn ghost icon-btn" title="Close (${escapeHtml(
-          displayKeys(["dismiss"]),
-        )})" aria-label="Close find">
+        <button id="find-close" class="btn ghost icon-btn" aria-label="Close find">
           ${icon("x-lg", { size: 13 })}
         </button>
       </div>
@@ -4510,6 +4509,20 @@ function buildShell(): void {
          stacking contexts. -->
     <div id="cmdhold-root"></div>
     <div id="toast" class="toast" role="status" hidden></div>`;
+  paintShellHints();
+}
+
+/** Write the shell's chord hints (hints.ts) on to whatever of it is on screen. The shell
+ *  is painted once, so this is what keeps its tooltips true after a rebind: `buildShell`
+ *  calls it, and so does `setOverrides`. Properties, not markup, so nothing is parsed. */
+function paintShellHints(): void {
+  for (const [id, hint] of Object.entries(shellHints())) {
+    const node = document.getElementById(id);
+    if (!node) continue;
+    if (hint.title !== undefined) node.title = hint.title;
+    if (hint.placeholder !== undefined && node instanceof HTMLInputElement)
+      node.placeholder = hint.placeholder;
+  }
 }
 
 function wireEvents(): void {
