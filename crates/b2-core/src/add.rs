@@ -156,7 +156,12 @@ mod tests {
         assert_eq!(parsed.as_str(), out, "renders round-trip losslessly");
         let f = parsed.fields();
         assert!(f.r#type.is_none(), "type is not seeded (GH #80)");
-        assert_eq!(f.title.as_deref(), Some("Spaced repetition"));
         assert_eq!(f.created.as_deref(), Some("2026-07-03"));
+        // `title:` is inert (the display title is the filename), so it is checked as
+        // the frontmatter bytes it was written as.
+        assert_eq!(
+            parsed.frontmatter(),
+            Some("title: \"Spaced repetition\"\ncreated: 2026-07-03\n")
+        );
     }
 }
