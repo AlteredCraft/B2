@@ -216,7 +216,7 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
  * a watcher pulse, or the dialog's own state change, and WebKit drops focus to `<body>`.
  *
  * Restored by **`id`**: a modal control's id is the identity that outlives the swap
- * (render.ts's Settings builder says so out loud, which is why every control in there
+ * (settingsview.ts's Settings builder says so out loud, which is why every control in there
  * carries one). Null when the keyboard was somewhere else entirely, or on a control with
  * no id — a repaint must only ever *give back* focus, never take it, and guessing a
  * replacement for an unidentifiable control is taking it.
@@ -478,11 +478,11 @@ async function paintCodeHighlights(): Promise<void> {
 //
 // There are two meters and one painter. The shell's lives in the top bar; Settings →
 // Index paints a second while a run is live, because Settings took the whole window and a
-// meter behind an opaque surface is no meter (render.ts). So this walks *every*
+// meter behind an opaque surface is no meter (widgets.ts). So this walks *every*
 // `.reindex-progress` on screen and writes the same values into each — one computation,
 // so the two can't disagree about a run, and adding a third costs nothing here.
 //
-// The button does not: it is Settings → Index's now (render.ts `indexPanelHtml`), so it
+// The button does not: it is Settings → Index's now (settingsview.ts `indexPanelHtml`), so it
 // exists only while that dialog is open on that section — hence the null-tolerant lookup
 // rather than `el`. `settingsPanelHtml` paints it in the right state to begin with; this
 // keeps it there through the runs that *don't* full-render, which is every auto-index
@@ -705,7 +705,7 @@ async function loadResourceImage(r: ResourceExplainView): Promise<string | null>
 
 // --- the note's inline pictures (`![[image.png]]`) ---------------------------------
 //
-// An embed draws the file it names (render.ts, livepreview.ts), and the bytes for that
+// An embed draws the file it names (markdown.ts, livepreview.ts), and the bytes for that
 // come over the same `read_resource` command the resource card uses. What is *here* is
 // the reconciliation: which pictures the open document should be holding, and the reads
 // that close the gap.
@@ -1110,7 +1110,7 @@ let holdTimer: number | null = null;
 
 /** The ⌘ sheet's own paint. No memo and no focus dance: nothing in it is focusable or
  *  typed into, so a rewrite costs one innerHTML of static markup and can't take anything
- *  away from the user (render.ts's `cmdSheetHtml` says why it is deliberately not a
+ *  away from the user (keysview.ts's `cmdSheetHtml` says why it is deliberately not a
  *  dialog).
  *
  *  Called by `render()` as well, so an unrelated repaint can't leave the layer behind —
@@ -1194,7 +1194,7 @@ const FOCUSABLE =
 function overlayFocusables(): HTMLElement[] {
   // `[role="dialog"]`, not a class: the overlay layer has two shapes now — the `.modal`
   // box the link/move/delete dialogs paint into, and Settings' full-window
-  // `.settings-screen` (render.ts) — and what they have in common is the semantics the
+  // `.settings-screen` (settingsview.ts) — and what they have in common is the semantics the
   // trap exists to serve, not the chrome.
   const modal = document.querySelector<HTMLElement>('#modal-root [role="dialog"]');
   // The `tabIndex >= 0` filter is what makes a **roving tabstop inside a modal** work:
@@ -1961,8 +1961,12 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
       state.current = await api.readNote(openNotePath);
     }
     if (openResourcePath !== null) {
+      // The new path is adopted before the picture's bytes are read: the watcher pulse
+      // this move causes must never find state still naming the old, vanished path.
       const moved = await api.explainResource(openResourcePath);
-      adoptResource(moved, await loadResourceImage(moved));
+      adoptResource(moved, null);
+      const picture = await loadResourceImage(moved);
+      if (state.currentResource === moved) state.resourceImage = picture;
     }
     await loadNotes();
     if (openNotePath !== null) await refreshDiscovery(); // backlinks may show new paths
@@ -2254,7 +2258,7 @@ function clearSearch(): void {
 
 // --- chat (flow ④, GH #151/#153/#155) -----------------------------------------------
 //
-// The wiring; the paint is render.ts's `chatPaneHtml` and the pure logic is chat.ts.
+// The wiring; the paint is chatview.ts's `chatPaneHtml` and the pure logic is chat.ts.
 // What lives here is what only the running app can own: the streaming turn, its
 // cancellation, and the focus/repaint discipline a token-by-token surface demands.
 //
@@ -2711,7 +2715,7 @@ async function commitLink(): Promise<void> {
 // (appearance), Embedding (the model picker — selecting one persists to the shared config
 // the CLI also reads, and a real switch is completed by the user with b2 init + Reindex,
 // which the flashed guidance names), and Keyboard (K1's discoverable half — the table
-// lives in shortcuts.ts). This is the wiring; the paint is render.ts.
+// lives in shortcuts.ts). This is the wiring; the paint is settingsview.ts.
 
 /** Open Settings, optionally jumping straight to a section — `?` lands on Keyboard, the
  *  "semantic search is off" banner lands on Embedding where its Download button is.
@@ -3671,7 +3675,7 @@ function mountEditor(body: string): void {
 }
 
 /** The editor chip's tooltip. Its chord comes out of the live registry rather than being
- *  spelled here, for `graphToggleHtml`'s reason (render.ts): ⇧⌘E is rebindable (#121), so
+ *  spelled here, for `graphToggleHtml`'s reason (graphview.ts): ⇧⌘E is rebindable (#121), so
  *  a tooltip naming the shipped default would be wrong for the user who moved it. Off
  *  "live preview" rather than the reading bar's "rendered Markdown" — one sticky flag,
  *  two surfaces, and each names what *it* shows when the flag is off. */
@@ -4373,7 +4377,7 @@ function buildShell(): void {
              floating at the far end of the bar. Hidden between runs, so this is just the
              path almost all of the time. The Reindex button that used to stand here has
              moved into Settings → Index — indexing is automatic now, and permanent chrome
-             for an exception trains the eye to skip the bar (render.ts, indexPanelHtml).
+             for an exception trains the eye to skip the bar (settingsview.ts, indexPanelHtml).
              What stays is the live meter and the Cancel that belongs with it — visible
              wherever you are in the app, except behind Settings, which covers the bar and
              so paints a second meter of its own. -->
@@ -4466,7 +4470,7 @@ function settingsClick(target: HTMLElement): void {
     void provisionModel();
     return;
   }
-  // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (render.ts
+  // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (settingsview.ts
   // says why), so pressing one rewrites the URL field to that configuration's starting
   // point and shows or hides the key + its privacy copy — the consent moment is the
   // configuration moment (M5).
@@ -4479,7 +4483,7 @@ function settingsClick(target: HTMLElement): void {
     void saveChatConfig();
     return;
   }
-  // The Model field's two shapes (render.ts's `chatModelFieldHtml`). Neither saves:
+  // The Model field's two shapes (settingsview.ts's `chatModelFieldHtml`). Neither saves:
   // this only decides whether the field is a list of what the daemon has or a box for
   // a name it doesn't have yet.
   if (target.closest("[data-chat-model-custom]")) {
@@ -4695,7 +4699,7 @@ function wireClicks(): void {
     // Settings: a rail tab, the Download button (in-app `b2 init`), else the Done button
     // closes it. Checked before the link-modal backdrop branch so settings wins when it's
     // up. There is no click-outside to close on any more — the surface is the whole window
-    // (render.ts) — so the ways out are Done and Escape.
+    // (settingsview.ts) — so the ways out are Done and Escape.
     if (state.settingsOpen) {
       settingsClick(target);
       return; // clicks inside Settings do nothing else

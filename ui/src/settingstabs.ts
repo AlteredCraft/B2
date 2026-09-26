@@ -12,7 +12,7 @@
 // not a failure mode, not a moment you'd open the dialog. And the keyboard reference is a
 // *reference*, read start to finish, which is the one thing a settings column must never
 // make you scroll past. The rail is where expansion lands (vault prefs, editor prefs,
-// diagnostics): a new tab is a row here plus a panel in render.ts, and nothing else moves.
+// diagnostics): a new tab is a row here plus a panel in settingsview.ts, and nothing else moves.
 // Index is the worked example — it arrived as one button that used to live in the top bar.
 //
 // Invariant K1 (docs/invariants.md, GH #78) governs the rail like every other
@@ -38,7 +38,7 @@ export interface SettingsTab {
 }
 
 /** The rail, in paint order. Adding a section means adding a row here and a panel in
- *  render.ts's `settingsPanelHtml` — the navigation, the roving tabstop, and the wrap
+ *  settingsview.ts's `settingsPanelHtml` — the navigation, the roving tabstop, and the wrap
  *  all follow from this list. */
 export const SETTINGS_TABS: SettingsTab[] = [
   { id: "general", label: "General", hint: "Appearance and app-wide preferences" },

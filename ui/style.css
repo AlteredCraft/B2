@@ -1112,7 +1112,7 @@ body.is-resizing {
   background: var(--accent-soft);
 }
 
-/* The inline image an `![[picture.png]]` embed draws (render.ts). The embed is still a
+/* The inline image an `![[picture.png]]` embed draws (markdown.ts). The embed is still a
    link — clicking it opens the resource card — but the picture *is* the label now, so
    the link's dashed underline and hover wash come off: they would frame the image
    rather than mark a word. The accent outline on hover is the same affordance said in
@@ -2265,7 +2265,7 @@ body.is-loading {
    text. Inline it sat exactly where a chord's last glyph goes, so "⌘4 •" read as a chord
    with a dot in it — the one thing a keyboard reference can't be ambiguous about. A badge
    hung off the corner is the editor-tab idiom for "modified", and can't be misread as a
-   key. The `title` is what says it in words (render.ts), for the reader and the screen
+   key. The `title` is what says it in words (keysview.ts), for the reader and the screen
    reader both. */
 .kbd-changed::after {
   content: "";
@@ -2612,7 +2612,7 @@ button.move-dest:hover {
 
 /* --- settings: the full-window surface -------------------------------------------
    Settings outgrew a single scrolling column, then it outgrew the box that replaced it
-   (render.ts's `settingsScreenHtml` argues the case), so it takes the window: the app is
+   (settingsview.ts's `settingsScreenHtml` argues the case), so it takes the window: the app is
    *behind* it, not dimmed under it. No backdrop — there is no outside left to click —
    which is what lets the surface be opaque and the panel be as tall as the screen.
 
@@ -2706,7 +2706,7 @@ button.move-dest:hover {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* The panel is focusable (`tabindex="0"` in render.ts) because it is the scroll
+/* The panel is focusable (`tabindex="0"` in settingsview.ts) because it is the scroll
    container: a region you can't focus is a region you can't scroll without the mouse,
    and the Keyboard section is a page of table with no controls of its own. Hence a ring
    it can actually show — inset, so it reads as "this region has the keyboard" rather
@@ -2739,7 +2739,7 @@ button.move-dest:hover {
 /* One exception, and it is a different *kind* of content: the chord sheet is a reference
    read in columns, not prose read in lines, and the width is the whole reason it packs
    into two columns instead of scrolling as one. Set on the wrapper rather than the grid,
-   because a child cannot outgrow the measure that clips it (render.ts picks the class by
+   because a child cannot outgrow the measure that clips it (settingsview.ts picks the class by
    section). */
 .settings-measure-wide {
   max-width: 1120px;
@@ -3593,7 +3593,7 @@ button.move-dest:hover {
 }
 
 /* --- Explain: the Compare view for one Similar card (GH #236) ---------------------
-   The centre pane's fourth mode (render.ts `explainPaneHtml`). A reading column like a
+   The centre pane's fourth mode (explainview.ts `explainPaneHtml`). A reading column like a
    note's, under a sticky bar with the one way back. Passages are note text shown as
    text, so they keep their line breaks and scroll inside a bounded box rather than
    letting one 11k-token passage push the rest of the view off the page. */

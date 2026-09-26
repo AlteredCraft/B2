@@ -51,7 +51,7 @@ import { renderMarkdown } from "./markdown.ts";
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
 //
 // A `[[target]]` / `[[target|label]]` inline node — the same grammar as the reading
-// view's `marked` tokenizer (render.ts): target = one-or-more chars that aren't `]` or
+// view's `marked` tokenizer (markdown.ts): target = one-or-more chars that aren't `]` or
 // `|`, optional `|label` where label is one-or-more non-`]` chars. Giving the tree a
 // `Wikilink` node lets the *one* decoration engine style wikilinks uniformly with every
 // other construct, instead of a bolt-on. Positions are document-relative throughout.
@@ -111,7 +111,7 @@ export const WIKILINK_RE = WIKILINK_EXACT;
 // --- the note's pictures (the `![[image.png]]` embed) --------------------------------
 //
 // An embed's bytes arrive over IPC long after the editor mounted, and they arrive for
-// the *document*, not for the editor — the reading view draws the same map (render.ts).
+// the *document*, not for the editor — the reading view draws the same map (markdown.ts).
 // So they enter the editor as ordinary editor state: a field main.ts writes with an
 // effect, which every decoration pass then reads. That is what keeps `inlineDecorations`
 // a pure function of `EditorState` (the property the whole suite leans on) instead of a
@@ -279,7 +279,7 @@ class TableWidget extends WidgetType {
 }
 
 // The picture of an `![[image.png]]` embed, drawn in the buffer's place — the editor's
-// half of the reading view's inline image (render.ts). An inline replace, not a block
+// half of the reading view's inline image (markdown.ts). An inline replace, not a block
 // widget: it spans no line break, so it belongs to the ViewPlugin with every other
 // inline conceal, and an embed written mid-sentence stays mid-sentence.
 //
@@ -419,7 +419,7 @@ function handleNode(
     // plain text to the grammar (the tree has no node for it), so the construct's real
     // span starts at `node.from - 1` and every offset below is taken from that. Three
     // things follow from the marker, and all three are the reading view's rules —
-    // read and edit must not disagree about what a note says (render.ts):
+    // read and edit must not disagree about what a note says (markdown.ts):
     //
     //   • the `|`-part is a display **width**, not a label, so an embed shows its
     //     *target* where a plain wikilink shows its label (never a bare "500");

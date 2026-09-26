@@ -2,7 +2,7 @@
 //
 // Note content is **untrusted input**: authorship is not trust, and a `.md` can arrive
 // from a shared vault, a download, or a web clip. So every byte of note-derived HTML
-// crosses this seam before it can reach `innerHTML`. render.ts wires it as `marked`'s
+// crosses this seam before it can reach `innerHTML`. markdown.ts wires it as `marked`'s
 // `postprocess` hook, which is what makes it *unavoidable* rather than remembered — the
 // reading view, the live-preview table widget, and any future call site are covered by
 // construction, not by each caller choosing to sanitize.
@@ -30,7 +30,7 @@ import DOMPurify, {
  * - `ALLOW_DATA_ATTR: false` + `ADD_ATTR: ["data-target"]` — B2 delegates clicks off
  *   `data-*` hooks, so leaving the default (every `data-*` allowed) would let a note mint
  *   the app's own handles. `data-target` is the one exception because it *is* the
- *   wikilink contract: render.ts emits `<a class="wikilink" data-target="…">` and both
+ *   wikilink contract: markdown.ts emits `<a class="wikilink" data-target="…">` and both
  *   the reading view's follow handler and livepreview's `TableWidget` read it back. A
  *   note forging one gains nothing — it can write `[[target]]` and get the same anchor.
  * - `FORBID_TAGS: ["form"]` — the CSP hole this issue named: `form-action` does *not*
