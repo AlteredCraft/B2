@@ -635,12 +635,6 @@ export function keystrokes(spec: string): string[] {
   return physicalForms(parseChord(spec));
 }
 
-/** Do two chords answer to any of the same keystrokes? */
-export function chordsOverlap(a: string, b: string): boolean {
-  const forms = new Set(keystrokes(a));
-  return keystrokes(b).some((f) => forms.has(f));
-}
-
 /** One chord, as one keystroke string — modifiers in Apple's order, then the key. */
 function formOf(chord: Chord): string {
   return (

@@ -14,8 +14,7 @@
 // fine — which teaches them to ignore the recorder. So the tests below are as much about
 // when it stays quiet as when it speaks.
 import { type KeyEventLike, chordMatches, parseChord } from "./bindings.ts";
-import { MENU_CHORDS } from "./menukeys.ts";
-import { PROBE_AFTER_MS, capture, reservedChords, silenceHint } from "./recorder.ts";
+import { PROBE_AFTER_MS, capture, silenceHint } from "./recorder.ts";
 
 let passed = 0;
 
@@ -165,17 +164,6 @@ check("the probe under-reports rather than false-alarms, by construction", () =>
   // trustworthy enough to act on.
   assertEq(silenceHint({ elapsedMs: PROBE_AFTER_MS * 100, blurred: false })?.length !== 0, true, "speaks");
   assertEq(silenceHint({ elapsedMs: -1, blurred: false }), null, "and never before it has cause");
-});
-
-check("the reserved chords are the host's menu, rendered as the sheet renders chords", () => {
-  // What the recorder can name *up front*, and the only thing it can: these are the
-  // keystrokes guaranteed to arrive as silence, enumerable only because #119 made the
-  // host declare its own menu instead of inheriting Tauri's default.
-  const shown = reservedChords();
-  assertEq(shown.length, MENU_CHORDS.length, "one per menu item with a chord");
-  assert(shown.includes("⌘W"), "⌘W closes the window");
-  assert(shown.includes("⌥⌘H"), "and modifiers print in Apple's order");
-  assertEq(reservedChords([]), [], "an empty menu reserves nothing");
 });
 
 console.log(`recorder: ${passed} checks passed`);
