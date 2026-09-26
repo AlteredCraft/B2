@@ -32,12 +32,18 @@
 //! Model quality is read off the numbers, not the exit code: a gate that fails on every small
 //! local model would be a gate nobody runs.
 
+// The retrieval harness's shared helpers, reused rather than copied: everything the
+// module imports is in this crate's (dev-)dependencies too.
+#[path = "../../b2-embed/examples/common/mod.rs"]
+mod common;
+
 use b2_core::chat::{cited_markers, ASK_PASSAGES};
 use b2_core::embed::Embedder;
 use b2_core::llm::{LlmProvider, NO_EVIDENCE_ANSWER};
 use b2_core::vault::Vault;
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
 use b2_llm::{LlmConfig, OpenAiCompatProvider};
+use common::{append_result, git_short_sha, truncate, ScratchVault};
 use serde::Deserialize;
 use std::error::Error;
 use std::ops::ControlFlow;
@@ -128,16 +134,8 @@ fn run() -> Result<bool, Box<dyn Error>> {
     eprintln!("[eval] embedder = {embed_model}");
 
     // A throwaway vault from the corpus — nothing here touches a real one.
-    let tmp = tempfile::TempDir::new()?;
-    let vault_root = tmp.path().join("vault");
-    std::fs::create_dir_all(&vault_root)?;
-    for entry in std::fs::read_dir(&corpus_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
-        }
-    }
-    let vault = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
+    let scratch = ScratchVault::copy_flat(&corpus_dir)?;
+    let vault = Vault::open_with_embedder(scratch.root(), Box::new(embedder))?;
     let report = vault.reindex()?;
     eprintln!(
         "[eval] indexed {} notes; asking {} questions\n",
@@ -340,41 +338,4 @@ fn print_summary(row: &serde_json::Value) {
         row["mean_first_token_ms"].as_f64().unwrap_or_default(),
         row["mean_total_ms"].as_f64().unwrap_or_default()
     );
-}
-
-/// Append one row to the results log (creating it on first run). Append-only, so
-/// runs accumulate into one dataset — the retrieval eval's convention.
-fn append_result(path: &Path, row: &serde_json::Value) -> Result<(), Box<dyn Error>> {
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    writeln!(f, "{row}")?;
-    Ok(())
-}
-
-/// The repo's short commit hash, best-effort (None outside a git checkout).
-fn git_short_sha() -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    // Counted in chars, cut on a char boundary: the byte-index arithmetic this
-    // used (`&s[..i - 1]`) lands mid-codepoint — and panics — whenever the char
-    // before the cut is multibyte, which question text (em dashes, °C) is.
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{cut}…")
-    }
 }

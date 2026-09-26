@@ -58,12 +58,18 @@
 // costs the thing the row is for: a reader seeing every recorded field at once.
 #![recursion_limit = "256"]
 
+mod common;
+
 use b2_core::chunk::ChunkConfig;
 use b2_core::db::FtsTokenizer;
 use b2_core::embed::Embedder;
 use b2_core::search::EvidenceBar;
 use b2_core::vault::{chunk_candidate_pool, note_candidate_pool, Vault};
 use b2_embed::{provision, EmbedConfig, LocalEmbedder};
+use common::{
+    append_result, cosine_of, git_short_sha, passage_z, pile_stats, term_coverage, title_query,
+    truncate, Band, ScratchVault,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -90,13 +96,6 @@ const FOLD_MUTUAL_K: [usize; 3] = [3, 5, 10];
 /// as "mutually near", which is the rule going vacuous rather than a depth
 /// anyone would ship.
 const FOLD_K_SWEEP: usize = 15;
-/// The strength-band landmarks the desktop paints (`ui/src/strength.ts`,
-/// GH #182), restated for the negatives' band readout (GH #197's A2): what a
-/// loner anchor's always-served cards *claim*. Restated rather than imported —
-/// the bands are UI copy, and this block is the instrument their values are
-/// re-measured by.
-const BAND_STRONG_Z: f64 = 2.52;
-const BAND_CLEAR_Z: f64 = 1.96;
 /// The soft reference floor on the default config's hybrid note hit@1.
 /// Untouched by the GH #197 re-derivation: retrieval never had a gate to
 /// retire.
@@ -548,18 +547,9 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     check_batch_matches_single(&embedder)?;
 
     // Build a throwaway vault from the corpus.
-    let tmp = tempfile::TempDir::new()?;
-    let vault_root = tmp.path().join("vault");
-    std::fs::create_dir_all(&vault_root)?;
-    for entry in std::fs::read_dir(&corpus_dir)? {
-        let entry = entry?;
-        // Regular files only: `fs::copy` errors on a directory, so a future
-        // corpus/ subfolder (or any stray non-file) must not abort the run.
-        if entry.file_type()?.is_file() {
-            std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
-        }
-    }
-    let mut vault = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
+    let scratch = ScratchVault::copy_flat(&corpus_dir)?;
+    let vault_root = scratch.root();
+    let mut vault = Vault::open_with_embedder(vault_root, Box::new(embedder))?;
 
     // ---- Phase 1: projection only → the BM25-only baseline. ------------------
     // The vector space does not exist yet, so `search`/`search_chunks` run
@@ -599,7 +589,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let floor_z = score_floor_z(&vault, &sim_set)?;
     // The search evidence dump (invariants.md D2, GH #201) — the query-side
     // sibling of the z calibration, read over the same built vault.
-    let evidence = score_search_evidence(&vault_root, &vault, &positives, &negatives)?;
+    let evidence = score_search_evidence(vault_root, &vault, &positives, &negatives)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
          {} for the passage view)\n",
@@ -620,7 +610,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let git = git_short_sha();
     append_result(
         &results_path,
-        result_row(
+        &result_row(
             &git,
             &model_id,
             dim,
@@ -649,7 +639,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let dense = score_dense(&evals_dir, &dense_set)?;
     print_dense_report(&dense);
     print_fold_bench(&dense.fold);
-    append_result(&results_path, dense_row(&git, &model_id, dim, &dense))?;
+    append_result(&results_path, &dense_row(&git, &model_id, dim, &dense))?;
     // The tail bake-off's cross-bench join (GH #206) — printable only here,
     // where both corpora's readings exist in one run.
     print_tail_join(&evidence, &tail, &dense.search.titles);
@@ -701,7 +691,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         );
         append_result(
             &results_path,
-            result_row(
+            &result_row(
                 &git,
                 &model_id,
                 dim,
@@ -829,7 +819,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
             print_rank_moves(&positives, &hybrid, &pass);
             append_result(
                 &results_path,
-                result_row(
+                &result_row(
                     &git,
                     &model_id,
                     dim,
@@ -1131,16 +1121,8 @@ fn score_dense(
     let config = EmbedConfig::load()?;
     let embedder = LocalEmbedder::load(&config)?;
     let model_id = embedder.model_id().to_string();
-    let tmp = tempfile::TempDir::new()?;
-    let vault_root = tmp.path().join("vault");
-    std::fs::create_dir_all(&vault_root)?;
-    for entry in std::fs::read_dir(&corpus_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            std::fs::copy(entry.path(), vault_root.join(entry.file_name()))?;
-        }
-    }
-    let vault = Vault::open_with_embedder(&vault_root, Box::new(embedder))?;
+    let scratch = ScratchVault::copy_flat(&corpus_dir)?;
+    let vault = Vault::open_with_embedder(scratch.root(), Box::new(embedder))?;
     vault.project(false)?;
     let (chunks, embed_secs) = timed_embed(&vault)?;
 
@@ -1273,26 +1255,19 @@ const DENSE_NONSENSE: [&str; 2] = ["shjfasd", "vrelqip zonktar wembleforth"];
 /// Replay the shipped bar over the dense fixture (see [`DenseSearch`]).
 ///
 /// Coverage is read off [`b2_core::vault::QueryTermView::idf`] — the view's own
-/// weights, not a second copy of the formula. The orthogonal corpus's bake-off
-/// re-derives its arithmetic deliberately, as a drift check against the engine;
-/// one such check is the check, and a second would only be two places to fix.
+/// weights, not a second copy of the formula ([`term_coverage`]). The orthogonal
+/// corpus's bake-off re-derives its arithmetic deliberately, as a drift check
+/// against the engine; one such check is the check, and a second would only be two
+/// places to fix.
 fn score_dense_search(
     vault: &Vault,
     model_id: &str,
 ) -> Result<DenseSearch, Box<dyn std::error::Error>> {
     let read = |query: &str, keep: bool| -> Result<SearchProbe, Box<dyn std::error::Error>> {
         let view = vault.search_evidence(query, K)?;
-        let total: f64 = view.terms.iter().map(|t| t.idf).sum();
         Ok(SearchProbe {
             query: query.to_string(),
-            coverage: (total > f64::EPSILON).then(|| {
-                view.terms
-                    .iter()
-                    .filter(|t| t.df >= 1)
-                    .map(|t| t.idf)
-                    .fold(0.0, |a, b| a + b)
-                    / total
-            }),
+            coverage: term_coverage(&view),
             best_cos: view.best_cos,
             vouched: view.vouched,
             rows: view
@@ -1312,13 +1287,7 @@ fn score_dense_search(
         // The fixture's notes carry no frontmatter title, so the slug is the
         // query — `drone-comb` → "drone comb", which is the pair of words the
         // retired ceiling called stopwords.
-        let title = note.title.clone().unwrap_or_else(|| {
-            std::path::Path::new(&note.path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
-                .unwrap_or_default()
-        });
-        if !title.trim().is_empty() {
+        if let Some(title) = title_query(&note) {
             titles.push(read(&title, true)?);
         }
     }
@@ -3729,47 +3698,6 @@ fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]
     }
 }
 
-/// A `similar` score is negated L2 distance between L2-normalized vectors
-/// (the real embedder normalizes every row), so it converts exactly:
-/// `cos = 1 − d²/2`. Cosine is the unit the floor ruling is stated in and the
-/// unit that survives a model swap comparison, so the piles are recorded in it.
-fn cosine_of(score: f64) -> f64 {
-    1.0 - (score * score) / 2.0
-}
-
-/// Z-score a population of squared distances, oriented nearer = higher — the
-/// harness's own restatement of the arithmetic `discover::candidates` applies
-/// to the stage-2 best-pair distances (GH #192), kept so the engine's z can be
-/// cross-checked rather than merely trusted. `None` when no meaningful
-/// statistic exists (under two values, or zero variance), mirroring the
-/// engine's own inertness guard.
-fn passage_z(d2: &[f64]) -> Option<Vec<f64>> {
-    if d2.len() < 2 {
-        return None;
-    }
-    let n = d2.len() as f64;
-    let mean = d2.iter().sum::<f64>() / n;
-    let var = d2.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    let sd = var.sqrt();
-    (sd > 0.0).then(|| d2.iter().map(|d| (mean - d) / sd).collect())
-}
-
-/// (min, median, max) of a pile, or None while it's empty.
-fn pile_stats(pile: &[f64]) -> Option<(f64, f64, f64)> {
-    if pile.is_empty() {
-        return None;
-    }
-    let mut sorted = pile.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = sorted.len() / 2;
-    let median = if sorted.len().is_multiple_of(2) {
-        (sorted[mid - 1] + sorted[mid]) / 2.0
-    } else {
-        sorted[mid]
-    };
-    Some((sorted[0], median, sorted[sorted.len() - 1]))
-}
-
 /// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding short rows
 /// to the batch's longest and masking them out has to leave each row's CLS vector unchanged.
 /// The reindex path batches freely, so a regression here would silently corrupt every stored
@@ -4120,7 +4048,7 @@ fn print_floor_windows(z: &FloorZ) {
                 a.anchor,
                 c.path,
                 c.z,
-                band_glyph(c.z)
+                Band::of(c.z).glyph()
             ),
             None => println!("      {}  (no candidates)", a.anchor),
         }
@@ -4132,18 +4060,6 @@ fn print_floor_windows(z: &FloorZ) {
             z.ungraded.len(),
             z.ungraded.join(", ")
         );
-    }
-}
-
-/// The strength band a z paints (`ui/src/strength.ts`'s landmarks, restated —
-/// see [`BAND_STRONG_Z`]).
-fn band_glyph(z: f64) -> &'static str {
-    if z >= BAND_STRONG_Z {
-        "●●●"
-    } else if z >= BAND_CLEAR_Z {
-        "●●○"
-    } else {
-        "●○○"
     }
 }
 
@@ -4485,31 +4401,6 @@ fn result_row(
     })
 }
 
-/// Append one row to the results log (creating it on first run). Append-only, so
-/// runs accumulate into one dataset — the same convention as `B2_LOG_FILE`.
-fn append_result(path: &Path, row: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    writeln!(f, "{row}")?;
-    Ok(())
-}
-
-/// The repo's short commit hash, best-effort (None outside a git checkout).
-fn git_short_sha() -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 /// Corpus notes are copied flat into the vault, so a result path equals (or ends
 /// with) the labelled relevant path.
 fn paths_match(result_path: &str, relevant: &str) -> bool {
@@ -4521,14 +4412,5 @@ fn rank_str(rank: Option<usize>) -> String {
         Some(1) => "✓1".to_string(),
         Some(r) => format!("·{r}"),
         None => format!("✗>{K}"),
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max - 1).collect();
-        format!("{cut}…")
     }
 }
