@@ -1,72 +1,35 @@
-//! Where a cloud bearer token is remembered between launches — the macOS Keychain
-//! (GH #176). Chat's Cloud configuration needs a bearer token, and for one release this
-//! host held it in memory only, which read as a bug to anyone who restarted the app.
+//! The cloud API key, remembered between launches in the macOS Keychain (GH #176), not a
+//! plaintext file. The Keychain can refuse (locked, prompt declined), so every operation is
+//! best-effort and reports what happened: a refused save degrades to session-only.
 //!
-//! Three things decided the shape:
-//!
-//! * **The Keychain, not a file.** A plaintext JSON beside `chat.json` is readable by every
-//!   process running as the user, rides into backups and sync, and outlives an uninstall.
-//!   B2 ships macOS-only, so the platform-specific answer costs nothing in portability.
-//! * **The framework, not `/usr/bin/security`.** Shelling out would put the token in the
-//!   `security` process's argv, and so in `ps` — the exact argument against a key in a CLI
-//!   flag.
-//! * **It must never be able to break chat.** The Keychain can refuse — locked, the prompt
-//!   declined, no keychain at all — so every operation here is best-effort and *says* what
-//!   happened rather than raising: a refused save degrades to session-only, with the key
-//!   still in force and the Settings copy saying so.
-//!
-//! One item, not one per endpoint: a user repointing `base_url` overwrites the key rather
-//! than accumulating a drawer of them, which also avoids the hazard `chat.rs`'s Remove
-//! button exists to prevent. Note for `cargo tauri dev`: the item's ACL names the binary
-//! that created it, so a rebuilt unsigned `b2-desktop` is a different application to the
-//! Keychain and macOS will ask again.
+//! One item, not one per endpoint. Under `cargo tauri dev` a rebuilt unsigned binary is a
+//! new application to the Keychain, so macOS asks again.
 
-/// A place the host can keep one secret between launches.
-///
-/// A trait for one concrete reason: **a unit test must not touch the developer's real
-/// Keychain**, so `chat.rs`'s key resolution is exercised against `MemoryStore` below.
-/// Host infrastructure, not one of the enumerated model seams (ADR-0005).
+/// A place the host can keep one secret between launches. A trait so unit tests never
+/// touch the real Keychain; not one of the model seams (ADR-0005).
 pub trait KeyStore {
-    /// The remembered key, or `None` when there is none — *or* when the store
-    /// refused. The two are deliberately one answer: a caller whose fallback is
-    /// "no stored key" does the same thing either way, and the difference is
-    /// logged rather than branched on.
+    /// The remembered key, or `None` when there is none or the store refused (logged).
     fn load(&self) -> Option<String>;
 
-    /// Remember `key`, replacing whatever was there. `false` means the store
-    /// refused, which is the caller's cue to keep the key **for this session
-    /// only** rather than to fail the save.
+    /// Remember `key`. `false` means the store refused: keep the key for this session.
     fn save(&self, key: &str) -> bool;
 
-    /// Forget the remembered key. `true` when the store no longer holds one — including
-    /// when it never did, which is the outcome this asks for and not a failure.
-    ///
-    /// The return value is load-bearing, and an earlier draft got it wrong by making
-    /// removal infallible. A refused delete leaves the item in the Keychain; if the caller
-    /// drops the key from memory anyway, Settings shows a keyless configuration and the
-    /// **next launch reads the credential straight back out**. So removal is
-    /// all-or-nothing: `false` means the caller must keep the key exactly as it was.
+    /// Forget the remembered key. `true` when the store no longer holds one, including
+    /// when it never did. On `false` the caller must keep the key as it was: a refused
+    /// delete leaves the item, and the next launch would read it back.
     fn clear(&self) -> bool;
 }
 
-/// The macOS Keychain, and the only [`KeyStore`] the shipped app constructs.
-///
-/// A unit struct: the item it addresses is a constant, so there is no state to
-/// hold and no handle to keep open — which is also why `Debug` is safe to derive
-/// here and pointedly *not* on [`MemoryStore`] below.
+/// The macOS Keychain, the only [`KeyStore`] the shipped app constructs. Holds no key, so
+/// `Debug` is safe here (unlike [`MemoryStore`]).
 #[derive(Debug)]
 pub struct Keychain;
 
-/// The service half of the generic-password item's identity. The app's bundle
-/// identifier (`tauri.conf.json`), so the item is unambiguously B2's in a
-/// keychain full of other applications'. Both halves are `cfg`'d with the only
-/// implementation that addresses an item — on any other platform they would name
-/// nothing, and `-D warnings` is right to say so.
+/// The item's service: the app's bundle identifier (`tauri.conf.json`).
 #[cfg(target_os = "macos")]
 pub const SERVICE: &str = "dev.b2.desktop";
 
-/// The account half. Named for what it is rather than for a user or an endpoint —
-/// there is exactly one such item (see the module header).
+/// The item's account; there is exactly one item.
 #[cfg(target_os = "macos")]
 pub const ACCOUNT: &str = "chat-api-key";
 
@@ -77,10 +40,8 @@ mod platform {
         delete_generic_password, get_generic_password, set_generic_password,
     };
 
-    /// `errSecItemNotFound`, from Apple's `SecBase.h`. Spelled here rather than
-    /// pulled from `security-framework-sys` to keep this corner at one
-    /// dependency; the value is part of a stable public API and has been since
-    /// OS X 10.6.
+    /// `errSecItemNotFound` (`SecBase.h`), a stable value, spelled here to avoid a
+    /// dependency on `security-framework-sys`.
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
     impl KeyStore for Keychain {
@@ -89,15 +50,11 @@ mod platform {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(key) => Some(key.trim().to_string()).filter(|k| !k.is_empty()),
                     Err(_) => {
-                        // Something else wrote a non-UTF-8 item under our name.
-                        // Not ours to interpret, and not worth failing over.
                         eprintln!("[b2] ignoring an unreadable API key in the Keychain");
                         None
                     }
                 },
-                // No item is the overwhelmingly common case — every user who has
-                // never configured a cloud model — and it is silent, and it
-                // prompts for nothing.
+                // The common case (no cloud model configured): silent.
                 Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => None,
                 Err(e) => {
                     eprintln!("[b2] could not read the API key from the Keychain: {e}");
@@ -130,11 +87,8 @@ mod platform {
     }
 }
 
-/// Everywhere else there is no store, and the host behaves exactly as it did
-/// before #176: the key lives for the session and `B2_LLM_API_KEY` is how one
-/// persists. B2 ships macOS-only, so this is the compile-anywhere path rather
-/// than a supported configuration — and it is the *same* path a refusing Keychain
-/// takes, which is why it needs no separate handling upstream.
+/// Elsewhere there is no store: the key lives for the session, as with a refusing
+/// Keychain, so upstream needs no separate handling.
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use super::{KeyStore, Keychain};
@@ -148,22 +102,17 @@ mod platform {
             false
         }
 
-        /// Trivially true: a store that never remembers anything is always
-        /// already in the state `clear` asks for.
         fn clear(&self) -> bool {
             true
         }
     }
 }
 
-/// An in-memory [`KeyStore`] — the Keychain's test double, and the reason
-/// [`KeyStore`] is a trait at all. Lives here rather than in `chat.rs` because
-/// both that module's tests and `commands.rs`'s need it.
+/// An in-memory [`KeyStore`], the Keychain's test double for `chat.rs` and `commands.rs`.
 #[cfg(test)]
 pub struct MemoryStore {
     key: std::sync::Mutex<Option<String>>,
-    /// Whether [`save`](KeyStore::save) refuses — the Keychain saying no, which
-    /// the host must degrade past rather than fail on.
+    /// Whether writes refuse, as a locked Keychain would.
     refuses: bool,
 }
 
@@ -177,7 +126,7 @@ impl MemoryStore {
         }
     }
 
-    /// A store holding `key` already — a launch that finds a remembered key.
+    /// A store already holding `key`.
     pub fn holding(key: &str) -> Self {
         Self {
             key: std::sync::Mutex::new(Some(key.to_string())),
@@ -185,8 +134,7 @@ impl MemoryStore {
         }
     }
 
-    /// A store that refuses every write: a locked Keychain, or a user who
-    /// declined the prompt.
+    /// A store that refuses every write.
     pub fn refusing() -> Self {
         Self {
             key: std::sync::Mutex::new(None),
@@ -194,8 +142,7 @@ impl MemoryStore {
         }
     }
 
-    /// A store that already holds `key` *and* refuses to give it up — the
-    /// failed-removal case, which is the one that must never read as success.
+    /// A store holding `key` that refuses to give it up: the failed-removal case.
     pub fn refusing_holding(key: &str) -> Self {
         Self {
             key: std::sync::Mutex::new(Some(key.to_string())),
@@ -203,7 +150,7 @@ impl MemoryStore {
         }
     }
 
-    /// What the store is holding — the assertion a test actually wants to make.
+    /// What the store is holding.
     pub fn peek(&self) -> Option<String> {
         self.key.lock().expect("test store lock").clone()
     }
@@ -225,9 +172,7 @@ impl KeyStore for MemoryStore {
 
     fn clear(&self) -> bool {
         let mut held = self.key.lock().expect("test store lock");
-        // Nothing to remove succeeds even under refusal — the real Keychain
-        // answers `errSecItemNotFound` here, which `Keychain::clear` reads as
-        // "already in the asked-for state".
+        // Nothing to remove succeeds even under refusal, as `errSecItemNotFound` does.
         if held.is_none() {
             return true;
         }

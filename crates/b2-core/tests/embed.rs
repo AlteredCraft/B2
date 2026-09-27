@@ -1,8 +1,5 @@
-//! Step 3 — the vector store + the embedder seam
-//! (index-engine.md): a deterministic fake embedder
-//! produces reproducible KNN; `embed_model_id`/`embed_dim` are recorded; a
-//! model/dim swap recreates the vector space; note centroids (discovery's coarse
-//! stage, #38) track the stored chunk vectors.
+//! The vector store and the embedder seam (index-engine.md): reproducible KNN, the
+//! recorded model identity, model swaps, and note centroids (GH #38).
 
 mod common;
 
@@ -35,8 +32,7 @@ fn fake_embedder_is_deterministic() {
     assert_eq!(e.embed("x").unwrap().len(), 16);
 }
 
-/// Constructing the fake is on a production path (`Vault::open`), so a zero
-/// dimension degrades to the smallest real vector rather than panicking.
+/// The fake is built on a production path (`Vault::open`), so zero degrades, not panics.
 #[test]
 fn a_zero_dimension_fake_is_clamped_to_one() {
     let e = FakeEmbedder::new(0);
@@ -46,8 +42,7 @@ fn a_zero_dimension_fake_is_clamped_to_one() {
 
 #[test]
 fn embed_batch_matches_embed_per_element() {
-    // The default `embed_batch` (which the fake inherits) must be a faithful map of
-    // `embed` — that equivalence is what lets the reindex path batch freely.
+    // The default `embed_batch` must equal mapping `embed`, so reindex can batch freely.
     let e = FakeEmbedder::new(32);
     let texts = ["alpha", "beta", "", "gamma delta"];
     let refs: Vec<&str> = texts.to_vec();
@@ -81,15 +76,11 @@ fn reindex_with_progress_reports_cumulative_and_fully_embeds() {
     })
     .unwrap();
 
-    // Batched embed still populates a vector for every chunk.
     let total = count(&conn, "chunks");
     assert!(total > 0);
     assert_eq!(count(&conn, "embeddings"), total);
 
-    // Progress: reported, per-note fields populated, notes_embedded within the
-    // stable denominator and monotonic, chunks_done non-decreasing and ending
-    // exactly at the chunk total. A fresh index embeds every note, so the "notes to
-    // embed" denominator equals the full note count here.
+    // A fresh index embeds every note, so the denominator is the full note count.
     assert!(!events.is_empty(), "at least one batch is reported");
     let notes = count(&conn, "notes") as usize;
     assert!(events.iter().all(|e| e.notes_to_embed == notes));
@@ -115,30 +106,22 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = opened_vault(tmp.path());
 
-    // First index: both notes are new → both embedded.
     let first = vault.reindex().unwrap();
     assert_eq!(first.indexed, 2);
     assert_eq!(first.embedded, 2, "a fresh index embeds every note");
 
-    // Nothing changed on disk → the incremental reindex re-embeds nothing.
     let again = vault.reindex().unwrap();
     assert_eq!(again.indexed, 2);
     assert_eq!(again.embedded, 0, "unchanged notes reuse their vectors");
 
-    // Edit exactly one note's BODY → only that note re-embeds.
     let srs = root.join("notes/spaced-repetition.md");
     let text = std::fs::read_to_string(&srs).unwrap();
     std::fs::write(&srs, format!("{text}\n\nA newly appended paragraph.")).unwrap();
     let edited = vault.reindex().unwrap();
     assert_eq!(edited.embedded, 1, "only the changed note re-embeds");
 
-    // --force re-chunks everything regardless of change — and, since the vector
-    // store is content-addressed (M4), re-*embeds* only what genuinely differs.
-    // On an unchanged vault that is nothing: the same chunk text hashes to the
-    // vector already stored, and recomputing it could only produce the same bytes.
-    // Where force still matters — a chunker-config change, the eval harness's
-    // `set_chunk_config` → `project(force)` — the chunk text *does* change, so the
-    // hashes miss and the model runs.
+    // --force re-chunks everything, but the store is content-addressed (M4), so
+    // unchanged text re-embeds nothing.
     let forced = vault
         .reindex_with_progress(true, &mut |_| ControlFlow::Continue(()))
         .unwrap();
@@ -148,8 +131,7 @@ fn reindex_is_incremental_and_force_reembeds_everything() {
         "identical chunk text needs no second forward pass"
     );
 
-    // The proof that force is still doing its job: change the chunking, and every
-    // note's text — and therefore every hash — moves.
+    // Changing the chunking moves every hash, so force does embed.
     let mut rechunked = Vault::open(&root).unwrap();
     rechunked.set_chunk_config(b2_core::chunk::ChunkConfig {
         target_tokens: 20,
@@ -169,7 +151,6 @@ fn ingest_populates_embeddings_and_records_meta() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
-    // one vector per chunk
     assert!(count(&conn, "chunks") > 0);
     assert_eq!(count(&conn, "chunks"), count(&conn, "embeddings"));
 
@@ -180,10 +161,8 @@ fn ingest_populates_embeddings_and_records_meta() {
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
 }
 
-/// `note_centroids` is derived data with the vectors' own lifecycle: after any embed
-/// pass, every note with stored vectors carries a centroid, and it equals
-/// `centroid_of` over exactly those vectors — including after a body edit re-chunks
-/// and re-embeds the note (the stale centroid must not survive).
+/// `note_centroids` shares the vectors' lifecycle: after any embed pass each embedded note's
+/// centroid equals `centroid_of` its current vectors, and a stale one never survives.
 #[test]
 fn centroids_track_the_stored_chunk_vectors() {
     use b2_core::embed::{centroid_of, pack_f32};
@@ -230,7 +209,6 @@ fn centroids_track_the_stored_chunk_vectors() {
     };
     assert_centroids_current(&conn);
 
-    // Edit one note's body → re-project + re-embed → its centroid must follow.
     let srs = root.join("notes/spaced-repetition.md");
     let text = std::fs::read_to_string(&srs).unwrap();
     std::fs::write(&srs, format!("{text}\n\nFreshly appended centroid bait.")).unwrap();
@@ -244,7 +222,7 @@ fn knn_finds_the_chunk_whose_text_we_query() {
     let embedder = FakeEmbedder::new(64);
     let conn = ingest_golden(tmp.path(), &embedder);
 
-    // pick a known chunk, query with the embedding of its own text
+    // Query with the embedding of a known chunk's own text.
     let (id, text): (i64, String) = conn
         .query_row(
             "SELECT id, text FROM chunks WHERE note_path = ?1 ORDER BY seq LIMIT 1",
@@ -285,7 +263,6 @@ fn reindex_yields_identical_vectors() {
     ingest_vault(&conn, &vault, &embedder).unwrap();
     let before = vec_for_srs_seq0(&conn);
 
-    // A full re-index re-embeds deterministically → byte-identical vectors.
     ingest_vault(&conn, &vault, &embedder).unwrap();
     assert_eq!(before, vec_for_srs_seq0(&conn));
 }
@@ -296,9 +273,7 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
     assert!(count(&conn, "embeddings") > 0);
 
-    // A model/dim swap: the only place it can be detected is meta. Vectors are
-    // dropped (a full re-embed is required) and the dim is updated. Centroids share
-    // the vectors' lifecycle, so the swap empties them too.
+    // A swap is detected via meta; vectors and centroids are dropped.
     db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128).unwrap();
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("128"));
     assert_eq!(
@@ -313,23 +288,16 @@ fn changing_dim_recreates_the_vector_space_and_clears_vectors() {
     );
 }
 
-/// Concurrent embed passes leave **one** intact vector space (ADR-0021, invariant C1).
-///
-/// `ensure_embedding_space` is the second drop-and-rebuild in `db.rs`, and two embed passes
-/// genuinely overlap: the `#55` advisory lock is `b2-cli`'s alone, so a desktop reindex and a
-/// `b2 reindex` are exactly this test. Where the migration race needed twenty rounds to bite,
-/// this one is near-certain — every caller runs the batch. Measured against the unfixed
-/// engine: **70 of 80 workers errored** and **every** round lost vectors, in each of three
-/// runs. Losing vectors is the quiet half: a `DROP` landing after another pass started
-/// writing leaves an index reporting a complete embed over a half-empty space.
+/// Concurrent embed passes leave one intact vector space (ADR-0021, C1). The GH #55 lock is
+/// the CLI's alone, so a desktop and a CLI reindex really overlap. The quiet failure is a
+/// late `DROP` leaving a "complete" embed over a half-empty space.
 #[test]
 fn concurrent_embed_passes_leave_one_intact_vector_space() {
     use std::sync::{Arc, Barrier};
 
     const ROUNDS: usize = 3;
     const PASSES: i64 = 8;
-    /// Distinct text per racing pass, so the eight writes are eight rows rather
-    /// than one row written eight times (which would pass this vacuously).
+    /// Distinct text per pass, so eight writes are eight rows, not one (M4).
     fn text_of(seq: i64) -> String {
         format!("chunk text {seq}")
     }
@@ -337,7 +305,7 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
     for round in 0..ROUNDS {
         let tmp = tempfile::TempDir::new().unwrap();
         let db_path = tmp.path().join("b2.sqlite");
-        // A projected-but-unembedded index: one note, one chunk per racing pass.
+        // Projected, unembedded: one note, one chunk per racing pass.
         {
             let conn = open(&db_path).unwrap();
             conn.execute(
@@ -346,8 +314,6 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
                 [],
             )
             .unwrap();
-            // One chunk per racing pass, each with its own text so each addresses
-            // its own vector (the store is content-addressed — M4).
             for seq in 0..PASSES {
                 conn.execute(
                     "INSERT INTO chunks
@@ -367,7 +333,7 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
                 std::thread::spawn(move || {
                     let conn = open(&db_path).unwrap();
                     start.wait();
-                    // What `embed_vault` does: ensure the space, then write vectors into it.
+                    // What `embed_vault` does.
                     db::ensure_embedding_space(&conn, "fake-deterministic-v1", 128)?;
                     db::set_vector(&conn, &db::text_hash(&text_of(chunk_id)), &[0.5; 128])
                 })
@@ -388,12 +354,8 @@ fn concurrent_embed_passes_leave_one_intact_vector_space() {
     }
 }
 
-/// The other half of the model-swap contract. `ensure_embedding_space` (above)
-/// covers what a *reindex* does — drop the stale vectors and re-embed. This covers
-/// what happens **before** anyone reindexes: `open` deliberately never touches the
-/// vector space, so a vault can sit with vectors from one model while a different
-/// one is configured. Ranking those stored vectors against a query vector from the
-/// new model would be silently wrong, so `search` refuses instead.
+/// Before any reindex, `open` never touches the vector space, so a vault can hold vectors
+/// from another model. Ranking them would be silently wrong, so `search` refuses.
 #[test]
 fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
     use b2_core::vault::Vault;
@@ -403,14 +365,12 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);
 
-    // Index the vault under a 64-dim embedder.
     let vault = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(64))).unwrap();
     vault.reindex().unwrap();
     assert!(!vault.search("forgetting", 5).unwrap().is_empty());
     drop(vault);
 
-    // Reopen with a different dimension — a model swap, as far as the recorded
-    // identity is concerned.
+    // A different dimension is a model swap to the recorded identity.
     let swapped = Vault::open_with_embedder(&root, Box::new(FakeEmbedder::new(128))).unwrap();
     let err = swapped.search("forgetting", 5).unwrap_err();
     assert!(
@@ -418,14 +378,13 @@ fn search_fails_fast_on_a_model_swap_and_a_reindex_heals_it() {
         "a swap must fail fast, not rank on incomparable vectors: {err:?}"
     );
 
-    // `open` left the stored vectors alone (so a misconfigured model can never wipe
-    // a vault's embeddings) — the refusal is a query-time guard, not a migration.
+    // A misconfigured model can never wipe a vault's embeddings.
     let conn = index_conn(&root);
     assert!(count(&conn, "embeddings") > 0, "vectors survive the reopen");
     assert_eq!(meta(&conn, "embed_dim").as_deref(), Some("64"));
     drop(conn);
 
-    // The documented fix: reindex re-creates the space at the new dimension.
+    // The documented fix.
     swapped.reindex().unwrap();
     assert!(!swapped.search("forgetting", 5).unwrap().is_empty());
     let conn = index_conn(&root);

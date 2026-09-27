@@ -5,10 +5,8 @@ edition = "2021"
 rust-version = "1.96"
 description = "B2 desktop app — the Tauri host, a dumb adapter over the b2-core Vault façade (the GUI sibling of b2-cli)"
 
-# The dependency arrow points *one way*: this crate depends on b2-core (+ b2-embed);
-# the core never learns about Tauri or the UI (crates/b2-desktop/CLAUDE.md). So the
-# fast core suite (`cargo test -p b2-core`) never compiles Tauri/webview deps — the
-# same discipline that keeps b2-embed's candle deps out of the core.
+# Depends on b2-core; the core never learns about Tauri or the UI
+# (crates/b2-desktop/CLAUDE.md), so `cargo test -p b2-core` never compiles webview deps.
 
 [[bin]]
 name = "b2-desktop"
@@ -20,72 +18,48 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
-# The chat provider + the Ollama-native onboarding corner (GH #155), wired here exactly
-# as b2-embed is: the host picks the implementation and injects it, the façade does the
-# work. Sync end-to-end, so it brings no runtime with it.
+# The chat provider and Ollama onboarding (GH #155), injected like b2-embed. Sync, no runtime.
 b2-llm = { path = "../b2-llm" }
 tauri = { version = "2", features = [] }
-# Native folder picker for the in-app vault switcher. Used host-side only (the
-# `choose_vault` command calls it in Rust); the webview is granted no dialog
-# permission, so it can't open a dialog itself (least-privilege, capabilities/default.json).
+# Folder picker for the vault switcher, called host-side only; the webview gets no dialog
+# permission (capabilities/default.json).
 tauri-plugin-dialog = "2"
-# "Open in system default" on the resource fallback card (file-type slice 1, spec §6),
-# and the same handoff for a web link inside a note (`open_external`): an OS handoff,
-# never in-webview execution — a link followed in the webview would replace the whole
-# app. Same least-privilege posture as the dialog: the host-side commands call this in
-# Rust after validating what they were handed (a path against the inventory, a URL
-# against the scheme allow-list); the webview is granted no opener permission.
+# "Open in system default" for resources and web links: an OS handoff, since a link
+# followed in the webview would replace the app. Called host-side after validating the
+# path or URL; the webview gets no opener permission.
 tauri-plugin-opener = "2"
-# Plain-text clipboard read for the editor's ⌘⇧V (paste as plain text, ui/src/paste.ts).
-# Host-side for the same least-privilege reason as the two above — and because it has to
-# be: WebKit runs no editing command for a raw ⌘⇧V (the key event reaches the page and
-# nothing pastes), and it gates a programmatic `navigator.clipboard` read behind a native
-# confirmation. The webview is granted no clipboard permission; only `clipboard_text` reads.
+# Plain-text clipboard read for ⌘⇧V (ui/src/paste.ts). Host-side because WebKit runs no
+# paste for a raw ⌘⇧V and gates `navigator.clipboard` behind a native prompt. The webview
+# gets no clipboard permission.
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
-# Transport only, for `import_file`: a file dropped on the tree reaches the webview as
-# *content* (the OS hands WebKit bytes, never a path — ui/src/main.ts), and Tauri's JSON
-# IPC has no cheap byte array, so the drop payload crosses as base64 and is decoded here.
-# Already in the lock via tauri's own tree, so it costs no extra build.
+# `import_file`: a dropped file reaches the webview as bytes, not a path, and crosses the
+# JSON IPC as base64. Already in the tree via tauri.
 base64 = "0.22"
-# Platform data dir for the "last opened vault" state file, so the app reopens the
-# vault that was open when it was last closed. Same crate/convention b2-embed uses for
-# its XDG model cache (`dirs::data_dir()/b2/…`), so both live under one vendor dir.
+# Platform data dir for the "last opened vault" state file; same `data_dir()/b2/` as
+# b2-embed's model cache.
 dirs = "6"
-# Native filesystem watch for auto-reload on external edits (#14 / crates/b2-desktop/CLAUDE.md).
-# Host-owned infrastructure: the watcher coalesces raw OS events into one debounced
-# `vault-changed` pulse to the webview, which reconciles via existing façade ops — the
-# webview itself is granted no filesystem permission (least-privilege, capabilities/).
+# Filesystem watch for auto-reload on external edits (#14): coalesced into one debounced
+# `vault-changed` event. The webview gets no filesystem permission.
 notify = "8"
-# Opt-in structured-log sink (B2_LOG/B2_DEBUG/B2_LOG_FILE), the GUI mirror of the CLI's
-# — same JSONL shape (see src/logging.rs). `tracing-appender` adds the non-blocking
-# writer this long-lived, multi-threaded host needs (the CLI's Mutex<File> is fine for a
-# one-shot process; here it would block GUI/reindex threads on log I/O).
+# Opt-in JSONL log sink, the CLI's twin (src/logging.rs). `tracing-appender` gives the
+# non-blocking writer a long-lived, multi-threaded host needs.
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 serde_json = "1.0.150"
 
-# The macOS Keychain, where a cloud bearer token is remembered between launches (GH #176,
-# src/keychain.rs). Three notes on the choice. It is *this* crate rather than `keyring`
-# because B2 ships macOS-only, so the platform's own binding is the whole requirement and a
-# cross-platform store abstraction would be a dependency tree bought for one target. It is a
-# library rather than shelling out to `/usr/bin/security`, whose `add-generic-password -w
-# <key>` would put the token in that process's argv and so in `ps` — the exact argument #154
-# makes against a key in a CLI flag. And it is target-gated: everywhere else `keychain.rs`
-# compiles a stub that remembers nothing, which is the same degraded path a Keychain that
-# refuses already takes.
+# The macOS Keychain, for the cloud API key (GH #176, src/keychain.rs). A library, not
+# `/usr/bin/security`, whose `-w <key>` would put the token in argv and `ps`. Elsewhere
+# `keychain.rs` compiles a stub that remembers nothing.
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
 
-# Research build (GH #40, macOS-only): forward the Metal GPU embedder feature to b2-embed so
-# `cargo tauri dev --features metal` (or `make app`, which auto-selects it on Apple Silicon)
-# embeds on the GPU. Default is CPU.
+# Metal GPU embedder (GH #40, macOS-only); `make app` selects it on Apple Silicon.
 [features]
 metal = ["b2-embed/metal"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
-# Test-only: exercise the `CmdError` → webview serialization boundary the way Tauri
-# does (already in the tree via b2-core, so no new build cost).
+# Tests the `CmdError` serialization the way Tauri does.
 serde_json = "1.0.150"

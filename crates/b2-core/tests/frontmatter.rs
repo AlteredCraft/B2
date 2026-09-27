@@ -29,7 +29,6 @@ fn add_relation_creates_a_block_when_absent() {
         .unwrap();
     let expected = "---\ntype: note\nb2_relations:\n  - \"contradicts [[concepts/memory|Human memory]] — because\"\n---\nBody.\n";
     assert_eq!(n.as_str(), expected);
-    // re-parse is stable + the entry reads back
     assert_eq!(parse(n.as_str()).as_str(), expected);
     assert_eq!(
         parse(n.as_str()).fields().relations,
@@ -58,7 +57,7 @@ fn add_relation_preserves_other_keys_and_body() {
     );
     assert!(out.contains("Body stays.\nLine 2.\n"), "body preserved");
     assert!(out.contains("b2_relations:\n  - \"relates [[x|X]]\"\n"));
-    assert_eq!(parse(out).as_str(), out); // round-trip
+    assert_eq!(parse(out).as_str(), out);
 }
 
 #[test]
@@ -67,7 +66,6 @@ fn add_relation_quotes_safely() {
     let mut n = parse(raw);
     n.add_relation("relates [[x|X]] — has \"quotes\" inside")
         .unwrap();
-    // the embedded quotes are escaped, and it re-parses to the original spec
     assert_eq!(
         parse(n.as_str()).fields().relations,
         vec!["relates [[x|X]] — has \"quotes\" inside".to_string()]
@@ -76,8 +74,7 @@ fn add_relation_quotes_safely() {
 
 #[test]
 fn a_generic_relations_key_is_not_b2s() {
-    // The namespace is the point (data-model §1): another tool's `relations:` is
-    // an unknown key — preserved verbatim, never projected into edges.
+    // Another tool's `relations:` is an unknown key, never projected (data-model §1).
     let raw = "---\ntype: note\nrelations:\n  - \"supports [[a|A]]\"\n---\nBody.\n";
     let n = parse(raw);
     assert!(n.fields().relations.is_empty(), "generic key must not read");
@@ -119,8 +116,7 @@ fn frontmatter_wins_when_the_same_edge_is_in_both_body_and_frontmatter() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    // a references b in the BODY *and* declares the same (target, type) in
-    // frontmatter — with an explanation only the frontmatter home can carry.
+    // The same (target, type) in body and frontmatter; only frontmatter carries a why.
     fs::write(
         vault.join("a.md"),
         "---\ntype: note\ntitle: A\nb2_relations:\n  - \"references [[b|B]] — the why\"\n---\nSee [[b|B]].\n",
@@ -133,8 +129,7 @@ fn frontmatter_wins_when_the_same_edge_is_in_both_body_and_frontmatter() {
     .unwrap();
     let conn = ingest(&vault, &tmp.path().join("b2.sqlite"));
 
-    // exactly one references edge a→b, origin=frontmatter (it wins — data-model
-    // §0/§3), and its explanation survives.
+    // One edge, and frontmatter wins (data-model §0/§3).
     let rows: Vec<(String, Option<String>)> = {
         let mut s = conn
             .prepare("SELECT origin, explanation FROM edges WHERE src_path = ?1 AND dst_path = ?2 AND type = 'references'")
@@ -155,8 +150,7 @@ fn a_typed_relation_augments_a_body_link_as_a_second_edge() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
-    // The augment flow (data-model §2): the body's plain link stays an untyped
-    // reference; a `supports` entry over the same target adds the typed edge.
+    // The augment flow (data-model §2): the typed entry adds a second edge.
     fs::write(
         vault.join("a.md"),
         "---\ntype: note\ntitle: A\nb2_relations:\n  - \"supports [[b|B]] — backs it\"\n---\nSee [[b|B]].\n",

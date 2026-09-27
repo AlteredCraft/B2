@@ -1,17 +1,10 @@
-//! The `#[tauri::command]` handlers — B2's IPC surface, and the frontend's mirror of the
-//! [`Vault`](b2_core::vault::Vault) façade (ADR-0012). Each handler is **deserialize ->
-//! call one façade method -> serialize**: no branch, no loop, no rule. If a handler ever
-//! needs one, that logic belongs behind the façade in `b2-core`. The façade already
-//! returns `Serialize` views (the CLI's `--json` types), so the IPC contract is nearly
-//! free — no parallel DTO layer.
+//! The `#[tauri::command]` handlers, B2's IPC surface over the
+//! [`Vault`](b2_core::vault::Vault) façade (ADR-0012). Each is deserialize, call one façade
+//! method, serialize; any logic belongs in `b2-core`. Views are the CLI's `--json` types.
 //!
-//! Every data command is `#[tauri::command(async)]` so Tauri runs it **off the main
-//! thread** — a slow `search` or `embed` never freezes the window. The bodies stay fully
-//! synchronous (ADR-0011); `(async)` is only the "don't block the UI" knob.
-//!
-//! The thin `*_impl` split lets the command layer be unit-tested against a real vault
-//! without a Tauri runtime, and [`read_op`] / [`semantic_op`] are the whole of "open a
-//! fresh vault, make one façade call, map its error" — so a command body is one line.
+//! `#[tauri::command(async)]` only moves a command off the main thread so the window never
+//! freezes; the bodies stay synchronous (ADR-0011). The `*_impl` split lets commands be
+//! tested without a Tauri runtime.
 
 use crate::chat::ChatPrefs;
 use crate::error::CmdError;
@@ -37,11 +30,8 @@ use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-/// The active vault's root + whether semantic ranking is live, for the UI header and
-/// honest empty states. `semantic` answers "is the real model installed";
-/// `notes_embedded`/`notes_total` answer the *precise* "how much of this vault is embedded"
-/// (#26), so the UI can flag search as "keyword-only for now" while a projected vault
-/// embeds behind the first tree paint. A model-free count.
+/// The active vault's root, whether the real model is installed, and how much of the
+/// vault is embedded (#26), so the UI can say search is keyword-only for now.
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultInfo {
     pub root: String,
@@ -50,8 +40,7 @@ pub struct VaultInfo {
     pub notes_total: usize,
 }
 
-/// One façade call over a fresh **read-path** vault (the fake embedder, no model load) —
-/// the whole body of a model-free command. The call's own error is mapped once, here.
+/// One façade call over a fresh read-path vault (the fake embedder, no model load).
 fn read_op<T>(
     state: &AppState,
     op: impl FnOnce(&Vault) -> b2_core::Result<T>,
@@ -59,8 +48,7 @@ fn read_op<T>(
     Ok(op(&open_read(state)?)?)
 }
 
-/// [`read_op`] over the **real** model, for a command that embeds a query or re-projects
-/// with the model the index was built with (fail-fast "run `b2 init`" when absent).
+/// [`read_op`] over the real model, for a command that embeds.
 fn semantic_op<T>(
     state: &AppState,
     op: impl FnOnce(&Vault) -> b2_core::Result<T>,
@@ -73,18 +61,12 @@ pub fn vault_info(state: State<'_, AppState>) -> Result<VaultInfo, CmdError> {
     vault_info_impl(state.inner())
 }
 
-/// The in-app vault switcher: open a **native folder picker** and, if the user picks,
-/// point the app at it and **remember** it for the next launch. Returns the new
-/// [`VaultInfo`], or `None` when the user cancels.
+/// The vault switcher: a native folder picker, then point the app at the pick and
+/// remember it. `None` when the user cancels. `persist_last_vault` lives here, not in
+/// [`set_vault_root_impl`], so tests never write the real data dir.
 ///
-/// Host-owned by design: vault-root resolution is this crate's job and the picker is an OS
-/// concern, so there is nothing here to push behind the façade — and running the dialog in
-/// Rust keeps the webview dialog-permission-free. The `persist_last_vault` call lives in
-/// this untestable wrapper, not in [`set_vault_root_impl`], so the unit-tested state
-/// transition never writes to the real user data dir; it is best-effort.
-///
-/// `(async)` is *required*: `blocking_pick_folder` waits on the main thread to show the
-/// panel, so calling it from the main thread would deadlock.
+/// `(async)` is required: `blocking_pick_folder` waits on the main thread, so calling it
+/// from there would deadlock.
 #[tauri::command(async)]
 pub fn choose_vault(
     app: tauri::AppHandle,
@@ -93,16 +75,13 @@ pub fn choose_vault(
     let Some(picked) = app.dialog().file().blocking_pick_folder() else {
         return Ok(None); // user cancelled
     };
-    // On desktop a folder pick is always a real filesystem path (`Url` is a mobile
-    // content URI); if it somehow isn't, treat it as a cancel rather than error out.
+    // A `Url` pick is a mobile content URI; treat it as a cancel.
     let Ok(path) = picked.into_path() else {
         return Ok(None);
     };
     let info = set_vault_root_impl(state.inner(), &path)?;
-    // Remember it for the next launch (best-effort).
     crate::persist_last_vault(&path);
-    // Re-point filesystem auto-reload at the new vault (#14): the old watch is dropped and a
-    // fresh one starts, so pulses now reflect the vault the app is on.
+    // Re-point filesystem auto-reload at the new vault (#14).
     app.state::<VaultWatcher>().watch(&app, &path);
     Ok(Some(info))
 }
@@ -117,34 +96,28 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, CmdErr
     list_notes_impl(state.inner())
 }
 
-/// The file tree's resource half (file-type slice 1, spec §6): every inventoried
-/// non-`.md` file. The frontend merges this with `list_notes` into one tree — the
-/// per-kind composition the locked design prefers over a union type (research §9b #10).
+/// Every inventoried non-`.md` file, merged by the frontend with `list_notes` into the
+/// tree (spec §6).
 #[tauri::command(async)]
 pub fn list_resources(state: State<'_, AppState>) -> Result<Vec<ResourceSummary>, CmdError> {
     read_op(state.inner(), |v| v.list_resources())
 }
 
-/// The file tree's structure half: every folder in the vault, **empty ones
-/// included**, read live off the filesystem (never the index) so the tree stays
-/// one-to-one with disk. The frontend composes this with `list_notes` +
-/// `list_resources` into one tree.
+/// Every folder in the vault, empty ones included, read live off the filesystem so the
+/// tree matches disk.
 #[tauri::command(async)]
 pub fn list_dirs(state: State<'_, AppState>) -> Result<Vec<String>, CmdError> {
     list_dirs_impl(state.inner())
 }
 
-/// Create a folder — the file tree's New-folder action (⇧⌘N). A real on-disk
-/// create, missing parents included, occupied targets refused (a folder is
-/// user-authored vault structure, immediately visible to Finder/CLI/sync),
-/// touching no index rows. Model-free and index-free.
+/// Create a folder (⇧⌘N), missing parents included; an occupied target is refused.
+/// Touches no index rows.
 #[tauri::command(async)]
 pub fn create_dir(state: State<'_, AppState>, dir: String) -> Result<DirCreateReport, CmdError> {
     create_dir_impl(state.inner(), &dir)
 }
 
-/// The fallback card's data: a resource's inventory metadata + backlinks. A pure
-/// graph/inventory read, model-free like `explain`.
+/// The fallback card's data: a resource's inventory metadata and backlinks.
 #[tauri::command(async)]
 pub fn explain_resource(
     state: State<'_, AppState>,
@@ -153,54 +126,30 @@ pub fn explain_resource(
     read_op(state.inner(), |v| v.explain_resource(&path))
 }
 
-/// A resource's **bytes**, base64, for the viewer the card shows in place of the
-/// *No viewer available* fallback (an image, today).
-///
-/// base64 because the IPC is JSON and these are arbitrary bytes — the same encoding
-/// [`import_file`] takes in the other direction, and what the webview turns straight
-/// into the `data:` URL the CSP already admits (`img-src 'self' data:`). It carries a
-/// copy of the file, so the frontend asks only for what it will actually display: the
-/// size is on the card's view before this is ever called.
-///
-/// The path is re-validated host-side against the inventory (in the façade), because
-/// the note that authored the link is untrusted input (ADR-0016) — the caller passes,
-/// the host validates, exactly as [`open_resource`] does.
+/// A resource's bytes as base64, for the card's viewer (an image, today); the webview
+/// makes a `data:` URL of it, which the CSP admits. The façade re-validates the path
+/// against the inventory, since the linking note is untrusted (ADR-0016).
 #[tauri::command(async)]
 pub fn read_resource(state: State<'_, AppState>, path: String) -> Result<String, CmdError> {
     read_op(state.inner(), |v| v.read_resource_bytes(&path)).map(|bytes| BASE64.encode(bytes))
 }
 
-/// *Open in system default* on the fallback card — an **OS handoff**, never
-/// in-webview execution (spec §6 security posture). Host infrastructure like the
-/// folder dialog: the webview holds no opener permission; this command validates
-/// the path against the inventory (so only an indexed vault file can be opened)
-/// and hands the absolute path to the OS.
-///
-/// The vault resolves the path against its own root, so the check and the path handed
-/// to the OS are the same vault's even if a switch lands in between.
+/// *Open in system default*: an OS handoff, never in-webview execution (spec §6). Only an
+/// inventoried vault file can be opened.
 #[tauri::command(async)]
 pub fn open_resource(state: State<'_, AppState>, path: String) -> Result<(), CmdError> {
-    // Inventory-checked by the façade: an unknown path refuses, never opens.
     let abs = read_op(state.inner(), |v| v.resource_path(&path))?;
     tauri_plugin_opener::open_path(abs, None::<&str>)
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
-/// The three URL schemes B2 will hand to the OS, lowercase, each including the
-/// punctuation that ends it. The frontend's `externalUrl` (`ui/src/links.ts`) holds the
-/// same list because it is what *routes* a click here; this one is what **refuses**, and
-/// it is the authority — change them together, the way `WRITE_CONFLICT_MESSAGE` and
-/// `VAULT_CHANGED_EVENT` are changed on both sides of the seam.
+/// The URL schemes B2 will hand to the OS. `ui/src/links.ts`'s `externalUrl` routes by the
+/// same list, but this one is the authority; change them together.
 const OPENABLE_SCHEMES: [&str; 3] = ["http://", "https://", "mailto:"];
 
-/// Is this a link the host will open in the user's browser or mail app?
-///
-/// A note is **untrusted input** (ADR-0016): its links are authored by whoever wrote the
-/// file, and `open` on macOS launches whatever app has registered the scheme — so an
-/// unfiltered handoff turns a `.md` into "run the thing this URL names". The allow-list is
-/// the whole of the security posture here, and it is deliberately three schemes wide.
-/// Byte-wise rather than `&url[..n]`, so a URL beginning mid-UTF-8 can't panic the slice;
-/// control characters are refused outright.
+/// Is this a link the host will open? A note is untrusted (ADR-0016) and `open` launches
+/// whatever app claims the scheme, so this allow-list is the whole security posture.
+/// Byte-wise, so a multi-byte prefix can't panic the slice.
 fn is_openable_link(url: &str) -> bool {
     if url.chars().any(|c| c.is_ascii_control()) {
         return false;
@@ -212,15 +161,8 @@ fn is_openable_link(url: &str) -> bool {
     })
 }
 
-/// *Open a web link in the system default browser* — [`open_resource`]'s sibling for the
-/// links **inside** a note. Following a `https://…` in place would replace the whole app
-/// with a web page in a window that has no back button, no address bar and no way home;
-/// the webview holds no opener permission, so the frontend routes the click here. Vault-
-/// free, so it takes no `State`.
-///
-/// The frontend has already decided this href is a web link; this re-checks, because the
-/// frontend's copy of the rule is *routing* and the note that authored the href is not
-/// trusted (ADR-0016 — the caller passes, the host validates).
+/// Open a web link from a note in the system browser; followed in place it would replace
+/// the app. Re-checked here because the note is untrusted (ADR-0016).
 #[tauri::command(async)]
 pub fn open_external(url: String) -> Result<(), CmdError> {
     if !is_openable_link(&url) {
@@ -230,12 +172,8 @@ pub fn open_external(url: String) -> Result<(), CmdError> {
         .map_err(|e| CmdError::OpenFailed(e.to_string()))
 }
 
-/// The clipboard's plain-text flavor — what the editor's ⌘⇧V pastes (paste as plain
-/// text, the escape hatch from the rich paste in `ui/src/paste.ts`). Host infrastructure
-/// like the folder dialog and [`open_resource`], and host-side *necessarily*: WebKit runs
-/// no editing command for a raw ⌘⇧V, and it gates a programmatic `navigator.clipboard`
-/// read behind a native confirmation — so the webview cannot do this itself. Touches no
-/// vault; an empty or non-text clipboard reads as "".
+/// The clipboard's plain text, for ⌘⇧V (`ui/src/paste.ts`). Host-side because WebKit runs
+/// no paste for a raw ⌘⇧V and gates `navigator.clipboard` behind a native prompt.
 #[tauri::command(async)]
 pub fn clipboard_text(app: tauri::AppHandle) -> Result<String, CmdError> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -244,12 +182,9 @@ pub fn clipboard_text(app: tauri::AppHandle) -> Result<String, CmdError> {
         .map_err(|e| CmdError::ClipboardFailed(e.to_string()))
 }
 
-/// Save a note's body — the editing surface's body write ([`write_frontmatter`] is its
-/// frontmatter sibling). **Model-free** like `project`, so this opens the fake vault (no
-/// model load; saving works with nothing provisioned) and runs **outside** the
-/// single-in-flight embed slot. A stale `base_revision` surfaces as the **stable** conflict
-/// message the frontend drives its conflict bar from — change it in `error.rs` and
-/// `ui/src/api.ts` together.
+/// Save a note's body. Model-free and outside the embed slot, so saving never waits on a
+/// model. A stale `base_revision` surfaces as the stable conflict message the frontend
+/// matches (`ui/src/api.ts`).
 #[tauri::command(async)]
 pub fn write_note(
     state: State<'_, AppState>,
@@ -260,10 +195,7 @@ pub fn write_note(
     write_note_impl(state.inner(), &note, &body, &base_revision)
 }
 
-/// Save a note's frontmatter — the drawer's write op (GH #79), `write_note`'s sibling with
-/// the identical posture: model-free (an unchanged body keeps its vectors), outside the
-/// embed slot, same `base_revision` conflict contract. The fence refusal lives behind
-/// `Vault::write_frontmatter`, not here: B2 owns no line *inside* the block.
+/// Save a note's frontmatter (GH #79), with `write_note`'s posture and conflict contract.
 #[tauri::command(async)]
 pub fn write_frontmatter(
     state: State<'_, AppState>,
@@ -274,23 +206,16 @@ pub fn write_frontmatter(
     write_frontmatter_impl(state.inner(), &note, &frontmatter, &base_revision)
 }
 
-/// Create a new, empty note — the file tree's New-note action (and ⌘N). **Model-free**
-/// like `write_note`: it writes the file and projects it without touching vectors, so
-/// creating works with no model provisioned and runs outside the embed slot (a fake-opened
-/// vault must never write into a real-model embedding space). The chunks join the pending
-/// set for the next embed pass. Missing parent folders are created; an *empty* folder is
-/// [`create_dir`]'s job.
+/// Create a new, empty note (⌘N). Model-free like `write_note`: its chunks wait for the
+/// next embed pass, since a fake-opened vault must never write vectors.
 #[tauri::command(async)]
 pub fn create_note(state: State<'_, AppState>, path: String) -> Result<AddReport, CmdError> {
     create_note_impl(state.inner(), &path)
 }
 
-/// Import a file from **outside** the vault into the folder `dir` (`""` for the root) —
-/// the tree's drop target and its Import files… action. `data` is the file's bytes,
-/// base64-encoded: a file dropped on a webview arrives as *content*, not a path, and
-/// Tauri's JSON IPC carries no byte array cheaply. Decoding is **transport**, not logic —
-/// the façade op does the placing, the projecting, and every refusal. **Model-free**, so
-/// it runs outside the embed slot and its chunks join the pending set.
+/// Import a file from outside the vault into `dir` (`""` for the root): the tree's drop
+/// target. `data` is base64, since a dropped file reaches the webview as bytes, not a
+/// path. Model-free.
 #[tauri::command(async)]
 pub fn import_file(
     state: State<'_, AppState>,
@@ -301,9 +226,7 @@ pub fn import_file(
     import_file_impl(state.inner(), &dir, &name, &data)
 }
 
-/// [`import_file`] from a path instead of bytes — what the Import files… picker's
-/// selections come back as. Same façade op, same posture; the bytes never round-trip
-/// through the webview.
+/// [`import_file`] from a path, for the Import files… picker.
 #[tauri::command(async)]
 pub fn import_path(
     state: State<'_, AppState>,
@@ -313,11 +236,8 @@ pub fn import_path(
     import_path_impl(state.inner(), &dir, &source)
 }
 
-/// The keyboard half of the drop gesture (K1): open a **native multi-select file picker**
-/// and return the absolute paths for [`import_path`] to place; an empty list means the user
-/// cancelled. Host-owned for `choose_vault`'s reason, and it deliberately imports
-/// *nothing*: the choosing is the OS's job, the placing is the façade's. `(async)` is
-/// required, as there.
+/// The keyboard half of the drop gesture (K1): a native multi-select picker returning
+/// paths for [`import_path`]; empty when cancelled. `(async)` as in `choose_vault`.
 #[tauri::command(async)]
 pub fn pick_import_files(app: tauri::AppHandle) -> Result<Vec<String>, CmdError> {
     let Some(picked) = app.dialog().file().blocking_pick_files() else {
@@ -325,16 +245,14 @@ pub fn pick_import_files(app: tauri::AppHandle) -> Result<Vec<String>, CmdError>
     };
     Ok(picked
         .into_iter()
-        // On desktop a file pick is always a real filesystem path (`Url` is a mobile
-        // content URI); anything else is dropped rather than surfaced as an error.
+        // A `Url` pick is a mobile content URI; drop it.
         .filter_map(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
         .collect())
 }
 
-/// Move/rename a note — the tree's Rename / Move… / drag-drop action. Opens the
-/// **real** model (like `search`/`link`): rewriting an inbound file's link text
-/// changes its body, and the re-projection re-embeds it inline.
+/// Move/rename a note. Opens the real model: rewriting an inbound file's links changes
+/// its body, which re-embeds inline.
 #[tauri::command(async)]
 pub fn move_note(
     state: State<'_, AppState>,
@@ -344,7 +262,7 @@ pub fn move_note(
     move_note_impl(state.inner(), &note, &to)
 }
 
-/// [`move_note`]'s resource sibling — same posture, same path-keyed identity (L3).
+/// [`move_note`] for a resource (L3).
 #[tauri::command(async)]
 pub fn move_resource(
     state: State<'_, AppState>,
@@ -354,8 +272,7 @@ pub fn move_resource(
     move_resource_impl(state.inner(), &path, &to)
 }
 
-/// Move/rename a whole folder — one rename on disk (unindexed files travel too),
-/// inbound links across and within the moved set rewritten, index re-projected.
+/// Move/rename a whole folder: one rename on disk, with inbound links rewritten.
 #[tauri::command(async)]
 pub fn move_dir(
     state: State<'_, AppState>,
@@ -365,16 +282,13 @@ pub fn move_dir(
     move_dir_impl(state.inner(), &from, &to)
 }
 
-/// Delete a note — the tree's Delete action (context menu, ⌘⌫). **Model-free**
-/// (the `create_note`/`write_note` posture): no body changes, so nothing
-/// re-embeds — inbound links simply dangle, exactly as an external delete plus a
-/// reindex would leave them.
+/// Delete a note (⌘⌫). Model-free: inbound links dangle, as after an external delete.
 #[tauri::command(async)]
 pub fn delete_note(state: State<'_, AppState>, note: String) -> Result<DeleteReport, CmdError> {
     delete_note_impl(state.inner(), &note)
 }
 
-/// [`delete_note`]'s resource sibling — same posture, same path-keyed identity (L3).
+/// [`delete_note`] for a resource (L3).
 #[tauri::command(async)]
 pub fn delete_resource(
     state: State<'_, AppState>,
@@ -383,8 +297,7 @@ pub fn delete_resource(
     delete_resource_impl(state.inner(), &path)
 }
 
-/// Delete a whole folder and everything inside it (one `remove_dir_all` — unindexed
-/// files go too). The frontend confirms first; the host just executes. Model-free.
+/// Delete a whole folder and everything in it. The frontend confirms first. Model-free.
 #[tauri::command(async)]
 pub fn delete_dir(state: State<'_, AppState>, dir: String) -> Result<DirDeleteReport, CmdError> {
     delete_dir_impl(state.inner(), &dir)
@@ -396,14 +309,11 @@ pub fn similar(
     note: String,
     limit: usize,
 ) -> Result<Vec<SimilarView>, CmdError> {
-    // The ranked list is what the façade serves (GH #197) — no raw/floored mode
-    // to route, so the command is the one call it always should have been.
     read_op(state.inner(), |v| v.similar(&note, limit))
 }
 
-/// **Explain** one Similar card (GH #236): the model-free Compare view's data, the GUI
-/// sibling of `b2 similar --explain`. `limit` is the list length the side pane asked
-/// `similar` for, so the rank is the card's.
+/// The Compare view for one Similar card (GH #236), as `b2 similar --explain`. `limit` is
+/// the pane's list length, so the rank is the card's.
 #[tauri::command(async)]
 pub fn explain_similar(
     state: State<'_, AppState>,
@@ -416,19 +326,14 @@ pub fn explain_similar(
     })
 }
 
-/// Hybrid search **with its evidence reading** (invariants.md D2, GH #202) — the
-/// GUI sibling of `b2 search`, which changed to the same façade op in the same
-/// change. The rows are `search`'s, in `search`'s order; what rides beside them
-/// is the query-level verdict, and deciding what to *show* on each of its three
-/// states is the frontend's (`ui/src/main.ts`). The host returns the view whole:
-/// an adapter that withheld rows would be an adapter holding the rule (E3).
+/// Hybrid search with its evidence reading (D2, GH #202), as `b2 search`. Returned whole:
+/// what to show for each verdict is the frontend's call (E3).
 #[tauri::command(async)]
 pub fn search(
     state: State<'_, AppState>,
     query: String,
     limit: usize,
 ) -> Result<SearchEvidenceView, CmdError> {
-    // Semantic: the query is embedded, so this opens the real model (fail-fast if absent).
     semantic_op(state.inner(), |v| v.search_evidence(&query, limit))
 }
 
@@ -445,34 +350,22 @@ pub fn link(
     relation: String,
     explanation: Option<String>,
 ) -> Result<LinkReport, CmdError> {
-    // Re-projects the source note → opens the same real model the index was built with.
+    // Re-projects the source note, so it needs the real model.
     semantic_op(state.inner(), |v| {
         v.link(&src, &dst, &relation, explanation.as_deref())
     })
 }
 
-/// The **projection pass** — the fast, model-free half of a reindex. One façade call over
-/// the **fake** vault (no model load on the first-paint path), so the moment it returns the
-/// tree repopulates and keyword search answers; `embed` then streams behind it. Nothing to
-/// stream, nothing to cancel.
-///
-/// Deliberately **outside** the single-in-flight reindex slot: the slot protects the long,
-/// vector-writing embed pass, and a `project` racing a vault switch is harmless — it writes
-/// the `.b2/` of the root it captured at dispatch, idempotently.
+/// The projection pass, the fast model-free half of a reindex: once it returns, the tree
+/// and keyword search work, and `embed` follows. Outside the reindex slot: racing a vault
+/// switch is harmless, since it idempotently writes the root it captured.
 #[tauri::command(async)]
 pub fn project(state: State<'_, AppState>) -> Result<ProjectReport, CmdError> {
     project_impl(state.inner())
 }
 
-/// The **embed pass** — fill the missing vectors as an observable, cancellable background
-/// action. Tauri runs the `(async)` body on a worker thread, so the window stays live;
-/// progress streams to the webview over a typed per-invocation [`Channel`], and the closure
-/// returns `ControlFlow::Break` once the shared cancel flag is set — the one cancel
-/// checkpoint the core exposes.
-///
-/// Still a dumb adapter: "claim the slot -> open one vault -> call one façade op ->
-/// serialize", with progress forwarded and a flag consulted. Task spawn/track/cancel and
-/// IPC streaming are host infrastructure, not engine logic.
+/// The embed pass: fill missing vectors in the background, streaming progress over a
+/// [`Channel`] and stopping at the next batch once cancelled.
 #[tauri::command(async)]
 pub fn embed(
     state: State<'_, AppState>,
@@ -481,95 +374,63 @@ pub fn embed(
     embed_impl(state.inner(), &on_event)
 }
 
-/// Ask the in-flight embed to stop at its next batch boundary. Runs on a *different*
-/// worker thread than `embed`, so it observes/sets the shared flag concurrently; the
-/// embed closure sees it and breaks cooperatively — no thread-killing, no torn
-/// writes. A no-op if nothing is running.
+/// Ask the in-flight embed to stop at its next batch boundary.
 #[tauri::command(async)]
 pub fn cancel_reindex(state: State<'_, AppState>) {
     state.reindex.cancel();
 }
 
-/// The settings picker's model list: every model B2 offers ([`b2_embed::AVAILABLE_MODELS`]),
-/// annotated with which is configured now and which are already downloaded. Global
-/// (per-machine) config, not per-vault — like `b2 init`, so it needs no vault open.
-///
-/// Thin like the rest: one `EmbedConfig` read → the shared `model_choices` view →
-/// serialize. The registry and the current/installed logic live in `b2-embed`, not here.
+/// The settings picker's model list, annotated with current and installed. Per-machine,
+/// so it needs no vault open.
 #[tauri::command(async)]
 pub fn list_models() -> Result<Vec<ModelChoice>, CmdError> {
     Ok(EmbedConfig::load()?.model_choices())
 }
 
-/// Persist the chosen embedding model into the shared `config.toml` (the same file the
-/// CLI reads), then return the refreshed list. Selecting a *different* model is a model
-/// swap: it takes effect only after the model is provisioned (`b2 init`) and the vault
-/// is reindexed — the UI surfaces that; this command just records the choice. Refuses an
-/// id outside the registry (`EmbedError::UnknownModel`, mapped generic in `error.rs`).
+/// Persist the chosen embedding model to the shared `config.toml` and return the refreshed
+/// list. The swap takes effect after provisioning and a reindex.
 #[tauri::command(async)]
 pub fn set_model(model: String) -> Result<Vec<ModelChoice>, CmdError> {
     set_model_impl(&model)
 }
 
-/// Provision (download + verify) the **currently-selected** model into the shared cache —
-/// the in-app equivalent of `b2 init`, so a freshly-picked model installs without dropping
-/// to a terminal. Idempotent and network-bound, hence `(async)`. Still thin: it drives
-/// [`b2_embed::provision`] — exactly what `b2 init` runs — and reprojects the choices.
+/// Provision the currently selected model: the in-app `b2 init`.
 #[tauri::command(async)]
 pub fn provision_model() -> Result<Vec<ModelChoice>, CmdError> {
     let config = EmbedConfig::load()?;
-    // Full progress detail to the server log (repo policy); the webview gets only the
-    // generic outcome. The line sink mirrors the CLI's `eprintln!` progress.
+    // Progress goes to the host log; the webview gets only the outcome.
     b2_embed::provision(&config, |line| eprintln!("[b2] init: {line}"))?;
     Ok(config.model_choices())
 }
 
-/// The shared cache directory where downloaded model files live (each model in its own
-/// `<dir>/<sanitized-id>` subfolder) — shown in Settings so the user knows where the
-/// (large) files are saved. Per-machine, config-resolved (`EmbedConfig::cache_dir`).
+/// The shared model cache directory, shown in Settings.
 #[tauri::command(async)]
 pub fn models_dir() -> Result<String, CmdError> {
     Ok(EmbedConfig::load()?.cache_dir.display().to_string())
 }
 
-/// The compute device the real embedder runs on for THIS build — `"Metal"` on a
-/// `--features metal` build with a working Apple-Silicon GPU, else `"CPU"` (GH #40). Global,
-/// infallible embedder-wiring like [`list_models`] (no vault, no engine logic): it forwards
-/// [`b2_embed::active_device_label`] straight through for the Settings badge.
+/// The embedder's compute device, `"Metal"` or `"CPU"`, for the Settings badge (GH #40).
 #[tauri::command(async)]
 pub fn embed_device() -> &'static str {
     b2_embed::active_device_label()
 }
 
-/// The per-model embedding-time ledger (`stats.rs`) — what the Settings pane renders so a
-/// model swap can be judged on real speed. Infallible: no data / an unreadable ledger is
-/// an empty list, never an error (the totals are diagnostic, never load-bearing).
+/// The per-model embedding-time ledger (`stats.rs`); empty rather than an error.
 #[tauri::command(async)]
 pub fn embed_stats() -> Vec<crate::stats::EmbedStat> {
     crate::stats::read_all()
 }
 
-/// Every chord the app's **menu bar** takes, in menu order (`menu.rs`, #119). The UI folds
-/// these into its keyboard registry as reserved chords (ADR-0017), so the reference sheet
-/// lists them and the conflict check can finally see the one set it was blind to — AppKit
-/// dispatches a menu key equivalent before the webview receives the key at all. Static
-/// data, so infallible and vault-free.
+/// Every chord the menu bar takes (`menu.rs`, #119), reserved in the UI's keyboard
+/// registry (ADR-0017).
 #[tauri::command]
 pub fn menu_chords() -> Vec<crate::menu::MenuChord> {
     crate::menu::chords()
 }
 
-/// Set the window's **page zoom** — the whole rendering scaled the way ⌘+ does in Safari,
-/// which is what B2's ⌘= / ⌘- / ⌘0 mean (`ui/src/zoom.ts`). WebKit's `pageZoom`, and the
-/// one thing here that is genuinely the host's: a webview cannot zoom itself, and scaling
-/// with CSS would grow the text while the pixel-sized chrome around it stayed put.
-///
-/// A pass-through by design. The ladder, its walls, the snapping of an off-ladder value
-/// and the remembering of the choice are all the UI's, tested there in node — this crate
-/// holds no rule about *which* sizes are allowed, exactly as it holds no rule about which
-/// column widths are. `factor` is a scale, so it is only ever the positive, bounded number
-/// `adoptZoom` produced; the guard here is the type, and anything stranger is a webview
-/// the platform refuses to render, which is what the error variant is for.
+/// Set the window's page zoom, as ⌘+ does in Safari (`ui/src/zoom.ts`). Host-side because
+/// a webview can't zoom itself, and CSS scaling would leave the chrome behind. A
+/// pass-through: which sizes are allowed is the UI's rule.
 #[tauri::command]
 pub fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), CmdError> {
     window
@@ -577,16 +438,9 @@ pub fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), CmdErro
         .map_err(|e| CmdError::ZoomFailed(e.to_string()))
 }
 
-/// **Flow ④ — one grounded answer**: condense -> retrieve -> assemble -> stream -> cite,
-/// all of it behind `Vault::ask`. The host's whole contribution is the shape of the
-/// *delivery*: Tauri runs the `(async)` body on a worker thread, tokens stream to the
-/// webview over a typed per-invocation [`Channel`], and the resolved [`AnswerView`] is the
-/// return — the same two facts `b2 ask --json` emits as a JSONL event stream.
-///
-/// `history` is the **caller's**: session-only, held in the pane's own state and handed
-/// back turn by turn. Nothing about a chat is stored anywhere. Opens the **real-model**
-/// vault, since retrieval embeds the question — and degrades to BM25-only on an unembedded
-/// vault, so chat keeps working.
+/// Flow ④, one grounded answer behind `Vault::ask`: tokens stream over a [`Channel`] and
+/// the [`AnswerView`] is the return. `history` is the pane's; nothing about a chat is
+/// stored. Opens the real model, since retrieval embeds the question.
 #[tauri::command(async)]
 pub fn ask(
     state: State<'_, AppState>,
@@ -595,28 +449,19 @@ pub fn ask(
     on_event: Channel<String>,
 ) -> Result<AnswerView, CmdError> {
     let state = state.inner();
-    // Pick the provider (`B2_LLM=fake` or the configured endpoint) and open the vault
-    // before claiming the answer slot: both are the wiring `ask_impl` is handed, which is
-    // what makes the streaming half — the guard, the sink, the cancel checkpoint —
-    // testable against `FakeLlm` and a fake-embedder vault with no Tauri runtime and no
-    // environment to set.
+    // Wired here and handed to `ask_impl`, so the streaming half is testable against
+    // `FakeLlm` without a Tauri runtime.
     let llm = crate::chat::provider(&state.chat_prefs());
     let vault = open_semantic(state)?;
     ask_impl(state, &vault, llm.as_ref(), &question, &history, &|token| {
-        // A send error means the window navigated or closed; the stream is then
-        // pointless but not broken — the cancel flag is what actually stops it.
+        // A send error means the window closed; the cancel flag is what stops the stream.
         let _ = on_event.send(token.to_string());
     })
 }
 
-/// **Why was this suggested?** — the chat answer behind a click on a *Similar & unlinked*
-/// card: `Vault::why_similar` gathers B2's own discovery evidence for the pair and streams
-/// a grounded, cited explanation. Delivered exactly as [`ask`] is — same channel, same
-/// single answer slot, same `cancel_ask` — because to the pane it *is* a chat turn.
-///
-/// `limit` is the list length the pane showed, so the rank the explanation quotes is the
-/// card's own. Opens the **model-free** vault, as [`similar`] does: every read here is over
-/// stored vectors, and nothing embeds a query.
+/// **Why?** for a Similar card: a grounded, cited explanation from `Vault::why_similar`,
+/// delivered as [`ask`] is (same slot, same `cancel_ask`). `limit` is the pane's list
+/// length. Model-free: every read is over stored vectors.
 #[tauri::command(async)]
 pub fn why_similar(
     state: State<'_, AppState>,
@@ -641,37 +486,23 @@ pub fn why_similar(
     )
 }
 
-/// Ask the streaming answer to stop at its next token — the chat pane's Esc. Runs on a
-/// *different* worker thread than `ask`, so it sets the shared flag while that one reads
-/// it; the token callback sees it and breaks cooperatively. The partial text is not
-/// discarded: it comes back as an [`AnswerView`] marked `cancelled`, which is what lets the
-/// pane render a stopped answer honestly rather than as a failure. A no-op if nothing is
-/// streaming.
+/// Ask the streaming answer to stop at its next token (Esc). The partial text comes back
+/// as an [`AnswerView`] marked `cancelled`, not a failure.
 #[tauri::command(async)]
 pub fn cancel_ask(state: State<'_, AppState>) {
     state.ask.cancel();
 }
 
-/// What the chat surface needs to draw itself before a question is asked: the endpoint and
-/// model in force, whether that is the Local or the Cloud configuration, and — when the
-/// runtime is Ollama — the native inventory behind the setup card (the deliberately
-/// Ollama-native onboarding corner: is the daemon up, what is installed, what would you
-/// pull on a machine this size).
-///
-/// Thin like `list_models`: provider wiring, not a vault op, so the one call is into
-/// `b2-llm` and the rest is serialization. Infallible **by design** — "the daemon isn't
-/// running" is the answer the card is asking for, not an error — and it never carries the
-/// API key, only that one is configured.
+/// What the chat surface needs before a question: the endpoint and model in force, Local
+/// or Cloud, and for Ollama the setup card's inventory. Infallible by design: "the daemon
+/// isn't running" is an answer, not an error.
 #[tauri::command(async)]
 pub fn chat_setup(state: State<'_, AppState>) -> ChatSetup {
     chat_setup_impl(state.inner())
 }
 
-/// Save the chat configuration and re-probe it — the Settings section's one write.
-/// **Adapter state, never vault or index state**: the endpoint and model persist beside the
-/// remembered vault, so a chat model swap costs no reindex (contrast ADR-0007). The key
-/// goes to the platform's encrypted store instead (GH #176); `None` leaves whatever is in
-/// force, so re-saving the endpoint doesn't silently clear a key the user just typed.
+/// Save the chat configuration and re-probe it. The key goes to the Keychain (GH #176);
+/// `None` leaves the key in force untouched.
 #[tauri::command(async)]
 pub fn set_chat_config(
     state: State<'_, AppState>,
@@ -681,10 +512,8 @@ pub fn set_chat_config(
     max_tool_calls: Option<String>,
 ) -> ChatSetup {
     {
-        // One save at a time. `(async)` means Tauri runs these off the main thread and
-        // does not serialize them, so two overlapping saves could interleave and leave
-        // `chat.json` holding the *older* endpoint while memory holds the newer. Scoped to
-        // the mutating part only — the probe below is a network round trip.
+        // One save at a time (Tauri doesn't serialize `(async)` commands). Not held over
+        // the probe below, a network round trip.
         let _saving = state.begin_chat_save();
         let prefs = set_chat_config_impl(
             state.inner(),
@@ -694,21 +523,15 @@ pub fn set_chat_config(
             max_tool_calls,
             &crate::keychain::Keychain,
         );
-        // Persisting lives in the command wrapper, not in the state transition, so the
-        // unit-tested core never writes to the real user data dir (`choose_vault`'s split).
-        // The Keychain is the exception and has to be: whether the store took the key
-        // decides how long it lasts, and the state transition is what records that — so the
-        // store crosses in as a parameter, and tests pass an in-memory one.
+        // Persisted here so tests never write the real data dir. The Keychain is passed
+        // into the core instead, since whether it took the key is state the core records.
         crate::chat::persist_prefs(&prefs);
     }
     chat_setup_impl(state.inner())
 }
 
-/// The testable core of `set_chat_config`: normalize the three fields into [`ChatPrefs`]
-/// and install them. Blank is "unset" for the endpoint and the model, so an emptied field
-/// returns to the environment/default rather than configuring an unusable endpoint. The key
-/// does not go through `clean`, and must not: blank is a *distinct* input there, and
-/// `chat::apply_key` owns that three-state rule.
+/// The testable core of `set_chat_config`. Blank is "unset" for the endpoint and model.
+/// The key skips `clean`: blank means Remove there (`chat::apply_key`).
 fn set_chat_config_impl(
     state: &AppState,
     base_url: Option<String>,
@@ -734,9 +557,7 @@ fn set_chat_config_impl(
     prefs
 }
 
-/// The testable core of `chat_setup`: the fake provider's own status when
-/// `B2_LLM=fake` is in force (never overstate what answered — the CLI prints the
-/// same note), else one probe of the configured endpoint.
+/// The testable core of `chat_setup`: the fake's own status, or one probe.
 fn chat_setup_impl(state: &AppState) -> ChatSetup {
     let config = state.chat_prefs().config();
     if b2_llm::fake_requested() {
@@ -746,10 +567,7 @@ fn chat_setup_impl(state: &AppState) -> ChatSetup {
     }
 }
 
-/// The testable core of `ask`, split from the Tauri `Channel` wrapper so the whole
-/// streaming path — the single-in-flight guard, the token sink, the cancel checkpoint —
-/// is exercised without a Tauri runtime. `sink` is the framing the host owns: every token
-/// the seam delivers, in order, as it arrives.
+/// The testable core of `ask`. `sink` receives every token, in order, as it arrives.
 fn ask_impl(
     state: &AppState,
     vault: &Vault,
@@ -763,8 +581,7 @@ fn ask_impl(
     })
 }
 
-/// The testable core of `why_similar` — [`ask_impl`]'s sibling over the other streaming
-/// façade op, sharing its delivery whole.
+/// The testable core of `why_similar`.
 fn why_similar_impl(
     state: &AppState,
     vault: &Vault,
@@ -779,17 +596,15 @@ fn why_similar_impl(
     })
 }
 
-/// The delivery every streamed answer shares: claim the answer slot and run `call` — the
-/// one façade op — with a token callback that feeds `sink` and reads the slot's cancel at
-/// every token.
+/// Claim the answer slot and run `call` with a token callback that feeds `sink` and
+/// checks for cancel at every token.
 fn stream_answer(
     state: &AppState,
     sink: &dyn Fn(&str),
     call: impl FnOnce(&mut dyn FnMut(&str) -> ControlFlow<()>) -> b2_core::Result<AnswerView>,
 ) -> Result<AnswerView, CmdError> {
-    // Single-in-flight: two answers at once would share one cancel flag, so the second
-    // one's claim would quietly un-cancel the first. The pane already refuses a second
-    // turn while one is streaming, so this is the belt-and-suspenders half.
+    // Two answers at once would share one cancel flag, and the second claim would
+    // un-cancel the first.
     let _held = state.ask.try_claim().ok_or(CmdError::AskInFlight)?;
     Ok(call(&mut |token| {
         sink(token);
@@ -797,41 +612,31 @@ fn stream_answer(
     })?)
 }
 
-/// The testable core of `project`: one façade call over the fake vault (projection
-/// is model-free by construction — it never touches the embedding space).
+/// The testable core of `project`, over the fake vault.
 fn project_impl(state: &AppState) -> Result<ProjectReport, CmdError> {
     read_op(state, |v| v.project(false))
 }
 
-/// The testable core of `embed`, split from the Tauri `State` wrapper. Claims the
-/// reindex slot, opens the real-model vault, and streams progress while consulting the
-/// slot's cancel at each batch.
+/// The testable core of `embed`.
 fn embed_impl(
     state: &AppState,
     on_event: &Channel<ReindexProgress>,
 ) -> Result<EmbedReport, CmdError> {
-    // Single-in-flight: refuse a second embed rather than race two writers on one DB.
-    // The UI also disables the button, so this is rarely hit.
+    // Refuse a second embed rather than race two writers on one DB.
     let _held = state.reindex.try_claim().ok_or(CmdError::ReindexInFlight)?;
 
-    // Fills missing vectors → needs the real model. `model` is the id of the model this
-    // open actually loaded, and `None` only under `B2_EMBEDDER=fake` (dev/offline) —
-    // fake-embed time is never attributed to a real model.
+    // `model` is `None` under `B2_EMBEDDER=fake`, so fake time is never recorded.
     let (vault, model) = open_vault(state, true)?;
-    // Time the embed pass itself — the clock starts *after* the model load above, so the
-    // recorded total is embedding throughput, not one-time setup. `chunks_done` is
-    // cumulative, so its last value is this run's chunk count.
+    // The clock starts after the model load. `chunks_done` is cumulative.
     let start = std::time::Instant::now();
     let mut chunks_this_run = 0u64;
     let report = vault.embed(&mut |p| {
         chunks_this_run = chunks_this_run.max(p.chunks_done as u64);
-        // Forward progress to the webview; a send error (the window navigated/closed)
-        // is not fatal to the index — keep embedding.
+        // A send error (window closed) doesn't stop the embed.
         let _ = on_event.send(p);
         state.reindex.flow()
     })?;
-    // Record the run's cost (best-effort). Skip when nothing embedded (an up-to-date
-    // vault) or under the fake embedder, so the ledger stays clean and correctly attributed.
+    // Skip an up-to-date vault or the fake embedder.
     if let Some(model) = model.filter(|_| chunks_this_run > 0) {
         crate::stats::record(&model, start.elapsed().as_millis() as u64, chunks_this_run);
     }
@@ -842,11 +647,7 @@ fn embed_impl(
 
 fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     let root = state.current_root().ok_or(CmdError::VaultRequired)?;
-    // Model-free read, on both halves — this sits on the first-paint path (#133). The
-    // vault opens with the fake purely to count embedding coverage (#26), and
-    // `semantic` is a file *probe* (`semantic_available`), not a model load: it stays
-    // "is a model installed", while `notes_embedded/total` is the precise fraction the
-    // UI flags keyword-only from.
+    // Model-free on both halves: this is the first-paint path (#133).
     let status = read_op(state, |v| v.embed_status())?;
     Ok(VaultInfo {
         root: root.display().to_string(),
@@ -856,10 +657,8 @@ fn vault_info_impl(state: &AppState) -> Result<VaultInfo, CmdError> {
     })
 }
 
-/// Set the active vault root and report the resulting [`VaultInfo`] — the testable core of
-/// `choose_vault`, split off from the untestable OS dialog. **Cancels any in-flight reindex
-/// first**, waiting for it to wind down before repointing the root, so a reindex can never
-/// keep writing the vault the app has left.
+/// The testable core of `choose_vault`. Cancels and waits out any in-flight reindex first,
+/// so it can never keep writing the vault the app has left.
 fn set_vault_root_impl(state: &AppState, root: &Path) -> Result<VaultInfo, CmdError> {
     state.reindex.cancel_and_wait();
     state.set_root(root);
@@ -950,14 +749,8 @@ fn delete_dir_impl(state: &AppState, dir: &str) -> Result<DirDeleteReport, CmdEr
     read_op(state, |v| v.delete_dir(dir))
 }
 
-/// The testable core of `set_model`. `EmbedConfig::set_model` validates the id against the
-/// registry *before* any filesystem write, so the unknown-model path is hermetic; the
-/// real-config write is exercised by `b2-embed`'s own tests.
-///
-/// A *changed* model also restarts that model's embed-time ledger ([`stats::reset`]): the
-/// swap drops the vault's vectors (ADR-0007), so the next reindex re-embeds the whole
-/// corpus and the cumulative stat must restart with it. Re-selecting the current model is a
-/// no-op that keeps its history.
+/// The testable core of `set_model`. A changed model restarts its embed-time ledger
+/// ([`stats::reset`]), since the swap re-embeds the whole corpus (ADR-0007).
 fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
     let previous = EmbedConfig::load().ok().map(|c| c.model);
     EmbedConfig::set_model(model)?;
@@ -969,10 +762,8 @@ fn set_model_impl(model: &str) -> Result<Vec<ModelChoice>, CmdError> {
 
 #[cfg(test)]
 mod tests {
-    //! Thin command-layer tests: args resolve → the façade is called → a view comes
-    //! back (crates/b2-desktop/CLAUDE.md — "thinness *is* the test strategy"; the
-    //! façade's own suite covers behavior). Model-free: read-path commands open with
-    //! the fake, and setup reindexes with the fake directly, so no model is needed.
+    //! Thin command-layer tests: args resolve, the façade is called, a view comes back.
+    //! The façade's own suite covers behavior. Model-free throughout.
 
     use super::*;
     use crate::error::user_message;
@@ -981,8 +772,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    /// Copy the committed golden vault into `dst` (never mutate the repo fixtures),
-    /// then reindex it with the fake embedder so the read path has an index to resolve.
+    /// Copy the golden vault into `root` and reindex it with the fake embedder.
     fn golden_indexed(root: &Path) {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
         copy_dir(&src, root);
@@ -1037,8 +827,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         golden_indexed(&root);
-        // An external `mkdir` (Finder, CLI) — no reindex follows, and none is
-        // needed: structure is read off the filesystem, so the tree can't go stale.
+        // An external `mkdir` with no reindex after it.
         fs::create_dir_all(root.join("projects/2026")).unwrap();
         let state = AppState::new(Some(root));
 
@@ -1065,7 +854,6 @@ mod tests {
         assert_eq!(report.dir, "projects/2026");
         assert!(root.join("projects/2026").is_dir());
 
-        // Occupied → the actionable, no-internals refusal.
         let err = create_dir_impl(&state, "projects/2026").unwrap_err();
         assert_eq!(
             user_message(&err),
@@ -1078,7 +866,6 @@ mod tests {
         let state = AppState::new(None);
         let err = read_note_impl(&state, "anything").unwrap_err();
         assert!(matches!(err, CmdError::VaultRequired));
-        // …surfaced to the webview as an actionable, no-internals message.
         assert_eq!(
             user_message(&err),
             "No vault open. Launch B2 with a vault path, or set B2_VAULT_PATH to your vault folder."
@@ -1087,15 +874,12 @@ mod tests {
 
     #[test]
     fn set_vault_root_switches_the_active_vault() {
-        // Start with no vault (the actionable-refusal state)…
         let state = AppState::new(None);
         assert!(matches!(
             list_notes_impl(&state).unwrap_err(),
             CmdError::VaultRequired
         ));
 
-        // …then point it at a real vault: the switch reports the new root, and every
-        // later command resolves against it (proves `set_root` takes effect downstream).
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         golden_indexed(&root);
@@ -1112,8 +896,6 @@ mod tests {
 
     #[test]
     fn switching_vaults_repoints_subsequent_reads() {
-        // Two distinct vaults; switching from one to the other must change what reads
-        // resolve — the whole point of a runtime-swappable root.
         let tmp = tempfile::TempDir::new().unwrap();
         let first = tmp.path().join("first");
         golden_indexed(&first);
@@ -1126,12 +908,10 @@ mod tests {
         Vault::open(&second).unwrap().reindex().unwrap();
 
         set_vault_root_impl(&state, &second).unwrap();
-        // The first vault's note is gone from the newly-active vault…
         assert!(matches!(
             read_note_impl(&state, "concepts/memory").unwrap_err(),
             CmdError::Core(b2_core::Error::NoteNotFound(_))
         ));
-        // …and the second vault's note resolves.
         let notes = list_notes_impl(&state).unwrap();
         let paths: Vec<&str> = notes.iter().map(|n| n.path.as_str()).collect();
         assert_eq!(paths, vec!["solo.md"]);
@@ -1141,8 +921,6 @@ mod tests {
     fn vault_info_reports_embedding_coverage() {
         let tmp = tempfile::TempDir::new().unwrap();
 
-        // A fully-indexed vault (setup reindexes with the fake) reads as M/M embedded —
-        // the "N/M embedded" honesty signal (#26) surfaced through the command layer.
         let full = tmp.path().join("full");
         golden_indexed(&full);
         let state = AppState::new(Some(full));
@@ -1153,8 +931,6 @@ mod tests {
             "a fully-indexed vault reads as M/M embedded"
         );
 
-        // A projected-but-unembedded vault reads as 0/M — the command surfaces the precise
-        // fraction model-free (it never loads the real model to answer vault_info).
         let projected = tmp.path().join("projected");
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
         copy_dir(&src, &projected);
@@ -1170,9 +946,7 @@ mod tests {
 
     #[test]
     fn list_models_returns_the_registry() {
-        // Global config, no vault needed. Deterministic w.r.t. ambient config only in the
-        // ways asserted: the picker offers exactly the registry, by id (the current flag
-        // depends on the machine's config.toml and is covered by b2-embed's own tests).
+        // The current flag depends on the machine's config.toml, so it isn't asserted.
         let choices = list_models().unwrap();
         assert_eq!(choices.len(), b2_embed::AVAILABLE_MODELS.len());
         let ids: Vec<&str> = choices.iter().map(|c| c.id.as_str()).collect();
@@ -1183,16 +957,12 @@ mod tests {
 
     #[test]
     fn embed_device_reports_the_build_device() {
-        // Thin passthrough to b2_embed::active_device_label (own tests there). In the default
-        // (no `metal` feature) test build it is always "CPU"; a `--features metal` build would
-        // report "Metal". Either way it's one of the two labels the badge renders.
         assert!(matches!(embed_device(), "CPU" | "Metal"));
     }
 
     #[test]
     fn set_model_rejects_unknown_without_writing() {
-        // Validation happens before any filesystem write (b2-embed `write_model`), so this
-        // touches no real config file — it just proves the command refuses and stays generic.
+        // Validation precedes any write, so no real config file is touched.
         let err = set_model_impl("definitely/not-a-real-model").unwrap_err();
         assert!(matches!(
             err,
@@ -1203,7 +973,6 @@ mod tests {
 
     #[test]
     fn errors_stay_generic_and_leak_no_internals() {
-        // A missing note is actionable, and never exposes sqlite/io detail.
         let msg = user_message(&CmdError::Core(b2_core::Error::NoteNotFound(
             "x/y".to_string(),
         )));
@@ -1212,15 +981,10 @@ mod tests {
     }
 
     // --- The host's task-lifecycle bits -------------------------------------------
-    //
-    // Thin host-infrastructure tests: the guard + cancel state machine and
-    // switch-cancels-first, all model-free (no reindex actually runs — the core's own
-    // suite covers the cancel *behavior*; here we prove the host's control bits).
 
     #[test]
     fn a_second_embed_is_refused_before_touching_the_model() {
-        // With the slot already held, `embed_impl` must refuse *before* opening the
-        // real-model vault — so this needs no model and can't hang on one.
+        // Refused before the real model is opened, so this needs no model.
         let state = AppState::new(None);
         let running = state.reindex.try_claim(); // stand in for a running embed
         assert!(running.is_some());
@@ -1240,7 +1004,6 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Save based on the read's revision; the returned revision chains the next.
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         let report = write_note_impl(
             &state,
@@ -1263,12 +1026,11 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root.clone()));
 
-        // Missing parent folders are created on the way, like `b2 add`.
+        // Missing parent folders are created, like `b2 add`.
         let report = create_note_impl(&state, "inbox/idea").unwrap();
         assert_eq!(report.path, "inbox/idea.md");
         assert!(root.join("inbox/idea.md").is_file());
 
-        // Immediately in the tree and readable (projected, no model touched).
         let notes = list_notes_impl(&state).unwrap();
         assert!(notes.iter().any(|n| n.path == "inbox/idea.md"));
         let note = read_note_impl(&state, "inbox/idea").unwrap();
@@ -1276,9 +1038,7 @@ mod tests {
         assert_eq!(note.path, report.path);
     }
 
-    /// The drop path end to end at this layer: base64 in → the façade places and
-    /// projects → the tree lists it. The payload is deliberately **not** UTF-8, since
-    /// the transport exists to carry a PNG as faithfully as a `.md`.
+    /// The payload is not UTF-8: the transport must carry a PNG faithfully.
     #[test]
     fn import_file_decodes_the_drop_payload_and_projects() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1297,8 +1057,6 @@ mod tests {
         assert!(listed.iter().any(|r| r.path == "resources/dropped.png"));
     }
 
-    /// A payload the frontend's encoder mangled is the transport's own failure, so it
-    /// never reaches the façade and never leaks the decoder's detail to the webview.
     #[test]
     fn import_file_refuses_a_payload_that_is_not_base64() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1315,7 +1073,6 @@ mod tests {
         );
     }
 
-    /// The picker path: a chosen absolute path is copied in, source left alone.
     #[test]
     fn import_path_copies_the_picked_file_in() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1334,7 +1091,7 @@ mod tests {
         assert!(source.is_file(), "the picked file is copied, never moved");
     }
 
-    /// The import refusals speak of a *file*, not a note: what arrived may be a PDF.
+    /// Import refusals say "file", not "note": what arrived may be a PDF.
     #[test]
     fn import_refusals_stay_generic_and_actionable() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1353,7 +1110,7 @@ mod tests {
             "A file already exists at 'concepts/memory.md'. Rename it, or drop this one into a different folder."
         );
 
-        // A "name" that is really a path can't redirect the import out of the folder.
+        // A "name" that is really a path can't escape the folder.
         let err =
             import_file_impl(&state, "notes", "../escaped.png", &BASE64.encode("x")).unwrap_err();
         assert!(matches!(
@@ -1373,7 +1130,6 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Clobber refusal names the path and the way out.
         let err = create_note_impl(&state, "concepts/memory").unwrap_err();
         assert!(matches!(
             err,
@@ -1384,7 +1140,6 @@ mod tests {
             "A note already exists at 'concepts/memory.md'. Choose a different name, or open that note."
         );
 
-        // An invalid destination is refused with actionable phrasing, no internals.
         let err = create_note_impl(&state, "../escape").unwrap_err();
         assert!(matches!(
             err,
@@ -1403,9 +1158,6 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Save a new block based on the read's revision; the returned revision chains
-        // the next save, and a fresh read round-trips the block verbatim with the body
-        // untouched.
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         let body_before = note.body.clone();
         let new_fm = "tags: [edited]\n";
@@ -1420,10 +1172,8 @@ mod tests {
         assert_eq!(reread.revision, report.revision);
     }
 
-    /// The drawer's one refusal, and the shape of everything it no longer refuses.
-    /// A `---` line would end the block early and shift bytes into the *body*, which
-    /// is not this op's to change; every other edit saves, because since GH #170 B2
-    /// owns no line inside the block (W3).
+    /// A `---` line would end the block early and shift bytes into the body; every other
+    /// edit saves, since B2 owns no line inside the block (W3, GH #170).
     #[test]
     fn write_frontmatter_refuses_only_the_fence_and_says_so_without_internals() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1431,7 +1181,6 @@ mod tests {
         golden_indexed(&root);
         let state = AppState::new(Some(root));
 
-        // Wholesale replacement — the edit that used to be an identity refusal — saves.
         let note = read_note_impl(&state, "concepts/memory").unwrap();
         let report =
             write_frontmatter_impl(&state, "concepts/memory", "tags: [x]\n", &note.revision)
@@ -1464,7 +1213,7 @@ mod tests {
         let state = AppState::new(Some(root.clone()));
 
         let note = read_note_impl(&state, "concepts/memory").unwrap();
-        // An external edit lands after the read…
+        // An external edit lands after the read.
         let abs = root.join("concepts/memory.md");
         fs::write(
             &abs,
@@ -1472,9 +1221,7 @@ mod tests {
         )
         .unwrap();
 
-        // …so the stale save is refused with the STABLE message the frontend
-        // string-matches to drive its conflict bar (crates/b2-desktop/CLAUDE.md) — keep
-        // this assertion in lockstep with ui/src/api.ts.
+        // The frontend string-matches this message to drive its conflict bar.
         let err = write_note_impl(&state, "concepts/memory", "mine", &note.revision).unwrap_err();
         assert!(matches!(
             err,
@@ -1483,10 +1230,8 @@ mod tests {
         let msg = "This note changed on disk since it was opened. Reload the note, then reapply your edit.";
         assert_eq!(user_message(&err), msg);
 
-        // …and the frontend's mirror constant (`WRITE_CONFLICT_MESSAGE`) carries the
-        // exact same bytes — the recognizer string-matches on it, so a drifted copy
-        // would silently demote every conflict to a generic error toast. This assert
-        // automates the "change them together" discipline instead of trusting it.
+        // A drifted `WRITE_CONFLICT_MESSAGE` would silently demote every conflict to a
+        // generic error toast.
         let api_ts = fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/api.ts"),
         )
@@ -1559,9 +1304,7 @@ mod tests {
 
     #[test]
     fn write_note_runs_outside_the_reindex_slot() {
-        // Like `project`, a save is deliberately unguarded by the embed slot
-        // (crates/b2-desktop/CLAUDE.md): short, model-free, must not queue behind a
-        // long-running background embed.
+        // A save must not queue behind a long background embed.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         golden_indexed(&root);
@@ -1585,31 +1328,26 @@ mod tests {
 
     #[test]
     fn project_is_model_free_and_runs_outside_the_reindex_slot() {
-        // A fresh (never-indexed) vault copy — no reindex in the setup, so this also
-        // proves `project` alone is what makes the tree listable.
+        // Never indexed, so `project` alone makes the tree listable.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
         copy_dir(&src, &root);
         let state = AppState::new(Some(root));
 
-        // Hold the slot (a stand-in for an in-flight embed): `project` is deliberately
-        // unguarded (index-engine.md) and must still run.
+        // A stand-in for an in-flight embed.
         let running = state.reindex.try_claim();
         assert!(running.is_some());
         let report = project_impl(&state).unwrap();
         assert_eq!(report.indexed, 2);
 
-        // The tree is live off projection alone — no model, no vectors.
         let notes = list_notes_impl(&state).unwrap();
         assert_eq!(notes.len(), 2);
     }
 
     #[test]
     fn project_skips_unreadable_files_and_still_reports() {
-        // A real vault holds the odd non-UTF-8 file; projecting it must skip that file
-        // and index the rest, not fail the whole pass (the "reindex fails on a large
-        // vault" bug). The skip flows through the report to the UI, no logic added here.
+        // A non-UTF-8 file is skipped and reported, not fatal to the pass.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("vault");
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden-vault");
@@ -1624,13 +1362,11 @@ mod tests {
         );
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].path, "bad.md");
-        // The tree lists the good notes; the bad file is absent, not fatal.
         assert_eq!(list_notes_impl(&state).unwrap().len(), 2);
     }
 
-    /// `open_external`'s allow-list — the whole of its security posture, so it is pinned
-    /// on both sides. The refusals matter more than the acceptances: each one is a scheme
-    /// that would otherwise let a `.md` name a program for the OS to launch.
+    /// `open_external`'s allow-list, its whole security posture. Each refusal is a scheme
+    /// that would let a `.md` name a program for the OS to launch.
     #[test]
     fn only_web_links_are_openable() {
         for ok in [
@@ -1655,9 +1391,6 @@ mod tests {
         }
     }
 
-    /// The refusal reaches the webview as a generic sentence, with the note-authored URL
-    /// left server-side — the same "detail is logged, never sent" rule every other arm of
-    /// `user_message` follows.
     #[test]
     fn a_refused_link_says_so_without_echoing_the_url() {
         let err = CmdError::UnsupportedLink("x-b2-evil://run?secret=hunter2".into());
@@ -1676,14 +1409,11 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let state = AppState::new(Some(root.clone()));
 
-        // Simulate a reindex holding the slot.
         let held = state.reindex.try_claim().expect("the slot is free");
         assert!(state.reindex.in_flight());
 
         std::thread::scope(|s| {
-            // A stand-in reindex worker: spin until asked to cancel, then wind down —
-            // exactly what the real embed-loop closure does at a batch boundary, where
-            // returning drops the guard.
+            // A stand-in reindex worker that winds down once cancelled.
             s.spawn(|| {
                 while !state.reindex.cancelled() {
                     std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1691,27 +1421,21 @@ mod tests {
                 drop(held);
             });
 
-            // Switching vaults must request cancel AND block until the worker released
-            // the slot, *before* it repoints the root and reports the new info.
             let info = set_vault_root_impl(&state, &root).unwrap();
             assert_eq!(info.root, root.display().to_string());
-            // If the switch returned, the in-flight run has already wound down.
             assert!(!state.reindex.in_flight());
         });
     }
 
     // --- chat (flow ④) --------------------------------------------------------------
     //
-    // The host owns exactly one thing here: the **framing of the token stream** — every
-    // token, in order, as it arrives — plus the guard and cancel checkpoint around it.
-    // Everything the answer *is* belongs to `Vault::ask` and the engine suite.
+    // The host owns only the token stream's framing, its guard and its cancel checkpoint;
+    // the answer itself is the engine suite's.
 
     /// A vault whose passages are real, so the fake provider has something to cite.
     fn ask_state(tmp: &tempfile::TempDir) -> (AppState, Vault) {
         let root = tmp.path().join("vault");
         golden_indexed(&root);
-        // The fake-embedder vault the read path uses everywhere in this suite: `ask`'s
-        // retrieval degrades to the same hybrid search the rest of the app runs on.
         let vault = Vault::open(&root).unwrap();
         (AppState::new(Some(root)), vault)
     }
@@ -1727,16 +1451,13 @@ mod tests {
         })
         .unwrap();
 
-        // The framing contract: the tokens the webview saw, concatenated, ARE the answer
-        // the command returned. A pane that renders the stream and then the final view
-        // must never see the two disagree.
+        // The streamed tokens, concatenated, are the returned answer.
         assert_eq!(streamed.borrow().concat(), answer.answer);
         assert!(!answer.cancelled);
         assert!(
             !answer.citations.is_empty(),
             "the fake cites every passage it was handed: {answer:?}"
         );
-        // The slot is released on the way out, so the next turn can claim it.
         assert!(state.ask.try_claim().is_some());
     }
 
@@ -1746,8 +1467,7 @@ mod tests {
         let (state, vault) = ask_state(&tmp);
         let streamed = std::cell::RefCell::new(Vec::<String>::new());
 
-        // The pane's Esc, arriving after the first token — `cancel_ask` sets the same flag
-        // from another thread; setting it inside the sink is that race, made deterministic.
+        // Esc after the first token: the `cancel_ask` race, made deterministic.
         let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|t| {
             streamed.borrow_mut().push(t.to_string());
             state.ask.cancel();
@@ -1767,8 +1487,7 @@ mod tests {
     fn a_second_answer_is_refused_while_one_is_streaming() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
-        // Stand in for an answer already streaming (the real one holds the slot for the
-        // duration of its call).
+        // Stand in for an answer already streaming.
         let streaming = state.ask.try_claim();
         assert!(streaming.is_some());
 
@@ -1784,8 +1503,7 @@ mod tests {
     fn why_similar_streams_like_an_answer_and_shares_its_slot_and_its_esc() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
-        // Any two notes do: the façade explains a pair whether or not discovery would
-        // list it, and what it says is the engine suite's business (`tests/why.rs`).
+        // Any two notes do; what it says is `tests/why.rs`'s business.
         let notes = vault.list_notes().unwrap();
         let (anchor, candidate) = (notes[0].path.as_str(), notes[1].path.as_str());
         let streamed = std::cell::RefCell::new(Vec::<String>::new());
@@ -1800,7 +1518,6 @@ mod tests {
             assert!(c.path == anchor || c.path == candidate, "{c:?}");
         }
 
-        // The pane's Esc stops it at the next token, exactly as it stops an `ask`.
         streamed.borrow_mut().clear();
         let stopped = why_similar_impl(&state, &vault, &FakeLlm, anchor, candidate, 10, &|t| {
             streamed.borrow_mut().push(t.to_string());
@@ -1810,7 +1527,6 @@ mod tests {
         assert!(stopped.cancelled);
         assert_eq!(streamed.borrow().len(), 1);
 
-        // One answer slot for both kinds of turn.
         let streaming = state.ask.try_claim();
         assert!(streaming.is_some());
         let err =
@@ -1818,20 +1534,15 @@ mod tests {
         assert!(matches!(err, CmdError::AskInFlight));
     }
 
-    /// A stale cancel must not kill the *next* answer: claiming the slot clears it once the
-    /// fresh turn owns it, which is the whole reason the flag is cleared on claim rather
-    /// than reset by whoever set it.
     #[test]
     fn a_stale_cancel_does_not_stop_the_next_answer() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (state, vault) = ask_state(&tmp);
-        state.ask.cancel(); // …from a turn that already ended
+        state.ask.cancel(); // from a turn that already ended
         let answer = ask_impl(&state, &vault, &FakeLlm, "memory", &[], &|_| {}).unwrap();
         assert!(!answer.cancelled);
     }
 
-    /// The tool-call cap is saved by the same command, under the key's three-state rule:
-    /// a save that doesn't mention it (the setup card's model pick) must not reset it.
     #[test]
     fn the_tool_call_cap_is_set_kept_and_cleared_by_a_save() {
         let state = AppState::new(None);
@@ -1849,16 +1560,11 @@ mod tests {
             default,
             "blank returns to the shared resolution"
         );
-        // And the status the panel is drawn from reports the cap in force.
         save(Some("32"));
         let setup = b2_llm::ChatSetup::fake(&state.chat_prefs().config());
         assert_eq!(setup.tool_calls.in_force, 32);
     }
 
-    /// Chat settings are adapter state: setting them changes what the next ask resolves,
-    /// and blank means "unset" (back to the environment/default) rather than an unusable
-    /// endpoint. The key is kept when a save doesn't mention it — re-saving the endpoint
-    /// must not silently sign you out of a cloud provider.
     #[test]
     fn chat_config_layers_over_the_shared_resolution() {
         let state = AppState::new(None);
@@ -1876,8 +1582,7 @@ mod tests {
         assert_eq!(prefs.model.as_deref(), Some("qwen2.5"));
         assert_eq!(prefs.api_key.as_deref(), Some("sk-a-cloud-key"));
 
-        // Re-save with the key absent (the field the user didn't retype) and a blanked
-        // model: the key survives, the model falls back to the shared default.
+        // Key absent and model blanked: the key survives, the model falls back.
         set_chat_config_impl(
             &state,
             Some("http://localhost:1234/v1".into()),
@@ -1892,9 +1597,7 @@ mod tests {
         assert_eq!(prefs.config().model, b2_llm::LlmConfig::from_env().model);
     }
 
-    /// The #176 behavior at the command boundary: a saved key goes into the store, so
-    /// the *next launch* — a fresh `AppState` reading from that same store — starts
-    /// with it already in force.
+    /// GH #176 at the command boundary.
     #[test]
     fn a_saved_key_is_there_at_the_next_launch() {
         let keys = MemoryStore::empty();
@@ -1913,11 +1616,6 @@ mod tests {
         assert_eq!(next_launch.api_key_source(), b2_llm::ApiKeySource::Stored);
     }
 
-    /// The key's third state, and the reason it has one: **blank clears**. Without
-    /// it a key set once could never be removed through Settings — and repointing
-    /// the endpoint would then send the first provider's bearer token to the
-    /// second, which is the privacy failure, not just the annoyance. Since #176 the
-    /// removal has to reach the store too, or the key would simply return.
     #[test]
     fn a_blanked_key_clears_it_everywhere() {
         let state = AppState::new(None);
@@ -1935,7 +1633,7 @@ mod tests {
             Some("sk-a-cloud-key")
         );
 
-        // Absent: untouched, so the key stands — in memory and in the store.
+        // Absent: untouched.
         set_chat_config_impl(&state, None, None, None, None, &keys);
         assert_eq!(
             state.chat_prefs().api_key.as_deref(),
@@ -1943,9 +1641,7 @@ mod tests {
         );
         assert_eq!(keys.peek().as_deref(), Some("sk-a-cloud-key"));
 
-        // Blank (what the UI's Remove sends): gone from both. `config()` then resolves
-        // the key from the environment alone — `B2_LLM_API_KEY` is the user's own
-        // configuration, and Settings never had the standing to clear that.
+        // Blank (the Remove button): gone from both. `B2_LLM_API_KEY` is beyond its reach.
         set_chat_config_impl(&state, None, None, Some("   ".into()), None, &keys);
         assert_eq!(state.chat_prefs().api_key, None);
         assert_eq!(
@@ -1955,16 +1651,13 @@ mod tests {
         );
     }
 
-    /// The status the setup card renders never carries the key — only where the key in
-    /// force came from. (Pinned in `b2-llm` too, on the view type itself; this is the
-    /// command boundary.)
+    /// Also pinned in `b2-llm` on the view type; this is the command boundary.
     #[test]
     fn the_chat_setup_view_never_carries_the_key() {
         let state = AppState::new(None);
         set_chat_config_impl(
             &state,
-            // `.invalid` is reserved (RFC 2606), so the probe fails immediately and this
-            // never meets a model server a developer happens to be running.
+            // `.invalid` is reserved (RFC 2606), so the probe fails at once.
             Some("http://b2-no-such-host.invalid:11434/v1".into()),
             Some("llama3.2".into()),
             Some("sk-live-must-not-cross".into()),
@@ -1974,17 +1667,11 @@ mod tests {
         let setup = chat_setup_impl(&state);
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-must-not-cross"), "{json}");
-        // *That* a key is configured still crosses; which source answered depends on
-        // whether the developer's own environment has one, so this asserts the part
-        // that holds either way.
+        // The source depends on the developer's env, so only assert it isn't "none".
         assert!(json.contains("\"api_key_source\":"), "{json}");
         assert!(!json.contains("\"api_key_source\":\"none\""), "{json}");
     }
 
-    /// A Keychain that refuses must not break the save. The key the user typed is in
-    /// force for this run, nothing was stored, and the configuration says `session` so
-    /// the Settings copy can be honest about how long that lasts (GH #176's fallback
-    /// path — the convenience degrades, chat does not).
     #[test]
     fn a_refused_store_leaves_the_key_in_force_for_the_session() {
         let state = AppState::new(None);

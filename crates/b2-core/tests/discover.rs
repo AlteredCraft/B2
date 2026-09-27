@@ -1,12 +1,6 @@
-//! Connection-discovery candidate generation (index-engine.md §3, resolved
-//! 2026-07-01): candidates are the *complement* of the graph — notes near an anchor
-//! in vector space but **not** already connected (self + direct neighbors excluded),
-//! with 2-hop (triadic-closure) notes deliberately kept.
-//!
-//! Scope: with the deterministic *fake* embedder, vector nearness is content-
-//! addressed, not semantic, so these prove the **plumbing** — the exclusion set, the
-//! max-sim ranking, determinism — not model quality (that is the real-embedder eval,
-//! deferred to step ②).
+//! Discovery candidates (index-engine.md §3) are the complement of the graph: notes near
+//! an anchor but not already connected, with 2-hop (triadic-closure) notes kept. Plumbing
+//! only, under the fake embedder.
 
 mod common;
 
@@ -21,14 +15,12 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-// The four notes, by the thing that identifies them: their vault-relative paths (L1).
 const A: &str = "a.md";
 const B: &str = "b.md";
 const C: &str = "c.md";
 const E: &str = "e.md";
 
-/// a → b → e (a links b, b links e); c is disconnected. So within 1 hop of a is
-/// `{a, b}`; e is 2 hops (a triadic-closure candidate that must survive), c is far.
+/// a → b → e; c is disconnected. e is 2 hops from a, a triadic-closure candidate.
 fn linked_chain_vault(dir: &Path) -> Connection {
     let vault = dir.join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -121,8 +113,6 @@ fn generation_is_deterministic() {
 
 #[test]
 fn a_directly_connected_pair_yields_no_candidates() {
-    // The golden vault is two notes, directly connected (spaced-repetition supports
-    // /references human-memory), so each is within 1 hop of the other → no candidates.
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::new(64));
 
@@ -134,14 +124,9 @@ fn a_directly_connected_pair_yields_no_candidates() {
         .is_empty());
 }
 
-/// Two-stage discovery (coarse centroid shortlist → exact rescore, #38) must equal
-/// the **exhaustive** whole-space max-sim whenever the shortlist covers the
-/// candidate set — which it always does at test scale (the shortlist floor is 200
-/// notes). Ground truth is recomputed here straight from the stored vectors,
-/// independent of `discover`'s code path: same max-sim, same tie rules, over every
-/// chunk in the vault. With the fake embedder the *ordering* is arbitrary (random
-/// vectors), which is exactly why full equality — notes, scores, evidence chunks —
-/// is a strong plumbing check.
+/// Two-stage discovery (GH #38) must equal an exhaustive max-sim, recomputed here from
+/// the stored vectors, whenever the shortlist covers the candidates (always, below 200
+/// notes). Fake vectors make the order arbitrary, so full equality is a strong check.
 #[test]
 fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
     use b2_core::embed::{l2_sq, unpack_f32};
@@ -173,13 +158,12 @@ fn two_stage_equals_exhaustive_max_sim_when_shortlist_covers() {
         .map(|(_, v)| v)
         .collect();
 
-    // Exhaustive ground truth: every stored vector, min over the anchor's vectors,
-    // best chunk per note (strictly-less keeps the first-seen chunk, as discover does).
+    // Strictly-less keeps the first-seen chunk, as discover does.
     let mut best: HashMap<String, (f32, i64)> = HashMap::new();
     db::for_each_stored_vector(&conn, |chunk_id, blob| {
         let note = &db::note_for_chunk(&conn, chunk_id).unwrap().unwrap();
         if note == anchor {
-            return; // no links in this vault → the anchor is the whole exclusion set
+            return; // no links, so the anchor is the whole exclusion set
         }
         let v = unpack_f32(blob);
         for a in &anchor_vecs {

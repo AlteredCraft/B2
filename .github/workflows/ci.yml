@@ -1,19 +1,9 @@
-# The repo's one enforcement point (GH #87 §2). Everything it *checks* lives in `make ci`, not
-# here — this file is only the environment that recipe needs. That split is deliberate: a check
-# re-specified in YAML is a check that can drift from the one you run locally, and until this
-# workflow existed CLAUDE.md's "what CI runs" was aspirational. Now `make ci` is literally it.
+# The repo's one enforcement point (GH #87 §2). Every check lives in `make ci`; this file is
+# only the environment it needs, so CI can't drift from a local run.
 #
-# Runner: macos-latest. B2 is developed and shipped on macOS only — Metal is macOS-only, and the
-# Xcode Command Line Tools that `b2-desktop`'s WebView links against are preinstalled there (and
-# supply `make`, so no separate task-runner install step is needed either), so the whole
-# workspace (including the Tauri host) builds with no platform setup step at all. A Linux
-# runner would need the webkit2gtk/libsoup apt block and would red-build on portability breaks
-# nobody ships against.
+# macos-latest: B2 ships on macOS only, and the Xcode CLT there supply the WebView and `make`.
 #
-# Model-free by construction, so no `b2 init` step and no model download: `b2-core` never links
-# candle, and `b2-cli`'s tests spawn the binary under `B2_EMBEDDER=fake` (crates/b2-cli/tests/cli.rs).
-# The real-model work — `make eval` and friends — is non-deterministic and stays out of CI on
-# purpose (CLAUDE.md, "Keep `cargo test` fast, deterministic, and model-free").
+# Model-free: no `b2 init`, tests run under `B2_EMBEDDER=fake`. Real-model evals stay out of CI.
 
 name: CI
 
@@ -23,8 +13,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A new push to a branch makes the in-flight run for that branch obsolete; cancel it rather
-# than pay for both. `main` gets its own group so a merge is never cancelled by a PR push.
+# A new push cancels the branch's in-flight run. `main` has its own group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -42,40 +31,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # No toolchain action: rust-toolchain.toml is already the single source of the pin
-      # (1.96 + rustfmt + clippy), and the no-arg form installs exactly what it names — so CI
-      # can't silently run a different toolchain than a local `cargo` invocation resolves.
+      # No toolchain action: the no-arg form installs exactly what rust-toolchain.toml pins.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
 
-      # Caches ~/.cargo and target/. Load-bearing here: the workspace builds every dependency
-      # at opt-level 3 (see Cargo.toml's profile block), and candle dominates a cold build.
+      # Dependencies build at opt-level 3 (Cargo.toml), so a cold build is slow.
       - uses: Swatinem/rust-cache@v2
 
-      # Pinned rather than lts/* so a new LTS can't change the runner under us; 24 is what the
-      # repo is developed against. The floor is vite 6's engines field — Node 18, 20, or 22+.
+      # Pinned, not lts/*, so a new LTS can't change the runner under us.
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      # `npm ci` — not `npm install` — because CI is where lockfile drift should be an error
-      # rather than a silent rewrite. `make ci`'s own `ui-install` prerequisite is a no-op after
-      # this, and the tree-clean assertion below catches it if it turns out not to be.
+      # `npm ci` so lockfile drift is an error, not a silent rewrite.
       - name: Install frontend dependencies
         run: npm --prefix ui ci
 
-      # The gate. Same command, same stages, same order as a local run. No separate task-runner
-      # install step: `make` is already on the runner (macos-latest ships Xcode CLT).
+      # The gate: the same command as a local run.
       - run: make ci
 
-      # Nothing above is allowed to edit a tracked file. This catches two real invariants at
-      # once: `ui-install` rewriting package-lock.json (drift between package.json and the
-      # committed lockfile), and the engine suite mutating fixtures/golden-vault/. The tests
-      # still copy the fixture into a tempdir first (CLAUDE.md, "Conventions"), but since
-      # GH #170 the deeper claim is that they wouldn't need to: B2 makes no unbidden writes,
-      # so indexing a vault leaves every byte of it alone. This is what stands behind that.
+      # Nothing above may edit a tracked file: catches lockfile drift and any write to
+      # fixtures/golden-vault/ (no unbidden writes, GH #170).
       - name: Assert the gate left the working tree clean
         run: |
           if ! git diff --exit-code; then

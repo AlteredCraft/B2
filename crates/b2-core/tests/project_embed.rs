@@ -1,8 +1,6 @@
-//! The projection/embedding split (index-engine.md): `project` alone builds the complete
-//! keyword + graph index with **no** vectors and no embedding space; `embed` fills
-//! exactly the DB-derived missing vectors; and project→embed is **observably**
-//! equivalent to the fused `reindex` (counts, chunk text, text→vector, edges — never
-//! rowid equality, per §7.1). Model-free throughout (fake embedder).
+//! The projection/embedding split (index-engine.md): `project` builds the keyword and
+//! graph index with no vectors, `embed` fills exactly the missing ones, and the two are
+//! observably equivalent to the fused `reindex` (§7.1: never rowid equality).
 
 mod common;
 
@@ -26,13 +24,11 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
     golden_vault_copy(&vault_dir);
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
 
-    // Projection alone: no embedder anywhere near the call. If it issued any query
-    // against `embeddings` (which does not exist yet), this would error.
+    // No embedder: any query against the not-yet-created `embeddings` would error.
     let cfg = ChunkConfig::default();
     let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
     assert_eq!(outcome.notes.len(), 2);
 
-    // The keyword + graph index is complete…
     let chunks = count(&conn, "chunks");
     assert!(chunks > 0);
     assert_eq!(
@@ -41,7 +37,6 @@ fn project_only_builds_keyword_graph_index_with_no_vectors() {
         "FTS mirrors every chunk"
     );
     assert!(count(&conn, "edges") > 0, "typed graph projected");
-    // …and the embedding space was never created (that is the embed pass's job).
     assert!(
         !db::embedding_space_exists(&conn).unwrap(),
         "projection must not create the vector tables"
@@ -59,22 +54,18 @@ fn embed_fills_exactly_the_missing_vectors() {
 
     project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
 
-    // First embed: every chunk lacks a vector → both notes embed, space is full.
     let first = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!first.cancelled);
     assert_eq!(first.embedded.len(), 2, "both projected notes embed");
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 
-    // Second embed: the DB-derived pending set is empty → fills 0, changes nothing.
     let second = embed_vault(&conn, &embedder, &mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!second.cancelled);
     assert!(second.embedded.is_empty(), "a second embed fills nothing");
     assert_eq!(count(&conn, "embeddings"), count(&conn, "chunks"));
 }
 
-/// The observable projection of an index: note count, `(note, seq) → chunk text`,
-/// `chunk text → vector bytes`, and the full edge rows — everything §7.1 calls
-/// observable, and deliberately **not** chunk rowids.
+/// Everything §7.1 calls observable in an index, and not chunk rowids.
 #[derive(Debug, PartialEq)]
 struct Observable {
     notes: i64,
@@ -83,8 +74,7 @@ struct Observable {
     edges: Vec<EdgeKey>,
 }
 
-/// An edge's identity + typing, minus the internal columns: `(id, src, dst, type,
-/// origin, occurrence)`.
+/// `(id, src, dst, type, origin, occurrence)`.
 type EdgeKey = (String, String, Option<String>, String, String, i64);
 
 fn observable_state(root: &Path) -> Observable {
@@ -147,20 +137,16 @@ fn project_then_embed_matches_reindex() {
     golden_vault_copy(&split_root);
     golden_vault_copy(&fused_root);
 
-    // One fresh copy through the split façade ops…
     let split = Vault::open(&split_root).unwrap();
     let p = split.project(false).unwrap();
     let e = split.embed(&mut |_| ControlFlow::Continue(())).unwrap();
     assert!(!e.cancelled);
 
-    // …a sibling fresh copy through the composed reindex.
     let fused = Vault::open(&fused_root).unwrap();
     let r = fused.reindex().unwrap();
 
-    // The reports agree…
     assert_eq!((p.indexed, e.embedded), (r.indexed, r.embedded));
 
-    // …and so does every observable aspect of the two indexes (§7.1).
     drop(split);
     drop(fused);
     let split_obs = observable_state(&split_root);
@@ -179,24 +165,20 @@ fn project_then_embed_matches_reindex() {
 
 // --- resilience: one unreadable file must never abort the whole reindex ----------
 //
-// A real vault holds the odd non-UTF-8 or unreadable `.md`. Before this, a single such
-// file made `fs::read_to_string` fail and took the entire projection (and thus the
-// reindex) down with a generic error. The pass must skip it and index everything else.
+// A real vault holds the odd non-UTF-8 `.md`; the pass skips it and indexes the rest.
 
 #[test]
 fn project_skips_unreadable_file_and_indexes_the_rest() {
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("vault");
     golden_vault_copy(&vault_dir);
-    // A `.md` file that is not valid UTF-8 (a stray 0xFF byte). `read_to_string` fails
-    // with `InvalidData` on it — the exact shape a large primary vault trips over.
+    // A stray 0xFF byte: not valid UTF-8.
     fs::write(vault_dir.join("bad.md"), [b'#', b' ', 0xff, b'\n']).unwrap();
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     let cfg = ChunkConfig::default();
 
     let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
 
-    // Both readable notes projected; the bad one is skipped, not fatal.
     assert_eq!(outcome.notes.len(), 2, "both readable notes still index");
     assert_eq!(
         outcome.skipped.len(),
@@ -205,15 +187,11 @@ fn project_skips_unreadable_file_and_indexes_the_rest() {
     );
     assert_eq!(outcome.skipped[0].path, "bad.md");
     assert_eq!(outcome.skipped[0].reason, "not valid UTF-8 text");
-    // The good notes' keyword index is intact.
     assert!(count(&conn, "chunks") > 0);
 }
 
-/// A file replaced out of band — deleted and another renamed onto its path — is
-/// simply that path's note now. The `UNIQUE constraint failed: notes.path` crash this
-/// regresses came from two identities contending for one path, and GH #170 removed the
-/// contention rather than the reconciliation: the path *is* the identity, so
-/// `ON CONFLICT(path)` is the whole of it.
+/// A file replaced out of band is simply that path's note now: the path is the identity
+/// (GH #170), so there is no `UNIQUE` conflict to crash on.
 #[test]
 fn reindex_reconciles_a_path_taken_over_by_another_file() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -225,12 +203,10 @@ fn reindex_reconciles_a_path_taken_over_by_another_file() {
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 2);
 
-    // Out-of-b2 edit: delete foo.md, rename bar.md → foo.md.
     fs::remove_file(root.join("foo.md")).unwrap();
     fs::rename(root.join("bar.md"), root.join("foo.md")).unwrap();
 
-    // The incremental reindex converges on the current truth: one note at foo.md,
-    // carrying bar's content — byte-identical to a from-scratch rebuild (S3).
+    // Converges on one note at foo.md carrying bar's content (S3).
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 1);
     let notes = vault.list_notes().unwrap();
@@ -242,18 +218,15 @@ fn reindex_reconciles_a_path_taken_over_by_another_file() {
     );
 }
 
-/// Write a minimal note at `root/name` — the same bytes in every root, so two roots
-/// build comparable indexes (a note's identity is its path, which the caller picks).
+/// Write a minimal note at `root/name`, byte-identical across roots so indexes compare.
 fn write_note(root: &Path, name: &str, body: &str) {
     fs::write(root.join(name), format!("---\n---\n\n{body}\n")).unwrap();
 }
 
 #[test]
 fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
-    // A note file deleted outside b2 with *no replacement* must not linger as a ghost
-    // row (#31): before this, only a path reuse or a from-scratch rebuild evicted it,
-    // so an incremental reindex diverged from `full-reindex ≡ incremental-update`.
-    // foo links to bar so the deletion also exercises inbound-edge re-dangling.
+    // A note deleted outside b2 must not linger as a ghost row (GH #31). foo links to
+    // bar so the deletion also re-dangles an inbound edge.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -264,34 +237,29 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 3);
 
-    // Out-of-b2 deletion, no replacement — the path is never reused.
     fs::remove_file(root.join("bar.md")).unwrap();
 
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 2);
     assert_eq!(report.notes_pruned, 1, "the ghost row is pruned");
 
-    // Gone from every read surface: the listing…
+    // Gone from the listing, search and discovery.
     let notes = vault.list_notes().unwrap();
     assert_eq!(notes.len(), 2);
     assert!(notes.iter().all(|n| n.path != "bar.md"));
-    // …search (its chunks and FTS entries cascaded with the row)…
     assert!(vault
         .search("tidal", 10)
         .unwrap()
         .iter()
         .all(|h| h.path != "bar.md"));
-    // …and discovery (its vectors are gone; the unlinked survivor still surfaces).
     let candidates = vault.similar("foo.md", 5).unwrap();
     assert!(candidates.iter().any(|c| c.path == "baz.md"));
     assert!(candidates.iter().all(|c| c.path != "bar.md"));
     drop(vault);
 
     let conn = index_conn(&root);
-    // FTS stayed in lockstep through the cascade (no ghost text in the index)…
     assert_eq!(count(&conn, "chunks_fts"), count(&conn, "chunks"));
-    // …and foo's `[[bar]]` re-dangled: phase 2 re-resolved it against the pruned
-    // resolver, keeping the authored link visible for repair (#12), not dropped.
+    // foo's `[[bar]]` re-dangles, staying visible for repair (GH #12).
     let (dst_path, dst_path_raw): (Option<String>, String) = conn
         .query_row(
             "SELECT dst_path, dst_path_raw FROM edges WHERE src_path = ?1",
@@ -303,8 +271,7 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
     assert_eq!(dst_path_raw, "bar");
     drop(conn);
 
-    // The invariant itself: the incrementally-reconciled index equals a from-scratch
-    // rebuild of the same final vault (the same files at the same paths).
+    // The incrementally reconciled index equals a rebuild of the same final vault.
     let fresh_root = tmp.path().join("fresh");
     fs::create_dir_all(&fresh_root).unwrap();
     write_note(&fresh_root, "foo.md", "Alpha body. See [[bar]].");
@@ -319,9 +286,7 @@ fn reindex_prunes_a_deleted_note_like_a_full_rebuild() {
 
 #[test]
 fn prune_spares_a_file_skipped_as_unreadable() {
-    // The #31 carve-out: a file the walk *saw* but could not read yields no
-    // projection this run — and "not projected" must not mean "deleted", since the
-    // file is plainly still on disk at its path. Its existing row stays.
+    // The GH #31 carve-out: a file still on disk but unreadable is not "deleted".
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -331,7 +296,6 @@ fn prune_spares_a_file_skipped_as_unreadable() {
     let vault = Vault::open(&root).unwrap();
     assert_eq!(vault.reindex().unwrap().indexed, 2);
 
-    // bar.md turns unreadable in place (a stray non-UTF-8 write) — still on disk.
     fs::write(root.join("bar.md"), [0xff, 0xfe, b'x']).unwrap();
 
     let report = vault.reindex().unwrap();
@@ -345,10 +309,7 @@ fn prune_spares_a_file_skipped_as_unreadable() {
 
 #[test]
 fn single_note_ingest_never_prunes() {
-    // Pruning is a *whole-vault* reconciliation: only `project_vault` sees every file,
-    // so only it may decide a note is gone. The single-note paths (`project_file` /
-    // `ingest_file`, the add/mv/link/write substrate) touch their one note and must
-    // leave every other row alone — even a genuine ghost.
+    // Only `project_vault` sees every file, so only it may decide a note is gone.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&vault_dir).unwrap();
@@ -361,7 +322,6 @@ fn single_note_ingest_never_prunes() {
 
     fs::remove_file(vault_dir.join("bar.md")).unwrap();
 
-    // Neither single-note path evicts the now-ghost row…
     let cfg = ChunkConfig::default();
     let proj = ProjectionCtx::new(&conn, &vault_dir, &cfg);
     project_file(proj, "foo.md").unwrap();
@@ -369,7 +329,6 @@ fn single_note_ingest_never_prunes() {
     ingest_file(EmbedCtx::new(proj, &embedder), "foo.md").unwrap();
     assert_eq!(count(&conn, "notes"), 2, "ingest_file prunes nothing");
 
-    // …only the whole-vault pass reconciles the deletion.
     let outcome = project_vault(ProjectionCtx::new(&conn, &vault_dir, &cfg), false).unwrap();
     assert_eq!(outcome.notes_pruned, 1);
     assert_eq!(count(&conn, "notes"), 1);
@@ -383,7 +342,6 @@ fn reindex_completes_and_reports_skipped_files() {
     fs::write(root.join("bad.md"), [0xff, 0xfe, b'x']).unwrap();
     let vault = Vault::open(&root).unwrap();
 
-    // The composed reindex succeeds (no abort) and reports the skip truthfully.
     let report = vault.reindex().unwrap();
     assert_eq!(report.indexed, 2);
     assert_eq!(report.embedded, 2);
@@ -391,7 +349,6 @@ fn reindex_completes_and_reports_skipped_files() {
     assert_eq!(report.skipped.len(), 1);
     assert_eq!(report.skipped[0].path, "bad.md");
 
-    // …and the vault is fully usable: keyword search over the good notes still answers.
     assert!(!vault.search("forgetting", 5).unwrap().is_empty());
 }
 
@@ -403,7 +360,6 @@ fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
     let (vault, _) = opened_vault(tmp.path());
     vault.project(false).unwrap();
 
-    // Keyword search answers before any embedding — BM25-only, no model touched.
     let hits = vault.search("forgetting", 10).unwrap();
     assert!(
         !hits.is_empty(),
@@ -413,7 +369,7 @@ fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
     assert!(hits[0].snippet.contains("forgetting"));
     assert!(hits[0].score > 0.0);
 
-    // The graph resolves, and discovery degrades to empty — never an error.
+    // Discovery degrades to empty, never an error.
     assert!(!vault.neighbors("concepts/memory").unwrap().is_empty());
     assert!(
         vault.similar("concepts/memory", 5).unwrap().is_empty(),
@@ -421,17 +377,13 @@ fn projected_vault_answers_keyword_search_and_similar_degrades_empty() {
     );
 }
 
-/// The honest "N/M embedded" coverage read (#26): 0/M while projected-but-unembedded,
-/// M/M once fully embedded, and a precise partial fraction when a projected note still
-/// lacks vectors — the signal an adapter flags "keyword-only for now" from. Model-free.
+/// The "N/M embedded" coverage read (GH #26) adapters flag "keyword-only for now" from.
 #[test]
 fn embed_status_reports_the_coverage_fraction() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = opened_vault(tmp.path());
 
-    // Projected but unembedded: every note counts toward the total, none is embedded, and
-    // the embedding space doesn't exist yet — reads as 0/M, no error (the query short-
-    // circuits before touching the absent `embeddings` table).
+    // No embedding space yet: 0/M, not an error.
     vault.project(false).unwrap();
     let s = vault.embed_status().unwrap();
     assert_eq!(
@@ -440,14 +392,11 @@ fn embed_status_reports_the_coverage_fraction() {
         "projected-but-unembedded: 0/M"
     );
 
-    // After a full embed: every note is embedded — M/M, semantic ranking complete.
     vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
     let s = vault.embed_status().unwrap();
     assert_eq!((s.embedded, s.total), (2, 2), "fully embedded: M/M");
 
-    // A newly added note (projected, not yet embedded) makes coverage partial — the
-    // precise fraction #26 surfaces, distinct from the binary "is a model installed".
-    // The two unchanged notes keep their vectors (project never re-embeds them).
+    // A new projected note makes coverage partial.
     fs::write(
         root.join("fresh.md"),
         "---\n---\n\nA fresh unembedded note.\n",
@@ -462,31 +411,16 @@ fn embed_status_reports_the_coverage_fraction() {
     );
 }
 
-/// A note with **no body** — frontmatter only, or an empty file — counts as embedded, and
-/// a reindex forecasts no work for it. It has no chunks, so there is no vector it could
-/// ever be waiting for: "embedded" is vacuously true, and the alternative is a note that
-/// reads as forever-pending.
-///
-/// **The bug this pins is a stuck fraction, not a rounding error.** The coverage predicate
-/// required `>= 1 chunk`, so an empty note could never join the numerator. On a real vault
-/// that is a permanent `1183/1188` — five `Untitled.md` and stub entity notes — and the
-/// fraction is not decoration: every UI surface keyed on `embedded < total` read it as
-/// unfinished work. The chat pane said grounding was keyword-first "while this vault
-/// embeds", the graph pane withheld ghost connections pending an embed that would never
-/// come, search wore a permanent "keyword-first" caveat, and `autoIndexOnOpen` plus the
-/// fs-watch's `vectorsPending` scheduled a no-op embed pass on every open and every pulse.
-/// A vault could not reach "done" by any amount of reindexing.
-///
-/// So the assertions come in pairs: the *fraction* is what the user sees, and `would_embed`
-/// is the work it kept commissioning.
+/// A note with no body has no chunks, so it counts as embedded and forecasts no work.
+/// Otherwise the fraction never reaches M/M, and every surface keyed on
+/// `embedded < total` (caveats, auto-embed passes) stays stuck.
 #[test]
 fn a_note_with_no_body_counts_as_embedded_and_forecasts_no_work() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);
 
-    // The two shapes a real vault produces: a stub note that is all frontmatter (the
-    // entity/`Untitled.md` case), and a file with nothing in it at all.
+    // All frontmatter, and an empty file.
     fs::write(root.join("stub.md"), "---\ntags:\n  - People\n---\n").unwrap();
     fs::write(root.join("blank.md"), "").unwrap();
 
@@ -497,8 +431,7 @@ fn a_note_with_no_body_counts_as_embedded_and_forecasts_no_work() {
         "both empty notes are projected like any other"
     );
 
-    // Non-vacuity: they really do contribute no chunks, so this is the chunkless case and
-    // not some other note quietly carrying the fraction.
+    // Non-vacuity: they really are chunkless.
     let conn = index_conn(&root);
     for path in ["stub.md", "blank.md"] {
         let chunks: i64 = conn
@@ -519,7 +452,6 @@ fn a_note_with_no_body_counts_as_embedded_and_forecasts_no_work() {
          must be able to reach M/M, or every surface keyed on it is stuck"
     );
 
-    // And the work the stuck fraction used to commission: none.
     let plan = vault.plan_reindex(false).unwrap();
     assert_eq!(
         plan.would_embed, 0,

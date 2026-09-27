@@ -1,14 +1,9 @@
-//! `b2` — one of the two dumb adapters over the `b2-core` typed API (ADR-0012),
-//! headless-first: "the CLI is the UI before the UI". It holds **no engine logic** — it
-//! parses args, injects the embedder and chat provider, calls the
-//! [`Vault`](b2_core::vault::Vault) façade, and prints (human-readable, or `--json` for
-//! agents). `dispatch` below routes each subcommand to its domain module.
+//! `b2`, a dumb adapter over the `b2-core` [`Vault`](b2_core::vault::Vault) façade
+//! (ADR-0012): parse args, inject the embedder and chat provider, call the façade, print
+//! (human or `--json`). No engine logic lives here.
 //!
-//! The embedder is the real candle-backed [`b2_embed::LocalEmbedder`] by default. It is **not
-//! bundled**: `b2 init` downloads it into a shared XDG cache, and `reindex`/`search` fail
-//! fast with "run `b2 init`" if it is absent, never a surprise mid-command download
-//! (ADR-0020). `B2_EMBEDDER=fake` forces the deterministic fake — an offline/dev mode,
-//! and what the CLI suite runs under.
+//! The real embedder is not bundled: `b2 init` downloads it, and `reindex`/`search` fail
+//! fast without it (ADR-0020). `B2_EMBEDDER=fake` forces the deterministic fake.
 
 mod args;
 mod cancel;
@@ -41,8 +36,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// The thin router: each subcommand's whole behavior lives in its `cmd_*` fn, in the
-/// module for its domain; this match only destructures the parsed args and forwards them.
+/// Route each subcommand to its `cmd_*` fn.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Command::Init => cmd_init(cli.json),
@@ -95,15 +89,13 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
     }
 }
 
-/// Print `value` as pretty JSON on stdout — the one `--json` output path, shared by
-/// every subcommand.
+/// Print `value` as pretty JSON on stdout: the one `--json` output path.
 pub fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<(), CliError> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 
-/// A command's one result, rendered for whoever asked: the value itself as JSON under
-/// `--json`, else `human`'s text. Every single-result command ends here, so the two
+/// A command's one result as JSON under `--json`, else `human`'s text, so the two
 /// renderings can't come from different values.
 pub fn emit<T: serde::Serialize + ?Sized>(
     json: bool,

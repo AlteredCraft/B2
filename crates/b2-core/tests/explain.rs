@@ -1,7 +1,4 @@
-//! `b2 explain` — a note's connections with their "why". Driven through the
-//! [`Vault`] façade against the golden vault, deterministic under the FakeEmbedder.
-//! `explain` is a pure graph read; these pin the header + the per-edge shape
-//! (label, target, explanation, origin) it presents, and the orphan case.
+//! `b2 explain`: a note's connections with their "why", a pure graph read.
 
 mod common;
 
@@ -14,14 +11,12 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
     let (vault, _root) = reindexed_vault(tmp.path());
 
     let view = vault.explain("notes/spaced-repetition").unwrap();
-    // Header: the note resolved to its identity + display fields.
     assert_eq!(view.path, SRS_PATH);
     assert_eq!(view.path, "notes/spaced-repetition.md");
     assert_eq!(view.title.as_deref(), Some("spaced-repetition"));
 
-    // Two outbound edges to memory — a typed `supports` (with a "why", from the
-    // `b2_relations:` entry) and a bare body `references` (none). The two homes,
-    // side by side (data-model §8).
+    // A typed `supports` with a why, and a bare body `references`: the two homes
+    // (data-model §8).
     assert_eq!(view.connections.len(), 2, "{:?}", view.connections);
     assert!(view.connections.iter().all(|c| c.direction == "outbound"));
     assert!(view.connections.iter().all(|c| c.path == MEMORY_PATH));
@@ -45,8 +40,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
         .find(|c| c.label == "references")
         .expect("the bare body link is a references edge");
     assert_eq!(references.origin, "inline", "the body home");
-    // Every edge carries the other note's `created` (GH #22) — resolved from
-    // the projection, not a file re-read.
+    // The other note's `created` (GH #22), from the projection.
     assert!(
         view.connections
             .iter()
@@ -54,7 +48,6 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
         "neighbors carry their created date: {:?}",
         view.connections
     );
-    // Every link resolves, so there are no unresolved (dangling) links.
     assert!(
         view.unresolved.is_empty(),
         "resolved note has no unresolved links: {:?}",
@@ -64,9 +57,7 @@ fn explain_shows_the_header_and_outbound_edges_with_their_why() {
 
 #[test]
 fn explain_surfaces_outbound_resource_links() {
-    // GH #22: an edge can target a note, a resource, or nothing. The resource kind
-    // must be visible from the *note's* side (not only as the resource's backlinks),
-    // else a graph over `explain` silently hides a note's file links.
+    // GH #22: resource links must be visible from the note's side too.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
@@ -79,7 +70,6 @@ fn explain_surfaces_outbound_resource_links() {
     vault.reindex().unwrap();
 
     let view = vault.explain("notes/uses-diagram").unwrap();
-    // The note link is a normal connection; the file link is a resource link.
     assert_eq!(view.connections.len(), 1, "{:?}", view.connections);
     assert_eq!(view.resources.len(), 1, "{:?}", view.resources);
     let r = &view.resources[0];
@@ -89,7 +79,6 @@ fn explain_surfaces_outbound_resource_links() {
     assert_eq!(r.origin, "inline");
     assert_eq!(r.caption.as_deref(), Some("a tiny diagram"));
     assert!(r.embed, "an image embed reads as embed=true");
-    // A note with no file links reports an empty list, never an error.
     assert!(vault
         .explain("concepts/memory")
         .unwrap()
@@ -99,9 +88,7 @@ fn explain_surfaces_outbound_resource_links() {
 
 #[test]
 fn explain_surfaces_unresolved_folder_and_typo_links() {
-    // GH #12: a `[[Hermes]]` link naming a *folder* (a note is one `.md` file) — or a
-    // typo — resolves to nothing. `explain` must surface it as an unresolved link,
-    // distinct from a resolved connection, so a broken link reads as broken not gone.
+    // GH #12: a link naming a folder or a typo reads as broken, not gone.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(
@@ -114,11 +101,9 @@ fn explain_surfaces_unresolved_folder_and_typo_links() {
     vault.reindex().unwrap();
 
     let view = vault.explain("guide").unwrap();
-    // The resolvable link is a normal outbound connection…
     assert_eq!(view.connections.len(), 1, "{:?}", view.connections);
     assert_eq!(view.connections[0].path, MEMORY_PATH);
     assert_eq!(view.connections[0].direction, "outbound");
-    // …and the folder link is surfaced as unresolved, carrying its authored target.
     assert_eq!(view.unresolved.len(), 1, "{:?}", view.unresolved);
     assert_eq!(view.unresolved[0].target, "Hermes");
     assert_eq!(view.unresolved[0].relation, "references");
@@ -130,7 +115,7 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // Memory is only pointed *at* (by SRS) — inbound edges, inverse-labelled.
+    // Memory is only pointed at, by SRS.
     let view = vault.explain(MEMORY_PATH).unwrap();
     assert_eq!(view.title.as_deref(), Some("memory"));
     assert!(!view.connections.is_empty());
@@ -153,9 +138,7 @@ fn explain_shows_inbound_backlinks_with_inverse_labels() {
 
 #[test]
 fn explain_resolves_a_stem_and_a_full_path_to_the_same_note() {
-    // The two ref forms `explain` still accepts since GH #170 — the extensionless
-    // wikilink habit and the full vault-relative path. There is no third form: the
-    // path *is* the identity (L1), so "or by b2id" is gone rather than renamed.
+    // The two ref forms since GH #170: the extensionless stem and the full path (L1).
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
@@ -167,8 +150,7 @@ fn explain_resolves_a_stem_and_a_full_path_to_the_same_note() {
 
 #[test]
 fn explain_surfaces_frontmatter_provenance() {
-    // An edge accepted into (or authored in) frontmatter reads as origin=frontmatter,
-    // distinct from a human body link — the provenance data-model §0 says explain shows.
+    // The provenance data-model §0 says explain shows.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
     fs::write(

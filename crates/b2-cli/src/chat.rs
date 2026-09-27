@@ -11,14 +11,11 @@ use std::io::{IsTerminal, Write};
 use std::ops::ControlFlow;
 
 pub fn cmd_ask(cli: &Cli, question: &str, llm_args: &LlmArgs) -> Result<(), CliError> {
-    // The provider first, deliberately: it is the cheap check, and loading the real
-    // embedder below takes seconds. A stopped model server should cost a round trip,
-    // not a model load followed by a failure.
+    // The provider first: a stopped server should cost a round trip, not a model load.
     let llm = open_llm(llm_args)?;
-    // Retrieval embeds the question for the vector half → the real model, like `search`.
+    // Retrieval embeds the question, so the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
-    // Ctrl-C cancels the answer at the next token rather than killing the process, so
-    // what already streamed stays on screen and is reported as partial.
+    // Ctrl-C cancels at the next token; what streamed stays, reported as partial.
     install_cancel_on_sigint(false);
     ask_streamed(&vault, llm.as_ref(), question, &[], cli.json)?;
     if !cli.json {
@@ -35,8 +32,7 @@ pub fn cmd_why(
     llm_args: &LlmArgs,
 ) -> Result<(), CliError> {
     let llm = open_llm(llm_args)?;
-    // A pure read over stored vectors, like `similar`: nothing embeds a query, so the
-    // real model is never loaded.
+    // Stored vectors only, like `similar`: no model load.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     install_cancel_on_sigint(false);
     let json = cli.json;
@@ -53,12 +49,9 @@ pub fn cmd_why(
 pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
     let llm = open_llm(llm_args)?;
     let vault = open_vault(cli.vault_or_cwd(), true)?;
-    // Mid-answer, Ctrl-C cancels the stream (the partial text stands); at an idle prompt
-    // it leaves, as it would anywhere else in a terminal.
+    // Mid-answer Ctrl-C cancels the stream; at an idle prompt it leaves.
     install_cancel_on_sigint(true);
-    // Prompts and the banner are chrome for a human at a terminal: on stderr so
-    // stdout stays answers, and only when there's a terminal there to read them
-    // (the `reindex` progress-line rule).
+    // Chrome goes to stderr, and only on a terminal.
     let interactive = !cli.json && std::io::stderr().is_terminal();
     if interactive {
         eprintln!(
@@ -74,8 +67,7 @@ pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
     if !cli.json {
         note_fake_llm();
     }
-    // Session-only history (S4): the turns live in this Vec and die with the process —
-    // a persisted transcript would be B2-derived state outside the Markdown.
+    // Session-only history (S4): a persisted transcript would be state outside the Markdown.
     let mut history: Vec<ChatTurn> = Vec::new();
     let stdin = std::io::stdin();
     loop {
@@ -85,7 +77,6 @@ pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
         }
         let mut line = String::new();
         if stdin.read_line(&mut line)? == 0 {
-            // Ctrl-D / end of a piped script.
             break;
         }
         let question = line.trim();
@@ -99,28 +90,19 @@ pub fn cmd_chat(cli: &Cli, llm_args: &LlmArgs) -> Result<(), CliError> {
             while_answering(|| ask_streamed(&vault, llm.as_ref(), question, &history, cli.json));
         match turn {
             Ok(answer) => {
-                // A cancelled answer goes into the history too: the human saw that
-                // text, so a follow-up referring to it ("go on") must be read
-                // against what was actually said, not against a turn we pretend
-                // never happened.
+                // A cancelled answer is kept too: a follow-up refers to what was shown.
                 history.push(ChatTurn::user(question));
                 history.push(ChatTurn::assistant(&answer.answer));
             }
-            // A failed turn ends the turn, not the session: a model server that
-            // hiccuped is worth retyping a question at, not worth losing the
-            // conversation over. The message is the same one the process would
-            // have exited with.
+            // A failed turn ends the turn, not the session.
             Err(e) => eprintln!("{}", user_message(&e)),
         }
     }
     Ok(())
 }
 
-/// One grounded ask, rendered as it arrives — the shared body of `ask` and each `chat`
-/// turn (flow ④'s streaming contract: every surface streams). Under `--json` this is a
-/// **JSON Lines event stream** — one `token` event per token, then one `answer` event
-/// carrying the [`AnswerView`] — so an agent sees the answer forming and still gets the
-/// resolved citations as data.
+/// One grounded ask, streamed: the body of `ask` and each `chat` turn. Under `--json`, a
+/// JSON Lines stream of `token` events, then one `answer` event carrying the [`AnswerView`].
 fn ask_streamed(
     vault: &Vault,
     llm: &dyn LlmProvider,
@@ -135,8 +117,7 @@ fn ask_streamed(
     Ok(answer)
 }
 
-/// Render one streamed token — the framing `ask`, `chat` and `why` share — and report
-/// whether Ctrl-C has asked the stream to stop.
+/// Render one streamed token and report whether Ctrl-C asked the stream to stop.
 fn stream_token(token: &str, json: bool) -> ControlFlow<()> {
     if json {
         print_event(&AskEvent::Token { text: token });
@@ -157,10 +138,8 @@ fn finish_answer(answer: &AnswerView, json: bool) {
     }
 }
 
-/// One line of the `--json` ask stream. The framing is the CLI's; the payload of
-/// the final event is `b2-core`'s [`AnswerView`], which is the standing
-/// convention (the view types are the adapters' shared contract — the desktop
-/// carries the same two facts as Tauri events plus a command return).
+/// One line of the `--json` ask stream. The final payload is `b2-core`'s [`AnswerView`],
+/// the adapters' shared contract.
 #[derive(serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum AskEvent<'a> {
@@ -170,16 +149,14 @@ enum AskEvent<'a> {
     Answer(&'a AnswerView),
 }
 
-/// Print one event as a single line of JSON — **not** `print_json`, which is
-/// pretty-printed: this is a stream, so one object per line is the contract.
+/// One event per line: not `print_json`, which pretty-prints.
 fn print_event(event: &AskEvent) {
     if let Ok(line) = serde_json::to_string(event) {
         println!("{line}");
     }
 }
 
-/// The human-readable tail of an answer: end the streamed line, then the sources
-/// the model cited, then — honestly — whether the answer is the whole of one.
+/// The human-readable tail of an answer: sources, tools, and whether it was cut short.
 fn print_answer_tail(answer: &AnswerView) {
     println!();
     if !answer.citations.is_empty() {
@@ -194,8 +171,7 @@ fn print_answer_tail(answer: &AnswerView) {
     if !answer.tools.is_empty() {
         println!("\nB2 tools used:");
         for t in &answer.tools {
-            // A lookup B2 made itself is marked, so the list never overstates what the
-            // model chose to do.
+            // Marked, so the list never overstates what the model chose to do.
             let by = if t.seeded { "  (made by B2)" } else { "" };
             println!("  {} {}{by}", t.name, t.arguments);
         }
@@ -205,10 +181,8 @@ fn print_answer_tail(answer: &AnswerView) {
     }
 }
 
-/// Never overstate what answered (the `search` fake-embedder caveat, applied to
-/// the chat seam): under `B2_LLM=fake` the "answer" is deterministic scaffolding,
-/// not a model. On stderr, so stdout stays the answer; the sentence is b2-llm's, so the
-/// desktop's setup card says the same thing.
+/// Never overstate what answered: under `B2_LLM=fake` the answer is scaffolding. On
+/// stderr, so stdout stays the answer.
 fn note_fake_llm() {
     if b2_llm::fake_requested() {
         eprintln!("{}", b2_llm::FAKE_NOTICE);

@@ -1,45 +1,34 @@
-//! The global embedder config — where the model comes from and where it's cached.
+//! The global embedder config: where the model comes from and where it's cached.
 //!
-//! Resolution order: the TOML at `$XDG_CONFIG_HOME/b2/config.toml` (if present)
-//! over compiled defaults; the `HF_ENDPOINT` env var (the standard Hugging Face
-//! mirror knob) supplies the endpoint when the file's `source` names none. A vault with no config file gets a
-//! working default — zero-config is the happy path (the fail-fast config rule
-//! applies to the *model files*, via `b2 init`, not to this file).
+//! `$XDG_CONFIG_HOME/b2/config.toml` over compiled defaults; `HF_ENDPOINT` supplies the
+//! endpoint when the file's `source` names none. No config file is the happy path.
 
 use crate::{EmbedError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// The default model: BAAI/bge-base-en-v1.5 — BERT-family, 768-dim, ungated, and
-/// validated in the spike. `dim` is *not* set here; it is read authoritatively from
-/// the model's own `config.json` (`hidden_size`) at load, so config can never lie
-/// about it.
+/// The default model. Its dim is read from the model's own `config.json` at load, never
+/// configured.
 pub const DEFAULT_MODEL: &str = "BAAI/bge-base-en-v1.5";
 
-/// One embedding model B2 knows how to run, as offered in the desktop's settings
-/// picker. [`AVAILABLE_MODELS`] is the **single source of truth** for "which models B2
-/// supports": adding one is a single entry here — no host or UI change, the picker
-/// fills automatically. `id` is the Hugging Face repo id, which is exactly what lands
-/// in `meta.embed_model_id`, so choosing a different one *is* the model swap that
-/// re-embeds on the next `reindex` (index-engine.md §8).
+/// One embedding model B2 can run, as offered in the settings picker. `id` lands in
+/// `meta.embed_model_id`, so choosing another is a model swap that re-embeds on the next
+/// `reindex` (index-engine.md §8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelInfo {
     /// Repo id == `meta.embed_model_id` (e.g. `BAAI/bge-base-en-v1.5`).
     pub id: &'static str,
     /// Human label for the picker (e.g. `BGE Base EN v1.5`).
     pub label: &'static str,
-    /// Embedding dimension, for display. Authoritatively re-read from the model's own
-    /// `config.json` at load; this is only the picker's at-a-glance number.
+    /// Embedding dimension, for display only (the real one is read at load).
     pub dim: usize,
     /// One-line "why pick this" shown under the picker.
     pub description: &'static str,
 }
 
-/// Every model the picker can offer. Each is BERT-family + ungated with the three
-/// [`REQUIRED_FILES`](crate::model::REQUIRED_FILES), so it drops into the same
-/// [`LocalEmbedder`](crate::LocalEmbedder) with no code change — the real dim is read from
-/// the model's own `config.json` at load, and the query prefix is shared. `dim` here is
-/// display-only. More land here as they're vetted.
+/// Every supported model; adding one is one entry here. Each must be BERT-family and
+/// ungated with the [`REQUIRED_FILES`](crate::model::REQUIRED_FILES), so it runs in the same
+/// [`LocalEmbedder`](crate::LocalEmbedder) with the shared query prefix.
 pub const AVAILABLE_MODELS: &[ModelInfo] = &[
     ModelInfo {
         id: DEFAULT_MODEL,
@@ -56,15 +45,13 @@ pub const AVAILABLE_MODELS: &[ModelInfo] = &[
     },
 ];
 
-/// The registry entry for `id`, or `None` if it isn't a model B2 supports — the guard
-/// [`EmbedConfig::set_model`] uses to refuse writing a config the loader can't provision.
+/// The registry entry for `id`, or `None` if B2 doesn't support it.
 fn find_model(id: &str) -> Option<&'static ModelInfo> {
     AVAILABLE_MODELS.iter().find(|m| m.id == id)
 }
 
-/// A registry model annotated for the settings picker: which one is configured now, and
-/// which are already downloaded. Owned (unlike [`ModelInfo`]'s `&'static str`s) because
-/// it crosses the IPC boundary as the `list_models` / `set_model` payload.
+/// A registry model annotated for the settings picker (current, installed). Owned because
+/// it crosses the IPC boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelChoice {
     pub id: String,
@@ -73,8 +60,7 @@ pub struct ModelChoice {
     pub description: String,
     /// The model this config currently resolves to (from config.toml, else the default).
     pub current: bool,
-    /// Already provisioned into the shared cache (all required files present); when
-    /// false, choosing it needs a `b2 init` before it can embed.
+    /// All required files are in the cache; otherwise it needs `b2 init`.
     pub installed: bool,
 }
 
@@ -82,8 +68,7 @@ pub struct ModelChoice {
 /// index-engine.md §5). Documents are embedded verbatim. Empty ⇒ symmetric.
 pub const DEFAULT_QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
 
-/// The standard Hugging Face mirror knob: the endpoint `b2 init` downloads from when
-/// the config's `source` names none.
+/// The standard Hugging Face mirror knob, used when the config's `source` names none.
 const ENV_HF_ENDPOINT: &str = "HF_ENDPOINT";
 
 /// Where the model files are fetched from when `b2 init` provisions them.
@@ -101,20 +86,17 @@ pub enum Source {
 /// The resolved embedder configuration.
 #[derive(Debug, Clone)]
 pub struct EmbedConfig {
-    /// Model identifier — recorded as `meta.embed_model_id`, so changing it is a
-    /// model swap that re-embeds on the next `reindex` (index-engine.md §8).
+    /// Recorded as `meta.embed_model_id`; changing it re-embeds (index-engine.md §8).
     pub model: String,
     /// Where to fetch the files from.
     pub source: Source,
-    /// The shared, machine-level cache dir (XDG data). One copy per machine, *not*
-    /// per-vault `.b2/` — the model is a runtime dep, not vault data.
+    /// The machine-level cache dir, not per-vault: the model is not vault data.
     pub cache_dir: PathBuf,
     /// The query-side prompt prefix (empty ⇒ symmetric embedding).
     pub query_prefix: String,
 }
 
-/// The `[embedder]` table as written in TOML. Every field optional → any subset
-/// overrides the defaults.
+/// The `[embedder]` table as written in TOML; any subset overrides the defaults.
 #[derive(Debug, Default, Deserialize)]
 struct RawFile {
     #[serde(default)]
@@ -131,9 +113,7 @@ struct RawEmbedder {
 }
 
 impl EmbedConfig {
-    /// Load from the standard config path, falling back to defaults where the file
-    /// (or any field) is absent. `HF_ENDPOINT` supplies the mirror endpoint when the
-    /// file's `source` names none.
+    /// Load from the standard config path, falling back to defaults.
     pub fn load() -> Result<Self> {
         let raw = match Self::config_path() {
             Some(p) if p.is_file() => {
@@ -149,16 +129,13 @@ impl EmbedConfig {
         ))
     }
 
-    /// The standard config file location: `$XDG_CONFIG_HOME/b2/config.toml`. Public
-    /// so an adapter can name the file in a "check your config" message.
+    /// `$XDG_CONFIG_HOME/b2/config.toml`, public so an adapter can name it in a message.
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("b2").join("config.toml"))
     }
 
-    /// The file's fields over the defaults. `hf_endpoint` is the `HF_ENDPOINT` value,
-    /// passed in rather than read here so resolution is testable without mutating a
-    /// process-global that parallel tests share (`b2_llm::LlmConfig::resolve`'s reason).
-    /// Blank reads as unset.
+    /// The file's fields over the defaults. `hf_endpoint` is passed in so tests needn't
+    /// mutate the process env. Blank reads as unset.
     fn from_raw(e: RawEmbedder, hf_endpoint: Option<String>) -> Self {
         let model = e.model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let endpoint_env = hf_endpoint.filter(|s| !s.trim().is_empty());
@@ -178,9 +155,8 @@ impl EmbedConfig {
         }
     }
 
-    /// Interpret the free-form `source` string (locked as one field): a URL is a
-    /// mirror endpoint; an existing filesystem path is a local install; anything
-    /// else is an alternate repo id. Absent ⇒ the default HF repo == `model`.
+    /// Interpret the free-form `source`: a URL is a mirror endpoint, an existing dir a
+    /// local install, anything else an alternate repo id. Absent means the repo `model`.
     fn resolve_source(model: &str, source: Option<String>, endpoint_env: Option<String>) -> Source {
         match source {
             Some(s) if is_url(&s) => Source::Hf {
@@ -199,31 +175,22 @@ impl EmbedConfig {
         }
     }
 
-    /// The flat directory the configured model's files live in under the cache —
-    /// predictable (`<cache_dir>/<sanitized-model>`) so "is it installed?" is a plain
-    /// file check.
+    /// `<cache_dir>/<sanitized-model>`, so "is it installed?" is a plain file check.
     pub(crate) fn model_dir(&self) -> PathBuf {
         self.model_dir_for(&self.model)
     }
 
-    /// [`model_dir`](Self::model_dir) for any registry id — the one place the cache
-    /// path is joined, so the loader and the picker's installed flag agree.
+    /// [`model_dir`](Self::model_dir) for any id; the one place the path is joined.
     fn model_dir_for(&self, model: &str) -> PathBuf {
         self.cache_dir.join(sanitize(model))
     }
 
-    /// Whether the model with repo id `model` is already provisioned in *this* config's
-    /// cache — all [`REQUIRED_FILES`](crate::model::REQUIRED_FILES) present. A cheap
-    /// file-existence check (no model load), so the settings picker can flag which
-    /// choices are installed vs. still need `b2 init`. Uses the config's own `cache_dir`
-    /// so a custom cache is honored, not just the default.
+    /// Whether `model`'s files are all in this config's cache. A file check, no load.
     pub fn is_model_provisioned(&self, model: &str) -> bool {
         crate::model::files_present(&self.model_dir_for(model))
     }
 
-    /// The full registry annotated against this config — the data the settings picker
-    /// renders. Pure (a function of `self` + [`AVAILABLE_MODELS`]), so both the mapping
-    /// and the current/installed flags are unit-testable without the real config dir.
+    /// The full registry annotated against this config, for the settings picker.
     pub fn model_choices(&self) -> Vec<ModelChoice> {
         AVAILABLE_MODELS
             .iter()
@@ -238,36 +205,28 @@ impl EmbedConfig {
             .collect()
     }
 
-    /// Persist `model` as the configured embedder in the standard `config.toml`,
-    /// preserving every other field and table already there. This is the **one config
-    /// both adapters read** (`load`), so the CLI and desktop always agree on the model —
-    /// a divergence would build the vault's vectors with one model and read them with
-    /// another, which `search` refuses (`ModelMismatch`). Refuses an id not in
-    /// [`AVAILABLE_MODELS`] rather than write a config the loader can't provision.
+    /// Persist `model` in the standard `config.toml`, keeping every other field. Both
+    /// adapters read this one file, so they can't embed with different models. Refuses an
+    /// id not in [`AVAILABLE_MODELS`].
     pub fn set_model(model: &str) -> Result<()> {
         let path = Self::config_path()
             .ok_or_else(|| EmbedError::Config("no config directory on this platform".into()))?;
         Self::write_model(&path, model)
     }
 
-    /// [`set_model`](Self::set_model) against an explicit path — the testable core (a
-    /// tempfile stands in for the real config). Validates *before* touching the
-    /// filesystem, so a rejected model leaves no file behind; creates the file (and its
-    /// parent dir) when absent, giving zero-config users a minimal `[embedder]` table.
+    /// [`set_model`](Self::set_model) against an explicit path. Validates before touching
+    /// the filesystem; creates the file and its parent when absent.
     fn write_model(path: &Path, model: &str) -> Result<()> {
         if find_model(model).is_none() {
             return Err(EmbedError::UnknownModel(model.to_string()));
         }
-        // Read the existing document (if any) so other keys/tables survive the write.
         let mut doc: toml::Table = match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text)
                 .map_err(|e| EmbedError::Config(format!("{}: {e}", path.display())))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
             Err(e) => return Err(EmbedError::Io(e)),
         };
-        // Set (or create) `[embedder].model`, leaving any sibling fields (source,
-        // cache_dir, query_prefix) intact. An existing non-table `embedder` is malformed;
-        // replace it rather than propagate the corruption.
+        // A non-table `embedder` is malformed; replace it.
         let embedder = doc
             .entry("embedder".to_string())
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -287,8 +246,7 @@ impl EmbedConfig {
     }
 }
 
-/// Default XDG cache: `~/.local/share/b2/models` (falls back to `./.b2-models` only
-/// if no home/data dir is discoverable, which is not expected on a normal machine).
+/// `<data-dir>/b2/models`, or `./.b2-models` when no data dir is discoverable.
 fn default_cache_dir() -> PathBuf {
     dirs::data_dir()
         .map(|d| d.join("b2").join("models"))
@@ -366,7 +324,6 @@ mod tests {
             source: Some("BAAI/bge-small-en-v1.5".into()),
             ..Default::default()
         };
-        // model id stays what `model` says; source repo is the override.
         let c = EmbedConfig::from_raw(e, None);
         assert!(matches!(c.source, Source::Hf { repo, .. } if repo == "BAAI/bge-small-en-v1.5"));
     }
@@ -386,7 +343,7 @@ mod tests {
             "default must be offered"
         );
         assert!(find_model("no/such-model").is_none());
-        // No duplicate ids (the picker keys on id, and set_model validates against it).
+        // No duplicate ids.
         let mut ids: Vec<_> = AVAILABLE_MODELS.iter().map(|m| m.id).collect();
         ids.sort_unstable();
         ids.dedup();
@@ -396,7 +353,6 @@ mod tests {
     #[test]
     fn model_choices_flag_current_and_installed() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // Default model, cache pointed at an empty temp dir → current but not installed.
         let mut c = EmbedConfig::from_raw(RawEmbedder::default(), None);
         c.cache_dir = tmp.path().to_path_buf();
         let choices = c.model_choices();
@@ -406,7 +362,6 @@ mod tests {
         assert_eq!(current[0].id, DEFAULT_MODEL);
         assert!(!current[0].installed, "empty cache ⇒ not installed");
 
-        // Drop the required files into the model dir → the flag flips to installed.
         let dir = c.model_dir();
         std::fs::create_dir_all(&dir).unwrap();
         for f in crate::model::REQUIRED_FILES {
@@ -425,7 +380,6 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("b2/config.toml");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // A pre-existing config with other embedder fields set (and no model yet).
         std::fs::write(
             &path,
             "[embedder]\nsource = \"https://mirror.example\"\nquery_prefix = \"Q: \"\n",
@@ -436,7 +390,6 @@ mod tests {
 
         let raw: RawFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(raw.embedder.model.as_deref(), Some(DEFAULT_MODEL));
-        // Siblings survive the write — set_model touches only `model`.
         assert_eq!(
             raw.embedder.source.as_deref(),
             Some("https://mirror.example")
@@ -447,7 +400,6 @@ mod tests {
     #[test]
     fn write_model_creates_missing_file_and_parent() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // Neither the file nor its parent dir exists yet — write must `mkdir -p`.
         let path = tmp.path().join("state/b2/config.toml");
         EmbedConfig::write_model(&path, DEFAULT_MODEL).unwrap();
         let raw: RawFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

@@ -1,6 +1,5 @@
-//! The qmd-heuristic chunker (index-engine.md, issue #19): size-targeted,
-//! overlapping, Markdown-aware chunks carrying a `heading_path`. Two DB-level tests keep
-//! the projection wiring honest; the rest exercise `chunk_body` as the pure function it is.
+//! The qmd-heuristic chunker (index-engine.md, GH #19): size-targeted, overlapping,
+//! Markdown-aware chunks carrying a `heading_path`.
 
 mod common;
 
@@ -23,9 +22,7 @@ fn chunks_are_projected_for_each_note() {
         .unwrap();
     assert!(total >= 2, "at least one chunk per golden note");
 
-    // Under qmd sizing the whole small spaced-repetition note (prose + the Relations
-    // list, well under the 450-token target) coalesces into a single chunk — the
-    // paragraph splitter's two-chunk split is exactly the regression #19 fixes.
+    // A small note, well under target, coalesces into one chunk (GH #19).
     let srs_chunks: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM chunks WHERE note_path = ?1",
@@ -35,7 +32,6 @@ fn chunks_are_projected_for_each_note() {
         .unwrap();
     assert_eq!(srs_chunks, 1);
 
-    // char offsets must address the slice that produced the chunk text.
     let (start, end, text): (i64, i64, String) = conn
         .query_row(
             "SELECT char_start, char_end, text FROM chunks WHERE note_path = ?1 AND seq = 0",
@@ -55,8 +51,6 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
-    // 'forgetting' appears only in spaced-repetition's Relations text (now folded
-    // into that note's single chunk); the match still resolves to that note.
     let note: String = conn
         .query_row(
             "SELECT c.note_path FROM chunks_fts f
@@ -71,10 +65,7 @@ fn fts_index_tracks_chunks_and_matches_body_text() {
 
 #[test]
 fn vault_chunk_config_reaches_projection() {
-    // The eval's sweep seam (the eval harness, crates/b2-embed/evals/): a non-default ChunkConfig
-    // set on the Vault must actually shape the cut — `set_chunk_config` +
-    // `project(force)` on the same vault re-chunks under the new policy, so a
-    // much finer target yields more chunks than the default did. Model-free.
+    // The eval's sweep seam: a ChunkConfig set on the Vault must shape the cut.
     let tmp = tempfile::TempDir::new().unwrap();
     let (mut vault, vault_dir) = opened_vault(tmp.path());
     vault.project(false).unwrap();
@@ -113,7 +104,6 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
     };
     let before = fts_count(&conn);
 
-    // Re-ingesting must replace, not accumulate (delete sentinel + reinsert).
     ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         before,
@@ -126,7 +116,7 @@ fn reindexing_a_note_does_not_leave_stale_fts_rows() {
 // chunk_body — the pure function (spec §6 Step 1). Deterministic, model-free.
 // --------------------------------------------------------------------------
 
-/// Estimated tokens by the same `chars/4` proxy the chunker sizes with.
+/// Estimated tokens by the chunker's own `chars/4` proxy.
 fn est_tokens(text: &str, cfg: &ChunkConfig) -> f64 {
     text.chars().count() as f64 / cfg.chars_per_token as f64
 }
@@ -140,7 +130,7 @@ fn empty_or_blank_body_yields_no_chunks() {
 
 #[test]
 fn char_ranges_address_the_exact_text() {
-    // The anchoring invariant: body[char_start..char_end] == text (prepend off).
+    // With prepend off.
     let body = "# Title\n\nA first paragraph about memory and recall.\n\n\
                 ## Section\n\nSome more content under a section heading here.\n";
     let cfg = ChunkConfig::default();
@@ -152,22 +142,19 @@ fn char_ranges_address_the_exact_text() {
 
 #[test]
 fn a_heading_and_its_section_land_in_one_chunk() {
-    // The core regression (#19): a bare `## Threat model` must not be its own chunk —
-    // it coalesces with the section body it introduces.
+    // GH #19: a bare heading must not be its own chunk.
     let body = "## Threat model\n\n\
                 The adversary can read any file left on the disk after a theft.\n";
     let chunks = chunk_body(body, &ChunkConfig::default());
     assert_eq!(chunks.len(), 1, "heading + section is one chunk");
     assert!(chunks[0].text.contains("## Threat model"));
     assert!(chunks[0].text.contains("The adversary can read"));
-    // No chunk is the bare heading alone.
     assert!(!chunks.iter().any(|c| c.text.trim() == "## Threat model"));
 }
 
 #[test]
 fn heading_path_tracks_nested_headings() {
-    // A small target forces each section into its own chunk; the deep chunk carries
-    // the full H1 › H2 › H3 breadcrumb. Overlap off so the deep chunk starts clean.
+    // A small target gives each section its own chunk; no overlap, so each starts clean.
     let cfg = ChunkConfig {
         target_tokens: 8,
         overlap_frac: 0.0,
@@ -190,7 +177,6 @@ fn heading_path_tracks_nested_headings() {
         Some("Top > Section A > Sub A1")
     );
 
-    // A chunk under the H1 intro (before any H2) carries just the H1.
     let top = chunks
         .iter()
         .find(|c| c.text.contains("Intro prose"))
@@ -200,8 +186,7 @@ fn heading_path_tracks_nested_headings() {
 
 #[test]
 fn body_before_any_heading_has_no_path() {
-    // Prose, then a heading. The single chunk starts in the headingless prose,
-    // so its path is None.
+    // The single chunk starts in headingless prose.
     let body = "Spaced repetition exploits the forgetting curve.\n\n## Notes\n- more prose\n";
     let chunks = chunk_body(body, &ChunkConfig::default());
     assert_eq!(chunks.len(), 1);
@@ -210,8 +195,7 @@ fn body_before_any_heading_has_no_path() {
 
 #[test]
 fn large_body_splits_near_target_and_never_far_over() {
-    // Many paragraphs → several chunks, each clustered near the target and never
-    // wildly past the proxy cap (target + one backscan window of slack).
+    // The cap is target plus one backscan window of slack.
     let para = "This is a paragraph of ordinary prose that carries a fair amount \
                 of content so that several of them together comfortably exceed the \
                 chunk size target and force the chunker to make real cuts.\n\n";
@@ -228,7 +212,6 @@ fn large_body_splits_near_target_and_never_far_over() {
             est_tokens(&c.text, &cfg)
         );
     }
-    // The interior chunks should sit in the neighbourhood of the target, not tiny.
     let interior_ok = chunks[..chunks.len() - 1]
         .iter()
         .all(|c| est_tokens(&c.text, &cfg) >= cfg.target_tokens as f64 * 0.5);
@@ -266,14 +249,14 @@ fn zero_overlap_partitions_without_gaps() {
     let chunks = chunk_body(&body, &cfg);
     assert!(chunks.len() > 1);
     for pair in chunks.windows(2) {
-        // Boundaries touch (allowing for trimmed whitespace between them).
+        // Allowing for trimmed whitespace between them.
         assert!(pair[1].char_start >= pair[0].char_end);
     }
 }
 
 #[test]
 fn a_giant_single_line_paragraph_still_splits() {
-    // No blank lines, no newlines — only word-boundary fallbacks can cut it.
+    // Only word-boundary fallbacks can cut it.
     let body = "word ".repeat(2000);
     let cfg = ChunkConfig::default();
     let chunks = chunk_body(&body, &cfg);
@@ -295,7 +278,6 @@ fn seq_is_contiguous_from_zero() {
 
 #[test]
 fn hash_inside_a_code_fence_is_not_a_heading() {
-    // A shell comment inside a fence must not corrupt the breadcrumb.
     let cfg = ChunkConfig {
         target_tokens: 8,
         overlap_frac: 0.0,
@@ -308,7 +290,6 @@ fn hash_inside_a_code_fence_is_not_a_heading() {
                 ```\n\n\
                 Trailing prose distinctively marked with a zebra token here.\n";
     let chunks = chunk_body(body, &cfg);
-    // No chunk's path is ever led by the shell comment text.
     for c in &chunks {
         let path = c.heading_path.as_deref().unwrap_or("");
         assert!(
@@ -316,13 +297,11 @@ fn hash_inside_a_code_fence_is_not_a_heading() {
             "fence comment leaked into heading_path: {path:?}"
         );
     }
-    // The trailing prose stays under the real heading.
     let zebra = chunks.iter().find(|c| c.text.contains("zebra")).unwrap();
     assert_eq!(zebra.heading_path.as_deref(), Some("Real heading"));
 }
 
-/// Count fence-delimiter lines (```` ``` ````/`~~~`) in a chunk — an odd count means
-/// the chunk carries an unbalanced fence, i.e. a code block was bisected.
+/// Fence-delimiter lines in a chunk; an odd count means a code block was bisected.
 fn fence_lines(text: &str) -> usize {
     text.lines()
         .filter(|l| {
@@ -334,9 +313,7 @@ fn fence_lines(text: &str) -> usize {
 
 #[test]
 fn a_code_fence_is_never_split_across_chunks() {
-    // #41: a code block larger than the backscan window spans a target boundary, so a
-    // forced cut would land inside it. The guard must keep every chunk's fences
-    // balanced and pull the whole block into a single chunk.
+    // GH #41: a block larger than the backscan window spans a target boundary.
     let cfg = ChunkConfig {
         target_tokens: 30,
         overlap_frac: 0.15,
@@ -365,7 +342,6 @@ fn a_code_fence_is_never_split_across_chunks() {
             c.text
         );
     }
-    // The block is pushed past its closing fence into one chunk (first line to last).
     let block = chunks
         .iter()
         .find(|c| c.text.contains("fn alpha()"))
@@ -379,8 +355,7 @@ fn a_code_fence_is_never_split_across_chunks() {
 
 #[test]
 fn a_table_keeps_its_header_and_rows_together() {
-    // #41: a table larger than the target spans a boundary; the guard must keep the
-    // header row and every data row in the same chunk (no orphaned rows).
+    // GH #41: a table larger than the target spans a boundary.
     let cfg = ChunkConfig {
         target_tokens: 30,
         overlap_frac: 0.0,
@@ -399,7 +374,6 @@ fn a_table_keeps_its_header_and_rows_together() {
     let chunks = chunk_body(body, &cfg);
 
     assert!(chunks.len() > 1, "the body must actually split");
-    // Any chunk carrying a data row must also carry the header — the table is whole.
     for c in &chunks {
         let has_row = ["| Ann", "| Bob", "| Cy", "| Dot", "| Eve"]
             .iter()
@@ -413,7 +387,6 @@ fn a_table_keeps_its_header_and_rows_together() {
             );
         }
     }
-    // And the header chunk holds the full table (first row through last).
     let table = chunks
         .iter()
         .find(|c| c.text.contains("| Name |"))
@@ -423,16 +396,13 @@ fn a_table_keeps_its_header_and_rows_together() {
 
 #[test]
 fn a_setext_underline_is_not_mistaken_for_a_table() {
-    // `---` under a line is a setext heading / rule, not a table delimiter (no `|`),
-    // so it forms no protected region and normal boundary scoring applies.
+    // `---` with no `|` is a setext underline, not a table delimiter.
     let cfg = ChunkConfig {
         target_tokens: 12,
         overlap_frac: 0.0,
         ..ChunkConfig::default()
     };
     let body = "Alpha heading\n---\n\nSome prose that follows the setext underline here.\n";
-    // Just needs to chunk without panicking and address exact slices (no false region
-    // pushing the boundary somewhere the text no longer matches).
     for c in chunk_body(body, &cfg) {
         assert_eq!(&body[c.char_start..c.char_end], c.text);
     }
@@ -440,8 +410,7 @@ fn a_setext_underline_is_not_mistaken_for_a_table() {
 
 #[test]
 fn prepend_heading_path_seeds_the_embedded_text() {
-    // D3's eval knob: with prepend on, the breadcrumb leads the embedded text; the
-    // char range keeps addressing the underlying body slice.
+    // D3's eval knob.
     let cfg = ChunkConfig {
         target_tokens: 8,
         overlap_frac: 0.0,
@@ -456,18 +425,12 @@ fn prepend_heading_path_seeds_the_embedded_text() {
         hit.text.starts_with(hp),
         "embedded text leads with the path"
     );
-    // The stored range still points at the real slice (which excludes the prefix).
+    // The stored range excludes the prefix.
     assert!(!body[hit.char_start..hit.char_end].starts_with(hp));
 }
 
-/// `weights` is a real lever, not decoration — the scorer reads the numbers from
-/// the config rather than hard-coding the qmd gradient.
-///
-/// Two halves: with the default gradient (H2 = 90 ≫ blank_line = 20) a cut near a
-/// section break snaps to the heading, so each section keeps its own breadcrumb;
-/// demote headings *below* every other boundary and the same body cuts somewhere
-/// else. Only `weights.heading` differs between the two runs, so the difference is
-/// attributable to it alone.
+/// The scorer reads `weights` from the config, not a hard-coded gradient: zeroing only
+/// `weights.heading` moves the cuts.
 #[test]
 fn heading_weight_is_a_lever_on_where_the_cut_lands() {
     let cfg = ChunkConfig {

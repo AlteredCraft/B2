@@ -1,44 +1,21 @@
-//! The app's macOS menu bar — **declared**, not inherited (ADR-0017, #119).
+//! The app's macOS menu bar, declared rather than inherited from `Menu::default()`
+//! (ADR-0017, #119). AppKit dispatches menu chords before the webview sees the key, so K1
+//! needs them enumerable: [`MENU`] is read by [`build`] and by [`chords`] (the UI's
+//! reference sheet and conflict check).
 //!
-//! Tauri applies `Menu::default()` to an app that sets none, and a dozen chords ride in
-//! with it. Those chords are live in the window and used to be invisible twice over:
-//! nothing enumerates the default, and AppKit dispatches a menu key equivalent inside
-//! `NSApplication.sendEvent` *before* the key window's responder chain, so they never reach
-//! the webview's keydown handler either. Invariant K1 promises a keyboard path that is
-//! *findable*, and you cannot document what you cannot enumerate.
-//!
-//! So the menu is B2's own data now. [`MENU`] is the whole of it, with exactly two readers:
-//! [`build`], which is what the window gets, and [`chords`], which the `menu_chords`
-//! command hands the UI for the reference sheet and the registry's conflict check.
-//!
-//! **The items stay predefined on purpose.** The Edit menu is load-bearing rather than
-//! decorative — Cut/Copy/Paste work in the webview *because* the native items route the
-//! standard selectors to it. The consequence is that B2 does not *choose* these
-//! accelerators: muda assigns them and exposes no getter, so the `keys` column below
-//! restates them. This is the one place to fix if a muda release moves one.
-//!
-//! **Two departures from `Menu::default()`**, neither touching a chord: its Window menu
-//! repeats Close Window (⌘W), which already lives in File, and its Help menu is empty on
-//! macOS. Neither survives here.
+//! The native items stay predefined because they route Cut/Copy/Paste into the webview.
+//! muda assigns their accelerators and exposes no getter, so the `keys` column restates
+//! them; fix it here if a muda release moves one.
 
 use serde::Serialize;
 use tauri::menu::{AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Runtime};
 
-/// The event the host emits when one of B2's **own** menu items is chosen — the View
-/// menu's three zoom lines, today. The payload is the item's [`ItemSpec::id`], and
-/// `ui/src/api.ts` carries the mirror of this string; change the two together.
-///
-/// Why an event at all, rather than the host simply zooming. The *rule* — the ladder of
-/// sizes, its walls, and remembering the choice — lives in `ui/src/zoom.ts`, because a
-/// reading size is a viewing preference and this crate holds no logic (the one rule).
-/// AppKit just happens to be where the keystroke lands, so the host's whole job is to
-/// say which line was chosen and let the frontend decide what that means.
+/// Emitted when one of B2's own items is chosen, with the item's [`ItemSpec::id`]. Must
+/// match `ui/src/api.ts`. The zoom rule itself lives in `ui/src/zoom.ts`.
 pub const MENU_COMMAND_EVENT: &str = "menu-command";
 
-/// The native behavior an item delegates to — one variant per [`PredefinedMenuItem`]
-/// constructor B2 uses. An enum rather than a function pointer so [`MENU`] stays a
-/// plain, readable table that the tests below can walk.
+/// The native behavior an item delegates to, one per [`PredefinedMenuItem`] constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
     About,
@@ -55,33 +32,24 @@ enum Item {
     SelectAll,
     Fullscreen,
     Minimize,
-    /// macOS's name for `maximize` — the label the platform itself uses.
+    /// macOS's name for `maximize`.
     Zoom,
     Separator,
-    /// **B2's own**, rather than a native behavior delegated to. The only kind of item
-    /// here that has no `PredefinedMenuItem` behind it: choosing it emits
-    /// [`MENU_COMMAND_EVENT`] carrying the row's id, and the frontend decides what it
-    /// means. Its accelerator is derived from the row's `keys` ([`muda_accelerator`]),
-    /// so — unlike every predefined row above, whose chord muda assigns and this table
-    /// merely restates — this is a chord B2 actually chooses.
+    /// B2's own item: emits [`MENU_COMMAND_EVENT`] with the row's id. Unlike predefined
+    /// rows, its accelerator is B2's choice, derived from `keys` ([`muda_accelerator`]).
     Command,
 }
 
 /// One line of the menu.
 #[derive(Debug, Clone, Copy)]
 struct ItemSpec {
-    /// Stable id, and the join key the UI mirrors this row by (`edit.copy`).
-    /// Deliberately *not* prefixed `menu.`: the registry already spells the
-    /// right-click menu's own commands that way (`menu.open`, `menu.item.next`).
+    /// Stable id the UI joins on (`edit.copy`). Not prefixed `menu.`, which the registry
+    /// uses for the right-click menu.
     id: &'static str,
     item: Item,
-    /// What the menu shows — and, since the reference sheet renders these verbatim,
-    /// what the keyboard reference calls the action. One string, both places.
+    /// Shown in both the menu and the keyboard reference.
     label: &'static str,
-    /// The chord macOS gives this item, spelled in the chord syntax of
-    /// `ui/src/bindings.ts` (which is CodeMirror's) so the UI can parse it with the
-    /// same parser it uses for B2's own chords. `None` for an item with no
-    /// accelerator — those are real menu items, but they are not keyboard surface.
+    /// The item's chord in `ui/src/bindings.ts`'s (CodeMirror's) syntax, or `None`.
     keys: Option<&'static str>,
 }
 
@@ -101,9 +69,7 @@ const SEPARATOR: ItemSpec = ItemSpec {
 
 /// B2's menu bar, in the order it is drawn.
 const MENU: &[SectionSpec] = &[
-    // The application menu. macOS draws this one from the bundle, and `Menu::default`
-    // passes the package name here — which is this same string (tauri.conf.json's
-    // `productName`).
+    // Matches tauri.conf.json's `productName`, as `Menu::default` would pass.
     SectionSpec {
         title: "B2",
         items: &[
@@ -151,8 +117,7 @@ const MENU: &[SectionSpec] = &[
             keys: Some("Mod-w"),
         }],
     },
-    // The load-bearing one: these route the platform's editing selectors into the
-    // webview, which is how copy and paste work at all inside the note editor.
+    // Routes the editing selectors into the webview: how copy and paste work at all.
     SectionSpec {
         title: "Edit",
         items: &[
@@ -195,13 +160,8 @@ const MENU: &[SectionSpec] = &[
             },
         ],
     },
-    // The one section with items of B2's own. The three sizes are here rather than in
-    // `ui/src/bindings.ts` for the reason this module exists at all: a menu accelerator
-    // is dispatched before the key window's responder chain, so a chord spelled in both
-    // places is a chord the webview never receives. Since macOS expects Zoom In / Zoom
-    // Out / Actual Size to *be* in the View menu — with their chords printed beside them,
-    // which is where most people find them — the menu is the honest owner, and the
-    // registry stays out of these three keystrokes entirely.
+    // Zoom lives here, not in `ui/src/bindings.ts`: a menu chord never reaches the webview,
+    // and macOS expects these in the View menu.
     SectionSpec {
         title: "View",
         items: &[
@@ -251,11 +211,8 @@ const MENU: &[SectionSpec] = &[
     },
 ];
 
-/// One menu item that carries a chord — the host's half of the app's keyboard
-/// contract, serialized to the UI by the `menu_chords` command.
-///
-/// Borrowed rather than owned because [`MENU`] is static: there is nothing to build,
-/// only something to hand over.
+/// One menu item that carries a chord, sent to the UI by `menu_chords`. Borrowed because
+/// [`MENU`] is static.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct MenuChord {
     pub id: &'static str,
@@ -264,11 +221,7 @@ pub struct MenuChord {
     pub keys: &'static str,
 }
 
-/// Every chord the menu bar takes, in menu order.
-///
-/// Items with no accelerator are skipped: this is the keyboard surface, not an
-/// inventory of the menu. `ui/src/menukeys.ts` mirrors the result — see the pin in
-/// this module's tests.
+/// Every chord the menu bar takes, in menu order. Mirrored by `ui/src/menukeys.ts`.
 pub fn chords() -> Vec<MenuChord> {
     MENU.iter()
         .flat_map(|section| section.items)
@@ -282,23 +235,12 @@ pub fn chords() -> Vec<MenuChord> {
         .collect()
 }
 
-/// One chord, translated from the registry's spelling into the one Tauri's accelerator
-/// parser reads (`Mod-Shift-z` → `CmdOrCtrl+Shift+z`).
-///
-/// **Derived rather than written down**, and that is the whole point of the function: an
-/// [`Item::Command`] row would otherwise carry the same chord twice — once for the UI to
-/// mirror and once for muda to bind — with nothing but care keeping them equal. Tauri
-/// takes the accelerator as a string and *silently drops one it can't parse*
-/// (`.parse().ok()`), so the failure mode of a drifted second spelling is not an error
-/// but a menu item that quietly has no shortcut. One source, no drift, no silence.
-///
-/// The split is CodeMirror's own rule, `-(?!$)`, for the reason `parseChord` gives: `-`
-/// is both the separator and a key you can press, so `Mod--` is ⌘ plus the hyphen.
+/// A registry chord in Tauri's accelerator syntax (`Mod-Shift-z` → `CmdOrCtrl+Shift+z`).
+/// Derived so a command row has one spelling: Tauri silently drops an accelerator it can't
+/// parse. Splits on CodeMirror's `-(?!$)`, since `Mod--` is ⌘ plus the hyphen.
 fn muda_accelerator(chord: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     let mut rest = chord;
-    // Cut at every `-` that isn't the last character; what's left when none remains is
-    // the key. `split` can't express "not at the end", so this walks it.
     while let Some(i) = rest[..rest.len().saturating_sub(1)].find('-') {
         parts.push(&rest[..i]);
         rest = &rest[i + 1..];
@@ -326,19 +268,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     Ok(menu)
 }
 
-/// One [`ItemSpec`] as the native item it becomes — predefined for everything the
-/// platform already does, and B2's own for [`Item::Command`].
-///
-/// Boxed because those are two unrelated types and a submenu takes `&dyn IsMenuItem`;
-/// it is one allocation per row, once, at launch.
+/// One [`ItemSpec`] as its native item: predefined, or B2's own for [`Item::Command`].
 fn item_for<R: Runtime>(
     app: &AppHandle<R>,
     spec: &ItemSpec,
     about: &AboutMetadata<'static>,
 ) -> tauri::Result<Box<dyn IsMenuItem<R>>> {
     if spec.item == Item::Command {
-        // `spec.id` is the payload the frontend switches on, so the item's menu id and
-        // the row's id are the same string by construction.
+        // The menu id is the payload the frontend switches on.
         let accel = spec.keys.map(muda_accelerator);
         let item = MenuItem::with_id(app, spec.id, spec.label, true, accel)?;
         return Ok(Box::new(item));
@@ -346,12 +283,8 @@ fn item_for<R: Runtime>(
     Ok(Box::new(predefined(app, spec, about)?))
 }
 
-/// The About panel's contents, from the same sources `Menu::default` reads: the
-/// package info and the bundle config.
-///
-/// `'static` because the only borrowed field is the panel's `icon`, which B2 leaves
-/// unset — eliding it here would tie the metadata to the handle it was read from for
-/// no reason.
+/// The About panel's contents, from the same sources `Menu::default` reads. `'static`
+/// because the only borrowed field, `icon`, is unset.
 fn about_metadata<R: Runtime>(app: &AppHandle<R>) -> AboutMetadata<'static> {
     let pkg = app.package_info();
     let bundle = &app.config().bundle;
@@ -364,9 +297,7 @@ fn about_metadata<R: Runtime>(app: &AppHandle<R>) -> AboutMetadata<'static> {
     }
 }
 
-/// One [`ItemSpec`] as the native item it delegates to. Every item passes its own
-/// `label`, so what the menu shows and what the keyboard reference prints are the
-/// same string rather than two that agree today.
+/// One [`ItemSpec`] as the predefined item it delegates to, with its own `label`.
 fn predefined<R: Runtime>(
     app: &AppHandle<R>,
     spec: &ItemSpec,
@@ -390,19 +321,15 @@ fn predefined<R: Runtime>(
         Item::Minimize => PredefinedMenuItem::minimize(app, text),
         Item::Zoom => PredefinedMenuItem::maximize(app, text),
         Item::Separator => PredefinedMenuItem::separator(app),
-        // Unreachable: `item_for` takes this branch before calling here. Handled rather
-        // than `unreachable!()` — a panic in the menu builder is a window that never
-        // opens, and a separator is the harmless thing to draw if the two ever disagree.
+        // Unreachable (`item_for` handles it); a panic here would mean no window.
         Item::Command => PredefinedMenuItem::separator(app),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! The menu as *data*. [`build`] needs a running app and is left to the app to
-    //! exercise; the table it reads is what has to hold together, and every check here
-    //! is a claim the UI relies on — a chord it can parse, an id it can join by, and a
-    //! list that matches its mirror.
+    //! The menu as data: [`build`] needs a running app, so these check the table the UI
+    //! relies on.
 
     use super::*;
     use std::collections::HashSet;
@@ -412,24 +339,18 @@ mod tests {
         MENU.iter().flat_map(|section| section.items)
     }
 
-    /// Is this spelled the way `ui/src/bindings.ts`'s `parseChord` reads a chord?
-    ///
-    /// A deliberately small check, not a second parser: it exists to catch a chord
-    /// written in the *platform's* spelling (`CmdOrCtrl+C`, which is what Tauri's own
-    /// accelerator syntax would want) leaking into a table the UI parses with
-    /// CodeMirror's. `menukeys.test.ts` runs the real parser over the mirror.
+    /// Is this spelled the way `ui/src/bindings.ts`'s `parseChord` reads a chord? A small
+    /// check against Tauri's spelling (`CmdOrCtrl+C`) leaking in; `menukeys.test.ts` runs
+    /// the real parser.
     fn is_registry_chord(spec: &str) -> bool {
-        // The same `-(?!$)` cut `muda_accelerator` makes, and for the same reason: `-` is
-        // both the separator and a key, so ⌘- is spelled `Mod--`.
+        // The same `-(?!$)` cut as `muda_accelerator`.
         let mut parts: Vec<&str> = Vec::new();
         let mut key = spec;
         while let Some(i) = key[..key.len().saturating_sub(1)].find('-') {
             parts.push(&key[..i]);
             key = &key[i + 1..];
         }
-        // One character, and never an uppercase one — `parseChord` lowercases what it
-        // reads, so an uppercase key here is a chord that parses to something else.
-        // Symbols are allowed: `=` and `-` are the View menu's.
+        // One character, never uppercase: `parseChord` lowercases what it reads.
         let key_ok = key.len() == 1 && !key.chars().any(|c| c.is_ascii_uppercase());
         key_ok
             && parts
@@ -439,9 +360,6 @@ mod tests {
 
     #[test]
     fn every_item_has_a_unique_id_and_a_label() {
-        // The id is what the UI's mirror joins on, so a duplicate would make one of the
-        // two rows unaddressable; the label is what both the menu and the keyboard
-        // reference print, so an empty one is a blank row in the sheet.
         let mut seen = HashSet::new();
         for spec in all_items() {
             if spec.item == Item::Separator {
@@ -466,10 +384,7 @@ mod tests {
 
     #[test]
     fn no_two_items_answer_to_the_same_chord() {
-        // The sheet lists one action per chord, so a menu that binds ⌘W twice — which
-        // `Menu::default` does, with Close Window in both File and Window — would print
-        // two rows the reader can't choose between. Dropping that duplicate is one of
-        // this module's two departures from the default.
+        // `Menu::default` binds ⌘W in both File and Window; B2 drops the duplicate.
         let mut seen = HashSet::new();
         for c in chords() {
             assert!(
@@ -491,32 +406,24 @@ mod tests {
                 c.keys
             );
         }
-        // And the guard has teeth: the spelling this is here to keep out.
         assert!(!is_registry_chord("CmdOrCtrl+C"));
         assert!(!is_registry_chord("Mod-Meh-c"));
         assert!(!is_registry_chord("Mod-C"));
-        // ...and it accepts the two symbol keys the View menu is spelled with.
         assert!(is_registry_chord("Mod--"));
         assert!(is_registry_chord("Mod-="));
     }
 
     #[test]
     fn a_command_item_carries_a_chord_muda_can_actually_parse() {
-        // The one place B2 *chooses* an accelerator rather than restating one macOS
-        // assigned — and Tauri drops an unparseable accelerator silently
-        // (`.parse().ok()`), so a wrong spelling here is a menu line with no shortcut and
-        // no complaint. `muda_accelerator` is the single source; this pins what it emits.
+        // Tauri drops an unparseable accelerator silently, so pin what this emits.
         assert_eq!(muda_accelerator("Mod-="), "CmdOrCtrl+=");
         assert_eq!(muda_accelerator("Mod--"), "CmdOrCtrl+-");
         assert_eq!(muda_accelerator("Mod-0"), "CmdOrCtrl+0");
         assert_eq!(muda_accelerator("Mod-Shift-z"), "CmdOrCtrl+Shift+z");
         assert_eq!(muda_accelerator("Mod-Ctrl-f"), "CmdOrCtrl+Ctrl+f");
-        // A bare key keeps its lone self rather than becoming an empty modifier.
         assert_eq!(muda_accelerator("-"), "-");
         assert_eq!(muda_accelerator("f"), "f");
 
-        // And every command row in the real table survives the trip: modifiers muda
-        // knows, one key left over, nothing empty.
         for spec in all_items().filter(|s| s.item == Item::Command) {
             let keys = spec.keys.unwrap_or_else(|| panic!("{}: no chord", spec.id));
             let accel = muda_accelerator(keys);
@@ -535,10 +442,6 @@ mod tests {
 
     #[test]
     fn a_command_item_is_addressable_and_every_other_item_is_not() {
-        // The event payload is the row's id, so a command row without one is a menu line
-        // the frontend cannot act on. The converse matters just as much: a predefined row
-        // must stay predefined, because those are what route the platform's editing
-        // selectors into the webview (copy and paste work *because* of them).
         for spec in all_items().filter(|s| s.item == Item::Command) {
             assert!(!spec.id.is_empty(), "a command item with no id");
             assert!(
@@ -551,12 +454,8 @@ mod tests {
 
     #[test]
     fn the_exported_chords_are_what_the_ui_mirrors() {
-        // `ui/src/menukeys.ts` carries this same list — the UI's only offline knowledge of
-        // what the menu takes, and what its conflict gate reads. **Change the two
-        // together**: the app compares them at startup (`menuDrift`) and reports a
-        // mismatch, the same posture as `WRITE_CONFLICT_MESSAGE`. A row moving in or out is
-        // a change to what the app reserves from its own keyboard, which is exactly what
-        // used to happen invisibly — hence a pin rather than a count.
+        // `ui/src/menukeys.ts` carries this same list; change the two together (the app
+        // also reports drift at startup, `menuDrift`).
         let exported: Vec<String> = chords()
             .iter()
             .map(|c| format!("{} {} {}", c.id, c.keys, c.label))

@@ -3,19 +3,16 @@
 use b2_embed::{EmbedConfig, EmbedError};
 use b2_llm::{model_missing_message, refusal_message, unreachable_message, LlmError};
 
-/// The CLI's error, composing the two crates it drives. Kept internal; `user_message`
-/// turns it into a generic, actionable, no-internals-leaked line (logging policy).
-/// `#[from]` supplies the `?` conversions; `transparent` defers `Display` to the
-/// inner error (only ever surfaced under `B2_DEBUG`).
+/// The CLI's error, composing the crates it drives. Kept internal: `user_message` turns it
+/// into a generic, actionable line, and `Display` surfaces only under `B2_DEBUG`.
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error(transparent)]
     Core(#[from] b2_core::Error),
     #[error(transparent)]
     Embed(#[from] EmbedError),
-    /// A setup-time chat failure the adapter can act on — an unreachable model
-    /// server, an un-pulled model. Call-time failures arrive as
-    /// [`b2_core::Error::Llm`] instead (the seam collapses them to a message).
+    /// A setup-time chat failure the adapter can act on. Call-time failures arrive as
+    /// [`b2_core::Error::Llm`].
     #[error(transparent)]
     Llm(#[from] LlmError),
     #[error(transparent)]
@@ -23,35 +20,28 @@ pub enum CliError {
     /// A filesystem error creating `.b2/` or opening the reindex lock file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// A command that writes (`reindex`, `add`, `write`, `mv`, `rm`, `link`) was run with
-    /// no vault at all (no positional, no `-C`, no `$B2_VAULT_PATH`) — refuse rather than
-    /// silently write into the current directory.
+    /// A writing command got no vault; refuse rather than write into the cwd.
     #[error("no vault specified")]
     VaultRequired,
     /// Another `reindex` already holds the single-in-flight lock on this vault.
     #[error("a reindex is already running")]
     ReindexRunning,
-    /// `reindex --cancel` found no run in flight on this vault — nothing to signal.
+    /// `reindex --cancel` found no run in flight.
     #[error("no reindex is running")]
     NoReindexRunning,
-    /// `reindex --cancel` found a run in flight whose lock names no readable pid, so
-    /// there is no address to signal (a holder that hasn't stamped its pid yet).
+    /// `reindex --cancel` found a run whose lock holds no readable pid yet.
     #[error("the running reindex recorded no pid")]
     ReindexPidUnknown,
-    /// `rm` was pointed at a folder without `--recursive` — refuse rather than
-    /// silently remove a whole subtree (the CLI's stand-in for the desktop's
-    /// confirm dialog; there is no interactive prompt to give an agent).
+    /// `rm` on a folder without `--recursive`: the CLI's stand-in for the desktop's
+    /// confirm dialog.
     #[error("folder delete requires --recursive: {0}")]
     RecursiveRequired(String),
-    /// `write` was invoked with stdin attached to a terminal (nothing piped) — refuse
-    /// rather than hang waiting for hand-typed input; the new body must be piped in.
+    /// `write` with stdin on a terminal: refuse rather than hang waiting for input.
     #[error("no body piped on stdin")]
     StdinRequired,
 }
 
-/// The head of a model server's own model list, for "…or pick one it already
-/// serves". Bounded: a local runtime holds a handful, but a cloud endpoint lists
-/// hundreds, and a hundred-model line is not a hint.
+/// The head of a server's model list, bounded because a cloud endpoint lists hundreds.
 fn model_hint(available: &[String]) -> Option<String> {
     const SHOWN: usize = 6;
     if available.is_empty() {
@@ -65,8 +55,7 @@ fn model_hint(available: &[String]) -> Option<String> {
     })
 }
 
-/// The core relation verbs, as a message lists them — read from `b2_core::relation::CORE`
-/// so a verb added there is offered here without an edit.
+/// The core relation verbs, read from `b2_core::relation::CORE`.
 fn core_verbs() -> String {
     b2_core::relation::CORE
         .iter()
@@ -81,8 +70,7 @@ fn config_file() -> String {
         .map_or_else(|| "config.toml".to_string(), |p| p.display().to_string())
 }
 
-/// Translate an internal error into a generic, actionable, user-facing message —
-/// never leaking sqlite/io/serde internals. Set `B2_DEBUG` to also print the detail.
+/// A generic, actionable message that never leaks internals; `B2_DEBUG` adds the detail.
 pub fn user_message(err: &CliError) -> String {
     let msg = match err {
         CliError::Core(b2_core::Error::NoteNotFound(r)) => format!(
@@ -103,7 +91,6 @@ pub fn user_message(err: &CliError) -> String {
         CliError::Embed(EmbedError::Load(_)) => {
             "The embedding model's files failed to load. Run `b2 init` to fetch them again.".to_string()
         }
-        // `config.toml` didn't parse, or its `source` names a folder missing a model file.
         // Either way the fix is in that one file, so name it.
         CliError::Embed(EmbedError::Config(_)) => format!(
             "B2 couldn't use its embedder settings. Check the [embedder] table in {}, then try again.",
@@ -112,8 +99,7 @@ pub fn user_message(err: &CliError) -> String {
         CliError::Embed(EmbedError::Io(_)) => {
             "B2 couldn't read or write the embedding model's files. Check that the model cache is readable and writable, then run `b2 init` again.".to_string()
         }
-        // Only a settings picker names a model to switch to; the CLI never does, so this
-        // arm exists for exhaustiveness and says what the fix would be.
+        // Only a settings picker names a model to switch to; here for exhaustiveness.
         CliError::Embed(EmbedError::UnknownModel(m)) => format!(
             "'{m}' isn't an embedding model B2 offers. Set `model` in {} to one of: {}.",
             config_file(),
@@ -176,23 +162,17 @@ pub fn user_message(err: &CliError) -> String {
         CliError::StdinRequired => {
             "No body piped on stdin. Pipe the new note body in, e.g. `cat new-body.md | b2 write notes/foo`.".to_string()
         }
-        // The E4 case chat is most likely to hit: nothing is serving the endpoint. The
-        // sentence is b2-llm's, advised by the endpoint the user actually configured
-        // (`ollama serve` only when it is Ollama's); the CLI adds only its own way of
-        // pointing somewhere else.
+        // E4. The sentence is b2-llm's; the CLI adds only its own flag.
         CliError::Llm(LlmError::Unreachable { endpoint, .. }) => format!(
             "{} Or point --llm-url (or B2_LLM_URL) at a different one.",
             unreachable_message(endpoint)
         ),
-        // Something answered the probe and refused it — a *different* mistake from
-        // nothing listening, and one this used to report as success. The sentence is
-        // b2-llm's (`refusal_message`), so the CLI and the app say the same thing; the
-        // Ollama-root hint is the app's alone, since only its card has asked the daemon.
+        // Something answered and refused, a different mistake from nothing listening. The
+        // Ollama-root hint is the app's alone: only its card has asked the daemon.
         CliError::Llm(LlmError::Refused { endpoint, status, message }) => {
             refusal_message(endpoint, *status, message, None)
         }
-        // b2-llm's sentence again, plus the CLI's flag — and the server's own list, since
-        // "pick one it already serves" is only advice when it names them.
+        // Plus the server's own list: "pick one it serves" is only advice if it names them.
         CliError::Llm(LlmError::ModelMissing { model, endpoint, available }) => {
             let msg = model_missing_message(model, endpoint);
             match model_hint(available) {
@@ -200,28 +180,22 @@ pub fn user_message(err: &CliError) -> String {
                 None => msg,
             }
         }
-        // Not the generic chat failure below: the server is up and the model is there,
-        // so that advice would mislead. The cap is the one fix on this side of the wire.
+        // The server is up and the model is there, so the generic advice would mislead.
         CliError::Core(b2_core::Error::ToolCallLimit { limit }) => format!(
             "The chat model asked for more than {limit} tool calls in one reply, so b2 stopped it. Try again or use another model (--llm-model). If this model really needs more, raise {}.",
             b2_llm::ENV_MAX_TOOL_CALLS
         ),
-        // Every remaining chat failure — an HTTP refusal at probe time, a malformed
-        // stream — is one sentence with one fix, and the detail is a `B2_DEBUG` away.
         CliError::Llm(_) | CliError::Core(b2_core::Error::Llm(_)) => {
             "The model server couldn't answer. Check that it's running and that the model is installed (`ollama list`), then try again.".to_string()
         }
-        // Everything else in the composed crates is an internal (sqlite/io/serde/…) this
-        // message must never show. Spelled out rather than `_`, so a new `CliError`
-        // variant fails to compile here instead of silently landing in the catch-all.
+        // Internals this message must never show. Spelled out rather than `_`, so a new
+        // `CliError` variant fails to compile instead of landing in the catch-all.
         CliError::Core(_) | CliError::Serde(_) | CliError::Io(_) => {
             "Something went wrong. Please check the vault path and try again.".to_string()
         }
     };
     if std::env::var_os("B2_DEBUG").is_some() {
-        // Every wrapper variant is `#[error(transparent)]` and every local variant
-        // carries its own `#[error("…")]` line, so the enum's own `Display` *is* the
-        // per-variant detail — no match needed.
+        // The enum's own `Display` is the per-variant detail.
         let detail = err.to_string();
         format!("{msg}\n(debug: {detail})")
     } else {
@@ -255,8 +229,7 @@ mod tests {
         }
     }
 
-    /// `b2 init` meets these two, and they used to fall through to "check the vault path"
-    /// — advice about a vault the command never opened.
+    /// `b2 init` never opens a vault, so "check the vault path" would mislead.
     #[test]
     fn embedder_setup_failures_say_what_to_fix_not_to_check_the_vault() {
         for err in [

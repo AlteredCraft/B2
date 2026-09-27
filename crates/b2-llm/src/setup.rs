@@ -1,56 +1,36 @@
-//! The **onboarding corner** — deliberately Ollama-native, even though chat is generic
-//! (GH #151, cut as GH #155).
+//! Chat onboarding (GH #151, GH #155). Chat itself is generic `/v1`, but the setup card
+//! speaks Ollama's native API (detect the daemon, list models, suggest a pull): guided
+//! setup is a per-runtime feature, so don't generalize it.
 //!
-//! The chat path speaks the generic OpenAI-compatible `/v1` surface and will talk to LM
-//! Studio, llama.cpp, vLLM or a cloud provider with a URL change. The *setup card* speaks
-//! Ollama's **native** API: detect the daemon, list what is installed, suggest a pull sized
-//! to the machine. That asymmetry is by design, so nobody later "generalizes" the card
-//! against an abstraction that cannot serve it — **guided setup is a per-runtime feature.**
-//!
-//! Everything here is a *status*, never an error: [`probe_setup`] cannot fail, because "the
-//! daemon isn't running" is the answer the card is asking for. Adapter-level throughout, so
-//! nothing here is recorded in the vault or the index.
+//! Everything here is a status, never an error: "the daemon isn't running" is the answer
+//! [`probe_setup`] is asking for.
 
 use crate::{ApiKeySource, LlmConfig, LlmError, OpenAiCompatProvider, FAKE_NOTICE};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Ollama's native model inventory — the one non-`/v1` endpoint B2 speaks, and
-/// only for onboarding.
+/// Ollama's native model inventory, the one non-`/v1` endpoint B2 speaks.
 const TAGS_PATH: &str = "/api/tags";
 
-/// Where a human who has *no* Ollama is sent — the quickstart rather than the product
-/// page: someone reading this has already found out nothing is listening, so they need the
-/// page with the install command on it. One constant, printed by [`unreachable_message`]
-/// for both adapters, so the link cannot drift between them.
+/// Where someone with no Ollama is sent: the page with the install command on it.
 pub const OLLAMA_INSTALL_URL: &str = "https://docs.ollama.com/quickstart";
 
-/// The port Ollama serves on. Recognizing it is what decides whether Ollama's own
-/// commands (`ollama serve`, `ollama pull …`) belong in a message — advice about
-/// the wrong program is worse than no advice, and `B2_LLM_URL` also points at LM
-/// Studio, llama.cpp, vLLM and cloud providers.
+/// The port Ollama serves on, which decides whether Ollama's commands belong in a message.
 const OLLAMA_PORT: &str = ":11434";
 
-/// How long the onboarding round trip may take. Short for [`PROBE_TIMEOUT`]'s
-/// reason: a setup card that hangs is worse than one that says "not running".
+/// How long the onboarding round trip may take: a hanging card is worse than "not running".
 const TAGS_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Does this endpoint look like the Ollama daemon — its port, or a host that names it? It
-/// decides two things: whether Ollama's own commands belong in an error message, and
-/// whether [`probe_setup`] asks `/api/tags` at all. Deliberately a *guess about the
-/// runtime*, not a security check: being wrong costs one refused request.
+/// Does this endpoint look like Ollama (its port, or a host naming it)? A guess, not a
+/// security check: being wrong costs one refused request.
 fn is_ollama(base_url: &str) -> bool {
     let endpoint = base_url.to_ascii_lowercase();
     endpoint.contains(OLLAMA_PORT) || endpoint.contains("ollama")
 }
 
-/// Is this endpoint on **this machine** — the Local configuration (M5)? Anything else is
-/// Cloud models: note passages leave the machine, which is why the desktop shows the
-/// privacy copy beside exactly this answer.
-///
-/// Permissive about *how* loopback is spelled, because guessing "cloud" for a local URL
-/// only shows a warning the user doesn't need, while guessing "local" for a remote one
-/// would hide one they do. So it is a **membership** test: only known loopback spellings.
+/// Is this endpoint on this machine (Local, M5)? Anything else is Cloud, where passages
+/// leave the machine. A membership test of known loopback spellings: calling a remote host
+/// local would hide the privacy warning.
 fn is_local(base_url: &str) -> bool {
     let host = host_of(base_url);
     host == "localhost"
@@ -61,20 +41,13 @@ fn is_local(base_url: &str) -> bool {
         || host.ends_with(".localhost")
 }
 
-/// `127.0.0.0/8`, spelled as a dotted quad — and **nothing that merely begins
-/// with `127.`**, because a registrable DNS name may (`127.notes.example.com`
-/// resolves to wherever its owner points it). Parsing rather than prefix-matching
-/// is the membership test [`is_local`] promises: the one direction that must
-/// never happen is a remote host reading as local, which is exactly what the
-/// prefix let through.
+/// `127.0.0.0/8` as a dotted quad. Parsed, not prefix-matched: `127.notes.example.com` is
+/// a DNS name.
 fn is_loopback_v4(host: &str) -> bool {
     matches!(host.parse::<std::net::Ipv4Addr>(), Ok(ip) if ip.is_loopback())
 }
 
-/// A URL's scheme (when it names one) and its authority — everything between `://` and
-/// the first `/`, `?` or `#`. Hand-rolled rather than a URL crate: this crate's whole
-/// posture is one wire shape and no dependency tree, and [`host_of`] and [`origin_of`]
-/// need only these two pieces.
+/// A URL's scheme (when present) and authority. Hand-rolled to avoid a URL crate.
 fn scheme_and_authority(url: &str) -> (Option<&str>, &str) {
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (Some(s), r),
@@ -95,16 +68,9 @@ fn host_of(url: &str) -> String {
     }
 }
 
-/// Ollama's **native** root, derived from the configured compat base URL: the compat
-/// surface is mounted under `/v1`, and `/api/tags` is not. Two derivations, in order,
-/// because the input is a URL a human typed:
-///
-/// 1. Drop a trailing `/v1`. This must come first, since it is the only one that survives a
-///    **path-mounted** daemon — `https://gw/ollama/v1` keeps its `/ollama` prefix.
-/// 2. Failing that, the **authority root**. What lands here is a base URL that isn't the
-///    compat surface at all — most often a typo — and that is precisely when knowing
-///    whether the daemon is up is worth most: "Ollama is running, your path is wrong"
-///    rather than "is Ollama running?".
+/// Ollama's native root from the compat base URL: drop a trailing `/v1` (first, so a
+/// path-mounted daemon keeps its prefix), else the authority root. The fallback catches a
+/// typo'd path, where "Ollama is running, your path is wrong" is most useful.
 fn ollama_root(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     match trimmed.strip_suffix("/v1") {
@@ -113,8 +79,7 @@ fn ollama_root(base_url: &str) -> String {
     }
 }
 
-/// `scheme://authority` — the URL with every path segment dropped. A missing
-/// scheme reads as `http`, which is what an Ollama URL without one means.
+/// `scheme://authority`; a missing scheme reads as `http`.
 fn origin_of(url: &str) -> String {
     let (scheme, authority) = scheme_and_authority(url);
     format!("{}://{authority}", scheme.unwrap_or("http"))
@@ -126,19 +91,12 @@ fn origin_of(url: &str) -> String {
 pub enum ChatState {
     /// A server answered and serves the configured model. Chat works.
     Ready,
-    /// Nothing usable is at the endpoint: the daemon isn't running, or the URL
-    /// is wrong. Both readings live here because both are *the endpoint is not
-    /// serving chat*, and the card's copy is where they part — a refusal
-    /// ([`LlmError::Refused`]) never gets "is Ollama running?" advice about a
-    /// daemon that plainly answered. Which is to say: the **state** picks the
-    /// card, the **message** carries the fix.
+    /// Nothing usable is at the endpoint: not running, or a wrong URL. The state picks the
+    /// card; the message carries the fix.
     Unreachable,
-    /// A server is there, but doesn't serve the configured model — the most
-    /// common local-setup mistake (an un-pulled Ollama model).
+    /// A server is there, but doesn't serve the configured model.
     ModelMissing,
-    /// `B2_LLM=fake` is in force: the deterministic provider answers, and no
-    /// model is involved at all. Surfaced rather than hidden, for the same
-    /// reason `b2 chat` prints its note — never overstate what answered.
+    /// `B2_LLM=fake` is in force; surfaced so nobody overstates what answered.
     Fake,
 }
 
@@ -147,16 +105,14 @@ pub enum ChatState {
 pub struct OllamaModel {
     /// The name to configure, tag included (`llama3.2:latest`).
     pub name: String,
-    /// On-disk size in bytes, for "how much did this cost me" in the picker.
+    /// On-disk size in bytes.
     pub size: u64,
     /// The parameter count as Ollama labels it (`"3.2B"`), when it says.
     pub parameters: Option<String>,
 }
 
-/// One rung of the picker heuristic (GH #151: *illustrative, non-binding*) —
-/// deliberately data rather than prose, so the card can point at the rung the
-/// machine actually sits on instead of printing a table and leaving the
-/// arithmetic to the reader.
+/// One rung of the picker heuristic (GH #151), as data so the card can point at this
+/// machine's rung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ModelTier {
     /// Inclusive floor, in whole GB of system memory.
@@ -165,14 +121,12 @@ pub struct ModelTier {
     pub ram: &'static str,
     /// The model size band ("7–8B").
     pub size: &'static str,
-    /// A concrete model at that band — what `ollama pull` would be handed.
+    /// A concrete model at that band, for `ollama pull`.
     pub model: &'static str,
 }
 
-/// The tiers, smallest first. **Illustrative and non-binding** (the spec's own
-/// words): they are a starting point for someone who has never pulled a model,
-/// not a hardware floor — B2 has none, and any OpenAI-compatible endpoint,
-/// including a cloud one, satisfies the contract.
+/// The tiers, smallest first. Illustrative and non-binding: a starting point, not a
+/// hardware floor.
 pub const MODEL_TIERS: [ModelTier; 3] = [
     ModelTier {
         min_ram_gb: 0,
@@ -194,9 +148,7 @@ pub const MODEL_TIERS: [ModelTier; 3] = [
     },
 ];
 
-/// The rung `ram_gb` sits on — the highest tier whose floor it meets. Total
-/// installed memory, not free: the question is what the machine can host, and a
-/// suggestion that changed with whatever else is open would be noise.
+/// The highest tier whose floor `ram_gb` (total, not free) meets.
 fn tier_for_ram(ram_gb: u64) -> &'static ModelTier {
     MODEL_TIERS
         .iter()
@@ -206,55 +158,39 @@ fn tier_for_ram(ram_gb: u64) -> &'static ModelTier {
 }
 
 /// The Ollama-native half of the card: what the daemon has, and what to pull.
-/// `None` on the [`ChatSetup`] when the endpoint isn't Ollama's — there is
-/// nothing honest to say about pulling models into LM Studio.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OllamaSetup {
-    /// The daemon's native root (`http://localhost:11434`) — what `/api/tags`
-    /// was asked, and what a message names.
+    /// The daemon's native root (`http://localhost:11434`).
     pub root: String,
     /// Whether the native API answered at all.
     pub running: bool,
-    /// Every installed model, as the daemon lists them. Empty when the daemon is
-    /// running with nothing pulled — which is the "no model" empty state, and a
-    /// different card from "no server".
+    /// Every installed model; empty is the "no model" state, not "no server".
     pub installed: Vec<OllamaModel>,
     /// Total system memory in whole GB, when the platform could be asked.
     pub ram_gb: Option<u64>,
     /// The whole heuristic, so the card can show the table it chose from.
     pub tiers: Vec<ModelTier>,
-    /// The rung this machine sits on — `None` when memory couldn't be read, in
-    /// which case the card shows the table without picking for the user.
+    /// This machine's rung, or `None` when memory couldn't be read.
     pub suggested: Option<ModelTier>,
 }
 
-/// Everything an adapter needs to draw the chat surface's setup card and its
-/// Settings section: the resolved configuration, the verdict, and — when the
-/// runtime is Ollama — the native inventory behind it.
-///
-/// A **status object, not a result**: every field is filled on every path, so an
-/// unreachable daemon renders a card rather than raising.
+/// Everything an adapter needs for the chat setup card and Settings section. A status,
+/// not a result: an unreachable daemon renders a card rather than raising.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChatSetup {
     /// The OpenAI-compatible base URL in force (env + adapter overrides applied).
     pub base_url: String,
     /// The chat model id in force.
     pub model: String,
-    /// `false` for the **Local** configuration, `true` for **Cloud models** —
-    /// which is the flag the privacy copy hangs off (M5).
+    /// `true` for Cloud models: the flag the privacy copy hangs off (M5).
     pub cloud: bool,
-    /// Whether a bearer token is configured and, when one is, which source supplied it.
-    /// **Never the token itself.** Richer than the boolean it replaced because the Settings
-    /// copy differs in each case (GH #176) — a key the environment supplies cannot be
-    /// removed from inside the app, and a key the Keychain refused to take is gone at quit.
+    /// Which source supplied the bearer token, never the token (GH #176).
     pub api_key_source: ApiKeySource,
     pub state: ChatState,
-    /// A generic, actionable sentence when `state` isn't `Ready` (E4), else
-    /// `None`. Phrased here rather than in each adapter so the CLI's wording and
-    /// the app's stay one sentence.
+    /// A generic, actionable sentence when `state` isn't `Ready` (E4), shared by both
+    /// adapters.
     pub message: Option<String>,
-    /// Models the endpoint says it serves, when it said — the list a "that model
-    /// isn't there" card offers instead of the one that's missing.
+    /// Models the endpoint says it serves, when it said.
     pub available: Vec<String>,
     /// The Ollama-native onboarding half; `None` for any other runtime.
     pub ollama: Option<OllamaSetup>,
@@ -262,17 +198,15 @@ pub struct ChatSetup {
     pub tool_calls: ToolCallCap,
 }
 
-/// [`LlmConfig::max_tool_calls`] for a surface that edits it: the value in force, plus the
-/// two numbers the field's copy and its validation quote. Carried rather than mirrored in
-/// the frontend, so the panel can never advertise a range the parser would refuse.
+/// [`LlmConfig::max_tool_calls`] for a surface that edits it, with its default and ceiling
+/// so the frontend never advertises a range the parser would refuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ToolCallCap {
-    /// The cap in force — Settings over the environment over the default.
+    /// The cap in force: Settings over the environment over the default.
     pub in_force: usize,
-    /// [`crate::DEFAULT_MAX_TOOL_CALLS`]: what clearing the field returns to (absent
-    /// an environment override).
+    /// [`crate::DEFAULT_MAX_TOOL_CALLS`].
     pub default: usize,
-    /// [`crate::MAX_TOOL_CALLS_CEILING`]: the highest value any source may set.
+    /// [`crate::MAX_TOOL_CALLS_CEILING`].
     pub ceiling: usize,
 }
 
@@ -288,9 +222,7 @@ impl ToolCallCap {
 }
 
 impl ChatSetup {
-    /// The setup a **fake** provider is in: `B2_LLM=fake`, no server, nothing to
-    /// configure. Its own constructor because every other field would otherwise
-    /// be a lie about a model that isn't answering.
+    /// The setup under `B2_LLM=fake`: no server, nothing to configure.
     pub fn fake(config: &LlmConfig) -> Self {
         Self {
             base_url: config.base_url.clone(),
@@ -306,10 +238,8 @@ impl ChatSetup {
     }
 }
 
-/// Ask the configured endpoint what it can do and render the answer as a card's worth of
-/// facts: one `GET /models`, plus one `GET /api/tags` when the endpoint looks like Ollama's.
-/// Never fails — a dead daemon, a wrong URL, a model nobody pulled: each is a [`ChatState`]
-/// with a sentence, because each is a thing the human can fix.
+/// Ask the configured endpoint what it can do: `GET /models`, plus `GET /api/tags` when it
+/// looks like Ollama. Never fails: each problem is a [`ChatState`] with a sentence.
 pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
     let ollama = is_ollama(&config.base_url).then(|| ollama_setup(&config.base_url));
     let (state, message, available) = match OpenAiCompatProvider::new(config.clone()).probe() {
@@ -321,10 +251,8 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
             Some(model_missing_message(&model, &config.base_url)),
             available,
         ),
-        // Something is listening and refused the probe. A different sentence from
-        // "nothing is listening", and the one place the Ollama half is *evidence*
-        // rather than onboarding: a daemon that answered `/api/tags` proves the
-        // server is up, which turns a 404 from a guess into a diagnosis.
+        // Refused, not unreachable. A daemon that answered `/api/tags` proves the server
+        // is up, which turns a 404 into a diagnosis.
         Err(LlmError::Refused {
             status, message, ..
         }) => (
@@ -359,11 +287,8 @@ pub fn probe_setup(config: &LlmConfig) -> ChatSetup {
     }
 }
 
-/// E4's own sentence — nothing is listening at `base_url` — and the reason [`is_ollama`]
-/// exists: `ollama serve` is the fix for Ollama and no help whatever for LM Studio,
-/// llama.cpp, vLLM or a cloud endpoint, all of which the same setting points at. Phrased
-/// here so both adapters say it the same way; an adapter appends only its own way of
-/// changing the endpoint (a CLI flag, a Settings field).
+/// E4: nothing is listening at `base_url`. Suggests `ollama serve` only for Ollama. Both
+/// adapters use it and append their own way to change the endpoint.
 pub fn unreachable_message(base_url: &str) -> String {
     if is_ollama(base_url) {
         format!(
@@ -375,19 +300,9 @@ pub fn unreachable_message(base_url: &str) -> String {
     }
 }
 
-/// What to tell a human when the endpoint **answered a probe with a refusal** — the
-/// sentence for [`LlmError::Refused`], phrased here so the CLI's wording and the app's stay
-/// one sentence. Split by status, because these are different mistakes with different fixes
-/// and a single "the server said no" would be useful for none:
-///
-/// - **401/403** — the path is right and the credential isn't.
-/// - **404/405/410/501** — nothing serves `/models` here; overwhelmingly a base URL that
-///   isn't the compat surface, which is why the fix names the path rather than the server.
-/// - anything else — a server that is there and failing, whose own words are the most
-///   useful thing available.
-///
-/// `ollama_root` is `Some` only when the daemon **answered its native API**, which is proof
-/// the machine is serving requests: with it, the 404 branch names the URL that would work.
+/// The sentence for [`LlmError::Refused`], by status: 401/403 is the credential, 404-ish
+/// is the base URL path, anything else quotes the server. `ollama_root` is `Some` only when
+/// the daemon answered its native API, so the 404 branch can name the URL that would work.
 pub fn refusal_message(
     base_url: &str,
     status: u16,
@@ -404,8 +319,7 @@ pub fn refusal_message(
                 "Something is running at {base_url}, but it isn't an OpenAI-compatible API \
                  (HTTP {status}). Check the endpoint path — it usually ends in `/v1`."
             );
-            // Only when it would name something *other* than what the user already
-            // typed: echoing their own URL back as the fix is worse than silence.
+            // Never echo the user's own URL back as the fix.
             if let Some(root) = ollama_root {
                 let suggestion = format!("{root}/v1");
                 if suggestion != base_url.trim_end_matches('/') {
@@ -423,10 +337,7 @@ pub fn refusal_message(
     }
 }
 
-/// The server at `base_url` is up but doesn't serve `model` ([`LlmError::ModelMissing`]) —
-/// the most common local-setup mistake. [`unreachable_message`]'s sibling: Ollama gets its
-/// own fix, everything else the general one, and an adapter appends only how *it* picks
-/// another model.
+/// The sentence for [`LlmError::ModelMissing`]; Ollama gets its own fix.
 pub fn model_missing_message(model: &str, base_url: &str) -> String {
     if is_ollama(base_url) {
         format!(
@@ -438,18 +349,13 @@ pub fn model_missing_message(model: &str, base_url: &str) -> String {
     }
 }
 
-/// `ollama pull <model>` — the one command the card tells a human to run, spelled
-/// in one place so the button's label, its copy-to-clipboard payload and any
-/// message agree.
+/// `ollama pull <model>`, spelled once for the button, its clipboard payload and messages.
 pub fn pull_command(model: &str) -> String {
     format!("ollama pull {model}")
 }
 
-/// The native half: `GET {root}/api/tags`, plus the machine's memory and the rung
-/// it sits on. A daemon that doesn't answer is `running: false` with an empty
-/// inventory — the "no server" card — and a daemon that answers with nothing
-/// installed is `running: true` and still empty: the "no model" card. Those are
-/// two different sentences, which is why this is a struct and not a bool.
+/// The native half: `GET {root}/api/tags`, plus the machine's memory and rung.
+/// `running: false` is the "no server" card; running and empty is "no model".
 fn ollama_setup(base_url: &str) -> OllamaSetup {
     let root = ollama_root(base_url);
     let installed = installed_models(&root);
@@ -464,8 +370,7 @@ fn ollama_setup(base_url: &str) -> OllamaSetup {
     }
 }
 
-/// What `GET {root}/api/tags` returns, of which B2 reads three fields. Ollama's
-/// own shape, so it lives beside the one call that speaks it.
+/// What `GET {root}/api/tags` returns; B2 reads three fields.
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
     #[serde(default)]
@@ -488,10 +393,8 @@ struct TagsDetails {
     parameter_size: Option<String>,
 }
 
-/// Every model the daemon at `root` has installed. `None` means the native API didn't
-/// answer — not that nothing is installed, which is a different card. Its own agent rather
-/// than the provider's: a different API on a different path, wanted at a shorter timeout,
-/// and it must never send the bearer token a cloud configuration might carry.
+/// Every model the daemon at `root` has installed, or `None` when it didn't answer. Its own
+/// agent: a shorter timeout, and it must never send a cloud bearer token.
 fn installed_models(root: &str) -> Option<Vec<OllamaModel>> {
     let url = format!("{root}{TAGS_PATH}");
     let agent = ureq::AgentBuilder::new()
@@ -520,12 +423,8 @@ fn installed_models(root: &str) -> Option<Vec<OllamaModel>> {
     Some(models_from(parsed))
 }
 
-/// Ollama's inventory shape, narrowed to the three fields the card shows. Split
-/// from the HTTP call because it is the only real *parsing* in this module, and a
-/// parse that can only be exercised through a live daemon is a parse nobody tests:
-/// a nameless entry (which the daemon has been known to return for a partial pull)
-/// is dropped rather than painted as a blank row, and an entry with no `details`
-/// keeps its name instead of being lost with it.
+/// Ollama's inventory narrowed to what the card shows; split out so it is testable. A
+/// nameless entry (a partial pull) is dropped.
 fn models_from(parsed: TagsResponse) -> Vec<OllamaModel> {
     parsed
         .models
@@ -539,28 +438,19 @@ fn models_from(parsed: TagsResponse) -> Vec<OllamaModel> {
         .collect()
 }
 
-/// Total system memory in whole GB, or `None` where the platform can't be asked.
-///
-/// Read from the OS rather than pulled in as a dependency (`sysinfo` and friends
-/// bring a tree for one number), and best-effort by construction: the only thing
-/// it feeds is a *non-binding suggestion*, so `None` costs the card its
-/// highlighted row and nothing else.
+/// Total system memory in whole GB, or `None` where the platform can't be asked. Read
+/// from the OS rather than a dependency; it only feeds a suggestion.
 fn system_ram_gb() -> Option<u64> {
-    // Rounded, not truncated. The tiers are floors, and a machine sold as "16 GB"
-    // does not always report 16 GiB of usable memory — Linux's `MemTotal` excludes
-    // what the firmware reserved, so it reads ~15.6, and truncation would drop such
-    // a machine a whole rung. Rounding puts it on the rung it was sold as.
+    // Rounded, not truncated: Linux's `MemTotal` excludes firmware-reserved memory, so a
+    // "16 GB" machine reads ~15.6 and would drop a rung.
     system_ram_bytes().map(|b| (b + GIB / 2) / GIB)
 }
 
-/// One gibibyte — what "GB" means everywhere in this module (and what `hw.memsize`
-/// and `MemTotal` both report in).
+/// One gibibyte: what "GB" means in this module.
 const GIB: u64 = 1_073_741_824;
 
 #[cfg(target_os = "macos")]
 fn system_ram_bytes() -> Option<u64> {
-    // `sysctl` is part of the base system; B2 ships on macOS (crates/b2-desktop),
-    // so this is the platform's own answer rather than a guess.
     let out = std::process::Command::new("/usr/sbin/sysctl")
         .args(["-n", "hw.memsize"])
         .output()
@@ -570,8 +460,7 @@ fn system_ram_bytes() -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn system_ram_bytes() -> Option<u64> {
-    // Not a shipping platform, but developers work here — and a suggestion that
-    // silently vanished off-macOS would look like a bug in the card.
+    // Not a shipping platform, but developers work here.
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let kb: u64 = meminfo
         .lines()
@@ -597,8 +486,6 @@ mod tests {
         assert!(is_ollama("http://localhost:11434/v1"));
         assert!(is_ollama("http://127.0.0.1:11434"));
         assert!(is_ollama("https://ollama.example.com/v1"));
-        // LM Studio, llama.cpp and the cloud endpoints must not be told to run
-        // `ollama serve` — advice about the wrong program.
         assert!(!is_ollama("http://localhost:1234/v1"));
         assert!(!is_ollama("https://api.openai.com/v1"));
     }
@@ -616,10 +503,7 @@ mod tests {
         for cloud in [
             "https://api.openai.com/v1",
             "https://api.anthropic.com/v1",
-            // The failures that matter, both of the same shape: a host that merely
-            // *looks* loopback must read as cloud, or the privacy copy hides on a
-            // remote endpoint. `127.notes.example.com` is a perfectly registrable
-            // name, and a `starts_with("127.")` test took it for the loopback range.
+            // Hosts that merely look loopback must read as cloud.
             "https://localhost.evil.example.com/v1",
             "https://127.notes.example.com/v1",
             "https://127.0.0.1.example.com/v1",
@@ -645,8 +529,6 @@ mod tests {
         );
     }
 
-    /// The typo case, and why the fallback exists: `…/v1X` has no `/v1` to strip,
-    /// and the daemon it needs to ask about is at the authority root.
     #[test]
     fn a_root_that_isnt_the_compat_surface_falls_back_to_the_authority() {
         assert_eq!(
@@ -657,17 +539,13 @@ mod tests {
             ollama_root("http://localhost:11434/api"),
             "http://localhost:11434"
         );
-        // A path-mounted daemon keeps its prefix — which is the whole reason the
-        // `/v1` strip comes first rather than always taking the authority.
+        // A path-mounted daemon keeps its prefix.
         assert_eq!(
             ollama_root("https://gw.example.com/ollama/v1"),
             "https://gw.example.com/ollama"
         );
     }
 
-    /// The reported bug, at the layer that phrases it: a base URL that answers but
-    /// isn't a chat API must produce a sentence about the **path**, never
-    /// "is Ollama running?" about a daemon that is plainly running.
     #[test]
     fn a_refusal_names_the_mistake_it_actually_is() {
         let path = refusal_message(
@@ -678,28 +556,22 @@ mod tests {
         );
         assert!(path.contains("isn't an OpenAI-compatible API"), "{path}");
         assert!(path.contains("HTTP 404"), "{path}");
-        // The daemon answered its native API, so the fix is a URL, not a guess.
         assert!(path.contains("try http://localhost:11434/v1"), "{path}");
         assert!(!path.contains("ollama serve"), "the daemon is up: {path}");
 
-        // A key is a different fix, and used to read as Connected.
         let key = refusal_message("https://api.example.com/v1", 401, "invalid api key", None);
         assert!(key.contains("API key"), "{key}");
         assert!(!key.contains("endpoint path"), "one fix, not two: {key}");
 
-        // Nothing to suggest: no Ollama evidence, so no invented advice.
         let bare = refusal_message("http://localhost:1234/v2", 404, "", None);
         assert!(bare.contains("endpoint path"), "{bare}");
         assert!(!bare.to_lowercase().contains("ollama"), "{bare}");
 
-        // Anything else is the server's own words, which are the useful part.
         let busy = refusal_message("https://api.example.com/v1", 503, "at capacity", None);
         assert!(busy.contains("HTTP 503"), "{busy}");
         assert!(busy.contains("at capacity"), "{busy}");
     }
 
-    /// The one sentence that would be silly: echoing back the URL the user typed
-    /// as the thing to try instead.
     #[test]
     fn a_refusal_never_suggests_the_url_it_was_given() {
         let same = refusal_message(
@@ -718,15 +590,9 @@ mod tests {
         assert_eq!(tier_for_ram(16).model, MODEL_TIERS[1].model);
         assert_eq!(tier_for_ram(24).model, MODEL_TIERS[1].model);
         assert_eq!(tier_for_ram(64).model, MODEL_TIERS[2].model);
-        // Below the smallest rung is still the smallest rung — a 4 GB machine
-        // gets the smallest suggestion, never no suggestion.
         assert_eq!(tier_for_ram(0).model, MODEL_TIERS[0].model);
     }
 
-    /// The only real parsing in this module, and the reason `models_from` is split
-    /// out of the HTTP call: a nameless entry is dropped rather than painted as a
-    /// blank row, and an entry with no `details` keeps its name instead of going
-    /// with it.
     #[test]
     fn the_inventory_reads_ollamas_own_shape() {
         let body = r#"{"models":[
@@ -750,13 +616,11 @@ mod tests {
                 },
             ]
         );
-        // A body with no `models` key at all is an empty inventory, not a failure:
-        // "the daemon answered and has nothing" is a card B2 draws.
+        // No `models` key is an empty inventory, not a failure.
         assert!(models_from(serde_json::from_str("{}").unwrap()).is_empty());
     }
 
-    /// The setup view is what crosses to a webview, so the one thing it must
-    /// never carry is the bearer token — only whether there is one.
+    /// The setup view crosses to a webview, so it must never carry the bearer token.
     #[test]
     fn the_setup_view_reports_a_key_without_carrying_it() {
         let config = LlmConfig {
@@ -779,7 +643,6 @@ mod tests {
         };
         let json = serde_json::to_string(&setup).unwrap();
         assert!(!json.contains("sk-live-do-not-serialize-me"), "{json}");
-        // The cap rides along with the two numbers the Settings field quotes.
         assert!(
             json.contains("\"tool_calls\":{\"in_force\":64,\"default\":64,\"ceiling\":4096}"),
             "{json}"
@@ -788,13 +651,10 @@ mod tests {
         assert!(json.contains("\"cloud\":true"), "{json}");
     }
 
-    /// The view's source is the **resolved** one, not a guess about it — which is
-    /// what lets the Settings copy tell a user that the key in force is their
-    /// shell's, and that the Remove button therefore cannot reach it (GH #176).
+    /// GH #176: Settings tells the user when the key in force is their shell's.
     #[test]
     fn the_setup_view_names_the_source_the_resolver_chose() {
-        // `.invalid` is reserved (RFC 2606): the probe fails immediately and this
-        // never meets a model server a developer happens to be running.
+        // `.invalid` is reserved (RFC 2606), so the probe fails at once.
         let stored_under_an_env_key = LlmConfig {
             base_url: "http://b2-no-such-host.invalid:11434/v1".into(),
             api_key: Some("sk-from-the-environment".into()),
@@ -806,16 +666,12 @@ mod tests {
             probe_setup(&stored_under_an_env_key).api_key_source,
             ApiKeySource::Environment
         );
-        // A keyless configuration says so plainly — what hides the Remove button
-        // and the cloud privacy copy alike.
         assert_eq!(
             ChatSetup::fake(&LlmConfig::default()).api_key_source,
             ApiKeySource::None
         );
     }
 
-    /// `B2_LLM=fake` is surfaced, not hidden: the CLI prints a note for the same
-    /// reason (never overstate what answered).
     #[test]
     fn the_fake_setup_says_so() {
         let setup = ChatSetup::fake(&LlmConfig::default());
@@ -827,8 +683,6 @@ mod tests {
     fn messages_name_ollamas_own_fix_only_for_ollama() {
         let ollama = unreachable_message("http://localhost:11434/v1");
         assert!(ollama.contains("ollama serve"), "{ollama}");
-        // The other half of "nothing is listening": the daemon may not be installed at
-        // all, and the fix for that is a page, not a command.
         assert!(ollama.contains(OLLAMA_INSTALL_URL), "{ollama}");
         let other = unreachable_message("http://localhost:1234/v1");
         assert!(!other.to_lowercase().contains("ollama"), "{other}");
@@ -843,9 +697,7 @@ mod tests {
         );
     }
 
-    /// An unreachable endpoint is a *status*, not an error — the whole point of
-    /// this module. Port 1 on a reserved-`.invalid` host can't resolve, so this
-    /// stays hermetic and never meets a daemon a developer happens to be running.
+    /// A reserved `.invalid` host can't resolve, so this stays hermetic.
     #[test]
     fn an_unreachable_endpoint_is_a_card_not_a_failure() {
         let setup = probe_setup(&LlmConfig {
@@ -855,8 +707,7 @@ mod tests {
         });
         assert_eq!(setup.state, ChatState::Unreachable);
         assert!(setup.message.is_some_and(|m| m.contains("ollama serve")));
-        // The endpoint names Ollama's port, so the native half was attempted —
-        // and honestly reports a daemon that isn't there.
+        // Ollama's port, so the native half was attempted.
         let ollama = setup
             .ollama
             .expect("an Ollama-shaped endpoint gets the card");

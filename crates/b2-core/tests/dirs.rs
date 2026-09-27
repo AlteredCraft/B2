@@ -1,8 +1,5 @@
-//! Folder structure through the [`Vault`] façade — `list_dirs` + `create_dir`.
-//! Folders are user-authored vault *structure*, and the filesystem is authoritative
-//! for them (data-model.md §1): both ops go straight to disk, never the index, so
-//! the listing can't go stale and an **empty** folder is as real as a full one —
-//! the file tree must be one-to-one with the filesystem in both directions.
+//! Folders (`list_dirs`, `create_dir`): the filesystem is authoritative (data-model.md §1),
+//! so both ops go straight to disk and an empty folder is as real as a full one.
 
 mod common;
 
@@ -15,7 +12,7 @@ fn list_dirs_returns_every_folder_sorted_including_empty_ones() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = opened_vault(tmp.path());
 
-    // An empty folder (with an empty nested child) made outside B2 — Finder, mkdir.
+    // Made outside B2.
     fs::create_dir_all(root.join("projects/2026")).unwrap();
 
     let dirs = vault.list_dirs().unwrap();
@@ -36,8 +33,7 @@ fn list_dirs_is_index_free_and_skips_dot_folders() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = opened_vault(tmp.path());
 
-    // Never reindexed — `.b2/` exists (Vault::open creates it) and `.obsidian/`
-    // simulates a sibling tool; both are dot-folders, never vault structure.
+    // Never reindexed. `.b2/` and `.obsidian/` are dot-folders, never vault structure.
     fs::create_dir_all(root.join(".obsidian/plugins")).unwrap();
 
     let dirs = vault.list_dirs().unwrap();
@@ -60,7 +56,7 @@ fn create_dir_creates_missing_parents_and_tolerates_a_trailing_slash() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = opened_vault(tmp.path());
 
-    // The UI's inline input allows nesting ("projects/2026"), like `mkdir -p`.
+    // Like `mkdir -p`.
     let report = vault.create_dir("projects/2026/q3/").unwrap();
     assert_eq!(report.dir, "projects/2026/q3");
     assert!(root.join("projects/2026/q3").is_dir());
@@ -71,13 +67,11 @@ fn create_dir_refuses_an_existing_folder_or_file() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = opened_vault(tmp.path());
 
-    // An existing folder: refused, not silently a no-op — the user asked to
-    // *create* something, and it's already there.
+    // Refused, not a silent no-op: the user asked to create something.
     match vault.create_dir("concepts") {
         Err(Error::DirTargetExists(p)) => assert_eq!(p, "concepts"),
         other => panic!("expected DirTargetExists, got {other:?}"),
     }
-    // A file in the way: same refusal (the vault never clobbers).
     match vault.create_dir("concepts/memory.md") {
         Err(Error::DirTargetExists(p)) => assert_eq!(p, "concepts/memory.md"),
         other => panic!("expected DirTargetExists, got {other:?}"),

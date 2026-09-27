@@ -1,7 +1,5 @@
-//! Model provisioning — the work behind `b2 init`. Downloads (or copies, for a
-//! local source) the model files into the shared XDG cache and verifies them by
-//! actually loading the model and embedding once. Idempotent: a already-installed,
-//! loadable model is a no-op.
+//! Model provisioning, the work behind `b2 init`: fetch the model into the shared cache and
+//! verify it by loading and embedding once. Idempotent.
 
 use crate::config::{EmbedConfig, Source};
 use crate::model::{files_present, LocalEmbedder, REQUIRED_FILES};
@@ -21,14 +19,12 @@ pub struct ProvisionReport {
     pub already_present: bool,
 }
 
-/// Provision the model named by `config` into its cache dir. Prints progress via
-/// `log` (a simple line sink so the CLI owns all stdout formatting). Verifies the
-/// result by loading + embedding once, so a half-downloaded or corrupt model is
-/// caught here rather than at first `search`.
+/// Provision the model named by `config` into its cache dir, reporting progress through
+/// `log` (the CLI owns stdout). Verifying here catches a corrupt download before the
+/// first `search`.
 pub fn provision(config: &EmbedConfig, mut log: impl FnMut(&str)) -> Result<ProvisionReport> {
     let model_dir = config.model_dir();
 
-    // Idempotent fast path: present + loadable ⇒ done.
     if files_present(&model_dir) {
         if let Ok(e) = LocalEmbedder::load(config) {
             log(&format!("Model '{}' already installed.", config.model));
@@ -50,7 +46,6 @@ pub fn provision(config: &EmbedConfig, mut log: impl FnMut(&str)) -> Result<Prov
         }
     }
 
-    // Verify by loading and embedding a probe string.
     log("Verifying model…");
     let embedder = LocalEmbedder::load(config)?;
     let probe = embedder

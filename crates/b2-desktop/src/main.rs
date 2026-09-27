@@ -1,20 +1,9 @@
-//! `b2-desktop` — the Tauri host, B2's **second dumb adapter** over the
-//! [`Vault`](b2_core::vault::Vault) façade and the GUI sibling of `b2-cli` (ADR-0012). It
-//! holds **no engine logic**; the rules that keep it dumb live in this crate's `CLAUDE.md`.
+//! `b2-desktop`: the Tauri host, a dumb adapter over the [`Vault`](b2_core::vault::Vault)
+//! façade and the GUI sibling of `b2-cli` (ADR-0012). See this crate's `CLAUDE.md`.
 //!
-//! Two things this file owns, both mirroring the CLI:
-//!   * **Vault root resolution** — an explicit launch arg, else the last vault the user
-//!     opened (persisted across launches), else `$B2_VAULT_PATH`. Seeded once into
-//!     [`AppState`] and thereafter swappable at runtime by the in-app picker, which also
-//!     remembers the pick. Every command opens a *fresh* vault from the current root,
-//!     exactly as the one-process-per-command CLI does.
-//!   * **Embedder wiring** — pure reads open with the deterministic fake; anything that
-//!     embeds a query or writes vectors opens the real model (`b2_embed::embedder_for`,
-//!     the rule the CLI uses too) and fails fast with "run `b2 init`" if absent. `project` opens the fake, so the first tree paint
-//!     never waits on a model load. `B2_EMBEDDER=fake` forces the fake everywhere.
-//!
-//! And one it hands off: the **menu bar** is declared in [`menu`] rather than inherited, so
-//! its chords are B2's own data and the UI can list them (ADR-0017, #119).
+//! This file owns vault root resolution (launch arg, else the last opened vault, else
+//! `$B2_VAULT_PATH`; swappable at runtime by the picker) and embedder wiring, both as in the
+//! CLI. Every command opens a fresh vault from the current root.
 
 // This binary is desktop-only (no mobile entry point), so a plain `main` suffices.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -40,42 +29,23 @@ use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use watch::VaultWatcher;
 
-/// The state file remembering the last opened vault (see [`state_file`]).
+/// The state file remembering the last opened vault.
 const LAST_VAULT_FILE: &str = "last-vault";
 
-/// The host's shared state: the active vault root plus the background-reindex and chat
-/// control bits. The root is resolved once at startup and swappable at runtime by the
-/// picker, so it sits behind a [`Mutex`]; every command still opens its own short-lived
-/// [`Vault`] over the *current* root, the faithful mirror of the CLI opening a fresh vault
-/// per invocation. `None` means no vault is configured.
-///
-/// The reindex and chat slots are host **infrastructure**, not engine logic: *how the
-/// window drives and interrupts* a long façade op stays here, *what* it computes stays in
-/// the core. Each is a [`Slot`]: single-in-flight, released on every exit path, cancelled
-/// cooperatively from another thread.
+/// The host's shared state: the active vault root (`None` when unconfigured), the reindex
+/// and ask [`Slot`]s, and the chat preferences.
 pub struct AppState {
     root: Mutex<Option<PathBuf>>,
-    /// The vector-writing embed pass (the model-free `project` runs outside it by
-    /// design). Cancelled by `cancel_reindex` and by a vault switch; a running embed
-    /// reads it at each batch boundary.
+    /// The vector-writing embed pass (`project` runs outside it). Cancelled by
+    /// `cancel_reindex` and by a vault switch; checked at each batch boundary.
     pub reindex: Slot,
-    /// The streaming answer (`ask` and `why_similar` share it). Cancelled by
-    /// `cancel_ask` (the chat pane's Esc); the token callback reads it at every token,
-    /// and the seam reports a stop honestly as a cancelled — not failed — completion.
+    /// The streaming answer (`ask` and `why_similar` share it), cancelled by `cancel_ask`.
     pub ask: Slot,
-    /// The chat endpoint, model, and the key in force. Behind a `Mutex` for the
-    /// vault root's reason: Settings changes it at runtime and every later ask
-    /// resolves a fresh provider from it. **Never vault or index state**
-    /// (GH #151) — see `chat.rs`.
+    /// The chat endpoint, model and key in force; never vault or index state (GH #151).
     chat: Mutex<ChatPrefs>,
-    /// Held for the whole of one Settings save, which the `chat` lock alone cannot cover.
-    ///
-    /// A save is a read-modify-write spanning the Keychain, the `chat` mutex and
-    /// `chat.json`, and `chat_prefs()` deliberately drops its lock between them — it must,
-    /// since a Keychain write can block on the OS access prompt and no ask should wait
-    /// behind that. So two overlapping saves can interleave, and the loser writes *its*
-    /// preferences after the winner installed the newer ones in memory. The window is small,
-    /// but the Keychain prompt is exactly what makes a save long enough to be caught.
+    /// Held for a whole Settings save. A save spans the Keychain, `chat` and `chat.json`,
+    /// and `chat` is unlocked between them (a Keychain prompt can block), so without this
+    /// two saves could interleave.
     chat_saving: Mutex<()>,
 }
 
@@ -84,8 +54,7 @@ impl AppState {
         Self::with_chat(root, ChatPrefs::default())
     }
 
-    /// [`new`](Self::new) with explicit chat preferences — what `main` builds
-    /// from the persisted file, and what the tests build without touching it.
+    /// [`new`](Self::new) with explicit chat preferences.
     pub fn with_chat(root: Option<PathBuf>, chat: ChatPrefs) -> Self {
         Self {
             root: Mutex::new(root),
@@ -96,63 +65,47 @@ impl AppState {
         }
     }
 
-    /// Claim the Settings save for its whole read-modify-write — see
-    /// [`chat_saving`](Self::chat_saving). Blocks rather than refusing: a save is
-    /// short and a user who pressed Save twice meant both, so the second must
-    /// *follow* the first rather than be dropped (contrast the `ask` slot,
-    /// where two answers at once is a genuine conflict).
+    /// Claim the Settings save ([`chat_saving`](Self::chat_saving)). Blocks rather than
+    /// refusing: a second Save should follow the first, not be dropped.
     pub fn begin_chat_save(&self) -> std::sync::MutexGuard<'_, ()> {
         lock_recover(&self.chat_saving)
     }
 
-    /// The chat preferences in force, cloned out so the lock is **not** held
-    /// while a command opens a network connection (the `current_root` rule).
+    /// The chat preferences in force, cloned so no lock is held over network I/O.
     pub fn chat_prefs(&self) -> ChatPrefs {
         lock_recover(&self.chat).clone()
     }
 
-    /// Replace the chat preferences (the Settings section's Save). Takes effect
-    /// for every subsequent ask, since each resolves a fresh provider.
+    /// Replace the chat preferences; every later ask resolves a fresh provider.
     pub fn set_chat_prefs(&self, prefs: ChatPrefs) {
         *lock_recover(&self.chat) = prefs;
     }
 
-    /// The current vault root, cloned out so the lock is **not** held while a command
-    /// opens a vault (which may load the model — slow). `None` when unconfigured.
+    /// The current vault root, cloned so no lock is held while a vault (and model) opens.
     pub fn current_root(&self) -> Option<PathBuf> {
         self.lock_root().clone()
     }
 
-    /// Point the app at a new vault root (the vault switcher). Takes effect for every
-    /// subsequent command, since each opens a fresh vault over `current_root`.
+    /// Point the app at a new vault root (the vault switcher).
     pub fn set_root(&self, root: &Path) {
         *self.lock_root() = Some(root.to_path_buf());
     }
 
-    /// The critical sections here are a single clone or store — neither can panic —
-    /// so the lock can never be poisoned; see [`lock_recover`].
+    /// See [`lock_recover`].
     fn lock_root(&self) -> std::sync::MutexGuard<'_, Option<PathBuf>> {
         lock_recover(&self.root)
     }
 }
 
-/// Lock a mutex, recovering the inner value rather than unwrapping if the lock is ever
-/// poisoned (the no-panic rule). Every mutex in this host guards a critical section of
-/// a single clone/store/drop — none can panic, so poisoning is effectively impossible,
-/// but the rule holds regardless if a poison ever somehow occurs.
+/// Lock a mutex, recovering the value if it is ever poisoned (the no-panic rule). Every
+/// critical section here is a single clone, store or drop, so poisoning shouldn't happen.
 pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Open a fresh vault over the configured root with the right embedder — the desktop
-/// mirror of the CLI's `open_vault`, over the same `b2_embed::embedder_for` rule.
-/// `needs_semantic` commands (`search`/`link`/`embed`) load the real model (fail-fast
-/// "run `b2 init`" if absent); pure reads — and `project`, which never touches vectors —
-/// use the fake. Errors with [`CmdError::VaultRequired`] if no vault is set.
-///
-/// Returns the vault and, when the real model was loaded, its configured id — which is
-/// what `embed` attributes its time to, read off the model actually loaded rather than a
-/// second look at a config that may have changed since.
+/// Open a fresh vault over the configured root with the right embedder, as the CLI's
+/// `open_vault` does (`b2_embed::embedder_for`). Also returns the loaded model's id, which
+/// `embed` attributes its time to.
 pub fn open_vault(
     state: &AppState,
     needs_semantic: bool,
@@ -161,8 +114,8 @@ pub fn open_vault(
     open_vault_at(&root, needs_semantic)
 }
 
-/// [`open_vault`] over an explicit root — for a command that needs the root itself as
-/// well, so the two can't come from either side of a vault switch.
+/// [`open_vault`] over an explicit root, so a command that also needs the root can't see
+/// two sides of a vault switch.
 pub fn open_vault_at(
     root: &Path,
     needs_semantic: bool,
@@ -179,28 +132,19 @@ pub fn open_vault_at(
     })
 }
 
-/// Read-path open: a fresh vault over the fake embedder (no model load), for commands
-/// that never embed. [`open_vault`] with the model id discarded.
+/// A fresh vault over the fake embedder, for commands that never embed.
 pub fn open_read(state: &AppState) -> Result<Vault, CmdError> {
     Ok(open_vault(state, false)?.0)
 }
 
-/// Wants-the-real-model open: a fresh vault over the real embedder (fail-fast "run
-/// `b2 init`" if absent), for commands that embed. [`open_vault`] with the id discarded.
+/// A fresh vault over the real embedder, for commands that embed.
 pub fn open_semantic(state: &AppState) -> Result<Vault, CmdError> {
     Ok(open_vault(state, true)?.0)
 }
 
-/// Whether the real (semantic) embedder is available right now — mirrors the CLI: false
-/// under `B2_EMBEDDER=fake`, or if the model isn't provisioned. `vault_info` uses it to
-/// tell the UI whether semantic ranking is live, so the app never overstates the fake.
-///
-/// A **probe, never a load** (#133): `is_model_provisioned` is the repo's one "installed"
-/// check, so this answers the question `load` would without parsing `config.json`, building
-/// the tokenizer, or mmapping the weights — which matters because `vault_info` calls it on
-/// every first paint and vault switch. What the probe trades away: a present-but-corrupt
-/// model reads as `semantic: true` and fails at the first `search`/`reindex` instead, which
-/// is already fail-fast and actionable.
+/// Whether the real embedder is available (not under `B2_EMBEDDER=fake`, and provisioned),
+/// so the UI never overstates the fake. A file probe, never a load (#133), since
+/// `vault_info` calls it on every first paint; a corrupt model fails later, at `search`.
 pub fn semantic_available() -> bool {
     if b2_embed::fake_requested() {
         return false;
@@ -208,14 +152,9 @@ pub fn semantic_available() -> bool {
     EmbedConfig::load().is_ok_and(|c| c.is_model_provisioned(&c.model))
 }
 
-/// Resolve the vault root once at startup. Precedence, most-explicit first: an explicit
-/// **launch argument** (the CLI's positional); the **last vault the user opened** via the
-/// picker; then `$B2_VAULT_PATH` (the CLI's `-C` / env).
-///
-/// The remembered choice deliberately beats `$B2_VAULT_PATH`: on a GUI the picker is the
-/// primary way you choose a vault, so the env var seeds the *first* run and a launch arg
-/// remains the escape hatch for one session. A leading-`-` first arg is ignored, so a macOS
-/// `-psn_…` Finder argument is never mistaken for a path.
+/// Resolve the vault root once at startup: launch arg, then the last picked vault, then
+/// `$B2_VAULT_PATH`. The picker beats the env var because on a GUI it is how you choose. A
+/// leading-`-` arg is ignored, so macOS's `-psn_…` is never taken for a path.
 fn resolve_root() -> Option<PathBuf> {
     let arg = std::env::args()
         .nth(1)
@@ -225,9 +164,7 @@ fn resolve_root() -> Option<PathBuf> {
     pick_root(arg, read_last_vault(), env)
 }
 
-/// The pure precedence rule behind [`resolve_root`], split out so it is unit-testable
-/// without touching process args, the environment, or the filesystem: launch arg, then
-/// the remembered pick, then the env fallback.
+/// The precedence rule behind [`resolve_root`].
 fn pick_root(
     arg: Option<PathBuf>,
     remembered: Option<PathBuf>,
@@ -236,87 +173,53 @@ fn pick_root(
     arg.or(remembered).or(env)
 }
 
-/// The remembered vault root from the last picker choice, or `None` if there is none,
-/// the file is unreadable/empty, **or the remembered directory no longer exists** (moved
-/// or deleted). Falling through on a stale entry lets startup drop back to the env
-/// default rather than opening a vault whose every command would then error.
+/// The remembered vault root, or `None` if there is none or the directory no longer
+/// exists, so startup falls back to the env default.
 fn read_last_vault() -> Option<PathBuf> {
     read_last_vault_from(&state_file::path(LAST_VAULT_FILE)?)
 }
 
-/// [`read_last_vault`] against an explicit file path — the testable core (a tempfile
-/// stands in for the real state file). Strips only trailing newline(s), so a path is
-/// preserved verbatim, and requires the target to be an existing directory.
+/// [`read_last_vault`] against an explicit path. Strips only trailing newlines.
 fn read_last_vault_from(file: &Path) -> Option<PathBuf> {
     let contents = std::fs::read_to_string(file).ok()?;
     let path = PathBuf::from(contents.trim_end_matches(['\n', '\r']));
     path.is_dir().then_some(path)
 }
 
-/// Remember `root` as the last opened vault so the next launch reopens it. **Best-effort
-/// host state** ([`state_file::update`]): remembering must never fail the vault switch the
-/// user just made. Called only from the `choose_vault` command wrapper (an explicit user
-/// pick), never from the unit-tested state transition, so tests don't touch the real data
-/// dir.
+/// Remember `root` as the last opened vault. Best-effort; called only from `choose_vault`,
+/// so tests never touch the real data dir.
 fn persist_last_vault(root: &Path) {
     state_file::update(LAST_VAULT_FILE, "remember the last vault", |file| {
         persist_last_vault_to(file, root)
     });
 }
 
-/// [`persist_last_vault`] against an explicit file path — the testable core. Creates the
-/// parent dir if needed and writes the path as the file's sole line.
+/// [`persist_last_vault`] against an explicit path.
 fn persist_last_vault_to(file: &Path, root: &Path) -> std::io::Result<()> {
     state_file::write(file, root.to_string_lossy().as_bytes())
 }
 
 fn main() {
-    // Opt-in structured logging (B2_LOG/B2_DEBUG/B2_LOG_FILE), the GUI mirror of the
-    // CLI. Bind the guard for the whole run: it owns the non-blocking writer thread's
-    // flush-on-drop, and `.run()` below blocks until the app exits, so `_guard` lives
-    // exactly as long as the app does. `None` (no logging requested) is a plain no-op.
+    // Held for the whole run: dropping it flushes the log writer.
     let _guard = logging::init_logging();
-    // The chat endpoint/model the user last chose, plus the API key out of the Keychain.
-    // Adapter state like the remembered vault, and best-effort throughout: nothing
-    // configured resolves to the same local default the CLI uses with no flags. A vault
-    // with no cloud model configured has no Keychain item, so the common launch asks for
-    // nothing and prompts for nothing.
     let state = AppState::with_chat(resolve_root(), chat::read_prefs(&keychain::Keychain));
     let app = tauri::Builder::default()
-        // The menu bar, declared (#119). Without this call Tauri installs
-        // `Menu::default()`, whose dozen accelerators nothing in the app can enumerate
-        // — and AppKit dispatches them before the webview sees a key, so the keyboard
-        // registry can't observe them either. `menu::MENU` is that list, made data.
+        // Declared, not `Menu::default()`, so its chords are enumerable (#119).
         .menu(menu::build)
-        // ...and the handler for the lines in it that are B2's own rather than the
-        // platform's (the View menu's three sizes). The host forwards the chosen id and
-        // stops there: what a size *means* — the ladder, its ends, remembering it — is
-        // `ui/src/zoom.ts`'s, because this crate holds no logic. A predefined item never
-        // arrives here; those are handled natively, which is the point of them.
+        // B2's own items: forward the id; `ui/src/zoom.ts` decides what it means.
         .on_menu_event(|app, event| {
             let _ = app.emit(menu::MENU_COMMAND_EVENT, event.id().0.as_str());
         })
-        // The dialog plugin backs the native folder picker for `choose_vault`. It is
-        // driven host-side only; the webview gets no dialog permission (capabilities/
-        // default.json), so it can never open a dialog itself.
+        // The dialog, opener and clipboard plugins are driven host-side only; the webview
+        // gets none of their permissions (capabilities/default.json).
         .plugin(tauri_plugin_dialog::init())
-        // The opener plugin backs the fallback card's *Open in system default*
-        // (`open_resource`, file-type slice 1). Same posture: host-side only, the
-        // webview holds no opener permission.
         .plugin(tauri_plugin_opener::init())
-        // The clipboard plugin backs the editor's ⌘⇧V (`clipboard_text`, paste as plain
-        // text). Same posture again: host-side only, no clipboard permission in the webview.
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(state)
-        // Filesystem auto-reload (#14 / crates/b2-desktop/CLAUDE.md): its own managed state so the
-        // pure `AppState` machine stays free of an OS watch handle. Started below once the
-        // app handle exists, and re-pointed on a vault switch (`choose_vault`).
+        // Filesystem auto-reload (#14), re-pointed on a vault switch.
         .manage(VaultWatcher::default())
         .setup(|app| {
-            // Watch the startup vault, if one resolved. Best-effort: `watch` swallows and
-            // logs a failure, so a platform without a watch backend still launches (the
-            // conflict bar remains the fallback). No vault configured → nothing to watch;
-            // the first `choose_vault` starts it.
+            // Watch the startup vault, if any; best-effort.
             if let Some(root) = app.state::<AppState>().current_root() {
                 app.state::<VaultWatcher>().watch(app.handle(), &root);
             }
@@ -370,8 +273,7 @@ fn main() {
             commands::set_chat_config,
         ])
         .run(tauri::generate_context!());
-    // The one failure left to report is the app itself not starting (no window, no
-    // webview). Say so and exit non-zero — the no-panic rule, even here.
+    // The app itself didn't start: say so and exit non-zero, without panicking.
     if let Err(e) = app {
         eprintln!("[b2] the desktop app could not start: {e}");
         std::process::exit(1);
@@ -380,10 +282,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    //! Host-side vault-resolution tests: the pure precedence rule and the "last opened
-    //! vault" state file's persist/read round-trip. All hermetic — `pick_root` touches
-    //! nothing global, and the file helpers run against a tempdir, never the real data
-    //! dir (which only the `choose_vault` wrapper writes, in production).
+    //! Vault-resolution tests, hermetic: the file helpers run against a tempdir.
 
     use super::*;
     use std::path::PathBuf;
@@ -394,8 +293,7 @@ mod tests {
 
     #[test]
     fn pick_root_precedence_arg_then_remembered_then_env() {
-        // (arg, remembered, env) → the chosen root. Arg wins outright; the remembered
-        // pick beats the env fallback; env is used only when nothing more explicit is set.
+        // (arg, remembered, env) → the chosen root.
         let cases = [
             (p("/arg"), p("/mem"), p("/env"), p("/arg")),
             (None, p("/mem"), p("/env"), p("/mem")),
@@ -419,7 +317,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let vault = tmp.path().join("my vault"); // a space proves we don't trim it
         std::fs::create_dir_all(&vault).unwrap();
-        // The state file sits under a not-yet-created subdir — persist must `mkdir -p`.
+        // The parent dir doesn't exist yet.
         let file = tmp.path().join("state/b2/last-vault");
 
         persist_last_vault_to(&file, &vault).unwrap();
@@ -430,7 +328,6 @@ mod tests {
     fn read_last_vault_ignores_a_stale_or_missing_directory() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("last-vault");
-        // A remembered vault that has since been deleted must not be reopened.
         std::fs::write(&file, tmp.path().join("gone").to_string_lossy().as_bytes()).unwrap();
         assert_eq!(read_last_vault_from(&file), None);
     }
@@ -438,9 +335,7 @@ mod tests {
     #[test]
     fn read_last_vault_ignores_missing_or_empty_file() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // No file at all.
         assert_eq!(read_last_vault_from(&tmp.path().join("absent")), None);
-        // An empty file (whitespace only) is not a path.
         let empty = tmp.path().join("empty");
         std::fs::write(&empty, "\n").unwrap();
         assert_eq!(read_last_vault_from(&empty), None);
@@ -452,7 +347,7 @@ mod tests {
         let vault = tmp.path().join("vault");
         std::fs::create_dir_all(&vault).unwrap();
         let file = tmp.path().join("last-vault");
-        // A trailing newline (as `persist` never writes, but a hand-edit might) is fine.
+        // `persist` never writes one, but a hand-edit might.
         std::fs::write(&file, format!("{}\n", vault.display())).unwrap();
         assert_eq!(read_last_vault_from(&file), Some(vault));
     }

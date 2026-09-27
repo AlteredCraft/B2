@@ -1,11 +1,5 @@
-//! `b2 reindex --dry-run` — a read-only preview, driven through the [`Vault`] façade against
-//! the golden vault. The contract: it forecasts exactly what a real reindex *would* do, and
-//! touches nothing — no note projected, no byte written to the vault.
-//!
-//! The preview is one column now. It used to answer "which notes would be stamped" and
-//! "which files collide", because a real run *wrote* to the vault. A run that writes nothing
-//! (ADR-0004) has only work to size, so what is left to test is that the forecast matches
-//! the run.
+//! `b2 reindex --dry-run`: forecasts exactly what a real reindex would do, and touches
+//! nothing, neither the vault nor the index.
 
 mod common;
 
@@ -15,8 +9,7 @@ use common::{golden_vault_copy, MEMORY_PATH};
 use std::fs;
 use std::path::Path;
 
-/// A golden vault copy plus one extra note, so the counts are not all 2. Returns
-/// (vault, root, the extra file's path).
+/// The golden vault plus one note, so the counts are not all 2.
 fn vault_with_an_extra_note(dir: &Path) -> (Vault, std::path::PathBuf, std::path::PathBuf) {
     let root = dir.join("vault");
     golden_vault_copy(&root);
@@ -40,7 +33,6 @@ fn dry_run_previews_counts_without_writing_anything() {
         .chain(std::iter::once(fs::read_to_string(&fresh).unwrap()))
         .collect();
 
-    // Pristine index: all three notes would be indexed and embedded.
     let plan = vault.plan_reindex(false).unwrap();
     assert_eq!(plan.would_index, 3);
     assert_eq!(
@@ -48,8 +40,7 @@ fn dry_run_previews_counts_without_writing_anything() {
         "a never-embedded vault embeds every note"
     );
 
-    // Nothing on disk moved — which is now true of the real run too, so this
-    // asserts the *dry* half: nothing was projected into the index either.
+    // The real run writes nothing either, so the dry half is the index.
     for (path, was) in paths
         .iter()
         .map(|p| root.join(p))
@@ -72,15 +63,12 @@ fn dry_run_matches_what_a_real_reindex_then_does() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root, _fresh) = vault_with_an_extra_note(tmp.path());
 
-    // The preview…
     let plan = vault.plan_reindex(false).unwrap();
-    // …exactly equals what the real reindex reports it did.
     let report = vault.reindex().unwrap();
     assert_eq!(plan.would_index, report.indexed);
     assert_eq!(plan.would_embed, report.embedded);
 
-    // A second preview, now against the populated index, would embed nothing:
-    // every note is unchanged, so its chunks hash to vectors already stored.
+    // Unchanged chunks hash to vectors already stored.
     let plan2 = vault.plan_reindex(false).unwrap();
     assert_eq!(plan2.would_index, 3);
     assert_eq!(plan2.would_embed, 0, "unchanged notes would not re-embed");
@@ -102,7 +90,6 @@ fn dry_run_flags_only_a_changed_note() {
     let (vault, root, _fresh) = vault_with_an_extra_note(tmp.path());
     vault.reindex().unwrap();
 
-    // Edit one note's body; a dry-run should predict exactly that one re-embed.
     let memory = root.join("concepts/memory.md");
     let mut text = fs::read_to_string(&memory).unwrap();
     text.push_str("\nAn appended paragraph changes the body hash.\n");

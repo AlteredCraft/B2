@@ -1,22 +1,9 @@
-//! Chat wiring — the desktop's half of the second AI seam (ADR-0005), and the sibling of
-//! `main.rs`'s embedder wiring. What lives here is *which provider a chat command talks
-//! to*, layered the way the vault root is: **flag beats environment beats default**, with
-//! the app's Settings standing in for the flags. Resolution itself is
-//! `b2_llm::LlmConfig::from_env`'s — one place, so the two adapters cannot drift.
+//! Chat wiring (ADR-0005): which provider a chat command talks to, with Settings layered
+//! over `b2_llm::LlmConfig::from_env` as a CLI flag would be. Adapter state only, so a chat
+//! model swap costs no reindex.
 //!
-//! Three things are deliberate:
-//!
-//! * **Chat config is adapter state, never vault or index state.** Nothing here reaches
-//!   the index, which is what makes "change models at any time" true by construction: a
-//!   chat model swap costs no reindex (contrast ADR-0007).
-//! * **The API key is remembered in the Keychain, never in a file** (GH #176; see
-//!   `keychain.rs` for why). It stays `#[serde(skip)]` on both halves, so it is
-//!   structurally incapable of reaching `chat.json` and a hand-edited one cannot put a key
-//!   back. It never crosses to the webview either — the status view carries an
-//!   [`ApiKeySource`], never the key.
-//! * **`B2_LLM_API_KEY` outranks the remembered key**, so a shell can point one launch at
-//!   another provider, or tell B2 to keep no secret of its own. That rule is the one
-//!   resolver's; this adapter states its sources and doesn't rank them.
+//! The API key lives in the Keychain, never in `chat.json` (GH #176), and never crosses to
+//! the webview. `B2_LLM_API_KEY` outranks it; that ranking is the resolver's.
 
 use crate::keychain::KeyStore;
 use crate::state_file;
@@ -25,13 +12,11 @@ use b2_llm::{ApiKeySource, LlmConfig};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// The state file holding the persisted half of [`ChatPrefs`] (see [`state_file`]).
+/// The state file holding the persisted half of [`ChatPrefs`].
 const PREFS_FILE: &str = "chat.json";
 
-/// The desktop's chat preferences: the Settings section's two persisted fields,
-/// plus the key in force. `None` means "whatever the environment and the
-/// defaults say" — so a user who has never opened the section is exactly the CLI
-/// with no flags, and clearing a field returns to that rather than to `""`.
+/// The desktop's chat preferences plus the key in force. `None` means "whatever the
+/// environment and defaults say", as the CLI with no flags.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatPrefs {
     /// The OpenAI-compatible base URL the user typed, if any.
@@ -40,30 +25,21 @@ pub struct ChatPrefs {
     /// The chat model id the user typed, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// The tool-call cap the user set, if any (`LlmConfig::max_tool_calls`). `None` is
-    /// "whatever `B2_LLM_MAX_TOOL_CALLS` and the default say", like the two fields above.
+    /// The tool-call cap the user set, if any (`LlmConfig::max_tool_calls`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
-    /// The bearer token for a cloud endpoint, as it stands for this run.
-    ///
-    /// `skip` on both halves, not merely `skip_serializing_if`: this type is what
-    /// [`write_prefs_to`] writes, so the field must be structurally incapable of reaching
-    /// that file, and a file that somehow named it must not put one *back*.
+    /// The bearer token in force for this run. `skip` both ways: it can never reach the
+    /// file, and a file naming it can't install one.
     #[serde(skip)]
     pub api_key: Option<String>,
-    /// Whether [`api_key`](Self::api_key) is also in the [`KeyStore`] — i.e. whether it
-    /// survives quit. Meaningless on its own, which is why nothing reads it directly:
-    /// [`ChatPrefs::api_key_source`] is the answer callers want, and deriving it from the
-    /// pair keeps "a key with no source" unrepresentable.
+    /// Whether [`api_key`](Self::api_key) is also in the [`KeyStore`]. Read it through
+    /// [`ChatPrefs::api_key_source`].
     #[serde(skip)]
     pub key_remembered: bool,
 }
 
-/// Hand-written for `LlmConfig`'s reason, applied to the type that holds the key in
-/// force: **a secret kept in an encrypted store must not leak out of a log line instead.**
-/// `Debug` is what an adapter reaches for when something is wrong — a `tracing` field, a
-/// panic message — which in this host means stderr and, under `B2_LOG_FILE`, a JSONL file
-/// the user may paste into an issue. Only the key's *presence* prints.
+/// Hand-written, as `LlmConfig`'s is, so the key can never reach a log; only its presence
+/// prints.
 impl std::fmt::Debug for ChatPrefs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChatPrefs")
@@ -83,10 +59,8 @@ impl std::fmt::Debug for ChatPrefs {
 }
 
 impl ChatPrefs {
-    /// The configuration these preferences resolve to: the shared env resolution with this
-    /// host's explicit choices laid over it. The key is the one field that does **not**
-    /// follow that rule — `with_api_key` yields to `B2_LLM_API_KEY` (GH #176). This adapter
-    /// passes what it has and where it got it; the ranking is the resolver's.
+    /// The configuration these preferences resolve to, over the shared env resolution.
+    /// The key yields to `B2_LLM_API_KEY` instead (GH #176).
     pub fn config(&self) -> LlmConfig {
         LlmConfig::from_env()
             .with_overrides(self.base_url.as_deref(), self.model.as_deref())
@@ -94,9 +68,8 @@ impl ChatPrefs {
             .with_api_key(self.api_key.as_deref(), self.api_key_source())
     }
 
-    /// Where this host's own key came from — never [`ApiKeySource::Environment`],
-    /// which only [`LlmConfig::from_env`] has the standing to claim. Derived
-    /// rather than stored so the pair it reads can never disagree with it.
+    /// Where this host's own key came from; never [`ApiKeySource::Environment`], which
+    /// only [`LlmConfig::from_env`] claims.
     pub fn api_key_source(&self) -> ApiKeySource {
         match (&self.api_key, self.key_remembered) {
             (None, _) => ApiKeySource::None,
@@ -106,39 +79,25 @@ impl ChatPrefs {
     }
 }
 
-/// Pick + wire the chat provider — `main.rs`'s `open_vault` for the second seam, over the
-/// same `b2_llm::provider` rule the CLI uses (`B2_LLM=fake` or the configured endpoint).
-///
-/// Unlike the CLI's `open_llm` this does **not** probe: the desktop probes once when the
-/// chat surface opens, and a round trip per turn would be a per-question tax on a cloud
-/// endpoint. A server that dies between the probe and the question surfaces as the same
-/// actionable message from `Error::Llm`.
+/// The chat provider, by the same rule as the CLI. Unlike the CLI's `open_llm` it doesn't
+/// probe: the desktop probes once when the chat surface opens, not per question.
 pub fn provider(prefs: &ChatPrefs) -> Box<dyn LlmProvider> {
     b2_llm::provider(prefs.config())
 }
 
-/// Where the persisted half lives: `<data-dir>/b2/chat.json`, beside the remembered vault
-/// ([`state_file`]). `None` only if the platform has no data dir — chat still works, it
-/// just forgets the endpoint at quit.
+/// Where the persisted half lives, or `None` when the platform has no data dir.
 pub fn prefs_file() -> Option<PathBuf> {
     state_file::path(PREFS_FILE)
 }
 
-/// The preferences this launch starts from: the endpoint and model out of the
-/// state file, and the API key out of the [`KeyStore`]. Best-effort in every
-/// direction — an unreadable or malformed file reads as "nothing configured", and
-/// a store with nothing in it (or one that refuses) reads as "no key" — because
-/// the fallback is a working local configuration.
+/// The preferences this launch starts from: the state file, and the key from the
+/// [`KeyStore`]. Best-effort: a bad file is "nothing configured", a refusing store "no key".
 pub fn read_prefs(keys: &dyn KeyStore) -> ChatPrefs {
     let file = prefs_file();
     read_prefs_from(file.as_deref(), keys)
 }
 
-/// [`read_prefs`] against an explicit path — the testable core (a tempfile stands in
-/// for the real state file and `MemoryStore` for the Keychain, so tests touch neither
-/// the user's data dir nor their keychain). `None` is the platform with no data dir:
-/// no file to read, and a key that is still remembered, since the two live in
-/// different places.
+/// [`read_prefs`] against an explicit path. `None` (no data dir) still reads the key.
 pub fn read_prefs_from(file: Option<&Path>, keys: &dyn KeyStore) -> ChatPrefs {
     let mut prefs = match file.map(std::fs::read_to_string) {
         Some(Ok(text)) => match serde_json::from_str::<ChatPrefs>(&text) {
@@ -150,38 +109,19 @@ pub fn read_prefs_from(file: Option<&Path>, keys: &dyn KeyStore) -> ChatPrefs {
         },
         _ => ChatPrefs::default(),
     };
-    // Reading is silent and prompts for nothing when no key was ever saved,
-    // which is every user who has not configured a cloud model — so this costs
-    // the common launch nothing (`keychain.rs`).
+    // Silent, no prompt, when no key was ever saved.
     prefs.api_key = keys.load();
     prefs.key_remembered = prefs.api_key.is_some();
     prefs
 }
 
-/// Apply a save's key field to the key in force, writing the [`KeyStore`] to match — the
-/// one place the store is written, and the whole of the field's three-state rule.
+/// Apply a save's key field, writing the [`KeyStore`] to match; returns
+/// `(key, remembered)`. The field paints empty even when a key is set, so it is
+/// three-state: `None` untouched, blank clears (the Remove button, which must be possible
+/// or repointing `base_url` would leak the key to a new provider), a value sets.
 ///
-/// **The key is three-state, and has to be.** The Settings field paints empty even when a
-/// key is set, so "I didn't touch it" and "I cleared it" would otherwise be the same
-/// input — and collapsing them either signs the user out on every save or makes the key
-/// impossible to remove. The second is the dangerous one: with the key un-removable,
-/// repointing `base_url` would send the *first* provider's token to the second. So:
-///
-/// * `None` — **untouched**. Re-saving the endpoint must not sign you out.
-/// * `Some(blank)` — **clear**, the UI's Remove button and the only way back to a keyless
-///   configuration; forgotten in the store too, or it would return at the next launch.
-/// * `Some(key)` — **set**, and remembered for next time.
-///
-/// **Removal is all-or-nothing**, and that asymmetry with the *set* path is the point. A
-/// refused save is survivable — the key still works, just for this run. A refused *delete*
-/// is not: dropping the key from memory while the store keeps it would show a keyless
-/// configuration and hand the credential back at the next launch. So a store that won't
-/// let go leaves the key exactly where it was.
-///
-/// The returned pair is `(key, remembered)`. A store that refuses is **not** an error: the
-/// key stays in force and the configuration reads [`ApiKeySource::Session`], the behaviour
-/// that shipped before #176 — the convenience degrades, never chat. What clearing reaches
-/// is B2's own key; a `B2_LLM_API_KEY` still outranks it.
+/// A refused save degrades to [`ApiKeySource::Session`]. A refused clear keeps the key as
+/// it was, or the next launch would read it back.
 pub fn apply_key(
     prev: &ChatPrefs,
     typed: Option<&str>,
@@ -192,20 +132,15 @@ pub fn apply_key(
     };
     match typed.trim() {
         "" if keys.clear() => (None, false),
-        // The store refused to let go. Keep the key precisely as it stood, so
-        // what the panel reports and what the next launch will find stay the
-        // same fact.
+        // The store refused to let go: keep the key as it stood.
         "" => (prev.api_key.clone(), prev.key_remembered),
         key => (Some(key.to_string()), keys.save(key)),
     }
 }
 
-/// Apply a save's tool-call-cap field — [`apply_key`]'s three-state rule, for the same
-/// reason: a save that doesn't mention the field (the setup card's one-click model pick,
-/// the key's Remove button) must not reset it. `None` is **untouched**, blank is **clear**
-/// (back to the environment/default), a value is **set**. Judging the value is
-/// `b2_llm::parse_max_tool_calls`'s — the environment variable's own parser — and one it
-/// refuses leaves the cap as it stood, which the returned status then shows.
+/// Apply a save's tool-call-cap field with [`apply_key`]'s three-state rule, so a save
+/// that doesn't mention it can't reset it. A value `b2_llm::parse_max_tool_calls` refuses
+/// leaves the cap as it stood.
 pub fn apply_tool_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
     match typed.map(str::trim) {
         None => prev.max_tool_calls,
@@ -214,18 +149,14 @@ pub fn apply_tool_cap(prev: &ChatPrefs, typed: Option<&str>) -> Option<usize> {
     }
 }
 
-/// Remember the endpoint and model. **Best-effort host state**, like the last
-/// opened vault: a write failure is logged and swallowed, never failing the
-/// setting the user just made — the change is already live in memory either way.
+/// Remember the endpoint and model. Best-effort: the change is already live in memory.
 pub fn persist_prefs(prefs: &ChatPrefs) {
     state_file::update(PREFS_FILE, "remember chat settings", |file| {
         write_prefs_to(file, prefs)
     });
 }
 
-/// [`persist_prefs`] against an explicit path — the testable core. Creates the
-/// parent dir if needed. The API key is `#[serde(skip)]`, so what lands on disk
-/// is the endpoint and the model and nothing else.
+/// [`persist_prefs`] against an explicit path. The API key is skipped.
 pub fn write_prefs_to(file: &Path, prefs: &ChatPrefs) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(prefs)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -240,7 +171,7 @@ mod tests {
     #[test]
     fn prefs_round_trip_without_the_key_in_the_file() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // The file sits under a not-yet-created subdir — the write must `mkdir -p`.
+        // The parent dir doesn't exist yet.
         let file = tmp.path().join("state/b2/chat.json");
         let prefs = ChatPrefs {
             base_url: Some("http://localhost:1234/v1".into()),
@@ -256,8 +187,6 @@ mod tests {
             !on_disk.contains("sk-live-must-not-persist"),
             "a bearer token must never reach the settings file: {on_disk}"
         );
-        // Read back against an *empty* store: the endpoint and model come out of
-        // the file, and the key does not, because the file never held it.
         let back = read_prefs_from(Some(&file), &MemoryStore::empty());
         assert_eq!(back.base_url.as_deref(), Some("http://localhost:1234/v1"));
         assert_eq!(back.model.as_deref(), Some("qwen2.5"));
@@ -280,7 +209,6 @@ mod tests {
         assert_eq!(back.max_tool_calls, Some(128));
         assert_eq!(back.config().max_tool_calls, 128);
 
-        // Never set: nothing about it reaches the file, and the shared resolution stands.
         write_prefs_to(&file, &ChatPrefs::default()).unwrap();
         assert!(!std::fs::read_to_string(&file)
             .unwrap()
@@ -290,7 +218,6 @@ mod tests {
             LlmConfig::from_env().max_tool_calls
         );
 
-        // A hand-edited file cannot lift the ceiling the parser enforces.
         std::fs::write(&file, r#"{"max_tool_calls": 1000000000}"#).unwrap();
         let edited = read_prefs_from(Some(&file), &MemoryStore::empty());
         assert_eq!(
@@ -299,8 +226,6 @@ mod tests {
         );
     }
 
-    /// The field's three-state rule, which is the key's: `None` is *untouched*, blank is
-    /// *clear*, a value is *set* — and a value the shared parser refuses changes nothing.
     #[test]
     fn the_tool_call_cap_field_is_untouched_cleared_or_set() {
         let held = ChatPrefs {
@@ -319,9 +244,6 @@ mod tests {
         }
     }
 
-    /// The other half of #176: the key *does* come back, from the store rather
-    /// than the file — and it comes back marked as remembered, which is what the
-    /// Settings copy reads.
     #[test]
     fn the_key_comes_back_from_the_store() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -337,9 +259,6 @@ mod tests {
         assert_eq!(prefs.api_key_source(), ApiKeySource::Stored);
     }
 
-    /// The two stores are independent: no settings file (a platform with no data
-    /// dir, or a first run) still finds a remembered key, and a broken file does
-    /// not take the key down with it.
     #[test]
     fn a_missing_settings_file_does_not_lose_the_remembered_key() {
         let no_file = read_prefs_from(None, &MemoryStore::holding("sk-remembered"));
@@ -354,13 +273,12 @@ mod tests {
         assert_eq!(prefs.api_key.as_deref(), Some("sk-remembered"));
     }
 
-    /// The field's three states, against the store they have to keep in step.
     #[test]
     fn applying_the_key_field_keeps_the_store_in_step() {
         let store = MemoryStore::empty();
         let none = ChatPrefs::default();
 
-        // Set: in force, and remembered for next launch.
+        // Set.
         let (key, remembered) = apply_key(&none, Some("sk-typed"), &store);
         assert_eq!(key.as_deref(), Some("sk-typed"));
         assert!(remembered);
@@ -373,25 +291,19 @@ mod tests {
         };
         assert_eq!(set.api_key_source(), ApiKeySource::Stored);
 
-        // Untouched: nothing moves, in memory or in the store.
+        // Untouched.
         let (key, remembered) = apply_key(&set, None, &store);
         assert_eq!(key.as_deref(), Some("sk-typed"));
         assert!(remembered);
         assert_eq!(store.peek().as_deref(), Some("sk-typed"));
 
-        // Blank — the Remove button. Gone from *both*, or it would come back at
-        // the next launch and make the button a lie.
+        // Blank: gone from both memory and the store.
         let (key, remembered) = apply_key(&set, Some("   "), &store);
         assert_eq!(key, None);
         assert!(!remembered);
         assert_eq!(store.peek(), None);
     }
 
-    /// The failure this module most owes a test: a store that **won't let go**. Dropping
-    /// the key from memory while the Keychain keeps it would show a keyless configuration
-    /// and resurrect the credential at the next launch. So removal is all-or-nothing — and
-    /// the proof is the second half, where a fresh `read_prefs_from` over the same store
-    /// finds exactly what the panel was still claiming.
     #[test]
     fn a_removal_the_store_refuses_does_not_pretend_to_have_happened() {
         let store = MemoryStore::refusing_holding("sk-wont-let-go");
@@ -410,8 +322,7 @@ mod tests {
         assert!(remembered);
         assert_eq!(store.peek().as_deref(), Some("sk-wont-let-go"));
 
-        // The whole point, stated as the next launch: what the panel reports and
-        // what the store will hand back are the same fact.
+        // The next launch agrees with what the panel reports.
         let next_launch = read_prefs_from(None, &store);
         assert_eq!(next_launch.api_key.as_deref(), Some("sk-wont-let-go"));
         assert_eq!(
@@ -426,9 +337,6 @@ mod tests {
         );
     }
 
-    /// The other side of it: a *session-only* key sits in no store, so removing
-    /// it can't be refused — `clear` on an empty store is already the asked-for
-    /// state (the real Keychain's `errSecItemNotFound`).
     #[test]
     fn a_session_key_clears_even_against_a_refusing_store() {
         let store = MemoryStore::refusing();
@@ -442,9 +350,6 @@ mod tests {
         assert!(!remembered);
     }
 
-    /// A Keychain that says no must cost the convenience and nothing else: the
-    /// key the user just typed is still the key in force, and the configuration
-    /// is honest that it lasts only for this run (GH #176's fallback path).
     #[test]
     fn a_refusing_store_degrades_to_session_only() {
         let store = MemoryStore::refusing();
@@ -459,19 +364,13 @@ mod tests {
             ..ChatPrefs::default()
         };
         assert_eq!(prefs.api_key_source(), ApiKeySource::Session);
-        // And it is the key the next question is asked with. Stated as the
-        // layering rather than as a literal, so it holds however the developer's
-        // own environment happens to be set (`from_env` reads the process env).
+        // Stated as the layering, so it holds whatever the process env holds.
         assert_eq!(
             prefs.config(),
             LlmConfig::from_env().with_api_key(Some("sk-typed"), ApiKeySource::Session)
         );
     }
 
-    /// The disk guarantee above has a sibling the derive would have broken:
-    /// `Debug` is how a secret reaches a *log*, and this host's log can be a file
-    /// (`B2_LOG_FILE`). `LlmConfig` hand-writes its own impl for exactly this, and
-    /// the type holding the session key owes the same.
     #[test]
     fn debug_never_prints_the_api_key() {
         let prefs = ChatPrefs {
@@ -487,9 +386,7 @@ mod tests {
             "a bearer token must never reach a log: {rendered}"
         );
         assert!(rendered.contains("redacted"), "{rendered}");
-        // Presence still shows — "is a key configured at all" is the question a
-        // rejected cloud call actually needs answered — and now which key, which
-        // is the follow-up when the answer is "yes, and it's being rejected".
+        // Presence and source still show.
         assert!(rendered.contains("api.example.com"), "{rendered}");
         assert!(rendered.contains("Stored"), "{rendered}");
         assert!(
@@ -498,10 +395,6 @@ mod tests {
         );
     }
 
-    /// A file naming `api_key` must not be able to install one: the field is
-    /// skipped in *both* directions, so a hand-edited (or synced) settings file
-    /// can't quietly become a credential store. #176 moved where a key *does*
-    /// live; it did not open this door.
     #[test]
     fn a_hand_written_key_in_the_file_is_ignored() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -532,13 +425,9 @@ mod tests {
         );
     }
 
-    /// Empty preferences resolve to exactly what the CLI resolves with no flags —
-    /// which is the point of laying them over `LlmConfig::from_env` rather than
-    /// spelling the defaults here.
     #[test]
     fn empty_prefs_resolve_to_the_shared_default() {
-        // `from_env` reads the process environment; this asserts the *layering*,
-        // which holds however the environment happens to be set.
+        // Asserts the layering, which holds whatever the process env holds.
         assert_eq!(ChatPrefs::default().config(), LlmConfig::from_env());
         let pointed = ChatPrefs {
             base_url: Some("http://localhost:1234/v1".into()),

@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
-# Environment sanity check for local development — "stop 0" before `make app` works.
+# Environment sanity check for local development, in the order a fresh clone hits it.
+# Each check prints pass/fail/warn with the fix inline.
 #
-# Walks the same order a fresh clone hits in the README's Build-and-run: Rust (needed for
-# every recipe) -> Node/npm + the Tauri CLI (desktop app only) -> the platform's native
-# webview toolchain -> optional extras (the embedding model; B2_VAULT_PATH is purely FYI —
-# `make app` works with or without it via the in-app vault switcher). Each check
-# prints pass/fail/warn with the fix inline, so a broken environment becomes a checklist
-# instead of a scavenger hunt — this script exists because `make app` failing with
-# "error: no such command: `tauri`" gives no hint that the fix is a separate `cargo install`.
-#
-# Usage: `make doctor` (or run directly: scripts/doctor.sh). Exits 0 if every hard
-# requirement passes; warnings (optional extras) don't fail the run.
+# Usage: `make doctor` (or scripts/doctor.sh). Exits 0 if every hard requirement passes;
+# warnings don't fail the run.
 
 set -uo pipefail
 
@@ -20,8 +13,7 @@ cd "$REPO"
 FAILS=0
 WARNS=0
 
-# ANSI colors, no 3rd-party dep (just raw escapes) — off when stdout isn't a terminal
-# (piped/redirected output) or NO_COLOR is set (https://no-color.org), so logs/files stay plain.
+# ANSI colors, off when stdout isn't a terminal or NO_COLOR is set.
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
   C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'
@@ -46,9 +38,7 @@ else
   else
     warn "cargo found but not via rustup — rust-toolchain.toml (pins 1.96) won't auto-apply; if builds complain about MSRV, install rustup instead"
   fi
-  # Running cargo here resolves (and, via rustup, auto-installs) the toolchain pinned in
-  # rust-toolchain.toml — the same thing `make build`/`make app` would do on first run, so
-  # doing it here just surfaces that cost up front instead of mid-build.
+  # Resolves (and via rustup installs) the pinned toolchain up front instead of mid-build.
   if VERSION_OUT="$(cargo --version 2>&1)"; then
     pass "cargo resolves: $VERSION_OUT"
   else
@@ -57,11 +47,8 @@ else
 fi
 
 # --- make itself (informational — you're running this via `make doctor` most likely) --------
-# No version floor: the Makefile targets GNU Make 3.81, what Apple's Xcode Command Line Tools
-# ship (and has for years, since Apple won't bundle GPLv3 Make 4.x) — so it works out of the box
-# on macOS with no separate install. The "Platform build toolchain" section below confirms the
-# CLT are present; this check just names `make` itself in case a non-CLT `make` is on PATH first
-# (e.g. a Homebrew `gmake` aliased over it) with something older or broken.
+# No version floor: the Makefile targets GNU Make 3.81, what Apple's CLT ship. This names
+# `make` in case a non-CLT one is first on PATH.
 section "make"
 if command -v make >/dev/null 2>&1; then
   pass "make found ($(make --version 2>/dev/null | head -1))"
@@ -70,10 +57,8 @@ else
 fi
 
 # --- Node + npm (needed for ui/, the desktop frontend) ---------------------------------------
-# Version floor comes from vite (ui/package-lock.json pins vite@6, engines.node =
-# "^18.0.0 || ^20.0.0 || >=22.0.0") — the strictest of the frontend's deps. Note that range
-# excludes the odd-numbered releases (19, 21, ...): those are Node's short-lived non-LTS
-# lines, not vite-incompatible per se, but unsupported here — install an LTS line instead.
+# Version floor from vite 6's engines.node: "^18.0.0 || ^20.0.0 || >=22.0.0" (so 19 and 21
+# are unsupported).
 section "Node.js + npm (desktop app frontend)"
 nvm_available() {
   [[ -n "${NVM_DIR:-}" && -s "${NVM_DIR}/nvm.sh" ]] || [[ -s "$HOME/.nvm/nvm.sh" ]]
@@ -161,10 +146,8 @@ else
 fi
 
 # --- Optional: coverage tooling (`make coverage*`) ------------------------------------------
-# Same reason this script exists at all: `make coverage` fails with cargo's bare
-# "error: no such command: `llvm-cov`", which names neither of the two things that are
-# actually missing. Both are needed — the subcommand *and* the rustup component it drives
-# (the component is per-toolchain, so it can be absent even when the binary is installed).
+# Needs both the subcommand and its rustup component (per-toolchain, so it can be missing
+# even when the binary is installed).
 section "Coverage tooling (optional — needed by \`make coverage\`)"
 if cargo llvm-cov --version >/dev/null 2>&1; then
   pass "cargo-llvm-cov found ($(cargo llvm-cov --version 2>/dev/null))"
@@ -180,8 +163,7 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 
 # --- Informational: B2_VAULT_PATH --------------------------------------------------------
-# Not required either way: `make app` opens the in-app vault switcher when unset. This is
-# purely FYI, so it never counts as a warning.
+# FYI only: `make app` opens the vault switcher when unset.
 section "Vault (informational)"
 if [[ -n "${B2_VAULT_PATH:-}" ]]; then
   info "B2_VAULT_PATH set: $B2_VAULT_PATH — make app will open this vault directly"

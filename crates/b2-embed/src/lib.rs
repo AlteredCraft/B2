@@ -1,14 +1,9 @@
-//! `b2-embed` — B2's real, local embedder: candle + hf-hub producing embeddings inside the
-//! single binary, with **BAAI/bge-base-en-v1.5** @ dim 768 as the default model (ADR-0020).
+//! `b2-embed`: B2's real local embedder (candle, default BAAI/bge-base-en-v1.5, ADR-0020),
+//! behind the [`b2_core::embed::Embedder`] seam (ADR-0005). Only the adapters wire it in.
 //!
-//! It sits **behind the [`b2_core::embed::Embedder`] seam** (ADR-0005), so the store, the
-//! flows and the whole `b2-core` suite never see it — they run against the deterministic
-//! `FakeEmbedder`. The adapters are the only clients that wire the real model in.
-//!
-//! The model is **not bundled**: an explicit [`provision`] (`b2 init`) downloads and
-//! verifies it into a shared XDG cache, and [`LocalEmbedder::load`] fails fast if it is
-//! absent. Configurable via `$XDG_CONFIG_HOME/b2/config.toml`, whose `source` can point at
-//! a mirror, an alternate repo, or a local path for a fully-offline install.
+//! The model is not bundled: [`provision`] (`b2 init`) fetches it into a shared cache, and
+//! [`LocalEmbedder::load`] fails fast if it is absent. `$XDG_CONFIG_HOME/b2/config.toml`
+//! can point `source` at a mirror, another repo, or a local path.
 
 mod config;
 mod model;
@@ -18,23 +13,17 @@ pub use config::{EmbedConfig, ModelChoice, ModelInfo, Source, AVAILABLE_MODELS, 
 pub use model::{active_device_label, LocalEmbedder};
 pub use provision::{provision, ProvisionReport};
 
-/// The environment variable that forces the deterministic fake embedder everywhere:
-/// `B2_EMBEDDER=fake`, the offline/dev mode both adapters honour and their suites run
-/// under.
+/// `B2_EMBEDDER=fake` forces the deterministic fake embedder everywhere.
 pub const ENV_EMBEDDER: &str = "B2_EMBEDDER";
 
-/// Whether `B2_EMBEDDER=fake` is in force. Read in one place so the CLI and the desktop
-/// cannot disagree about what the switch means.
+/// Whether `B2_EMBEDDER=fake` is in force; one reader so the adapters can't disagree.
 pub fn fake_requested() -> bool {
     std::env::var_os(ENV_EMBEDDER).is_some_and(|v| v == "fake")
 }
 
-/// The embedder a command should open its vault with — the adapters' one wiring rule.
-///
-/// A command that embeds (`needs_semantic`) gets the real, configured [`LocalEmbedder`],
-/// failing fast with [`EmbedError::NotProvisioned`] ("run `b2 init`") when it is absent.
-/// Everything else — and every command under [`fake_requested`] — gets `None`, which the
-/// caller reads as "open with the core's fake", so no model is needed just to read.
+/// The embedder a command should open its vault with. A command that embeds gets the real
+/// [`LocalEmbedder`] (or [`EmbedError::NotProvisioned`]); everything else, and everything
+/// under [`fake_requested`], gets `None`: open with the core's fake.
 pub fn embedder_for(needs_semantic: bool) -> Result<Option<LocalEmbedder>> {
     if !needs_semantic || fake_requested() {
         return Ok(None);
@@ -42,9 +31,8 @@ pub fn embedder_for(needs_semantic: bool) -> Result<Option<LocalEmbedder>> {
     LocalEmbedder::load(&EmbedConfig::load()?).map(Some)
 }
 
-/// Errors from provisioning/loading the local model. Embed-*time* failures map into
-/// [`b2_core::Error::Embed`] so the index path surfaces one error type; the
-/// setup-time errors here carry the actionable "run `b2 init`" guidance.
+/// Errors from provisioning or loading the model. Embed-time failures map into
+/// [`b2_core::Error::Embed`] instead.
 #[derive(thiserror::Error, Debug)]
 pub enum EmbedError {
     #[error("io error: {0}")]
@@ -53,8 +41,7 @@ pub enum EmbedError {
     #[error("config error: {0}")]
     Config(String),
 
-    /// The model is not in the cache yet — the fail-fast the CLI turns into
-    /// "run `b2 init`". Carries the model id and the directory that was checked.
+    /// The model is not in the cache yet.
     #[error("embedding model '{model}' is not installed (looked in {dir}); run `b2 init`")]
     NotProvisioned { model: String, dir: String },
 
@@ -64,10 +51,8 @@ pub enum EmbedError {
     #[error("model load failed: {0}")]
     Load(String),
 
-    /// A model id that isn't in [`AVAILABLE_MODELS`] was passed to
-    /// [`EmbedConfig::set_model`] — refuse rather than write a config the loader could
-    /// never provision. Reachable only from the desktop settings picker (the CLI never
-    /// sets the model), so it maps to a generic "pick one from the list" message there.
+    /// [`EmbedConfig::set_model`] got an id not in [`AVAILABLE_MODELS`]. Reachable only
+    /// from the desktop settings picker.
     #[error("unknown embedding model '{0}'")]
     UnknownModel(String),
 }

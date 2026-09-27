@@ -1,6 +1,6 @@
-//! [`LocalEmbedder`] — the candle-backed BERT sentence embedder that satisfies the
-//! [`b2_core::embed::Embedder`] seam. Loaded from the provisioned cache; a missing
-//! model is a fail-fast "run `b2 init`", never a surprise mid-command download.
+//! [`LocalEmbedder`]: the candle BERT sentence embedder behind the
+//! [`b2_core::embed::Embedder`] seam. A missing model fails fast ("run `b2 init`"); the read
+//! path never downloads.
 
 use crate::config::EmbedConfig;
 use crate::{EmbedError, Result};
@@ -13,29 +13,24 @@ use tokenizers::{
     TruncationStrategy,
 };
 
-/// The three files a BERT sentence model needs. Presence of all three in the flat
-/// model dir *is* the "installed" check (fail-fast surface) — [`files_present`].
+/// The three files a BERT sentence model needs.
 pub const REQUIRED_FILES: [&str; 3] = ["config.json", "tokenizer.json", "model.safetensors"];
 
-/// Whether every [`REQUIRED_FILES`] entry sits in `dir` — **the** "installed"
-/// check, shared by [`LocalEmbedder::load`]'s fail-fast, the provision fast path,
-/// and the settings picker's installed flag, so the three can never drift.
+/// Whether every [`REQUIRED_FILES`] entry is in `dir`: the one "installed" check, shared
+/// by `load`, provisioning and the settings picker.
 pub fn files_present(dir: &std::path::Path) -> bool {
     REQUIRED_FILES.iter().all(|f| dir.join(f).is_file())
 }
 
-/// BERT's positional limit; longer chunks are truncated so position embeddings are
-/// never indexed out of range. Capped again by the model's own config.
+/// BERT's positional limit, capped again by the model's own config.
 const MAX_TOKENS: usize = 512;
 
-/// A loaded local embedding model. Cheap to embed with once loaded; loading (which
-/// mmaps the weights) is the one-time cost.
+/// A loaded local embedding model. Loading (which mmaps the weights) is the one-time cost.
 pub struct LocalEmbedder {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
-    /// The configured repo id (`config.model`), untagged by device — what the
-    /// adapters attribute embedding cost to.
+    /// The configured repo id, without the device tag.
     configured_model: String,
     /// The id recorded as `meta.embed_model_id`: the repo id, tagged by device.
     model_id: String,
@@ -44,9 +39,7 @@ pub struct LocalEmbedder {
 }
 
 impl LocalEmbedder {
-    /// Load the provisioned model named by `config` from its cache dir. Fails fast
-    /// with [`EmbedError::NotProvisioned`] if the files are absent — the read path
-    /// never downloads.
+    /// Load the provisioned model named by `config`, or [`EmbedError::NotProvisioned`].
     pub fn load(config: &EmbedConfig) -> Result<Self> {
         let dir = config.model_dir();
         if !files_present(&dir) {
@@ -64,7 +57,6 @@ impl LocalEmbedder {
 
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| EmbedError::Load(format!("tokenizer.json: {e}")))?;
-        // Truncate long chunks so position embeddings stay in range.
         tokenizer
             .with_truncation(Some(TruncationParams {
                 max_length: max_len,
@@ -73,11 +65,9 @@ impl LocalEmbedder {
                 direction: TruncationDirection::Right,
             }))
             .map_err(|e| EmbedError::Load(format!("truncation: {e}")))?;
-        // Pad a batch to its longest member so `embed_batch` can stack sequences of
-        // differing lengths into one tensor; the attention mask zeroes the pad
-        // positions, so a padded row's CLS vector equals its single-encode vector.
-        // `BatchLongest` leaves a single `encode` (batch of one) unpadded, so the
-        // `embed`/`embed_query` path is unchanged. bge/BERT's `[PAD]` id is 0.
+        // Pad a batch to its longest member so `embed_batch` can stack it; the attention
+        // mask makes a padded row's CLS vector equal its single-encode vector. A single
+        // `encode` stays unpadded. BERT's `[PAD]` id is 0.
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
             pad_id: 0,
@@ -86,16 +76,12 @@ impl LocalEmbedder {
             ..Default::default()
         }));
 
-        // Pick the compute device (GH #40). Default build → CPU (with Accelerate BLAS, see
-        // Cargo.toml); a `--features metal` build → the Apple-Silicon GPU, with a graceful CPU
-        // fallback. The *resolved* device tags the recorded model id (`@metal`), so a device
-        // switch is a model swap: `ensure_embedding_space` re-embeds and `search` fails fast
-        // rather than mixing CPU and GPU vectors in one space.
+        // The resolved device tags the model id (GH #40), so a device switch is a model
+        // swap and CPU and GPU vectors never mix in one space.
         let (device, device_tag) = select_device();
         let model_id = tagged_model_id(&config.model, device_tag);
-        // SAFETY: memory-maps the safetensors weights. Sound as long as the file is
-        // not mutated while mapped; it is a read-only file in our XDG cache, written
-        // once by `b2 init` (provision) and never touched again for the process's life.
+        // SAFETY: memory-maps the safetensors weights. Sound as long as the file is not
+        // mutated while mapped; it is written once by `b2 init` and never touched again.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[dir.join("model.safetensors")], DTYPE, &device)
                 .map_err(|e| EmbedError::Load(format!("weights: {e}")))?
@@ -114,16 +100,13 @@ impl LocalEmbedder {
         })
     }
 
-    /// The configured model's repo id, **without** the device tag
-    /// [`model_id`](Embedder::model_id) carries — the id the config and the settings
-    /// picker speak, so an adapter's per-model bookkeeping keys on the same name.
+    /// The configured repo id, without the device tag [`model_id`](Embedder::model_id)
+    /// carries: the id the config and settings picker use.
     pub fn configured_model(&self) -> &str {
         &self.configured_model
     }
 
-    /// The pooled, L2-normalized embedding of one `text`: a single, unpadded encode
-    /// through [`forward_cls`](Self::forward_cls). Deliberately not a batch of one — a
-    /// query takes the plain single-sequence path.
+    /// The L2-normalized embedding of one `text`, from a single unpadded encode.
     fn embed_inner(&self, text: &str) -> candle_core::Result<Vec<f32>> {
         let enc = self
             .tokenizer
@@ -134,10 +117,8 @@ impl LocalEmbedder {
             .ok_or_else(|| candle_core::Error::Msg("the model returned no embedding".into()))
     }
 
-    /// Embed a batch in one forward pass: tokenize+pad to the batch's longest, then
-    /// [`forward_cls`](Self::forward_cls). One matmul over `B` texts is far cheaper on
-    /// CPU than `B` single passes — the reindex win. Equivalent, per row, to
-    /// [`embed_inner`](Self::embed_inner).
+    /// Embed a batch in one forward pass, far cheaper than `B` single passes. Equal, per
+    /// row, to [`embed_inner`](Self::embed_inner).
     fn embed_batch_inner(&self, texts: &[&str]) -> candle_core::Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -149,14 +130,11 @@ impl LocalEmbedder {
         self.forward_cls(&encs)
     }
 
-    /// The step both paths share: stack same-length encodings into `[B, L]`, run them
-    /// through BERT, take each row's CLS token (position 0 — what bge is trained for, and
-    /// unaffected by right-padding), and L2-normalize so the index's L2 distance ranks by
-    /// cosine.
+    /// Run same-length encodings through BERT and take each row's CLS token (what bge is
+    /// trained for), L2-normalized so the index's L2 distance ranks by cosine.
     fn forward_cls(&self, encs: &[Encoding]) -> candle_core::Result<Vec<Vec<f32>>> {
         let batch = encs.len();
-        // A single encode is unpadded; a batch was padded to its longest. Either way
-        // every encoding here has the same length.
+        // Every encoding here has the same length (a batch was padded).
         let seq = encs.first().map_or(0, |e| e.get_ids().len());
         let mut ids = Vec::with_capacity(batch * seq);
         let mut mask = Vec::with_capacity(batch * seq);
@@ -200,8 +178,7 @@ impl Embedder for LocalEmbedder {
     }
 }
 
-/// A candle error crossing the [`Embedder`] seam, as the core's error type. A free
-/// fn rather than a `From` impl — both types are foreign here (orphan rule).
+/// A candle error as the core's error type. Not a `From` impl: both types are foreign.
 fn embed_err(e: candle_core::Error) -> b2_core::Error {
     b2_core::Error::Embed(e.to_string())
 }
@@ -211,14 +188,10 @@ fn l2_normalize(v: &[f32]) -> Vec<f32> {
     v.iter().map(|x| x / norm).collect()
 }
 
-/// Try to open the Metal GPU — only when compiled `--features metal` (candle's
-/// `metal_is_available()` is literally `cfg!(feature = "metal")`), and never a hard
-/// requirement: any failure returns `None` and the caller uses the CPU (GH #40). `announce`
-/// gates the fallback notice so the load path can say it while the cheap capability probe
-/// ([`active_device_label`]) stays silent. The notice goes to stderr rather than a log
-/// event on purpose: it explains a user-visible consequence (a CPU-tagged embedding space,
-/// so a Metal-built index reads as a model change), and a log is off unless asked for. No `unwrap`: a failed `new_metal` is a soft
-/// degrade (no-panic rule), not a load error.
+/// Try to open the Metal GPU (only in a `--features metal` build); any failure returns
+/// `None` and the caller uses the CPU (GH #40). `announce` prints the fallback to stderr,
+/// not a log, since it has a user-visible consequence (a Metal-built index reads as a
+/// model change).
 fn open_metal(announce: bool) -> Option<Device> {
     if candle_core::utils::metal_is_available() {
         match Device::new_metal(0) {
@@ -232,8 +205,7 @@ fn open_metal(announce: bool) -> Option<Device> {
     None
 }
 
-/// Pick the inference device and a short tag (`"cpu"`/`"metal"`) describing what we *actually*
-/// got — so the recorded model id reflects the resolved device, and a fallback build honestly
+/// The inference device and a tag for what was actually resolved, so a fallback build
 /// records CPU vectors.
 fn select_device() -> (Device, &'static str) {
     match open_metal(true) {
@@ -242,10 +214,7 @@ fn select_device() -> (Device, &'static str) {
     }
 }
 
-/// Human label for the compute device this build embeds on — `"Metal"` on a `--features metal`
-/// build with a working GPU, else `"CPU"` (GH #40). The desktop Settings badge renders it.
-/// Same resolution as [`select_device`] but silent; cheap — the compile-time gate
-/// short-circuits on a CPU build before any GPU probe.
+/// `"Metal"` or `"CPU"` for the Settings badge (GH #40): [`select_device`], but silent.
 pub fn active_device_label() -> &'static str {
     match open_metal(false) {
         Some(_) => "Metal",
@@ -253,11 +222,9 @@ pub fn active_device_label() -> &'static str {
     }
 }
 
-/// The id recorded as `meta.embed_model_id`, tagged by the resolved device. CPU keeps the
-/// bare repo id (so existing indexes need no migration); any non-CPU device appends `@<tag>`
-/// so its vectors live in a distinct embedding space — the swap that forces a re-embed and
-/// makes `search` fail fast rather than mix devices. The tag is only in this id, never in
-/// `config.model` (model-file lookup is unaffected).
+/// The id recorded as `meta.embed_model_id`. CPU keeps the bare repo id (existing indexes
+/// need no migration); other devices append `@<tag>`, a distinct embedding space. Never
+/// in `config.model`.
 fn tagged_model_id(base: &str, device_tag: &str) -> String {
     if device_tag == "cpu" {
         base.to_string()
@@ -272,12 +239,10 @@ mod tests {
 
     #[test]
     fn cpu_id_is_untagged_others_are_suffixed() {
-        // CPU keeps the bare repo id — existing indexes must not be seen as a model swap.
         assert_eq!(
             tagged_model_id("BAAI/bge-base-en-v1.5", "cpu"),
             "BAAI/bge-base-en-v1.5"
         );
-        // A non-CPU device tags a distinct embedding space, so a switch re-embeds + fails fast.
         assert_eq!(
             tagged_model_id("BAAI/bge-base-en-v1.5", "metal"),
             "BAAI/bge-base-en-v1.5@metal"
@@ -286,10 +251,8 @@ mod tests {
 
     #[test]
     fn files_present_is_loads_own_precondition() {
-        // What the desktop's `semantic` probe rests on (GH #133): the cheap file check
-        // and `load`'s fail-fast ask the same question, so answering with the former
-        // never overstates the model — and where they *do* part company (a corrupt
-        // model), the failure is `load`'s, which is fail-fast and actionable.
+        // The desktop's `semantic` probe relies on this (GH #133): the file check never
+        // overstates the model, and a corrupt model still fails in `load`.
         let tmp = tempfile::TempDir::new().unwrap();
         let config = EmbedConfig {
             model: "acme/not-a-real-model".to_string(),
@@ -298,17 +261,13 @@ mod tests {
             query_prefix: String::new(),
         };
 
-        // Empty cache: the probe says "not installed" and `load` refuses for exactly
-        // that reason — the two agree, which is what lets the probe stand in.
         assert!(!config.is_model_provisioned(&config.model));
         assert!(matches!(
             LocalEmbedder::load(&config),
             Err(EmbedError::NotProvisioned { .. })
         ));
 
-        // Present-but-corrupt: the probe reports installed (it is a *file* check), and
-        // the refusal moves to `load` — no longer `NotProvisioned`, so the file gate
-        // demonstrably passed and only the deeper parse failed.
+        // Present but corrupt: the file check passes and `load` fails deeper.
         let dir = config.model_dir();
         std::fs::create_dir_all(&dir).unwrap();
         for f in REQUIRED_FILES {
@@ -323,14 +282,10 @@ mod tests {
 
     #[test]
     fn select_device_falls_back_to_cpu_without_the_metal_feature() {
-        // The default (no-feature) test build has `metal_is_available() == false`, so selection
-        // resolves to CPU and the tag is "cpu" — this keeps the whole test suite on the CPU path.
-        // (A `--features metal` build exercises the GPU branch out-of-CI; see the eval recipe.)
         if !candle_core::utils::metal_is_available() {
             let (device, tag) = select_device();
             assert_eq!(tag, "cpu");
             assert!(matches!(device, Device::Cpu));
-            // The Settings-badge label agrees with the resolved device.
             assert_eq!(active_device_label(), "CPU");
         }
     }

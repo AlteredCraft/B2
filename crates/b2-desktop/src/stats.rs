@@ -1,39 +1,29 @@
-//! Cumulative, per-model **embedding time** — the desktop's persistent "how much has
-//! embedding cost with this model" ledger, surfaced in Settings so a model swap can be
-//! judged on its real speed.
+//! Cumulative per-model embedding time, shown in Settings so a model swap can be judged on
+//! its real speed. The adapter times the embed pass because `b2-core` has no clock.
 //!
-//! Host-owned state, like `persist_last_vault`: `b2-core` stays wall-clock-free, so the
-//! *adapter* times the embed pass. Keyed by model id, so each bucket's totals stay directly
-//! comparable. A bucket is a running total for the model's **current stint**: [`reset`]
-//! drops it when the user switches *to* that model, because the swap re-embeds the whole
-//! corpus (ADR-0007) and the ledger must restart with the vectors. Purely diagnostic and
-//! best-effort — a read/write failure never fails an embed.
+//! A bucket covers the model's current stint: [`reset`] drops it on a switch to that model,
+//! since the swap re-embeds the whole corpus (ADR-0007). Best-effort throughout.
 
 use crate::state_file;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The ledger's state file, `<data-dir>/b2/embed-stats.json` (see [`state_file`]).
+/// The ledger's state file (see [`state_file`]).
 const STATS_FILE: &str = "embed-stats.json";
 
-/// One model's accumulated embedding cost. `total_ms / chunks` is the throughput the
-/// Settings pane shows; `runs` counts the embed passes that contributed.
+/// One model's accumulated embedding cost; `total_ms / chunks` is its throughput.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelStat {
-    /// Total wall-clock milliseconds spent embedding chunks with this model (the model
-    /// *load* is excluded — the adapter starts the clock after the model is loaded, so
-    /// this is embedding throughput, not one-time setup).
+    /// Milliseconds spent embedding, excluding the model load.
     pub total_ms: u64,
-    /// Total chunks embedded across those runs — the throughput denominator.
+    /// Total chunks embedded across those runs.
     pub chunks: u64,
     /// How many embed runs contributed to this total.
     pub runs: u64,
 }
 
-/// One model's row as the Settings pane reads it (`embed_stats`, `ui/src/types.ts`'s
-/// `EmbedStat`): the id beside its [`ModelStat`] fields, flattened, so the IPC payload is
-/// the ledger's own bucket rather than a hand-copied mirror of it.
+/// One model's row as the Settings pane reads it (`ui/src/types.ts`'s `EmbedStat`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EmbedStat {
     pub model: String,
@@ -47,9 +37,7 @@ struct StatsFile {
     models: BTreeMap<String, ModelStat>,
 }
 
-/// The whole ledger, one row per model, or empty when there's no data dir / no file / an
-/// unreadable-or-corrupt file — stats are never load-bearing, so a bad file degrades
-/// cleanly to "no history" rather than surfacing an error.
+/// The whole ledger, one row per model. A missing or corrupt file reads as no history.
 pub fn read_all() -> Vec<EmbedStat> {
     let Some(path) = state_file::path(STATS_FILE) else {
         return Vec::new();
@@ -61,8 +49,7 @@ pub fn read_all() -> Vec<EmbedStat> {
         .collect()
 }
 
-/// [`read_all`] against an explicit path — the testable core. A missing or malformed file
-/// reads as the empty ledger.
+/// [`read_all`] against an explicit path.
 fn read_from(path: &Path) -> StatsFile {
     std::fs::read_to_string(path)
         .ok()
@@ -70,26 +57,20 @@ fn read_from(path: &Path) -> StatsFile {
         .unwrap_or_default()
 }
 
-/// Serialize the ledger and rewrite it at `path` — the shared write tail of
-/// [`record_to`] and [`reset_in`]. Only a write that has something to say reaches here
-/// (a no-op reset returns before it), so creating the parent dir on the way is safe.
+/// Serialize the ledger and rewrite it at `path`.
 fn write_ledger(path: &Path, file: &StatsFile) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(file).map_err(std::io::Error::other)?;
     state_file::write(path, text.as_bytes())
 }
 
-/// Add one embed run's `(elapsed_ms, chunks)` to `model`'s running total. Best-effort:
-/// a missing data dir or a write failure is logged to stderr and swallowed — recording a
-/// measurement must never fail the embed the user actually asked for.
+/// Add one embed run to `model`'s running total. Best-effort: failures go to stderr.
 pub fn record(model: &str, elapsed_ms: u64, chunks: u64) {
     state_file::update(STATS_FILE, "record embed stats", |path| {
         record_to(path, model, elapsed_ms, chunks)
     });
 }
 
-/// [`record`] against an explicit path — the testable core. Read-modify-write: load the
-/// ledger, fold the run into `model`'s bucket (saturating, so a pathological total can't
-/// panic), and rewrite. Creates the file (and parent dir) on first use.
+/// [`record`] against an explicit path. Creates the file on first use.
 fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io::Result<()> {
     let mut file = read_from(path);
     let entry = file.models.entry(model.to_string()).or_default();
@@ -99,41 +80,34 @@ fn record_to(path: &Path, model: &str, elapsed_ms: u64, chunks: u64) -> std::io:
     write_ledger(path, &file)
 }
 
-/// Forget `model`'s accumulated total, so its bucket restarts on the next [`record`].
-/// Called when the user **switches to** this model: the swap drops the vault's vectors, so
-/// the next reindex re-embeds the whole corpus and the ledger must restart with it —
-/// otherwise switching back and forth would stack corpus after corpus onto one bucket. Only
-/// the switched-to model is touched, so the others' history survives for comparison.
-/// Best-effort like [`record`].
+/// Forget `model`'s total, called when the user switches to it: the next reindex re-embeds
+/// the whole corpus, which must not stack onto the old bucket. Other models keep their
+/// history. Best-effort.
 pub fn reset(model: &str) {
     state_file::update(STATS_FILE, "reset embed stats", |path| {
         reset_in(path, model)
     });
 }
 
-/// [`reset`] against an explicit path — the testable core. Drops `model`'s bucket and
-/// rewrites the ledger; a **no-op with no write** when the model has no history (a
-/// never-embedded model, or no file yet), so switching to it can't create an empty ledger
-/// or churn the file.
+/// [`reset`] against an explicit path. Writes nothing when the model has no history.
 fn reset_in(path: &Path, model: &str) -> std::io::Result<()> {
     let mut file = read_from(path);
     if file.models.remove(model).is_none() {
-        return Ok(()); // nothing recorded for this model — leave the file untouched
+        return Ok(());
     }
     write_ledger(path, &file)
 }
 
 #[cfg(test)]
 mod tests {
-    //! Hermetic: every case runs against a tempfile, never the real data dir (which only
-    //! the production `record`/`read_all` wrappers resolve).
+    //! Hermetic: every case runs against a tempfile, never the real data dir.
 
     use super::*;
 
     #[test]
     fn record_accumulates_across_runs_per_model() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // Parent dir does not exist yet — the first record must `mkdir -p`.
+        // Parent dir does not exist yet.
         let path = tmp.path().join("state/b2/embed-stats.json");
 
         record_to(&path, "m/base", 1000, 40).unwrap();
@@ -145,7 +119,6 @@ mod tests {
         assert_eq!(base.total_ms, 3500, "two runs' ms sum");
         assert_eq!(base.chunks, 100);
         assert_eq!(base.runs, 2);
-        // A different model accumulates in its own bucket, untouched by base.
         let small = &ledger["m/small"];
         assert_eq!(small.total_ms, 300);
         assert_eq!(small.runs, 1);
@@ -159,8 +132,6 @@ mod tests {
         record_to(&path, "m/base", 1000, 40).unwrap();
         record_to(&path, "m/small", 300, 50).unwrap();
 
-        // Switching *to* base restarts its stint; small's history is untouched so the two
-        // models stay side-by-side comparable in the Settings pane.
         reset_in(&path, "m/base").unwrap();
 
         let ledger = read_from(&path).models;
@@ -173,8 +144,7 @@ mod tests {
             "other model survives the reset"
         );
 
-        // The next run rebuilds base from zero — a full re-embed after the swap, not
-        // stacked onto the old 40 (this is the accumulation bug the reset fixes).
+        // The next run starts from zero, not stacked onto the old 40.
         record_to(&path, "m/base", 2000, 60).unwrap();
         let base = &read_from(&path).models["m/base"];
         assert_eq!(base.chunks, 60);
@@ -185,7 +155,6 @@ mod tests {
     fn reset_is_a_noop_for_unknown_model_or_missing_file() {
         let tmp = tempfile::TempDir::new().unwrap();
 
-        // No file yet: nothing to reset, and we must not create an empty ledger.
         let absent = tmp.path().join("absent/embed-stats.json");
         reset_in(&absent, "m/base").unwrap();
         assert!(
@@ -193,7 +162,6 @@ mod tests {
             "reset must not create a file when there's no history"
         );
 
-        // Existing ledger, but the model has no bucket → the file is left untouched.
         let path = tmp.path().join("embed-stats.json");
         record_to(&path, "m/base", 1000, 40).unwrap();
         reset_in(&path, "m/never-embedded").unwrap();
@@ -204,8 +172,7 @@ mod tests {
         );
     }
 
-    /// The Settings pane reads these four keys (`ui/src/types.ts`'s `EmbedStat`), so the
-    /// flattened row must serialize exactly as the hand-written mirror it replaced.
+    /// The Settings pane reads these four keys (`ui/src/types.ts`'s `EmbedStat`).
     #[test]
     fn a_ledger_row_crosses_ipc_with_the_ui_field_names() {
         let row = EmbedStat {
@@ -225,9 +192,7 @@ mod tests {
     #[test]
     fn missing_or_corrupt_file_reads_as_empty() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // No file at all.
         assert!(read_from(&tmp.path().join("absent.json")).models.is_empty());
-        // A garbage file is treated as no history, never an error.
         let bad = tmp.path().join("bad.json");
         std::fs::write(&bad, "not json {{{").unwrap();
         assert!(read_from(&bad).models.is_empty());

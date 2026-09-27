@@ -14,28 +14,19 @@ b2-core = { path = "../b2-core" }
 b2-embed = { path = "../b2-embed" }
 b2-llm = { path = "../b2-llm" }
 clap = { version = "4.6.1", features = ["derive", "env"] }
-# The `Serialize` bound on `print_json` — the one shared `--json` printer — plus the
-# derive for `AskEvent`, the `ask --json` stream's own framing (the *events* are the
-# CLI's, the `AnswerView` inside the last one is b2-core's and derives there).
+# `print_json`'s bound, and the derive for the `ask --json` stream's `AskEvent`.
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
-# Foreground `reindex` Ctrl-C → cooperative cancel (GH #16): a SIGINT handler flips a
-# flag the embed loop reads at each batch boundary (the shipped `ControlFlow` seam), so
-# a cancel leaves a consistent, re-runnable partial index rather than a torn one.
+# Ctrl-C as a cooperative cancel (GH #16).
 ctrlc = "3.4"
-# `reindex --cancel` → the *same* SIGINT, sent to the pid the lock names (GH #55), so a
-# run backgrounded with `b2 reindex &` (no controlling terminal, so Ctrl-C can't reach it)
-# takes the shipped cooperative-cancel path rather than a new one. A safe `kill(2)` wrapper,
-# so the signal costs no `unsafe`; already in the tree as ctrlc's own dependency. Unix-only —
-# as is B2 (macOS-only, which is why CI runs `macos-latest`; CLAUDE.md).
+# `reindex --cancel` sends the same SIGINT to the lock's pid (GH #55). A safe `kill(2)`
+# wrapper, already in the tree via ctrlc. Unix-only, as is B2.
 nix = { version = "0.31", default-features = false, features = ["signal"] }
-# The opt-in structured-log sink (B2_LOG/B2_DEBUG): the kernel's tracing events —
-# per-query SQLite timings, façade-op spans — rendered as JSON Lines on stderr.
+# The opt-in JSON Lines log sink (B2_LOG/B2_DEBUG).
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 
-# Research build (GH #40, macOS-only): forward the Metal GPU embedder feature to b2-embed so
-# `cargo run -p b2-cli --features metal -- reindex` embeds on the GPU. Default build is CPU.
+# Metal GPU embedding (GH #40, macOS-only); the default build is CPU.
 [features]
 metal = ["b2-embed/metal"]
 

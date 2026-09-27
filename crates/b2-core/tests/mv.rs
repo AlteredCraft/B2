@@ -1,7 +1,5 @@
-//! `b2 mv` — move/rename a note and repair inbound links (invariants.md,
-//! the locked invariant "rename keeps every backlink resolving"). Driven through
-//! the [`Vault`] façade against the golden vault (and a small purpose-built vault
-//! for prefix-safety), fully deterministic under the FakeEmbedder.
+//! `b2 mv`: move a note or folder and repair inbound links, so every backlink keeps
+//! resolving (invariants.md).
 
 mod common;
 
@@ -16,7 +14,6 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // The backlink set of memory, before the move (SRS supports + references it).
     let before = inbound(&vault, MEMORY_PATH);
     assert_eq!(
         before,
@@ -41,20 +38,15 @@ fn move_rewrites_inbound_links_and_the_graph_is_unchanged() {
         "the body link + the frontmatter relation's link"
     );
 
-    // The file moved on disk.
     assert!(!root.join("concepts/memory.md").exists());
     assert!(root.join("concepts/human-memory.md").exists());
 
-    // The inbound text was rewritten to the new path; no stale link remains.
     let srs = fs::read_to_string(root.join("notes/spaced-repetition.md")).unwrap();
     assert!(srs.contains("[[concepts/human-memory|Human memory]]"));
     assert!(!srs.contains("[[concepts/memory|"));
 
-    // The graph arrives intact at the destination: the note's identity moved with
-    // it (L1), and every backlink came along — index-side through the cascading
-    // re-key, Markdown-side through the rewritten link text above.
+    // Identity moved with the path (L1): the index re-keys, the Markdown is rewritten.
     assert_eq!(inbound(&vault, "concepts/human-memory.md"), before);
-    // The old path no longer resolves.
     assert!(matches!(
         vault.neighbors("concepts/memory.md").unwrap_err(),
         Error::NoteNotFound(_)
@@ -73,12 +65,10 @@ fn move_changes_only_the_link_path_every_other_byte_identical() {
         .move_note("concepts/memory.md", "concepts/human-memory.md")
         .unwrap();
 
-    // The moved note's content is byte-for-byte what it was (only its path changed).
     let memory_after = fs::read_to_string(root.join("concepts/human-memory.md")).unwrap();
     assert_eq!(memory_after, memory_before);
 
-    // The inbound file differs by *exactly* the rewritten target token — nothing
-    // else. (Story 1: "only their link `path` changed — every other byte identical".)
+    // Only the link target changed.
     let srs_after = fs::read_to_string(root.join("notes/spaced-repetition.md")).unwrap();
     assert_eq!(
         srs_after,
@@ -90,7 +80,6 @@ fn move_changes_only_the_link_path_every_other_byte_identical() {
 fn move_leaves_unrelated_files_byte_identical() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
-    // A note that links to nothing relevant.
     let bystander = root.join("unrelated.md");
     fs::write(
         &bystander,
@@ -130,7 +119,6 @@ fn move_into_a_new_subdirectory_creates_it() {
         .unwrap();
 
     assert!(root.join("archive/deep/memory.md").is_file());
-    // Backlinks still resolve after crossing directories.
     assert_eq!(inbound(&vault, "archive/deep/memory").len(), 2);
 }
 
@@ -143,7 +131,6 @@ fn move_onto_an_existing_file_is_refused() {
         .move_note("concepts/memory.md", "notes/spaced-repetition.md")
         .unwrap_err();
     assert!(matches!(err, Error::MoveTargetExists(p) if p == "notes/spaced-repetition.md"));
-    // Nothing moved.
     assert!(root.join("concepts/memory.md").exists());
 }
 
@@ -161,7 +148,7 @@ fn an_invalid_destination_is_rejected() {
             "destination {dest:?} must be rejected"
         );
     }
-    // Moving a note onto itself is a no-op error, not a silent clobber.
+    // Onto itself: an error, not a silent clobber.
     assert!(matches!(
         vault
             .move_note("concepts/memory.md", "concepts/memory.md")
@@ -181,9 +168,8 @@ fn moving_an_unknown_note_is_note_not_found() {
     assert!(matches!(err, Error::NoteNotFound(r) if r == "does/not/exist"));
 }
 
-/// A purpose-built vault for the dir-move suite: `docs/` holds two linked notes
-/// and a resource, with inbound links from outside in both syntaxes and an
-/// unindexed dotfile that must travel with the folder.
+/// `docs/` holds two linked notes, a resource and an unindexed dotfile, with inbound
+/// links from outside in both syntaxes.
 fn dir_move_vault(root: &Path) -> Vault {
     fs::create_dir_all(root.join("docs")).unwrap();
     fs::write(
@@ -239,9 +225,7 @@ fn move_dir_moves_an_empty_folder() {
     let vault = dir_move_vault(&root);
     fs::create_dir_all(root.join("scratch")).unwrap();
 
-    // An empty folder is a real vault member (fs-authoritative structure): the
-    // move resolves against the filesystem, not the index, so the rename works
-    // exactly like a full folder's — just with nothing indexed to repoint.
+    // Folder moves resolve against the filesystem, not the index.
     let report = vault.move_dir("scratch", "archive/scratch").unwrap();
     assert_eq!(report.moved_notes, 0);
     assert_eq!(report.moved_resources, 0);
@@ -259,17 +243,15 @@ fn move_dir_rewrites_inbound_and_intra_folder_links_and_graph_is_unchanged() {
     let before = inbound(&vault, "docs/alpha.md");
     let report = vault.move_dir("docs", "media").unwrap();
 
-    // The outside file's wikilink and Markdown resource link are both rewritten.
     let hub = fs::read_to_string(root.join("hub.md")).unwrap();
     assert!(hub.contains("[[media/alpha|Alpha]]"));
     assert!(hub.contains("![pic](media/pic.png)"));
 
-    // The vault-root wikilink BETWEEN co-moved notes is rewritten too.
+    // The vault-root wikilink between co-moved notes is rewritten too.
     let alpha = fs::read_to_string(root.join("media/alpha.md")).unwrap();
     assert!(alpha.contains("[[media/beta|Beta]]"));
 
-    // `rewrote` reports post-move paths; the intra-folder relative resource link
-    // (`![p](pic.png)`) was a natural no-op, so alpha counts for its wikilink only.
+    // Post-move paths; alpha's relative `![p](pic.png)` needed no rewrite.
     assert_eq!(
         report.rewrote,
         vec!["hub.md".to_string(), "media/alpha.md".to_string()]
@@ -279,8 +261,6 @@ fn move_dir_rewrites_inbound_and_intra_folder_links_and_graph_is_unchanged() {
         "hub's two links + alpha's sibling link"
     );
 
-    // The graph arrives intact at the new paths: every moved note re-keyed with
-    // the folder, and the inbound link text followed.
     assert_eq!(inbound(&vault, "media/alpha.md"), before);
     assert!(matches!(
         vault.neighbors("docs/alpha").unwrap_err(),
@@ -297,15 +277,13 @@ fn move_dir_keeps_relative_intra_folder_resource_links_byte_stable() {
     let beta_before = fs::read_to_string(root.join("docs/beta.md")).unwrap();
     vault.move_dir("docs", "media").unwrap();
 
-    // beta had no links to rewrite — byte-identical at its new path.
     assert_eq!(
         fs::read_to_string(root.join("media/beta.md")).unwrap(),
         beta_before
     );
-    // alpha's relative `![p](pic.png)` survives verbatim (both ends moved).
+    // Both ends moved, so the relative link survives verbatim.
     let alpha = fs::read_to_string(root.join("media/alpha.md")).unwrap();
     assert!(alpha.contains("![p](pic.png)"));
-    // And the inventory + backlinks resolved at the new resource path.
     let view = vault.explain_resource("media/pic.png").unwrap();
     let mut sources: Vec<String> = view.backlinks.into_iter().map(|b| b.path).collect();
     sources.sort();
@@ -326,7 +304,6 @@ fn move_dir_incremental_equals_full_rebuild() {
     let neighbors_after_move = inbound(&vault, "archive/media/alpha.md");
     drop(vault);
 
-    // Drop the disposable index and rebuild from the Markdown alone.
     fs::remove_dir_all(root.join(".b2")).unwrap();
     let rebuilt = Vault::open(&root).unwrap();
     rebuilt.reindex().unwrap();
@@ -355,7 +332,6 @@ fn move_dir_invalid_destinations_are_rejected() {
     let root = tmp.path().join("vault");
     let vault = dir_move_vault(&root);
 
-    // Into its own subtree, onto itself, and the usual invalid shapes.
     for dest in ["docs/inner", "docs", "../out", "/abs", "  ", ".b2/x"] {
         assert!(
             matches!(
@@ -365,7 +341,7 @@ fn move_dir_invalid_destinations_are_rejected() {
             "destination {dest:?} must be rejected"
         );
     }
-    // A prefix-sharing sibling name is NOT "inside" the moved folder.
+    // A prefix-sharing sibling is not inside the moved folder.
     vault.move_dir("docs", "docs2").unwrap();
     assert!(root.join("docs2/alpha.md").is_file());
 }
@@ -381,7 +357,6 @@ fn move_dir_onto_an_existing_entry_is_refused_but_unknown_source_is_dir_not_foun
     assert!(matches!(err, Error::MoveTargetExists(p) if p == "existing"));
     assert!(root.join("docs/alpha.md").is_file(), "nothing moved");
 
-    // A file at the destination refuses the same way.
     let err = vault.move_dir("docs", "hub.md").unwrap_err();
     assert!(matches!(err, Error::MoveTargetExists(_)));
 
@@ -396,9 +371,8 @@ fn move_dir_case_only_rename_succeeds_on_a_case_insensitive_fs() {
     let root = tmp.path().join("vault");
     let vault = dir_move_vault(&root);
 
-    // On case-sensitive APFS variants this is an ordinary rename; on the default
-    // case-insensitive APFS the destination "exists" as the source itself and the
-    // same-dirent carve-out must let it through. Either way it succeeds.
+    // On case-insensitive APFS the destination "exists" as the source itself; the
+    // same-dirent carve-out must let it through.
     let report = vault.move_dir("docs", "Docs").unwrap();
     assert_eq!(report.to, "Docs");
     assert_eq!(
@@ -414,8 +388,7 @@ fn move_dir_case_only_rename_succeeds_on_a_case_insensitive_fs() {
 
 #[test]
 fn move_repairs_only_the_moved_target_not_prefix_siblings() {
-    // A purpose-built vault where an inbound file links to BOTH the moved note and
-    // a prefix-sharing sibling — the sibling link must survive untouched.
+    // The hub links to the moved note and to a prefix-sharing sibling.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(root.join("concepts")).unwrap();
@@ -454,15 +427,8 @@ fn move_repairs_only_the_moved_target_not_prefix_siblings() {
     );
 }
 
-/// **A move re-embeds nothing** — the content-addressed vector store paying for the
-/// pivot (M4, GH #170). Identity is the path, so moving a note changes it; what
-/// makes that cheap is that vectors are keyed by chunk *text*, which a move does not
-/// touch. Asserted on the vectors themselves, not on a count: the moved note's
-/// passages must come back byte-identical, at the new path, with no forward pass.
-///
-/// The in-band half. The out-of-band half is below, and matters more: there the note
-/// is projected as a delete plus a create, so "re-embeds nothing" is the *only*
-/// thing keeping that path cheap.
+/// A move re-embeds nothing: vectors are keyed by chunk text, which a move does not touch
+/// (M4, GH #170). Asserted on the vector bytes, not a count.
 #[test]
 fn a_move_reuses_every_vector() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -488,14 +454,8 @@ fn a_move_reuses_every_vector() {
     );
 }
 
-/// The out-of-band move: a `git mv`/Finder rename, which a path-keyed index sees as
-/// a delete plus a create. Two claims, and the pivot needs both:
-///
-///  * the inbound links **surface as dangling** rather than silently resolving or
-///    vanishing (G5) — the scope decision GH #170 made, "identification, not repair";
-///  * it **re-embeds nothing**, because the re-created note's chunks hash to vectors
-///    already stored. That is what keeps the accepted loss to chunk/FTS/edge
-///    re-projection instead of a full re-embed of the moved file.
+/// An out-of-band rename is a delete plus a create: its backlinks surface as dangling
+/// (G5; GH #170, "identification, not repair"), and its chunks reuse stored vectors.
 #[test]
 fn an_out_of_band_move_dangles_its_backlinks_and_re_embeds_nothing() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -503,7 +463,7 @@ fn an_out_of_band_move_dangles_its_backlinks_and_re_embeds_nothing() {
     let conn = common::index_conn(&root);
     let before = note_vectors(&conn, MEMORY_PATH);
 
-    // Behind B2's back — no `b2 mv`, so no link repair and no re-key.
+    // Behind B2's back: no link repair, no re-key.
     fs::create_dir_all(root.join("archive")).unwrap();
     fs::rename(root.join(MEMORY_PATH), root.join("archive/human-memory.md")).unwrap();
 
@@ -519,8 +479,7 @@ fn an_out_of_band_move_dangles_its_backlinks_and_re_embeds_nothing() {
         "and they are the same vectors, reachable at the new path"
     );
 
-    // The accepted loss, surfaced rather than hidden: SRS still links the old path,
-    // and that link now reads as broken instead of resolving to nothing in silence.
+    // SRS still links the old path, and that link reads as broken.
     let dangling = vault.unresolved_links(SRS_PATH).unwrap();
     assert!(
         dangling.iter().any(|u| u.target == "concepts/memory"),
@@ -535,9 +494,7 @@ fn an_out_of_band_move_dangles_its_backlinks_and_re_embeds_nothing() {
     );
 }
 
-/// A note's stored chunk vectors in `seq` order, as raw blobs — the unit both move
-/// tests compare, so "re-embeds nothing" is checked on the bytes rather than on a
-/// count that a coincidence could satisfy.
+/// A note's stored chunk vectors in `seq` order, as raw blobs.
 fn note_vectors(conn: &rusqlite::Connection, note_path: &str) -> Vec<Vec<u8>> {
     let mut stmt = conn
         .prepare(
@@ -551,13 +508,11 @@ fn note_vectors(conn: &rusqlite::Connection, note_path: &str) -> Vec<Vec<u8>> {
 
 // --- a failed move changes nothing (GH #230) ------------------------------------
 //
-// A move writes the vault in two kinds of step: the inbound files' link text, then the
-// rename. A move that fails must leave every file byte-identical — reindexing cannot
-// repair rewritten link text, because it faithfully projects whatever the Markdown now
-// says. Two routes to a failure: a destination refused up front, and an I/O failure
-// after the rewrites have been written, which must be rolled back.
+// A move rewrites inbound link text, then renames. A failed move must leave every file
+// byte-identical, since a reindex would faithfully project rewritten links. Failures are
+// refused up front, or rolled back after an I/O error.
 
-/// A purpose-built vault under `dir/vault` from `(path, contents)` pairs, reindexed.
+/// A reindexed vault under `dir/vault` from `(path, contents)` pairs.
 fn small_vault(dir: &Path, files: &[(&str, &str)]) -> (Vault, std::path::PathBuf) {
     let root = dir.join("vault");
     for (path, contents) in files {
@@ -570,8 +525,7 @@ fn small_vault(dir: &Path, files: &[(&str, &str)]) -> (Vault, std::path::PathBuf
     (vault, root)
 }
 
-/// Every file under `root` (outside `.b2/`) with its bytes, sorted by path — the
-/// whole authored vault, so an assertion on it catches a stray write anywhere.
+/// Every file under `root` outside `.b2/`, with its bytes, sorted by path.
 fn vault_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(dir).unwrap() {
@@ -600,8 +554,7 @@ fn vault_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
 
 #[test]
 fn a_move_under_a_file_is_refused_and_changes_nothing() {
-    // The issue's reproduction: `blocked` is a regular file, so `blocked/a.md` can
-    // never exist. The move must be refused before a single inbound link is touched.
+    // `blocked` is a regular file, so `blocked/a.md` can never exist.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -629,7 +582,6 @@ fn a_move_under_a_file_is_refused_and_changes_nothing() {
 
     assert_eq!(vault_bytes(&root), before, "every file byte-identical");
     assert_eq!(inbound(&vault, "a.md"), backlinks, "the index is untouched");
-    // And the Markdown still says what it said: a rebuild resolves the same links.
     vault.reindex().unwrap();
     assert_eq!(
         inbound(&vault, "a.md"),
@@ -640,7 +592,6 @@ fn a_move_under_a_file_is_refused_and_changes_nothing() {
 
 #[test]
 fn a_move_deeper_under_a_file_is_refused_too() {
-    // The blocking file may be any ancestor, not just the immediate parent.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -659,10 +610,8 @@ fn a_move_deeper_under_a_file_is_refused_too() {
 
 #[test]
 fn a_move_whose_rename_fails_restores_every_rewritten_file() {
-    // A failure *after* the rewrites: the note vanished from disk (an out-of-band
-    // delete the index hasn't seen), so the destination checks pass, both inbound
-    // files are rewritten, and only then does the rename fail. The rewrites and the
-    // destination folder the move created must all be undone.
+    // The note vanished out of band, so the rename fails after the rewrites. The
+    // rewrites and the created destination folder must be undone.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -709,8 +658,7 @@ fn a_resource_move_under_a_file_is_refused_and_changes_nothing() {
 
 #[test]
 fn a_resource_move_whose_rename_fails_restores_every_rewritten_note() {
-    // The resource arm of the rollback: both link syntaxes are rewritten, then the
-    // rename fails because the file is gone from disk.
+    // Both link syntaxes are rewritten, then the rename fails.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -760,10 +708,8 @@ fn move_dir_under_a_file_is_refused_and_changes_nothing() {
 
 #[test]
 fn re_running_a_move_interrupted_before_its_rename_finishes_it() {
-    // The one window no undo covers is a crash between the rewrites and the rename:
-    // the inbound links already name the destination, the note is still at its source,
-    // and the index hasn't heard. Simulated by writing that state by hand; re-running
-    // the same move must complete it rather than refuse or double-rewrite.
+    // A crash between the rewrites and the rename, which no undo covers, simulated by
+    // hand. Re-running must complete the move, not refuse or double-rewrite.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -787,13 +733,11 @@ fn re_running_a_move_interrupted_before_its_rename_finishes_it() {
 
 // --- one grammar, one pipeline -------------------------------------------------
 //
-// The move reads link text with ingest's own scanner and runs every kind of move through
-// one pipeline, so what a move repairs is what ingest projected, and each kind leaves
-// the index a rebuild would produce.
+// A move reads links with ingest's scanner, so every kind of move leaves the index a
+// rebuild would produce.
 
-/// Every projected note, chunk, edge and inventory row, sorted — the index state a move
-/// must leave equal to a from-scratch rebuild (S3). Edge ids are derived from the
-/// resolved target, so a wrongly (un)resolved edge shows up here too.
+/// Every projected note, chunk, edge and inventory row, sorted (S3). Edge ids derive from
+/// the resolved target, so a wrongly resolved edge shows up too.
 fn projection(root: &Path) -> Vec<String> {
     let conn = common::index_conn(root);
     let mut rows: Vec<String> = Vec::new();
@@ -905,9 +849,7 @@ fn linked_vault(dir: &Path) -> (Vault, std::path::PathBuf) {
 
 #[test]
 fn a_move_rewrites_a_link_after_a_stray_open_bracket() {
-    // Ingest scans per line, so `see [[a]]` is an edge even though an earlier line
-    // left a `[[` open. The move used to scan the whole file, pair that stray `[[`
-    // with the `]]` below, miss the link, and leave the backlink dangling.
+    // Ingest scans per line, so `see [[a]]` is an edge despite the stray `[[` above.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = small_vault(
         tmp.path(),
@@ -999,8 +941,7 @@ fn a_folder_move_leaves_the_index_a_rebuild_would_project() {
 
 #[test]
 fn a_resource_move_to_a_note_path_is_refused_and_changes_nothing() {
-    // A `.md` path names a note: the moved bytes would be indexed as one by the next
-    // rebuild, so the resource would silently stop being a resource.
+    // A `.md` path would be indexed as a note by the next rebuild.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = linked_vault(tmp.path());
     let before = vault_bytes(&root);

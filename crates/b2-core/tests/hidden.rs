@@ -1,11 +1,6 @@
-//! **Hidden means hidden** (GH #136, data-model.md §1): a dot-prefixed name is not
-//! vault material of any kind. The walk applies the rule *above* its note/resource
-//! routing, so a `.scratch.md` is as invisible as a `.DS_Store` — and no authoring
-//! command will create one, since a member b2 never sees is a silent fs/index desync.
-//!
-//! The sibling cases live where their own surface is tested: dot-*folders* dropping
-//! out of the structure listing in `dirs.rs`, dot-*resources* dropping out of the
-//! inventory in `resources.rs`. This file owns the note route and the write guard.
+//! Hidden means hidden (GH #136, data-model.md §1): a dot-prefixed name is not vault
+//! material, and no authoring command creates one. Dot-folders are in `dirs.rs`,
+//! dot-resources in `resources.rs`; this file owns notes and the write guard.
 
 mod common;
 
@@ -15,9 +10,7 @@ use common::{count, index_conn};
 use std::fs;
 use std::path::Path;
 
-/// A vault whose Markdown is split across the managed subtree and three hidden
-/// places: a dot-prefixed note at the root, one inside a managed folder, and an
-/// ordinary-looking note inside a dot-folder.
+/// One visible note, plus hidden Markdown at the root, in a folder, and in a dot-folder.
 fn vault_with_hidden_markdown(root: &Path) -> Vault {
     fs::create_dir_all(root.join("notes")).unwrap();
     fs::create_dir_all(root.join(".templates")).unwrap();
@@ -36,9 +29,7 @@ fn vault_with_hidden_markdown(root: &Path) -> Vault {
     Vault::open(root).unwrap()
 }
 
-/// The three hidden files are absent from every projection the walk feeds — and,
-/// because the skip happens before routing, absent as *notes* specifically: no
-/// row, no chunk, no embedding.
+/// The skip happens before routing, so hidden files leave no row, chunk or embedding.
 #[test]
 fn dot_prefixed_markdown_is_not_a_note() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -58,9 +49,7 @@ fn dot_prefixed_markdown_is_not_a_note() {
 
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "notes"), 1);
-    // Chunks are keyed by note, so a hidden file that never became a note cannot
-    // have contributed any — asserting it directly keeps the claim honest if the
-    // note route ever grows a second entry point.
+    // Asserted directly in case the note route grows a second entry point.
     let chunk_notes: Vec<String> = {
         let mut stmt = conn
             .prepare("SELECT DISTINCT note_path FROM chunks")
@@ -74,16 +63,12 @@ fn dot_prefixed_markdown_is_not_a_note() {
     };
     assert_eq!(chunk_notes, vec!["notes/real.md".to_string()]);
 
-    // …and the term they all share finds only the managed one.
     let hits = vault.search("capybaras", 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "notes/real.md");
 }
 
-/// W4 holds for a skipped file: not indexing it is not touching it. Since GH #170
-/// b2 makes no unbidden write to *any* file (W1), so this is now the weaker half of
-/// a stronger rule — kept because it is the rule this issue's walk is responsible
-/// for, and a future write path would have to pass here before it shipped.
+/// W4: not indexing a file is not touching it (the weaker half of W1).
 #[test]
 fn a_hidden_markdown_file_is_never_written_to() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -107,9 +92,7 @@ fn a_hidden_markdown_file_is_never_written_to() {
     }
 }
 
-/// `plan_reindex` shares `collect_vault_files` with the real pass, so the preview
-/// must agree about what is *not* a note. A dry run that counted a `.scratch.md`
-/// the real run then skipped would be a lying preview.
+/// The dry run must agree with the real pass about what is not a note.
 #[test]
 fn dry_run_agrees_the_hidden_files_are_not_notes() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -124,18 +107,11 @@ fn dry_run_agrees_the_hidden_files_are_not_notes() {
     assert_eq!(plan.would_embed, report.embedded);
 }
 
-// The byte-wise half of the same rule — a name UTF-8 rejects, which must still read
-// as hidden — is a unit test on the predicate in `src/pathspec.rs`, not a case here:
-// APFS refuses to *create* such a name (EILSEQ), so there is no file to walk on the
-// platform B2 ships on. See that test for why the predicate must answer anyway.
+// Non-UTF-8 hidden names are a unit test in `src/pathspec.rs`: APFS refuses to create
+// them, so there is no file to walk here.
 
-/// The migration path a pre-#136 vault takes, and the one a rename opens: a `.md`
-/// that *was* indexed under a managed name and is then hidden drops out of the
-/// projection on the next pass — ghost-pruned (#31), because incremental must equal
-/// a from-scratch rebuild (S3) and a rebuild would never have collected it. The file
-/// keeps its bytes (W4), so renaming it back re-adopts it at exactly the path it
-/// left — which, since GH #170, *is* its identity, so the round trip is lossless
-/// without anything having been stamped into it.
+/// A note renamed into hiding is ghost-pruned (GH #31, S3) with its bytes kept (W4), and
+/// renaming it back re-adopts it at the same path, its identity (GH #170).
 #[test]
 fn a_note_renamed_into_hiding_is_pruned_and_readopted_on_the_way_back() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -149,7 +125,6 @@ fn a_note_renamed_into_hiding_is_pruned_and_readopted_on_the_way_back() {
     assert_eq!(report.notes_pruned, 1, "the hidden note is a ghost row now");
     assert!(vault.list_notes().unwrap().is_empty());
 
-    // Pruned from the index, byte-untouched on disk.
     let hidden = fs::read_to_string(root.join("notes/.real.md")).unwrap();
     assert_eq!(
         hidden,
@@ -163,9 +138,7 @@ fn a_note_renamed_into_hiding_is_pruned_and_readopted_on_the_way_back() {
     assert_eq!(notes[0].path, "notes/real.md");
 }
 
-/// The write side of the same rule: b2 refuses to *create* what it would then never
-/// index. Every authoring destination shares one validator, so the refusal covers a
-/// note, a resource, and a folder alike — each mapped onto its own error variant.
+/// b2 refuses to create what it would never index: notes, resources and folders alike.
 #[test]
 fn authoring_refuses_a_hidden_destination() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -204,8 +177,7 @@ fn authoring_refuses_a_hidden_destination() {
         Error::DirDestination(_)
     ));
 
-    // The refusals are about the *leading* dot, not any dot: an extension-looking
-    // interior dot is an ordinary name and must still be creatable.
+    // Only a leading dot hides; an interior dot is ordinary.
     assert!(vault.create_note("notes/v1.2.md").is_ok());
     assert!(vault.create_dir("notes/v1.2").is_ok());
 }
