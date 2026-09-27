@@ -1,6 +1,4 @@
-// The import rules (importfiles.ts), pinned. Pure logic — no DOM — so node runs it
-// straight off the source via its native type-stripping: `npm test`. Dependency-free
-// like newentry.test.ts (hand-rolled assert; no @types/node).
+// The import rules (importfiles.ts), pinned.
 import {
   bytesToBase64,
   destinationLabel,
@@ -57,9 +55,7 @@ check("a file over the limit is refused before a byte is read", () => {
 });
 
 check("the caller's own entry fields survive the plan", () => {
-  // The plan filters; it never projects. main.ts hangs the File handle off the entry
-  // and reads it back from `accepted`, so a copy that dropped extra fields would
-  // leave the import with nothing to send.
+  // main.ts reads the File handle back off `accepted` entries, so extra fields must survive.
   const plan = planImport([{ ...file("a.png"), handle: "FILE" }]);
   equal(plan.accepted[0].handle, "FILE", "extra fields ride along");
 });
@@ -108,8 +104,7 @@ check("bytes round-trip through the transport encoding", () => {
 });
 
 check("a payload larger than the argument limit still encodes", () => {
-  // The chunking's whole reason: a single spread of this many bytes overflows the
-  // call-argument limit, which no small fixture would ever catch.
+  // Large enough that a single spread would overflow the call-argument limit.
   const big = new Uint8Array(300_000);
   for (let i = 0; i < big.length; i++) big[i] = i % 256;
   const back = Uint8Array.from(atob(bytesToBase64(big)), (c) => c.charCodeAt(0));

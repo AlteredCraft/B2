@@ -1,26 +1,12 @@
-// Dropping a discovery card into the note — the gesture that turns "Similar & unlinked"
-// from a list you read into a list you *act on*: drag a candidate card out of the right
-// column, drop it on a line of the note you are editing, and a `[[wikilink]]` lands at the
-// end of that line. Flow ③'s "the human is the precision gate" (root CLAUDE.md), with the
-// pointer doing the committing instead of a modal.
+// Dropping a discovery card into the note: drag a candidate card onto a line of the note
+// being edited and a `[[wikilink]]` lands at the end of that line.
 //
-// **This authors nothing on B2's behalf.** The drop inserts text into the *editor buffer*,
-// exactly as `[[` completion does (wikicomplete.ts) — the human picked the target, the
-// human picked the line, and the bytes reach disk through the same guarded `write_note`
-// splice every keystroke does. Invariant W1 is untouched: no unbidden write, and no body
-// content B2 decided on its own.
+// The drop inserts into the editor buffer, as `[[` completion does, and the bytes reach
+// disk through the normal `write_note` path, so W1 holds. It writes an untyped body link
+// (data-model.md §2), not a typed `b2_relations:` entry like the card's Link… item.
 //
-// A **body** link, not a frontmatter relation. The card's Link… item writes a *typed*
-// `b2_relations:` entry (`b2 link`); this writes the other kind the data model has — an
-// untyped inline `references` edge, which is what a `[[link]]` in prose always is
-// (data-model.md §2). Two gestures because they are two different claims: "this note
-// supports that one" is a judgement worth a verb, and "…see also [[that]]" is a sentence.
-//
-// The split here is the repo's usual one. Everything that decides *where the link goes* is
-// a pure function of a line (or of an `EditorState` + a position), so node runs it straight
-// off the source; main.ts owns the `DragEvent` plumbing, the save, and the pane refresh,
-// because those are the running app's. `toDOM` is the one thing that wants a document, and
-// nothing in the test reaches it (livepreview.test.ts's rule).
+// Where the link goes is pure (node tests it); main.ts owns the `DragEvent` plumbing,
+// the save and the refresh.
 
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, StateEffect, StateField } from "@codemirror/state";
@@ -31,15 +17,12 @@ import {
   WidgetType,
 } from "@codemirror/view";
 
-/** The drag's own MIME type. Deliberately **not** `text/plain`: CodeMirror has its own
- *  text-drop handling, so a plain flavor would give a missed interception a second,
- *  silent behavior (the bare path dropped mid-word). A private type also keeps the drag
- *  inert outside B2 — nothing else on the machine claims it. */
+/** The drag's own MIME type. Not `text/plain`, which CodeMirror would also handle if an
+ *  interception were missed; a private type is also inert outside B2. */
 export const CARD_DRAG_MIME = "application/x-b2-card";
 
-/** Where a dropped card's link would land, and what it would insert. Positions are
- *  document offsets; `lineFrom` is the target line's start (what the wash decorates),
- *  `from` the insertion point (what the ghost sits at). */
+/** Where a dropped card's link would land (`lineFrom` the line start, `from` the
+ *  insertion point), and what it would insert. */
 export interface DropInsertion {
   lineFrom: number;
   from: number;
@@ -47,15 +30,9 @@ export interface DropInsertion {
 }
 
 /**
- * The rule, on one line of text: **a link lands at the end of the line**, with a single
- * space in front of it unless the line already ends in whitespace (or is empty).
- *
- * End-of-line rather than at-the-cursor-column is a deliberate simplification, and it is
- * what makes the gesture teachable: you aim at a *line*, not at a character between two
- * words, so a drop can't split "seman|tics" — and an empty line takes the link on its own,
- * which is how a "see also" line gets written. The offset is the true end of the line, so
- * nothing is ever left dangling *after* the link (an indented blank line keeps its indent,
- * `- ` keeps its bullet and its space).
+ * A link lands at the end of the line, after a single space unless the line is empty or
+ * already ends in whitespace. You aim at a line, not a column, so a drop can't split a
+ * word.
  */
 export function lineDrop(lineText: string, target: string): { offset: number; insert: string } {
   const link = `[[${target}]]`;
@@ -64,10 +41,9 @@ export function lineDrop(lineText: string, target: string): { offset: number; in
 }
 
 /**
- * Is `pos` inside code — a fence, an indented block, or an inline span? The read the rich
- * paste and the list keys make (editorcmds.ts's `inCodeContext` delegates here), taking a
- * position rather than reading the selection, because a *drop* names a place the cursor
- * isn't.
+ * Is `pos` inside code (a fence, an indented block, or an inline span)? Takes a position,
+ * not the selection, because a drop names a place the cursor isn't. editorcmds.ts's
+ * `inCodeContext` delegates here.
  */
 export function inCodeAt(state: EditorState, pos: number, side: -1 | 1 = -1): boolean {
   const at = syntaxTree(state).resolveInner(pos, side);
@@ -77,10 +53,8 @@ export function inCodeAt(state: EditorState, pos: number, side: -1 | 1 = -1): bo
   return false;
 }
 
-/** The **block** half of that question — is this line's own block a fence or an indented
- *  block? An inline span is deliberately not code for this purpose: the link goes at the
- *  end of the line, *outside* a `\`span\`` that happens to close there, so refusing a line
- *  for containing one would be a refusal with no hazard behind it. */
+/** Is this line's block a fence or an indented block? Inline spans don't count: the link
+ *  lands after any span that closes at the line's end. */
 function inBlockCodeAt(state: EditorState, pos: number): boolean {
   const at = syntaxTree(state).resolveInner(pos, 1);
   for (let n: typeof at | null = at; n; n = n.parent) {
@@ -90,36 +64,27 @@ function inBlockCodeAt(state: EditorState, pos: number): boolean {
 }
 
 /**
- * What a drop at `pos` would do, or **null** where it may not happen: on a line of code,
- * where a `[[link]]` is literal text that resolves to nothing. Refusing there (no ghost,
- * no-drop cursor) is the same posture the paste takes — B2 keeps its hands off code — and
- * it is visible *before* the mouse button comes up, which is the point of a drag preview.
+ * What a drop at `pos` would do, or null on a line of code, where a `[[link]]` is literal
+ * text. The refusal shows during the drag (no ghost, no-drop cursor).
  */
 export function planDrop(state: EditorState, pos: number, target: string): DropInsertion | null {
   const line = state.doc.lineAt(pos);
-  // Asked at the line's first non-blank character, looking forward. Not at `line.from`: an
-  // indented code block's node starts *after* the indent, so a line-start read calls
-  // `    cargo test` ordinary prose. Not at the insertion point either: that offset sits at
-  // the block's edge, where the answer flips with the side you read from. A blank line has
-  // no content to ask about, so it asks at its start — which is what a blank line inside a
-  // fence resolves into.
+  // Asked at the first non-blank character: an indented code block's node starts after
+  // the indent, and the line end is a block edge where the answer depends on side. A
+  // blank line asks at its start.
   const content = line.from + Math.max(0, line.text.search(/\S/));
   if (inBlockCodeAt(state, content)) return null;
   const { offset, insert } = lineDrop(line.text, target);
   return { lineFrom: line.from, from: line.from + offset, insert };
 }
 
-/** Show (or clear, with null) the drop preview. Exported for main.ts, which clears it when
- *  the pointer leaves the buffer for the discovery column — the drag's cancel gesture. */
+/** Show (or clear, with null) the drop preview. main.ts clears it when the pointer leaves
+ *  the buffer. */
 export const setDropTarget = StateEffect.define<DropInsertion | null>();
 
-/** The ghost `[[target]]` at the insertion point: what the drop will write, where it will
- *  write it, in the note's own type. `aria-hidden` and non-editable — it is a preview of a
- *  document that doesn't exist yet, so nothing may read it as content. */
+/** The ghost `[[target]]` at the insertion point. `aria-hidden`: a preview, not content. */
 class DropGhost extends WidgetType {
-  // An explicit field, not a constructor parameter property: node runs the suite off this
-  // source in strip-only mode, which cannot compile that shorthand (livepreview.ts's
-  // widgets are written the same way).
+  // Not a constructor parameter property: node's strip-only mode can't compile those.
   label: string;
   constructor(label: string) {
     super();
@@ -137,10 +102,8 @@ class DropGhost extends WidgetType {
   }
 }
 
-/** The two decorations a live preview paints: a wash over the line being aimed at, and the
- *  ghost at the exact offset the text would enter. Split out so the field stays a plain
- *  value (the insertion) rather than a set of ranges — the value is what `setDropTarget`
- *  carries and what a test can assert on. */
+/** A wash over the target line and the ghost at the insertion point. Derived, so the
+ *  field holds a plain `DropInsertion`. */
 function previewDecorations(plan: DropInsertion | null): DecorationSet {
   if (plan === null) return Decoration.none;
   return Decoration.set(
@@ -156,20 +119,16 @@ const dropTargetField = StateField.define<DropInsertion | null>({
   create: () => null,
   update(plan, tr) {
     for (const e of tr.effects) if (e.is(setDropTarget)) return e.value;
-    // Anything the *user* does ends the preview, and that is a safety net rather than
-    // tidiness: a repaint that destroys the dragged card mid-gesture takes the `dragend`
-    // with it (the event fires at a node no longer in the document, so it never reaches
-    // main.ts), and a ghost with no drag behind it would otherwise sit in the buffer until
-    // the next one. A drag itself moves neither the document nor the selection — the drop
-    // clears the preview before it inserts — so nothing legitimate is cut short here.
+    // Any user edit or cursor move ends the preview. A safety net: a repaint that destroys
+    // the dragged card loses its `dragend`, which would strand the ghost. A drag moves
+    // neither doc nor selection, so nothing legitimate is cut short.
     return tr.docChanged || tr.selection ? null : plan;
   },
   provide: (f) => EditorView.decorations.from(f, previewDecorations),
 });
 
-/** The one insertion path — the drop and its keyboard half (the card menu's *Insert link at
- *  cursor*) both come through here, so there is one behavior to keep correct rather than
- *  two. The caret lands after the link, ready to keep typing the sentence it belongs to. */
+/** The one insertion path, shared by the drop and the card menu's *Insert link at cursor*.
+ *  The caret lands after the link. */
 export function insertDrop(view: EditorView, plan: DropInsertion): void {
   view.dispatch({
     changes: { from: plan.from, insert: plan.insert },
@@ -180,19 +139,9 @@ export function insertDrop(view: EditorView, plan: DropInsertion): void {
 }
 
 /**
- * The card being dragged, as the app describes it.
- *
- * Two fields because a note has two spellings and they are not interchangeable: `path` is
- * the app's **key** for it (`notes/x.md` — what `SimilarView.path` carries, what the index
- * is keyed by, invariant L1), and `target` is what a *link* to it says (`notes/x`, the
- * extension dropped). This module reads only `target`; `path` is opaque here and rides
- * along so the app gets its own key back on drop rather than reversing a target into one.
- *
- * That reversal is exactly the bug PR #185's review caught: the drop handed back the
- * target, the app filtered `state.similar` with it, and `notes/x !== notes/x.md` matched
- * nothing — so a dropped card sat in "Similar & unlinked" until the next discovery read.
- * The pair travels together now, and [`withoutCard`] takes the pair rather than a string,
- * so there is no longer a spelling to pick wrongly.
+ * The card being dragged. A note has two spellings: `path` is the app's key (`notes/x.md`,
+ * L1) and `target` is what a link says (`notes/x`). Both travel together so the app never
+ * reverses a target into a key (PR #185).
  */
 export interface DraggedCard {
   /** The note's vault-relative path, extension included — the app's key. */
@@ -201,9 +150,7 @@ export interface DraggedCard {
   target: string;
 }
 
-/** The candidate list minus the one just linked. Keyed by the card's **path**, never by
- *  its target — see [`DraggedCard`]. Generic over the caller's row type so it filters
- *  `SimilarView`s without this module importing them. */
+/** The candidate list minus the one just linked, keyed by path (see [`DraggedCard`]). */
 export function withoutCard<T extends { path: string }>(
   cards: readonly T[],
   card: DraggedCard,
@@ -211,26 +158,20 @@ export function withoutCard<T extends { path: string }>(
   return cards.filter((c) => c.path !== card.path);
 }
 
-/** What the extension needs from the app: the card currently being dragged (null when the
- *  drag isn't ours — a text drag inside the buffer is CodeMirror's business), and what to
- *  do once the link is in. */
+/** What the extension needs from the app. */
 export interface CardDropOptions {
-  /** The dragged candidate, or null for "not our drag" — asked per event, so the answer
-   *  can be read off the payload ([`CARD_DRAG_MIME`]) rather than off app state a mid-drag
-   *  repaint may have stranded. */
+  /** The dragged candidate, or null when the drag isn't ours. Asked per event, so it is
+   *  read off the payload ([`CARD_DRAG_MIME`]) rather than app state a repaint may strand. */
   dragged: (e: DragEvent) => DraggedCard | null;
   /** Called after the insertion, with that same card — main.ts saves and refreshes. */
   onDrop: (card: DraggedCard) => void;
 }
 
 /**
- * The editor half of the gesture: a drop preview while a card is over the buffer, and the
- * insertion when it lands.
- *
- * Every handler returns `true` on our drag so CodeMirror's own drop handling never also
- * runs, and `false` otherwise so an ordinary text drag inside the note behaves exactly as
- * it always has. `preventDefault` is called **only** where the drop may happen, which is
- * what makes the OS cursor honest: copy over a droppable line, no-drop over code.
+ * The editor half of the gesture: a preview while a card is over the buffer, and the
+ * insertion on drop. Handlers return `true` only on our drag, so CodeMirror's own drop
+ * never also runs. `preventDefault` only where a drop may happen, so the OS cursor shows
+ * no-drop over code.
  */
 export function cardDrop(opts: CardDropOptions): Extension {
   const show = (view: EditorView, plan: DropInsertion | null): void => {
@@ -255,15 +196,12 @@ export function cardDrop(opts: CardDropOptions): Extension {
   return [
     dropTargetField,
     EditorView.domEventHandlers({
-      // dragenter as well as dragover, for the reason main.ts's file-drop pair states:
-      // some engines want the *first* event over an element cancelled before they will
-      // treat it as a drop zone at all.
+      // Some engines need the first event (dragenter) cancelled to treat it as a drop zone.
       dragenter: over,
       dragover: over,
       dragleave(e, view) {
         if (opts.dragged(e) === null) return false;
-        // Fires between child elements too, so only a pointer that actually left the
-        // buffer clears the preview (main.ts clears it for the panes outside).
+        // Fires between child elements too; clear only when the pointer left the buffer.
         const to = e.relatedTarget;
         if (to instanceof Node && view.dom.contains(to)) return false;
         show(view, null);
@@ -278,8 +216,7 @@ export function cardDrop(opts: CardDropOptions): Extension {
         e.preventDefault();
         insertDrop(view, plan);
         view.focus();
-        // The whole card back, not the target it was planned from: the app's key is the
-        // path, and asking it to reverse one out of the other is the bug in `DraggedCard`.
+        // The whole card, so the app keys by path (see `DraggedCard`).
         opts.onDrop(card);
         return true;
       },

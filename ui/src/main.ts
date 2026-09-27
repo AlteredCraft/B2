@@ -1,8 +1,6 @@
-// The controller: build the shell once, wire events (delegated), run the actions
-// that mutate `state` and re-render. No framework — the app is small enough that a
-// full-pane innerHTML swap on each change is instant and keeps the model honest.
-// All backend access goes through `api` (the one IPC seam); this file holds the UI
-// flow, never engine logic.
+// The controller: build the shell once, wire delegated events, run the actions that mutate
+// `state` and re-render (a full-pane innerHTML swap; no framework). Backend access goes
+// through `api`, the one IPC seam; no engine logic lives here.
 
 import "../style.css";
 import { autocompletion } from "@codemirror/autocomplete";
@@ -172,21 +170,10 @@ function el(id: string): HTMLElement {
 }
 
 /**
- * Where the keyboard is inside `pane`, as a thunk that finds it again after the pane's
- * `innerHTML` is swapped — the one mechanism every repaint here owes the keyboard
- * (crates/b2-desktop/CLAUDE.md, "Two things that bite"). The swap destroys the focused
- * element and WebKit silently drops the keyboard to `<body>`, so the element itself is
- * never the thing to hold on to: what survives is an identity the next paint re-emits —
- * a discovery row's key (sidenav.ts), a graph node's scene id (graph.ts), or a control's
- * stable `id`. Null when the keyboard was somewhere else entirely, because a repaint
- * must only ever *give back* focus, never take it.
- *
- * One capture serves both panes: the two row attributes are pane-specific by
- * construction (`data-side-row` is painted only by the side pane, `data-gnode` only by
- * the note pane). What a pane paints *without* an identity — a wikilink in a note's
- * body, a backlink card — falls back to the pane itself, which at least leaves the
- * keyboard in the column it was in (⌘1/⌘2/⌘3's own landing spot) instead of at the top
- * of the window.
+ * Where the keyboard is in `pane`, as a thunk that restores it after an `innerHTML` swap
+ * (WebKit drops focus to `<body>`; crates/b2-desktop/CLAUDE.md). Holds a stable identity
+ * (side-row key, graph node id, element id) and falls back to the pane. Null when focus
+ * was elsewhere: a repaint gives focus back, never takes it.
  */
 function capturePaneFocus(pane: HTMLElement): (() => void) | null {
   const active = document.activeElement;
@@ -194,8 +181,7 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
   if (!pane.contains(active)) return null;
   const row = active.closest<HTMLElement>("[data-side-row]");
   if (row) {
-    // A row that didn't survive the repaint (its section folded, a new note replaced
-    // discovery wholesale) hands off to the roving tabstop rather than to nothing.
+    // A row that didn't survive the repaint falls back to the roving tabstop.
     const key = row.dataset.sideRow ?? null;
     return () => (sideRowEl(key) ?? rovingSideRowEl() ?? pane).focus();
   }
@@ -210,45 +196,18 @@ function capturePaneFocus(pane: HTMLElement): (() => void) | null {
 }
 
 /**
- * `capturePaneFocus`'s counterpart for the overlay layer. `#modal-root` is swapped
- * wholesale on a repaint, so a modal control holding the keyboard — a Settings tab, the
- * theme segment you just pressed, the link modal's verb — is destroyed by a toast timer,
- * a watcher pulse, or the dialog's own state change, and WebKit drops focus to `<body>`.
- *
- * Restored by **`id`**: a modal control's id is the identity that outlives the swap
- * (settingsview.ts's Settings builder says so out loud, which is why every control in there
- * carries one). Null when the keyboard was somewhere else entirely, or on a control with
- * no id — a repaint must only ever *give back* focus, never take it, and guessing a
- * replacement for an unidentifiable control is taking it.
- *
- * When the named control genuinely didn't survive — Settings' Download button *becomes*
- * a spinner the moment you press it — the floor is the overlay's first stop rather than
- * nothing, the way `capturePaneFocus`'s is the pane itself. Dropping the keyboard on
- * `<body>` behind a backdrop is the one outcome an overlay may never produce.
- *
- * "Didn't survive" means *can't take the keyboard*, not merely "is gone": Settings →
- * Index's Reindex button is still there after you press it and **disabled**, which
- * `.focus()` silently declines — the same `<body>` outcome, arrived at through an element
- * that exists. Hence the membership test against `overlayFocusables()` (whose selector
- * already excludes `[disabled]`) rather than a null check.
+ * `capturePaneFocus` for the overlay layer, restored by `id` (every modal control carries
+ * one). Null when focus was elsewhere or on a control with no id. If the control can no
+ * longer take focus (gone, or disabled like a pressed Reindex button), falls back to the
+ * overlay's first stop: focus must never land on `<body>` behind a backdrop.
  */
 function captureModalFocus(root: HTMLElement): (() => void) | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !root.contains(active) || !active.id) return null;
   const id = active.id;
-  // What the human has *typed* into the control the keyboard is in, if it is a field.
-  // A modal's fields are painted from state (`value="…"`), so a repaint the user didn't
-  // cause — Settings → Chat's probe landing seconds after the dialog opened — otherwise
-  // discards the endpoint they were half-way through typing. This is `captureChatInput`'s
-  // rule for the overlay layer, and deliberately narrower than "restore every field":
-  // only the focused one is carried, so a repaint that is *meant* to rewrite a field the
-  // user is not in (picking an installed model rewrites the model field) still does.
-  //
-  // A `<select>` is the same promise about a different gesture: Settings → Chat's Model
-  // field is a picker over what the daemon has, and a choice made and not yet saved is
-  // exactly as uncommitted as a half-typed endpoint. Without this it reverts to the
-  // configured model on the next repaint and *Save and test* saves what was already
-  // there — a button that appears to do nothing.
+  // Carry the focused field's uncommitted value (typed text, or an unsaved `<select>`
+  // choice) across a repaint the user didn't cause, e.g. a chat probe landing. Only the
+  // focused one, so a repaint meant to rewrite another field still does.
   const typed =
     active instanceof HTMLInputElement ||
     active instanceof HTMLTextAreaElement ||
@@ -269,19 +228,14 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
       (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
     ) {
       target.value = typed.value;
-      // `selectionStart` is null on an input type that doesn't support selection
-      // (`type="number"`, and some engines for `type="password"`); fall back to the end
-      // of the text rather than throwing on the way to restoring focus.
+      // `selectionStart` is null on inputs without selection (`type="number"`).
       target.setSelectionRange?.(
         typed.start ?? typed.value.length,
         typed.end ?? typed.value.length,
       );
     }
-    // Only a choice the repainted list still offers. Assigning an absent value to a
-    // `<select>` sets `selectedIndex` to -1 and its value to `""` — which would reach the
-    // save as "no model" and reset the configuration, a far worse outcome than the
-    // reversion this is preventing. So a model that vanished from the inventory between
-    // the two paints simply loses the pending choice, and the field shows what is true.
+    // Only a choice the list still offers: an absent value would set it to `""`, which
+    // saves as "no model".
     if (typed && target === back && target instanceof HTMLSelectElement) {
       const offered = Array.from(target.options).some((o) => o.value === typed.value);
       if (offered) target.value = typed.value;
@@ -290,9 +244,8 @@ function captureModalFocus(root: HTMLElement): (() => void) | null {
   };
 }
 
-// The overlay layer's memo, and the reason it is worth having beyond the focus contract
-// above: a modal's *typed* state lives only in the DOM (the link modal's explanation
-// field), so an unrelated repaint with identical HTML must not swap it away mid-sentence.
+// The overlay memo: a modal's typed state lives only in the DOM, so an identical repaint
+// must not swap it away.
 let lastModalHtml: string | null = null;
 
 function paintModal(): void {
@@ -305,19 +258,14 @@ function paintModal(): void {
   restore?.();
 }
 
-// The note pane's last-written HTML, for the render memo below. Cleared whenever the
-// pane is owned imperatively (edit mode writes its own DOM) so exiting always repaints.
+// The note pane's memo. Cleared whenever edit mode owns the pane's DOM, so exiting repaints.
 let lastNotePaneHtml: string | null = null;
-// The tree pane's memo — same idea, different reason: while an inline create input
-// is open (`state.treeCreate`), its typed name lives only in the DOM, so an
-// unrelated repaint (a toast timer, streamed progress) must not rebuild the pane
-// under the user's cursor. Identical HTML skips the swap entirely; a real tree
-// change swaps and then restores the input's value, caret, and focus below.
+// The tree pane's memo: an open create/rename input's typed name lives only in the DOM, so
+// an identical repaint must not rebuild it under the cursor.
 let lastTreePaneHtml: string | null = null;
 
-/** Repaint the tree pane (memoized), carrying an open create/rename input across
- *  the swap. A fresh rename input (first paint) gets its prefilled name selected,
- *  so typing replaces it wholesale — the platform rename affordance. */
+/** Repaint the tree pane (memoized), carrying an open create/rename input across the swap.
+ *  A fresh rename input gets its name selected, the platform rename affordance. */
 function paintTree(): void {
   const html = treePaneHtml(state);
   if (html === lastTreePaneHtml) return;
@@ -339,11 +287,7 @@ function paintTree(): void {
   };
   const restoreCreate = carry("tree-create-input", state.treeCreate !== null, false);
   const restoreRename = carry("tree-rename-input", state.treeRename !== null, true);
-  // Whether the keyboard is *in* the tree right now (K1): the innerHTML swap destroys
-  // the focused row and focus silently falls back to <body>, so an unrelated repaint —
-  // a toast timer, a watcher pulse, streamed reindex progress — would eject a keyboard
-  // user from the tree mid-navigation. Restored by path, not by element, since the
-  // element the focus was on no longer exists after the swap.
+  // Keep a keyboard user in the tree across the swap (K1), restored by path.
   const hadRowFocus = focusedTreeRow() !== null;
   el("tree-pane").innerHTML = html;
   lastTreePaneHtml = html;
@@ -352,24 +296,15 @@ function paintTree(): void {
   if (hadRowFocus && !state.treeCreate && !state.treeRename) rovingRowEl()?.focus();
 }
 
-// The side pane's memo, and the same focus contract the tree has — discovery is a keyboard
-// surface too now (sidenav.ts, K1): an `innerHTML` swap destroys the row holding focus, so
-// an unrelated repaint — a toast timer, a watcher pulse, the *other* discovery read landing
-// — would silently eject a keyboard user to `<body>` mid-list. Restored by row key, since
-// the element it was on no longer exists — and by `id` for the pane's one focusable that
-// *isn't* a row, search mode's `clear` (GH #91). Memoized for the reason the note pane is:
-// identical HTML skips the swap, so the pane's scroll position survives a repaint that
-// changes nothing about it.
+// The side pane's memo: identical HTML skips the swap, so scroll survives. Focus is carried
+// by `capturePaneFocus` (K1, GH #91).
 let lastSidePaneHtml: string | null = null;
 
 function paintSide(): void {
   const html = sidePaneHtml(state);
   if (html === lastSidePaneHtml) return;
   const restore = capturePaneFocus(el("side-pane"));
-  // The chat composer's half-typed question lives only in the DOM (`paintTree`'s inline
-  // create input, in the right column): a repaint this pane doesn't know about — a toast
-  // timer, a watcher pulse, an answer landing — would otherwise wipe a question mid-word.
-  // Carried by value and caret, since the element itself does not survive the swap.
+  // The chat composer's half-typed question lives only in the DOM; carry it across.
   const carryInput = captureChatInput();
   el("side-pane").innerHTML = html;
   lastSidePaneHtml = html;
@@ -377,9 +312,7 @@ function paintSide(): void {
   restore?.();
 }
 
-/** The chat composer's contents across a side-pane repaint — value, caret and all.
- *  A no-op thunk when the composer isn't up or is empty, so nothing is restored over a
- *  pane that has moved on to something else. */
+/** The chat composer's value and caret, as a restore thunk (a no-op when empty). */
 function captureChatInput(): () => void {
   const prev = document.getElementById("chat-input") as HTMLTextAreaElement | null;
   if (!prev || prev.value === "") return () => {};
@@ -393,18 +326,9 @@ function captureChatInput(): () => void {
 }
 
 /**
- * Repaint the note pane, putting the keyboard back on what it was on — a graph node by
- * its scene id, a bar chip by its `id` (GH #91).
- *
- * Memoized: an unrelated render (a toast timer, streamed progress) with identical pane
- * HTML skips the swap entirely, so reading scroll position survives and the graph view's
- * entrance animation plays on real changes only. That memo is also why this pane's focus
- * bug was the narrow one — a swap here means the pane *genuinely* changed: discovery
- * landing while the graph is open and focused, or the drawer/source/graph chip you just
- * pressed rebuilding the bar it lives in. Both dropped the keyboard to `<body>`.
- *
- * Reports whether the swap actually happened — the find bar's Ranges and the syntax
- * highlight pass are re-derived off that, not off every render.
+ * Repaint the note pane (memoized, so scroll survives and the graph's entrance animation
+ * plays only on real changes), restoring focus (GH #91). Returns whether it swapped: find
+ * Ranges and syntax highlighting are re-derived only then.
  */
 function paintNote(): boolean {
   const html = notePaneHtml(state);
@@ -418,22 +342,18 @@ function paintNote(): boolean {
 
 function render(): void {
   paintTree();
-  // The carve-out (crates/b2-desktop/CLAUDE.md): while editing, the note pane belongs to
-  // the live EditorView — rebuilding it here (e.g. from a toast timer) would destroy
-  // the editor mid-keystroke. The frontmatter mini-editor (GH #79) gets the same
-  // deal: its buffer is a live textarea in the pane. Everything else keeps rendering.
+  // While editing (or in the frontmatter editor, GH #79) the pane belongs to the live
+  // editor; a rebuild would destroy it mid-keystroke (crates/b2-desktop/CLAUDE.md).
   let noteSwapped = false;
   if (!state.editing && !state.fmEditing) noteSwapped = paintNote();
   else lastNotePaneHtml = null;
-  // Graph mode owns the pane's box: padding off, scrolling off, column flex on
-  // (the stage flexes to fill; the SVG viewBox scales the scene into it).
+  // Graph mode owns the pane's box (no padding or scroll; the stage flexes to fill).
   el("note-pane").classList.toggle(
     "is-graph",
     state.graphOpen && !state.editing && state.current !== null && state.currentResource === null,
   );
   paintSide();
-  // The "semantic search is off — install the model" banner, under the top bar. Empty
-  // string when the gate (embedreminder.ts) says not to prompt, so the strip collapses.
+  // The "install the model" banner; empty (collapsed) when embedreminder.ts says not to.
   el("embed-banner").innerHTML = embedBannerHtml(state);
   el("menu-root").innerHTML = contextMenuHtml(state);
   paintModal();
@@ -442,9 +362,8 @@ function render(): void {
   document.body.classList.toggle("is-loading", state.loading);
   paintReindex();
   paintNav();
-  // The vault switcher stays enabled with no vault open — it's the in-app way to pick
-  // the first one — but not mid-op, to avoid re-entrant switches. It stays live during
-  // a reindex: switching cancels the in-flight run first (handled host-side).
+  // Enabled with no vault open (it picks the first one) and during a reindex (the host
+  // cancels the run), but not mid-op, to avoid re-entrant switches.
   (el("switch-vault") as HTMLButtonElement).disabled = state.loading;
 
   const toast = el("toast");
@@ -457,37 +376,22 @@ function render(): void {
   syncOverlayFocus();
   syncFind(noteSwapped);
   if (noteSwapped) void paintCodeHighlights();
-  // The open note's `![[image.png]]` embeds. Skipped while editing — there the buffer,
-  // not the last-saved body, is what the pictures answer to (`scheduleImageScan`).
+  // The open note's `![[image.png]]` embeds; while editing, `scheduleImageScan` owns this.
   if (!state.editing) void syncNoteImages(state.current?.path ?? null, state.current?.body ?? "");
 }
 
-/** The reading view's half of syntax highlighting (highlight.ts): a post-render pass over
- *  the pane's `<pre><code>` blocks. Async — a language grammar is a lazily loaded chunk —
- *  so a fence paints plain first and gains its colours a tick later. Find-in-note anchors
- *  Ranges into the pane's text nodes, so a repaint under an open bar re-derives them. */
+/** Reading-view syntax highlighting (highlight.ts), a post-render pass. Grammars load
+ *  lazily, so fences paint plain first; an open find bar re-derives its Ranges after. */
 async function paintCodeHighlights(): Promise<void> {
   if (!(await highlightCodeBlocks(el("note-pane")))) return;
   if (findOpen && !state.editing) applyReadingFind();
 }
 
-// Paint just the reindex affordance — the progress bar/label/Cancel, and the Reindex
-// button's state *if it is on screen*. Called on every full render AND on each streamed
-// progress batch, so progress updates never rebuild the panes (which would fight scrolling
-// and churn on a large vault).
-//
-// There are two meters and one painter. The shell's lives in the top bar; Settings →
-// Index paints a second while a run is live, because Settings took the whole window and a
-// meter behind an opaque surface is no meter (widgets.ts). So this walks *every*
-// `.reindex-progress` on screen and writes the same values into each — one computation,
-// so the two can't disagree about a run, and adding a third costs nothing here.
-//
-// The button does not: it is Settings → Index's now (settingsview.ts `indexPanelHtml`), so it
-// exists only while that dialog is open on that section — hence the null-tolerant lookup
-// rather than `el`. `settingsPanelHtml` paints it in the right state to begin with; this
-// keeps it there through the runs that *don't* full-render, which is every auto-index
-// (`autoIndexOnOpen`, `trailingEmbed`) — those repaint the affordance alone, and a stale
-// "Reindex" you can click into a no-op is the failure that reads as a broken button.
+// Paint just the reindex affordance, on every render and each streamed progress batch, so
+// progress never rebuilds the panes. Writes every `.reindex-progress` on screen (top bar and
+// Settings → Index) from one computation. The Reindex button exists only while Settings →
+// Index is open, hence the null-tolerant lookup; auto-index runs repaint only this, so it
+// must keep the button's state current.
 function paintReindex(): void {
   const btn = document.getElementById("reindex") as HTMLButtonElement | null;
   if (btn) {
@@ -499,8 +403,7 @@ function paintReindex(): void {
   for (const wrap of meters) wrap.hidden = !state.reindexing;
   if (!state.reindexing) return;
 
-  // Determinate only once embedding starts and the denominator is known; before that
-  // (the fast projection phase) the bar sweeps rather than showing a bogus fraction.
+  // Determinate only once embedding has a known denominator; before that the bar sweeps.
   const p = state.reindexProgress;
   const embedding = p && p.notes_to_embed > 0 ? p : null;
   const done = embedding ? `${embedding.notes_embedded}/${embedding.notes_to_embed}` : "";
@@ -546,18 +449,13 @@ function flash(msg: string): void {
 
 // --- actions --------------------------------------------------------------------
 
-/** Unfold every folder down to and including `dir`, so the file tree shows what is in
- *  it — a document opened from search, a wikilink or discovery, a fresh create, a
- *  rename's input, a move's destination. */
+/** Unfold every folder down to and including `dir` in the file tree. */
 function revealDir(dir: string): void {
   for (const d of dirChain(dir)) state.expandedDirs.add(d);
 }
 
-// Load the vault listing for the file tree — all three lists fetched before any
-// state commit, so a mid-refresh failure can't leave the tree half-updated.
-// Non-fatal on failure (e.g. no vault open): the tree shows its empty state and
-// the reason surfaces as a toast; resolves false so callers don't overwrite that
-// toast with a success flash.
+// Load the file tree's listings, all fetched before any commit so a failure can't leave the
+// tree half-updated. On failure, toasts and resolves false so callers don't flash success.
 async function loadNotes(): Promise<boolean> {
   try {
     const notes = await api.listNotes();
@@ -577,13 +475,9 @@ async function loadNotes(): Promise<boolean> {
 }
 
 /**
- * Load a note into the center pane — the shared core of `openNote` and back/forward
- * (#52): everything after the edit-mode guard. `commit` runs the history-stack
- * mutation the moment the read succeeds — before the slower discovery tail, so rapid
- * navigations can't interleave stack updates out of order — and receives the
- * canonical vault-relative path (the ref may be a wikilink target, so `.md`-less).
- * Resolves false when the read failed (its error already toasted), so back/forward
- * can prune a dead entry.
+ * Load a note into the center pane: the core of `openNote` and back/forward (#52). `commit`
+ * updates history with the canonical path as soon as the read succeeds, before discovery,
+ * so rapid navigations stay ordered. Resolves false on a failed read (already toasted).
  */
 async function loadNote(ref: string, commit: (path: string) => void): Promise<boolean> {
   state.loading = true;
@@ -595,9 +489,7 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     state.currentResource = null; // one document owns the pane
     state.resourceImage = null;
     state.fmEditing = false; // a new document ends any drawer edit (guards ran upstream)
-    // Paint the note the instant its body is read — the body is already in hand.
-    // Discovery (`similar` + `explain`) is a slower, independent side-pane read; gating
-    // the middle pane on it made note-open feel as slow as the whole discovery scan.
+    // Paint the note now; discovery is a slower, independent side-pane read.
     enterDocument(note.path, commit);
     state.loading = false;
     state.discoveringSimilar = true;
@@ -609,20 +501,15 @@ async function loadNote(ref: string, commit: (path: string) => void): Promise<bo
     flash(errText(e));
     return false;
   } finally {
-    // The discovery flags are owned by refreshDiscovery (it clears each section's when
-    // that read settles, guarded against a superseding open) — clearing them here would
-    // race a newer note's in-flight load, so only the middle-pane spinner is ours.
+    // Discovery flags belong to refreshDiscovery; clearing them here would race a newer
+    // open.
     state.loading = false;
     render();
   }
 }
 
-/**
- * What entering any document does beyond putting it in the pane — the part `loadNote`
- * and `loadResource` share: record it in history (`commit`, with the canonical path),
- * reveal it in the tree, point the create context at its folder, and clear the previous
- * document's side pane so its cards don't linger under the new one.
- */
+/** What `loadNote` and `loadResource` share on entering a document: history, tree reveal,
+ *  create context, and clearing the previous document's side pane. */
 function enterDocument(path: string, commit: (path: string) => void): void {
   commit(path);
   revealDir(parentDir(path));
@@ -653,29 +540,23 @@ function adoptExplain(explain: ExplainView): void {
   state.unresolved = explain.unresolved;
 }
 
-/** Put a resource card in the pane, with its picture (null when there is none to show —
- *  `loadResourceImage`). The two travel together so the card never shows another
- *  file's picture. */
+/** Put a resource card and its picture in the pane together, so the card never shows
+ *  another file's picture. */
 function adoptResource(resource: ResourceExplainView, picture: string | null): void {
   state.currentResource = resource;
   state.resourceImage = picture;
 }
 
-// User navigation to a note (tree, wikilink, backlink, similar card, search result).
-// Mid-edit navigation flushes the buffer and leaves edit mode first; a conflict keeps
-// the editor — and the user's buffer — alive instead. A successful load records the
-// document in the history stack (#52); back/forward call `loadNote` directly.
+// User navigation to a note. Mid-edit, flushes and leaves edit mode first (a conflict keeps
+// the editor instead). Records history (#52); back/forward call `loadNote` directly.
 async function openNote(ref: string): Promise<void> {
   if (!(await leaveEdits())) return;
   await loadNote(ref, (path) => navPush({ kind: "note", path }));
 }
 
-// Follow a wikilink from the reading view or the editor's mod-click. A `[[link]]`
-// target can name a resource just as readily as a note (`[[report.pdf]]`), so route
-// by the target's shape — the same extension-only rule the core resolves the edge on
-// (`refKind`/`doc_kind`) — to the resource card rather than failing a note read. A
-// wikilink target is vault-root, so it *is* the resource's vault-relative path (minus
-// any `#fragment`); the host re-validates either way.
+// Follow a wikilink. A target can name a resource (`[[report.pdf]]`), routed by the same
+// extension rule the core uses (`refKind`/`doc_kind`). Targets are vault-root, so minus any
+// `#fragment` it is the resource's path; the host re-validates.
 async function followWikilink(target: string): Promise<void> {
   if (refKind(target) === "resource") {
     await openResource(target.split("#")[0].trim());
@@ -685,14 +566,9 @@ async function followWikilink(target: string): Promise<void> {
 }
 
 /**
- * The open resource's picture, or null when there isn't one to show.
- *
- * Null for every class without an in-app viewer, for an image too large to hold on
- * screen (`IMAGE_VIEWER_MAX_BYTES` — the card's size is already in hand, so the decision
- * costs no IPC), and for a read that failed. That last one is deliberate: the card is the
- * truth about the file whether or not its bytes can be read, so a failed read falls back
- * to *Open in system default* rather than failing the navigation and leaving the pane on
- * the previous document.
+ * The open resource's picture, or null: not an image, over `IMAGE_VIEWER_MAX_BYTES`, or the
+ * read failed. A failed read still shows the card (with *Open in system default*) rather
+ * than failing the navigation.
  */
 async function loadResourceImage(r: ResourceExplainView): Promise<string | null> {
   if (r.class !== "image" || r.size > IMAGE_VIEWER_MAX_BYTES) return null;
@@ -705,58 +581,32 @@ async function loadResourceImage(r: ResourceExplainView): Promise<string | null>
 
 // --- the note's inline pictures (`![[image.png]]`) ---------------------------------
 //
-// An embed draws the file it names (markdown.ts, livepreview.ts), and the bytes for that
-// come over the same `read_resource` command the resource card uses. What is *here* is
-// the reconciliation: which pictures the open document should be holding, and the reads
-// that close the gap.
-//
-// It is driven off the document rather than off each navigation, for the reason
-// `paintCodeHighlights` is: there are a dozen ways a note's body reaches the pane (open,
-// back/forward, save, an external change, a rename), and a loader wired into each of
-// them is a loader that will be forgotten by the thirteenth. One reconcile at the tail of
-// `render()` covers all of them, and it is cheap because it is memoized on the exact body
-// it last ran against — the repaint an arriving picture *causes* does no work at all.
-//
-// The map is the budget: `inlineImagePlan` (embeds.ts) decides what may be held, and
-// anything the document no longer embeds is dropped, so a long editing session can't
-// accumulate pictures past the bound.
+// Reconciles which pictures the open document should hold (bytes via `read_resource`).
+// Driven from the tail of `render()` rather than from each way a body reaches the pane, and
+// memoized on the body, so it is cheap. `inlineImagePlan` (embeds.ts) bounds what is held.
 
-/** The document the held pictures belong to, the exact body they were planned from, and
- *  the inventory they were planned against — together, the memo that makes the
- *  `render()`-tail call free. The inventory is in there because the tree's file list
- *  arrives *after* the first note can be on screen (`loadVault`), and a plan made against
- *  an empty one has to be made again rather than remembered. */
+/** The memo: owner, body and inventory the held pictures were planned from. The inventory
+ *  is included because the file list can arrive after the first note (`loadVault`). */
 let imagesOwner: string | null = null;
 let imagesBody: string | null = null;
 let imagesInventory: readonly ResourceSummary[] | null = null;
-/** Which plan is the current one. Bumped by every reconcile that gets past the memo, and
- *  checked again after the reads — a read is only allowed to store what the *latest* plan
- *  still wants. Without it, a picture deleted from the buffer mid-read comes back after
- *  the newer plan pruned it, and the memo then holds that stale entry in the map for as
- *  long as the body doesn't change again: the per-note budget quietly stops bounding. */
+/** The current plan's generation. Reads store only if still current, or a picture removed
+ *  mid-read would come back and escape the budget. */
 let imagesGeneration = 0;
-/** Debounce for the *buffer* scan while editing — a keystroke can add an embed, and the
- *  answer is worth a moment's wait rather than a scan per character. */
+/** Debounce for the buffer scan while editing. */
 let imageScanTimer: number | undefined;
 const IMAGE_SCAN_MS = 400;
 
-/** Hand the live editor the pictures the note holds now — a no-op when not editing, and
- *  when the editor is in raw-source mode (the field is there, nothing reads it). */
+/** Hand the live editor the pictures the note holds now (a no-op when not editing). */
 function pushNoteImages(): void {
-  // A copy, not the live map: what the editor holds is `EditorState`, and state that
-  // changes under CodeMirror without a transaction is state its decorations can read
-  // twice and get two answers from.
+  // A copy: editor state must not change under CodeMirror without a transaction.
   editorView?.dispatch({ effects: setEmbedImages.of(new Map(state.embedImages)) });
 }
 
 /**
- * Reconcile `state.embedImages` against `body` — the open note's, or the editor's live
- * buffer while editing. A null `owner` means the pane holds no note (a resource card, an
- * empty pane), which drops every picture.
- *
- * Repaints only when a picture actually arrived, and only after the read — so this is
- * safe to call from the tail of `render()` without re-entering it. A read that a newer
- * reconcile has superseded stores nothing (`imagesGeneration`).
+ * Reconcile `state.embedImages` against `body` (the note's, or the live buffer). A null
+ * `owner` drops every picture. Repaints only after a picture arrives, so it is safe from
+ * the tail of `render()`.
  */
 async function syncNoteImages(owner: string | null, body: string): Promise<void> {
   if (imagesOwner === owner && imagesBody === body && imagesInventory === state.resources) return;
@@ -771,8 +621,7 @@ async function syncNoteImages(owner: string | null, body: string): Promise<void>
   }
   const missing = plan.filter((path) => !state.embedImages.has(path));
   if (missing.length === 0) return;
-  // A failed read is not an error the reader needs told about: the embed keeps reading
-  // as its link, which still opens the file. Same posture as `loadResourceImage`.
+  // A failed read stays silent: the embed still reads as a working link.
   const loaded = await Promise.all(
     missing.map(async (path) => {
       try {
@@ -782,8 +631,7 @@ async function syncNoteImages(owner: string | null, body: string): Promise<void>
       }
     }),
   );
-  // Superseded while we were reading — another note, or another keystroke in this one.
-  // Whatever the newer plan still wants, it asked for itself.
+  // Superseded while reading; the newer plan requested its own.
   if (imagesGeneration !== generation) return;
   let arrived = false;
   for (const [path, url] of loaded) {
@@ -797,8 +645,7 @@ async function syncNoteImages(owner: string | null, body: string): Promise<void>
   render();
 }
 
-/** The editing half: a keystroke can add or remove an embed, so the *buffer* — not the
- *  last-saved body — is what the held pictures are reconciled against. */
+/** While editing, reconcile pictures against the buffer rather than the saved body. */
 function scheduleImageScan(): void {
   window.clearTimeout(imageScanTimer);
   imageScanTimer = window.setTimeout(() => {
@@ -808,9 +655,7 @@ function scheduleImageScan(): void {
   }, IMAGE_SCAN_MS);
 }
 
-/** The resource sibling of `loadNote` — same core/commit split, for `openResource`
- *  and back/forward. Discovery doesn't apply (resources have no chunks until file-type
- *  slice 3), so the side pane clears. */
+/** `loadNote` for resources. Resources have no discovery yet, so the side pane clears. */
 async function loadResource(path: string, commit: (path: string) => void): Promise<boolean> {
   state.loading = true;
   render();
@@ -831,10 +676,7 @@ async function loadResource(path: string, commit: (path: string) => void): Promi
   }
 }
 
-// Select a resource in the tree → the fallback card (file-type slice 1, spec §6):
-// metadata + backlinks + *Open in system default*. The note-pane sibling of
-// openNote — same edit-mode flush, same one-document-owns-the-pane rule, same
-// history push.
+// Open a resource's fallback card (spec §6): `openNote`'s sibling.
 async function openResource(path: string): Promise<void> {
   if (!(await leaveEdits())) return;
   await loadResource(path, (p) => navPush({ kind: "resource", path: p }));
@@ -842,15 +684,9 @@ async function openResource(path: string): Promise<void> {
 
 // --- navigation history (#52) -----------------------------------------------------
 //
-// Browser-style back/forward over the center pane's document. The stack holds every
-// document the pane has shown — notes and resources alike, regardless of how each was
-// reached — with a cursor at the current one. Session-scoped by design: it starts
-// empty on launch, is never persisted, and clears on vault switch. Module-locals like
-// the editor's timers (nothing here is rendered from, so it stays out of AppState);
-// the two chrome buttons repaint through the targeted `paintNav` (the `paintReindex`
-// pattern). In-place content updates (a save's re-read, a write report, external-edit
-// reconciliation) mutate `state.current` directly without passing through
-// `openNote`/`openResource`, so they never create entries.
+// Browser-style back/forward over the center pane's documents. Session-scoped: never
+// persisted, cleared on vault switch. Kept out of AppState; the buttons repaint via
+// `paintNav`. In-place updates (save, external edit) bypass `openNote`, so add no entries.
 
 /** One center-pane document: what `loadNote`/`loadResource` can bring back. */
 interface NavEntry {
@@ -865,12 +701,8 @@ let navStack: NavEntry[] = [];
 /** Index of the pane's current document in `navStack`; -1 while it's empty. */
 let navCursor = -1;
 
-// Record a genuine navigation: truncate the forward branch (the browser model —
-// navigating after going back discards it), then append. Called from the load cores
-// *after* a successful read with the canonical vault-relative path in hand, so a
-// wikilink followed by title and a tree click on the same note dedupe, and a target
-// that fails to load never enters the stack. Re-opening the already-current document
-// is a history no-op (consecutive-duplicate suppression).
+// Record a navigation: drop the forward branch, then append. Called after a successful
+// read with the canonical path, so failed targets never enter and duplicates collapse.
 function navPush(entry: NavEntry): void {
   const cur = navStack[navCursor];
   if (cur && cur.kind === entry.kind && cur.path === entry.path) return;
@@ -888,8 +720,7 @@ function navClear(): void {
   paintNav();
 }
 
-/** True while a text-entry surface owns the keyboard (the search field, a modal
- *  input) — ⌘←/⌘→ mean caret-to-line-edge there, never history. */
+/** True while a text field owns the keyboard, where ⌘←/⌘→ move the caret, not history. */
 function inTextEntry(): boolean {
   const a = document.activeElement;
   return (
@@ -901,33 +732,25 @@ function inTextEntry(): boolean {
 
 // --- keyboard: focus plumbing (invariant K1, GH #78) --------------------------------
 //
-// B2 is fully operable from the keyboard; the mouse is an accelerator, never a
-// requirement (docs/invariants.md K1). Three things make that true and all three
-// live here: the file tree navigates by arrow key (the ARIA `tree` pattern, walking the
-// row order treenav.ts also paints), every overlay takes focus on open and gives it back
-// on close, and every mouse-only gesture — the right-click menu above all — has a key
-// that reaches it. The chords themselves are wired in the global keydown handler,
-// `wireChords`; what's here is the focus bookkeeping they share.
+// B2 is fully operable from the keyboard (K1): the tree is an ARIA `tree`, overlays take and
+// return focus, and every mouse gesture has a key. Chords are wired in `wireChords`; this
+// is their shared focus bookkeeping.
 
 /** Every row the tree currently paints, in paint order — the list the arrows walk. */
 function treeRows(): TreeRow[] {
   return visibleRows(buildTree(state.notes, state.resources, state.dirs), state.expandedDirs);
 }
 
-/** What a file-tree row is, as a selector: every row carries its vault path in
- *  `data-tree-row` (render.ts), whatever kind of node it is. */
+/** A file-tree row; each carries its vault path in `data-tree-row` (render.ts). */
 const TREE_ROW = ".tree-row[data-tree-row]";
 
-/** The DOM row for a vault path. Looked up by data attribute rather than by CSS
- *  selector because a filename may contain anything a selector would choke on. */
+/** The DOM row for a vault path. */
 function treeRowEl(path: string | null): HTMLElement | null {
   return findByData<HTMLElement>(el("tree-pane"), TREE_ROW, "treeRow", path);
 }
 
-/** The first element under `root` matching `selector` whose `data-*` field `key` is
- *  exactly `value` (null finds nothing). Iterated rather than put in the selector: the
- *  value is a path or a key carrying one, and a path may contain anything a selector
- *  would choke on. */
+/** The first `selector` match under `root` whose `data-*` field `key` is `value`. Iterated,
+ *  not a selector, because the value holds a path, which may contain anything. */
 function findByData<E extends HTMLElement | SVGElement>(
   root: Element,
   selector: string,
@@ -963,12 +786,7 @@ function treeRowRef(row: HTMLElement): TreeNodeRef {
   return { path, nodeKind, label: baseName(path) };
 }
 
-/**
- * Move keyboard focus to a tree row: state first (so the roving tabstop travels with
- * it), then the repaint, then the DOM. `scrollIntoView` is what keeps a long vault
- * navigable — arrowing off the bottom of the viewport must bring the row into view,
- * exactly as a mouse-driven scroll would.
- */
+/** Focus a tree row: state first (so the roving tabstop moves), repaint, then the DOM. */
 function focusTreeRow(path: string): void {
   state.treeFocus = path;
   paintTree();
@@ -978,19 +796,13 @@ function focusTreeRow(path: string): void {
 }
 
 // --- keyboard: the discovery pane's rows (sidenav.ts) --------------------------------
-//
-// The tree's helpers above, for the right column. Rows are keyed by `data-side-row` rather
-// than looked up by CSS selector for the same reason: a row key carries a note path, and a
-// path may contain anything a selector would choke on.
 
 /** The DOM row for a `sidenav.ts` row key. */
 function sideRowEl(key: string | null): HTMLElement | null {
   return findByData<HTMLElement>(el("side-pane"), "[data-side-row]", "sideRow", key);
 }
 
-/** The graph node for a scene id (graph.ts `GraphNode.id`) — the note pane's `sideRowEl`,
- *  and iterating rather than selecting for the same reason: a node id carries a vault
- *  path, and a path may contain anything a selector would choke on. */
+/** The graph node for a scene id (graph.ts `GraphNode.id`). */
 function gnodeEl(id: string | null): SVGElement | null {
   return findByData<SVGElement>(el("note-pane"), "[data-gnode]", "gnode", id);
 }
@@ -1000,8 +812,7 @@ function rovingSideRowEl(): HTMLElement | null {
   return el("side-pane").querySelector<HTMLElement>('[data-side-row][tabindex="0"]');
 }
 
-/** Move keyboard focus to a discovery row — state first (so the roving tabstop travels
- *  with it), then the repaint, then the DOM. `focusTreeRow`'s counterpart. */
+/** Focus a discovery row; `focusTreeRow`'s counterpart. */
 function focusSideRow(key: string): void {
   state.sideFocus = key;
   paintSide();
@@ -1017,8 +828,7 @@ function focusTreePane(): void {
   else el("tree-pane").focus();
 }
 
-/** Put the keyboard in the note (⌘2): the live editor while editing, else the pane
- *  itself — which is the scroll container, so the arrows read the note from there. */
+/** Put the keyboard in the note (⌘2): the editor while editing, else the scrolling pane. */
 function focusNotePane(): void {
   if (state.editing && editorView) {
     editorView.focus();
@@ -1027,8 +837,8 @@ function focusNotePane(): void {
   el("note-pane").focus();
 }
 
-/** Put the keyboard in discovery (⌘3) — on the row it last left off at (the roving
- *  tabstop, like ⌘1), else whatever chrome the pane has, else the empty pane itself. */
+/** Put the keyboard in discovery (⌘3): the roving row, else the first button, else the
+ *  pane. */
 function focusSidePane(): void {
   const pane = el("side-pane");
   const row = rovingSideRowEl();
@@ -1038,27 +848,15 @@ function focusSidePane(): void {
 
 // --- keyboard: overlay focus (K1) ---------------------------------------------------
 //
-// An overlay that opens without taking focus is a mouse-only control: the keyboard is
-// still on the page behind it, ⏎ hits whatever was focused before, and Tab walks the
-// page *under* the modal. So each overlay takes focus on open, keeps it (the Tab trap in
-// the keydown handler), and hands it back on close. One transition hook rather than a
-// per-modal dance: `render()` paints overlays declaratively, so the open/close *edge*
-// is the only honest place to move focus — moving it on every render would fight the
-// user's own Tab while a modal is up.
+// Each overlay takes focus on open, traps Tab, and returns focus on close. Focus moves only
+// on the open/close edge; moving it on every render would fight the user's own Tab.
 
 type OverlayKind = "settings" | "move" | "delete" | "link" | "menu" | null;
 
 /**
- * Which overlay is up, in the same precedence `modalHtml` renders them — the guard
- * every global chord asks before acting, and what the focus transition below keys on.
- *
- * **Exactly one is ever up**, which is what keeps this a single value rather than a
- * stack: an overlay that hands off to another (a menu → Move…) is *replaced*, not
- * covered, so closing returns focus to whatever opened the menu and never to a menu item
- * that no longer exists. The `?` sheet used to be the one exception — it rendered *over*
- * Settings, because a button there was one of its two entry points — and it is now the
- * Keyboard section of the Settings dialog itself (settingstabs.ts), so the second layer,
- * and the pair of return-focus slots it needed, are gone.
+ * Which overlay is up, in `modalHtml`'s precedence; global chords check it before acting.
+ * Exactly one is ever up (a menu → Move… replaces, not covers), so this is a value, not a
+ * stack.
  */
 function currentOverlay(): OverlayKind {
   if (state.settingsOpen) return "settings";
@@ -1070,20 +868,9 @@ function currentOverlay(): OverlayKind {
 }
 
 /**
- * Take down every overlay, so the caller's own can be the one that is up.
- *
- * This is what makes "exactly one is ever up" true rather than aspirational. ⌘, is a
- * deliberately **unguarded** toggle — you can hit it from anywhere, editing included —
- * so it is the path that opens an overlay while another is already on screen.
- * `currentOverlay` and `modalHtml` both rank Settings above the rest, so the newcomer
- * *paints*; but a `moveTarget` left set is not a dismissed modal, it is a **hidden**
- * one, and it comes back the moment the newcomer closes. ⌘, over Move… then Esc used to
- * put the Move modal on screen with nothing having asked for it.
- *
- * Discarding beats deferring here, and beats refusing: pressing ⌘, is an unambiguous
- * "take me to Settings", and a modal you have to dismiss twice is worse than one that
- * closed when you looked away from it. Only the *targets* are cleared — no side effects,
- * so nothing is committed on the way out.
+ * Take down every overlay so the caller's is the only one up. ⌘, is unguarded, so without
+ * this a hidden Move… would reappear when Settings closes. Clears targets only; nothing is
+ * committed.
  */
 function dismissOverlays(): void {
   state.contextMenu = null;
@@ -1096,34 +883,21 @@ function dismissOverlays(): void {
 
 // --- the ⌘-hold sheet ----------------------------------------------------------------
 //
-// cmdhold.ts owns the machine and what the sheet says; this is the DOM half — the one
-// timer it asks for, and the listeners that turn key events into its four inputs.
-//
-// The listeners are **capture phase on `window`, and never call `preventDefault`**. This
-// is a spectator of the keyboard: every handler below sees exactly what it saw before,
-// including the pane handlers that stop propagation on their own rows, and the sheet is
-// never the reason a chord did or didn't fire. Capture rather than bubble for the same
-// reason — an event consumed on the way down is still an event that says the hold is over.
+// The DOM half of cmdhold.ts: its timer, and listeners feeding its inputs. They listen in
+// the capture phase on `window` and never `preventDefault`: a spectator that sees even
+// events other handlers stop, and never affects whether a chord fires.
 
 let holdPhase: HoldPhase = "idle";
 let holdTimer: number | null = null;
 
-/** The ⌘ sheet's own paint. No memo and no focus dance: nothing in it is focusable or
- *  typed into, so a rewrite costs one innerHTML of static markup and can't take anything
- *  away from the user (keysview.ts's `cmdSheetHtml` says why it is deliberately not a
- *  dialog).
- *
- *  Called by `render()` as well, so an unrelated repaint can't leave the layer behind —
- *  but the hold itself calls **only this**. A modifier press has no business rebuilding
- *  the tree, the note and the right column, and the listeners run in the capture phase of
- *  a keystroke the app has not handled yet: a full `render()` there would be swapping the
- *  DOM out from under an event still in flight. */
+/** The ⌘ sheet's paint (nothing in it is focusable, so no memo or focus handling). The hold
+ *  calls only this: a full `render()` in a capture listener would swap the DOM under an
+ *  event still in flight. */
 function paintCmdSheet(): void {
   el("cmdhold-root").innerHTML = cmdSheetHtml(state);
 }
 
-/** Feed the machine one event, do what it says with the timer, and paint if the sheet
- *  actually moved — arming and disarming are invisible, so only `open` changing repaints. */
+/** Feed the machine one event, manage the timer, and repaint only if `open` changed. */
 function cmdHoldEvent(e: HoldEvent): void {
   const step = holdStep(holdPhase, e);
   if (step.timer !== "keep" && holdTimer !== null) {
@@ -1147,15 +921,8 @@ function wireCmdHold(): void {
   window.addEventListener(
     "keydown",
     (e) => {
-      // A bare ⌘, nothing else down. `metaKey` is already true on ⌘'s own keydown, so the
-      // test that matters is the other three: ⇧⌘ is the front half of a chord being typed,
-      // not a question being asked.
-      //
-      // Refused outright while an overlay owns the keyboard. Settings *is* the reference,
-      // in full and editable; the recorder is a surface you press chords at, and a sheet
-      // that appeared because you held ⌘ at it would be the app answering a question the
-      // recorder was asking. A menu or a modal is someone mid-decision, which is the wrong
-      // moment to paint a page of chords over their choice.
+      // A bare ⌘ (⇧⌘ is the start of a chord). Refused while an overlay is up: Settings
+      // already is the reference, and the recorder is listening for chords.
       if (e.key === "Meta" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         if (currentOverlay() === null) cmdHoldEvent({ kind: "hold", repeat: e.repeat });
         return;
@@ -1171,14 +938,10 @@ function wireCmdHold(): void {
     },
     true,
   );
-  // A ⌘-click or a ⌘-drag is a gesture in its own right, not a pause for thought.
+  // A ⌘-click or ⌘-drag is a gesture, not a hold.
   window.addEventListener("pointerdown", () => cmdHoldEvent({ kind: "other" }), true);
-  // The releases the keyboard never delivers. macOS stops sending key events to a window
-  // that isn't key, so ⌘⇥ into another app, Spotlight, or Hide takes the ⌘ keyup with it —
-  // and a sheet whose only exit is an event that will never arrive is a sheet stuck on
-  // screen. (A second `blur` listener, deliberately: the one in `wireWindowBlur` is the
-  // editor's flush point and the recorder's silence probe, and stapling an unrelated
-  // third job onto it would hide this one from anyone reading either.)
+  // macOS never delivers the ⌘ keyup after ⌘⇥, Spotlight or Hide, so treat losing the
+  // window as a release. Kept separate from `wireWindowBlur`'s listener.
   window.addEventListener("blur", () => cmdHoldEvent({ kind: "release" }));
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) cmdHoldEvent({ kind: "release" });
@@ -1188,20 +951,13 @@ function wireCmdHold(): void {
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
-/** The overlay's own focusable controls, in DOM order — what Tab cycles through, and
- *  whose first entry receives focus on open. Menu items are deliberately `tabindex=-1`
- *  (the menu is one stop, arrow-navigated), so they're collected by class instead. */
+/** The overlay's focusable controls in DOM order: the Tab cycle, first one focused on open.
+ *  Menu items are `tabindex=-1` (arrow-navigated), so they're collected by class. */
 function overlayFocusables(): HTMLElement[] {
-  // `[role="dialog"]`, not a class: the overlay layer has two shapes now — the `.modal`
-  // box the link/move/delete dialogs paint into, and Settings' full-window
-  // `.settings-screen` (settingsview.ts) — and what they have in common is the semantics the
-  // trap exists to serve, not the chrome.
+  // `[role="dialog"]` covers both the `.modal` box and Settings' `.settings-screen`.
   const modal = document.querySelector<HTMLElement>('#modal-root [role="dialog"]');
-  // The `tabIndex >= 0` filter is what makes a **roving tabstop inside a modal** work:
-  // `button:not([disabled])` matches a `tabindex="-1"` button regardless of the last
-  // clause, so without it Settings' rail would put every section in the Tab cycle —
-  // which is precisely the "Tab past N buttons to reach the controls" the roving
-  // tabindex exists to prevent (settingstabs.ts).
+  // `tabIndex >= 0` keeps roving tabstops (Settings' rail) to one Tab stop; the selector
+  // alone matches `tabindex="-1"` buttons.
   if (modal) {
     return [...modal.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((n) => n.tabIndex >= 0);
   }
@@ -1210,48 +966,34 @@ function overlayFocusables(): HTMLElement[] {
 }
 
 /**
- * The last element that actually received focus.
- *
- * Tracked continuously rather than read on demand, because by the time an overlay's
- * open edge is handled — at the end of `render()` — the DOM that held focus is already
- * gone: `render()` swaps `#modal-root`/`#menu-root` wholesale, so `document.activeElement`
- * has fallen back to `<body>` and the trigger is unrecoverable. `focusin` fires long
- * before that, and *destroying* a focused node fires no `focusin` (only blur), so this
- * still names the trigger at the moment we come to remember it. Set in `wireFocusMemory`.
+ * The last element that received focus, tracked via `focusin` (`wireFocusMemory`). By the
+ * time `render()` handles an overlay's open edge, the trigger's DOM is gone and
+ * `activeElement` is `<body>`.
  */
 let lastFocused: HTMLElement | SVGElement | null = null;
 
 /**
- * A thunk that puts focus back where it was before an overlay opened. A *thunk*, not
- * the element, because the element usually doesn't survive: opening a menu repaints
- * the tree, which swaps the row that triggered it, and opening the `?` sheet swaps the
- * Settings button that opened it. Restore by identity that outlives a repaint — a tree
- * row by its path (falling back to the roving row when the path is gone, e.g. it was
- * just deleted), anything else by its element id, and only then by the element itself.
+ * A thunk that returns focus to where it was before an overlay opened. The trigger rarely
+ * survives the repaint, so restore by a stable identity (tree path, side-row key, graph
+ * node id, element id), and only last by the element itself.
  */
 function captureReturnFocus(): (() => void) | null {
   const active = lastFocused;
   if (active === null || active === document.body) return null;
-  // Unscoped on purpose: `active` is usually *detached* by now, so an ancestor-matching
-  // selector (`#tree-pane .tree-row`) would find nothing. `data-tree-row` is emitted by
-  // the tree and nowhere else, so it identifies a row on its own.
+  // Unscoped: `active` is usually detached by now, so `#tree-pane …` would match nothing.
   const row = active.closest<HTMLElement>(TREE_ROW);
   if (row) {
     const path = row.dataset.treeRow ?? null;
     return () => (treeRowEl(path) ?? rovingRowEl())?.focus();
   }
-  // A discovery row, by its key — the ⇧F10 → Link… path a keyboard user takes, where
-  // committing the link re-runs discovery and so detaches the row that opened the menu.
+  // A discovery row, by key (committing a link re-runs discovery and detaches it).
   const side = active.closest<HTMLElement>("[data-side-row]");
   if (side) {
     const key = side.dataset.sideRow ?? null;
     return () => (sideRowEl(key) ?? rovingSideRowEl())?.focus();
   }
-  // A graph node, by its scene id — the same ⇧F10 → Link… path taken from a *ghost*, where
-  // committing re-runs discovery and repaints the graph out from under the node. The
-  // committed ghost is exactly the authored node for the same path (graph.ts ids a ghost
-  // `ghost:<path>`), so the solidified node is where the keyboard belongs; failing that,
-  // the pane, which keeps the keyboard in the graph rather than at the top of the window.
+  // A graph node, by id. A linked ghost (`ghost:<path>`) becomes the authored node `<path>`,
+  // so fall back to that, then to the pane.
   const gnode = active.closest<SVGElement>("[data-gnode]");
   if (gnode) {
     const id = gnode.dataset.gnode ?? null;
@@ -1267,26 +1009,19 @@ function captureReturnFocus(): (() => void) | null {
   };
 }
 
-// The one return target, captured when the *chain* starts, so menu → Move… → close
-// lands back on the tree row rather than on the menu item that handed off.
+// The return target, captured when the overlay chain starts (menu → Move… → back to row).
 let overlayShowing: OverlayKind = null;
 let overlayReturn: (() => void) | null = null;
 
 /** Move focus into the overlay that just opened. */
 function focusIntoOverlay(kind: OverlayKind): void {
-  // The link modal opens on its explanation field — the one thing you came here to type.
-  // Settings opens on its rail: `overlayFocusables()[0]` is the *selected* tab, since the
-  // unselected ones are the roving tabstop's `tabindex="-1"`.
+  // The link modal opens on its explanation field; Settings on its selected tab.
   const preferred = kind === "link" ? document.getElementById("link-explanation") : null;
   (preferred ?? overlayFocusables()[0])?.focus();
 }
 
-/**
- * Called at the end of every `render()`: acts only on open/close *edges*, never on a
- * plain repaint — otherwise a toast timer would yank focus back to an overlay's first
- * control while the user is mid-Tab. (A repaint *while* an overlay is up is
- * `paintModal`'s job, which restores what the keyboard was actually on.)
- */
+/** Called at the end of every `render()`; acts only on open/close edges, so a repaint
+ *  never yanks focus mid-Tab (`paintModal` handles repaints while open). */
 function syncOverlayFocus(): void {
   const overlay = currentOverlay();
   if (overlay === overlayShowing) return;
@@ -1295,18 +1030,14 @@ function syncOverlayFocus(): void {
   if (overlay === null) {
     const back = overlayReturn;
     overlayReturn = null;
-    // Not when an inline tree input just took the keyboard: Rename and New note are
-    // reached *through* the menu, so the menu closing must not yank focus back out of
-    // the input it just opened.
+    // Not when the menu just opened an inline tree input (Rename, New note).
     if (!state.treeCreate && !state.treeRename) back?.();
   } else {
     focusIntoOverlay(overlay);
   }
 }
 
-// Paint just the Back/Forward buttons' enabled state — never a pane rebuild. Disabled
-// at the stack's ends, and mid-op like the vault switcher (navGo also guards, for the
-// keyboard/mouse paths that don't go through a disabled button).
+// Paint just the Back/Forward buttons' enabled state (disabled at the ends and mid-op).
 function paintNav(): void {
   const back = document.getElementById("nav-back") as HTMLButtonElement | null;
   const forward = document.getElementById("nav-forward") as HTMLButtonElement | null;
@@ -1314,17 +1045,11 @@ function paintNav(): void {
   if (forward) forward.disabled = state.loading || navCursor >= navStack.length - 1;
 }
 
-// Back (-1) / Forward (+1): move the cursor and load the entry there, through the
-// same edit-mode guard as any navigation — flush + leave edit mode first, abort (and
-// keep the buffer) on a write conflict. The cursor commits at read-success inside the
-// load core, exactly where a normal navigation pushes, so a rapid follow-up can't
-// interleave a stale cursor over a fresher stack. A dead target (deleted or renamed
-// since it was visited) toasts the generic read error and is dropped from the stack
-// so navigation isn't wedged on it.
+// Back (-1) / Forward (+1), through the same edit-mode guard as any navigation. The cursor
+// commits on read success, like a push. A dead target is toasted and dropped from the stack.
 async function navGo(delta: -1 | 1): Promise<void> {
   if (state.loading) return;
-  // The guards first (closeEditor can await a save flush); the cursor math after,
-  // against whatever the stack is once navigation is actually allowed to proceed.
+  // Guards first (they can await a save); cursor math against the stack after.
   if (!(await leaveEdits())) return;
   const target = navCursor + delta;
   if (target < 0 || target >= navStack.length) return;
@@ -1338,8 +1063,7 @@ async function navGo(delta: -1 | 1): Promise<void> {
       ? await loadNote(entry.path, commit)
       : await loadResource(entry.path, commit);
   if (!ok) {
-    // By identity, not index: the failed read resolved through an await, so the
-    // stack may have shifted under us (e.g. a click-navigation truncated it).
+    // By identity: the stack may have shifted during the await.
     const i = navStack.indexOf(entry);
     if (i !== -1) {
       navStack.splice(i, 1);
@@ -1364,26 +1088,19 @@ function toggleFrontmatter(): void {
 
 // --- frontmatter mini-editor (GH #79) ---------------------------------------------
 //
-// The drawer's editing surface: the raw YAML in a plain textarea with explicit
-// Save/Cancel — no autosave, deliberately: half-typed YAML isn't a body sentence.
-// While it's live the note pane is under the render carve-out (the body editor's
-// pattern), so the buffer lives only in the DOM and the inline error is painted
-// imperatively. The one rule lives behind the façade (E3): a `---` line is refused
-// because it would shift bytes into the body, and anything else saves — including
-// YAML B2 can't read, which comes back flagged `frontmatter_readable: false` and
-// warns in the drawer, the same as an external hand-edit would.
+// Raw YAML in a textarea with explicit Save/Cancel (no autosave: half-typed YAML is
+// invalid). The pane is under the render carve-out while live, so the buffer lives in the
+// DOM. The façade refuses a `---` line (E3); unreadable YAML saves and is flagged.
 
 function enterFmEdit(): void {
   const n = state.current;
   if (!n || state.editing || state.fmEditing || state.loading) return;
   state.fmEditing = true;
   state.frontmatterOpen = true; // the editor lives in the open drawer
-  // One explicit pane paint WITH the editor; render() then treats the pane as
-  // carved out (and nulls its memo), so nothing rebuilds under the buffer.
+  // One explicit paint with the editor; render() then leaves the pane alone.
   el("note-pane").innerHTML = notePaneHtml(state);
   render();
-  // render() treats the pane as carved out, so the highlight pass it normally schedules
-  // won't fire for this hand-built one — the body below the drawer still wants colours.
+  // render() skips the highlight pass for a carved-out pane, so run it here.
   void paintCodeHighlights();
   (document.getElementById("fm-editor") as HTMLTextAreaElement | null)?.focus();
 }
@@ -1394,11 +1111,8 @@ function fmBuffer(): string | null {
   return ta instanceof HTMLTextAreaElement ? ta.value : null;
 }
 
-/**
- * Cancel (Esc / the button / the conflict bar's Reload): drop the buffer and adopt
- * disk. The re-read matters — reconcile defers the open note to this editor while
- * it's live, so an external edit that arrived mid-edit lands now, not never.
- */
+/** Cancel (Esc, button, or Reload): drop the buffer and re-read disk, since reconcile
+ *  deferred any external edit while the editor was live. */
 async function cancelFmEdit(): Promise<void> {
   if (!state.fmEditing) return;
   state.fmEditing = false;
@@ -1417,12 +1131,8 @@ async function cancelFmEdit(): Promise<void> {
   }
 }
 
-/**
- * Resolve the mini-editor before an action that would repaint or repoint the note
- * pane (navigation, the view toggles, a link commit, a move/delete of the open
- * note). A pristine buffer just closes; a dirty one blocks with the way out —
- * explicit-save semantics cut both ways, so typed YAML is never silently discarded.
- */
+/** Resolve the mini-editor before anything repaints the note pane: a pristine buffer
+ *  closes, a dirty one blocks (typed YAML is never silently discarded). */
 function fmEditGuard(): boolean {
   if (!state.fmEditing) return true;
   const buf = fmBuffer();
@@ -1446,10 +1156,8 @@ async function saveFmEdit(): Promise<void> {
   }
 }
 
-// After a successful save: leave edit mode and re-read from disk — the revision to
-// chain on, the verbatim block, the header metadata (type/created/tags) and the
-// readability flag may all have changed — then refresh discovery, since an edited
-// `b2_relations:` is a graph change.
+// After a save: leave edit mode, re-read from disk (revision, metadata, readability), then
+// refresh discovery, since `b2_relations:` may have changed.
 async function finishFmSave(path: string): Promise<void> {
   state.fmEditing = false;
   try {
@@ -1465,9 +1173,7 @@ async function finishFmSave(path: string): Promise<void> {
   void refreshDiscovery();
 }
 
-// The conflict bar's "Keep mine": re-read only to chain the fresh revision, then
-// re-save the buffer over it — a deliberate overwrite of the external edit, the
-// body editor's conflict semantics drawer-sized. (Reload is `cancelFmEdit`.)
+// The conflict bar's "Keep mine": re-read for the fresh revision, then overwrite it.
 async function fmConflictKeepMine(): Promise<void> {
   const n = state.current;
   const buf = fmBuffer();
@@ -1492,22 +1198,20 @@ function showFmError(msg: string, conflict: boolean): void {
   box.hidden = false;
 }
 
-/** Typing again clears the message — it belonged to the save attempt that failed. */
+/** Typing again clears the failed save's message. */
 function hideFmError(): void {
   const box = document.getElementById("fm-error");
   if (box) box.hidden = true;
 }
 
-// Fold a whole discovery section (Similar & unlinked / Connections). Sticky across
-// notes — a viewing preference, not per-note state.
+// Fold a whole discovery section; sticky across notes.
 function toggleSection(section: SideSection): void {
   if (state.collapsedSections.has(section)) state.collapsedSections.delete(section);
   else state.collapsedSections.add(section);
   render();
 }
 
-// Fold a single card's body (path + snippet) down to its title row. Per-note state,
-// keyed `"<section>:<path>"`; cleared on note-open (see openNote).
+// Fold a card to its title row. Per-note, keyed `"<section>:<path>"`.
 function toggleCard(key: string): void {
   if (state.collapsedCards.has(key)) state.collapsedCards.delete(key);
   else state.collapsedCards.add(key);
@@ -1516,20 +1220,14 @@ function toggleCard(key: string): void {
 
 // --- context menus (discovery cards + the file tree) ------------------------------
 //
-// Right-click a Similar card → Open note / Link… (replacing the inline "Link…"
-// button); right-click the file tree → New note / New folder in the folder under
-// the cursor. Anchored at the cursor, but clamped so a menu never spills past the
-// viewport edge (a menu that opens off-screen is unusable).
+// Anchored at the cursor and clamped to the viewport. The heights below feed only the
+// clamp; they may over-estimate but must not under-estimate.
 const CTX_MENU_W = 168;
 const CARD_MENU_H = 140; // Open note / Link… / Explain this suggestion / Why was this suggested?
-/** …plus *Insert link at cursor*, which the card's menu grows while a note is being edited
- *  (render.ts). Only the clamp reads these, and it must not *under*-read — a menu opened
- *  near the bottom edge would lose its last item off-screen. */
+/** Plus *Insert link at cursor*, added while editing. */
 const CARD_EDIT_MENU_H = 172;
 const TREE_MENU_H = 132; // the context line + three items
 // + Rename / Move… / Copy vault path / Copy system path / Delete and their separator.
-// Only the clamp reads these, so an approximation is fine — but it must not *under*-read,
-// or a menu opened near the bottom edge loses its last item off-screen.
 const TREE_NODE_MENU_H = 300;
 
 function clampMenu(clientX: number, clientY: number, height: number): { x: number; y: number } {
@@ -1562,11 +1260,8 @@ function closeContextMenu(): void {
 }
 
 /**
- * One right-click menu item: the attribute its button carries, and what choosing it does.
- * `closeFirst` is for an act that would leave the menu up over its result — a copy whose
- * confirmation is the status line, an OS picker, a navigation — so the menu goes before
- * it runs. An act that opens a surface of its own (rename, Move…, a create, a delete)
- * clears the menu itself. The act's argument is read off the menu before it closes.
+ * A right-click menu item. `closeFirst` closes the menu before acts that don't open a
+ * surface of their own (a copy, an OS picker, a navigation); the others clear it themselves.
  */
 interface MenuItem<A> {
   readonly attr: string;
@@ -1584,9 +1279,7 @@ const TREE_ROW_ITEMS: readonly MenuItem<TreeNodeRef>[] = [
   {
     attr: "data-ctx-copy-system-path",
     closeFirst: true,
-    // Both entry points refuse to open this menu without a vault, so the root is set
-    // here — but the absolute path is the root's to give, and inventing one for a
-    // vault-less window is not this item's call.
+    // The menu needs a vault to open, but never invent a root.
     act: (node) => {
       if (state.vaultRoot !== null) void copyPath(systemPath(state.vaultRoot, node.path));
     },
@@ -1598,7 +1291,7 @@ const TREE_ROW_ITEMS: readonly MenuItem<TreeNodeRef>[] = [
 const TREE_DIR_ITEMS: readonly MenuItem<string>[] = [
   { attr: "data-ctx-new-note", closeFirst: false, act: (dir) => startTreeCreate("note", dir) },
   { attr: "data-ctx-new-folder", closeFirst: false, act: (dir) => startTreeCreate("folder", dir) },
-  // The picker is modal to the OS — the menu goes first.
+  // The OS picker is modal, so the menu goes first.
   { attr: "data-ctx-import", closeFirst: true, act: (dir) => void pickAndImport(dir) },
 ];
 
@@ -1612,8 +1305,7 @@ const CARD_ITEMS: readonly MenuItem<CardMenu>[] = [
   { attr: "data-ctx-why", closeFirst: true, act: (m) => void askWhy({ path: m.path, title: m.title }) },
 ];
 
-/** A click while a right-click menu is up: its own items act; any other click only
- *  dismisses it. */
+/** A click while a menu is up: its items act; any other click dismisses it. */
 function contextMenuClick(target: HTMLElement): void {
   const menu = state.contextMenu;
   if (!menu) return;
@@ -1635,20 +1327,10 @@ function contextMenuClick(target: HTMLElement): void {
 
 // --- tree creation: new note / new folder (left nav) ------------------------------
 //
-// The create affordances: the tree-head icons, ⌘N / ⇧⌘N, and the tree's right-click
-// menu — all contextual, landing the entry in `state.selectedDir` (which follows
-// the selection: the open document's folder, or the last folder clicked). The name
-// is typed into an inline input row in the tree (Enter commits, Escape cancels,
-// blur commits a non-empty name).
-//
-// A new *note* is real — and auto-indexed — immediately: the model-free
-// `create_note` writes the file and projects it (tree, keyword search, graph), and
-// its vectors fill through the normal editing pipeline (the note opens in edit
-// mode; autosave's trailing embed covers whatever gets typed — an empty body has
-// nothing to embed). A new *folder* is equally real — `create_dir` is a true
-// `mkdir` on disk: a folder is user-authored vault structure (the fs is
-// authoritative for it, empty or not), so it exists to Finder, the CLI, and any
-// sync the moment the input commits, and the tree re-lists it from disk.
+// The tree-head icons, ⌘N / ⇧⌘N and the tree menu create in `state.selectedDir` via an
+// inline input (Enter commits, Escape cancels, blur commits a non-empty name). A note is
+// written and projected at once; its vectors fill via autosave's trailing embed. A folder
+// is a real `mkdir`.
 
 function startTreeCreate(kind: "note" | "folder", dir: string): void {
   if (state.vaultRoot === null) return;
@@ -1664,12 +1346,8 @@ function cancelTreeCreate(): void {
   render();
 }
 
-/**
- * Commit the inline input's name. `open` distinguishes the two commit gestures:
- * Enter means "create and start writing" (the note opens in edit mode); a blur
- * commit (the user clicked into something else) creates quietly and leaves their
- * click's navigation alone.
- */
+/** Commit the inline input's name. `open` (Enter) opens the note in edit mode; a blur
+ *  commit creates quietly and leaves the click's navigation alone. */
 async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
   const create = state.treeCreate;
   if (!create) return;
@@ -1689,8 +1367,7 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
       if (refreshed) flash(`Created ${report.dir}/.`);
       else render(); // the refresh failure already toasted; still repaint the expansion
     } catch (e) {
-      // Refused (e.g. the name is taken): keep the input open with the typed name
-      // intact — the commitTreeCreate posture below; the toast explains.
+      // Refused: keep the input open with the typed name; the toast explains.
       state.treeCreate = create;
       flash(errText(e));
     }
@@ -1707,9 +1384,7 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
       flash(`Created ${report.path}.`); // a failed refresh already toasted — don't overwrite it
     }
   } catch (e) {
-    // Refused (e.g. the name already exists): keep the input open — with the typed
-    // name intact, since the unchanged tree HTML skips the repaint — so the user
-    // adjusts rather than retypes; the toast explains.
+    // Refused: keep the input open (the unchanged tree HTML keeps the typed name).
     state.treeCreate = create;
     flash(errText(e));
   }
@@ -1717,17 +1392,10 @@ async function commitTreeCreate(raw: string, open: boolean): Promise<void> {
 
 // --- tree import: files from outside the vault ------------------------------------
 //
-// Two gestures, one outcome: drag files from Finder onto a folder row (the pointer
-// path, wired in wireDrags) or pick them in an OS dialog from the tree's right-click
-// menu (the keyboard path — K1: a drag is pointer-only, so it can't be the only way
-// in). Both place the files through `Vault::import_file`/`import_path`, which copies
-// the bytes verbatim and projects them — adding nothing to either: a `.md` lands as a
-// note, any other file as a resource, and the tree shows it with no reindex.
-//
-// The two differ only in what they can hand the host. A drop yields **bytes** — WebKit
-// gives the page content, never a path — so the file rides the IPC as base64 and is
-// size-capped (importfiles.ts explains both). The picker yields **paths**, so the host
-// reads the file itself and neither limit applies.
+// Drag files onto a folder row, or pick them from the tree menu (the keyboard path, K1).
+// Both copy verbatim and project via `Vault::import_file`/`import_path`. A drop yields
+// bytes (WebKit gives no path), sent as capped base64 (importfiles.ts); the picker yields
+// paths the host reads itself.
 
 /** An import is running — further gestures are ignored (no queueing, like moves). */
 let importInFlight = false;
@@ -1741,11 +1409,9 @@ interface DroppedFile {
 }
 
 /**
- * Read a drop's entries **synchronously** — the DataTransfer is neutered the moment
- * the handler returns, so nothing here may be deferred past the first `await`.
- * `items` is used rather than `files` for the one thing `files` can't say: whether an
- * entry is a *folder* (`webkitGetAsEntry`), which the plan refuses by name instead of
- * failing later on a read of nothing.
+ * Read a drop's entries synchronously: the DataTransfer is neutered once the handler
+ * returns. `items` rather than `files`, to detect folders (`webkitGetAsEntry`), which the
+ * plan refuses by name.
  */
 function droppedFiles(dt: DataTransfer | null): DroppedFile[] {
   if (!dt) return [];
@@ -1760,8 +1426,7 @@ function droppedFiles(dt: DataTransfer | null): DroppedFile[] {
     const file = item.getAsFile();
     if (file) out.push({ name: file.name, size: file.size, isDirectory: false, file });
   }
-  // Belt and braces: if `items` told us nothing, fall back to the file list rather
-  // than let the drop silently do nothing.
+  // If `items` yielded nothing, fall back to the file list.
   if (out.length === 0) {
     for (const file of Array.from(dt.files)) {
       out.push({ name: file.name, size: file.size, isDirectory: false, file });
@@ -1784,9 +1449,7 @@ async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<
   const imported: string[] = [];
   importInFlight = true;
   try {
-    // Sequential on purpose: one file's refusal (a name already taken) must not
-    // cancel the rest of the drop, and the reports read in the order the user
-    // dropped them.
+    // Sequential: one refusal must not cancel the rest, and reports keep drop order.
     for (const entry of plan.accepted) {
       if (!entry.file) continue;
       try {
@@ -1797,8 +1460,7 @@ async function importDroppedFiles(dir: string, dropped: DroppedFile[]): Promise<
         refused.push(`${entry.name}: ${errText(e)}`);
       }
     }
-    // Inside the gate, like `executeMove`'s: the refresh is part of the import, and two
-    // of them interleaving would re-list and toast out of order.
+    // Inside the gate, so two imports can't re-list and toast out of order.
     await finishImport(dir, imported, refused);
   } finally {
     importInFlight = false;
@@ -1833,13 +1495,8 @@ async function pickAndImport(dir: string): Promise<void> {
   }
 }
 
-/**
- * What both gestures do once the files are placed: reveal the destination, re-list the
- * tree (the host already projected each file, so this is what makes it visible), and
- * say what happened in one toast. The trailing embed is scheduled for the same reason
- * a save schedules one — an imported note's chunks are projected but unembedded, and
- * that is the pass that fills them.
- */
+/** After an import: reveal, re-list, and toast once. Schedules the trailing embed, since
+ *  imported notes are projected but unembedded. */
 async function finishImport(dir: string, imported: string[], refused: string[]): Promise<void> {
   if (imported.length > 0) {
     revealDir(dir);
@@ -1853,19 +1510,12 @@ async function finishImport(dir: string, imported: string[], refused: string[]):
 
 // --- tree move / rename (context menu, Move… modal, drag-and-drop) -----------------
 //
-// All three gestures funnel into one executor: resolve the destination (pure logic
-// in move.ts), dispatch the node's kind to its IPC command (`move_note` /
-// `move_resource` / `move_dir` — the host's `Vault` ops rewrite inbound links and
-// re-project the index), then re-point the open document and reload the tree.
-// Renaming acts on the *file path* — a frontmatter `title:` is inert (the note's
-// display title is its filename, data-model.md §1) — exactly like `b2 mv`.
-//
-// The re-point runs BEFORE the watcher's debounced `vault-changed` pulse arrives:
-// reconcileExternalChange re-reads the open note by path, so if it still pointed at
-// the old path it would flash "moved or removed" for a move we made ourselves.
+// All three gestures resolve a destination (move.ts) and call one executor; the host
+// rewrites inbound links. Rename changes the file path, like `b2 mv` (data-model.md §1).
+// The open document is re-pointed before the watcher's pulse arrives, or reconcile would
+// report our own move as "moved or removed".
 
-/** Refuse a write while an index run is live, and say so — true when refused. The run
- *  and the write would race the same index. */
+/** Refuse (and say so) a write that would race a live index run; true when refused. */
 function refusedWhileIndexing(what: string): boolean {
   if (!state.reindexing) return false;
   flash(`Indexing is running — try the ${what} again when it finishes.`);
@@ -1896,9 +1546,7 @@ async function commitTreeRename(raw: string): Promise<void> {
     cancelTreeRename(); // empty / traversal / unchanged — a back-out, not an error
     return;
   }
-  // The input stays open while the move runs: on a refusal the typed name survives
-  // (the memoized tree HTML is unchanged, so the DOM input is never rebuilt — the
-  // commitTreeCreate posture) and the toast explains; success clears it.
+  // The input stays open while the move runs, so a refusal keeps the typed name.
   const ok = await executeMove(node, dest);
   if (ok) {
     state.treeRename = null;
@@ -1912,17 +1560,12 @@ function openMoveModal(node: TreeNodeRef): void {
   render();
 }
 
-/**
- * The one shared move executor (rename commit, Move… modal, drop). Resolves true
- * on success. Refuses while a reindex runs — the move opens the real model, and
- * two model instances at once is a needless memory spike — and while another move
- * is still in flight.
- */
+/** The shared move executor; true on success. Refuses during a reindex (it would load a
+ *  second model) and while another move is in flight. */
 async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
   if (moveInFlight) return false;
   if (refusedWhileIndexing("move")) return false;
-  // If the open document is affected, flush and close the editor first so the save
-  // chain never targets the old path (a conflict keeps the editor and aborts the move).
+  // Close an affected editor first so no save targets the old path (conflict aborts).
   const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
@@ -1961,8 +1604,7 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
       state.current = await api.readNote(openNotePath);
     }
     if (openResourcePath !== null) {
-      // The new path is adopted before the picture's bytes are read: the watcher pulse
-      // this move causes must never find state still naming the old, vanished path.
+      // Adopt the new path before reading the picture, ahead of the watcher's pulse.
       const moved = await api.explainResource(openResourcePath);
       adoptResource(moved, null);
       const picture = await loadResourceImage(moved);
@@ -1987,20 +1629,14 @@ async function executeMove(node: TreeNodeRef, to: string): Promise<boolean> {
 
 // --- tree delete (context menu, ⌘⌫, the folder confirm modal) ---------------------
 //
-// Deletes remove the file(s) from B2 *and* the disk in one gesture. Files (notes,
-// resources) delete immediately — the gesture is the intent, no dialog; folders
-// confirm first (a whole subtree, unindexed files included, is a bigger loss).
-// Inbound links at the deleted target dangle (they surface as unresolved links) —
-// they are never rewritten, exactly what an external delete would leave.
+// Deletes remove from disk. Files go immediately; folders confirm first. Inbound links are
+// left dangling, as an external delete would leave them.
 
 /** A delete is in flight — further gestures are ignored (the move posture). */
 let deleteInFlight = false;
 
-/**
- * Route a delete gesture to its flow: files execute immediately; folders always
- * open the confirm modal — even one the index lists nothing under may hold
- * unindexed files on disk, and `delete_dir` removes everything.
- */
+/** Files delete immediately; folders always confirm, since even an empty-looking one may
+ *  hold unindexed files. */
 function requestDelete(node: TreeNodeRef): void {
   state.contextMenu = null;
   if (node.nodeKind !== "folder") {
@@ -2012,8 +1648,7 @@ function requestDelete(node: TreeNodeRef): void {
   render();
 }
 
-/** Commit the folder-delete confirm — its button and its ⏎ alike: the dialog closes and
- *  the delete runs. */
+/** Commit the folder-delete confirm (button or ⏎). */
 function confirmDelete(): void {
   const node = state.deleteTarget;
   if (!node) return;
@@ -2028,31 +1663,21 @@ function dropDirState(dir: string): void {
   if (gone(state.selectedDir)) state.selectedDir = parentDir(dir);
 }
 
-/**
- * The one shared delete executor (context menu, ⌘⌫, the folder confirm). Refuses
- * mid-reindex like a move — not for the model (deletes are model-free) but so two
- * writers never race the same index.
- */
+/** The shared delete executor. Refuses mid-reindex so two writers never race the index. */
 async function executeDelete(node: TreeNodeRef): Promise<void> {
   if (deleteInFlight) return;
   if (refusedWhileIndexing("delete")) return;
-  // If the open document dies with the delete, close the editor first so no save
-  // chain targets a file that's about to be removed (a conflict aborts the delete,
-  // keeping the buffer alive — the executeMove posture).
+  // Close an affected editor first (a conflict aborts, keeping the buffer).
   const curPath = openDocPath(state);
   const affected =
     curPath !== null &&
     (node.nodeKind === "folder" ? isWithin(curPath, node.path) : curPath === node.path);
-  // Not `leaveEdits`: with no editor open this must not yield before the in-flight flag
-  // is set below, or a second gesture could slip past it.
+  // Not `leaveEdits`, as in `executeMove`.
   if (affected && !fmEditGuard()) return;
   if (affected && state.editing && !(await closeEditor())) return;
 
-  // Where the keyboard lands once this row is gone (K1): the next visible row, else the
-  // previous one — the platform reflex after a delete, and the difference between arrow
-  // navigation that survives a delete and one that dumps focus back at the top. Computed
-  // *before* the delete, while the row is still in the list. Harmless for mouse users:
-  // it only moves the tree's roving tabstop.
+  // Where the keyboard lands after (K1): the next visible row, else the previous. Computed
+  // while the row is still listed.
   const nextFocus = neighborPath(treeRows(), node.path);
 
   deleteInFlight = true;
@@ -2070,8 +1695,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
       dangled = r.dangled.length;
     }
 
-    // Clear state that pointed into the deleted subtree — before the watcher's
-    // debounced pulse re-reads it and flashes "moved or removed" for our own delete.
+    // Clear state pointing into the deleted subtree before the watcher's pulse re-reads it.
     if (node.nodeKind === "folder") dropDirState(node.path);
     state.treeFocus = nextFocus;
     if (affected) {
@@ -2099,9 +1723,7 @@ async function executeDelete(node: TreeNodeRef): Promise<void> {
 
 // --- the anchored ghost graph (GH #22) --------------------------------------------
 
-/** Flip the pane between reading and the graph — a pure state flip (the scene
- *  renders from discovery state the note-open already fetched, so no IPC happens
- *  here). Sticky across notes, like sourceOpen. */
+/** Flip the pane between reading and the graph (no IPC; sticky across notes). */
 function toggleGraph(): void {
   if (!state.current) return; // the graph anchors on an open note
   if (!fmEditGuard()) return; // the graph takes the pane the mini-editor holds
@@ -2110,11 +1732,9 @@ function toggleGraph(): void {
   render();
 }
 
-// The `</>` toggle serves two surfaces off the one sticky `sourceOpen` (spec §3
-// "Escape hatch"). In the reading view it flips rendered ↔ raw via a full re-render.
-// While editing, the carve-out forbids rebuilding the pane, so it reconfigures the
-// live-preview compartment in place — decorations off = raw + syntax colors, monospace
-// (today's editor) — with cursor and undo intact, then repaints just the bar button.
+// The `</>` toggle (spec §3 "Escape hatch"). Reading view: a full re-render. Editing: the
+// carve-out forbids a rebuild, so it reconfigures the live-preview compartment in place,
+// keeping cursor and undo.
 function toggleSource(): void {
   if (!fmEditGuard()) return; // a reading-view flip would rebuild the pane
   state.sourceOpen = !state.sourceOpen;
@@ -2129,11 +1749,8 @@ function toggleSource(): void {
 async function refreshDiscovery(): Promise<void> {
   const n = state.current;
   if (!n) return;
-  // Two independent reads with independent repaints: `explain` (Connections) is a
-  // near-instant graph read, `similar` is the slower whole-vault discovery scan. A
-  // Promise.all would gate the fast one on the slow one — so each settles and paints on
-  // its own. Both guard against the user having navigated away before they resolved
-  // (don't clobber the new note's pane) and clear only their own section's loading flag.
+  // Two independent reads, each painting when it settles (`explain` is fast, `similar`
+  // slow). Each drops its result if the user navigated away.
   const stale = () => state.current?.path !== n.path;
   const connections = api
     .explain(n.path)
@@ -2170,25 +1787,15 @@ async function refreshDiscovery(): Promise<void> {
   await Promise.all([connections, similar]);
 }
 
-// Monotonic search-request counter: bumped by `doSearch` alone, so it answers exactly
-// one question — has a *newer search* taken over since this one started? (A reset is a
-// different question and is asked of `state.searchQuery`; see the guards below.)
+// Search-request counter: has a newer search taken over? (A reset is checked separately.)
 let searchSeq = 0;
 
-// The search wiring, and the one place D2's verdict turns into what the pane shows
-// (invariants.md D2, GH #202). Three states, three behaviors:
-//
-//   • `false` — the vault holds neither a lexical anchor nor semantic proximity
-//     clearing this model's bar. The rows are **dropped here**, at the boundary, so
-//     the pane serves none of them: strict, no expander, no "N more" (GH #202,
-//     decision 1). Dropping them in state rather than branching in the paint is what
-//     keeps `render.ts` and `sidenav.ts` agreeing by construction — the same reason
-//     the row order lives in one place, since a pane you can arrow through in an
-//     order you can't see is worse than no arrows at all.
-//   • `true` — serve them, as always.
-//   • `null` — *no verdict*: no calibrated bar for the active model (the fake
-//     embedder, or any model until the harness measures one — M2). Serve them, as
-//     always. Reading `null` as "no matches" would blank every dev vault.
+// Search, and where D2's verdict becomes what the pane shows (GH #202):
+//   • `false`: no evidence. Rows are dropped here, in state, so render.ts and sidenav.ts
+//     agree by construction.
+//   • `true`: serve them.
+//   • `null`: no calibrated bar for this model (M2). Serve them; reading it as "no
+//     matches" would blank every dev vault.
 async function doSearch(raw: string): Promise<void> {
   const query = raw.trim();
   if (!query) {
@@ -2198,23 +1805,13 @@ async function doSearch(raw: string): Promise<void> {
   }
   state.loading = true;
   state.searchQuery = query;
-  // Search and chat both own the right column, and a search is an explicit act — so it
-  // wins, and the conversation waits in state until ⌘J brings it back (chat.ts's header).
+  // Search takes the right column from chat; ⌘J brings the conversation back.
   state.chatOpen = false;
   render();
-  // `refreshDiscovery`'s staleness guard, in the two parts this pane needs. A slower
-  // search for A must not land on top of a newer B, nor on a pane the user cleared —
-  // and it is load-bearing *because* of the verdict rather than merely tidy: a stale
-  // `false` would empty the pane while the header names the newer query, so the empty
-  // state would claim the vault holds no evidence for a query nothing has judged yet,
-  // the exact false claim D2 exists to stop.
-  //
-  // Two tests, not one, because two different things are owned. **Results** belong to
-  // this query, so a reset (`resetSearch` blanks the query) discards them as surely as
-  // a newer search does. **`state.loading` is global** — it drives the body class and
-  // disables switch-vault, unlike discovery's own per-section flags — so this call must
-  // always release it *unless* a newer search has taken it over, or a clear-mid-flight
-  // would strand the whole window in its loading state.
+  // Staleness guards. Results are dropped if a newer search or a reset took over (a stale
+  // `false` would claim "no evidence" for a query nobody judged, against D2). The global
+  // `state.loading` is released unless a newer search owns it, or a mid-flight clear
+  // would strand the window loading.
   const seq = ++searchSeq;
   const superseded = () => seq !== searchSeq;
   const abandoned = () => superseded() || state.searchQuery !== query;
@@ -2236,8 +1833,7 @@ async function doSearch(raw: string): Promise<void> {
   }
 }
 
-// Back to discovery: no query, no rows, and no verdict. All three move together —
-// a verdict outliving the query it was read for is a claim about nothing.
+// Back to discovery: query, rows and verdict reset together.
 function resetSearch(): void {
   state.searchQuery = "";
   state.searchResults = [];
@@ -2258,20 +1854,12 @@ function clearSearch(): void {
 
 // --- chat (flow ④, GH #151/#153/#155) -----------------------------------------------
 //
-// The wiring; the paint is chatview.ts's `chatPaneHtml` and the pure logic is chat.ts.
-// What lives here is what only the running app can own: the streaming turn, its
-// cancellation, and the focus/repaint discipline a token-by-token surface demands.
-//
-// **Streaming does not go through `render()`.** A full render on every token would swap
-// the side pane's `innerHTML` a hundred times an answer — destroying the composer's caret,
-// resetting the pane's scroll, and (worst) ejecting a keyboard user to `<body>` mid-answer.
-// So tokens land in `state.chatStreaming` and are painted into one element
-// (`paintChatStream`), the same targeted-repaint shape `paintReindex` uses for streamed
-// index progress. One full render at the start of a turn, one at the end.
+// The streaming turn and its cancellation; the paint is chatview.ts, the logic chat.ts.
+// Tokens do not go through `render()` (a swap per token would lose caret, scroll and
+// focus): they are painted into one element by `paintChatStream`. One full render at each
+// end of a turn.
 
-/** Show or hide the chat pane. Opening it probes the model server (so the setup card is
- *  right the moment it appears) and puts the keyboard in the composer, which is the only
- *  thing anyone opens this pane to do. */
+/** Show or hide the chat pane. Opening probes the model server and focuses the composer. */
 function toggleChat(): void {
   if (state.chatOpen) {
     closeChat();
@@ -2282,25 +1870,17 @@ function toggleChat(): void {
   void refreshChatSetup();
 }
 
-/** Open the pane. Chat and search both own the whole column, one at a time (chat.ts's
- *  header), so search goes. The render is explicit, rather than leaning on
- *  `clearSearch`'s own repaint: a caller that focuses the composer next needs it to
- *  exist, and a paint that happens only as somebody else's side effect is one refactor
- *  away from not happening. The panes are memoized, so a second render over identical
- *  HTML costs nothing. */
+/** Open the pane, replacing search. Renders explicitly: callers focus the composer next. */
 function openChat(): void {
   state.chatOpen = true;
   clearSearch();
   render();
 }
 
-/** Close the pane. A streaming answer is stopped first — a pane you can't see must not
- *  keep a model working, and the partial text is kept either way, since the turn resolves
- *  normally with `cancelled` set. The conversation survives a close: reopening continues
- *  it (it dies with the window, S4, not with the toggle). */
+/** Close the pane, stopping a streaming answer (its partial text is kept). The
+ *  conversation survives until the window closes (S4). */
 function closeChat(): void {
-  // A failed cancel is nothing the user can act on and nothing to interrupt a close with:
-  // the turn resolves on its own either way, and the pane is going away regardless.
+  // A failed cancel is harmless: the turn resolves on its own.
   if (state.chatStreaming !== null) void api.cancelAsk().catch(() => {});
   state.chatOpen = false;
   render();
@@ -2310,9 +1890,7 @@ function focusChatInput(): void {
   (document.getElementById("chat-input") as HTMLTextAreaElement | null)?.focus();
 }
 
-/** Ask the host what the chat provider can do right now — the setup card's whole input.
- *  Never throws in practice (the probe is a status), but a rejected IPC must not take the
- *  pane down with it: an unknown setup reads as the "loading" state, which is honest. */
+/** Probe the chat provider for the setup card. A rejected IPC leaves it "loading". */
 async function refreshChatSetup(): Promise<void> {
   try {
     adoptChatSetup(await api.chatSetup());
@@ -2323,37 +1901,25 @@ async function refreshChatSetup(): Promise<void> {
   render();
 }
 
-/**
- * One turn: the question goes up, tokens come back, the resolved answer replaces the
- * stream. The transcript keeps a failed turn too — the question is still on screen to
- * retry, and chat.ts's `chatHistory` leaves it out of the next ask because there is no
- * answer to carry forward.
- */
+/** One typed turn. A failed turn stays in the transcript; `chatHistory` omits it. */
 async function sendChat(question: string): Promise<void> {
   const q = question.trim();
   if (!q || state.chatStreaming !== null) return;
-  // The history the *next* ask carries is derived from the transcript before this
-  // question joins it — the question itself is the `ask` argument, not history.
+  // History is taken before this question joins the transcript.
   const history = chatHistory(state.chatMessages);
   await runChatTurn(q, true, "Searching your notes…", (onToken) =>
     api.ask(q, history, onToken),
   );
 }
 
-/** How long a *Similar & unlinked* list is — asked of `similar`, and quoted back to
- *  `whySimilar` so the rank an explanation names is the rank the card was shown at. */
+/** The *Similar & unlinked* list length, also passed to `whySimilar`/`explainSimilar` so
+ *  the rank they name matches the card's. */
 const SIMILAR_LIMIT = 10;
 
 /**
- * **Why was this suggested?** — a candidate card's *Why?* (or the card menu's item, its
- * keyboard half). Opens chat beside the note and asks, as one ordinary turn, why
- * `candidate` is in the open note's *Similar & unlinked* list. The host gathers the
- * turn as a tool-using one (`Vault::why_similar`: the model calls B2's read-only tools,
- * and the answer lists which); the transcript gets a question a human can read, and a follow-up typed afterwards is an ordinary `ask` with this turn as context.
- *
- * Chat takes the column the card was in (one column, one thing in it — chat.ts), which
- * is the right trade here: the answer cites passages from both notes, a citation opens
- * its note in the centre, and ⌘J brings the list back.
+ * A card's *Why?*: opens chat and asks, as one turn, why `candidate` is in the open note's
+ * *Similar & unlinked* list. The host runs it as a tool-using turn (`Vault::why_similar`);
+ * follow-ups are ordinary asks.
  */
 async function askWhy(candidate: { path: string; title: string | null }): Promise<void> {
   const anchor = state.current;
@@ -2362,11 +1928,10 @@ async function askWhy(candidate: { path: string; title: string | null }): Promis
     return;
   }
   if (!state.chatOpen) openChat();
-  // The probe first: with no model to answer, the pane's setup card is the useful thing
-  // to show, and a turn sent anyway would only add a failure under it.
+  // Probe first: with no model, the setup card is what to show.
   await refreshChatSetup();
   if (!chatReady(state) || state.current?.path !== anchor.path) return;
-  // `false`: this turn was not typed, so a question half-written in the composer stays.
+  // `false`: not typed, so leave the composer's draft alone.
   await runChatTurn(
     whyQuestion(candidate, anchor),
     false,
@@ -2376,17 +1941,14 @@ async function askWhy(candidate: { path: string; title: string | null }): Promis
 }
 
 /**
- * **Explain** — a candidate card's model-free explanation (GH #236): the centre pane
- * compares the open note with `candidate`, from the same computation that ranked the
- * card (`Vault::explain_similar`). The card's *Explain*, and the card menu's item (its
- * keyboard half, K1). The pane paints at once with a spinner, and a read that arrives
- * after the user has moved on is dropped. The keyboard lands on *Back to note*.
+ * A card's model-free *Explain* (GH #236): the centre pane compares the open note with
+ * `candidate` via `Vault::explain_similar`. Paints a spinner at once; a superseded read
+ * is dropped.
  */
 async function openExplain(candidate: string): Promise<void> {
   const anchor = state.current;
   if (!anchor) return;
-  // The note pane belongs to the live editor while editing (the carve-out), so the
-  // Compare view can't take it. Say so rather than drop the click.
+  // The pane belongs to the editor while editing; say so rather than drop the click.
   if (state.editing) {
     flash(`Leave edit mode (${displayKeys(["edit.toggle"])}) to see Explain.`);
     return;
@@ -2424,11 +1986,8 @@ function closeExplain(): void {
   if (i >= 0) focusSideRow(cardRowKey("similar", i, ec.candidate));
 }
 
-/**
- * The shared body of a chat turn, whichever host call answers it: `shown` joins the
- * transcript, `call` streams tokens into the live row, and the resolved answer (or the
- * failure) replaces the stream.
- */
+/** The shared body of a chat turn: `shown` joins the transcript, `call` streams into the
+ *  live row, and the answer (or failure) replaces it. */
 async function runChatTurn(
   shown: string,
   clearComposer: boolean,
@@ -2436,10 +1995,7 @@ async function runChatTurn(
   call: (onToken: (token: string) => void) => Promise<AnswerView>,
 ): Promise<void> {
   if (state.chatStreaming !== null) return;
-  // The vault this turn is grounded in. A switch mid-answer clears the transcript (the
-  // old vault's paths mean nothing in the new one), so an answer that lands afterwards
-  // must be dropped rather than pushed into a conversation it doesn't belong to — the
-  // `stale()` guard discovery uses, keyed on the vault instead of the note.
+  // A vault switch mid-answer clears the transcript, so a late answer is dropped.
   const askedIn = state.vaultRoot;
   state.chatMessages.push(userMessage(shown));
   state.chatStreaming = "";
@@ -2450,8 +2006,7 @@ async function runChatTurn(
   scrollChatToEnd();
   try {
     const view = await call((token) => {
-      // Guard against a token arriving after the turn ended (a cancel racing the last
-      // frame): appending to a null stream would resurrect the live row.
+      // A token after the turn ended would resurrect the live row.
       if (state.chatStreaming === null) return;
       state.chatStreaming += token;
       paintChatStream();
@@ -2460,27 +2015,21 @@ async function runChatTurn(
   } catch (e) {
     if (state.vaultRoot === askedIn) state.chatMessages.push(errorMessage(errText(e)));
   } finally {
-    // Where the keyboard was *before* the closing repaint — read here because `render()`
-    // swaps the pane on the next line and the answer would already be `<body>`.
+    // Read focus before the repaint swaps the pane.
     const active = document.activeElement;
     const composerHeld =
       active === document.body || (active instanceof HTMLElement && active.id === "chat-input");
     state.chatStreaming = null;
     render();
     scrollChatToEnd();
-    // Back to the composer — a conversation is a sequence of questions, and hunting for
-    // the field after every answer is the fastest way to make a keyboard user reach for
-    // the mouse (K1). Only when the composer is where the keyboard actually was, though:
-    // an answer landing while the reader is in a note or on a citation must **give** focus
-    // back, never take it (crates/b2-desktop/CLAUDE.md, "Two things that bite").
+    // Back to the composer (K1), but only if focus was there: a repaint gives focus back,
+    // never takes it (crates/b2-desktop/CLAUDE.md).
     if (composerHeld) focusChatInput();
   }
 }
 
-/** Paint the streaming answer — the one targeted repaint on this surface. `textContent`,
- *  never `innerHTML`: a half-arrived answer is not a document, and model output is
- *  untrusted content either way (E5 — the finished answer goes through the sanitizing
- *  `renderMarkdown` seam on the next full render). */
+/** Paint the streaming answer as `textContent`, never `innerHTML`: model output is
+ *  untrusted (E5); the finished answer goes through sanitizing `renderMarkdown`. */
 function paintChatStream(): void {
   const live = document.getElementById("chat-stream");
   if (!live || state.chatStreaming === null) return;
@@ -2488,24 +2037,20 @@ function paintChatStream(): void {
   scrollChatToEnd();
 }
 
-/** Keep the newest text in view. Only when the reader is already at the bottom would be
- *  the polished rule; the simple one is right here because the pane is a conversation the
- *  user just spoke into — they are at the bottom. */
+/** Keep the newest text in view. */
 function scrollChatToEnd(): void {
   const log = document.getElementById("chat-log");
   if (log) log.scrollTop = log.scrollHeight;
 }
 
-/** Esc while an answer streams: stop it. Returns whether there was one to stop, so the
- *  `dismiss` chord can fall through to closing the pane when there wasn't. */
+/** Esc while an answer streams: stop it. False when idle, so `dismiss` falls through. */
 function stopChatAnswer(): boolean {
   if (state.chatStreaming === null) return false;
   void api.cancelAsk().catch((e) => flash(errText(e)));
   return true;
 }
 
-/** Start over. The transcript is session state and nothing else — dropping it writes
- *  nothing, deletes nothing, and costs no reindex. */
+/** Start over. The transcript is session state only; dropping it writes nothing. */
 function newChat(): void {
   state.chatMessages = [];
   state.sideFocus = null;
@@ -2513,10 +2058,8 @@ function newChat(): void {
   focusChatInput();
 }
 
-/** Switch the Settings section between the two named configurations. **Local** seeds the
- *  endpoint back to the local default; **Cloud models** clears it, because there is no
- *  default cloud provider — picking one is the explicit act M5 is about, and pre-filling a
- *  company's URL would be B2 making that choice. Neither saves: Save and test does. */
+/** Switch Settings → Chat between Local (seeds the local endpoint) and Cloud (clears it:
+ *  there is no default cloud provider, M5). Neither saves. */
 function setChatMode(cloud: boolean): void {
   state.chatCloud = cloud;
   render();
@@ -2527,25 +2070,15 @@ function setChatMode(cloud: boolean): void {
   }
 }
 
-/**
- * Swap the Settings → Chat **Model** field between the picker and the text box, and put
- * the keyboard on whichever one just appeared.
- *
- * The focus move is the point, not a flourish: the button that swaps them is *replaced*
- * by the repaint (each shape offers the other's), so `captureModalFocus` has no id to
- * restore and the keyboard would land on `<body>` — the ejection the settings panel's
- * "every control carries a stable id" rule exists to prevent. Focusing the field the
- * press was *about* is both the fix and the right destination.
- */
+/** Swap Settings → Chat's Model field between picker and text box, and focus it: the swap
+ *  button is replaced by the repaint, so focus would otherwise fall to `<body>`. */
 function setChatModelTyped(typed: boolean): void {
   state.chatModelTyped = typed;
   render();
   document.getElementById("settings-chat-model")?.focus();
 }
 
-/** Settings → Chat: save the endpoint/model/key and re-probe, so "Save and test" is one
- *  act. The key is sent only when the user typed one — an untouched field must not clear
- *  a key that is already in force (the host applies the same rule). */
+/** Settings → Chat: save endpoint/model/key and re-probe ("Save and test"). */
 async function saveChatConfig(): Promise<void> {
   const value = (id: string): string | null => {
     const el = document.getElementById(id) as HTMLInputElement | null;
@@ -2554,12 +2087,10 @@ async function saveChatConfig(): Promise<void> {
   };
   const url = value("settings-chat-url");
   const model = value("settings-chat-model");
-  // An empty key field is `null` — *keep* — not `""`: the field paints empty even when a
-  // key is set, so "I didn't retype my key" must never read as "sign me out". Removing a
-  // key is `clearChatKey`'s explicit button.
+  // Empty is `null` (keep): the field paints empty even when a key is set. Removal is
+  // `clearChatKey`.
   const key = value("settings-chat-key");
-  // The tool-call cap: judged before anything is sent, so a bad number is a sentence
-  // and the rest of the panel is not saved around it.
+  // Validate the tool-call cap before sending anything.
   const capField = document.getElementById("settings-chat-tool-cap") as HTMLInputElement | null;
   const cap =
     capField && state.chatSetup
@@ -2577,14 +2108,10 @@ async function saveChatConfig(): Promise<void> {
   );
 }
 
-/** The setup card's installed-model list: pick one and it becomes the configured model.
- *  A one-click fix for the commonest local mistake — the daemon is up, the model name is
- *  just not one it has. */
+/** The setup card's installed-model list: pick one to configure it. */
 async function useChatModel(model: string): Promise<void> {
-  // The endpoint rides along explicitly. `null` means *unset* to the host — it is how
-  // an emptied field returns to the environment's value — so sending it here would
-  // quietly reset a configured endpoint back to the default as a side effect of picking
-  // a model off the card. The key is `null` in the other sense: untouched, so kept.
+  // Send the endpoint explicitly: `null` would reset it to the default. The key's `null`
+  // means keep.
   await applyChatConfig(
     state.chatSetup?.base_url ?? null,
     model,
@@ -2595,15 +2122,8 @@ async function useChatModel(model: string): Promise<void> {
 }
 
 /**
- * Forget B2's API key — the only way back to a keyless configuration, since the field
- * paints empty whether or not one is set (a password field that echoed its secret back
- * would be a worse idea than not having this button).
- *
- * Sends `""`, which is the host's *clear* signal, as distinct from `null`'s *keep*. What
- * it clears is the key B2 is holding, in memory and in the Keychain both — a removal that
- * left the stored copy behind would simply hand it back at the next launch. A
- * `B2_LLM_API_KEY` in the environment is the user's own configuration and outlives it —
- * the copy beside the button says so.
+ * Forget B2's API key, in memory and the Keychain. Sends `""` (the host's clear signal, vs
+ * `null`'s keep). A `B2_LLM_API_KEY` in the environment outlives it.
  */
 async function clearChatKey(): Promise<void> {
   await applyChatConfig(
@@ -2611,12 +2131,8 @@ async function clearChatKey(): Promise<void> {
     state.chatSetup?.model ?? null,
     "",
     null,
-    // Removal is all-or-nothing host-side, so the returned source *is* the
-    // outcome — no separate success flag to keep in step. A key still reported
-    // as stored/session means the Keychain refused to let go, and saying
-    // "removed" there would be the one lie this button must never tell: the key
-    // would be back at the next launch. (`environment` is neither outcome — B2
-    // never had standing over that key, and the panel's copy says so.)
+    // The returned source is the outcome: still stored/session means the Keychain
+    // refused, and the key would return at next launch.
     (setup) =>
       setup.api_key_source === "stored" || setup.api_key_source === "session"
         ? "Couldn’t remove the key — your Keychain refused. It is still saved."
@@ -2624,9 +2140,7 @@ async function clearChatKey(): Promise<void> {
   );
 }
 
-/** Save a chat configuration, re-probe, and say what happened — the shared tail of every
- *  path that changes it (Save, the card's model picker, Remove key). `said` words the
- *  outcome from the setup the host sends back; a refusal says the host's own sentence. */
+/** Save a chat configuration, re-probe, and flash `said(setup)` (or the host's refusal). */
 async function applyChatConfig(
   baseUrl: string | null,
   model: string | null,
@@ -2644,16 +2158,14 @@ async function applyChatConfig(
   render();
 }
 
-/** Adopt what the host says the chat provider is now. The Local/Cloud switch follows the
- *  configuration — it is a view of it, until the user flips it to start another. */
+/** Adopt the host's chat setup; the Local/Cloud switch follows it. */
 function adoptChatSetup(setup: ChatSetup): void {
   state.chatSetup = setup;
   state.chatCloud = setup.cloud;
 }
 
 function openLinkModal(path: string, title: string): void {
-  // A committed link rewrites the open note's frontmatter — the exact bytes the
-  // mini-editor is holding — so resolve that edit before offering to link.
+  // A link rewrites the frontmatter the mini-editor holds, so resolve that first.
   if (!fmEditGuard()) return;
   state.linkTarget = { path, title: title || null };
   state.linkRelation = "references";
@@ -2681,14 +2193,12 @@ async function commitLink(): Promise<void> {
   state.loading = true;
   render();
   try {
-    // A link rewrites the open note's frontmatter on disk. Mid-edit: flush the buffer
-    // first (so the link isn't racing an autosave), then chain the post-link revision —
-    // otherwise the next autosave would false-conflict with our own link write.
+    // Mid-edit: flush first, then chain the post-link revision, or the next autosave
+    // would conflict with our own link write.
     if (state.editing) await saveNow();
     const report = await api.link(src.path, target.path, relation, explanation);
     if (state.editing && !state.editConflict && state.current?.path === src.path) {
-      // Skipped while the conflict bar is up: adopting a fresh revision there would
-      // let a later save silently clobber the external edit the bar is guarding.
+      // Not under the conflict bar: a fresh revision would let a save clobber the edit.
       const fresh = await api.readNote(src.path);
       state.current.revision = fresh.revision;
       state.current.frontmatter = fresh.frontmatter;
@@ -2711,35 +2221,24 @@ async function commitLink(): Promise<void> {
 
 // --- settings (⌘,) ----------------------------------------------------------------
 //
-// A tabbed dialog (settingstabs.ts owns the rail) over the app's preferences: General
-// (appearance), Embedding (the model picker — selecting one persists to the shared config
-// the CLI also reads, and a real switch is completed by the user with b2 init + Reindex,
-// which the flashed guidance names), and Keyboard (K1's discoverable half — the table
-// lives in shortcuts.ts). This is the wiring; the paint is settingsview.ts.
+// The tabbed preferences dialog (rail: settingstabs.ts; paint: settingsview.ts).
 
-/** Open Settings, optionally jumping straight to a section — `?` lands on Keyboard, the
- *  "semantic search is off" banner lands on Embedding where its Download button is.
- *  Without one, the dialog comes back where it was left (`state.settingsTab`). */
+/** Open Settings, optionally at a section; otherwise where it was left. */
 async function openSettings(tab?: SettingsTabId): Promise<void> {
-  // Read before `dismissOverlays` — it clears this flag along with everyone else's, and
-  // "was the dialog already up" is what decides whether this is an open or a jump.
+  // Read before `dismissOverlays` clears it: open or jump?
   const wasOpen = state.settingsOpen;
   dismissOverlays();
   if (tab) state.settingsTab = tab;
   state.settingsOpen = true;
   render(); // show the dialog shell immediately; the model list fills when it resolves
   if (wasOpen) {
-    // Already up, so this was a *jump* between sections (`?` from inside the dialog).
-    // Move the keyboard with the selection exactly as the rail's own arrows do —
-    // `paintModal` restores focus to the tab that had it, which is no longer the
-    // selected one, and a roving tabstop that disagrees with the highlight is worse
-    // than no tabstop. The reads below are skipped too: nothing about the host changed.
+    // A jump between sections: move focus with the selection (`paintModal` would restore
+    // the old tab). Skip the reads; nothing changed host-side.
     if (tab) document.getElementById(tabDomId(tab))?.focus();
     return;
   }
   try {
-    // Models, their embedding-time history, where model files live, and the active compute
-    // device (Metal/CPU) — parallel reads.
+    // Models, embedding stats, models dir and compute device, in parallel.
     const [models, stats, dir, device] = await Promise.all([
       api.listModels(),
       api.embedStats(),
@@ -2753,33 +2252,22 @@ async function openSettings(tab?: SettingsTabId): Promise<void> {
   } catch (e) {
     flash(errText(e));
   }
-  // The Chat section's status, deliberately *not* in the `Promise.all` above: it is a
-  // network probe, and an unreachable cloud endpoint takes seconds to say so — long
-  // enough to hold the whole dialog empty for a user who came here to change the theme.
-  // It fills in behind the paint, exactly as the pane's own card does.
+  // Not in the `Promise.all`: a network probe can take seconds and would hold the dialog.
   void refreshChatSetup();
-  // No explicit focus call: the open edge put the keyboard on the selected tab, and
-  // `paintModal` hands it back across this repaint by the tab's id.
+  // Focus is already on the selected tab, and `paintModal` keeps it there.
   render();
 }
 
 function closeSettings(): void {
   state.settingsOpen = false;
-  // The recorder lives inside this dialog, so it cannot outlive it — a listener still
-  // swallowing every keystroke behind a closed Settings is the one failure a recorder
-  // must never have.
+  // The recorder must not outlive the dialog, or it swallows every keystroke.
   stopRecording();
 }
 
 /**
- * Show a section. `focusTab` is the keyboard's half of the ARIA tabs pattern — an arrow
- * or ⌃Tab moves focus *with* the selection, so the rail keeps the keyboard; a click does
- * not, because WebKit never focuses a button on click and forcing it would light a ring
- * the mouse user didn't ask for.
- *
- * The explicit focus is also the one case `paintModal` can't cover: it restores by id,
- * and the id that had focus (the *previous* tab) still exists after the repaint, so
- * without this the keyboard would stay behind on the tab you just moved off.
+ * Show a section. `focusTab` (arrow or ⌃Tab) moves focus with the selection, which
+ * `paintModal` would otherwise restore to the previous tab. A click passes false: WebKit
+ * doesn't focus buttons on click, and forcing it would show a focus ring.
  */
 function selectSettingsTab(tab: SettingsTabId, focusTab: boolean): void {
   if (state.settingsTab === tab && !focusTab) return;
@@ -2788,15 +2276,8 @@ function selectSettingsTab(tab: SettingsTabId, focusTab: boolean): void {
   if (focusTab) document.getElementById(tabDomId(tab))?.focus();
 }
 
-/**
- * Hand a path over to the clipboard and say so.
- *
- * The file tree's two copy items share it.
- *
- * The failure branch is not decoration: WebKit can refuse a programmatic clipboard
- * write, and a silent no-op would leave a copy action looking like it worked. Falling
- * back to the status line at least puts the path somewhere it can be read off.
- */
+/** Copy a path to the clipboard and say so. WebKit can refuse the write, so the failure
+ *  toast shows the path instead. */
 async function copyPath(path: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(path);
@@ -2808,10 +2289,8 @@ async function copyPath(path: string): Promise<void> {
 
 // --- appearance (light/dark) ------------------------------------------------------
 //
-// A pure front-end preference: "system" (the default) defers to the OS via the
-// stylesheet's `prefers-color-scheme` rules; "light"/"dark" pin a theme by stamping a
-// `data-theme` attribute on <html> that those rules' overrides key on. Persisted in
-// localStorage — a viewing choice, never vault state, so it doesn't touch the host.
+// "system" follows `prefers-color-scheme`; "light"/"dark" set `data-theme` on <html>.
+// Persisted in localStorage: a viewing choice, never vault state.
 
 /** Reflect `state.theme` onto <html>: absent attribute ⇒ follow the OS. */
 function applyTheme(): void {
@@ -2838,36 +2317,15 @@ function setTheme(theme: ThemePref): void {
 
 // --- text size (View ▸ Zoom In / Zoom Out / Actual Size) ---------------------------
 //
-// The appearance preference's sibling, and stored the same way for the same reason: a
-// reading size is a viewing choice, never vault state. Two things differ.
-//
-// Where it lands: a theme is a `data-theme` attribute the stylesheet reads, but no
-// stylesheet can scale px-sized chrome, so this one leaves the webview and comes back as
-// WebKit page zoom (zoom.ts's header is the argument in full).
-//
-// And where the *keystroke* lands. ⌘= / ⌘- / ⌘0 are not in the registry: they are the
-// View menu's, declared in `crates/b2-desktop/src/menu.rs`, because macOS expects Zoom
-// In / Zoom Out / Actual Size to live there with their chords printed beside them — and
-// an accelerator the menu owns is dispatched before the key window's responder chain, so
-// a keydown for one never arrives here to be dispatched. The host emits the chosen item's
-// id instead, which is what `initMenuCommands` below listens for. The upshot is that these
-// three work from anywhere the window has focus, including mid-edit and behind a dialog,
-// with no guard of their own — a size control you have to leave a text field to reach
-// would be a size control that fails exactly when you need it.
-//
-// Module-local rather than in `state`, and the reason is panes.ts's: nothing renders
-// from it, so putting it in the model would only invite a repaint the zoom already did.
+// A viewing choice stored like the theme, applied as WebKit page zoom (zoom.ts). ⌘= / ⌘- /
+// ⌘0 belong to the View menu (crates/b2-desktop/src/menu.rs), whose accelerators fire before
+// any keydown reaches here; `initMenuCommands` gets the item id, so they work everywhere,
+// mid-edit included. Module-local: nothing renders from it.
 
 let zoom = DEFAULT_ZOOM;
 
-/** Hand a size to the host and remember it — the one place the IPC call lives, so both
- *  callers below agree on what "the size is now applied" means.
- *
- *  Resolves when the window has actually been scaled, and **never rejects**: a refusal
- *  can only come from a window that is going away or from running outside Tauri at all,
- *  and neither is worth a toast about a size the user can plainly see didn't change —
- *  still less worth failing a boot over. The two callers both wait on it, and a promise
- *  that can reject would make one of them a hang. */
+/** Hand a size to the host and remember it. Resolves once the window is scaled and never
+ *  rejects: a refusal (window closing, no Tauri) isn't worth a toast or a failed boot. */
 function pushZoom(next: number): Promise<void> {
   zoom = next;
   saveZoom(next);
@@ -2876,18 +2334,9 @@ function pushZoom(next: number): Promise<void> {
   });
 }
 
-/** A size the user just asked for: apply it, then say so if it cost a column.
- *
- *  Page zoom narrows the *layout* viewport, so style.css's breakpoints treat a ⌘= exactly
- *  as they treat dragging the window narrower — and at some size discovery goes, then the
- *  file tree. That is the responsive layout doing its job, and B2 doesn't refuse the step
- *  over it (zoom.ts's `hiddenNotice` argues why); it just stops being a surprise.
- *
- *  The notice is **measured, not predicted**, because the breakpoints are the
- *  stylesheet's and this file must not hold a second copy of them — which fixes when it
- *  can be taken. Not before the host has scaled the window (there would be nothing to
- *  see), and not on the frame it does (WebKit lays out on one frame and
- *  `getComputedStyle` can answer on the next). So: the round trip, then two frames. */
+/** Apply a requested size, then say so if a breakpoint hid a pane (zoom.ts `hiddenNotice`).
+ *  Measured, not predicted, so the breakpoints live only in style.css: after the round trip
+ *  plus two frames, since WebKit's layout can lag `getComputedStyle` by one. */
 function applyZoom(next: number): void {
   const before = visiblePanes();
   void pushZoom(next).then(() =>
@@ -2900,35 +2349,22 @@ function applyZoom(next: number): void {
   );
 }
 
-/** One rung, in `dir`. Silent at the ends — the ladder's walls are walls, not errors. */
+/** One rung in `dir`; silent at the ends. */
 function nudgeZoom(dir: Direction): void {
   const next = stepZoom(zoom, dir);
   if (next !== zoom) applyZoom(next);
 }
 
-/** Read the saved size and hand it to the host — and **wait for it**, which is the whole
- *  point of this being separate from `applyZoom`.
- *
- *  Page zoom changes the CSS viewport, so everything after this in `boot` depends on it
- *  having landed: `buildShell` + the first `render` would otherwise paint one frame at
- *  100% and jump, the appearance preference's flash-of-the-wrong-thing in a second form,
- *  and `initPanes` settles the columns against `clientWidth` — a width that is about to
- *  change under it. (The resize a zoom fires would eventually correct the columns; it
- *  can't un-paint the frame.) One IPC round trip of blank window is the cheaper half of
- *  that trade.
- *
- *  No column notice here, and not by accident: at boot there is no shell yet, so "which
- *  columns were showing before" has no answer, and the honest thing to report about a
- *  size the user chose in a previous session is nothing at all. */
+/** Read the saved size, apply it, and wait: the rest of `boot` needs the final viewport,
+ *  or the first paint jumps and `initPanes` sizes columns against a stale width. No
+ *  column notice at boot. */
 async function loadZoomPref(): Promise<void> {
   const saved = loadZoom();
   zoom = saved;
   if (saved !== DEFAULT_ZOOM) await pushZoom(saved);
 }
 
-/** Listen for the menu lines that are B2's own. One `switch`, and an id it doesn't know
- *  falls through silently: the host declares the menu, so a line from a newer build is
- *  something to ignore, not something to fail on. */
+/** Listen for B2's own menu items; unknown ids are ignored. */
 function initMenuCommands(): void {
   void api.onMenuCommand((id) => {
     if (id === "view.zoom-in") nudgeZoom(1);
@@ -2939,31 +2375,18 @@ function initMenuCommands(): void {
 
 // --- the customizable keyboard (GH #121) ------------------------------------------
 //
-// The same localStorage idiom as the appearance preference above, for the same reason: a
-// keyboard layout is a viewing choice, never vault state, so it never touches the host,
-// the index, or a byte of Markdown. keymap.ts owns the algebra and the judgement; this is
-// the wiring — install a table, run a recorder, persist the result.
+// Stored in localStorage like the theme (never vault state). keymap.ts owns the logic;
+// this installs the table, runs the recorder, and persists the result.
 
-/** Lay the stored rebindings over the shipped table and make that the live registry.
- *  Every `isBound` in the handler below, the sheet in Settings, and the conflict checkers
- *  all read `activeBindings()`, so this one call moves the whole keyboard at once —
- *  except for the one keyboard that is not B2's to read from a table. CodeMirror holds
- *  its **own** copy of the chords it was mounted with, so the registry moving under it
- *  changes nothing until it is told; the compartment is how it's told. Null before the
- *  first edit, which is the common case at boot and needs no handling of its own. */
+/** Lay the stored rebindings over the shipped table as the live registry. CodeMirror keeps
+ *  its own copy of the chords, so it is reconfigured via its compartment too. */
 function installKeymap(): void {
   setActiveBindings(applyOverrides(DEFAULT_BINDINGS, state.keyOverrides));
   editorView?.dispatch({ effects: keysCompartment.reconfigure(editorKeymap()) });
 }
 
-/** Read the saved keyboard and install it. Runs before `buildShell`, which projects a
- *  chord into the find bar's tooltip, and long before anything can dispatch one.
- *
- *  Returns what it had to drop rather than reporting it: a dropped entry is worth saying
- *  out loud — it is a preference the user thought they had — but `flash` repaints, and at
- *  this point in boot there is no shell to repaint. keymap.ts's `adoptOverrides` is what
- *  guarantees whatever survives still leaves the keyboard conflict-free; this can only
- *  return a non-empty list for a hand-edited store, or one written against an older table. */
+/** Read the saved keyboard and install it (before `buildShell`, which prints chords).
+ *  Returns dropped entries for the caller to report, since there is no shell to flash yet. */
 function loadKeymap(): string[] {
   const { overrides, dropped } = loadOverrides();
   state.keyOverrides = overrides;
@@ -2971,8 +2394,7 @@ function loadKeymap(): string[] {
   return dropped;
 }
 
-/** Adopt a set of rebindings: persist, install, repaint. The one write path, so the
- *  stored keyboard and the live one can't come apart. */
+/** Adopt rebindings: persist, install, repaint. The one write path. */
 function setOverrides(next: Overrides): void {
   state.keyOverrides = next;
   saveOverrides(next);
@@ -2983,12 +2405,9 @@ function setOverrides(next: Overrides): void {
   paintEditor();
 }
 
-// The recorder. `state.recorder` is the whole of its state; these five actions are the
-// whole of its behavior.
+// The chord recorder; its state is `state.recorder`.
 
-/** Milliseconds the current recorder has been open with nothing having arrived — the
- *  probe's input (recorder.ts). Module-local because nothing renders from it directly;
- *  the tick writes its *reading* into `state.recorder.hint` and repaints from there. */
+/** When the recorder opened, for the silence probe (recorder.ts). */
 let recorderOpenedAt = 0;
 let recorderTimer: number | null = null;
 
@@ -2998,7 +2417,7 @@ function startRecording(id: BindingId): void {
   state.recorder = { id, candidate: null, problems: [], hint: null, blurred: false };
   recorderOpenedAt = Date.now();
   cancelProbe();
-  // The probe: silence is the observation, so something has to come back and read it.
+  // The silence probe (recorder.ts).
   recorderTimer = window.setTimeout(() => {
     recorderTimer = null;
     if (!state.recorder || state.recorder.candidate !== null) return;
@@ -3007,20 +2426,12 @@ function startRecording(id: BindingId): void {
     render();
   }, PROBE_AFTER_MS);
   render();
-  // Take the keyboard off whatever had it — a tree row, or CodeMirror, which would
-  // otherwise type the chord into the buffer behind the dialog. The strip carries an id,
-  // so `paintModal` hands focus back to it across every repaint the recorder causes.
+  // Take focus off CodeMirror, which would otherwise type the chord into the buffer.
   document.getElementById("keys-recorder")?.focus();
 }
 
-/** Stop the pending read of silence.
- *
- *  Called wherever something has already answered the question the timer was going to ask
- *  — the recorder closing, a chord arriving, or the window blurring. That last one is the
- *  subtle case (GH #125): a blur sets the *strong* hint, and a timer left running would
- *  fire moments later, still see no candidate, and overwrite it with the weaker "nothing
- *  has reached B2 yet" — downgrading the one positive observation the recorder ever makes
- *  into a guess. */
+/** Stop the silence probe: on close, a chord, or a window blur (which sets a stronger
+ *  hint the timer would otherwise overwrite, GH #125). */
 function cancelProbe(): void {
   if (recorderTimer !== null) {
     clearTimeout(recorderTimer);
@@ -3028,8 +2439,7 @@ function cancelProbe(): void {
   }
 }
 
-/** Tear the recorder down without painting — for the callers that are mid-teardown of
- *  something larger and will paint themselves (`dismissOverlays`). */
+/** Tear the recorder down without painting, for callers that paint themselves. */
 function clearRecorder(): void {
   cancelProbe();
   state.recorder = null;
@@ -3040,21 +2450,13 @@ function stopRecording(): void {
   render();
 }
 
-/** A keydown while the recorder is open. Returns true when it consumed the event.
- *
- *  Esc cancels and ⏎ accepts — the dialog reflex, and the reason neither can be recorded
- *  here. Both are `fixed` in the registry anyway (`Binding.fixed`), so nothing is lost:
- *  what a text field and a dialog do with ⏎ and Esc was never B2's to hand out. Every
- *  other keystroke is a candidate, replacing whatever was captured before it, so trying
- *  three chords is three presses rather than three round trips through the buttons. */
+/** A keydown while the recorder is open; true when consumed. Esc cancels, ⏎ accepts (both
+ *  `fixed`, so unrecordable anyway); any other chord replaces the candidate. */
 function recorderKeydown(e: KeyboardEvent): boolean {
   const rec = state.recorder;
   if (!rec) return false;
-  // Swallow the browser's own meaning for the keystroke — the point of the surface is that
-  // nothing *happens* while a chord is being pressed at it. This is not what keeps the
-  // chord out of the note buffer, though: CodeMirror's handler sits on a descendant of
-  // `document` and so runs first. `startRecording` takes the keyboard off the editor for
-  // that, and this branch is why it has to.
+  // Nothing should happen while a chord is pressed. (CodeMirror runs first, which is why
+  // `startRecording` moves focus off it.)
   e.preventDefault();
   if (canonicalKey(e.key) === "Escape") {
     stopRecording();
@@ -3081,8 +2483,7 @@ function recorderKeydown(e: KeyboardEvent): boolean {
   return true;
 }
 
-/** Save the captured chord. A refusal never reaches here — the button is disabled and
- *  ⏎ declines — so this is the commit, not the check. */
+/** Save the captured chord. */
 function commitRecording(): void {
   const rec = state.recorder;
   if (!rec || rec.candidate === null || refused(rec.problems)) return;
@@ -3091,8 +2492,7 @@ function commitRecording(): void {
   setOverrides(next);
 }
 
-/** Put one command back on its shipped chord — a delete from the override set, since
- *  there is no stored copy of a default to restore from. */
+/** Put one command back on its shipped chord (removes its override). */
 function resetChord(id: BindingId): void {
   clearRecorder();
   setOverrides(withOverride(state.keyOverrides, id, []));
@@ -3106,29 +2506,23 @@ function resetAllChords(): void {
 
 // --- install reminder (the "semantic search is off" banner) -----------------------
 //
-// Gating is the pure `shouldPromptEmbedInstall` (embedreminder.ts); these own the
-// dismissal side. The banner nags once per launch on a fresh, model-less vault — a plain
-// ✕ hides it for the session (it returns next launch), while "Don't remind me again"
-// persists the opt-out so a keyword-only user isn't pestered. Same localStorage idiom as
-// the appearance preference above (a viewing choice, never vault state).
+// Gating is embedreminder.ts; this is dismissal. ✕ hides it for the session; "Don't remind
+// me again" persists the opt-out in localStorage.
 
 /** Read the persisted "don't remind me" opt-out into state (once, on boot). */
 function loadEmbedReminderPref(): void {
   state.embedReminderDismissed = loadReminderOptOut();
 }
 
-/** Turn the banner off. `persist` writes the opt-out so it survives relaunch (the
- *  checkbox); the bare ✕ passes false and only hides it for this session. */
+/** Turn the banner off; `persist` keeps it off across launches. */
 function dismissEmbedReminder(persist: boolean): void {
   state.embedReminderDismissed = true;
   if (persist) saveReminderOptOut();
   render();
 }
 
-// Download + verify the selected model in-app (the `b2 init` button). Single-flight via
-// `state.provisioning` (the webview is single-threaded, so the sync guard + button-disable
-// fully prevent a concurrent download — no host guard needed). On success the model's
-// `installed` flag flips and the Download button disappears.
+// Download and verify the selected model in-app (`b2 init`). Single-flight via
+// `state.provisioning`.
 async function provisionModel(): Promise<void> {
   if (state.provisioning) return;
   state.provisioning = true;
@@ -3136,13 +2530,10 @@ async function provisionModel(): Promise<void> {
   try {
     state.models = await api.provisionModel();
     const now = state.models.find((m) => m.current);
-    // The model is installed now, so `vault_info` reports `semantic: true` — re-read it so
-    // the install banner and the search caveat both clear immediately.
+    // Re-read coverage so the banner and search caveat clear now.
     await refreshEmbedStatus(state.vaultRoot);
     flash(`Downloaded ${now?.label ?? "model"}. Embedding your vault now…`);
-    // Close the loop (#25 auto-index): actually embed the vault so semantic search turns
-    // on, instead of leaving it behind a manual Reindex the user is unlikely to find.
-    // Background run with the usual progress + Cancel; no-ops if already complete.
+    // Embed the vault now so semantic search turns on (#25).
     trackIndexing(autoIndexOnOpen(state.vaultRoot));
   } catch (e) {
     flash(errText(e));
@@ -3152,8 +2543,7 @@ async function provisionModel(): Promise<void> {
   }
 }
 
-// Persist a model choice. A no-op if it's already current; otherwise record it and tell
-// the user what still has to happen for the swap to take effect (download, then Reindex).
+// Persist a model choice and say what the swap still needs (download, then Reindex).
 async function changeModel(model: string): Promise<void> {
   if (state.models.find((m) => m.current)?.id === model) return;
   try {
@@ -3166,7 +2556,7 @@ async function changeModel(model: string): Promise<void> {
         : `Model set to ${label}. Reindex to re-embed your vault with it.`,
     );
   } catch (e) {
-    // The write was refused; re-sync the picker to the unchanged config and surface why.
+    // Refused: re-sync the picker to the unchanged config.
     flash(errText(e));
     try {
       state.models = await api.listModels();
@@ -3177,14 +2567,11 @@ async function changeModel(model: string): Promise<void> {
   render();
 }
 
-// Switch the active vault via the host's native folder picker. On a fresh choice the
-// open note, discovery, search, and tree-expansion all reset (they belong to the old
-// vault); a cancel is a no-op. The picker runs host-side, so all this action does is
-// re-seed state from the new `VaultInfo` and reload the tree.
+// Switch vault via the host's folder picker, resetting everything that belonged to the
+// old vault. A cancel is a no-op.
 async function switchVault(): Promise<void> {
-  // Flush + leave edit mode before the picker (same hook as openNote); then drop any
-  // pending trailing embed — it belongs to the vault we may be about to leave, and
-  // its DB-derived pending set heals on that vault's next embed/reindex anyway.
+  // Leave edit mode, then drop the pending trailing embed (it heals on that vault's next
+  // run).
   if (!(await leaveEdits())) return;
   if (embedTimer !== undefined) {
     clearTimeout(embedTimer);
@@ -3193,10 +2580,8 @@ async function switchVault(): Promise<void> {
   try {
     const info = await api.chooseVault();
     if (!info) return; // cancelled — leave the current vault untouched
-    // `choose_vault` already cancelled any in-flight index for the vault we're leaving
-    // (host-side); capture its frontend run so the new vault's auto-index can be chained
-    // *after* it settles — otherwise the new run could see a not-yet-cleared `reindexing`
-    // flag and bail. Not awaited here: the UI reset below must not block on a wind-down.
+    // The host cancelled the old index run; chain the new auto-index after it settles, or
+    // it would see a stale `reindexing` flag. Not awaited: the reset mustn't block.
     const departing = indexingRun;
     state.vaultRoot = info.root; // set now so the departing run's guards bail promptly
     adoptCoverage(info);
@@ -3205,11 +2590,7 @@ async function switchVault(): Promise<void> {
     state.resourceImage = null;
     clearDiscovery();
     resetSearch();
-    // The conversation is grounded in the vault we just left — every citation in it
-    // names a path that means nothing here (a note's identity is its path, L1). Dropping
-    // it writes nothing and loses nothing durable: the transcript was session state. The
-    // answer in flight is stopped for the reason a departing reindex is: nothing should
-    // keep working on the vault the app has left. `sendChat` drops what it was holding.
+    // The conversation's citations are paths in the old vault (L1): stop and drop it.
     if (state.chatStreaming !== null) void api.cancelAsk().catch(() => {});
     state.chatMessages = [];
     state.chatStreaming = null;
@@ -3225,9 +2606,7 @@ async function switchVault(): Promise<void> {
     await loadNotes(); // catches its own errors → toast; empty tree on an unindexed vault
     state.loading = false;
     flash(`Switched to ${info.root}.`);
-    // Auto-index the new vault (#25): if it's unindexed or only partly embedded, bring it
-    // up to date now — the tree we just painted fills in as projection completes. Chained
-    // after the departing run so it starts only once that has fully wound down.
+    // Auto-index the new vault (#25), after the departing run winds down.
     trackIndexing(
       (async () => {
         if (departing) await departing;
@@ -3240,10 +2619,7 @@ async function switchVault(): Promise<void> {
   }
 }
 
-// Re-read the embedding-coverage fraction (#26) from the host so the search caveat
-// reflects reality after a project/embed phase. Best-effort and guarded on the vault we
-// started on: a mid-run switch owns the UI, so a stale count must never clobber its fresh
-// one, and a failed status read just leaves the prior fraction rather than blocking.
+// Re-read embedding coverage (#26). Best-effort, and dropped if the vault switched.
 async function refreshEmbedStatus(forRoot: string | null): Promise<void> {
   try {
     const info = await api.vaultInfo();
@@ -3254,26 +2630,18 @@ async function refreshEmbedStatus(forRoot: string | null): Promise<void> {
   }
 }
 
-/** Adopt a `VaultInfo`'s embedding coverage: whether semantic ranking is live, and how
- *  many notes are embedded of how many. The root is the caller's to set — only a boot or
- *  a switch changes it. */
+/** Adopt a `VaultInfo`'s embedding coverage (the root is the caller's to set). */
 function adoptCoverage(info: VaultInfo): void {
   state.semantic = info.semantic;
   state.notesEmbedded = info.notes_embedded;
   state.notesTotal = info.notes_total;
 }
 
-// The in-flight background index — a manual Reindex (`doReindex`), an auto-index on
-// open (`autoIndexOnOpen`), or a trailing embed after a save (`runTrailingEmbed`) — or
-// null when idle. A vault switch cancels the run host-side (choose_vault →
-// cancel_and_wait_for_reindex) and then chains the new vault's auto-index *after* this
-// handle, so the fresh run never starts on the departing run's not-yet-cleared
-// `state.reindexing` flag. Only one index runs at a time (each entry point guards on
-// `reindexing`), so a single slot suffices.
+// The in-flight background index run (reindex, auto-index, or trailing embed), or null.
+// A vault switch chains its auto-index after this. One run at a time, so one slot.
 let indexingRun: Promise<void> | null = null;
 
-/** Register a background-index run so a vault switch can chain after its wind-down. The
- *  tracked promise settles *after* the run's `finally` has cleared `state.reindexing`. */
+/** Register a background-index run; it settles after `state.reindexing` is cleared. */
 function trackIndexing(run: Promise<void>): void {
   const done = run.finally(() => {
     if (indexingRun === done) indexingRun = null;
@@ -3281,15 +2649,14 @@ function trackIndexing(run: Promise<void>): void {
   indexingRun = done;
 }
 
-/** Start an index run: the meter comes up empty, with no cancel pending. The caller
- *  picks the repaint (a full one, or just the meter). */
+/** Start an index run's state; the caller picks the repaint. */
 function beginIndexRun(): void {
   state.reindexing = true;
   state.reindexProgress = null;
   state.reindexCancelling = false;
 }
 
-/** End an index run — every run's `finally`: the meter goes, and the app repaints. */
+/** End an index run (every run's `finally`). */
 function endIndexRun(): void {
   state.reindexing = false;
   state.reindexProgress = null;
@@ -3297,12 +2664,8 @@ function endIndexRun(): void {
   render();
 }
 
-/**
- * After a run: the open note's vectors exist now, so refresh discovery for `similar` to
- * rank with — and re-read the note first, unless an editor (body or frontmatter) holds
- * it: adopting a fresh revision under an open buffer could regress the save chain into a
- * false conflict, or let its save clobber what changed on disk.
- */
+/** After a run: re-read the open note (unless an editor holds it, where a fresh revision
+ *  would break the save chain) and refresh discovery. */
 async function refreshOpenNoteAfterIndex(): Promise<void> {
   if (!state.current) return;
   if (!state.editing && !state.fmEditing) {
@@ -3311,66 +2674,47 @@ async function refreshOpenNoteAfterIndex(): Promise<void> {
   await refreshDiscovery();
 }
 
-// Reindex as project → embed, sequenced here (Shape A, docs/index-engine.md):
-// the fast, model-free `project` completes the keyword + graph index, the tree
-// paints immediately, and only then does the slow, cancellable `embed` stream behind
-// it. Deliberately does NOT set `state.loading` — the app stays fully usable
-// (read/search/navigate) while it runs; only the Reindex button is disabled and a
-// progress + Cancel affordance shows. Progress streams in via the channel callback,
-// which repaints only the affordance.
+// Reindex as project → embed (Shape A, docs/index-engine.md): the fast `project` paints the
+// tree, then the cancellable `embed` streams progress. Doesn't set `state.loading`, so the
+// app stays usable.
 async function doReindex(): Promise<void> {
   if (state.reindexing) return; // single-in-flight (the host also guards embed)
   const startedRoot = state.vaultRoot; // guard against a vault switch mid-run
   beginIndexRun();
   render();
   try {
-    // Phase 1 — projection (fast, no model): notes, keyword index, and graph are
-    // complete when this resolves.
+    // Phase 1: projection (fast, no model): notes, keyword index, graph.
     const p = await api.project();
-    // If a switch already committed (vaultRoot changed), it owns the UI — bail. (A
-    // late-finishing project is harmless host-side: it wrote the old vault's own
-    // .b2/, idempotently — spec §6.)
+    // A vault switch committed and owns the UI (spec §6).
     if (state.vaultRoot !== startedRoot) return;
-    // A projection can skip files it can't read (non-UTF-8, permission-denied) rather
-    // than abort — appended to every reindex flash below so the user knows some files
-    // were left out, and why, instead of silently missing them.
+    // Unreadable files are skipped, not fatal; every flash below names them.
     const skipped = p.skipped.length
       ? ` — skipped ${p.skipped.length} unreadable file(s): ${p.skipped
           .map((s) => `${s.path} (${s.reason})`)
           .join(", ")}`
       : "";
-    // The tree paints HERE — a projection can add, remove, or rename notes, and the
-    // vault is browsable + keyword-searchable while embedding runs.
+    // The tree paints now; the vault is browsable while embedding runs.
     await loadNotes();
-    // The search caveat now reads "keyword-only for now (0/M embedded)" honestly while
-    // the embed phase below fills the vectors (#26).
+    // The search caveat shows 0/M embedded while vectors fill (#26).
     await refreshEmbedStatus(startedRoot);
     render();
     if (state.reindexCancelling) {
-      // Cancel landed during the short projection window: don't start embedding (the
-      // host would clear the flag and run to completion). The projected index is
-      // complete and consistent; vectors fill on the next run.
+      // Cancelled during projection: don't start embedding (the host would clear the
+      // flag and run to completion).
       flash(
         `Indexed ${p.indexed} note(s) — cancelled before embedding. Re-run to embed.${skipped}`,
       );
       return;
     }
-    // Phase 2 — embedding (real model), metered + cancellable via the host's slot.
+    // Phase 2: embedding (real model), metered and cancellable.
     const r = await embedWithProgress(startedRoot);
-    // If the switch already committed (vaultRoot changed), it owns the UI — bail.
     if (state.vaultRoot !== startedRoot) return;
-    // The common ordering is subtler: the host frees the embed slot *before* the
-    // vault-switch command returns, so this Promise usually resolves while `vaultRoot`
-    // is still `startedRoot` — the check above misses it. But a cancel we didn't
-    // initiate (`reindexCancelling` is false) can only come from a vault switch
-    // cancelling us host-side (main.rs `cancel_and_wait_for_reindex` is the sole other
-    // cancel source). In that case the switch will reload the new vault — so we must
-    // NOT toast or touch the vault we're leaving. A user-initiated cancel
-    // (`reindexCancelling` true) *does* fall through: the projected index is complete
-    // and a prefix embedded, worth reporting.
+    // The host frees the embed slot before the switch returns, so the check above usually
+    // misses a switch. A cancel we didn't initiate can only be a switch (main.rs
+    // `cancel_and_wait_for_reindex`): leave the departing vault alone. A user cancel falls
+    // through and is reported.
     if (r.cancelled && !state.reindexCancelling) return;
-    // Coverage is now total/total after a full embed, or the partial count after a cancel
-    // — the search caveat updates to match (#26).
+    // Refresh coverage for the search caveat (#26).
     await refreshEmbedStatus(startedRoot);
     flash(
       r.cancelled
@@ -3385,27 +2729,18 @@ async function doReindex(): Promise<void> {
   }
 }
 
-// Auto-index on open (#25): the moment a vault is opened — app launch or vault switch —
-// bring its index up to date with no manual Reindex click and no confirm dialog. The
-// detector is the model-free embedding-coverage read already in `VaultInfo` (#26):
-//   • notesTotal === 0        → never projected: run the fast `project` first (its tree +
-//                               keyword search go live in seconds), then embed.
-//   • notesEmbedded < total   → projected but embedding didn't finish (a prior cancel or
-//                               crash): only the trailing vectors need filling — the pass
-//                               is self-healing off the DB-derived pending set (split §7.2).
-//   • embedded === total (>0) → index complete: left untouched, so reopening is never busywork.
-// The embed phase runs only when the real model is installed (`state.semantic`); without
-// it a fresh vault still gets its keyword + graph index and nothing errors — the search
-// caveat already reads "keyword-only for now". Silent like the trailing embed after a
-// save: the progress meter (and Cancel) are the only chrome, no toast. Reuses doReindex's
-// exact vault-switch guards (spec §6) so a switch mid-run never touches the departed vault.
+// Auto-index on open (#25), driven by `VaultInfo`'s coverage (#26):
+//   • notesTotal === 0        → never projected: project, then embed.
+//   • notesEmbedded < total   → embedding unfinished: fill the pending vectors (§7.2).
+//   • embedded === total (>0) → complete: nothing to do.
+// Embeds only with the real model installed. Silent (meter and Cancel only), with
+// doReindex's vault-switch guards (spec §6).
 async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
   if (state.reindexing || state.vaultRoot === null) return; // a run is live, or no vault
   const projected = state.notesTotal > 0;
   if (projected && state.notesEmbedded >= state.notesTotal) return; // index already complete
   const needsProject = !projected;
-  // An already-projected vault with no model has nothing left we can do; a never-projected
-  // one still gets its keyword + graph index below (project is model-free).
+  // Without a model, only a never-projected vault has work (project is model-free).
   if (!needsProject && !state.semantic) return;
 
   beginIndexRun();
@@ -3418,31 +2753,24 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
       await refreshEmbedStatus(startedRoot); // caveat reads "keyword-only for now (0/M)"
       render();
     }
-    // Embed only with a real model, not if a Cancel landed during the project window, and
-    // not if a vault switch has taken over meanwhile (don't embed the vault we're leaving).
+    // Embed only with a model, no pending Cancel, and no vault switch.
     if (state.vaultRoot !== startedRoot || !state.semantic || state.reindexCancelling) return;
     const r = await embedWithProgress(startedRoot);
     if (state.vaultRoot !== startedRoot) return;
-    // A cancel we didn't initiate came from a vault switch stopping us host-side; that
-    // switch reloads the new vault, so leave the one we're departing untouched (spec §6).
+    // A cancel we didn't initiate is a vault switch (see doReindex).
     if (r.cancelled && !state.reindexCancelling) return;
     await refreshEmbedStatus(startedRoot);
-    // If the user opened a note while embedding ran, its vectors exist now. Unlike
-    // doReindex this skips discovery too while an editor is open — the run was unasked
-    // for, so it leaves a pane someone is working in entirely alone.
+    // Unlike doReindex, an unasked-for run leaves an open editor's pane entirely alone.
     if (!state.editing && !state.fmEditing) await refreshOpenNoteAfterIndex();
   } catch {
-    // Silent by design (§7.2): the user didn't ask for this run, so a missing model or a
-    // lost race just leaves the vault keyword-first; the pending set heals on the next run.
+    // Silent (§7.2): the pending set heals on the next run.
   } finally {
     endIndexRun();
   }
 }
 
-// Ask the host to stop the in-flight embed at its next batch boundary. Cooperative:
-// the embed Promise in `doReindex` resolves shortly after with `cancelled: true`, and
-// its `finally` clears the affordance. (During the short projection window there is
-// nothing host-side to stop; `doReindex` sees `reindexCancelling` and skips embed.)
+// Ask the host to stop the embed at its next batch; the run resolves with `cancelled`.
+// During projection, `doReindex` sees `reindexCancelling` and skips embedding.
 async function cancelReindex(): Promise<void> {
   if (!state.reindexing || state.reindexCancelling) return;
   state.reindexCancelling = true;
@@ -3456,25 +2784,15 @@ async function cancelReindex(): Promise<void> {
 
 // --- editing (crates/b2-desktop/CLAUDE.md) -------------------------------------------
 //
-// Edit mode hands the note pane to a CodeMirror 6 editor and autosaves on idle
-// through the guarded, model-free `write_note`. Everything here that never drives a
-// render is a module-local, not AppState: the EditorView, the debounce timers, and
-// the single-flight save flags.
+// Edit mode hands the note pane to CodeMirror 6 and autosaves on idle via `write_note`.
+// State that never drives a render is module-local, not AppState.
 
 let editorView: EditorView | null = null;
 let autosaveTimer: number | undefined;
 let embedTimer: number | undefined;
-// Live-preview lives in a Compartment (spec §5) so `</>` can swap it for raw source
-// mode with no remount. Two configs off the sticky `sourceOpen`: decorated (the
-// document feel) or raw + today's syntax colors.
-//
-// Both configs paint with `b2Highlighter` — one palette across all three surfaces
-// (highlight.ts). What differs is *reach*, and the CSS scope is what expresses it: source
-// mode colors the whole document (`.src-body`), live preview only the fence lines
-// (`.lp-fence`), because there the Markdown's own markup is already spoken for by the
-// `.lp-*` decorations. CodeMirror's stock `defaultHighlightStyle` is deliberately gone:
-// its colors are hard-coded for a light background, so source mode read as ink-on-ink in
-// dark mode — the `--syn-*` palette is theme-aware.
+// Live preview sits in a Compartment (spec §5) so `</>` swaps to raw source with no remount.
+// Both use `b2Highlighter` (highlight.ts); CSS scopes its reach: `.src-body` colors the whole
+// document, live preview only `.lp-fence`. Not `defaultHighlightStyle`: it is light-only.
 const lpCompartment = new Compartment();
 function livePreviewConf(): Extension {
   return state.sourceOpen
@@ -3491,8 +2809,7 @@ let autosavePaused = false;
 const AUTOSAVE_MS = 1000;
 const TRAILING_EMBED_MS = 2000;
 
-// Enter edit mode: one render (which now skips the note pane — the carve-out), then
-// the pane is ours: chrome built once here, owned imperatively until exit.
+// Enter edit mode: render (now skipping the note pane), then own the pane until exit.
 function enterEdit(): void {
   const n = state.current;
   if (!n || state.editing || state.loading) return;
@@ -3508,16 +2825,8 @@ function enterEdit(): void {
 const wikiSource = wikiCompletionSource(() => state);
 
 
-/**
- * B2's own chords inside the editor, read from the **live** registry each time.
- *
- * A function, not a const, and that distinction is the whole of GH #125's first review
- * note: built once at module load, this array froze the shipped chords *before* boot had
- * even read the user's rebindings, so a rebound ⌘B would move in the sheet and in every
- * conflict check while CodeMirror went on answering to ⌘B forever. The compartment below
- * is what carries a change into a *mounted* editor; this is what makes a fresh mount
- * correct in the first place.
- */
+/** B2's chords in the editor, read from the live registry each call. A function, not a
+ *  const, or it would freeze the defaults before boot loads rebindings (GH #125). */
 function b2EditorKeymap(): KeyBinding[] {
   return [
     ...FORMATS.map((f) => ({
@@ -3543,34 +2852,18 @@ function b2EditorKeymap(): KeyBinding[] {
   ];
 }
 
-// The editor's keymap lives in a Compartment for `lpCompartment`'s reason — a change has
-// to reach a *mounted* editor without remounting it. Settings is reachable while editing
-// (⌘, is an unguarded toggle), so rebinding ⌘B is something you can do with the buffer
-// open behind the dialog, and without this the new chord would only take effect the next
-// time you entered edit mode.
-//
-// B2's chords and the stock ones stay in **one** `keymap.of` array, B2's first: that
-// ordering is what makes ⌘I italic rather than `selectParentSyntax`, and
-// editorkeys.test.ts pins the overlap set on that reasoning. Splitting them into two
-// facet inputs would leave the same outcome resting on extension order instead, which is
-// a quieter thing to depend on.
+// In a Compartment so a rebinding reaches a mounted editor (Settings opens mid-edit).
+// B2's chords and the stock ones share one array, B2's first: that order makes ⌘I italic
+// rather than `selectParentSyntax` (editorkeys.test.ts pins it).
 const keysCompartment = new Compartment();
 const editorKeymap = (): Extension => keymap.of([...b2EditorKeymap(), ...STOCK_EDITOR_KEYMAP]);
 
 
 
 /**
- * ⌘⇧V — paste as plain text, the escape hatch from the conversion above.
- *
- * It performs the paste itself rather than deferring to the webview, because the
- * webview does nothing: WebKit's *Paste and Match Style* is a menu command, so a raw
- * ⌘⇧V reaches the page and no paste event ever fires (verified in the app). Reading the
- * clipboard is therefore ours to do, and it goes through the **host** — WebKit gates a
- * programmatic `navigator.clipboard` read behind a native confirmation, and the webview
- * holds no clipboard permission by design (crates/b2-desktop/CLAUDE.md).
- *
- * The binding claims the chord (returns true) so a platform whose webview *does* paste
- * on ⌘⇧V can't also insert its own copy.
+ * ⌘⇧V: paste as plain text, bypassing `richPaste`. WebKit fires no paste event for ⌘⇧V,
+ * and gates `navigator.clipboard` reads behind a prompt, so the host reads the clipboard
+ * (crates/b2-desktop/CLAUDE.md). The binding claims the chord so no webview pastes twice.
  */
 async function pastePlain(view: EditorView): Promise<void> {
   try {
@@ -3614,52 +2907,34 @@ function mountEditor(body: string): void {
   editorView = new EditorView({
     doc: body,
     extensions: [
-      // GFM base + the wikilink node: the reading view's `gfm: true` twin, and without
-      // `markdownLanguage` there's no `Strikethrough` node (the default base is
-      // CommonMark-only). Always on — the parser feeds both live preview and source mode.
-      // `codeLanguages` lets a ```lang fence's body be parsed by that language's own
-      // grammar (loaded lazily, reparsed when it lands) — the editor half of highlight.ts,
-      // sharing its resolver so a fence resolves identically here and in the reading view.
-      // Source mode picks the colours up too, in its own style.
+      // GFM (the default base is CommonMark-only, with no `Strikethrough`) plus wikilinks.
+      // `codeLanguages` parses fences with highlight.ts's resolver, as the reading view does.
       markdown({ base: markdownLanguage, extensions: [wikilink], codeLanguages: resolveLang }),
       history(),
-      // Formatting chords first so a future format key can shadow a default binding.
-      // Every `key` here comes out of the registry, which is why its syntax is
-      // CodeMirror's: one spelling of a chord serves the editor and the sheet alike.
-      // In a compartment so a rebinding reaches this editor while it is still mounted
-      // (`editorKeymap`); the stock bindings ride along because they share the array whose
-      // order decides who wins.
+      // Registry chords (CodeMirror syntax), ahead of the stock ones (`editorKeymap`).
       keysCompartment.of(editorKeymap()),
       EditorView.lineWrapping,
-      // Web-page formatting survives the clipboard (editorcmds.ts `richPaste`); an
-      // unformatted paste still takes CodeMirror's own path.
+      // Web-page formatting survives the clipboard (editorcmds.ts `richPaste`).
       richPaste,
-      // A discovery card dragged in from the right column — the drop preview and the
-      // insertion (droplink.ts). Ordinary text drags inside the buffer are untouched: the
-      // handlers decline anything that isn't the card drag.
+      // A discovery card dropped into the buffer (droplink.ts); other drags are untouched.
       wikilinkDrop,
-      // `[[` completion — always on, in both live-preview and source mode. Its
-      // keymap (arrows/Enter/Escape while the menu is open) binds at higher
-      // precedence than defaultKeymap, so Enter accepts rather than newlines.
+      // `[[` completion, in both modes. Its keymap outranks defaultKeymap, so Enter
+      // accepts.
       autocompletion({ override: [wikiSource], icons: false }),
-      // The note pane is an overflow scroll container; render tooltips fixed on
-      // <body> so a menu near the pane's bottom edge isn't clipped by it.
+      // Tooltips on <body>, so the scrolling pane can't clip them.
       tooltips({ position: "fixed", parent: document.body }),
-      // The note's loaded pictures, so live preview can draw its `![[image.png]]`
-      // embeds. Outside `lpCompartment` on purpose (livepreview.ts): they are a fact
-      // about the document, and the `</>` swap must not drop them. **Ahead** of the
-      // compartment, because live preview's `blockField` reads this one inside its own
-      // `update` — and a CodeMirror field may only read a field defined before it.
+      // The note's loaded pictures. Outside `lpCompartment` so `</>` keeps them, and
+      // ahead of it because live preview's `blockField` reads this field, and a field can
+      // only read fields defined before it.
       embedImagesField,
       lpCompartment.of(livePreviewConf()),
-      // Find-in-note (⌘F) match decorations — inert (null) until the bar sets a query.
+      // Find-in-note (⌘F) match decorations.
       findField,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
           scheduleAutosave();
           scheduleImageScan(); // a typed or deleted embed changes what to hold
-          // An edit reshapes the match set (the field already recomputed) — keep the
-          // bar's count pill in step.
+          // Keep the find bar's count in step.
           if (findOpen) syncEditorFind(u.view);
         }
       }),
@@ -3669,23 +2944,17 @@ function mountEditor(body: string): void {
   editorView.focus();
   pushNoteImages(); // whatever the reading view already loaded, without a second read
   paintEditor();
-  // An open find bar carries across the mount (Edit clicked, or a conflict reload):
-  // same query, editor engine.
+  // An open find bar carries across the mount.
   if (findOpen) setFindQuery(findInput().value);
 }
 
-/** The editor chip's tooltip. Its chord comes out of the live registry rather than being
- *  spelled here, for `graphToggleHtml`'s reason (graphview.ts): ⇧⌘E is rebindable (#121), so
- *  a tooltip naming the shipped default would be wrong for the user who moved it. Off
- *  "live preview" rather than the reading bar's "rendered Markdown" — one sticky flag,
- *  two surfaces, and each names what *it* shows when the flag is off. */
+/** The editor's `</>` tooltip, with the live (rebindable, #121) chord. */
 function editorSourceTitle(): string {
   const what = state.sourceOpen ? "Show live preview" : "Show Markdown source";
   return `${what} — ${displayKeys(["source.toggle"])}`;
 }
 
-// Repaint just the editor's conflict bar and the `</>` source-toggle button — never a
-// pane rebuild (the same targeted-repaint pattern as paintReindex).
+// Repaint just the editor's conflict bar and `</>` button, never the pane.
 function paintEditor(): void {
   const bar = document.getElementById("edit-conflict");
   if (bar) bar.hidden = !state.editConflict;
@@ -3706,11 +2975,8 @@ function scheduleAutosave(): void {
   }, AUTOSAVE_MS);
 }
 
-/**
- * The save chain's entry — an immediate flush (skips the debounce). Single-flight:
- * one save in flight, at most one trailing marked; the returned promise resolves
- * when the whole chain settles, so flush points can await it.
- */
+/** Flush now (skipping the debounce). Single-flight with at most one trailing save; the
+ *  promise resolves when the whole chain settles. */
 function saveNow(): Promise<void> {
   if (autosaveTimer !== undefined) {
     clearTimeout(autosaveTimer);
@@ -3738,17 +3004,15 @@ async function runSaveChain(): Promise<void> {
     if (buffer === cur.body) continue; // nothing new since the last save — settle
     try {
       const report = await api.writeNote(cur.path, buffer, cur.revision);
-      // The chain: the next save bases on the revision this one returned, so our own
-      // saves never self-conflict (spec §3 "last save wins"). Mirroring the buffer
-      // into `body` means exiting edit mode renders the saved text with no re-read.
+      // Chain the returned revision so our own saves never conflict (spec §3); mirroring
+      // `body` lets exit render without a re-read.
       cur.revision = report.revision;
       cur.body = buffer;
       scheduleTrailingEmbed();
       void refreshConnections(); // a body edit can add/remove [[wikilink]] edges
     } catch (e) {
       if (isWriteConflict(e)) {
-        // Pause the chain and put the decision to the user — never re-fire into a
-        // conflict, never silently clobber.
+        // Pause and let the user decide; never re-fire or silently clobber.
         autosavePaused = true;
         state.editConflict = true;
         paintEditor();
@@ -3760,8 +3024,7 @@ async function runSaveChain(): Promise<void> {
   } while (trailingDirty);
 }
 
-// Post-save connection refresh (spec §6 "what refreshes"). Quiet on failure —
-// autosave is a background hum, and the pane corrects on the next open/discovery.
+// Post-save connection refresh (spec §6). Silent on failure; the next open corrects it.
 async function refreshConnections(): Promise<void> {
   const cur = state.current;
   if (!cur) return;
@@ -3775,9 +3038,8 @@ async function refreshConnections(): Promise<void> {
   }
 }
 
-// After the save chain settles (~2s with no saves), fill the vectors the saves
-// invalidated. Keyword search and the graph are current from the save itself;
-// `similar`/semantic lag by these seconds (spec §6).
+// After the save chain settles (~2s), fill the invalidated vectors. Keyword search and the
+// graph are current from the save; `similar` lags by these seconds (spec §6).
 function scheduleTrailingEmbed(): void {
   if (embedTimer !== undefined) clearTimeout(embedTimer);
   embedTimer = window.setTimeout(() => {
@@ -3791,8 +3053,7 @@ async function runTrailingEmbed(): Promise<void> {
     scheduleTrailingEmbed(); // the chain hasn't settled — come back after it has
     return;
   }
-  // A full run is already live (its embed covers our note), or no vault: skip — the
-  // missing-vector set is DB-derived, so any later embed/reindex heals it (split §7.2).
+  // A live run covers our note; the pending set heals on any later run (split §7.2).
   if (state.reindexing || state.vaultRoot === null) return;
   const startedRoot = state.vaultRoot;
   beginIndexRun();
@@ -3802,16 +3063,13 @@ async function runTrailingEmbed(): Promise<void> {
     // Vectors are fresh — let `similar` rank with them.
     if (state.vaultRoot === startedRoot) await refreshDiscovery();
   } catch {
-    // Refused (ReindexInFlight race) or failed (e.g. no model provisioned): skip
-    // silently — the user didn't ask for this run, and the pending set heals.
+    // Silent: the user didn't ask for this run, and the pending set heals.
   } finally {
     endIndexRun();
   }
 }
 
-// The one embed invocation shape, shared by doReindex's phase 2 and the trailing
-// embed: stream per-batch progress into the persistent affordance, ignoring stray
-// events from a vault we've switched away from.
+// Embed with progress into the meter, ignoring events from a vault we've left.
 function embedWithProgress(startedRoot: string | null) {
   return api.embed((prog) => {
     if (state.vaultRoot !== startedRoot) return;
@@ -3820,8 +3078,7 @@ function embedWithProgress(startedRoot: string | null) {
   });
 }
 
-// Conflict bar: Reload — discard the buffer; read fresh, remount on the new
-// body/revision, resume autosave.
+// Conflict bar: Reload. Discard the buffer, remount on disk's version, resume autosave.
 async function conflictReload(): Promise<void> {
   const cur = state.current;
   if (!cur) return;
@@ -3837,16 +3094,14 @@ async function conflictReload(): Promise<void> {
   }
 }
 
-// Conflict bar: Keep mine — read fresh for the *current* revision, then write the
-// buffer against it: an explicit, informed overwrite through the same guarded op (no
-// force flag exists; a further external edit in this window still conflicts).
+// Conflict bar: Keep mine. Write the buffer against the current revision through the same
+// guarded op (there is no force flag).
 async function conflictKeepMine(): Promise<void> {
   const cur = state.current;
   if (!cur || !editorView) return;
   try {
     const fresh = await api.readNote(cur.path);
-    // Adopt the disk state (revision to chain on; frontmatter/metadata the external
-    // writer may have changed — the splice preserves *disk* frontmatter, so mirror it).
+    // Adopt disk's revision and frontmatter (the save preserves disk frontmatter).
     state.current = fresh;
     autosavePaused = false;
     state.editConflict = false;
@@ -3857,8 +3112,7 @@ async function conflictKeepMine(): Promise<void> {
   }
 }
 
-/** Destroy the live editor and forget its save-chain flags — what a remount (Reload) and
- *  a close share. */
+/** Destroy the editor and reset its save-chain flags (remount and close share this). */
 function teardownEditor(): void {
   editorView?.destroy();
   editorView = null;
@@ -3866,7 +3120,7 @@ function teardownEditor(): void {
   autosavePaused = false;
 }
 
-/** Does the live editor hold text the open note on disk doesn't — a flush that failed? */
+/** Does the editor hold text not on disk (a failed flush)? */
 function bufferUnsaved(): boolean {
   return (
     editorView !== null &&
@@ -3875,22 +3129,15 @@ function bufferUnsaved(): boolean {
   );
 }
 
-/**
- * Resolve both editors before the pane changes what it shows: the frontmatter drawer must
- * be settled (`fmEditGuard`), and the body editor flushed and closed. False when either
- * holds the user back — a conflict, a failed save, a drawer edit to resolve first — and
- * the caller abandons whatever triggered it rather than drop an edit.
- */
+/** Resolve both editors before the pane changes. False means the caller must abandon
+ *  the action rather than drop an edit. */
 async function leaveEdits(): Promise<boolean> {
   if (!fmEditGuard()) return false;
   return closeEditor();
 }
 
-/**
- * Flush and leave edit mode. Returns false when the buffer could not be saved — a
- * conflict (the bar is up) or a failed save — so the caller must abandon whatever
- * navigation triggered the close rather than drop the user's edits.
- */
+/** Flush and leave edit mode; false when the buffer couldn't be saved (conflict or
+ *  failure), so the caller abandons rather than drop edits. */
 async function closeEditor(): Promise<boolean> {
   if (!state.editing) return true;
   await saveNow();
@@ -3913,98 +3160,65 @@ async function exitEdit(): Promise<void> {
 
 // --- discovery card → wikilink (droplink.ts) ---------------------------------------
 //
-// Drag a "Similar & unlinked" card onto a line of the note you are editing and a
-// `[[wikilink]]` lands at the end of that line. The rules about *where* it lands, and the
-// drop preview, are droplink.ts's; what lives here is what only the running app can own:
-// the drag's payload, the save that makes the link real, and the pane refresh that is the
-// whole point — a card you have linked is no longer *un*linked, and the column must say so.
-//
-// The drag is withheld outside edit mode (render.ts sets `draggable` on that condition), so
-// this state is only ever set while there is a buffer to drop into. Its keyboard half is
-// the card menu's *Insert link at cursor* (K1) — a different gesture aimed at the caret,
-// exactly as *Import files…* is the Finder drop's picker-shaped twin.
+// Drag a Similar card onto a line being edited to append a `[[wikilink]]` there. Placement
+// and preview are droplink.ts's; this holds the payload, the save, and the pane refresh.
+// Cards are draggable only in edit mode. Keyboard half: *Insert link at cursor* (K1).
 
-/** The candidate being dragged out of discovery, or null. A module-local for `treeDrag`'s
- *  reason (same-window DnD needs no dataTransfer round-trip) — but the *authority* on
- *  whether a drag is ours is the payload's MIME type, which survives a mid-drag repaint
- *  destroying the card element and with it the `dragend` that would have cleared this. */
+/** The card being dragged, or null. Can go stale (see `carriesCard`). */
 let cardDrag: DraggedCard | null = null;
 
-/** Is this drag the discovery card's? Asked of the *payload* rather than of `cardDrag`,
- *  which a mid-drag repaint can strand: destroying the dragged element takes the `dragend`
- *  that would have cleared it, and a stale flag must never turn an ordinary text drag
- *  inside the editor into a wikilink insertion. */
+/** Is this drag a discovery card? Asked of the payload's MIME type: a mid-drag repaint can
+ *  destroy the card and its `dragend`, stranding `cardDrag`. */
 function carriesCard(e: DragEvent): boolean {
   return e.dataTransfer?.types.includes(CARD_DRAG_MIME) ?? false;
 }
 
-/** The editor extension, built once: it reads the drag through this closure rather than
- *  being rebuilt per mount, so `mountEditor` stays a list of extensions. */
+/** The editor extension, built once; reads the drag through this closure. */
 const wikilinkDrop = cardDrop({
   dragged: (e) => (carriesCard(e) ? cardDrag : null),
   onDrop: (card) => void commitDroppedLink(card),
 });
 
-/** Clear the editor's drop preview — called as the pointer leaves the buffer, so the ghost
- *  never lingers on a line the drag has wandered away from. */
+/** Clear the editor's drop preview as the pointer leaves the buffer. */
 function clearDropPreview(): void {
   editorView?.dispatch({ effects: setDropTarget.of(null) });
 }
 
-/** The discovery column as the drag's **cancel** target: let go here and nothing happens.
- *  A dashed wash says the column will take the card back, and `dropEffect = "none"` (the
- *  global dragover, below) is what makes AppKit refuse the drop rather than B2 having to. */
+/** Mark the discovery column as the drag's cancel target (the global dragover's
+ *  `dropEffect = "none"` makes AppKit refuse the drop). */
 function markSideCancel(on: boolean): void {
   el("side-pane").classList.toggle("is-drag-cancel", on);
 }
 
 /**
- * After the link is in the buffer: flush it to disk, then take the card out of Similar.
- *
- * The flush is what makes the gesture a *commit* rather than a keystroke — `commitLink`
- * (the typed, frontmatter kind) has the same shape, and the right column can only tell the
- * truth about a link the index has seen. The save chain does the rest of the work already:
- * `refreshConnections` re-reads the graph, so the new edge appears under Connections within
- * the round trip.
- *
- * Dropping the card from `state.similar` here is an **optimism with a receipt**: the write
- * succeeded, so the note genuinely links it now, and discovery excludes 1-hop neighbours by
- * construction (`discover::candidates`) — the eventual `refreshDiscovery` the trailing embed
- * fires will reach the same list. Waiting for it instead would leave a linked note sitting
- * in "unlinked" for the seconds the embed takes, or (worse) empty the whole section while
- * the note's own vectors are being refilled.
+ * After the link is in the buffer: flush it, then drop the card from Similar. Safe once the
+ * write succeeded, since discovery excludes 1-hop neighbours (`discover::candidates`);
+ * waiting for the trailing embed's refresh would leave it "unlinked" for seconds.
  */
 async function commitDroppedLink(card: DraggedCard): Promise<void> {
   const src = state.current;
   if (!src) return;
   await saveNow();
-  // Not saved: a conflict (the bar is up, and it owns the decision) or a failed write
-  // (already toasted). The link stays in the buffer either way — it is the user's edit —
-  // but nothing may claim it landed, and the card stays where it is.
+  // Not saved (conflict or failure): the link stays in the buffer, the card stays listed.
   if (state.editConflict) return;
   if (bufferUnsaved()) return;
   if (state.current?.path !== src.path) return; // navigated away while the save ran
-  // By the card, not by either of its strings: `withoutCard` is keyed on the path, and
-  // taking the pair is what stops the target being handed to a path comparison (the review
-  // note on PR #185 — it matched nothing, so a dropped card stayed in the list).
+  // Pass the card, not a string: `withoutCard` compares paths, not targets (PR #185).
   state.similar = withoutCard(state.similar, card);
   render();
   flash(`Linked [[${card.target}]].`);
 }
 
-/** The keyboard's half (K1): insert the same link at the caret's line, from the card menu.
- *  One insertion path with the drop — both plan with `planDrop` and apply with
- *  `insertDrop`, so the two gestures cannot drift into two behaviours. */
+/** The keyboard half (K1): insert the link at the caret's line, via the same
+ *  `planDrop`/`insertDrop` path as the drop. */
 function insertCardLink(path: string): void {
   const view = editorView;
   if (!state.editing || !view || !path) return;
-  // The same pair the drag carries, built here from the menu's note path — so both halves
-  // hand the commit one shape rather than two spellings (`DraggedCard`).
+  // The same `DraggedCard` shape the drag carries.
   const card: DraggedCard = { path, target: noteTarget(path) };
   const plan = planDrop(view.state, view.state.selection.main.head, card.target);
   if (plan === null) {
-    // The same refusal the drop makes silently (no ghost, no-drop cursor) — said out loud,
-    // because a menu item that appeared to do nothing teaches nothing.
+    // The drop refuses silently; a menu item must say why.
     flash("The cursor is inside code — a wikilink there would stay literal. Move it out first.");
     return;
   }
@@ -4015,15 +3229,10 @@ function insertCardLink(path: string): void {
 
 // --- find in note (⌘F) ------------------------------------------------------------
 //
-// One bar, two engines, one pure core (findbar.ts). The bar is static shell chrome —
-// a floating overlay in the note pane's grid area, built once in buildShell and never
-// innerHTML-swapped — and its state is module-local like the editor's: transient view
-// state, not AppState, so typing in it never triggers a render. Over the reading view
-// it paints matches with the CSS Custom Highlight API (Ranges over the rendered text
-// nodes — no DOM mutation, so the render memo, scroll position, and click delegation
-// are untouched, and a match spanning inline markup still highlights whole). Over the
-// editor it drives the CodeMirror StateField below. ⇧⌘F is different in kind: it just
-// focuses the global vault-search box in the top bar.
+// One bar, two engines, one pure core (findbar.ts). The bar is static shell chrome with
+// module-local state, so typing never renders. The reading view paints with the CSS Custom
+// Highlight API (no DOM mutation, so memo, scroll and delegation are untouched); the
+// editor uses findfield.ts's StateField. ⇧⌘F just focuses vault search.
 
 let findOpen = false;
 let findQuery = "";
@@ -4035,10 +3244,7 @@ let findRanges: globalThis.Range[] = [];
 /** The doc the bar is bound to — navigating anywhere else closes it (syncFind). */
 let findDocKey: string | null = null;
 
-// The editor engine is findfield.ts's StateField.
-
-/** What the note pane is showing, as an identity — null means "nothing findable"
- *  (empty pane, or the graph, which has no text to find in). */
+/** The note pane's document identity; null when nothing is findable (empty, graph). */
 function findableDocKey(): string | null {
   if (state.currentResource) return `res:${state.currentResource.path}`;
   if (!state.current) return null;
@@ -4051,8 +3257,7 @@ const findInput = () => el("find-input") as HTMLInputElement;
 function openFind(): void {
   const key = findableDocKey();
   if (!key) return;
-  // Seed from the live selection — the "search for this" gesture; otherwise the bar
-  // keeps its last query, preselected so typing replaces it.
+  // Seed from a one-line selection; otherwise keep the last query, preselected.
   const sel =
     state.editing && editorView
       ? editorView.state.sliceDoc(
@@ -4091,14 +3296,12 @@ function clearReadingFind(): void {
   }
 }
 
-/** Recompute matches + Ranges over the rendered note and repaint the highlights.
- *  Runs on open, on each query keystroke, and after any note-pane swap (which
- *  invalidates the previous pass's Ranges). */
+/** Recompute matches and Ranges over the rendered note and repaint. Also runs after any
+ *  pane swap, which invalidates the Ranges. */
 function applyReadingFind(): void {
   const anchor = findMatchesList[findActive]?.from ?? 0;
   clearReadingFind();
-  // The article is the reading surface (title, meta, tags, body — or the raw source
-  // in `</>` mode); the bars above it are chrome and stay out of the match set.
+  // Only the article is searched; the bars above it are chrome.
   const article = document.querySelector("#note-pane article.note");
   if (!article) {
     findMatchesList = [];
@@ -4144,8 +3347,7 @@ function scrollFindActiveIntoView(): void {
   const pane = el("note-pane");
   const rect = range.getBoundingClientRect();
   const box = pane.getBoundingClientRect();
-  // Leave it alone when it's already in the comfortable band (below the floating bar,
-  // above the bottom edge); otherwise bring it to the pane's upper third.
+  // Leave it if already comfortably visible; else bring it to the upper third.
   if (rect.top >= box.top + 96 && rect.bottom <= box.bottom - 40) return;
   pane.scrollTop += rect.top - box.top - pane.clientHeight * 0.35;
 }
@@ -4163,8 +3365,7 @@ function setFindQuery(q: string): void {
   if (state.editing && editorView) {
     const view = editorView;
     const matches = findMatches(view.state.doc.toString(), q);
-    // Anchor on the previous active match, else the caret — typing a longer query
-    // stays near where the user was instead of snapping to the top.
+    // Anchor on the previous match, else the caret, so typing doesn't jump to the top.
     const anchor = findMatchesList[findActive]?.from ?? view.state.selection.main.from;
     const active = activeAfter(matches, anchor);
     const effects: StateEffect<unknown>[] = [setFindEffect.of({ query: q, active })];
@@ -4186,8 +3387,7 @@ function findStep(delta: 1 | -1): void {
     if (!f || f.matches.length === 0) return;
     const active = stepActive(f.matches.length, f.active, delta);
     const m = f.matches[active];
-    // Selecting the match is the editor-find convention (a follow-up ⌘F re-seeds from
-    // it); the dispatch doesn't move focus, so Enter in the bar keeps stepping.
+    // Select the match (editor convention); focus stays in the bar so Enter keeps stepping.
     view.dispatch({
       selection: { anchor: m.from, head: m.to },
       effects: [
@@ -4217,9 +3417,8 @@ function paintFindBar(): void {
   (el("find-next") as HTMLButtonElement).disabled = none;
 }
 
-/** render()'s hook: close when the pane now shows a different doc (or the graph/empty
- *  state); re-derive the highlights when the pane's DOM was rebuilt under an open bar
- *  (the old pass's Ranges point into detached nodes). */
+/** render()'s hook: close when the pane shows a different doc; re-derive highlights when
+ *  the pane was rebuilt (old Ranges point into detached nodes). */
 function syncFind(noteSwapped: boolean): void {
   if (!findOpen) return;
   if (findableDocKey() !== findDocKey) {
@@ -4238,19 +3437,14 @@ function focusGlobalSearch(): void {
 
 // --- external-edit reconciliation (crates/b2-desktop/CLAUDE.md / #14) --------------------
 //
-// The host watches the vault and emits a debounced `vault-changed` pulse whenever the
-// Markdown changes on disk from outside the app (an external editor, a `git pull`). We
-// reconcile by re-reading through the façade — never by trusting event paths — so this
-// stays honest against `index = projection of (Markdown)` and reuses the exact ops the
-// rest of the UI uses. Our *own* writes also pulse, but they're no-ops here: a save keeps
-// `state.current.revision` in lockstep with disk, so the revision compare below sees "no
-// change" and skips (the guard that stops a self-inflicted reload loop).
+// The host emits a debounced `vault-changed` pulse on external disk changes. We reconcile
+// by re-reading through the façade, never trusting event paths. Our own saves also pulse,
+// but the revision compare below makes them no-ops.
 
 let reconcileInFlight = false;
 let reconcilePending = false;
 
-// Serialize reconciles: pulses can arrive faster than a reconcile completes (a big `git
-// pull`), so coalesce overlaps into one trailing run rather than racing reads against state.
+// Serialize reconciles, coalescing overlapping pulses into one trailing run.
 async function onVaultChanged(): Promise<void> {
   if (reconcileInFlight) {
     reconcilePending = true;
@@ -4269,32 +3463,15 @@ async function onVaultChanged(): Promise<void> {
 
 async function reconcileExternalChange(): Promise<void> {
   if (state.vaultRoot === null) return;
-  // The tree first — re-derive, then re-list, so an external add / remove / rename shows
-  // up immediately: the tree lists are index-first, and a Finder-dropped file has no index
-  // row until the (model-free, idempotent) projection runs (#65 item 4; reconcile.ts has
-  // the full argument), and the vectors that re-derivation cleared are healed behind it.
-  // Safe in every mode: `render()` rebuilds the tree and side panes but skips the note
-  // pane while editing (the carve-out), so a live editor is never touched — and
-  // projection reads disk, never the live buffer.
+  // The tree first: project, then re-list, since the tree lists are index-first (#65;
+  // reconcile.ts). Safe while editing: projection reads disk, and render() skips the pane.
   await reconcileIndex({
     reindexing: state.reindexing,
     project: api.project,
     list: loadNotes,
-    // …and then the vectors that projection just cleared. Re-chunking a changed note
-    // drops its chunk rows (its `embeddings` cascade) and its centroid, and the
-    // projection pass is model-free, so an externally edited note comes back with
-    // nothing for `similar` to rank from or be ranked against — an empty discovery
-    // pane until someone reindexes by hand (the reported bug). The heal is the save
-    // path's own trailing embed, which debounces, coalesces with that path's timer,
-    // and refreshes discovery when it lands.
-    //
-    // The gate is the model-free N/M coverage read (#26) — cheap, and it keeps that
-    // fraction honest after an external add/remove, which a pulse also left stale. It
-    // still errs the safe way (it can over-fire, never miss: any chunk lacking a vector
-    // drops its note out of the count), but it no longer over-fires *forever*. The count
-    // used to require ≥1 chunk, so a note with an empty body — the tree's freshly-created
-    // one, until you type — read as permanently pending and booked a no-op embed on every
-    // single pulse. A chunkless note has nothing to embed, and now counts as embedded.
+    // Re-chunking an edited note drops its vectors, so heal them with the save path's
+    // trailing embed. Gated on the N/M coverage read (#26), which can over-fire but never
+    // miss.
     vectorsPending: async () => {
       await refreshEmbedStatus(state.vaultRoot);
       return state.notesTotal > 0 && state.notesEmbedded < state.notesTotal;
@@ -4302,24 +3479,17 @@ async function reconcileExternalChange(): Promise<void> {
     healVectors: scheduleTrailingEmbed,
   });
 
-  // The open note. Two cases are deliberately left alone:
-  //   • editing (the body editor OR the frontmatter mini-editor) — the live buffer is
-  //     the user's unsaved work; never clobber it, and never adopt a fresh revision
-  //     under it (that would let its save silently overwrite the external edit). The
-  //     conflict surfaces through each editor's own save guard instead
-  //     (crates/b2-desktop/CLAUDE.md), the one case live reload can't own safely.
-  //   • reindexing — our own project/embed run owns the open note's refresh (doReindex);
-  //     reconciling here would fight it. Its own writes don't pulse anyway (sqlite under
-  //     `.b2/`, filtered host-side) — a projection writes nothing to the vault at all.
+  // The open note, except:
+  //   • while editing: never clobber the buffer or adopt a revision under it; the save
+  //     guard surfaces the conflict (crates/b2-desktop/CLAUDE.md).
+  //   • while reindexing: the run owns the open note's refresh.
   if (state.current && !state.editing && !state.fmEditing && !state.reindexing) {
     const cur = state.current;
     try {
       const fresh = await api.readNote(cur.path);
-      // The read is async: apply only if this note still owns the pane and we're still in
-      // reading mode (the user may have navigated or started editing meanwhile).
+      // Apply only if the note still owns the pane in reading mode.
       if (state.current?.path === cur.path && !state.editing) {
-        // Unchanged bytes (our own save's echo, or a touch that didn't alter content):
-        // skip — no discovery churn, no flicker.
+        // Unchanged bytes (e.g. our own save's echo): skip.
         if (fresh.revision !== cur.revision) {
           state.current = fresh;
           await refreshDiscovery(); // the edit may have changed similar/edges
@@ -4327,22 +3497,19 @@ async function reconcileExternalChange(): Promise<void> {
         }
       }
     } catch {
-      // The open note was moved or removed on disk. Keep the (now stale) pane rather than
-      // blanking it, but say so — the freshly reloaded tree lets the user navigate away.
+      // Moved or removed: keep the stale pane, but say so.
       if (state.current?.path === cur.path) {
         flash("This note is no longer on disk — it was moved or removed.");
       }
     }
   }
 
-  // The open resource card, same posture: refresh in place (its metadata/backlinks
-  // may have changed), and if the file vanished keep the stale card but say so.
+  // The open resource card, same posture.
   if (state.currentResource && !state.reindexing) {
     const cur = state.currentResource;
     try {
       const fresh = await api.explainResource(cur.path);
-      // The bytes are re-read too: an external edit can rewrite the picture in place
-      // without the path ever changing, and a stale `data:` URL would show the old one.
+      // Re-read the bytes too: the picture may have changed in place.
       const picture = await loadResourceImage(fresh);
       if (state.currentResource?.path === cur.path) adoptResource(fresh, picture);
     } catch {
@@ -4442,9 +3609,8 @@ function buildShell(): void {
   paintShellHints();
 }
 
-/** Write the shell's chord hints (hints.ts) on to whatever of it is on screen. The shell
- *  is painted once, so this is what keeps its tooltips true after a rebind: `buildShell`
- *  calls it, and so does `setOverrides`. Properties, not markup, so nothing is parsed. */
+/** Write the shell's chord hints (hints.ts). The shell paints once, so this keeps its
+ *  tooltips true after a rebind. */
 function paintShellHints(): void {
   for (const [id, hint] of Object.entries(shellHints())) {
     const node = document.getElementById(id);
@@ -4455,10 +3621,7 @@ function paintShellHints(): void {
   }
 }
 
-/**
- * A click inside Settings. Every branch here is Settings' own, and the caller returns
- * after it whatever happened: a click inside the surface does nothing else.
- */
+/** A click inside Settings; the caller does nothing else with it. */
 function settingsClick(target: HTMLElement): void {
   const tab = target.closest<HTMLElement>("[data-settings-tab]");
   if (tab) {
@@ -4470,10 +3633,7 @@ function settingsClick(target: HTMLElement): void {
     void provisionModel();
     return;
   }
-  // Settings → Chat. The Local/Cloud segments are a *view* of the endpoint (settingsview.ts
-  // says why), so pressing one rewrites the URL field to that configuration's starting
-  // point and shows or hides the key + its privacy copy — the consent moment is the
-  // configuration moment (M5).
+  // Settings → Chat's Local/Cloud segments rewrite the URL field (M5; settingsview.ts).
   const chatMode = target.closest<HTMLElement>("[data-chat-mode]");
   if (chatMode) {
     setChatMode(chatMode.dataset.chatMode === "cloud");
@@ -4483,9 +3643,7 @@ function settingsClick(target: HTMLElement): void {
     void saveChatConfig();
     return;
   }
-  // The Model field's two shapes (settingsview.ts's `chatModelFieldHtml`). Neither saves:
-  // this only decides whether the field is a list of what the daemon has or a box for
-  // a name it doesn't have yet.
+  // The Model field's two shapes (settingsview.ts `chatModelFieldHtml`); neither saves.
   if (target.closest("[data-chat-model-custom]")) {
     setChatModelTyped(true);
     return;
@@ -4503,17 +3661,12 @@ function settingsClick(target: HTMLElement): void {
     void clearChatKey();
     return;
   }
-  // Settings → Index: the manual Reindex, which used to be a top-bar button. Handled
-  // in here because this branch returns unconditionally — a click inside the dialog
-  // never reaches the shell's handlers below. The dialog deliberately stays open: the
-  // run's meter and its Cancel are in the top bar, one Esc away, and closing a dialog
-  // out from under the button you just pressed hides the result of pressing it.
+  // Settings → Index: the manual Reindex. The dialog stays open to show the result.
   if (target.closest("#reindex")) {
     trackIndexing(doReindex());
     return;
   }
-  // …and the Cancel beside it while a run is live. It is the top bar's Cancel in a
-  // second place, not a second behaviour — the bar itself is behind this surface now.
+  // …and its Cancel (the top bar's, repeated here).
   if (target.closest("[data-cancel-reindex]")) {
     void cancelReindex();
     return;
@@ -4524,9 +3677,8 @@ function settingsClick(target: HTMLElement): void {
     if (isThemePref(choice)) setTheme(choice);
     return;
   }
-  // Settings → Keyboard: a chord chip opens the recorder on that command; the strip's
-  // own buttons commit, back out, or restore a default. Checked before Done/backdrop
-  // so a click inside the strip is never read as "close the dialog".
+  // Settings → Keyboard: a chord chip opens the recorder; checked before close so a click
+  // in the strip never closes the dialog.
   const chip = target.closest<HTMLElement>("[data-rebind]");
   if (chip) {
     const id = chip.dataset.rebind ?? "";
@@ -4552,11 +3704,10 @@ function settingsClick(target: HTMLElement): void {
   if (target.closest("[data-settings-close]")) closeSettings();
 }
 
-/** Every listener the app registers, in registration order — which matters only where two
- *  share an event and a target (`wireCmdHold`'s keydown before `wireChords`'), but is kept
- *  exactly as it was everywhere, so a split never reorders what a user can feel. */
+/** Every listener the app registers. Order matters where two share an event and target
+ *  (`wireCmdHold`'s keydown before `wireChords`'). */
 function wireEvents(): void {
-  wireCmdHold(); // hold ⌘ and the app says what ⌘ does — a spectator, so it goes on first
+  wireCmdHold(); // a spectator, so it goes on first
   wireFocusMemory();
   wireFmErrorClear();
   wireClicks();
@@ -4573,10 +3724,7 @@ function wireEvents(): void {
 }
 
 function wireFocusMemory(): void {
-  // Remember where the keyboard is, continuously (K1). `syncOverlayFocus` needs the
-  // element that *triggered* an overlay, and by the time it runs that element has been
-  // swapped out of the DOM — see `lastFocused`. Capture-phase isn't needed (`focusin`
-  // bubbles); `<body>` is skipped so a destroyed control doesn't read as a real target.
+  // Track focus continuously for `lastFocused` (K1); `<body>` is not a real target.
   document.addEventListener("focusin", (e) => {
     const t = e.target;
     if ((t instanceof HTMLElement || t instanceof SVGElement) && t !== document.body) {
@@ -4586,9 +3734,7 @@ function wireFocusMemory(): void {
 }
 
 function wireFmErrorClear(): void {
-  // Typing in the frontmatter mini-editor clears its inline error — the message
-  // belonged to the save attempt that failed. Delegated (like the clicks below)
-  // because the textarea renders dynamically.
+  // Typing in the frontmatter editor clears its error (delegated: rendered dynamically).
   document.addEventListener("input", (e) => {
     if (state.fmEditing && e.target instanceof HTMLTextAreaElement && e.target.id === "fm-editor") {
       hideFmError();
@@ -4601,40 +3747,16 @@ function wireClicks(): void {
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
 
-    // An open right-click menu owns the next click: its own items act, any other
-    // click merely dismisses it (a menu-dismissing click isn't also a card click).
+    // An open menu owns the next click (a dismissing click isn't also a card click).
     if (state.contextMenu) {
       contextMenuClick(target);
       return;
     }
 
-    // A web link in a note belongs to the **system**, not to this window. The webview
-    // *is* the application, so letting a `https://…` navigate replaces B2 with a web page
-    // in a window with no address bar and no way back — the app is gone until it's
-    // relaunched. So the click is cancelled and the URL handed to the host, which opens
-    // it in the user's browser (`open_external`, the sibling of the resource card's
-    // *Open in system default*). links.ts owns which hrefs qualify.
-    //
-    // High in the delegation because an anchor means the same thing wherever it is
-    // painted — a note's reading view, live preview's rendered table widget, a backlink
-    // snippet — and no branch below handles one. Below the context menu, though: while a
-    // menu is up the next click only dismisses it. Wikilinks never reach here (they are
-    // `href="#"`, which links.ts declines) and are followed further down.
-    //
-    // Keyboard-complete for free (K1): ⏎ on a focused anchor dispatches a click, so this
-    // is the one activation path for both, and the sheet's "Follow the focused link"
-    // row already covers it.
-    //
-    // The `else` is the other half of the same promise, and it is not "do nothing":
-    // `renderMarkdown`'s allow-list is *wider* than `externalUrl`'s, so a note can put an
-    // `ftp:`/`tel:`/`xmpp:` href — or an ordinary relative path — into the document, and
-    // any of those left alone is a webview navigation, which is the failure this whole
-    // branch exists to prevent. So a link B2 won't follow is **cancelled and said so**,
-    // not silently ignored. It falls *through* rather than returning, because the one
-    // href that must keep its click is B2's own: a wikilink is `href="#"`, an in-page
-    // anchor, and the follow handler below is what acts on it. Leaving fragments alone
-    // also keeps a note's own `[to the top](#heading)` scrolling, which is the single
-    // navigation that doesn't unload the app.
+    // A web link opens in the system browser (`open_external`; links.ts decides which):
+    // navigating the webview would replace the app with no way back. Any other href is
+    // cancelled with a toast, except in-page anchors, which fall through so wikilinks
+    // (`href="#"`) and `#heading` links keep working.
     const anchor = target.closest<HTMLAnchorElement>("a[href]");
     if (anchor) {
       const href = anchor.getAttribute("href");
@@ -4668,8 +3790,7 @@ function wireClicks(): void {
       toggleChat();
       return;
     }
-    // The chat pane's own chrome. `data-chat-stop` is Esc's equal for the mouse (K1 cuts
-    // both ways: no action reachable only by keyboard either).
+    // The chat pane's chrome; `data-chat-stop` is Esc's mouse equivalent.
     if (target.closest("[data-chat-stop]")) {
       stopChatAnswer();
       return;
@@ -4678,16 +3799,13 @@ function wireClicks(): void {
       newChat();
       return;
     }
-    // The setup card's retry — the card is looked at *while* the user goes and starts the
-    // daemon or pulls a model, so it has to be able to notice that they did.
+    // The setup card's retry, after the user starts the daemon or pulls a model.
     if (target.closest("[data-chat-recheck]")) {
       void refreshChatSetup();
       return;
     }
-    // The install banner (the "semantic search is off" strip): its primary action opens
-    // Settings → Embedding, where the Download button it is pointing at lives; the ✕
-    // dismisses for this session. ("Don't remind me again" is a checkbox — handled in the
-    // `change` delegation below.)
+    // The install banner: open Settings → Embedding, or ✕ for this session. ("Don't remind
+    // me again" is in the `change` delegation.)
     if (target.closest("[data-install-open-settings]")) {
       void openSettings("embedding");
       return;
@@ -4696,10 +3814,8 @@ function wireClicks(): void {
       dismissEmbedReminder(false);
       return;
     }
-    // Settings: a rail tab, the Download button (in-app `b2 init`), else the Done button
-    // closes it. Checked before the link-modal backdrop branch so settings wins when it's
-    // up. There is no click-outside to close on any more — the surface is the whole window
-    // (settingsview.ts) — so the ways out are Done and Escape.
+    // Settings, before the modal backdrop branch. It fills the window, so there is no
+    // click-outside; the ways out are Done and Escape.
     if (state.settingsOpen) {
       settingsClick(target);
       return; // clicks inside Settings do nothing else
@@ -4741,10 +3857,8 @@ function wireClicks(): void {
       return;
     }
 
-    // A click on a discovery row moves the keyboard's idea of "where I am" with it, exactly
-    // as the tree's rows do below — and for the same reason: WebKit doesn't focus a button
-    // on click, so the `focusin` path alone would never see a mouse user's choice. Ahead of
-    // the fold/open handlers, which return.
+    // A click moves the roving tabstop too (WebKit doesn't focus buttons on click). Ahead
+    // of the fold/open handlers, which return.
     const sideRow = target.closest<HTMLElement>("#side-pane [data-side-row]");
     if (sideRow) state.sideFocus = sideRow.dataset.sideRow ?? null;
 
@@ -4795,8 +3909,7 @@ function wireClicks(): void {
       toggleGraph();
       return;
     }
-    // A ghost is a question — clicking it opens the link palette (the typing moment;
-    // committing re-runs discovery, so the ghost solidifies into a typed edge in place).
+    // Clicking a ghost opens the link modal; committing solidifies it into a typed edge.
     const ghostNode = target.closest<HTMLElement>("[data-ghost-link]");
     if (ghostNode) {
       openLinkModal(ghostNode.dataset.ghostLink ?? "", ghostNode.dataset.cardTitle ?? "");
@@ -4820,10 +3933,7 @@ function wireClicks(): void {
       return;
     }
 
-    // A click on a tree row moves the keyboard's idea of "where I am" with it, so
-    // switching from mouse to keyboard resumes at the row just clicked rather than
-    // teleporting to the roving tabstop's fallback. (WebKit doesn't focus a button on
-    // click, so the `focusin` path alone wouldn't see this.)
+    // A click moves the tree's roving tabstop too (WebKit doesn't focus buttons on click).
     const treeRow = target.closest<HTMLElement>("#tree-pane .tree-row[data-tree-row]");
     if (treeRow) state.treeFocus = treeRow.dataset.treeRow ?? null;
 
@@ -4847,8 +3957,7 @@ function wireClicks(): void {
       return;
     }
 
-    // A candidate card's *Explain*, and the Explain view's own controls — before
-    // `data-open`, which the same card also carries.
+    // *Explain* and its view's controls, before the card's own `data-open`.
     const explain = target.closest<HTMLElement>("[data-explain]");
     if (explain) {
       const p = explain.dataset.explain;
@@ -4870,7 +3979,7 @@ function wireClicks(): void {
       return;
     }
 
-    // A candidate card's *Why?* — before `data-open`, which the same card also carries.
+    // *Why?*, before the card's own `data-open`.
     const why = target.closest<HTMLElement>("[data-why]");
     if (why) {
       const p = why.dataset.why;
@@ -4901,10 +4010,7 @@ function wireClicks(): void {
       void switchVault();
       return;
     }
-    // (Reindex itself is Settings → Index's button — wired in the `state.settingsOpen`
-    // branch above, which is the only place it can be clicked. This is the top bar's
-    // Cancel; the one in Settings' own meter is handled in that branch, since a click
-    // inside the surface never reaches here.)
+    // The top bar's Cancel (Settings' own is in `settingsClick`).
     if (target.closest("[data-cancel-reindex]")) {
       void cancelReindex();
       return;
@@ -4913,18 +4019,14 @@ function wireClicks(): void {
 }
 
 function wireContextMenu(): void {
-  // Right-click surfaces. The file tree's default menu is taken over wholesale:
-  // New note / New folder, contextual on the row under the cursor — a folder row
-  // targets itself, a file row its parent folder, the pane's empty space the vault
-  // root — and, like a click, the right-click also moves the selection context.
-  // Similar cards — and ghost nodes in the graph (same latent candidate) — keep
-  // their menu (Open note / Link…). Everywhere else the webview's stays untouched.
+  // The tree's menu targets the row's folder (or the root) and moves the selection
+  // context; Similar cards and graph ghosts get the card menu. Elsewhere the webview's
+  // menu is untouched.
   document.addEventListener("contextmenu", (e) => {
     const target = e.target as HTMLElement;
     if (target.closest("#tree-pane") && state.vaultRoot !== null) {
       e.preventDefault();
-      // Over a concrete row, the menu also targets that node (Rename / Move…); over the
-      // pane's empty space, only the vault root.
+      // Over a row, the menu also targets that node (Rename / Move…).
       const row = target.closest<HTMLElement>(TREE_ROW);
       const node = row ? treeRowRef(row) : null;
       const dir = node ? folderContext(node.path, node.nodeKind) : "";
@@ -4940,17 +4042,11 @@ function wireContextMenu(): void {
 }
 
 function wireTreeKeys(): void {
-  // The file tree's own keyboard, the ARIA `tree` pattern (K1, GH #78). Bound to the
-  // pane rather than the document so it answers *before* the global chords below, and
-  // only while the keyboard is actually on a row. The moves themselves are pure and
-  // tested (treenav.ts `arrowMove`) — this half is just the DOM and the folding.
-  //
-  // ⏎ and Space are deliberately absent: a row IS a <button>, so the platform already
-  // turns both into the click the delegation above answers. Re-binding them here would
-  // be a second activation path to keep in sync with the first.
+  // The tree's ARIA `tree` keyboard (K1, GH #78), on the pane so it runs before the global
+  // chords. Moves are treenav.ts's. ⏎/Space are absent: rows are buttons, so the platform
+  // already clicks them.
   el("tree-pane").addEventListener("keydown", (e) => {
-    // The inline create/rename inputs live in this pane but are text entry — they own
-    // their keys (Enter/Escape), handled with the other text surfaces below.
+    // The inline create/rename inputs own their keys.
     if (e.target instanceof HTMLInputElement) return;
     const row = (e.target as HTMLElement).closest<HTMLElement>(TREE_ROW);
     if (!row) return;
@@ -4964,7 +4060,7 @@ function wireTreeKeys(): void {
       if (move.kind === "focus") {
         focusTreeRow(move.path);
       } else {
-        // Expand/collapse keeps the focus where it is; the fold is the whole gesture.
+        // Folding keeps focus in place.
         if (move.kind === "expand") state.expandedDirs.add(move.path);
         else state.expandedDirs.delete(move.path);
         state.selectedDir = move.path; // folding a folder makes it the create context, as a click does
@@ -4975,8 +4071,7 @@ function wireTreeKeys(): void {
       return;
     }
 
-    // First-letter typeahead — the reflex every file browser answers to. Guarded to
-    // bare printable keys so ⌘N, ⌘F and friends still reach the global handler.
+    // First-letter typeahead, on bare printable keys only.
     if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const hit = typeaheadTarget(rows, rowIndex(rows, path), e.key);
       if (hit !== null) {
@@ -4988,13 +4083,9 @@ function wireTreeKeys(): void {
 }
 
 function wireSideKeys(): void {
-  // Discovery's own keyboard — the *same* ARIA `tree` pattern as the file tree (K1, GH #78),
-  // bound to the pane so it answers before the global chords. The moves are pure and tested
-  // (sidenav.ts `sideArrowMove`); this half is the DOM and the folding, plus one wrinkle the
-  // tree doesn't have: a card row is a `<div>` because it *contains* the open button (nested
-  // buttons are illegal), so ⏎/Space dispatch that button's own click rather than inventing a
-  // second activation path — the graph nodes' rule (crates/b2-desktop/CLAUDE.md). Section
-  // heads and search results *are* buttons, so there the platform's activation is left alone.
+  // Discovery's ARIA `tree` keyboard (K1, GH #78); moves are sidenav.ts's. A card row is a
+  // `<div>` containing its open button, so ⏎/Space click that button
+  // (crates/b2-desktop/CLAUDE.md); button rows use the platform's activation.
   el("side-pane").addEventListener("keydown", (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>("[data-side-row]");
     if (!row) return;
@@ -5009,8 +4100,7 @@ function wireSideKeys(): void {
         focusSideRow(move.key);
         return;
       }
-      // Folding keeps the focus where it is; the fold is the whole gesture. Note the
-      // inverted sets: state tracks what's *collapsed*, so expanding is a delete.
+      // Folding keeps focus in place. State tracks what's collapsed.
       const open = move.kind === "expand";
       if (move.fold.kind === "section") {
         if (open) state.collapsedSections.delete(move.fold.section);
@@ -5027,13 +4117,9 @@ function wireSideKeys(): void {
     }
 
     if (e.key === "Enter" || e.key === " ") {
-      // Only when the *row* holds focus: a row that is itself a button (a section head, a
-      // search result) activates through the platform, and an inner control would already
-      // be sending its own click — dispatching a second one would open the note twice.
+      // Only when a non-button row itself holds focus, or the note opens twice.
       if (e.target !== row || row instanceof HTMLButtonElement) return;
-      // Cancelled before the lookup below, not after: an unresolved row has no open
-      // button, and a *focusable div* that lets Space through gets the browser default —
-      // scrolling the pane — where the row's contract says nothing happens (PR #90 review).
+      // Before the lookup: an unresolved row has no button, and Space would scroll (PR #90).
       e.preventDefault();
       const open = row.querySelector<HTMLElement>(".card-open");
       if (!open) return; // an unresolved link points at nothing — ⏎/Space do nothing
@@ -5043,17 +4129,14 @@ function wireSideKeys(): void {
 }
 
 function wireMenuDismissal(): void {
-  // The floating menu is positioned at fixed viewport coords, so any scroll or resize
-  // strands it — dismiss rather than let it hover over the wrong card. Capture-phase so
-  // a scroll inside the side pane (which doesn't bubble) is still caught.
+  // The menu is at fixed viewport coords, so a scroll or resize dismisses it. Capture
+  // phase, since scroll doesn't bubble.
   document.addEventListener("scroll", closeContextMenu, true);
   window.addEventListener("resize", closeContextMenu);
 }
 
 function wireFindBar(): void {
-  // The find bar is static shell chrome — direct listeners, not delegation. mousedown
-  // preventDefault keeps focus in the find input across button clicks, so Enter keeps
-  // stepping without a re-click.
+  // Static chrome, so direct listeners. Preventing mousedown keeps focus in the input.
   findInput().addEventListener("input", (e) => setFindQuery((e.target as HTMLInputElement).value));
   const findButtons: [string, () => void][] = [
     ["find-prev", () => findStep(-1)],
@@ -5074,9 +4157,7 @@ function wireForms(): void {
       e.preventDefault();
       void doSearch(searchInput()?.value ?? "");
     }
-    // The chat composer is a form so its Ask button is a submit button — the platform's
-    // own "this field's default action", which is what makes ⏎ work in it without B2
-    // claiming the key twice (the registry marks `chat.send` fixed for that reason).
+    // The chat composer is a form, so its Ask button submits (`chat.send` is fixed).
     if ((e.target as HTMLElement).id === "chat-composer") {
       e.preventDefault();
       const input = document.getElementById("chat-input") as HTMLTextAreaElement | null;
@@ -5095,24 +4176,19 @@ function wireForms(): void {
     if (t.id === "settings-model") {
       void changeModel((t as HTMLSelectElement).value);
     }
-    // The install banner's "Don't remind me again" — checking it persists the opt-out and
-    // dismisses the banner (the strip is gone the moment it's checked, which is the intent).
+    // The install banner's "Don't remind me again": persist and dismiss.
     if (t instanceof HTMLInputElement && t.matches("[data-install-remind-off]")) {
       dismissEmbedReminder(true);
     }
   });
 
-  // The inline create input commits on blur (a non-empty name — clicking away is a
-  // "yes, make it", VS Code-style; empty backs out). `isConnected` distinguishes a
-  // real blur from the input being torn down by a tree repaint or its own commit —
-  // a removed node must never re-commit.
+  // The inline create/rename inputs commit on blur (VS Code-style; empty or unchanged backs
+  // out). `isConnected` skips an input torn down by a repaint or its own commit.
   document.addEventListener("focusout", (e) => {
     const t = e.target as HTMLElement;
     if (t.id === "tree-create-input" && t.isConnected && state.treeCreate) {
       void commitTreeCreate((t as HTMLInputElement).value, false);
     }
-    // The rename input commits on blur too, same VS Code posture (a changed name is
-    // a "yes, rename it"; an unchanged or empty one backs out via renameDestination).
     if (t.id === "tree-rename-input" && t.isConnected && state.treeRename) {
       void commitTreeRename((t as HTMLInputElement).value);
     }
@@ -5120,21 +4196,13 @@ function wireForms(): void {
 }
 
 function wireChords(): void {
-  // The app's chords. Every `isBound(e, …)` below asks the keyboard registry
-  // (bindings.ts) whether this keystroke is that command — the registry owns *what* the
-  // chord is, and the sheet in Settings → Keyboard is projected from the same table, so
-  // the two can't drift. What stays here is everything the table deliberately doesn't
-  // model: the order the surfaces get their turn (innermost first), and the guard beside
-  // each branch saying when its command applies at all — an overlay owns the keyboard,
-  // the tree has no focused row, ⌘⌫ must not hijack delete-to-line-start while editing.
+  // The app's chords. `isBound` asks the registry (bindings.ts) which chord is which; this
+  // handler owns the order surfaces get their turn (innermost first) and each command's
+  // guard.
   document.addEventListener("keydown", (e) => {
-    // The chord recorder is above everything, including the registry itself: while it is
-    // open the user is *pressing chords at it*, not issuing them, so a keystroke that
-    // reached a command would be a keystroke the recorder failed to record. It is the
-    // only branch here that consumes an event without asking bindings.ts anything.
+    // The recorder first: while open, keystrokes are chords to record, not commands.
     if (recorderKeydown(e)) return;
-    // The tree's inline create input owns its keys first: Enter commits, Escape
-    // cancels, and nothing else typed there leaks into the global chords below.
+    // The inline create input owns its keys; nothing leaks to the chords below.
     if (state.treeCreate && (e.target as HTMLElement).id === "tree-create-input") {
       if (isBound(e, "create.commit")) {
         e.preventDefault();
@@ -5156,24 +4224,16 @@ function wireChords(): void {
       }
       return;
     }
-    // The chat composer's ⏎. Deliberately **not** a `return` like the two branches above:
-    // a name field is a modal little world, but a composer is somewhere you sit and think,
-    // and ⌘J, ⌘, and Esc have to keep working while the caret is in it. ⇧⏎ is a newline —
-    // the textarea's own behavior, which B2 keeps by not claiming it (bindings.ts).
+    // The chat composer's ⏎. Other keys fall through, so ⌘J, ⌘, and Esc work from it;
+    // ⇧⏎ stays the textarea's newline.
     if ((e.target as HTMLElement).id === "chat-input" && isBound(e, "chat.send")) {
       e.preventDefault();
       void sendChat((e.target as HTMLTextAreaElement).value);
       return;
     }
-    // Settings' rail (K1, the ARIA tabs pattern — settingstabs.ts owns the moves). Above
-    // the Tab trap because ⌃Tab is a Tab: the trap swallows the key unconditionally, so a
-    // section chord placed after it would never run.
-    //
-    // The two moves differ in reach on purpose. ⌃Tab / ⇧⌃Tab cycle sections from
-    // *anywhere* in the dialog — you should never have to walk back to the rail to switch
-    // — while ↑↓ and Home/End apply only with the keyboard actually **on** a tab, since
-    // those keys belong to the panel's own controls (and to the panel itself, which
-    // scrolls) the moment focus leaves the rail.
+    // Settings' rail (K1, ARIA tabs; settingstabs.ts), above the Tab trap, which would
+    // swallow ⌃Tab. ⌃Tab cycles sections from anywhere in the dialog; ↑↓/Home/End only
+    // on a tab, since elsewhere they belong to the panel.
     if (state.settingsOpen) {
       const forward = isBound(e, "settings.section.next");
       if (forward || isBound(e, "settings.section.prev")) {
@@ -5191,15 +4251,10 @@ function wireChords(): void {
         return;
       }
     }
-    // An open overlay owns Tab (K1): without a trap, Tab walks the page *behind* the
-    // modal — focus vanishes under the backdrop and the overlay becomes dismissible
-    // only with the mouse. Wrapping keeps every control in it reachable, forever.
+    // An open overlay traps Tab (K1), or focus walks the page behind the backdrop.
     if (isBound(e, "overlay.focus.step") && currentOverlay() !== null) {
-      // The binding is `Any-Tab`: this branch's contract is that *no* Tab reaches the
-      // page, so a modifier the user is still holding must not defeat it. Swallowed
-      // unconditionally for the same reason — an overlay that somehow renders with no
-      // focusable control must still not let Tab walk the page behind it, which is the
-      // exact failure this block exists to prevent.
+      // `Any-Tab`, swallowed unconditionally: no Tab may reach the page, whatever the
+      // modifiers or focusables.
       e.preventDefault();
       const items = overlayFocusables();
       if (items.length > 0) {
@@ -5211,8 +4266,7 @@ function wireChords(): void {
       }
       return;
     }
-    // ↑/↓ walk an open context menu — the menu-pattern sibling of the tree's arrows.
-    // (⏎ needs no binding: the items are buttons.)
+    // ↑/↓ walk an open context menu (⏎ needs no binding: the items are buttons).
     if (state.contextMenu) {
       const down = isBound(e, "menu.item.next");
       if (down || isBound(e, "menu.item.prev")) {
@@ -5227,8 +4281,7 @@ function wireChords(): void {
         return;
       }
     }
-    // The find bar's input: Enter steps (⇧Enter back), Escape closes. Everything else
-    // falls through so the global chords (⌘F itself, ⇧⌘F) still work from the bar.
+    // The find input: Enter steps (⇧Enter back), Escape closes; the rest falls through.
     if (findOpen && (e.target as HTMLElement).id === "find-input") {
       const forward = isBound(e, "find.input.next");
       if (forward || isBound(e, "find.input.prev")) {
@@ -5260,21 +4313,15 @@ function wireChords(): void {
         return;
       }
     }
-    // ⌘G — flip the pane between reading and the connection graph, the keyboard sibling
-    // of the graph chip in the note bar. Below the find branch on purpose: while the bar
-    // is open ⌘G is Find Next, the macOS reflex, and the chord only becomes the graph's
-    // once there are no matches to step (bindings.test.ts pins that shadow). Editing is
-    // out for the same reason the chip isn't drawn there — the pane belongs to the live
-    // editor, so `render` won't paint the graph over it and the flip would be invisible.
-    // Chat takes the right column (⌘J). Unlike the graph it is *not* refused while
-    // editing: asking your notes a question is a thing you do mid-sentence, and the pane
-    // it opens is not the one the editor owns.
+    // ⌘J: chat. Allowed while editing, since it doesn't take the editor's pane.
     if (isBound(e, "chat.toggle")) {
       if (currentOverlay() !== null) return;
       e.preventDefault();
       toggleChat();
       return;
     }
+    // ⌘G: the graph. Below the find branch, where ⌘G is Find Next (bindings.test.ts pins
+    // the shadow). Refused while editing: the editor owns the pane.
     if (isBound(e, "graph.toggle")) {
       if (currentOverlay() !== null || state.editing) return;
       e.preventDefault();
@@ -5288,10 +4335,8 @@ function wireChords(): void {
       startTreeCreate(newFolder ? "folder" : "note", state.selectedDir);
       return;
     }
-    // ⇧F10 / the Menu key — the keyboard's right-click, and the entry point that makes
-    // Rename / Move… / Link… reachable without a mouse at all (they live only in the
-    // context menu). Opens the *same* menu the mouse does, anchored under whatever the
-    // keyboard is on: a tree row, or a discovery card / graph ghost.
+    // ⇧F10 / Menu key: the keyboard's right-click, anchored under the focused tree row or
+    // card / graph ghost.
     if (isBound(e, "menu.open")) {
       if (currentOverlay() !== null || state.vaultRoot === null) return;
       const row = focusedTreeRow();
@@ -5321,8 +4366,7 @@ function wireChords(): void {
       }
       return;
     }
-    // F2 — rename the focused tree row. The platform rename chord, and the direct path
-    // the context menu advertises next to the item.
+    // F2: rename the focused tree row.
     if (isBound(e, "tree.rename")) {
       const row = focusedTreeRow();
       if (!row) return;
@@ -5330,12 +4374,8 @@ function wireChords(): void {
       startTreeRename(treeRowRef(row));
       return;
     }
-    // ? — the keyboard reference, which is Settings' Keyboard section (settingstabs.ts).
-    // Bare `?` (⇧/ on a US layout), so it can't conflict with typing: any text surface is
-    // excluded, editing included. Any *other* overlay owns the keyboard first (Escape,
-    // then ask again) — the sheet used to render over them, and folding it into Settings
-    // is what makes this chord an ordinary one. A toggle, like ⌘,: pressing it while
-    // already reading the section closes the dialog.
+    // ?: toggle Settings → Keyboard. Bare `?`, so never in a text surface; other overlays
+    // own the keyboard first.
     if (isBound(e, "help.keyboard")) {
       if (state.editing || inTextEntry()) return;
       const overlay = currentOverlay();
@@ -5345,9 +4385,7 @@ function wireChords(): void {
       else void openSettings("keyboard");
       return;
     }
-    // ⌘1 / ⌘2 / ⌘3 — put the keyboard in the files, the note, or discovery. Without
-    // them, reaching the tree means Tab-ing through the whole top bar first, which is
-    // "operable" only in the letter of K1, not its spirit.
+    // ⌘1 / ⌘2 / ⌘3: put the keyboard in the files, the note, or discovery (K1).
     const focusPane = isBound(e, "pane.tree")
       ? focusTreePane
       : isBound(e, "pane.note")
@@ -5361,22 +4399,19 @@ function wireChords(): void {
       focusPane();
       return;
     }
-    // Enter commits the link modal from anywhere inside it — the keyboard sibling of
-    // "Commit link" (the explanation field is a plain input, so ⏎ would do nothing).
+    // Enter commits the link modal from anywhere inside it.
     if (state.linkTarget && isBound(e, "link.commit")) {
       e.preventDefault();
       void commitLink();
       return;
     }
-    // Enter commits the folder-delete confirm (its keyboard sibling of the button).
+    // Enter commits the folder-delete confirm.
     if (state.deleteTarget && isBound(e, "delete.confirm")) {
       e.preventDefault();
       confirmDelete();
       return;
     }
-    // ⏎ / Space on a focused graph node. SVG has no native button activation, so the
-    // key becomes the click the delegation above already answers — one activation path
-    // for both hands, not two implementations to keep in step.
+    // ⏎ / Space on a graph node: SVG has no button activation, so dispatch a click.
     if (isBound(e, "graph.activate")) {
       const active = document.activeElement;
       const node =
@@ -5389,11 +4424,8 @@ function wireChords(): void {
         return;
       }
     }
-    // ⌘⌫ — delete. The focused tree row wins (a folder among them: it opens the
-    // confirm, so the one gesture now covers folders too); with the keyboard elsewhere
-    // it falls back to the open document, the reader's expectation. Reading view only:
-    // while editing — or in any text field — ⌘⌫ is the platform delete-to-line-start
-    // and must not be hijacked.
+    // ⌘⌫: delete the focused tree row, else the open document. Never in a text field or
+    // while editing, where it is delete-to-line-start.
     if (isBound(e, "delete.focused")) {
       if (currentOverlay() !== null) return;
       if (state.editing || inTextEntry()) return;
@@ -5420,9 +4452,7 @@ function wireChords(): void {
       else void openSettings();
       return;
     }
-    // ⌘E toggles edit mode — the keyboard sibling of the Edit / Done buttons. A modal
-    // owns the keyboard first; a resource or empty pane has nothing to edit. Works while
-    // editing (CodeMirror leaves Mod-e unbound, so the event bubbles here) to flip back.
+    // ⌘E toggles edit mode (CodeMirror leaves Mod-e unbound, so it works while editing).
     if (isBound(e, "edit.toggle")) {
       if (currentOverlay() !== null) return;
       if (state.editing) {
@@ -5434,13 +4464,8 @@ function wireChords(): void {
       }
       return;
     }
-    // ⇧⌘E flips the note between rendered and raw Markdown — the `</>` chip's chord, and
-    // the keyboard's route to the escape hatch. Live while editing for the same reason ⌘E
-    // is: CodeMirror leaves the chord unbound (editorkeys.test.ts is what keeps that
-    // true), so the event reaches this handler, and `toggleSource` reconfigures the live
-    // preview in place rather than rebuilding the pane. Refused with the graph up, the
-    // mirror of ⌘G being refused while editing — the pane belongs to the scene, so the
-    // flip would land somewhere nobody can see it. A resource card has no source to show.
+    // ⇧⌘E: the `</>` toggle. Works while editing (unbound in CodeMirror; editorkeys.test.ts);
+    // refused with the graph up, where the flip would be invisible.
     if (isBound(e, "source.toggle")) {
       if (currentOverlay() !== null || state.graphOpen) return;
       if (!state.current || state.currentResource) return;
@@ -5449,8 +4474,7 @@ function wireChords(): void {
       return;
     }
     if (isBound(e, "dismiss")) {
-      // Innermost first, always — and with the `?` sheet folded into Settings, the
-      // overlay layer is flat, so this is simply the one overlay that is up.
+      // Innermost first.
       if (state.contextMenu) {
         closeContextMenu();
         return;
@@ -5463,32 +4487,24 @@ function wireChords(): void {
         closeModal();
         return;
       }
-      // The frontmatter mini-editor: Esc is its documented discard (the hint says so).
+      // The frontmatter mini-editor: Esc discards.
       if (state.fmEditing) {
         void cancelFmEdit();
         return;
       }
-      // An open find bar dismisses next (Escape from anywhere, not just its input).
+      // The find bar, from anywhere.
       if (findOpen) {
         closeFind();
         return;
       }
-      // Chat, innermost part first: Esc **stops a streaming answer** (the spec's own
-      // cancellation gesture — the partial text stands and is marked stopped), and only a
-      // second Esc closes the pane. Stopping and closing on one keystroke would make the
-      // stop invisible, which is the opposite of rendering a cancelled turn honestly.
-      //
-      // Both halves are gated on the pane being *open*, because `closeChat` cancels but
-      // `chatStreaming` stays set until the turn resolves a tick later: in that window an
-      // Esc aimed at the graph would otherwise be swallowed by a surface that is no longer
-      // on screen, with nothing visible to show for it.
+      // Chat: the first Esc stops a streaming answer, a second closes the pane. Gated on
+      // the pane being open, since `chatStreaming` outlives `closeChat` by a tick.
       if (state.chatOpen) {
         if (stopChatAnswer()) return;
         closeChat();
         return;
       }
-      // With nothing else to dismiss, Escape backs out of Explain, then the graph,
-      // into reading.
+      // Then back out of Explain, then the graph.
       if (state.explainCard && !state.editing) {
         closeExplain();
         return;
@@ -5501,19 +4517,15 @@ function wireChords(): void {
       void saveNow();
       return;
     }
-    // ⌘⏎ / ⌘S save the frontmatter mini-editor — its explicit-save chords (the
-    // buttons' keyboard siblings, K1). Plain Enter stays a newline in the textarea.
+    // ⌘⏎ / ⌘S save the frontmatter mini-editor; plain Enter stays a newline.
     if (state.fmEditing && isBound(e, "fm.save")) {
       e.preventDefault();
       void saveFmEdit();
       return;
     }
-    // ⌘[ / ⌘] (and the ⌘←/⌘→ aliases) walk the pane's history (#52) — but never over
-    // text entry or a modal. While editing, both chords belong to CodeMirror (Mod-[/]
-    // are indent bindings, Mod-arrows caret movement); in an input, only the arrows
-    // mean caret-to-edge, so the brackets still navigate (e.g. straight from the
-    // search field). The buttons and mouse back/forward stay live everywhere — they
-    // flush through navGo's edit-mode guard.
+    // ⌘[ / ⌘] (and ⌘←/⌘→) walk history (#52). Not while editing (CodeMirror owns them) or
+    // under a modal; in an input only the arrows mean caret movement, so brackets still
+    // navigate.
     const back = isBound(e, "nav.back");
     if ((back || isBound(e, "nav.forward")) && !state.editing) {
       if (currentOverlay() !== null) return;
@@ -5525,9 +4537,7 @@ function wireChords(): void {
 }
 
 function wireMouseHistory(): void {
-  // Mouse back/forward buttons (W3C numbering: 3 back, 4 forward) walk the history
-  // too. `auxclick` fires only for non-primary buttons, so this never doubles the
-  // click delegation above.
+  // Mouse back/forward buttons (3 back, 4 forward). `auxclick` is non-primary only.
   document.addEventListener("auxclick", (e) => {
     if (e.button !== 3 && e.button !== 4) return;
     e.preventDefault();
@@ -5536,17 +4546,12 @@ function wireMouseHistory(): void {
 }
 
 function wireWindowBlur(): void {
-  // Losing window focus is a flush point: the buffer lands on disk before the user
-  // looks at (or edits in) anything else.
-  //
-  // It is also the recorder's one *positive* signal (recorder.ts): Spotlight, the app
-  // switcher and Hide all take the key window, so a window that lost focus while a chord
-  // was being pressed at us is evidence that something outside B2 answered — not an
-  // inference drawn from nothing happening.
+  // Losing window focus flushes the buffer. It is also the recorder's one positive signal
+  // (recorder.ts): something outside B2 took the chord.
   window.addEventListener("blur", () => {
     if (state.editing) void saveNow();
     if (state.recorder && state.recorder.candidate === null) {
-      cancelProbe(); // the blur has answered; there is no silence left to read
+      cancelProbe(); // the blur answered; see `cancelProbe`
       state.recorder.blurred = true;
       state.recorder.hint = silenceHint({ elapsedMs: Date.now() - recorderOpenedAt, blurred: true });
       render();
@@ -5557,32 +4562,16 @@ function wireWindowBlur(): void {
 function wireDrags(): void {
   // --- tree drag-and-drop ---------------------------------------------------------
   //
-  // Two drags land here, and they are told apart by `treeDrag` being set: a **tree
-  // row** being moved within the vault, and a **file from outside** (Finder) being
-  // imported. One set of listeners serves both because both aim at the same targets.
+  // Two drags, told apart by `treeDrag`: a tree row being moved, and a file from outside
+  // being imported.
   //
-  // Both depend on `dragDropEnabled: false` in tauri.conf.json's window config: with
-  // Tauri's native drag-drop interception on (the default), wry consumes drag
-  // events for its own file-drop channel and the DOM never sees dragover/drop on
-  // macOS — dragstart fires, but no drop zone ever activates. Turning it on to get
-  // the OS drop's *paths* would therefore cost the in-app move, so the import takes
-  // the bytes route instead (importDroppedFiles).
+  // Both need `dragDropEnabled: false` (tauri.conf.json), or wry swallows the DOM drag
+  // events; so imports take bytes, not paths. It also means an unhandled file drop makes
+  // WebKit navigate to the file, replacing the app, so every file drag is cancelled.
   //
-  // The flip side of that setting is why the external drag must be handled at all:
-  // with wry not intercepting, an unhandled file drop is WebKit's to act on, and
-  // WebKit's default is to **navigate to the dropped file** — which replaces the whole
-  // app with a rendering of that file, with no address bar and no way back (the same
-  // reason a note's web links are handed to the OS, links.ts). So every file drag is
-  // preventDefaulted, whether or not it lands somewhere B2 can use, and the OS cursor
-  // carries the difference: copy over a tree target, no-drop everywhere else.
-  //
-  // Any tree row drags; folder rows and the pane background (= vault root) accept
-  // drops — a drop on a *file* row lands in that file's folder, mirroring the
-  // right-click context rule. The payload is a module-local (same-window DnD needs
-  // no dataTransfer round-trip); validity is `canMoveInto` (pure, move.ts), and only
-  // a valid target preventDefaults dragover, so the OS cursor says no everywhere
-  // else. The highlight is applied imperatively — dragover fires continuously, and
-  // a render() per event would fight the drag.
+  // A drop on a file row lands in its folder; the background is the root. Validity is
+  // `canMoveInto` (move.ts). The highlight is imperative: a render() per dragover would
+  // fight the drag.
   let treeDrag: TreeNodeRef | null = null;
   let dropHighlight: Element | null = null;
 
@@ -5602,9 +4591,8 @@ function wireDrags(): void {
 
   document.addEventListener("dragstart", (e) => {
     const target = e.target as HTMLElement;
-    // A discovery candidate on its way into the note (droplink.ts). It carries a private
-    // MIME rather than `text/plain`: CodeMirror drops plain text where it lands, so a
-    // plain flavor would give a missed interception a second, silent behaviour.
+    // A discovery card (droplink.ts), under a private MIME: CodeMirror would insert
+    // `text/plain` on its own.
     const card = target.closest<HTMLElement>("#side-pane .card.candidate");
     if (card) {
       const path = card.dataset.cardPath ?? "";
@@ -5637,12 +4625,8 @@ function wireDrags(): void {
   const overBuffer = (e: DragEvent) =>
     e.target instanceof Element && e.target.closest(".cm-content") !== null;
 
-  /**
-   * Would WebKit *navigate* if this drag were dropped unhandled? Files, and also a
-   * dragged **link** — from a browser, a mail client, or a note's own anchor. Both
-   * end the same way (the window holds the whole app, so a navigation is the app
-   * gone), so both are cancelled; only files go anywhere afterwards.
-   */
+  /** Would WebKit navigate (losing the app) if this were dropped unhandled? Files and
+   *  dragged links. */
   const navigatesWebview = (e: DragEvent) =>
     carriesFiles(e) || (e.dataTransfer?.types.includes("text/uri-list") ?? false);
 
@@ -5652,18 +4636,14 @@ function wireDrags(): void {
       ? null
       : dropTargetOf(e.target as HTMLElement);
 
-  // dragenter as well as dragover: some engines want the *first* event over an
-  // element cancelled before they will treat it as a drop zone at all.
+  // Some engines need dragenter cancelled too before treating an element as a drop zone.
   document.addEventListener("dragenter", (e) => {
     if (!treeDrag && navigatesWebview(e)) e.preventDefault();
   });
 
   document.addEventListener("dragover", (e) => {
-    // The card drag (droplink.ts). Over the buffer, the editor's own handler has already
-    // painted the preview and claimed the event — this is only about everywhere *else*:
-    // clear the ghost, and mark the discovery column as the cancel target it is. Nothing
-    // outside the buffer is preventDefaulted, so the OS refuses those drops for us and a
-    // release there is the "put it back" the gesture promises.
+    // The card drag. The editor handles the buffer; elsewhere, clear the preview and let
+    // the OS refuse the drop (a cancel).
     if (carriesCard(e)) {
       if (overBuffer(e)) {
         markSideCancel(false);
@@ -5676,14 +4656,11 @@ function wireDrags(): void {
     }
     if (!treeDrag) {
       if (!navigatesWebview(e)) return; // plain text: the editor's business, not ours
-      // Unconditional: cancelling dragover is what stops WebKit navigating the whole
-      // app to the file, and that has to hold over the editor and every other pane —
-      // not just over the tree.
+      // Unconditional, over every pane: this is what stops WebKit navigating.
       e.preventDefault();
       const drop = importTargetOf(e);
       if (drop?.el !== dropHighlight) clearDropHighlight();
-      // "none" everywhere but the tree, so the OS cursor says where this can land —
-      // and so a drop outside it is refused by AppKit before anything sees it.
+      // "none" outside the tree, so the cursor shows it and AppKit refuses the drop.
       if (e.dataTransfer) e.dataTransfer.dropEffect = drop ? "copy" : "none";
       if (drop && drop.el !== dropHighlight) {
         dropHighlight = drop.el;
@@ -5704,9 +4681,7 @@ function wireDrags(): void {
   });
 
   document.addEventListener("drop", (e) => {
-    // A card that landed in the buffer was handled by the editor before this bubbled here
-    // (the link is already in, and its save is running); a card released anywhere else was
-    // refused by the OS and is a cancel. Both end the same way — put the state back.
+    // The editor already handled a card dropped in the buffer; elsewhere it's a cancel.
     if (carriesCard(e)) {
       cardDrag = null;
       markSideCancel(false);
@@ -5731,9 +4706,7 @@ function wireDrags(): void {
     void executeMove(drag, moveDestination(drag.path, drop.dir));
   });
 
-  // An external drag that leaves the window fires no dragend (the drag isn't ours),
-  // so the highlight would stick until the next drag. dragleave for the document's
-  // edge — `relatedTarget` is null exactly when the pointer left the window.
+  // An external drag leaving the window fires no dragend; `relatedTarget` is null then.
   document.addEventListener("dragleave", (e) => {
     if (!treeDrag && e.relatedTarget === null) clearDropHighlight();
   });
@@ -5751,18 +4724,8 @@ function wireDrags(): void {
 // --- boot -----------------------------------------------------------------------
 
 /**
- * Check the UI's copy of the app menu bar against the host that declares it (#119).
- *
- * `menukeys.ts` carries an offline mirror of `menu.rs`, and two things read it: the
- * conflict gate that runs in the suite with no host to ask, and the recorder's refusal of
- * a chord the menu takes first. A mirror free to fall behind the menu it mirrors is
- * precisely what #119 set out to end, and this is its only check — so the fetch stays
- * even though nothing paints from it any more (the keyboard reference stopped listing the
- * menu's chords; shortcuts.ts says why).
- *
- * A difference goes to the console, not to the user: it means someone edited `menu.rs`
- * without editing the mirror, which is a developer's bug. Nothing here blocks the paint,
- * and a failure costs only the check.
+ * Check `menukeys.ts`'s offline mirror of `menu.rs` against the host (#119); this is the
+ * mirror's only check. Drift is a developer's bug, so it goes to the console.
  */
 async function checkMenuDrift(): Promise<void> {
   try {
@@ -5779,16 +4742,15 @@ async function checkMenuDrift(): Promise<void> {
 
 async function boot(): Promise<void> {
   loadTheme(); // stamp the saved appearance onto <html> before the first paint
-  await loadZoomPref(); // and the saved size — awaited, because it changes what "the viewport" means below
+  await loadZoomPref(); // awaited: it changes the viewport
   initMenuCommands(); // View ▸ Zoom In / Zoom Out / Actual Size arrive from the host
   const lostChords = loadKeymap(); // the user's chords, before anything paints or dispatches one
-  loadEmbedReminderPref(); // honor a persisted "don't remind me" before the banner can paint
+  loadEmbedReminderPref(); // before the banner can paint
   buildShell();
-  initPanes(el("layout")); // restore the saved column widths, likewise before the paint
+  initPanes(el("layout")); // restore the saved column widths before the paint
   wireEvents();
-  // Auto-reload on external edits (#14): subscribe once for the window's lifetime. The
-  // host only pulses when the *watched* vault's Markdown changes, and re-points the watch
-  // on a vault switch, so this single subscription always tracks the active vault.
+  // Auto-reload on external edits (#14). The host re-points its watch on a vault switch,
+  // so one subscription suffices.
   void api.onVaultChanged(() => void onVaultChanged());
   void checkMenuDrift(); // menukeys.ts vs. the host's own menu — never blocks the paint
   try {
@@ -5803,14 +4765,11 @@ async function boot(): Promise<void> {
     flash(errText(e));
   }
   if (lostChords.length > 0) {
-    // Said here rather than at the read, which happens before there is a shell to paint
-    // into — and after the vault load, so a startup failure's own notice isn't clobbered.
+    // Reported now that there is a shell, after any startup failure's notice.
     flash(`${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`);
   }
   render();
-  // Auto-index on launch (#25): if the startup vault is unindexed or only partly embedded,
-  // bring it up to date now instead of waiting behind a manual Reindex click. No-ops when
-  // no vault resolved (vaultRoot === null) or the index is already complete.
+  // Auto-index on launch (#25); a no-op with no vault or a complete index.
   trackIndexing(autoIndexOnOpen(state.vaultRoot));
 }
 

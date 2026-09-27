@@ -1,8 +1,4 @@
-// The discovery pane's navigation rules (sidenav.ts), pinned. Pure logic — no DOM — so
-// node runs it straight off the source via its native type-stripping: `npm test`.
-// Dependency-free like treenav.test.ts (hand-rolled assert), and deliberately its mirror:
-// the right column now answers the same ARIA `tree` pattern the file tree does, so these
-// cases are the guard against the paint (render.ts) and the arrows drifting apart.
+// The side pane's navigation rules (sidenav.ts), pinned; treenav.test.ts's mirror.
 import type { KeyEventLike } from "./bindings.ts";
 import {
   cardKey,
@@ -46,8 +42,6 @@ const hit = (path: string): SearchResult => ({ path, snippet: "" }) as SearchRes
 /** A note open, both sections populated, nothing folded — the everyday case. */
 function pane(over: Partial<SideNavState> = {}): SideNavState {
   return {
-    // Chat is the column's third mode and owns it outright when open (chat.test.ts
-    // covers its rows); everything here is the other two.
     chatOpen: false,
     chatMessages: [],
     chatStreaming: null,
@@ -67,8 +61,7 @@ function pane(over: Partial<SideNavState> = {}): SideNavState {
 const keys = (rows: readonly SideRow[]) => rows.map((r) => r.key).join("|");
 
 check("chat mode owns the column: its rows replace search's and discovery's", () => {
-  // The delegation itself — the transcript's shape is chat.test.ts's subject, but *that
-  // the pane switches wholesale* is this module's rule: one column, one list in it.
+  // Chat's rows are chat.test.ts's subject; here, only that the pane switches wholesale.
   const rows = sideRows(
     pane({
       chatOpen: true,
@@ -131,9 +124,8 @@ check("a folded card stays a row; only its body goes", () => {
   equal(rows[4].expanded, true, "its neighbour is untouched");
 });
 
-// Two edges to one target are legal (a body link plus a typed frontmatter relation —
-// data-model.md §2's "augment" case), and they share ONE fold key. Row identity must
-// still be unique, or ↓ off the second lands back under the first and navigation sticks.
+// Two edges to one target are legal (data-model.md §2) and share one fold key, but row
+// keys must stay unique or ↓ off the second lands back on the first.
 check("duplicate edges to one note are distinct rows sharing one fold key", () => {
   const rows = sideRows(pane({ connections: [edge("notes/a.md"), edge("notes/a.md", "supports")] }));
   const [first, second] = [rows[1], rows[2]];
@@ -247,9 +239,7 @@ check("left folds what is open, else steps out to the section head", () => {
 });
 
 check("the shipped keys mean what the ARIA tree pattern says", () => {
-  // Pinned here rather than derived, for treenav.test.ts's reason: the registry owns the
-  // keys since #121, and this pane's set is a *sibling* of the tree's — same keys, its own
-  // commands, so rebinding one leaves the other where it was.
+  // Pinned, not derived: the same keys as the tree's, but its own commands (#121).
   equal(sideNavFor(press("ArrowDown")), "side.row.next", "↓ is the next row");
   equal(sideNavFor(press("ArrowUp")), "side.row.prev", "↑ is the previous one");
   equal(sideNavFor(press("Home")), "side.row.first", "Home");
@@ -274,8 +264,7 @@ check("the tabstop prefers the keyboard's row, else the first", () => {
 });
 
 check("a tabstop that folded or scrolled out of existence falls back", () => {
-  // The section collapsed under the focused card, or a new note replaced discovery
-  // wholesale: the pane must not be left with zero tabbable rows (⇥ would skip it).
+  // The focused row is gone: the pane must not be left with no tabbable row.
   const rows = sideRows(pane({ collapsedSections: new Set(["similar"] as const) }));
   equal(rovingSideKey(rows, "similar:0:notes/kivo.md"), "section:connections", "folded away → first row");
   equal(sideRowIndex(rows, null), -1, "nothing focused is not row 0");

@@ -1,12 +1,6 @@
-//! "Why was this suggested?" — `Vault::why_similar`, the chat answer behind a click on a
-//! *Similar & unlinked* card. A **tool-using** chat turn: the model is offered B2's
-//! read-only tools (`b2_passage_pairs`, `b2_similar`, `b2_neighbors`, `b2_read`), the core
-//! runs what it asks for, and the explanation streams with citations. The pair lookup the
-//! row was ranked on is never skipped: B2 makes it when the model does not.
-//!
-//! Like `tests/ask.rs` these prove the **plumbing** against [`FakeLlm`] and the fake
-//! embedder — which passages are handed over, what the facts say, how citations resolve,
-//! the degrades — not explanation quality, which is a real-model concern.
+//! "Why was this suggested?" (`Vault::why_similar`): a tool-using chat turn over B2's
+//! read-only tools, streamed with citations. B2 makes the pair lookup when the model
+//! doesn't. Plumbing only, against [`FakeLlm`]; quality is a real-model concern.
 
 mod common;
 
@@ -33,8 +27,7 @@ const B: &str = "b.md";
 const C: &str = "c.md";
 const E: &str = "e.md";
 
-/// Several short sections, so a fine chunk target cuts each note into several passages
-/// and "the nearest pairs" is a real ranking rather than a single forced pair.
+/// Several short sections, so each note cuts into several passages to rank.
 fn sections(topic: &str) -> String {
     (1..=4)
         .map(|i| {
@@ -67,8 +60,7 @@ fn chain_vault(dir: &Path) -> (Vault, PathBuf) {
     (vault, root)
 }
 
-/// Records the request it was handed, then answers as [`FakeLlm`] does — how the suite
-/// reads the assembled prompt without reaching into the orchestration.
+/// Records each request, then answers as [`FakeLlm`] does.
 #[derive(Default)]
 struct Recording {
     seen: RefCell<Vec<ChatRequest>>,
@@ -101,8 +93,7 @@ fn the_best_pair_is_the_passage_the_card_showed() {
     for c in cands {
         let pairs = discover::passage_pairs(&conn, A, &c.note_path, WHY_PAIRS).unwrap();
         let best = pairs.first().expect("an embedded candidate has a pair");
-        // The explanation must be about the same passage the card printed as evidence,
-        // at the same score — one ranking, not two that could disagree.
+        // The same passage and score the card showed: one ranking, not two.
         assert_eq!(best.candidate_chunk_id, c.evidence_chunk_id);
         assert!((best.score - c.score).abs() < 1e-6, "{best:?} vs {c:?}");
     }
@@ -124,9 +115,8 @@ fn pairs_are_nearest_first_distinct_per_candidate_passage_and_capped() {
     assert_eq!(distinct.len(), all.len(), "one pair per candidate passage");
     assert!(all.windows(2).all(|w| w[0].score >= w[1].score));
 
-    // Determinism: the same read twice is the same answer.
     assert_eq!(all, discover::passage_pairs(&conn, A, C, 100).unwrap());
-    // Nothing to compare ⇒ nothing, never an error.
+    // Nothing to compare is empty, never an error.
     assert!(discover::passage_pairs(&conn, A, C, 0).unwrap().is_empty());
     assert!(discover::passage_pairs(&conn, A, "nope.md", 3)
         .unwrap()
@@ -154,15 +144,13 @@ fn the_model_is_offered_b2s_tools_and_what_it_calls_is_run() {
         offered,
         BTreeSet::from([TOOL_PASSAGE_PAIRS, TOOL_SIMILAR, TOOL_NEIGHBORS, TOOL_READ])
     );
-    // Nothing is looked up for the model: the lookups are its own to make.
+    // The lookups are the model's own to make.
     assert!(first.exchanges.is_empty() && first.passages.is_empty());
-    // The conversation is one user turn naming both notes.
     assert_eq!(first.turns.len(), 1);
     assert_eq!(first.turns[0].role, Role::User);
     assert!(first.turns[0].content.contains(A) && first.turns[0].content.contains(C));
 
-    // FakeLlm's script: call every no-argument tool once (`{}` means this pair), then
-    // answer. The second request replays those calls with their results.
+    // FakeLlm calls every tool once with `{}` (this pair), then answers.
     assert_eq!(seen.len(), 2);
     let second = &seen[1];
     let called: Vec<&str> = second
@@ -189,12 +177,12 @@ fn the_model_is_offered_b2s_tools_and_what_it_calls_is_run() {
         "neighbors names a's link to b"
     );
 
-    // The passages the tool handed over are the citation ledger — both notes, only them,
-    // each numbered once — and are NOT repeated in the system message.
+    // The tool passages are the citation ledger, each numbered once, and are not
+    // repeated in the system message.
     let paths: BTreeSet<&str> = second.passages.iter().map(|p| p.path.as_str()).collect();
     assert_eq!(paths, BTreeSet::from([A, C]));
     assert!(second.passages.len() <= 2 * WHY_PAIRS + READ_PASSAGES);
-    // `b2_read {}` reads the suggested note — the open one is already on screen.
+    // `b2_read {}` reads the suggested note; the open one is already on screen.
     assert!(second.exchanges[3].result.starts_with("c.md:"));
     let texts: BTreeSet<(&str, &str)> = second
         .passages
@@ -204,7 +192,6 @@ fn the_model_is_offered_b2s_tools_and_what_it_calls_is_run() {
     assert_eq!(texts.len(), second.passages.len());
     assert!(!second.system_message().contains("Passages:"));
 
-    // The view says which tools ran, and that the model chose every one of them.
     let used: Vec<(&str, bool)> = view
         .tools
         .iter()
@@ -234,8 +221,7 @@ fn a_model_that_skips_the_pair_lookup_has_it_made_for_it() {
         .why_similar(&llm, A, C, 10, &mut keep_streaming())
         .unwrap();
 
-    // The row was ranked on its matched pairs, so no explanation is written without
-    // them: B2 appends the call the model left out, marked as its own.
+    // B2 appends the pair lookup the model left out, marked as seeded.
     let seen = llm.seen.borrow();
     let called: Vec<&str> = seen[1]
         .exchanges
@@ -280,8 +266,7 @@ fn a_model_that_ignores_its_tools_is_handed_the_evidence_and_its_first_try_is_ne
     assert!(view.tools.len() == 1 && view.tools[0].seeded);
 }
 
-/// A provider that plays a fixed script of rounds: each round is either tool calls or
-/// the final answer's tokens. Records every request, like [`Recording`].
+/// Plays a fixed script of rounds (tool calls or answer tokens), recording each request.
 struct Scripted {
     rounds: RefCell<Vec<Round>>,
     seen: RefCell<Vec<ChatRequest>>,
@@ -352,7 +337,7 @@ impl LlmProvider for Scripted {
 fn a_tool_the_model_calls_is_run_and_its_passages_become_citable() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = chain_vault(tmp.path());
-    // The model reads the linked note b.md — neither side of the pair — then cites it.
+    // b.md is neither side of the pair.
     let llm = Scripted::new(vec![
         Round::Calls(vec![
             (TOOL_READ, r#"{"note":"b.md"}"#),
@@ -370,7 +355,7 @@ fn a_tool_the_model_calls_is_run_and_its_passages_become_citable() {
     let read = &seen[1].exchanges[0];
     assert_eq!(read.call.name, TOOL_READ);
     assert!(read.result.contains("[1] b.md"), "{}", read.result);
-    // One ledger per turn: the pair lookup's numbering continues past what `read` took.
+    // One ledger per turn: numbering continues past what `read` took.
     let from_b = seen[1].passages.iter().take_while(|p| p.path == B).count();
     assert!(from_b >= 1);
     let pairs = &seen[1].exchanges[1].result;
@@ -389,8 +374,7 @@ fn a_tool_the_model_calls_is_run_and_its_passages_become_citable() {
 fn a_bad_tool_call_is_answered_with_an_error_result_not_a_failed_turn() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = chain_vault(tmp.path());
-    // Model output is untrusted: an unknown tool, arguments that aren't JSON, a note that
-    // doesn't exist, arguments that are JSON but not an object. Each gets a result the model can read.
+    // Model output is untrusted: each bad call gets a result the model can read.
     let llm = Scripted::new(vec![
         Round::Calls(vec![
             ("b2_delete_everything", "{}"),
@@ -418,8 +402,7 @@ fn a_bad_tool_call_is_answered_with_an_error_result_not_a_failed_turn() {
     );
     assert!(results[0].contains("unknown tool"));
     assert!(results[2].contains("nope.md"));
-    // Nothing a failed call returned became citable: the ledger holds only what B2's own
-    // pair lookup (made because the model never got one) handed over.
+    // Nothing a failed call returned became citable; only B2's seeded pair lookup.
     assert_eq!(seen[1].exchanges[4].call.name, TOOL_PASSAGE_PAIRS);
     assert!(seen[1].passages.iter().all(|p| p.path == A || p.path == C));
 }
@@ -428,7 +411,6 @@ fn a_bad_tool_call_is_answered_with_an_error_result_not_a_failed_turn() {
 fn the_loop_is_bounded_and_the_last_round_must_answer() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = chain_vault(tmp.path());
-    // A model that would call tools forever.
     let mut rounds: Vec<Round> = (1..MAX_TOOL_ROUNDS)
         .map(|_| Round::Calls(vec![(TOOL_SIMILAR, "{}")]))
         .collect();
@@ -451,8 +433,7 @@ fn the_loop_is_bounded_and_the_last_round_must_answer() {
     );
 }
 
-/// A provider for a model with no tool support: any request that offers tools is
-/// refused (Ollama's `400 … does not support tools`), anything else is answered.
+/// A model with no tool support: a request offering tools is refused, as Ollama does.
 #[derive(Default)]
 struct NoToolSupport {
     seen: RefCell<Vec<ChatRequest>>,
@@ -491,7 +472,6 @@ fn a_model_without_tool_support_is_handed_the_evidence_instead() {
     assert_eq!(handoff.kind, RequestKind::Chat);
     assert!(handoff.system.starts_with(WHY_SYSTEM_PROMPT));
     assert!(handoff.tools.is_empty() && handoff.exchanges.is_empty());
-    // B2's own pair lookup, handed over in the system message.
     assert!(!handoff.passages.is_empty());
     assert!(handoff.passages.iter().all(|p| p.path == A || p.path == C));
     assert!(handoff.system.contains("[1] and [2]"));
@@ -499,7 +479,6 @@ fn a_model_without_tool_support_is_handed_the_evidence_instead() {
 
     assert!(view.answer.starts_with("Grounded in [1]"));
     assert!(!view.citations.is_empty());
-    // Only B2's own lookup ran, and the view says so.
     assert_eq!(view.tools.len(), 1);
     assert!(view.tools[0].seeded);
 }
@@ -509,22 +488,20 @@ fn the_facts_report_what_b2s_tools_found_for_the_pair() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = chain_vault(tmp.path());
 
-    // The handoff is where B2 states the graph facts itself (a tool-using turn reads
-    // them with `b2_neighbors`), so read them off a model with no tool support.
+    // Only the handoff states the graph facts itself, so read them off a no-tools model.
     let system_for = |candidate: &str| {
         let llm = NoToolSupport::default();
         vault
             .why_similar(&llm, A, candidate, 10, &mut keep_streaming())
             .unwrap();
         let seen = llm.seen.borrow();
-        // The rank is the card's, and both kinds of turn are told it.
+        // Both kinds of turn are told the card's rank.
         if let Some(line) = seen[1].system.lines().find(|l| l.contains("ranked #")) {
             assert!(seen[0].system.contains(line), "{line}");
         }
         seen[1].system.clone()
     };
 
-    // The card's own position: the rank `similar` served it at, out of what it served.
     let served = vault.similar(A, 10).unwrap();
     let rank_of = |p: &str| served.iter().position(|s| s.path == p).unwrap() + 1;
 
@@ -533,13 +510,12 @@ fn the_facts_report_what_b2s_tools_found_for_the_pair() {
     assert!(c.contains("no direct link"));
     assert!(c.contains("share no linked neighbours"));
 
-    // e is two hops away through b — the shared neighbour is named.
+    // e is two hops away through b.
     let e = system_for(E);
     assert!(e.contains("no direct link"));
     assert!(e.contains("Both link to or from: b.md"), "{e}");
 
-    // b is already linked: said plainly, and no rank is claimed for a note discovery
-    // would not list.
+    // No rank is claimed for a note discovery would not list.
     let b = system_for(B);
     assert!(b.contains("already directly linked"), "{b}");
     assert!(!b.contains("ranked #"));
@@ -608,10 +584,9 @@ fn an_unembedded_vault_is_explained_from_what_can_be_read_never_failed() {
     write_note(&root, A, "alpha");
     write_note(&root, C, "gamma");
     let vault = Vault::open(&root).unwrap();
-    vault.project(false).unwrap(); // projected, never embedded
+    vault.project(false).unwrap();
 
-    // With tools: the pair lookup says why it has nothing, and reading still works —
-    // `b2_read` needs chunks, not vectors.
+    // With tools, `b2_read` still works: it needs chunks, not vectors.
     let llm = Recording::default();
     let view = vault
         .why_similar(&llm, A, C, 10, &mut keep_streaming())
@@ -622,8 +597,7 @@ fn an_unembedded_vault_is_explained_from_what_can_be_read_never_failed() {
     assert_eq!(view.citations.len(), 1);
     assert_eq!(view.citations[0].path, C);
 
-    // Without tools there is only the pair evidence, and there is none: the facts say
-    // so and the answer is the no-evidence sentence, not a failure.
+    // Without tools there is no evidence at all: the no-evidence sentence, not a failure.
     let llm = NoToolSupport::default();
     let view = vault
         .why_similar(&llm, A, C, 10, &mut keep_streaming())
@@ -688,9 +662,8 @@ fn a_blown_tool_call_cap_is_surfaced_never_papered_over_by_the_handoff() {
     let (vault, _root) = chain_vault(tmp.path());
     let llm = OverTheCap::default();
 
-    // A failed lookup round normally degrades to the handoff, because the usual cause
-    // is a model with no tool support. A reply past the cap is not that: it is a broken
-    // or hostile server, and quietly answering anyway would hide it.
+    // A failed lookup round normally degrades to the handoff, but a reply past the cap
+    // means a broken or hostile server, which answering anyway would hide.
     let err = vault
         .why_similar(&llm, A, C, 10, &mut keep_streaming())
         .unwrap_err();
@@ -702,9 +675,7 @@ fn a_blown_tool_call_cap_is_surfaced_never_papered_over_by_the_handoff() {
 
 #[test]
 fn the_why_prompt_keeps_the_grounding_rules_of_chat() {
-    // The explanation is grounded chat with a narrower subject: it must cite, and it
-    // must not reach for general knowledge. The no-evidence sentence is the one the
-    // fake obeys, pinned here exactly as it is for the grounded prompt.
+    // Grounded chat with a narrower subject: cite, and no general knowledge.
     assert!(WHY_SYSTEM_PROMPT.contains(NO_EVIDENCE_ANSWER));
     assert!(WHY_SYSTEM_PROMPT.contains("[n]"));
 
@@ -726,9 +697,8 @@ fn the_why_prompt_keeps_the_grounding_rules_of_chat() {
     assert!(req.system.contains("z = 1.23"));
     assert!(req.system.contains("[1] and [2]"));
 
-    // A hub-heavy vault can share dozens of neighbours. The count is always exact; the
-    // names stop at a handful, because a long list is what a small model recites back
-    // instead of answering.
+    // The count is exact but the names stop at a handful: a small model recites a long
+    // list instead of answering.
     let crowded = chat::WhyFacts {
         shared_neighbors: (1..=8).map(|i| format!("n{i}.md")).collect(),
         ..facts

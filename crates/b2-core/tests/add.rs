@@ -1,7 +1,5 @@
-//! `b2 add` — create a new note and project it (note CRUD's *create*). Driven
-//! through the [`Vault`] façade against a temp vault, deterministic under the
-//! FakeEmbedder. The new note must land on disk with a valid, stamped frontmatter
-//! and be immediately live in the index (graph + search), from the Markdown alone.
+//! `b2 add` and `create_note`: the new note lands on disk and is immediately live in the
+//! index (graph and search).
 
 mod common;
 
@@ -23,16 +21,14 @@ fn add_writes_a_minimal_note_and_projects_it() {
         )
         .unwrap();
 
-    // The `.md` suffix was appended; the path is the note's identity (L1).
+    // The `.md` suffix is appended; the path is the identity (L1).
     assert_eq!(report.path, "notes/widgets.md");
 
-    // The file exists with exactly the template's frontmatter + body — and nothing
-    // else: projecting it added no key of B2's (W1).
+    // No key of B2's is added (W1).
     let file = root.join("notes/widgets.md");
     let text = fs::read_to_string(&file).unwrap();
     assert!(!text.contains("b2id"), "nothing is stamped: {text}");
-    // `type:` is not seeded — the template stamps only what can't be reconstructed
-    // later; ingest defaults an absent type to "note" (GH #80).
+    // Ingest defaults an absent type to "note" (GH #80).
     assert!(!text.contains("type:"), "{text}");
     assert!(text.contains(r#"title: "All about widgets""#), "{text}");
     assert!(text.contains("created:"), "{text}");
@@ -41,11 +37,10 @@ fn add_writes_a_minimal_note_and_projects_it() {
         "{text}"
     );
 
-    // It round-trips losslessly.
     let parsed = b2_core::note::parse(&text);
     assert_eq!(parsed.as_str(), text);
 
-    // Projected: it resolves in both authored link forms, and search finds it.
+    // Resolves in both authored link forms.
     assert!(vault.explain("notes/widgets").is_ok());
     assert!(vault.explain(&report.path).is_ok());
     let hits = vault.search("widgets", 10).unwrap();
@@ -60,7 +55,6 @@ fn add_projects_the_edges_its_body_authors() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // A note whose body links to an existing golden note.
     let report = vault
         .add_note(
             "notes/linker",
@@ -69,7 +63,6 @@ fn add_projects_the_edges_its_body_authors() {
         )
         .unwrap();
 
-    // The outbound reference edge is live from the new note…
     let out = vault.neighbors(&report.path).unwrap();
     assert!(
         out.iter().any(|n| n.direction == "outbound"
@@ -77,7 +70,6 @@ fn add_projects_the_edges_its_body_authors() {
             && n.relation == "references"),
         "add must project the new note's body links: {out:?}"
     );
-    // …and shows up as an inbound backlink on the target.
     let inbound = vault.neighbors(MEMORY_PATH).unwrap();
     assert!(
         inbound
@@ -100,7 +92,7 @@ fn add_creates_missing_parent_directories() {
 
 #[test]
 fn add_works_on_a_never_reindexed_vault() {
-    // No prior `reindex`: `add` shapes the index and projects the note itself.
+    // `add` shapes the index itself.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -111,7 +103,6 @@ fn add_works_on_a_never_reindexed_vault() {
         .unwrap();
     assert_eq!(report.path, "first.md");
     assert!(root.join("first.md").is_file());
-    // Immediately searchable.
     let hits = vault.search("Body", 10).unwrap();
     assert!(hits.iter().any(|h| h.path == "first.md"), "{hits:?}");
 }
@@ -121,13 +112,11 @@ fn add_refuses_to_clobber_an_existing_file() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // Onto an existing golden note.
     let err = vault
         .add_note("concepts/memory.md", None, None)
         .unwrap_err();
     assert!(matches!(err, Error::AddTargetExists(p) if p == "concepts/memory.md"));
 
-    // Onto a note we just added (and its content is left intact).
     vault.add_note("notes/dup", None, Some("original")).unwrap();
     let before = fs::read_to_string(root.join("notes/dup.md")).unwrap();
     let err = vault
@@ -141,8 +130,7 @@ fn add_refuses_to_clobber_an_existing_file() {
     );
 }
 
-/// The refusal is the create itself (one create-new open, no check before it), so it
-/// covers whatever occupies the path — a folder named like the note included.
+/// The refusal is the create-new open itself, so it covers a folder at the path too.
 #[test]
 fn add_refuses_a_path_a_folder_occupies() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -169,16 +157,14 @@ fn create_note_writes_a_minimal_note_model_free() {
     let report = vault.create_note("inbox/idea").unwrap();
     assert_eq!(report.path, "inbox/idea.md");
 
-    // On disk: the minimal frontmatter (no title — the display title is the
-    // filename, data-model.md §1), body-less, in a freshly-created dir.
+    // No title: the display title is the filename (data-model.md §1).
     let text = fs::read_to_string(root.join("inbox/idea.md")).unwrap();
     assert!(!text.contains("b2id"), "nothing is stamped: {text}");
-    // `type:` is not seeded — ingest defaults it to "note" (GH #80).
+    // GH #80.
     assert!(!text.contains("type:"), "{text}");
     assert!(text.contains("created:"), "{text}");
     assert!(!text.contains("title:"), "{text}");
 
-    // Projected: it resolves in both authored link forms, and the tree lists it.
     assert!(vault.explain("inbox/idea").is_ok());
     assert!(vault.explain(&report.path).is_ok());
     assert!(vault
@@ -187,11 +173,8 @@ fn create_note_writes_a_minimal_note_model_free() {
         .iter()
         .any(|n| n.path == "inbox/idea.md"));
 
-    // Model-free: the embedding space is untouched. Measured on the vector table itself
-    // rather than on the coverage fraction, which cannot see this: a body-less note has
-    // no chunks, so it joins the embedded count the moment it is projected — vacuously,
-    // having nothing to wait for — and would hide a vector this call had no business
-    // storing. Any later embed/reindex owns vectors, never `create_note`.
+    // Model-free. Measured on the vector table: a body-less note counts as embedded
+    // vacuously, so the coverage fraction would hide a stray vector.
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "chunks WHERE note_path = 'inbox/idea.md'"), 0);
     assert_eq!(
@@ -200,7 +183,6 @@ fn create_note_writes_a_minimal_note_model_free() {
         "create_note must never embed"
     );
 
-    // And the note is in the projection, counted as needing nothing.
     let after = vault.embed_status().unwrap();
     assert_eq!(after.total, before.total + 1);
     assert_eq!(

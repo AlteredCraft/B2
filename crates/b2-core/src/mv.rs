@@ -1,41 +1,19 @@
 //! Move / rename a note, a resource or a folder, and repair inbound links.
 //!
-//! **A move is where "rename keeps every backlink resolving" is earned.** Identity is
-//! the vault-relative path (ADR-0003, L1/L3), so a move changes the moved member's
-//! identity, and this module makes that a re-key rather than a break. Two halves, both
-//! bounded by the moved set's backlink count: the human-facing copy — the link text in
-//! every file linking *at* a moved member, rewritten in place — and the index: each moved
-//! note re-keyed by one [`db::repoint_note_path`] whose `ON UPDATE CASCADE` FKs carry
-//! chunks, centroid and outbound edges atomically, each moved resource by one
-//! [`db::repoint_resource`], then a re-projection of the inbound sources so their edges
-//! (`edges.dst_path` has no FK — it must be free to dangle) point at the new paths. A
-//! moved note's **vectors are not touched at all**: content-addressed (ADR-0006), they
-//! belong to the chunk text, which a move does not change.
+//! Identity is the path (ADR-0003, L1/L3), so a move re-keys: it rewrites the link text in
+//! every file linking at a moved member, repoints the index rows (`ON UPDATE CASCADE`
+//! carries chunks, centroid and outbound edges), and re-projects the inbound sources,
+//! whose `edges.dst_path` has no FK. Vectors are untouched (ADR-0006).
 //!
-//! **One pipeline for every move.** `move_note`, `move_resource` and `move_dir` only
-//! validate and build a [`MoveSet`] — the one rename, and the indexed members travelling
-//! with it — and [`execute`] runs it. It is **Markdown-first**: rewrite the inbound text,
-//! rename on disk, *then* re-project from the now-current Markdown. And bounded, not a
-//! scan: [`db::inbound_edges_of`] names exactly the files to touch, so the cost is
-//! O(inbound links). The link text is found by [`crate::link`]'s own scanner, so a move
-//! reads links exactly as ingest does. Known gap: within one inbound file the rewrite is
-//! keyed by a link's *written* text, so a second link with the same text that resolves
-//! elsewhere (a note-relative Markdown link and a vault-root wikilink both written
-//! `img.png`, naming two different files) is rewritten too.
+//! Every move builds a [`MoveSet`] and runs [`execute`]: Markdown first, then re-project.
+//! Cost is O(inbound links) via [`db::inbound_edges_of`]. Known gap: rewrites are keyed by
+//! a link's written text, so two same-text links resolving to different files in one
+//! inbound file are both rewritten.
 //!
-//! **The vault half is all or nothing** (GH #230). Reindexing can't repair rewritten
-//! link text (it projects whatever the Markdown says), so a failed move must leave every
-//! file as it was. Three layers: the destination is checked before anything is written
-//! ([`refuse_occupied`], [`refuse_file_ancestor`]); every rewrite is read and computed
-//! in memory before the first write ([`plan_inbound`]); and the writes, the folders the
-//! move creates and the rename run as one [`commit`] that undoes whatever it did if a
-//! later step fails. Once the rename lands the vault is final: a failure re-keying or
-//! re-projecting the index leaves correct Markdown, which `b2 reindex` projects.
-//!
-//! No process can undo a crash, so the one unguarded window is between the first
-//! rewrite and the rename: the rewritten links already name the destination, the note
-//! is still at its source. Re-running the same move finishes it (the rewrites are
-//! already done, so only the rename is left).
+//! The vault half is all or nothing (GH #230), since a reindex can't repair link text: the
+//! destination is checked and every rewrite computed before the first write, then
+//! [`commit`] undoes itself on failure. A crash between the first rewrite and the rename
+//! is the one unguarded window; re-running the move finishes it.
 
 use crate::db::{self, InboundTarget};
 use crate::error::{Error, Result};
@@ -49,35 +27,22 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// What [`move_note`] did: the note's old and new vault-relative paths, the inbound
-/// files whose link text was rewritten, and the total number of `[[…]]` targets
-/// repaired across them. `to` is the note's identity after the move (L1).
+/// What [`move_note`] did. `to` is the note's identity after the move (L1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MoveReport {
     pub from: String,
     pub to: String,
-    /// Post-move vault-relative paths of the files whose link text was rewritten
-    /// (sorted, deduped) — the moved note itself under `to`, when it links to itself.
-    /// Empty when nothing linked to the moved note.
+    /// Post-move paths of the files whose link text was rewritten (sorted, deduped),
+    /// including the moved note itself when it self-links.
     pub rewrote: Vec<String>,
     /// Total individual `[[…]]` link targets rewritten across `rewrote`.
     pub links_rewritten: usize,
 }
 
-/// Move the note at `old_rel` to `new_rel_input`, rewriting every inbound
-/// `[[oldpath|alias]]` link and re-keying the index. `old_rel` is the note's current
-/// path (as the façade resolved it); `new_rel_input` is the raw destination the user
-/// gave (a `.md` suffix is optional).
-///
-/// Re-projection **re-embeds the inbound files** — their bodies changed — so the caller
-/// must open the vault with the embedder the index was built with. The *moved* note
-/// re-embeds nothing (ADR-0006). Errors with [`Error::MoveDestination`] for an invalid
-/// destination and [`Error::MoveTargetExists`] rather than clobber.
-///
-/// Only the `[[…]]` form is rewritten at a note. A Markdown-form link at one
-/// (`[x](notes/a.md)`) keeps its text, but its source is re-projected like every inbound
-/// source, so its edge is exactly what a rebuild would project — dangling, or resolved to
-/// whatever note that text now names — rather than keep naming a path that is gone.
+/// Move the note at `old_rel` to `new_rel_input` (`.md` optional), rewriting inbound
+/// `[[…]]` links and re-keying the index. Inbound files re-embed, so the caller needs the
+/// index's embedder. A Markdown-form link at a note keeps its text; its source is still
+/// re-projected, so its edge matches what a rebuild would project.
 pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<MoveReport> {
     let new_rel = pathspec::normalize_rel_md(new_rel_input).map_err(Error::MoveDestination)?;
     refuse_same_path(&new_rel, old_rel, "note")?;
@@ -94,28 +59,21 @@ pub fn move_note(ctx: EmbedCtx, old_rel: &str, new_rel_input: &str) -> Result<Mo
     })
 }
 
-/// What [`move_resource`] did — the resource sibling of [`MoveReport`]. Since
-/// GH #170 the two carry the same fields, both arms being path-keyed
-/// (data-model.md §10); they stay separate types because the reports are
-/// separate contracts, not because the shapes diverge.
+/// What [`move_resource`] did. Same fields as [`MoveReport`] (GH #170), kept separate as
+/// a separate contract (data-model.md §10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResourceMoveReport {
     pub from: String,
     pub to: String,
-    /// Vault-relative paths of the inbound notes whose link text was rewritten
-    /// (sorted, deduped). Empty when nothing linked to the moved resource.
+    /// Inbound notes whose link text was rewritten (sorted, deduped).
     pub rewrote: Vec<String>,
     /// Total individual link targets rewritten across `rewrote`.
     pub links_rewritten: usize,
 }
 
-/// Move the resource at `old_rel` to `new_rel_input` — the note move minus the identity
-/// step: rewrite every inbound link's authored text (both syntaxes, each keeping its own
-/// relative-vs-root convention), move the file, update the inventory, re-project the
-/// inbound notes. B2 never touches the resource's bytes; the move is path-only. Errors
-/// mirror [`move_note`] (the façade owns [`Error::ResourceNotFound`]), plus
-/// [`Error::MoveDestination`] for a `.md` destination: that path names a note, so the
-/// file would stop being this resource (and a rebuild would index it as a note).
+/// Move the resource at `old_rel` to `new_rel_input`, rewriting inbound links in both
+/// syntaxes (each keeping its relative-vs-root convention). Path-only; the bytes are never
+/// touched. A `.md` destination is refused: a rebuild would index it as a note.
 pub fn move_resource(
     ctx: EmbedCtx,
     old_rel: &str,
@@ -145,40 +103,23 @@ pub fn move_resource(
     })
 }
 
-/// What [`move_dir`] did: the folder's old and new vault-relative paths, how many
-/// **indexed** notes/resources travelled (unindexed files travel too — the whole
-/// directory is renamed — but only indexed rows are counted), the files whose
-/// link text was rewritten (reported at their **post-move** paths, sorted), and
-/// the total link targets repaired.
+/// What [`move_dir`] did. The counts are of indexed members; unindexed files travel too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DirMoveReport {
     pub from: String,
     pub to: String,
     pub moved_notes: usize,
     pub moved_resources: usize,
-    /// Post-move vault-relative paths of the files whose link text was rewritten
-    /// (sorted, deduped). Empty when no links referenced the moved set.
+    /// Post-move paths of the files whose link text was rewritten (sorted, deduped).
     pub rewrote: Vec<String>,
     /// Total individual link targets rewritten across `rewrote`.
     pub links_rewritten: usize,
 }
 
-/// Move/rename the whole directory `from_input` to `to_input`. One `fs::rename` moves
-/// the directory — so **unindexed** files inside travel too — after every inbound link
-/// at the moved set is rewritten, exactly as the per-file moves do:
-///
-/// - wikilinks are vault-root-anchored, so links *between* co-moved notes are rewritten
-///   just like links from outside the set;
-/// - note-relative Markdown targets between co-moved files survive unchanged (a computed
-///   replacement equal to the authored text is skipped);
-/// - after the rename every moved note's `notes.path` is repointed **first**, then each
-///   moved file re-projects — so path-based link resolution never depends on
-///   re-projection order, the same reason full ingest is two-phase.
-///
-/// Re-projection re-embeds only genuinely rewritten bodies, but still requires the real
-/// embedder. Errors: [`Error::DirNotFound`], [`Error::MoveDestination`] (including a
-/// destination inside the moved folder), [`Error::MoveTargetExists`] rather than merge
-/// (with the case-only-rename carve-out on case-insensitive filesystems).
+/// Move/rename the directory `from_input` to `to_input` with one `fs::rename`, after
+/// rewriting inbound links as the per-file moves do. Wikilinks between co-moved notes are
+/// rewritten (they are vault-root); note-relative Markdown links between them compute to
+/// themselves and are skipped. Requires the real embedder.
 pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMoveReport> {
     let conn = ctx.proj.conn;
     let from = pathspec::normalize_rel_dir(from_input).map_err(Error::MoveDestination)?;
@@ -193,8 +134,7 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
         return Err(Error::DirNotFound(from));
     }
 
-    // Every indexed member under the folder travels to the same place under `to`. A
-    // resource keeps its file name, so its class (from the new path) is its old one.
+    // A resource keeps its file name, so its class from the new path is its old one.
     let rebased = |old: String| pathspec::rebase(&old, &from, &to).map(|new| (old, new));
     let mut notes: Vec<(String, String)> = db::notes_under_dir(conn, &from)?
         .into_iter()
@@ -228,17 +168,12 @@ pub fn move_dir(ctx: EmbedCtx, from_input: &str, to_input: &str) -> Result<DirMo
 
 // --- the one move pipeline (GH #134) ---------------------------------------------
 //
-// A move is always the same steps — refuse a bad destination, rewrite the inbound files'
-// link text, rename on disk, re-key, re-project — whatever travels. Each op's own
-// refusals (the destination's shape, a folder moved into itself) run before `execute`,
-// whose shared refusals (an occupied destination, a file where a folder must be) follow:
-// that precedence is part of each op's contract.
+// Each op's own refusals run before `execute`'s shared ones; that precedence is part of
+// each op's contract.
 
-/// Everything one move carries: the one rename that moves it on disk (a file, or the
-/// folder holding every member), and the **indexed** members travelling with it.
+/// One move: the single on-disk rename, and the indexed members travelling with it.
 #[derive(Debug, Default)]
 struct MoveSet {
-    /// The rename's vault-relative source and destination.
     from: String,
     to: String,
     /// Each moved note's `(old path, new path)`, sorted by old path.
@@ -256,7 +191,6 @@ struct ResourceMove {
 }
 
 impl MoveSet {
-    /// A set renaming `from` → `to` with no members yet.
     fn rename(from: &str, to: &str) -> Self {
         Self {
             from: from.to_string(),
@@ -265,8 +199,7 @@ impl MoveSet {
         }
     }
 
-    /// Where the note at `path` is after the move — its new path if it travels,
-    /// otherwise `path` itself.
+    /// Where the note at `path` is after the move.
     fn after<'a>(&'a self, path: &'a str) -> &'a str {
         match self
             .notes
@@ -277,7 +210,6 @@ impl MoveSet {
         }
     }
 
-    /// Whether the note at `path` travels with this set.
     fn moves_note(&self, path: &str) -> bool {
         self.notes
             .binary_search_by(|(old, _)| old.as_str().cmp(path))
@@ -285,17 +217,14 @@ impl MoveSet {
     }
 }
 
-/// What [`execute`] did: the rewritten files at their post-move paths (sorted), and
-/// how many link targets it rewrote across them.
+/// What [`execute`] did: rewritten files at post-move paths (sorted), and the link count.
 #[derive(Debug)]
 struct Moved {
     rewrote: Vec<String>,
     links_rewritten: usize,
 }
 
-/// Run one move: refuse an occupied or unreachable destination, plan every inbound
-/// rewrite, commit the rewrites and the rename (all or nothing), re-key every moved
-/// member, then re-project from the now-current Markdown.
+/// Run one move: refuse, plan, commit (all or nothing), re-key, re-project.
 fn execute(ctx: EmbedCtx, set: &MoveSet) -> Result<Moved> {
     let (conn, root) = (ctx.proj.conn, ctx.proj.root);
     let old_abs = root.join(&set.from);
@@ -303,19 +232,14 @@ fn execute(ctx: EmbedCtx, set: &MoveSet) -> Result<Moved> {
     refuse_occupied(&old_abs, &new_abs, &set.to)?;
     refuse_file_ancestor(root, &set.to)?;
 
-    // The graph names the bounded inbound set: for each edge pointing at a moved
-    // member, its source file and the exact link text (`dst_path_raw`) written there.
-    // Group by file into per-syntax target→replacement maps. A note is rewritten in
-    // its `[[…]]` form only, each link keeping its own `.md`-or-not convention; a
-    // resource is linked as `![[img.png]]` *or* `![](img.png)`, so its replacement
-    // feeds both, re-relativized against the source's **post-move** folder so a
-    // relative link between two co-moved files computes to itself and is skipped.
+    // Per-file, per-syntax target→replacement maps. A note is rewritten in its `[[…]]`
+    // form only; a resource in both, re-relativized against the source's post-move folder
+    // so a link between co-moved files computes to itself.
     let note_paths: Vec<&str> = set.notes.iter().map(|(old, _)| old.as_str()).collect();
     let resource_paths: Vec<&str> = set.resources.iter().map(|r| r.from.as_str()).collect();
     let (mut wiki, mut md) = (ByFile::new(), ByFile::new());
-    // Every inbound source is re-projected below, whether or not its *text* changes:
-    // its edges name paths that are about to change, and `edges.dst_path` carries no FK
-    // to cascade (it must be free to be NULL — the dangling case, G5).
+    // Every inbound source is re-projected, text changed or not: `edges.dst_path` has no
+    // FK to cascade (it must be free to dangle, G5).
     let mut sources = BTreeSet::new();
     for (target, e) in db::inbound_edges_of(conn, &note_paths, &resource_paths)? {
         let (replacement, both_forms) = match target {
@@ -340,17 +264,12 @@ fn execute(ctx: EmbedCtx, set: &MoveSet) -> Result<Moved> {
         sources.insert(e.src_path);
     }
 
-    // 1. Markdown first: rewrite inbound link text in place at the pre-move paths (a
-    //    self-link or a co-moved linker included), then one rename moves the note,
-    //    resource or folder — unindexed files in a folder travel for free — all or
-    //    nothing.
+    // 1. Markdown first: rewrite inbound links at the pre-move paths, then rename.
     let plan = plan_inbound(root, &wiki, &md)?;
     commit(root, &plan.rewrites, &old_abs, &new_abs)?;
 
-    // 2. Re-key the index before anything re-projects, so path-based link resolution
-    //    is independent of re-projection order (the same reason full ingest is
-    //    two-phase). Old and new paths are disjoint — the destination didn't exist — so
-    //    the UNIQUE(path) constraints can't trip.
+    // 2. Re-key before re-projecting, so resolution is order-independent. Old and new
+    //    paths are disjoint, so UNIQUE(path) can't trip.
     for (old, new) in &set.notes {
         db::repoint_note_path(conn, old, new)?;
     }
@@ -360,15 +279,12 @@ fn execute(ctx: EmbedCtx, set: &MoveSet) -> Result<Moved> {
             .as_ref()
             .and_then(ingest::unix_mtime);
         if !db::repoint_resource(conn, &r.from, &r.to, r.class.as_str(), mtime)? {
-            // Not inventoried after all (an out-of-band change the index hasn't seen):
-            // inventory the file where it now is, as a reindex would.
+            // Not inventoried (an out-of-band change): inventory it where it now is.
             ingest::project_resource_file(conn, root, &r.to, r.class, true)?;
         }
     }
 
-    // 3. Re-project from the now-current Markdown: every moved note at its new path
-    //    (refreshing its filename-derived title, mtime and outbound edges — an
-    //    unchanged body reuses its vectors), then every inbound source that stayed put.
+    // 3. Re-project moved notes at their new paths, then inbound sources that stayed.
     for (_, new) in &set.notes {
         ingest::ingest_file(ctx, new)?;
     }
@@ -388,17 +304,13 @@ fn execute(ctx: EmbedCtx, set: &MoveSet) -> Result<Moved> {
     })
 }
 
-/// Each inbound file's authored-target → replacement map, keyed by the file's
-/// vault-relative path. `BTreeMap` throughout, so the rewrite order — and the
-/// `rewrote` list every report carries — is sorted and deterministic.
+/// Each inbound file's target → replacement map. `BTreeMap` keeps the order deterministic.
 type ByFile = BTreeMap<String, Targets>;
 
 /// One file's authored-target → replacement map for one link syntax.
 type Targets = BTreeMap<String, String>;
 
-/// Refuse a destination equal to the source. `subject` names the thing being
-/// moved, so the message reads in the user's own nouns ("… is the note's current
-/// path").
+/// Refuse a destination equal to the source. `subject` names the thing moved, for the message.
 fn refuse_same_path(new_rel: &str, old_rel: &str, subject: &str) -> Result<()> {
     if new_rel == old_rel {
         return Err(Error::MoveDestination(format!(
@@ -408,10 +320,8 @@ fn refuse_same_path(new_rel: &str, old_rel: &str, subject: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuse an occupied destination rather than clobber it (the vault never
-/// overwrites, data-model.md §1) — with the case-only-rename carve-out: on a
-/// case-insensitive filesystem the destination "exists" because it *is* the
-/// source ([`is_same_dirent`]).
+/// Refuse an occupied destination rather than clobber it (data-model.md §1), except a
+/// case-only rename on a case-insensitive filesystem ([`is_same_dirent`]).
 fn refuse_occupied(old_abs: &Path, new_abs: &Path, new_rel: &str) -> Result<()> {
     if new_abs.exists() && !is_same_dirent(old_abs, new_abs) {
         return Err(Error::MoveTargetExists(new_rel.to_string()));
@@ -419,11 +329,8 @@ fn refuse_occupied(old_abs: &Path, new_abs: &Path, new_rel: &str) -> Result<()> 
     Ok(())
 }
 
-/// Refuse a destination beneath a regular file (`blocked/a.md` when `blocked` is a
-/// file): no rename can land there, and finding out *after* the inbound rewrites is
-/// exactly the broken-links failure GH #230 reported. Walks the destination's
-/// ancestors from the vault root down and stops at the first missing one — the
-/// move creates everything below it.
+/// Refuse a destination beneath a regular file, before any rewrite (GH #230). Stops at the
+/// first missing ancestor; the move creates everything below it.
 fn refuse_file_ancestor(vault_root: &Path, new_rel: &str) -> Result<()> {
     for (i, _) in new_rel.match_indices('/') {
         let dir = &new_rel[..i];
@@ -440,8 +347,7 @@ fn refuse_file_ancestor(vault_root: &Path, new_rel: &str) -> Result<()> {
     Ok(())
 }
 
-/// One inbound file's planned rewrite: the bytes it holds now and the bytes it will
-/// hold. `original` is kept so [`commit`] can put the file back.
+/// One inbound file's planned rewrite. `original` lets [`commit`] put the file back.
 #[derive(Debug)]
 struct Rewrite {
     rel: String,
@@ -458,10 +364,8 @@ struct Plan {
     links_rewritten: usize,
 }
 
-/// Markdown first, for every move: read each inbound file and compute its rewritten
-/// link text, writing nothing. `wiki` holds each file's `[[…]]` replacements and `md`
-/// its `[…](…)` ones; a file whose rewrite changes nothing is left out of the plan. A
-/// file that can't be read fails the move here, while the vault is still untouched.
+/// Read each inbound file and compute its rewrite, writing nothing. An unreadable file
+/// fails the move here, while the vault is untouched.
 fn plan_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<Plan> {
     let none = Targets::new();
     let mut rewrites = Vec::new();
@@ -491,14 +395,9 @@ fn plan_inbound(vault_root: &Path, wiki: &ByFile, md: &ByFile) -> Result<Plan> {
     })
 }
 
-/// Rewrite every link in `raw` whose trimmed target is a key of its syntax's map —
-/// `wiki` for `[[…]]`/`![[…]]`, `md` for `[…](…)`/`![…](…)` — to that key's replacement.
-/// Only the target token changes: every other byte (the brackets, the `|alias`, the
-/// link text, whitespace around the target) is preserved, and a target merely sharing a
-/// prefix with a key is never touched. The links are the ones [`link::link_spans`]
-/// finds — the scanner ingest projects edges from — matched by their written text (see
-/// the module doc's known gap). Returns the rewritten text and the count of targets
-/// replaced.
+/// Replace each link target in `raw` found in its syntax's map (`wiki` for `[[…]]`, `md`
+/// for `[…](…)`). Only the target token changes. Uses [`link::link_spans`], the scanner
+/// ingest uses. Returns the text and the count replaced.
 fn rewrite_targets(raw: &str, wiki: &Targets, md: &Targets) -> (String, usize) {
     let mut out = String::with_capacity(raw.len());
     let (mut copied, mut count) = (0usize, 0usize);
@@ -519,7 +418,7 @@ fn rewrite_targets(raw: &str, wiki: &Targets, md: &Targets) -> (String, usize) {
     (out, count)
 }
 
-/// One vault change [`commit`] made, and so must undo if a later step fails.
+/// One vault change [`commit`] must undo if a later step fails.
 #[derive(Debug)]
 enum Done {
     /// `rewrites[i]` was opened for writing (and so truncated).
@@ -528,13 +427,9 @@ enum Done {
     CreatedDir(PathBuf),
 }
 
-/// Apply a move's vault writes as one unit: write every planned rewrite, create any
-/// missing destination folders, then rename `old_abs` → `new_abs` (the one step that
-/// moves the note, resource or folder). If any step fails, undo the earlier ones in
-/// reverse and return the failure; the rename is last, so once it succeeds there is
-/// nothing left to undo. A filesystem has no transaction, so an undo step can fail
-/// too — then [`Error::MoveIncomplete`] names the files still holding a rewrite, and
-/// carries the failure that started the undo, rather than pretending the vault is whole.
+/// Apply a move's vault writes as one unit: rewrites, missing folders, then the rename
+/// (last, so success leaves nothing to undo). On failure, undo in reverse. If the undo
+/// fails too, [`Error::MoveIncomplete`] names the files still holding a rewrite.
 fn commit(vault_root: &Path, rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path) -> Result<()> {
     let mut done = Vec::new();
     let Err(err) = apply(rewrites, old_abs, new_abs, &mut done) else {
@@ -561,8 +456,7 @@ fn apply(rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path, done: &mut Vec<Do
         done.push(Done::Wrote(i));
         file.write_all(r.rewritten.as_bytes())?;
     }
-    // The missing ancestors, outermost first, each created and recorded on its own so
-    // the undo removes exactly the folders this move made.
+    // Created outermost first, each recorded so the undo removes exactly these.
     let mut missing: Vec<&Path> = new_abs
         .ancestors()
         .skip(1)
@@ -577,10 +471,8 @@ fn apply(rewrites: &[Rewrite], old_abs: &Path, new_abs: &Path, done: &mut Vec<Do
     Ok(())
 }
 
-/// [`commit`]'s undo: reverse `done`, restoring each rewritten file's original bytes
-/// and removing each folder the move created. Returns the vault-relative paths of the
-/// files that could not be restored. A folder that won't go is only logged: it is
-/// empty, so no authored content is lost with it.
+/// [`commit`]'s undo. Returns the files that could not be restored; a folder that won't
+/// go is only logged, as it is empty.
 fn undo(vault_root: &Path, rewrites: &[Rewrite], done: &[Done]) -> Vec<String> {
     let mut unrestored = Vec::new();
     for step in done.iter().rev() {
@@ -608,8 +500,7 @@ fn undo(vault_root: &Path, rewrites: &[Rewrite], done: &[Done]) -> Vec<String> {
     unrestored
 }
 
-/// Split an authored link target at its first `#` into the path and the fragment —
-/// which addresses a place *inside* the target, so a move carries it through verbatim.
+/// Split a link target at its first `#`. A move carries the fragment through verbatim.
 fn split_fragment(authored: &str) -> (&str, Option<&str>) {
     match authored.split_once('#') {
         Some((base, fragment)) => (base, Some(fragment)),
@@ -617,7 +508,6 @@ fn split_fragment(authored: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// `base` with the authored `#fragment` (if any) put back on.
 fn with_fragment(base: &str, fragment: Option<&str>) -> String {
     match fragment {
         Some(f) => format!("{base}#{f}"),
@@ -625,10 +515,9 @@ fn with_fragment(base: &str, fragment: Option<&str>) -> String {
     }
 }
 
-/// The replacement for a wikilink at a note now living at `new_path`, preserving the
-/// link's own `.md`-or-not convention (Obsidian omits the extension; an authored `.md`
-/// is kept) and any `#heading` fragment. Only a lowercase `.md` is dropped: that is the
-/// suffix the resolver's `+ ".md"` ladder adds back, so any other spelling stays whole.
+/// The new wikilink target for a note at `new_path`, keeping the link's `.md`-or-not
+/// convention and fragment. Only a lowercase `.md` is dropped, the suffix the resolver
+/// adds back.
 fn wiki_replacement(new_path: &str, authored: &str) -> String {
     let (base, fragment) = split_fragment(authored);
     let new_base = if base.ends_with(".md") {
@@ -639,28 +528,20 @@ fn wiki_replacement(new_path: &str, authored: &str) -> String {
     with_fragment(new_base, fragment)
 }
 
-/// The replacement for a link at a resource moving `old_path` → `new_path`, as
-/// authored from a note in `src_dir` (its directory **after** the move, so a link
-/// between two co-moved files computes to itself and is skipped). Two things
-/// survive: the authored convention — a vault-root target stays vault-root,
-/// anything else is re-relativized against `src_dir` — and a `#fragment` suffix,
-/// carried through untouched.
+/// The new target for a link at a moved resource, from a note in `src_dir` (post-move).
+/// A vault-root target stays vault-root; anything else is re-relativized. Keeps the fragment.
 fn resource_replacement(authored: &str, old_path: &str, new_path: &str, src_dir: &str) -> String {
     let (base, fragment) = split_fragment(authored);
     let new_base = if base.trim() == old_path {
-        new_path.to_string() // authored vault-root — keep it vault-root
+        new_path.to_string()
     } else {
-        pathspec::relativize(src_dir, new_path) // authored note-relative — keep it relative
+        pathspec::relativize(src_dir, new_path)
     };
     with_fragment(&new_base, fragment)
 }
 
-/// Whether `a` and `b` name the **same directory entry** on disk — true only on
-/// a case-insensitive filesystem (APFS default) for a case-only rename, where
-/// `Path::exists` on the destination false-positives against the source itself.
-/// `fs::canonicalize` returns the on-disk-case path, so the two canonicalize
-/// equal iff they are one entry; any error (e.g. the path doesn't exist) means
-/// "not the same entry" and the ordinary target-exists refusal stands.
+/// Whether `a` and `b` are the same directory entry: a case-only rename on a
+/// case-insensitive filesystem (APFS default). Any canonicalize error means "not the same".
 fn is_same_dirent(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
@@ -741,8 +622,6 @@ mod tests {
         assert_eq!(n, 2);
     }
 
-    /// Each syntax is rewritten from its own map, and a Markdown target keeps the
-    /// whitespace and link text around it.
     #[test]
     fn each_syntax_is_rewritten_from_its_own_map() {
         let wiki = targets(&[("img.png", "media/img.png")]);
@@ -753,14 +632,11 @@ mod tests {
             "![[media/img.png|cap]] and ![alt]( ../media/img.png )\n"
         );
         assert_eq!(n, 2);
-        // A map for one syntax never touches the other's links.
         let (out, n) = rewrite_targets("![alt](img.png)", &wiki, &Targets::new());
         assert_eq!((out.as_str(), n), ("![alt](img.png)", 0));
     }
 
-    /// The divergence one grammar closes: a stray `[[` on one line used to pair with
-    /// the next line's `]]` in the move's whole-file scan, hiding a link ingest had
-    /// projected — so the backlink dangled after the move.
+    /// The move uses ingest's scanner, so a stray `[[` can't hide the next line's link.
     #[test]
     fn a_stray_open_bracket_does_not_hide_the_next_lines_link() {
         let t = targets(&[("old", "new")]);
@@ -770,14 +646,10 @@ mod tests {
     }
 
     // --- the replacement rules, direct (GH #134) ------------------------------
-    //
-    // Pure functions, so they get pinned here rather than only through a whole-vault
-    // move.
 
     #[test]
     fn a_wikilink_keeps_its_own_md_convention() {
-        // Obsidian's bare form stays bare; an authored `.md` keeps its `.md`. Both
-        // land on the same note — the convention is the *link's*, not the vault's.
+        // The convention is the link's, not the vault's.
         assert_eq!(
             wiki_replacement("archive/memory.md", "concepts/memory"),
             "archive/memory"
@@ -788,8 +660,6 @@ mod tests {
         );
     }
 
-    /// A `[[note#heading]]` link resolves to the note (the fragment is stripped for
-    /// the lookup only), so its move keeps the heading it addresses.
     #[test]
     fn a_wikilink_keeps_its_heading_fragment() {
         assert_eq!(
@@ -804,8 +674,7 @@ mod tests {
 
     #[test]
     fn a_resource_link_keeps_its_convention_and_its_fragment() {
-        // Authored vault-root (the target equals the resource's vault path) → stays
-        // vault-root, whoever links it.
+        // Authored vault-root stays vault-root.
         assert_eq!(
             resource_replacement(
                 "assets/plan.pdf",
@@ -815,7 +684,7 @@ mod tests {
             ),
             "docs/plan.pdf"
         );
-        // Authored note-relative → re-relativized against the linking note's dir.
+        // Authored note-relative is re-relativized.
         assert_eq!(
             resource_replacement(
                 "../assets/plan.pdf",
@@ -825,8 +694,7 @@ mod tests {
             ),
             "../docs/plan.pdf"
         );
-        // A `#fragment` survives verbatim on both routes — it addresses a place
-        // *inside* the resource, which a move never touches.
+        // A `#fragment` survives on both routes.
         assert_eq!(
             resource_replacement(
                 "assets/plan.pdf#page=3",
@@ -849,9 +717,7 @@ mod tests {
 
     #[test]
     fn a_relative_link_between_co_moved_files_computes_to_itself() {
-        // The folder move passes the source's **post-move** directory, so a link from
-        // `dir/note.md` to `dir/img.png` is unchanged by moving `dir/` — and an
-        // unchanged replacement is what the pipeline skips, leaving the file untouched.
+        // `src_dir` is the post-move directory, so the link is unchanged and skipped.
         assert_eq!(
             resource_replacement("img.png", "dir/img.png", "moved/img.png", "moved"),
             "img.png"
@@ -874,11 +740,8 @@ mod tests {
 
     // --- the all-or-nothing commit (GH #230) ------------------------------------
     //
-    // The façade suite (tests/mv.rs) drives a failed rename end to end. These pin the
-    // two failures it can't reach deterministically: a write that fails after an
-    // earlier one landed, and an undo that itself fails.
+    // Failures tests/mv.rs can't reach deterministically.
 
-    /// A planned rewrite of `rel` under `root`, from whatever is on disk now.
     fn planned(root: &Path, rel: &str, rewritten: &str) -> Rewrite {
         let abs = root.join(rel);
         Rewrite {

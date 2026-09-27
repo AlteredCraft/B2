@@ -1,9 +1,5 @@
-//! `Vault::read` — the one façade op the Desktop UI MVP adds
-//! (crates/b2-desktop/CLAUDE.md). Its contract: resolve a note by its
-//! vault-relative path — with or without the `.md`, the only two ref forms since
-//! GH #170 — and return the note's raw Markdown body **from disk** (source of
-//! truth, frontmatter stripped) plus the display metadata. A pure read, model-free
-//! (FakeEmbedder), against the golden-vault fixture.
+//! `Vault::read`: resolve a note by path, with or without the `.md` (GH #170), and return
+//! its raw body from disk, frontmatter stripped, plus display metadata.
 
 mod common;
 
@@ -17,16 +13,14 @@ fn read_returns_body_and_metadata_with_frontmatter_stripped() {
 
     let note = vault.read("concepts/memory.md").unwrap();
 
-    // Identity + display metadata: the title is the filename (data-model.md §1 — the
-    // frontmatter `title:` is inert); type/created still come from the frontmatter.
+    // The title is the filename (data-model.md §1); type and created are frontmatter's.
     assert_eq!(note.path, MEMORY_PATH);
     assert_eq!(note.path, "concepts/memory.md");
     assert_eq!(note.title.as_deref(), Some("memory"));
     assert_eq!(note.r#type.as_deref(), Some("concept"));
     assert_eq!(note.created.as_deref(), Some("2026-06-20"));
 
-    // the body is the Markdown *after* the frontmatter — the raw source, not a
-    // projection. It must not carry any frontmatter: neither the fence nor a key.
+    // The raw source, not a projection.
     assert!(note.body.contains("The brain encodes"));
     assert!(
         !note.body.contains("---"),
@@ -46,14 +40,11 @@ fn read_returns_the_raw_frontmatter_block_verbatim() {
     let note = vault.read("concepts/memory.md").unwrap();
     let fm = note.frontmatter.expect("golden note has frontmatter");
 
-    // The verbatim YAML between the fences — the source keys, not a re-serialization.
-    // Byte-honest: the raw block still carries the (inert) `title:` key verbatim,
-    // while the note's display `title` is its filename (data-model.md §1).
+    // Verbatim, not re-serialized: the inert `title:` key is still there (data-model.md §1).
     assert!(fm.contains(r#"title: "Human memory""#));
     assert_eq!(note.title.as_deref(), Some("memory"));
     assert!(fm.contains("type: concept"));
     assert!(!fm.contains("---"), "fences are excluded from the block");
-    // …and it is genuinely separate from the body (frontmatter isn't duplicated there).
     assert!(!note.body.contains("title:"));
 }
 
@@ -62,9 +53,7 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // The body is byte-honest Markdown: wikilinks survive verbatim so the adapter
-    // renders them (clickable wikilinks are the MVP's navigation). The typed
-    // relation is metadata — it shows in the frontmatter block, never the body.
+    // Wikilinks survive verbatim for the adapter; the typed relation stays in frontmatter.
     let note = vault.read("notes/spaced-repetition").unwrap();
     assert!(note.body.contains("[[concepts/memory|Human memory]]"));
     assert!(
@@ -79,8 +68,6 @@ fn read_body_is_verbatim_markdown_including_wikilinks() {
 
 #[test]
 fn read_resolves_a_path_and_its_stem_to_the_same_note() {
-    // Both accepted ref forms, and since GH #170 the only two: the full
-    // vault-relative path, and the extensionless stem the wikilink habit writes.
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
@@ -99,7 +86,7 @@ fn read_surfaces_tags_from_frontmatter() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     golden_vault_copy(&root);
-    // a note with tags + a body, to exercise the metadata that the golden notes lack.
+    // The golden notes have no tags.
     std::fs::write(
         root.join("tagged.md"),
         "---\ntype: note\ntitle: Tagged\ntags: [alpha, beta]\n---\nHello body.\n",
@@ -110,7 +97,7 @@ fn read_surfaces_tags_from_frontmatter() {
 
     let note = vault.read("tagged").unwrap();
     assert_eq!(note.tags, vec!["alpha".to_string(), "beta".to_string()]);
-    // Title is the filename (`tagged.md`), not the frontmatter `title: Tagged`.
+    // Title is the filename, not `title: Tagged`.
     assert_eq!(note.title.as_deref(), Some("tagged"));
     assert_eq!(note.body.trim(), "Hello body.");
 }

@@ -1,6 +1,5 @@
-//! The opt-in A/Bs, each judged against the default config's passes and logged as rows
-//! of their own beside its row: `--stemmer` (the FTS tokenizer ablation, GH #157) and
-//! `--sweep` (the in-process chunker sweep, GH #44).
+//! The opt-in A/Bs, each judged against the default config's passes and logged as its own
+//! row: `--stemmer` (FTS tokenizer, GH #157) and `--sweep` (chunker, GH #44).
 
 use crate::common::append_result;
 use crate::discovery::score_similar;
@@ -13,37 +12,26 @@ use b2_core::db::FtsTokenizer;
 use b2_core::vault::Vault;
 use std::path::Path;
 
-/// The default config's scored run — what every ablation row is judged against
-/// (the paired per-query moves) and logged beside. A short-lived, read-only view
-/// over values `run` owns, built once and handed to each A/B.
+/// The default config's scored run, which every ablation row is judged against. A
+/// short-lived, read-only view over values `run` owns.
 #[derive(Clone, Copy)]
 pub struct Baseline<'a> {
-    /// The results log every row is appended to.
     pub log: &'a Path,
     pub run: RunId<'a>,
     pub notes: usize,
     pub chunks: usize,
     pub embed_secs: f64,
-    /// The labelled positives every pass below was scored over.
     pub queries: &'a [Labelled],
     pub bm25: &'a Pass,
     pub vector: &'a Pass,
     pub hybrid: &'a Pass,
 }
 
-/// The FTS tokenizer ablation (the #157 instrument).
+/// The FTS tokenizer ablation (GH #157): shipped `porter unicode61` against unstemmed
+/// `unicode61` over identical chunks and vectors. Discovery never touches FTS, so it isn't
+/// re-scored; the dense ablation is, as a check that the harness itself is sound.
 ///
-/// One lever, isolated: `rebuild_fts` swaps the tokenizer over the identical
-/// chunk rows and vectors — the shipped `porter unicode61` against the
-/// unstemmed `unicode61` the A/B retired, kept measurable so the verdict can
-/// be re-tried as the corpus grows. Discovery is deliberately not re-scored —
-/// `similar` never touches FTS (centroid shortlist + chunk vectors), so its
-/// numbers cannot move and the ablation row records no `similar` keys. The
-/// dense ablation IS re-scored, as an instrument check: FTS cannot reach it
-/// either, so a moved dense rank means the harness is broken, not the engine.
-///
-/// `bm25_unstemmed` is the lexical arm, which `run` scores while the vault is still
-/// projected-but-unembedded (so `search` is honestly BM25-only under both tokenizers).
+/// `bm25_unstemmed` is scored by `run` before embedding, so it is BM25-only.
 pub fn stemmer(
     vault: &Vault,
     base: &Baseline,
@@ -102,8 +90,7 @@ pub fn stemmer(
             },
         ),
     )?;
-    // Hand the vault back untainted, so a `--sweep` in the same run (and the
-    // reference numbers above) stay under the shipped default tokenizer.
+    // Restore the shipped tokenizer for a `--sweep` in the same run.
     vault.rebuild_fts(FtsTokenizer::PorterUnicode61)?;
     Ok(())
 }
@@ -116,14 +103,9 @@ pub fn sweep(
     sim_set: &SimilarSet,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let positives = base.queries;
-    // The #44 grid: both directions on each swept knob, plus the one
-    // interaction worth a row. `target_tokens` brackets the 450 default
-    // (250 / 350 / 600); `overlap_frac` brackets 0.15 (0.0 / 0.30);
-    // `target-250+heading-path` exists because a smaller chunk carries less
-    // of its own context, which is exactly when the breadcrumb prefix (D3)
-    // is most plausibly worth its tokens. `chars_per_token` and
-    // `backscan_tokens` stay unswept: they are calibration constants of the
-    // token proxy and the boundary search, not retrieval-quality levers.
+    // The #44 grid brackets each knob's default. `target-250+heading-path` pairs the heading
+    // prefix (D3) with small chunks, where it most plausibly helps. `chars_per_token` and
+    // `backscan_tokens` are calibration constants, not quality levers, so stay unswept.
     let variants: Vec<(&str, ChunkConfig)> = vec![
         (
             "target-250",
@@ -178,12 +160,7 @@ pub fn sweep(
     ];
     println!("\n{}", "=".repeat(78));
     println!("chunker sweep (same model, same corpus; default row above for reference)");
-    // `mate MRR` rather than the per-anchor `similar h@3` this column used
-    // to carry: that number saturates (GH #183), so as a *comparison*
-    // column across variants it could only ever print 1.00 (GH #188).
-    // `strangers` replaced `neg clean` when GH #197 retired the existence
-    // gate: under always-serve a negative anchor always serves, so that
-    // column could only ever print 0/5 — the same cannot-move failure.
+    // Per-mate MRR and strangers, because per-anchor hit@3 saturates (GH #183, #188).
     println!(
         "{:<24} {:>7} {:>8}   note h@1/MRR   vec h@1/MRR    chunk h@1/MRR   mate MRR   strangers",
         "config", "chunks", "embed_s"
@@ -209,10 +186,8 @@ pub fn sweep(
             sim.mate.mrr(),
             sim.strangers.len(),
         );
-        // The readout the A/B is actually judged on: at this n every aggregate
-        // delta above is 1–2 queries, so the aggregate is a smoke alarm and the
-        // per-query win/loss list is the data (docs/evals.md, the
-        // process rules).
+        // What the A/B is judged on: at this n an aggregate delta is 1–2 queries, so the
+        // per-query moves are the data (docs/evals.md).
         print_rank_moves(positives, base.hybrid, &pass);
         append_result(
             base.log,

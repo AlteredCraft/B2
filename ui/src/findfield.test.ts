@@ -1,7 +1,5 @@
-// Find-in-note's editor engine (findfield.ts), on real EditorStates — the droplink.test.ts
-// rig. What's pinned is the field's contract with the bar: an effect sets the query and
-// the wanted active match, a doc edit re-derives the matches and keeps the active one
-// where the user was, and null closes it.
+// Find-in-note's editor engine (findfield.ts), on real EditorStates: an effect sets the
+// query and active match, a doc edit re-derives and keeps the active one, null closes it.
 
 import { strict as assert } from "node:assert";
 import test from "node:test";

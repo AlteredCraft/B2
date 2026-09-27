@@ -1,17 +1,5 @@
-// Where B2's keyboard meets CodeMirror's (editorkeys.ts), pinned.
-//
-// Not dependency-free, deliberately — this imports the real @codemirror keymaps, the way
-// paste.test.ts exercises the real turndown. A check that B2's chords survive contact
-// with CodeMirror is worthless against a hand-written copy of what CodeMirror binds; the
-// whole point is to read the dependency that actually ships.
-//
-// What it's guarding. Several of B2's chords work while the editor has the keyboard only
-// because CodeMirror leaves them alone: ⌘E to leave edit mode, ⌘S to flush, ⌘F to open
-// find. That's an assumption about a dependency, and until now it lived as a parenthesis
-// in a comment ("CodeMirror leaves Mod-e unbound, so the event bubbles here"). An upgrade
-// that binds Mod-e would break ⌘E in the one path a user hits constantly — no error, no
-// failing test, just a chord that stopped working. So the assumption is a list now, and
-// the list is asserted.
+// Where B2's keyboard meets CodeMirror's (editorkeys.ts), pinned against the real
+// @codemirror keymaps: an upgrade that binds Mod-e would otherwise break ⌘E silently.
 import { DEFAULT_BINDINGS, chordFor, keystrokes, parseChord } from "./bindings.ts";
 import {
   STOCK_EDITOR_KEYMAP,
@@ -36,20 +24,14 @@ function check(name: string, fn: () => void): void {
 }
 
 check("every stock chord parses into the registry's model", () => {
-  // The comparison is only as good as its coverage: a chord this can't read is a chord
-  // the overlap check is blind to. CodeMirror's key syntax is the one bindings.ts adopted,
-  // so this should hold — and if a release introduces a spelling it doesn't, the whole
-  // check quietly stops meaning anything, which is why it's asserted rather than assumed.
+  // A chord this can't read is one the overlap check is blind to.
   const chords = editorChords();
   assert(chords.length > 50, `only ${chords.length} stock chords — did a keymap go missing?`);
   for (const c of chords) parseChord(c.spec);
 });
 
 check("the keymap main.ts installs is the keymap this module compares against", () => {
-  // STOCK_EDITOR_KEYMAP is what main.ts spreads; STOCK_KEYMAPS is what the overlap check
-  // reads. Adding a keymap to the first and forgetting the second would leave the editor
-  // with bindings nothing checks — the failure mode this module exists to prevent,
-  // reintroduced one level up.
+  // Everything main.ts spreads must be in what the overlap check reads.
   const declared = new Set(STOCK_KEYMAPS.flatMap((k) => k.keymap));
   for (const b of STOCK_EDITOR_KEYMAP) {
     assert(declared.has(b), `a binding in STOCK_EDITOR_KEYMAP that STOCK_KEYMAPS doesn't list`);
@@ -57,9 +39,7 @@ check("the keymap main.ts installs is the keymap this module compares against", 
 });
 
 check("the chords B2 needs to reach it while editing are unbound by CodeMirror", () => {
-  // The assertion with teeth. Each of these is a chord whose handler has no edit-mode
-  // guard — it is *expected* to fire with the keyboard in the editor, and it can only do
-  // that if CodeMirror declines to handle it first.
+  // These handlers have no edit-mode guard: they rely on CodeMirror declining first.
   const mustBubble: [string, string][] = [
     ["edit.toggle", "⌘E is how you leave edit mode; bound here, you'd be stuck in it"],
     ["editor.save", "⌘S is the explicit flush, and only ever pressed while editing"],
@@ -79,26 +59,13 @@ check("the chords B2 needs to reach it while editing are unbound by CodeMirror",
 });
 
 check("B2 and CodeMirror overlap on exactly these chords", () => {
-  // Every row is deliberate, and every row is a different resolution. Read as: B2's
-  // chord, the chord, the stock keymap that also claims it, the command it runs.
-  //
-  //  - ⌘⌫  CodeMirror keeps it. Deleting to the line start is the platform's meaning
-  //        inside text, so B2's own ⌘⌫ (delete the focused row) guards itself off with
-  //        `state.editing || inTextEntry()` rather than competing.
-  //  - Esc  CodeMirror gets first refusal twice over — closing an open completion menu,
-  //        then collapsing a multi-selection. Both *decline* when there's nothing to do,
-  //        which is what lets Escape fall through to B2's overlay cascade the rest of
-  //        the time. This is the one row where "who wins" is decided per keystroke.
-  //  - ⌘[ ⌘] and ⌘← ⌘→  CodeMirror keeps all four: indent, and caret-to-line-edge. B2's
-  //        history chords guard on `!state.editing` (and the arrows additionally on
-  //        `inTextEntry()`) precisely because these are the editor's first.
-  //  - ⌘I   B2 wins, by install order — the format chords go into `keymap.of` ahead of
-  //        the stock ones, so italic shadows selectParentSyntax. That ordering is load-
-  //        bearing, and this row is what notices if it's ever shuffled.
-  //
-  // A new row appearing here means an upgrade took a chord. A row vanishing means B2 can
-  // stop guarding against something. Either way it should be looked at, not re-pinned
-  // reflexively.
+  // Each row resolves differently:
+  //  - ⌘⌫  CodeMirror keeps it; B2's ⌘⌫ guards on `state.editing || inTextEntry()`.
+  //  - Esc  CodeMirror's completion and multi-selection handlers decline when idle, so
+  //        Escape falls through to B2's overlay cascade; decided per keystroke.
+  //  - ⌘[ ⌘] ⌘← ⌘→  CodeMirror keeps them; B2's history chords guard on `!state.editing`.
+  //  - ⌘I   B2 wins by install order (format chords go into `keymap.of` first).
+  // A row appearing or vanishing should be looked at, not re-pinned reflexively.
   assertEq(
     editorOverlaps().map((o) => `${o.id} ${o.chord} — ${o.source}: ${o.command}`),
     [
@@ -116,17 +83,9 @@ check("B2 and CodeMirror overlap on exactly these chords", () => {
 });
 
 check("B2 and the editor never meet on a ⌃ keystroke — the emacs bindings are CodeMirror's", () => {
-  // The check that found the bug this file exists for, kept as the guard that it stays
-  // fixed. B2's matcher used to read `(e.metaKey || e.ctrlKey)`, so every ⌘ chord answered
-  // to ⌃ as well. On macOS that lands on the system's emacs text bindings — which
-  // CodeMirror implements — and since a CodeMirror binding calls `preventDefault` without
-  // `stopPropagation`, the event still reached the document handler. One keystroke ran
-  // both commands: ⌃E moved the caret to end-of-line *and* left edit mode; ⌃F moved it
-  // forward a character *and* opened the find bar. Six chords did this (⌃E ⌃F ⌃⇧F ⌃N ⌃⇧N
-  // ⌃⇧A), and two more would have but for an unrelated `!state.editing` guard.
-  //
-  // bindings.test.ts holds the matcher's end of this — no chord claims ⌃ without asking
-  // for it. This is the other end: whatever B2 binds, it doesn't land on the editor's ⌃.
+  // A CodeMirror binding calls `preventDefault` without `stopPropagation`, so a B2 chord on
+  // the editor's ⌃ emacs bindings would run both commands (⌃E: end-of-line and leave edit mode).
+  // bindings.test.ts holds the matcher's end: no chord claims ⌃ without asking.
   const onControl = editorOverlaps().filter((o) => o.shared.some((f) => f.startsWith("⌃")));
   assertEq(
     onControl.map((o) => `${o.id} ${o.chord} [${o.shared.join(" ")}] — ${o.command}`),
@@ -136,10 +95,7 @@ check("B2 and the editor never meet on a ⌃ keystroke — the emacs bindings ar
 });
 
 check("the editor's own B2 chords are the ones installed ahead of the stock keymap", () => {
-  // ⌘B / ⌘I / ⌘T / ⇧⌘V and Tab / ⇧Tab go into the editor's keymap; ⌘S is the document
-  // handler's. All are scope `editor`, which is what makes the overlap check consider
-  // them at all — a chord filed under the wrong scope would be compared against the
-  // wrong keyboard.
+  // Only scope `editor` is compared against CodeMirror's keyboard.
   const editorIds = DEFAULT_BINDINGS.filter((b) => b.scope === "editor").map((b) => b.id);
   assertEq(
     editorIds,
@@ -157,11 +113,8 @@ check("the editor's own B2 chords are the ones installed ahead of the stock keym
 });
 
 check("Tab reaches the editor's list commands — nothing in the editor binds it first", () => {
-  // The assumption `editor.list.indent` rests on, and the reason `markdownKeymap` is in
-  // STOCK_KEYMAPS now: `markdown()` installs it at Prec.high, *above* B2's own chords,
-  // so a release that gave it a Tab binding would take the key without a word. The stock
-  // list is also where `indentWithTab` would show up if it were ever added to
-  // `defaultKeymap` — that one would silently turn Tab back into plain indentation.
+  // `editor.list.indent` assumes no stock Tab binding: `markdownKeymap` sits above B2's
+  // chords, and `indentWithTab` in `defaultKeymap` would take Tab silently.
   const onTab = editorChords().filter((c) => keystrokes(c.spec).some((f) => f.endsWith("Tab")));
   assertEq(
     onTab.map((c) => `${c.spec} — ${c.source} ${c.command}`),
@@ -171,12 +124,8 @@ check("Tab reaches the editor's list commands — nothing in the editor binds it
 });
 
 check("chords handed to CodeMirror are ones CodeMirror can parse", () => {
-  // `chordFor` gives main.ts the registry's spelling and it goes straight into
-  // `keymap.of` — which works because the syntax is CodeMirror's, with one exception.
-  // `Any-` is B2's own, and CodeMirror would read it as a modifier named "Any" and bind
-  // a chord nothing presses. Nothing installed in the editor uses it today; this is what
-  // notices if that changes, since the failure is otherwise a chord that silently
-  // stops working.
+  // Registry chords go straight into `keymap.of`, but `Any-` is B2's own: CodeMirror would
+  // bind a modifier named "Any" that nothing presses.
   const installed = [
     "format.bold",
     "format.italic",

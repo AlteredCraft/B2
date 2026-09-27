@@ -1,10 +1,7 @@
-//! Real-vault discovery calibration — the instrument ADR-0014's Phase 0a promoted out of
-//! GH #196's hand arithmetic. It runs against **any built vault**, needs no labels, and
-//! prints the numbers every discovery-surfacing ruling has turned on: per-anchor pool
-//! distributions, each anchor's leader cosine and z, what a z gate would serve versus what
-//! always-serve does, and the strength bands the desktop would paint. This is process rule
-//! 5 made mechanical — **a constant derived from a corpus's score distribution is invalid
-//! until transfer-checked on a real vault**.
+//! Real-vault discovery calibration (ADR-0014, GH #196). Runs against any built vault with
+//! no labels, and prints per-anchor pool distributions, leader cosine and z, what a z gate
+//! would serve against always-serve, and the strength bands. Process rule 5: a constant
+//! derived from a corpus's score distribution is invalid until checked on a real vault.
 //!
 //! ```console
 //! make calibrate VAULT=$HOME/notes                                        # per-anchor lines + the summary block
@@ -15,29 +12,13 @@
 //! make calibrate VAULT=$HOME/notes ARGS="--mutual-k 5"                    # replay the fold at a different depth
 //! ```
 //!
-//! Beside the retired z gate it replays the two **default-disclosure** candidates ADR-0014
-//! admits a fold from. The **mutual-k reciprocity fold** (GH #200): B is reciprocal for A
-//! iff A ranks within B's own top `mutual_k`, and the replayed default view is the ranked
-//! list's longest reciprocal prefix — a cut in the served order, never a filter that skips
-//! rows. That bake-off has **ruled, and no fold ships**: the window is empty on both corpora,
-//! and this instrument supplied the reading that generalized it — the same `k` is a different
-//! rule on every vault (10 discloses 36% of cards on the orthogonal corpus, 91% on the dense
-//! fixture, 98% on `fixtures/test-vault`). The **authored-edge reference bar** is replayed
-//! beside it, and this is the only instrument that *can*: the rule calibrates from the score
-//! distribution of the human's own committed edges, and both eval corpora are link-free by
-//! construction. Unlike reciprocity that is a distributional constant, so this instrument is
-//! not an aside for it — it is the whole of its evidence.
+//! It also replays the two default-disclosure folds (GH #200): mutual-k reciprocity (ruled
+//! out; the same `k` is a different rule on every vault) and the authored-edge reference
+//! bar, which only a real vault with links can price.
 //!
-//! **It is a pure read** — stored vectors only, no model call — so it runs in seconds on any
-//! personal-scale vault and never perturbs what it measures.
-//!
-//! The z is **recomputed harness-side from the served scores**, kept independent of the
-//! engine's own statistic so the instrument can also *check* it: where the engine ships a z
-//! beside a candidate, the two are diffed and a drift reports as a fault.
-//!
-//! The replayed gate defaults to the constants ADR-0014 retired, so the acceptance reading
-//! reproduces GH #196's finding on its reporting vault: 16 of 17 anchors dark. It is a
-//! **simulation** — the shipped surface gates nothing.
+//! A pure read of stored vectors, no model call. The z is recomputed from the served scores
+//! and diffed against the engine's as a drift check. The replayed gate defaults to the
+//! constants ADR-0014 retired; it is a simulation, and the shipped surface gates nothing.
 
 mod common;
 
@@ -48,39 +29,32 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-/// How deep each anchor's pool is read. A bar is judged against the population it
-/// has to cut, so the read must cover the whole candidate set, not a pane's
-/// prefix; anything a personal vault holds fits far under this.
+/// How deep each anchor's pool is read: the whole candidate set, which a bar is judged
+/// against.
 const SCAN_LIMIT: usize = 100_000;
-/// The replayed gate is inert under this population — `discover.rs`'s statistics
-/// guard, restated here because the replay must match the rule it prices. (The
-/// strength bands the pane paints are [`common::BAND_STRONG_Z`]'s, shared with
-/// `make eval`'s calibration block, where their values are re-measured.)
+/// The replayed gate is inert under this population: `discover.rs`'s guard, restated.
 const MIN_POPULATION: usize = 12;
 
-/// The z existence gate being replayed — GH #197 retired it from the engine; the
-/// instrument keeps it (and any variant the flags name) priceable.
+/// The z existence gate being replayed, retired from the engine by GH #197.
 struct GateSim {
     leader_z: f64,
     member_z: f64,
 }
 
-/// One anchor's complete reading: its whole candidate pool in rank order, with
-/// the harness-side z when the population carries a statistic.
+/// One anchor's whole candidate pool in rank order, with the harness-side z.
 struct AnchorReading {
     path: String,
     /// (candidate path, cosine, engine z if shipped) in served (nearest-first) order.
     pool: Vec<(String, f64, Option<f64>)>,
-    /// Harness-recomputed z per pool entry — `None` when the population is under
-    /// [`MIN_POPULATION`] or has zero variance (no statistic exists).
+    /// Harness-recomputed z per pool entry; `None` under [`MIN_POPULATION`] or at zero
+    /// variance.
     z: Option<Vec<f64>>,
 }
 
 impl AnchorReading {
     fn from_candidates(path: &str, cands: &[SimilarView]) -> Self {
         let d2: Vec<f64> = cands.iter().map(|c| c.score * c.score).collect();
-        // The harness's own z (never the engine's), gated at the replayed rule's
-        // population floor before the shared restatement's own inertness guard.
+        // The harness's own z, never the engine's.
         let z = (d2.len() >= MIN_POPULATION)
             .then(|| passage_z(&d2))
             .flatten();
@@ -98,9 +72,8 @@ impl AnchorReading {
         self.pool.iter().map(|(_, cos, _)| *cos).collect()
     }
 
-    /// How many candidates the replayed z gate would serve, capped at `limit` —
-    /// 0 with the leader gate fired ("dark"), everything (to the cap) where the
-    /// pool is too small for a statistic (the rule's own inertness).
+    /// How many candidates the replayed gate serves, capped at `limit`: 0 when the leader
+    /// gate fires, everything when the pool has no statistic.
     fn gate_serves(&self, gate: &GateSim, limit: usize) -> usize {
         match &self.z {
             None => self.pool.len().min(limit),
@@ -117,9 +90,7 @@ impl AnchorReading {
         }
     }
 
-    /// Band histogram over the top-`limit` cards always-serve shows:
-    /// (strong ●●●, clear ●●○, near ●○○), or `None` for an ungraded pool —
-    /// the A6 readout (do dense vaults compress every card into one band?).
+    /// Band histogram (strong, clear, near) over the top-`limit` cards; `None` when ungraded.
     fn bands(&self, limit: usize) -> Option<(usize, usize, usize)> {
         let z = self.z.as_ref()?;
         let (mut strong, mut clear, mut near) = (0, 0, 0);
@@ -133,8 +104,7 @@ impl AnchorReading {
         Some((strong, clear, near))
     }
 
-    /// Worst |engine z − recomputed z| across the pool — the drift check, biting
-    /// only where the engine shipped a z at all.
+    /// Worst |engine z − recomputed z| across the pool, where the engine shipped a z.
     fn recheck_delta(&self) -> f64 {
         let Some(z) = &self.z else { return 0.0 };
         self.pool
@@ -144,10 +114,8 @@ impl AnchorReading {
             .fold(0.0, f64::max)
     }
 
-    /// How many pool entries the drift check actually compared — both z's
-    /// present. Zero pairs must print as "nothing to cross-check", never as a
-    /// pass: a check that reports success without having run is the
-    /// advisory-but-exit-0 hole this repo's gates exist to close.
+    /// How many entries the drift check compared. Zero must print as "nothing to
+    /// cross-check", never as a pass.
     fn recheck_pairs(&self) -> usize {
         if self.z.is_none() {
             return 0;
@@ -159,18 +127,10 @@ impl AnchorReading {
     }
 }
 
-/// **Candidate 2** of GH #200's bake-off, replayed: an *authored-edge reference bar*. It
-/// calibrates "what related looks like **in this vault**" from the one labelled population
-/// every real vault carries — the score distribution of the human's committed edges — and
-/// folds the default view at the longest prefix scoring at or above it.
-///
-/// Priceable only where that population exists, which is why it lives here rather than in
-/// `make eval`: **both eval corpora are link-free by construction**. Its pair score is the
-/// same statistic discovery ranks on, computed over the *linked* pairs discovery never scores
-/// (the 1-hop exclusion removes exactly them). The bar is the population's **lower quartile**
-/// — a candidate at least as related as the weaker quarter of what this human already linked
-/// — and the whole distribution prints beside it, because a quantile is a choice and a choice
-/// printed as one number is an assumption.
+/// GH #200's candidate 2: an authored-edge reference bar. It calibrates from the best-passage
+/// cosines of the human's own linked pairs (absent from the link-free eval corpora) and
+/// folds at the longest prefix at or above their lower quartile. The whole distribution
+/// prints, since the quantile is a choice.
 struct EdgeBar {
     /// Authored edges whose pair could be scored (both notes embedded).
     n: usize,
@@ -181,16 +141,13 @@ struct EdgeBar {
 }
 
 impl EdgeBar {
-    /// The bar itself — the lower quartile of the authored-edge cosines.
+    /// The lower quartile of the authored-edge cosines.
     fn bar(&self) -> f64 {
         self.q1
     }
 
-    /// This vault's authored-edge pair cosines. Undirected and de-duplicated: an
-    /// edge read from both endpoints is one relation, and counting it twice
-    /// would weight the reciprocally-visible pairs double. `None` when the vault
-    /// has no scorable authored edge — the rule has no population, which is a
-    /// reading about the vault, not a failure of the instrument.
+    /// This vault's authored-edge pair cosines, undirected and de-duplicated. `None` when
+    /// the vault has no scorable authored edge.
     fn read(vault: &Vault, conn: &Connection) -> Result<Option<Self>, Box<dyn std::error::Error>> {
         let mut seen: HashSet<(String, String)> = HashSet::new();
         let mut cos: Vec<f64> = Vec::new();
@@ -199,9 +156,7 @@ impl EdgeBar {
             if neighbors.is_empty() {
                 continue;
             }
-            // Loaded once per source note and dropped with it: the population is
-            // read edge by edge rather than by caching the whole vault's
-            // vectors, so a large vault costs time here, never memory.
+            // Per source note, not cached, so a large vault costs time, not memory.
             let src: Vec<Vec<f32>> = b2_core::db::note_chunk_vectors(conn, &note.path)?
                 .into_iter()
                 .map(|(_, v)| v)
@@ -219,10 +174,7 @@ impl EdgeBar {
                     .into_iter()
                     .map(|(_, v)| v)
                     .collect();
-                // Best-passage, the same statistic `similar` ranks on: the
-                // nearest chunk pair across the two notes. A pair with an
-                // unembedded side (or a dangling/resource target) scores nothing
-                // and drops out rather than entering the population as a zero.
+                // Best-passage, as `similar` ranks. An unembedded side drops out.
                 let best = src
                     .iter()
                     .flat_map(|x| dst.iter().map(move |y| b2_core::embed::l2_sq(x, y)))
@@ -246,8 +198,7 @@ impl EdgeBar {
         }))
     }
 
-    /// How many of `pool`'s leading candidates clear the bar — candidate 2's
-    /// fold, in the same prefix form candidate 1 takes.
+    /// How many of `pool`'s leading candidates clear the bar (a prefix fold).
     fn fold(&self, pool: &[(String, f64, Option<f64>)], limit: usize) -> usize {
         pool.iter()
             .take(limit)
@@ -256,21 +207,14 @@ impl EdgeBar {
     }
 }
 
-/// English function words, probed for **where they weigh** against a query's
-/// content (GH #201). The lexical-anchor rule weighs each term by its IDF, so
-/// its whole premise is that a vault's function words weigh near nothing beside
-/// its subject words. That is a claim about a vault, not about English, and this
-/// is where it is checked.
+/// English function words (GH #201). The lexical-anchor rule assumes they weigh near nothing
+/// in a vault's IDF; this checks that per vault.
 const FUNCTION_WORDS: [&str; 12] = [
     "the", "and", "of", "to", "a", "in", "is", "it", "that", "for", "with", "on",
 ];
 
-/// Built-in nonsense queries — the **strict** half of D2's negative pile, and
-/// the only half that can be built in: an off-topic *phrase* is off-topic
-/// relative to a particular vault ("choreographing a ballroom waltz" is a
-/// labelled negative on the eval corpus and would be a positive in a dancer's
-/// vault), so the eval corpus is where those live. These are strings no vault
-/// holds, which makes them vault-independent.
+/// Built-in nonsense queries: the only vault-independent negatives, since an off-topic
+/// phrase is only off-topic relative to a particular vault.
 const NONSENSE: [&str; 4] = [
     "shjfasd",
     "vrelqip zonktar wembleforth",
@@ -278,83 +222,66 @@ const NONSENSE: [&str; 4] = [
     "zzzyqx",
 ];
 
-/// How many notes contribute a title-as-query positive. A cap rather than a
-/// sample: the walk takes them in `list_notes` order, which is deterministic, so
-/// a re-run on an unchanged vault reads the same queries.
+/// How many notes contribute a title-as-query positive, in deterministic `list_notes` order.
 const MAX_TITLE_QUERIES: usize = 400;
 
-/// One query's transfer reading — the same two absolute signals `make eval`'s
-/// bake-off judges, read on a real vault instead of a labelled corpus.
+/// One query's transfer reading: `make eval`'s two signals, on a real vault.
 struct SearchProbe {
     query: String,
-    /// Share of the query's term IDF this vault carries. `None` when nothing in
-    /// the query carries weight here.
+    /// Share of the query's term IDF this vault carries; `None` when no term has weight.
     coverage: Option<f64>,
     /// Dense top-1 cosine; `None` on a vault with no embedding space.
     best_cos: Option<f64>,
-    /// What the shipped bar would say — `true` = the default view vouches.
+    /// Whether the shipped bar vouches.
     vouched: bool,
-    /// For a title-as-query probe, the note the title came from — the one row
-    /// this bench can certify as relevant with no label (GH #206). `None` for
-    /// nonsense.
+    /// For a title query, the note it came from: the one row certified relevant without a
+    /// label (GH #206).
     own_path: Option<String>,
-    /// The served list's per-hit provenance, in fused order — what the tail
-    /// families' constraints are read from.
+    /// The served list's per-hit provenance, in fused order.
     rows: Vec<TailRow>,
 }
 
 impl SearchProbe {
-    /// Where this probe's own note landed in the served list, 0-based — `None`
-    /// when retrieval never served it within the limit (or the probe has no own
-    /// note at all, which is every nonsense negative).
+    /// Where this probe's own note landed in the served list, 0-based.
     fn own_rank(&self) -> Option<usize> {
         let own = self.own_path.as_ref()?;
         self.rows.iter().position(|r| &r.path == own)
     }
 }
 
-/// One served row's per-hit provenance (GH #206) — `EvidencedResult`, shorn of
-/// the display fields this instrument never prints.
+/// One served row's per-hit provenance (GH #206).
 struct TailRow {
     path: String,
     bm25_rank: Option<usize>,
     cos: Option<f64>,
 }
 
-/// One tail family's edge: the tightest constant that still hides no own note,
-/// and the served row that pins it there.
-///
-/// Owned rather than borrowed out of the probe pile: the edge outlives the fold
-/// that finds it — it is carried to both renderings — and a lifetime here would
-/// buy nothing but the borrow.
+/// One tail family's edge: the tightest constant that hides no own note, and the row that
+/// pins it.
 struct TailEdge {
     value: f64,
     query: String,
     path: String,
 }
 
-/// A row served above its own note carrying **no finite cosine** — the reading
-/// that kills a cosine family outright rather than merely constraining it.
+/// A row served above its own note with no finite cosine, which kills a cosine family.
 struct DeadRow {
     query: String,
     path: String,
-    /// Dense-only besides, which kills the two-signal family too: no lexical
-    /// rank and no finite cosine passes at any bar.
+    /// Also dense-only, which kills the two-signal family too.
     dense_only: bool,
 }
 
-/// An own note the dense-only fold would hide: a row the lexical half never
-/// ranked, served *above* the one row this bench certifies.
+/// An own note the dense-only fold would hide, behind a row the lexical half never ranked.
 struct LexHidden {
     query: String,
-    /// 0-based, like every other rank this instrument reports (the text block
-    /// prints them +1).
+    /// 0-based, like every rank here (printed +1).
     own_rank: usize,
     dense_only_rank: usize,
 }
 
-/// The per-hit tail families (GH #206) priced on this vault: how tight each
-/// family's constant could be drawn before it hides a row the bench certifies.
+/// The per-hit tail families (GH #206) priced on this vault: how tight each constant can be
+/// before it hides an own note.
 struct TailReading {
     own_served: usize,
     own_missed: usize,
@@ -368,15 +295,9 @@ struct TailReading {
 }
 
 impl TailReading {
-    /// `make eval`'s tail bake-off derives each family's admissible window from
-    /// the labelled corpora; this is the reading that says whether such a window
-    /// survives a real vault (process rule 5 — owed even by the parameterless
-    /// family, whose "lexical half never ranked it" signal is partly a fact
-    /// about pool depth against vault size). No labels here: the one served row
-    /// a title query certifies is its **own note**, so each family is priced on
-    /// what its constant would have to be to hide none of them — the tripwire
-    /// direction. The fold is a prefix cut (D1), so every row served above an
-    /// own note must pass the family's test too.
+    /// Whether `make eval`'s tail windows survive a real vault (process rule 5). Each
+    /// family is priced so it hides no title query's own note; the fold is a prefix cut
+    /// (D1), so every row above an own note must pass too.
     fn read(positives: &[SearchProbe]) -> Self {
         let mut r = Self {
             own_served: 0,
@@ -397,8 +318,7 @@ impl TailReading {
                 continue;
             };
             r.own_served += 1;
-            // The drop family's reference is the list's own best served cosine —
-            // the whole list's, not the prefix's, matching how the fold would read.
+            // The whole list's best cosine, not the prefix's, as the fold reads it.
             let best = p
                 .rows
                 .iter()
@@ -413,9 +333,7 @@ impl TailReading {
                 });
             }
             for row in prefix {
-                // Finiteness-filtered (PR #212 review): a NaN cosine is *no
-                // reading*, and `is_none_or` would otherwise let a NaN first row
-                // seed an edge. It lands in the dead arm, named, never skipped.
+                // A NaN is no reading and would seed an edge via `is_none_or` (PR #212).
                 match row.cos.filter(|c| c.is_finite()) {
                     None => {
                         if r.cos_dead.is_none() {
@@ -452,8 +370,7 @@ impl TailReading {
     }
 }
 
-/// The half of the search bench that needs a calibrated bar: everything below
-/// the model-free function-word reading, which is judged against one.
+/// The half of the search bench that needs a calibrated bar.
 struct JudgedSearch {
     bar: b2_core::search::EvidenceBar,
     positives: Vec<SearchProbe>,
@@ -461,30 +378,23 @@ struct JudgedSearch {
     tail: TailReading,
 }
 
-/// The whole search-side reading, **computed once**. The text block and the
-/// `--json` object are two renderings of this one value rather than two
-/// computations of it, so a sweep that scripts the JSON and a human reading the
-/// table cannot be looking at different numbers.
+/// The whole search-side reading, computed once so the text and `--json` renderings can't
+/// disagree.
 struct SearchReading {
-    /// The embedding space the reading was taken in — carried so the renderer
-    /// names the same model the bar was looked up for, never one passed beside it.
+    /// The model the bar was looked up for.
     model_id: String,
-    /// Chunks in the index — the scale every weight below is read against.
     chunk_total: usize,
-    /// The weight a word the vault has never seen would carry: the scale the
-    /// function words are read against, since that is what an absent *content*
-    /// word contributes to the same sum.
+    /// The weight of a word the vault lacks: the scale function words are read against.
     absent_idf: f64,
     /// Each [`FUNCTION_WORDS`] entry with the weight it carries here.
     function_words: Vec<(String, f64)>,
-    /// `None` when the active model has no calibrated bar — the piles need one
-    /// to be judged, so none of them was read.
+    /// `None` when the model has no calibrated bar.
     judged: Option<JudgedSearch>,
 }
 
 impl SearchReading {
-    /// The heaviest function word's weight — the anchor test's premise, which
-    /// holds only where it is small beside [`Self::absent_idf`].
+    /// The heaviest function word's weight; the anchor test needs it small beside
+    /// [`Self::absent_idf`].
     fn heaviest(&self) -> f64 {
         self.function_words
             .iter()
@@ -492,36 +402,23 @@ impl SearchReading {
             .fold(0.0_f64, f64::max)
     }
 
-    /// That weight as a share of an absent word's, in percent — the printed form.
+    /// That weight as a percentage of an absent word's.
     fn heaviest_share(&self) -> f64 {
         100.0 * self.heaviest() / self.absent_idf.max(f64::EPSILON)
     }
 }
 
-/// The **search evidence transfer check** (ADR-0015) — process rule 5's bench for the
-/// query-level bar, which is a distributional constant and therefore invalid until a real
-/// vault has answered for it.
-///
-/// It needs no labels, and that is the point: the positives are each note's own **title**, a
-/// query the vault demonstrably holds material for by construction, and the negatives are
-/// [`NONSENSE`]. Neither is a hand-label, so running this on someone's notes costs them
-/// nothing and the reading cannot be tuned by relabelling.
-///
-/// It **can** see the tripwire direction — a bar that cuts queries a real vault holds
-/// material for is the failure ADR-0014 punished. It **cannot** see the paraphrase case,
-/// which needs judgement and is what the labelled corpus is for. Read the two together.
+/// The search evidence transfer check (ADR-0015): process rule 5's bench for the query-level
+/// bar. Label-free: positives are note titles, negatives are [`NONSENSE`]. It sees the
+/// tripwire direction but not paraphrase, which is the labelled corpus's job.
 fn read_search_transfer(
     vault: &Vault,
     conn: &Connection,
     model_id: &str,
     limit: usize,
 ) -> Result<SearchReading, Box<dyn std::error::Error>> {
-    // The function-word reading is **model-free**: it is a fact about this
-    // vault's vocabulary, and it is the lexical anchor's whole premise. It is
-    // read before the bar lookup, and printed above it, because gating it behind
-    // a calibrated bar (as this did until the PR #205 review) left a
-    // fake-embedded vault printing nothing at all, which the recipe's own help
-    // text promised it would not.
+    // The function-word reading is model-free, so it is read before, and without, a
+    // calibrated bar (PR #205).
     let probe = b2_core::search::lexical_evidence(conn, &FUNCTION_WORDS.join(" "))?;
     let reading = SearchReading {
         model_id: model_id.to_string(),
@@ -535,7 +432,6 @@ fn read_search_transfer(
         judged: None,
     };
 
-    // Only the *verdicts* need a bar, so only they stop here.
     let Some(bar) = b2_core::search::EvidenceBar::for_model(model_id) else {
         return Ok(reading);
     };
@@ -546,12 +442,9 @@ fn read_search_transfer(
         let view = vault.search_evidence(query, limit)?;
         Ok(SearchProbe {
             query: query.to_string(),
-            // The engine's own term weights — `make eval`'s labelled bake-off is
-            // where the formula is independently restated and drift-checked.
             coverage: term_coverage(&view),
             best_cos: view.best_cos,
-            // The engine's own verdict, not a restatement of it: this bench
-            // prices what would actually ship.
+            // The engine's verdict: this bench prices what would ship.
             vouched: view.vouched.unwrap_or(true),
             own_path,
             rows: view
@@ -595,8 +488,7 @@ fn read_search_transfer(
     })
 }
 
-/// The search reading as the text block — the human half of what
-/// [`read_search_transfer`] measured.
+/// The search reading as the text block.
 fn print_search_transfer(reading: &SearchReading) {
     println!();
     println!("search evidence transfer check (D2 — process rule 5's bench for GH #201's bar)");
@@ -668,9 +560,7 @@ fn print_search_transfer(reading: &SearchReading) {
     if cut.len() > 10 {
         println!("      … and {} more", cut.len() - 10);
     }
-    // The closest calls, not a sample: a bar is placed against the queries that
-    // nearly miss, and on a vault of any size those are the ten weakest — the
-    // same reason the eval prints piles rather than means.
+    // The ten weakest, since a bar is placed against the near misses.
     let mut weakest: Vec<&SearchProbe> = positives.iter().collect();
     weakest.sort_by(|a, b| {
         a.best_cos
@@ -761,8 +651,6 @@ fn print_search_transfer(reading: &SearchReading) {
         None => bar_line("cos ≥ c", &tail.cos_edge, false),
     }
     match &tail.cos_dead {
-        // A dead row that is also dense-only kills the two-signal family too:
-        // no lexical rank and no finite cosine passes at no bar.
         Some(d) if d.dense_only => println!(
             "    lex-or-cos ≥ c              DEAD — {} → {} is dense-only with no finite cosine",
             truncate(&d.query, 32),
@@ -781,8 +669,7 @@ fn print_search_transfer(reading: &SearchReading) {
     println!("      where the joint corpus edge also hides nothing here (process rule 5)");
 }
 
-/// A fixed-precision optional reading, or an em dash where there is none — the
-/// one spelling of "no reading" the table uses.
+/// A fixed-precision optional reading, or an em dash.
 fn fmt_opt(v: Option<f64>, places: usize) -> String {
     v.map(|c| format!("{c:.places$}"))
         .unwrap_or_else(|| "—".to_string())
@@ -827,14 +714,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "usage: calibrate <vault> [--limit N] [--leader-z Z] [--member-z Z] [--mutual-k N] \
          [--search] [--json]",
     )?;
-    // The reciprocity depth defaults to the simulated pane size, resolved after
-    // parsing so flag order can't matter.
+    // Resolved after parsing so flag order can't matter.
     let mutual_k = mutual_k_flag.unwrap_or(limit);
 
-    // A pure read over stored vectors, so the fake-embedder open is correct — the
-    // same posture as `b2 similar`. The recorded identity is read straight from
-    // the index, because it is what the vectors actually are, not what an
-    // injected embedder would be.
+    // A pure read of stored vectors, so the fake-embedder open is correct (as `b2 similar`).
+    // The model identity comes from the index: it is what the vectors actually are.
     let vault = Vault::open(&vault_root)?;
     let conn = b2_core::open(&vault_root.join(".b2").join("b2.sqlite"))?;
     let Some((model, dim)) = b2_core::db::recorded_embedder(&conn)? else {
@@ -855,21 +739,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     for note in &notes {
         let cands = vault.similar(&note.path, SCAN_LIMIT)?;
         if cands.is_empty() {
-            // No stored vectors on the anchor, or nothing unlinked with vectors
-            // to compare against — a genuinely empty candidate set, named rather
-            // than averaged in as a zero.
+            // Named rather than averaged in as a zero.
             poolless.push(note.path.clone());
         } else {
             readings.push(AnchorReading::from_candidates(&note.path, &cands));
         }
     }
 
-    // The mutual-k reciprocity fold, replayed (GH #200). Every note's own top `mutual_k`
-    // candidate paths come from the same full-depth pools just read, so reciprocity costs no
-    // extra discovery pass. A candidate with no pool of its own cannot reciprocate. The fold
-    // is the ranked list's longest reciprocal prefix, capped at `limit` — prefix form is
-    // ADR-0014's admissibility requirement, since a fold that skipped rank 2 to admit rank 5
-    // would visibly disagree with the row order.
+    // The mutual-k reciprocity fold (GH #200), from the pools just read: the longest
+    // reciprocal prefix, capped at `limit`. Prefix form is ADR-0014's requirement.
     let top_of: HashMap<&str, HashSet<&str>> = readings
         .iter()
         .map(|r| {
@@ -900,16 +778,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    // Candidate 2 of the same bake-off (GH #200): the authored-edge reference
-    // bar, priceable only where the human has committed edges — which is why it
-    // is measured here and not in `make eval` (both eval corpora are link-free
-    // by construction, so the rule has no population there).
+    // Candidate 2 (GH #200), the authored-edge reference bar.
     let edge_bar = EdgeBar::read(&vault, &conn)?;
 
-    // The search-side bench (GH #201), opt-in because it is the one part of this
-    // instrument that is **not** a pure read: judging the cosine half means
-    // embedding a query, which means loading the real model. The lexical half
-    // needs no model at all, so a fake-embedded vault still gets that much.
+    // The search bench (GH #201) is opt-in because the cosine half loads the real model to
+    // embed queries. A fake-embedded vault still gets the lexical half.
     let read_search = || -> Result<SearchReading, Box<dyn std::error::Error>> {
         if model == b2_core::embed::FAKE_MODEL_ID {
             read_search_transfer(&vault, &conn, &model, limit)
@@ -1111,16 +984,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // The table comes first and the model loads after it, so the discovery
-    // reading is on screen while the embedder is read off disk.
+    // After the table, so the discovery reading shows while the model loads.
     if search {
         print_search_transfer(&read_search()?);
     }
     Ok(())
 }
 
-/// The same reading as one JSON object on stdout — for scripting a sweep (the A7
-/// population-size sweep, a Phase-2 bake-off harness) without scraping the table.
+/// The same reading as one JSON object on stdout, for scripting a sweep.
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     vault_root: &std::path::Path,
@@ -1141,12 +1012,9 @@ fn print_json(
         "dim": dim,
         "limit": limit,
         "gate": { "leader_z": gate.leader_z, "member_z": gate.member_z, "min_population": MIN_POPULATION },
-        // The replayed fold's depth (GH #200): candidate B is reciprocal iff
-        // the anchor sits in B's own top `mutual_k`; `fold_serves` below is the
-        // ranked list's longest reciprocal prefix, capped at `limit`.
+        // The replayed fold's depth (GH #200).
         "mutual_k": mutual_k,
-        // Candidate 2's population and the bar read off it (GH #200) — `null`
-        // on a link-free vault, which is the rule's own reading there.
+        // `null` on a link-free vault (GH #200).
         "edge_bar": edge_bar.as_ref().map(|b| serde_json::json!({
             "n": b.n,
             "bar": r4(b.bar()),
@@ -1172,39 +1040,24 @@ fn print_json(
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "no_pool": poolless,
-        // Additive beside the discovery object, never redefining a key of it
-        // (GH #219): `null` means `--search` was not asked for, which is a fact
-        // about the invocation, not about the vault.
+        // Additive (GH #219); `null` means `--search` was not asked for.
         "search": search.as_ref().map(search_json),
     });
     println!("{row}");
 }
 
-/// The search-side bench as JSON (GH #219) — the same reading
-/// [`print_search_transfer`] renders as text.
-///
-/// It follows the discovery object's **re-derivability** convention: every
-/// summary the text block prints is left to the consumer, and what is emitted is
-/// what the summary was computed *from* — each probe's own query, coverage,
-/// cosine and the engine's own `vouched`, plus every served row's provenance. A
-/// sweep that wants "how many titles did the bar cut" counts them; a sweep that
-/// wants something the table never printed can have it too.
-///
-/// The one exception is the tail families, which are emitted **derived**: a
-/// family's edge is an extremum over the whole positive pile, and a consumer
-/// re-deriving it would be re-implementing the fold's admissibility rule rather
-/// than reading a number off it. They are re-derivable from `positives` all the
-/// same.
+/// The search-side bench as JSON (GH #219). Emits the per-probe inputs rather than the text
+/// block's summaries, except the tail families' edges, which are emitted derived so a
+/// consumer need not re-implement the fold.
 fn search_json(reading: &SearchReading) -> serde_json::Value {
     let probe = |p: &SearchProbe| {
         serde_json::json!({
             "query": p.query,
             "coverage": p.coverage.map(r4),
             "best_cos": p.best_cos.map(r4),
-            // The engine's verdict, not a restatement of it.
             "vouched": p.vouched,
             "own_path": p.own_path,
-            // 0-based, like `bm25_rank`; `null` = never served within `limit`.
+            // 0-based; `null` when not served within `limit`.
             "own_rank": p.own_rank(),
             "rows": p.rows.iter().map(|r| serde_json::json!({
                 "path": r.path,
@@ -1213,9 +1066,7 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
             })).collect::<Vec<_>>(),
         })
     };
-    // A family reads one of three ways, exactly as the text block prints it:
-    // `needs` (this row pins the constant), `unconstrained` (no row engages the
-    // test), `dead` (a row no constant can admit).
+    // A family is `needs`, `unconstrained` or `dead`, as the text block prints it.
     let edge = |e: &Option<TailEdge>| match e {
         None => serde_json::json!({ "status": "unconstrained" }),
         Some(e) => serde_json::json!({
@@ -1234,9 +1085,6 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
     };
     serde_json::json!({
         "chunk_total": reading.chunk_total,
-        // The lexical anchor's premise, model-free and read per vault: what a
-        // word this vault has never seen weighs, and what each function word
-        // weighs beside it.
         "function_words": {
             "absent_idf": r4(reading.absent_idf),
             "heaviest_share_pct": r4(reading.heaviest_share()),
@@ -1245,12 +1093,7 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
                 "idf": r4(*idf),
             })).collect::<Vec<_>>(),
         },
-        // One key, not four: the bar and the three piles read against it exist
-        // together or not at all, so they nest under the `Option` that decides
-        // it rather than each carrying its own `null` for a consumer to test.
-        // `null` = no calibrated bar for this model, so nothing under it was
-        // read: the piles need one to be judged (M2). The function-word reading
-        // above is model-free and is there either way.
+        // `null` when the model has no calibrated bar (M2).
         "judged": reading.judged.as_ref().map(|j| serde_json::json!({
             "bar": {
                 "min_term_coverage": j.bar.min_term_coverage,
@@ -1277,8 +1120,7 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
                         Some(d) => dead(d),
                         None => edge(&j.tail.cos_edge),
                     },
-                    // A dead row that is also dense-only kills the two-signal
-                    // family too; one that is not leaves it constrained.
+                    // Dead only when the dead row is also dense-only.
                     "lex_or_cos": match &j.tail.cos_dead {
                         Some(d) if d.dense_only => dead(d),
                         _ => edge(&j.tail.lexcos_edge),
@@ -1293,9 +1135,7 @@ fn search_json(reading: &SearchReading) -> serde_json::Value {
     })
 }
 
-/// Four decimals, the one rounding this object applies — enough to reproduce
-/// every printed reading, short of dumping a float's full noise into a dataset
-/// meant to be diffed.
+/// Four decimals: enough to reproduce every printed reading.
 fn r4(x: f64) -> f64 {
     (x * 1e4).round() / 1e4
 }

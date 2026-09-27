@@ -11,14 +11,11 @@ use b2_core::vault::{
 };
 
 pub fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
-    // Neighbors is a pure graph query — it never embeds, so don't require
-    // the model (no needless `b2 init` just to explore the graph).
+    // A pure graph query: no model needed.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     let neighbors = vault.neighbors(note)?;
-    // Dangling outbound links (a `[[folder]]` or a typo) that resolve to no
-    // note or resource — surfaced, not dropped (GH #12). `--json` keeps its
-    // resolved-neighbors array contract; the full structured picture,
-    // including these, is `b2 explain --json`.
+    // Dangling links are surfaced, not dropped (GH #12). `--json` stays an array of
+    // resolved neighbors; `b2 explain --json` carries these.
     let unresolved = vault.unresolved_links(note)?;
     emit(cli.json, &neighbors, |neighbors| {
         if neighbors.is_empty() && unresolved.is_empty() {
@@ -45,11 +42,9 @@ pub fn cmd_neighbors(cli: &Cli, note: &str) -> Result<(), CliError> {
 }
 
 pub fn cmd_explain(cli: &Cli, note: &str) -> Result<(), CliError> {
-    // Explain is a pure graph read (edges + their explanations), no embed —
-    // like `neighbors`, it opens with the fake and needs no `b2 init`.
+    // A pure graph read: no model needed.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
-    // Kind dispatch by the argument's own shape (core's one rule, §9b #8):
-    // a resource arg gets the fallback card's view — metadata + backlinks.
+    // Dispatch by the argument's shape (§9b #8).
     if doc_kind(note) == DocKind::Resource {
         return emit(
             cli.json,
@@ -82,8 +77,6 @@ fn print_explanation(view: &ExplainView) {
     let name = display_name(view.title.as_deref(), &view.path);
     println!("{name} ({})", view.path);
     if view.connections.is_empty() && view.resources.is_empty() && view.unresolved.is_empty() {
-        // Zero connections at all — nothing links to it and it links to
-        // nothing (an orphan; the kernel only surfaces, never archives).
         println!("No connections yet.");
     } else if !view.connections.is_empty() {
         println!("Connections:");
@@ -98,14 +91,12 @@ fn print_explanation(view: &ExplainView) {
                 println!("      why: {why}");
             }
         }
-        // If nothing points *at* the note, it's an orphan — surfaced, not
-        // acted on (invariants.md; files are only touched when asked).
+        // An orphan is surfaced, never acted on.
         if !view.connections.iter().any(|c| c.direction == "inbound") {
             println!("No inbound links — this note is an orphan.");
         }
     }
-    // Outbound links at resources (images, PDFs, …) — the third target
-    // kind an edge can have, shown from the note's side (GH #22).
+    // Outbound links at resources (GH #22).
     if !view.resources.is_empty() {
         println!("Resource links:");
         for r in &view.resources {
@@ -120,9 +111,7 @@ fn print_explanation(view: &ExplainView) {
             }
         }
     }
-    // Dangling outbound links (a `[[folder]]` or a typo): a note is one
-    // `.md` file, so these resolve to nothing — shown as broken rather
-    // than silently dropped (GH #12).
+    // Shown as broken rather than dropped (GH #12).
     if !view.unresolved.is_empty() {
         println!("Unresolved links:");
         for u in &view.unresolved {
@@ -143,26 +132,16 @@ pub fn cmd_search(
     limit: usize,
     exclude: &[String],
 ) -> Result<(), CliError> {
-    // Search embeds the query for the vector half → it needs the real model.
+    // Embeds the query, so it needs the real model.
     let vault = open_vault(cli.vault_or_cwd(), true)?;
-    // The evidence read, not the bare list (invariants.md D2, GH #201/#202): the
-    // rows are identical and in the same order, and the verdict beside them is
-    // what lets this command say **"no matches"** honestly instead of serving
-    // `limit` confident-looking results for a query the vault holds nothing for.
-    // `--exclude` paths are the caller's subtraction, never the verdict's.
+    // The evidence read (D2, GH #201/#202): the same rows, plus a verdict that lets this
+    // command say "no matches" honestly.
     let view = vault.search_evidence_excluding(query, limit, exclude)?;
-    // `--json` is the whole view, verdict included. This is an OBJECT where `--json` used
-    // to be an array — a deliberate break (GH #202), because a query-level verdict has
-    // nowhere to live in a list of rows; the rows themselves stay additive.
-    //
-    // The JSON serves the rows even at `vouched: false`, where the human surface shows
-    // none: an agent handed the rows *plus* an explicit verdict can be honest about them,
-    // where a human handed rows alone cannot.
+    // `--json` is the whole view (an object since GH #202). It serves rows even at
+    // `vouched: false`: an agent gets the explicit verdict beside them; a human would not.
     emit(cli.json, &view, |view| {
         println!("{}", search_report(view, query));
-        // Honesty (never overstate): with the fake embedder the vector half
-        // isn't semantic. Under the real model it is, so no caveat. Kept on
-        // stderr so stdout stays pure results.
+        // The fake embedder's vector half isn't semantic. On stderr, so stdout stays pure.
         if b2_embed::fake_requested() {
             eprintln!(
                 "note: keyword (BM25) ranking is live; semantic ranking is off (fake embedder)."
@@ -171,27 +150,15 @@ pub fn cmd_search(
     })
 }
 
-/// The human-mode rendering of a search — ADR-0015's three verdict states as one pure
-/// function (GH #202).
-///
-/// Pure, and separate from [`cmd_search`], because the state that matters most is the one
-/// the integration suite structurally cannot reach: `Some(false)` needs a *calibrated*
-/// bar, and the fake embedder the suite runs under has none by design. A branch reachable
-/// only under the real model is still the fast suite's to own once the rendering is
-/// separated from the retrieval.
+/// A search rendered for a human: ADR-0015's three verdict states (GH #202). Pure, so the
+/// unit tests can reach `Some(false)`, which the fake-embedder integration suite cannot.
 fn search_report(view: &SearchEvidenceView, query: &str) -> String {
     match view.vouched {
-        // D2's "no matches", strict: the vault holds neither a lexical anchor
-        // nor semantic proximity clearing the model's bar, so the
-        // nearest-by-meaning rows are not shown at all — no reveal, no `--all`.
-        // Offering them behind a flag would still be this command putting them
-        // forward as candidates (GH #202, decision 1).
+        // D2's "no matches", strict: no rows and no reveal flag, which would still put
+        // them forward as candidates (GH #202, decision 1).
         Some(false) => format!("No matches. Nothing in the vault matches “{query}”."),
-        // `Some(true)` — the vault vouches for these — and `None`, which is *no
-        // verdict at all*: the active embedder has no calibrated bar (the fake
-        // one, or any model until the harness measures it — M2), and reading
-        // that as "no matches" would blank a dev vault. Three states, three
-        // behaviors; `None` is never folded into `false`.
+        // `None` is no verdict (no calibrated bar, M2), never folded into `false`, which
+        // would blank a dev vault.
         _ if view.results.is_empty() => "No results.".to_string(),
         _ => view
             .results
@@ -211,25 +178,16 @@ fn search_report(view: &SearchEvidenceView, query: &str) -> String {
 }
 
 pub fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> {
-    // Candidate generation reads the *stored* vectors (no query embedding), so
-    // like `neighbors` it needs no live model — a prior `reindex` supplies them.
-    // Open with the fake; it's a pure, instant local read. (The z grading keys
-    // on the vault's RECORDED model id, so opening with the fake for reading
-    // never turns it off.)
+    // Reads stored vectors only, so the fake suffices. z grading keys on the vault's
+    // recorded model id, so the fake doesn't turn it off.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     let results = vault.similar(note, limit)?;
     if cli.json {
         print_json(&results)?;
     } else if limit == 0 {
-        // An ask for nothing yields nothing, silently: the empty-state copy
-        // below reads the candidate set, and a zero limit proves nothing about
-        // it — printing "nothing to compare" here would be the one way this
-        // command could still make a claim it can't check (GH #197).
+        // Silent: the empty-state copy makes a claim a zero ask can't check (GH #197).
     } else if results.is_empty() {
-        // Two honest empty states, and neither claims "nothing relates"
-        // (GH #197): at a nonzero ask, an empty list means the candidate set is
-        // genuinely empty — nothing unlinked with stored vectors to compare —
-        // or the vault's similarity isn't semantic yet.
+        // Neither empty state claims "nothing relates" (GH #197).
         let status = vault.embed_status()?;
         if status.embedded > 0 {
             println!("Nothing unlinked has stored vectors to compare.");
@@ -246,7 +204,7 @@ pub fn cmd_similar(cli: &Cli, note: &str, limit: usize) -> Result<(), CliError> 
                 println!("    {}", r.evidence);
             }
         }
-        // Nudge toward the commit step, on stderr so stdout stays pure results.
+        // On stderr, so stdout stays pure results.
         eprintln!("Commit one with:  b2 link {note} <note> --type <verb>");
     }
     Ok(())
@@ -262,7 +220,7 @@ pub fn cmd_explain_similar(
     other: &str,
     limit: usize,
 ) -> Result<(), CliError> {
-    // A pure read over stored vectors, like `similar`: the fake is enough to open with.
+    // Stored vectors only, like `similar`.
     let vault = open_vault(cli.vault_or_cwd(), false)?;
     let ex = vault.explain_similar(note, other, limit)?;
     emit(cli.json, &ex, |ex| print_similar_explanation(ex, limit))
@@ -319,8 +277,7 @@ fn print_similar_explanation(ex: &SimilarExplainView, limit: usize) {
     }
     if !ex.pairs.is_empty() {
         println!("\nPassage pairs, nearest first:");
-        // Pairs carry a grade only when the list does; say why they don't, once, rather
-        // than print bare pairs that read as unmeasured by accident.
+        // Say once why pairs are ungraded, so they don't read as unmeasured by accident.
         if ex.pairs.iter().all(|p| p.z.is_none()) {
             println!(
                 "     Ungraded: too few notes to compare against, or a vault indexed without the real model."
@@ -355,13 +312,12 @@ fn excerpt(text: &str, max: usize) -> String {
     }
 }
 
-/// The presentation rule for naming a note: its title when it has one, else its
-/// vault-relative path.
+/// A note's title, else its path.
 fn display_name<'a>(title: Option<&'a str>, path: &'a str) -> &'a str {
     title.unwrap_or(path)
 }
 
-/// The direction glyph: `→` for an outbound edge (this note → other), `←` inbound.
+/// `→` for an outbound edge, `←` inbound.
 fn arrow(direction: &str) -> &'static str {
     if direction == "outbound" {
         "→"
@@ -381,13 +337,8 @@ fn decorate(line: &mut String, embed: bool, caption: Option<&str>) {
     }
 }
 
-/// ADR-0015's three verdict states as rendered by [`search_report`] (GH #202).
-///
-/// The integration suite spawns the binary under `B2_EMBEDDER=fake`, whose embedder has no
-/// calibrated bar — so `vouched` there is always `None` and the two states that matter are
-/// unreachable from it. That is a fact about the model seam, not a hole to leave: the
-/// rendering is pure, so it is tested here directly rather than hidden behind an
-/// `#[ignore]` the suite would keep reporting as present.
+/// ADR-0015's three verdict states as rendered by [`search_report`] (GH #202), tested here
+/// because the fake-embedder integration suite only ever sees `None`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,9 +368,7 @@ mod tests {
 
     #[test]
     fn an_unvouched_query_shows_the_empty_state_and_none_of_its_rows() {
-        // Strict (GH #202, decision 1): the engine served rows, and the surface
-        // shows none of them — no reveal, no count of what is being withheld,
-        // since either would put them forward as candidates after all.
+        // Strict (GH #202, decision 1): no rows, and no count of what is withheld.
         let out = search_report(&view(Some(false), 10), "Fasdfadsf");
         assert!(out.starts_with("No matches."), "{out}");
         assert!(!out.contains("notes/n0.md"), "no row leaks: {out}");
@@ -438,9 +387,7 @@ mod tests {
 
     #[test]
     fn no_calibrated_bar_serves_its_rows_exactly_as_before() {
-        // `None` is *no verdict*, never "no matches" (M2): the fake embedder and
-        // every uncalibrated model land here, and folding it into `false` would
-        // blank the app on a dev vault.
+        // `None` is no verdict, never "no matches" (M2).
         let out = search_report(&view(None, 2), "memory");
         assert!(out.contains("notes/n0.md"), "{out}");
         assert!(!out.contains("No matches"), "{out}");
@@ -448,8 +395,7 @@ mod tests {
 
     #[test]
     fn an_empty_list_reads_as_no_results_whatever_the_verdict() {
-        // The genuinely-empty list keeps its own older copy, which claims
-        // nothing about evidence — an unbuilt index is not a judgment.
+        // This copy claims nothing about evidence: an unbuilt index is not a judgment.
         for vouched in [Some(true), None] {
             let out = search_report(&view(vouched, 0), "memory");
             assert_eq!(out, "No results.", "{vouched:?}");

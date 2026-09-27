@@ -1,8 +1,6 @@
 // The editor's commands (editorcmds.ts), as plans over real EditorStates parsed by the
-// editor's own language config — the droplink.test.ts rig, for its reason: a mocked tree
-// would let a code fence or a nested list go unrecognized here and undetected there.
-// The engines underneath (format.ts, list.ts, paste.ts) have their own suites; what is
-// pinned here is the adapter's half — which transaction, and when it declines.
+// editor's language config. The engines have their own suites; this pins the adapter:
+// which transaction, and when it declines.
 
 import { strict as assert } from "node:assert";
 import test from "node:test";

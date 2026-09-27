@@ -1,7 +1,6 @@
-//! Flow ④ on the façade: grounded chat ([`Vault::ask`]) and the one tool-using turn,
-//! **Why?** on a *Similar & unlinked* card ([`Vault::why_similar`], ADR-0022). The prompt
-//! text and tool schemas live in [`crate::chat`]; this is the orchestration over the
-//! façade's own reads. Chat is a reader: nothing model-derived is stored.
+//! Flow ④ on the façade: grounded chat ([`Vault::ask`]) and the tool-using Why? turn
+//! ([`Vault::why_similar`], ADR-0022). Prompts and tool schemas live in [`crate::chat`].
+//! Chat is a reader: nothing model-derived is stored.
 
 use super::{AnswerView, Citation, ToolUseView, Vault};
 use crate::chat;
@@ -13,26 +12,12 @@ use crate::snippet::snippet;
 use std::ops::ControlFlow;
 
 impl Vault {
-    /// Flow ④ — grounded chat over the vault: condense → retrieve → assemble →
-    /// stream → cite, orchestrated here over the core logic in [`crate::chat`]. The
-    /// provider is injected **per call**: chat is its sole consumer and, unlike the
-    /// embedder, it carries no index identity (contrast ADR-0007), so nothing about
-    /// it belongs on the open vault.
+    /// Flow ④, grounded chat: condense → retrieve → stream → cite. The provider is
+    /// injected per call: unlike the embedder it carries no index identity (ADR-0007).
     ///
-    /// - **Condense** (multi-turn only): one provider call rewrites the follow-up
-    ///   into a standalone retrieval query; on failure it degrades to the raw
-    ///   question, so that step can never break chat.
-    /// - **Retrieve**: [`search_chunks`](Self::search_chunks) at
-    ///   [`chat::ASK_PASSAGES`], holding `search`'s posture — chat is a reader.
-    /// - **Stream**: tokens flow up through `on_token` as they arrive; returning
-    ///   `ControlFlow::Break(())` cancels at token granularity and the result reports
-    ///   it ([`AnswerView::cancelled`]).
-    /// - **Cite**: distinct `[n]` markers resolve to `(path, excerpt)`; a
-    ///   hallucinated marker resolves to nothing, and the text is never rewritten.
-    ///
-    /// Nothing model-derived is stored anywhere, and history is the caller's,
-    /// session-only. Errors: retrieval as `search` raises it; a failed *answer* call
-    /// as [`Error::Llm`](crate::Error::Llm).
+    /// A failed condense falls back to the raw question. `on_token` returning `Break`
+    /// cancels. A hallucinated `[n]` resolves to nothing; the text is never rewritten.
+    /// A failed answer call is [`Error::Llm`](crate::Error::Llm).
     pub fn ask(
         &self,
         llm: &dyn LlmProvider,
@@ -70,39 +55,19 @@ impl Vault {
         self.stream_answer(llm, &req, on_token)
     }
 
-    /// **Why was this suggested?** — the chat answer behind one *Similar & unlinked*
-    /// row: explain, grounded and cited, why `candidate_ref` surfaced for `anchor_ref`.
+    /// Why? on a Similar & unlinked row: a grounded, cited explanation of why
+    /// `candidate_ref` surfaced for `anchor_ref`. A tool-using turn (ADR-0022) over
+    /// [`chat::why_tools`]; every argument defaults to this pair, so `{}` is valid.
     ///
-    /// A **tool-using** turn (ADR-0022). The model is offered B2's read-only tools
-    /// ([`chat::why_tools`]: `b2_passage_pairs`, `b2_similar`, `b2_neighbors`, `b2_read`)
-    /// and makes the lookups itself; each call is one read on this façade, run here and
-    /// replayed to the model with its result. Every argument defaults to this turn's
-    /// pair, so `{}` is always a valid call. Three things bound that:
+    /// - Round 1 is the lookup round and is never streamed. No tool call, or a failed
+    ///   one, degrades to [`chat::build_why_request`]. If the pair lookup was skipped,
+    ///   B2 makes it itself (`seeded`): the row was ranked on those pairs.
+    /// - At most [`chat::MAX_TOOL_ROUNDS`] rounds of [`chat::MAX_CALLS_PER_ROUND`] calls;
+    ///   the last round offers no tools.
+    /// - The row's rank and strength at `limit` ride in the prompt.
     ///
-    /// - **Round 1 is the lookup round.** Its text is never streamed: a model that
-    ///   answers there answered from nothing. If it calls no tool — or the call fails,
-    ///   most often a model with no tool support — the turn degrades to
-    ///   [`chat::build_why_request`]: B2 makes the pair lookup and hands the evidence over
-    ///   in one plain grounded request. If it calls tools but skips the pair lookup, B2
-    ///   appends that call itself (`seeded`), because the matched pairs are what the row
-    ///   was ranked on and no explanation is written without them.
-    /// - **The loop is bounded** at [`chat::MAX_TOOL_ROUNDS`] model calls and
-    ///   [`chat::MAX_CALLS_PER_ROUND`] tool calls each, and the last round offers no
-    ///   tools, so it can only answer.
-    /// - **The row's position rides in the prompt** — rank and strength from
-    ///   [`similar`](Self::similar) at the `limit` the surface showed, so the explanation
-    ///   describes the card that was clicked.
-    ///
-    /// One consequence of the hidden first round: a cancel lands when the first visible
-    /// token arrives, not during the lookups.
-    ///
-    /// A tool call is model output, so it is untrusted: an unknown tool, malformed
-    /// arguments or an unknown note is answered with an `error:` *result* the model can
-    /// read, never a failed turn. Every passage a tool hands over is numbered once on one
-    /// ledger, and the answer's `[n]` markers resolve against it. Streaming, cancellation
-    /// and the [`Error::Llm`] normalization are [`ask`](Self::ask)'s — chat is a reader
-    /// here too, and nothing is stored. [`Error::NoteNotFound`] for an unknown ref on
-    /// either side.
+    /// Tool calls are untrusted: a bad one gets an `error:` result, never a failed turn.
+    /// Passages are numbered once on one ledger, which `[n]` resolves against.
     pub fn why_similar(
         &self,
         llm: &dyn LlmProvider,
@@ -122,7 +87,7 @@ impl Vault {
         let anchor = self.resolve_ref(anchor_ref)?;
         let candidate = self.resolve_ref(candidate_ref)?;
 
-        // The row as the surface showed it: same call, same limit, so the same rank + z.
+        // Same call and limit as the surface, so the same rank and z.
         let served = self.similar(&anchor, limit)?;
         let row = served.iter().position(|s| s.path == candidate);
         let mut desk = ToolDesk {
@@ -156,9 +121,7 @@ impl Vault {
             if round == chat::MAX_TOOL_ROUNDS {
                 req.tools.clear(); // nothing left to do but answer
             }
-            // Round 1 is the lookup round, and its text is never shown: a model that
-            // answers there has answered from nothing, and one that calls tools says at
-            // most "let me check". From round 2 on, tokens stream as they arrive.
+            // Round 1's text is never shown: an answer there is from nothing.
             let completion = if round == 1 {
                 llm.complete(&req, &mut |_| ControlFlow::Continue(()))
             } else {
@@ -173,11 +136,10 @@ impl Vault {
                     return self.why_handoff(llm, &mut facts, desk, tools_used, on_token);
                 }
                 Ok(c) => c,
-                // Never degraded: a reply past the tool-call cap is a broken or hostile
-                // server, and a quiet handoff would hide it.
+                // Never degraded: past the cap is a broken or hostile server.
                 Err(e @ Error::ToolCallLimit { .. }) => return Err(e),
-                // The lookup round failed: most often a model with no tool support.
-                // If the server is simply down, the handoff fails the same way, honestly.
+                // Most often a model with no tool support; a down server fails the
+                // handoff too.
                 Err(e) if round == 1 => {
                     tracing::debug!(
                         target: "b2::chat",
@@ -217,9 +179,7 @@ impl Vault {
                 });
                 req.exchanges.push(ToolExchange { call, result });
             }
-            // Whatever the model chose to look up, the matched pairs for *this* pair are
-            // what the row was ranked on. If the lookup round skipped them, B2 makes that
-            // call itself, so no explanation is written without them on the desk.
+            // The row was ranked on this pair's matches, so B2 seeds them if skipped.
             if round == 1 && desk.passages.is_empty() {
                 let seeded = self.seed_pairs(&mut desk, &facts)?;
                 tools_used.push(ToolUseView {
@@ -262,9 +222,8 @@ impl Vault {
         })
     }
 
-    /// The degrade of a tool-using why-turn: B2 makes the pair lookup itself and hands
-    /// the evidence over in one plain grounded request — for a model with no tool
-    /// support, and for one that was offered tools and used none.
+    /// The why-turn's degrade: B2 makes the pair lookup and sends one plain grounded
+    /// request.
     fn why_handoff(
         &self,
         llm: &dyn LlmProvider,
@@ -287,10 +246,8 @@ impl Vault {
         Ok(view)
     }
 
-    /// Run one tool call for the model and render its result as text. Infallible by
-    /// design: the call is model output, so every failure — an unknown tool, arguments
-    /// that aren't a JSON object, a note that doesn't exist, an index error — becomes an
-    /// `error:` result the model reads, and the turn carries on.
+    /// Run one tool call and render its result as text. Infallible: the call is model
+    /// output, so every failure becomes an `error:` result the model reads.
     fn run_tool(&self, desk: &mut ToolDesk, facts: &chat::WhyFacts, call: &ToolCall) -> String {
         let args: serde_json::Value = if call.arguments.trim().is_empty() {
             serde_json::json!({})
@@ -321,8 +278,7 @@ impl Vault {
                 self.tool_neighbors(&note)
             }
             chat::TOOL_READ => {
-                // The open note is already on the human's screen; the one worth reading
-                // by default is the suggestion.
+                // The anchor is already on screen; default to the suggestion.
                 let note = note.unwrap_or_else(|| facts.candidate_path.clone());
                 let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
                 self.tool_read(desk, &note, offset as usize)
@@ -336,9 +292,8 @@ impl Vault {
         })
     }
 
-    /// `b2_passage_pairs`: the matched pairs between two notes, then each passage they
-    /// name that the ledger had not handed over yet. Also returns the pairs over the
-    /// ledger's numbering, which the seeded call's facts need.
+    /// `b2_passage_pairs`: the matched pairs between two notes and any passages new to the
+    /// ledger. Also returns the pairs in ledger numbering.
     fn tool_passage_pairs(
         &self,
         desk: &mut ToolDesk,
@@ -350,8 +305,7 @@ impl Vault {
         for pair in discover::passage_pairs(&self.conn, note, candidate, chat::WHY_PAIRS)? {
             let a = self.ledger_marker(desk, pair.anchor_chunk_id, note, &mut fresh)?;
             let c = self.ledger_marker(desk, pair.candidate_chunk_id, candidate, &mut fresh)?;
-            // A miss means a torn read against a concurrent reindex; skip the pair rather
-            // than name a passage with no text.
+            // A miss is a torn read (C1); skip the pair.
             if let (Some(a), Some(c)) = (a, c) {
                 pairs.push((a, c, pair.score));
             }
@@ -472,8 +426,7 @@ impl Vault {
         Ok(Some(desk.passages.len()))
     }
 
-    /// The text of the passages a tool call handed over for the first time. A passage
-    /// already on the ledger is named by its marker only — the model has its text.
+    /// The text of passages handed over for the first time.
     fn fresh_blocks(&self, desk: &ToolDesk, fresh: &[usize]) -> Vec<String> {
         fresh
             .iter()
@@ -486,9 +439,7 @@ impl Vault {
             .collect()
     }
 
-    /// The shared tail of [`ask`](Self::ask) and the handoff half of
-    /// [`why_similar`](Self::why_similar): stream the completion, then resolve the
-    /// answer's `[n]` markers against the request's own passages.
+    /// Stream the completion, then resolve `[n]` against the request's passages.
     fn stream_answer(
         &self,
         llm: &dyn LlmProvider,
@@ -505,10 +456,8 @@ impl Vault {
     }
 }
 
-/// The state one tool-using turn carries between calls: the list length the surface
-/// showed, and the **passage ledger** — every passage a tool has handed the model,
-/// numbered once in first-seen order, which is what `[n]` resolves against. Whose turn it
-/// is (what `{}` arguments default to) rides on the turn's [`chat::WhyFacts`].
+/// A tool-using turn's state: the surface's list length and the passage ledger, every
+/// passage handed to the model numbered once in first-seen order.
 struct ToolDesk {
     limit: usize,
     /// Parallel to `passages`: the chunk behind each, so a passage is never numbered twice.
@@ -516,17 +465,15 @@ struct ToolDesk {
     passages: Vec<ContextPassage>,
 }
 
-/// B2's own pair lookup: the call as the model would have made it, its result text, and
-/// the pairs over the ledger's numbering.
+/// B2's own pair lookup, as the model would have made it.
 struct SeededLookup {
     call: ToolCall,
     result: String,
     pairs: Vec<chat::MarkedPair>,
 }
 
-/// Normalize a provider failure: the trait returns the crate-wide `Result`, but every
-/// failure of a model call is a failed model call, and adapters match [`Error::Llm`] for
-/// the "can't reach the model server" message. Enforced here, not hoped for.
+/// Normalize a provider failure to [`Error::Llm`], which adapters match for the
+/// "can't reach the model server" message.
 fn llm_error(e: Error) -> Error {
     match e {
         Error::Llm(_) | Error::ToolCallLimit { .. } => e,
@@ -539,8 +486,7 @@ fn cite(answer: &str, passages: &[ContextPassage]) -> Vec<Citation> {
     chat::cited_markers(answer, passages.len())
         .into_iter()
         .filter_map(|marker| {
-            // 1-based marker to 0-based passage; skip rather than index, so even a
-            // broken invariant degrades to a missing citation.
+            // 1-based marker; a broken invariant degrades to a missing citation.
             let p = passages.get(marker.checked_sub(1)?)?;
             Some(Citation {
                 marker,

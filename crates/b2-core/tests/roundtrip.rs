@@ -1,10 +1,5 @@
-//! Lossless parse/serialize — `parse -> serialize -> parse` must be byte-identical,
-//! preserving unknown frontmatter keys and order, comments, and whitespace. B2 achieves it
-//! by keeping the raw text and only ever making the surgical edits it is asked to make.
-//!
-//! The *headingless* case is not pinned here: `props.rs` already proves it over 512 generated
-//! strings, which are overwhelmingly frontmatter-free. What that property cannot reach — a
-//! real, messy, human-authored block — is what the cases below hold.
+//! Lossless parse and serialize: byte-identical, keeping unknown keys, order, comments and
+//! whitespace. `props.rs` covers arbitrary text; these hold real, messy frontmatter.
 
 use b2_core::note::parse;
 use std::fs;
@@ -55,8 +50,7 @@ fn extracts_queryable_fields_without_disturbing_raw() {
     let f = n.fields();
     assert_eq!(f.r#type.as_deref(), Some("concept"));
     assert_eq!(f.created.as_deref(), Some("2026-06-20"));
-    // A relation is the logical value (the YAML quotes are a serialization detail
-    // kept in raw).
+    // The logical value; the YAML quotes stay in raw.
     assert_eq!(
         f.relations,
         vec!["supports [[concepts/memory|Human memory]] — applies the forgetting curve"]

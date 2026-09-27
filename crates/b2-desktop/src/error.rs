@@ -1,71 +1,48 @@
-//! The host's error type + the generic, actionable, no-internals-leaked mapping to a
-//! user-facing string — the desktop mirror of the CLI's `user_message`.
-//!
-//! [`CmdError`] **serializes to that string**, so a `#[tauri::command]` returning
-//! `Result<T, CmdError>` hands the webview a safe message and never a sqlite/io/serde
-//! internal. `B2_DEBUG` opts into the raw detail, exactly as the CLI does.
+//! The host's error type and its generic, actionable user-facing message, the desktop
+//! mirror of the CLI's `user_message`. [`CmdError`] serializes to that message, so the
+//! webview never sees an internal. `B2_DEBUG` appends the raw detail.
 
 use b2_embed::{EmbedConfig, EmbedError};
 use serde::{Serialize, Serializer};
 
-/// The host's error, composing the crates it drives. Kept internal; it is only ever
-/// surfaced to the webview through [`user_message`] (via its [`Serialize`] impl).
+/// The host's error, composing the crates it drives. Reaches the webview only through
+/// [`user_message`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdError {
     #[error(transparent)]
     Core(#[from] b2_core::Error),
     #[error(transparent)]
     Embed(#[from] EmbedError),
-    /// A command ran with no vault configured (no launch arg, no remembered pick, no
-    /// `$B2_VAULT_PATH`) — refuse rather than guess a directory, and tell the user how to
-    /// point B2 at one.
+    /// No vault configured (no launch arg, remembered pick or `$B2_VAULT_PATH`).
     #[error("no vault specified")]
     VaultRequired,
-    /// A `reindex` was requested while one was already running (single-in-flight).
-    /// The UI disables the button, so this is a belt-and-
-    /// suspenders refusal that reaches the webview only in a race.
+    /// A `reindex` while one is running; the UI prevents it, so only in a race.
     #[error("a reindex is already running")]
     ReindexInFlight,
-    /// An `ask` was requested while an answer was already streaming
-    /// ([`CmdError::ReindexInFlight`]'s chat sibling, GH #155). The pane refuses a
-    /// second turn while one is streaming, so this too reaches the webview only in a race.
+    /// An `ask` while an answer is streaming (GH #155); only in a race.
     #[error("an answer is already streaming")]
     AskInFlight,
-    /// The OS refused to open a resource in its default app (`open_resource`, the
-    /// fallback card's one action). The message is the opener plugin's detail —
-    /// logged in full server-side, generic to the webview like everything else.
+    /// The OS refused to open a resource in its default app (`open_resource`).
     #[error("open in system default failed: {0}")]
     OpenFailed(String),
-    /// A note asked B2 to open a link that isn't a web address (`open_external`). Not a
-    /// failure so much as a refusal: a note is untrusted content (E5), and handing an
-    /// arbitrary scheme to the OS launches whatever app claims it — so the host opens
-    /// `http`/`https`/`mailto` and nothing else. The offending URL rides along for the
-    /// server-side log only; it is note content, so it stays out of the message.
+    /// A note link that isn't `http`/`https`/`mailto` (`open_external`). Notes are
+    /// untrusted (E5), and an arbitrary scheme launches whatever app claims it. The URL is
+    /// for the log only.
     #[error("refused to open a non-web link: {0}")]
     UnsupportedLink(String),
-    /// The OS refused the clipboard read behind ⌘⇧V (`clipboard_text`). Same shape as
-    /// [`CmdError::OpenFailed`]: the plugin's detail, logged in full server-side, generic
-    /// to the webview.
+    /// The OS refused the clipboard read behind ⌘⇧V (`clipboard_text`).
     #[error("clipboard read failed: {0}")]
     ClipboardFailed(String),
-    /// The webview refused a page-zoom change (`set_zoom`, the ⌘= / ⌘- / ⌘0 family).
-    /// WebKit's `pageZoom` does not fail in practice, so this exists to keep the handler
-    /// honest rather than to describe something a user is likely to see — the same shape
-    /// as [`CmdError::OpenFailed`]: the platform's detail, logged in full server-side,
-    /// generic to the webview.
+    /// The webview refused a page-zoom change (`set_zoom`); not expected in practice.
     #[error("could not change the window size: {0}")]
     ZoomFailed(String),
-    /// `import_file` was handed a payload that isn't base64 — the drop transport's own
-    /// failure, before the façade ever sees bytes. Not something the user did: it means
-    /// the frontend's encoder produced something the host can't read, so the message
-    /// stays generic and the decoder's detail goes to the server log.
+    /// `import_file` got a payload that isn't base64: a transport fault, not the user's.
     #[error("import payload was not valid base64: {0}")]
     ImportPayload(String),
 }
 
-/// Translate an internal error into a generic, actionable, user-facing message —
-/// never leaking sqlite/io/serde internals. Mirrors the CLI's `user_message` so the
-/// two adapters speak the same language; `B2_DEBUG` also appends the raw detail.
+/// A generic, actionable message for `err`, mirroring the CLI's `user_message`.
+/// `B2_DEBUG` appends the raw detail.
 pub fn user_message(err: &CmdError) -> String {
     let msg = match err {
         CmdError::Core(b2_core::Error::NoteNotFound(r)) => {
@@ -93,8 +70,7 @@ pub fn user_message(err: &CmdError) -> String {
             "The embedding model failed to load. Try downloading it again, or pick a different model in Settings."
                 .to_string()
         }
-        // `config.toml` didn't parse, or its `source` names a folder missing a model file:
-        // the fix is in that one file, so name it.
+        // The fix is in `config.toml`, so name it.
         CmdError::Embed(EmbedError::Config(_)) => format!(
             "B2 couldn't use its embedder settings. Check the [embedder] table in {}, then try again.",
             EmbedConfig::config_path()
@@ -153,8 +129,7 @@ pub fn user_message(err: &CmdError) -> String {
                 .to_string()
         }
         CmdError::Core(b2_core::Error::Frontmatter(d)) => {
-            // The detail is a domain message (never an internal): today either the
-            // fence refusal from `write_frontmatter` or `b2 link`'s flow-style refusal.
+            // The detail is a domain message, never an internal.
             format!("Can't save this frontmatter: {d}.")
         }
         CmdError::Core(b2_core::Error::ResourceNotFound(r)) => {
@@ -189,16 +164,8 @@ pub fn user_message(err: &CmdError) -> String {
         CmdError::AskInFlight => {
             "B2 is still answering. Wait for it to finish, or press Esc to stop it.".to_string()
         }
-        // A failed *answer* call (GH #154/#155). The seam collapses the wire's typed
-        // failure to a message on the way through `b2-core` (by design — the core stays
-        // free of `b2-llm`'s types), so what's left to say is the CLI's own sentence for
-        // this case, minus its `(ollama list)` hint: a terminal command is no help to
-        // someone in a window, and Settings → Chat is where this adapter shows the same
-        // thing — the installed models, from the daemon itself.
-        // Not folded into the generic chat failure below: nothing is wrong with the
-        // server being reachable or the model being installed, so that advice would send
-        // someone to check the two things that are fine. The cap is an environment
-        // setting, named here because it is the only fix on this side of the wire.
+        // Not the generic chat failure below: the server and model are fine, and the cap
+        // is the only fix on this side of the wire (GH #154/#155).
         CmdError::Core(b2_core::Error::ToolCallLimit { limit }) => format!(
             "The chat model asked for more than {limit} tool calls in one reply, so B2 stopped it. Try again or pick another model in Settings → Chat. If this model really needs more, relaunch with {} set higher.",
             b2_llm::ENV_MAX_TOOL_CALLS
@@ -207,16 +174,13 @@ pub fn user_message(err: &CmdError) -> String {
             "The model server couldn't answer. Check that it's running and that the model is installed, then try again."
                 .to_string()
         }
-        // Everything else in the two composed crates is an internal (sqlite/io/serde/…)
-        // the webview must never see. Spelled out rather than `_` so adding a CmdError
-        // variant fails to compile here instead of silently degrading to the catch-all.
+        // Internals the webview must never see. Not `_`, so a new CmdError variant fails
+        // to compile here.
         CmdError::Core(_) | CmdError::Embed(EmbedError::Io(_)) => {
             "Something went wrong. Please check the vault and try again.".to_string()
         }
     };
     if std::env::var_os("B2_DEBUG").is_some() {
-        // `Core`/`Embed` are `#[error(transparent)]`, so `err` displays as its source —
-        // one `to_string` covers every variant.
         let detail = err.to_string();
         format!("{msg}\n(debug: {detail})")
     } else {
@@ -224,22 +188,15 @@ pub fn user_message(err: &CmdError) -> String {
     }
 }
 
-/// Log an error's **full internal detail** to stderr — the specifics the webview must
-/// never see. Under `tauri dev` it lands in the terminal running the host, so a failing
-/// command is diagnosable without a rebuild. Called from the one place every command error
-/// crosses to the webview ([`CmdError`]'s `Serialize` impl), so logging stays uniform and
-/// out of the dumb handlers.
+/// Log an error's full internal detail to stderr, so a failure is diagnosable without
+/// `B2_DEBUG`. Called from `Serialize`, the one place every command error crosses.
 fn log_internal(err: &CmdError) {
-    // `Core`/`Embed` are `#[error(transparent)]`, so `err` displays as its source —
-    // one `to_string` covers every variant.
+    // `Core`/`Embed` are transparent, so this displays the source for every variant.
     let detail = err.to_string();
     eprintln!("[b2] command failed: {detail}");
 }
 
-/// Serialize the error **as its user-facing message** — the whole point of the type:
-/// the webview receives a generic, actionable string, never an internal. This is also
-/// the single boundary where an error reaches the client, so it is where the full
-/// detail is logged server-side ([`log_internal`]) before the generic string goes out.
+/// Serialize as the user-facing message, logging the full detail first.
 impl Serialize for CmdError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         log_internal(self);
@@ -251,10 +208,6 @@ impl Serialize for CmdError {
 mod tests {
     use super::*;
 
-    /// Serializing an error — the one path by which a command failure reaches the
-    /// webview — yields the **generic** user-facing string, never the internal detail.
-    /// (It also runs `log_internal`, which writes the full detail to stderr; the
-    /// harness captures that, so this exercises the server-log boundary too.)
     #[test]
     fn a_blown_tool_call_cap_names_the_limit_and_the_setting_that_raises_it() {
         let msg = user_message(&CmdError::Core(b2_core::Error::ToolCallLimit { limit: 64 }));
@@ -268,8 +221,6 @@ mod tests {
 
     #[test]
     fn serializes_to_the_generic_message_and_hides_internals() {
-        // An unmapped Core error is the exact "Something went wrong" case the reindex
-        // bug hit — the client sees the generic message, not the io/utf-8 detail.
         let err = CmdError::Core(b2_core::Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "stream did not contain valid UTF-8",
@@ -293,8 +244,6 @@ mod tests {
         }
     }
 
-    /// A config that won't parse used to read as "check the vault" — a vault it never
-    /// involved. It names the settings instead, and keeps the parser's detail internal.
     #[test]
     fn a_broken_embedder_config_names_the_settings_not_the_vault() {
         let msg = user_message(&CmdError::Embed(EmbedError::Config(
@@ -307,8 +256,6 @@ mod tests {
         );
     }
 
-    /// The move family maps to specific, actionable messages (not the catch-all),
-    /// mirroring the CLI's `user_message` arms.
     #[test]
     fn move_errors_map_to_actionable_messages() {
         let exists = CmdError::Core(b2_core::Error::MoveTargetExists("a/b.md".into()));

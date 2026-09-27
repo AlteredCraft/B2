@@ -1,28 +1,17 @@
-// The anchored ghost graph's scene builder (GH #22): pure functions from the
-// discovery state the app already holds (`explain` + `similar`) to a positioned
-// scene of nodes and edges. **Deterministic, no physics** — an ego graph is a
-// statement, not soup: authored edges band by category around the anchor with
-// the latent (ghost) candidates on an outer orbit. That layout-follows-meaning
-// stance is the whole point of drawing B2's typed graph instead of cloning an
-// untyped force-directed hairball (issue #22).
-//
-// No DOM, no IPC, no randomness — same input, same scene — so this file is unit
-// tested the way `panes.ts` is (`graph.test.ts`, plain node). `render.ts` turns
-// a scene into SVG; `main.ts` wires the clicks.
+// The anchored ghost graph's scene builder (GH #22): pure functions from discovery state
+// (`explain` + `similar`) to positioned nodes and edges. Deterministic, no physics: authored
+// edges band by category around the anchor, latent (ghost) candidates on an outer orbit.
 
 import type { NeighborView, ResourceLink, SimilarView, UnresolvedLink } from "./types";
-// Extension-ful: `npm test` runs off the source through node, where a value import
-// must resolve as a real path (the type-only import above is stripped, so it needn't).
+// Extension-ful: node's type-stripping resolves value imports by real path.
 import { strengthBand } from "./strength.ts";
 
-/** The stance-trio core verbs (data-model.md §2) plus the tolerated tail —
- *  color = verb is the graph's first encoding. */
+/** The core verbs (data-model.md §2) plus the tolerated tail; color encodes the verb. */
 export type Category = "references" | "supports" | "contradicts" | "other";
 
 const CORE_VERBS = new Set(["references", "supports", "contradicts"]);
 
-/** A verb's color key: core verbs are themselves; tail verbs (stored verbatim,
- *  never dropped) read as "other". */
+/** A verb's color key: core verbs are themselves, tail verbs "other". */
 export function categoryOf(verb: string): Category {
   return CORE_VERBS.has(verb) ? (verb as Category) : "other";
 }
@@ -30,24 +19,22 @@ export function categoryOf(verb: string): Category {
 /** Symmetric verbs are their own inverse (relation.rs) — drawn with no arrowhead. */
 const SYMMETRIC = new Set(["contradicts"]);
 
-/** Verb display order: authored nodes sort by it so edge colors band into
- *  sectors instead of alternating around the orbit. */
+/** Verb display order, so edge colors band into sectors around the orbit. */
 const CATEGORY_ORDER: Category[] = ["references", "supports", "contradicts", "other"];
 
 /** The logical drawing space; the SVG viewBox scales it to the pane. */
 export const VIEW_W = 1000;
 export const VIEW_H = 620;
 
-/** Most ghost candidates drawn — beyond this the halo stops reading as "a few
- *  questions worth answering" and starts reading as noise. */
+/** Most ghost candidates drawn; beyond this the halo reads as noise. */
 export const GHOST_LIMIT = 6;
 
 /** Node radii (the square resource glyph uses `resource` as its half-side). */
 export const NODE_R = { anchor: 34, note: 24, resource: 22, dangling: 22, ghost: 22 } as const;
 
 export interface GraphNode {
-  /** Stable scene identity: the note's vault-relative path (its identity, L1),
-   *  `res:<path>`, `dangling:<n>`, `ghost:<path>`, or `anchor`. */
+  /** Stable scene identity: the note's path (L1), `res:<path>`, `dangling:<n>`,
+   *  `ghost:<path>`, or `anchor`. */
   id: string;
   kind: "anchor" | "note" | "resource" | "dangling" | "ghost";
   x: number;
@@ -57,7 +44,7 @@ export interface GraphNode {
   full: string;
   /** The quiet second line: a ghost's score, a resource class. */
   sub: string | null;
-  /** Vault path a click opens (null for dangling — nothing resolved to open). */
+  /** Vault path a click opens (null for dangling). */
   path: string | null;
   /** The target's title, for the link modal a ghost click opens. */
   title: string | null;
@@ -157,7 +144,6 @@ function authoredOf(input: GraphInput): Authored[] {
       nodeId: `dangling:${i}`,
       kind: "dangling",
       name: `[[${u.target}]]`,
-      // No sub-label: the ⚠ glyph, dashed ring, and legend already say "broken".
       sub: null,
       path: null,
       verb: u.relation,
@@ -188,8 +174,7 @@ function trim(a: Placed, ra: number, b: Placed, rb: number) {
   };
 }
 
-/** Build the edge records for `items` (all between the anchor and one node each),
- *  curving parallel edges apart and placing each label at its curve's midpoint. */
+/** Edge records for `items`, curving parallel edges apart, labels at each midpoint. */
 function edgesFor(
   items: Authored[],
   nodeAt: Map<string, Placed>,
@@ -292,8 +277,7 @@ function radii(items: Authored[]): Map<string, number> {
   return m;
 }
 
-/** Stable authored order: category bands first (so orbit colors cluster), then
- *  name, then node id — fully deterministic. */
+/** Stable authored order: category band, then name, then node id. */
 function sortAuthored(items: Authored[]): Authored[] {
   return [...items].sort((p, q) => {
     const c =
@@ -305,9 +289,7 @@ function sortAuthored(items: Authored[]): Authored[] {
   });
 }
 
-/** Orbits are ellipses, not circles: the pane is wide (1000×620), so the vertical
- *  radius is this fraction of the horizontal one — the scene fills the width
- *  without the outer halo clipping the top or bottom. */
+/** Vertical orbit radius as a fraction of the horizontal: the pane is wide (1000×620). */
 export const ORBIT_ASPECT = 0.6;
 
 /** Evenly spaced orbit positions starting at the top (−90°). `rx` is the
@@ -326,9 +308,8 @@ function ring(center: Placed, rx: number, n: number, phase = -Math.PI / 2): Plac
 
 const CENTER: Placed = { x: VIEW_W / 2, y: VIEW_H / 2 };
 
-/** The ghost graph — the module's one entry point: authored edges on an inner orbit
- *  (category-banded), the top `similar` candidates as a dashed outer halo of
- *  not-yet-links. */
+/** The ghost graph: authored edges on an inner orbit, top `similar` candidates as a dashed
+ *  outer halo. */
 export function buildScene(input: GraphInput): GraphScene {
   const authored = sortAuthored(authoredOf(input));
   const ghosts = input.ghosts.slice(0, GHOST_LIMIT);
@@ -342,8 +323,7 @@ export function buildScene(input: GraphInput): GraphScene {
   const nodeAt = new Map<string, Placed>();
   ids.forEach((id, i) => nodeAt.set(id, inner[i]));
 
-  // Ghost halo: outside the authored orbit, phase-shifted half a step so ghosts
-  // sit between authored spokes instead of stacking on them.
+  // Phase-shifted half a step so ghosts sit between authored spokes.
   const r2 = 400;
   const phase = -Math.PI / 2 + (ghosts.length ? Math.PI / ghosts.length : 0) + 0.35;
   const halo = ring(CENTER, r2, Math.max(ghosts.length, 1), phase);
@@ -361,10 +341,8 @@ export function buildScene(input: GraphInput): GraphScene {
       y: at.y,
       label: truncate(name),
       full: name,
-      // The strength figure the discovery card shows, or nothing — never the raw
-      // engine score. A ghost's ring position follows the candidate order, which is
-      // the z order wherever the floor computed one, so the label has to be the same
-      // number or it explains nothing about the ring (GH #150).
+      // The card's strength figure or nothing, never the raw score: the ring follows z
+      // order, so the label must be the same number (GH #150).
       sub: strengthBand(g.z)?.value ?? null,
       path: g.path,
       title: g.title,

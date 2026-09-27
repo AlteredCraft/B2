@@ -1,21 +1,11 @@
-// Live-preview decorations — a document feel over the byte-honest buffer
-// (crates/b2-desktop/CLAUDE.md). Decorations conceal Markdown markup away from the
-// cursor and style content in place; they change what the DOM shows, NEVER what
-// `state.doc` holds (spec §0, insight §2.2). The save chain literally cannot observe
-// this feature — every construct decorates *within* lines (marks, inline replaces,
-// line classes), so the whole engine is one ViewPlugin (spec insight §2.4).
+// Live-preview decorations over the byte-honest buffer (crates/b2-desktop/CLAUDE.md).
+// Decorations conceal Markdown markup away from the cursor and style content in place;
+// they change what the DOM shows, never what `state.doc` holds (spec §0, insight §2.2).
 //
-// Two exports the app uses: `wikilink` (the Lezer inline node giving the tree B2's most
-// important construct) and `livePreview(onFollow)` (the ViewPlugin + the proportional-font
-// body class). main.ts keeps `livePreview` in a Compartment so `</>` can swap it for raw
-// source mode with no remount.
-//
-// The rest of the exports are for the suite. Everything that decides *what* to decorate is
-// a pure function of (tree, selection, viewport) — so `inlineDecorations` and
-// `blockDecorations` take an `EditorState` plus the ranges rather than an `EditorView`,
-// which is the only thing the view ever contributed. That makes the whole engine reachable
-// from node: the real Lezer grammar parses with no DOM (highlight.test.ts leans on the same
-// fact), so livepreview.test.ts asserts against real trees rather than a mock (#120).
+// The app uses `wikilink` (the Lezer inline node) and `livePreview(onFollow)`; main.ts
+// keeps the latter in a Compartment so `</>` swaps to raw source with no remount. What to
+// decorate is a pure function of (tree, selection, viewport), so the rest of the exports
+// take an `EditorState` and are testable from node against real trees (#120).
 
 import { syntaxTree } from "@codemirror/language";
 import {
@@ -37,8 +27,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
-// Extension-qualified, unlike the app-only modules: node's test runner resolves
-// specifiers literally, and this file is in the suite now (livepreview.test.ts).
+// Extension-qualified: node's test runner resolves specifiers literally.
 import { externalUrl } from "./links.ts";
 import {
   embedWidth,
@@ -50,11 +39,9 @@ import { renderMarkdown } from "./markdown.ts";
 
 // --- the wikilink tree extension (spec §4, insight §2.3) --------------------------
 //
-// A `[[target]]` / `[[target|label]]` inline node — the same grammar as the reading
-// view's `marked` tokenizer (markdown.ts): target = one-or-more chars that aren't `]` or
-// `|`, optional `|label` where label is one-or-more non-`]` chars. Giving the tree a
-// `Wikilink` node lets the *one* decoration engine style wikilinks uniformly with every
-// other construct, instead of a bolt-on. Positions are document-relative throughout.
+// A `[[target]]` / `[[target|label]]` inline node, the same grammar as the reading view's
+// tokenizer (markdown.ts), so one decoration engine styles wikilinks like every other
+// construct.
 
 const BANG = 33; // !
 const OPEN = 91; // [
@@ -67,17 +54,11 @@ export const wikilink: MarkdownConfig = {
   parseInline: [
     {
       name: "Wikilink",
-      // Before the standard Link parser — and so before `Image`, which sits after it in
-      // the default inline order — so neither `[[` nor `![[` is first eaten as a link or
-      // a reference-style image. It *was* only ahead of `Link`, and the embed form paid
-      // for it: `![[shot.png]]` parsed as an Image wrapping a Link, no `Wikilink` node
-      // formed at all, and the editor showed an embed as raw text while the reading view
-      // rendered it.
+      // Before `Link` (and so before `Image`), so neither `[[` nor `![[` is first eaten
+      // as a link or a reference-style image.
       before: "Link",
       parse(cx: InlineContext, next: number, pos: number): number {
-        // The embed marker is part of the construct, so the node covers it: one node per
-        // wikilink however it was written, and no handler has to read a byte outside its
-        // own node to find out which form it is looking at.
+        // The node covers the embed `!`, so handlers never read outside their node.
         const open = next === BANG ? pos + 1 : pos;
         if (cx.char(open) !== OPEN || cx.char(open + 1) !== OPEN) return -1;
         const contentStart = open + 2;
@@ -98,34 +79,21 @@ export const wikilink: MarkdownConfig = {
   ],
 };
 
-/** The engine re-derives the `[[..]]` / `![[..]]` structure from the node text — its span
- *  is exactly the wikilink, so a whole-string match yields the marker, the target, and the
- *  label/pipe offsets. It is the reading view's grammar (embeds.ts) with both ends pinned:
- *  one spelling of what a wikilink *is*, so read and edit cannot drift.
- *
- *  Deliberately *stricter* than the parse rule above, which accepts a `[[a|]]` the empty
- *  `([^\]]+)` label group rejects. The two are allowed to disagree: the node exists, the
- *  match fails, and the Wikilink handler leaves the text raw (spec §4). */
+/** Matches a whole Wikilink node's text: the reading view's grammar (embeds.ts) with both
+ *  ends pinned, so read and edit cannot drift. Stricter than the parse rule above (it
+ *  rejects `[[a|]]`); such a node is left raw (spec §4). */
 export const WIKILINK_RE = WIKILINK_EXACT;
 
 // --- the note's pictures (the `![[image.png]]` embed) --------------------------------
 //
-// An embed's bytes arrive over IPC long after the editor mounted, and they arrive for
-// the *document*, not for the editor — the reading view draws the same map (markdown.ts).
-// So they enter the editor as ordinary editor state: a field main.ts writes with an
-// effect, which every decoration pass then reads. That is what keeps `inlineDecorations`
-// a pure function of `EditorState` (the property the whole suite leans on) instead of a
-// function of whatever main.ts's module scope happened to hold at paint time.
-//
-// The field lives *outside* the live-preview compartment on purpose: which pictures the
-// note has loaded is a fact about the document, not a viewing mode, so toggling `</>` to
-// raw source and back must not drop them.
+// Embed bytes arrive over IPC after mount, so they enter as editor state (a field main.ts
+// writes with an effect), keeping decorations a pure function of `EditorState`. The field
+// lives outside the live-preview compartment so toggling `</>` doesn't drop them.
 
 /** Hand the editor the note's loaded pictures (path → `data:` URL). */
 export const setEmbedImages = StateEffect.define<EmbedImages>();
 
-/** Where that map lives between paints. Add it to the editor's extensions once; the
- *  decorations read it, and nothing else in the editor knows about it. */
+/** Where that map lives between paints. Add it to the editor's extensions once. */
 export const embedImagesField = StateField.define<EmbedImages>({
   create: () => NO_EMBED_IMAGES,
   update(images, tr) {
@@ -134,9 +102,7 @@ export const embedImagesField = StateField.define<EmbedImages>({
   },
 });
 
-/** The pictures this state carries, or none — `false` so a state assembled without the
- *  field (a test, or a future editor that doesn't want embeds) reads as empty rather
- *  than throwing. */
+/** The pictures this state carries; a state without the field reads as empty. */
 function embedImagesOf(state: EditorState): EmbedImages {
   return state.field(embedImagesField, false) ?? NO_EMBED_IMAGES;
 }
@@ -160,8 +126,7 @@ function conceal(
 }
 const HIDE = Decoration.replace({});
 
-// `•`/HR are the two conceals that show *something* in the markup's place. Stateless
-// singletons — `eq` returns true so CM never rebuilds their DOM on a recompute.
+// Stateless singletons: `eq` is true so CM never rebuilds their DOM on a recompute.
 class BulletWidget extends WidgetType {
   eq(): boolean {
     return true;
@@ -186,17 +151,12 @@ class RuleWidget extends WidgetType {
 const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
 const ruleDeco = Decoration.replace({ widget: new RuleWidget() });
 
-// An interactive task checkbox in place of `[ ]`/`[x]`. Unlike every other decoration
-// this one *writes*: a click dispatches the single-byte toggle of the marker's state
-// char, which flows through the normal editor transaction → autosave path (spec §8 —
-// "a widget that writes"). The write stays byte-honest: only `[ ]` ↔ `[x]` changes,
-// `state.doc` remains the source of truth. `from` is the marker's `[`; the state char
-// sits at `from + 1`.
+// A task checkbox in place of `[ ]`/`[x]`, the one decoration that writes: a click
+// toggles the single state byte at `from + 1` through the normal transaction → autosave
+// path (spec §8).
 class TaskWidget extends WidgetType {
-  // Fields declared and assigned rather than written as constructor parameter
-  // properties: those are the one TypeScript construct node's `--experimental-strip-types`
-  // can't erase, and using them here made the *whole module* unimportable by the test
-  // runner — including the pure rules at the bottom of the file. Same below.
+  // No constructor parameter properties: node's `--experimental-strip-types` can't erase
+  // them, which makes the module unimportable by the test runner. Same below.
   readonly checked: boolean;
   readonly from: number;
   constructor(checked: boolean, from: number) {
@@ -214,8 +174,7 @@ class TaskWidget extends WidgetType {
     box.checked = this.checked;
     // mousedown: keep the editor selection where it is (no focus steal, no cursor jump).
     box.addEventListener("mousedown", (e) => e.preventDefault());
-    // click: preventDefault suppresses the native toggle — the doc change is the source
-    // of truth, and the rebuilt widget reflects it.
+    // Suppress the native toggle: the doc change is the truth, the rebuilt widget shows it.
     box.addEventListener("click", (e) => {
       e.preventDefault();
       view.dispatch({
@@ -229,20 +188,11 @@ class TaskWidget extends WidgetType {
   }
 }
 
-// A GFM table rendered in place — block-widget territory, so it is fed by a StateField
-// (block/line-break-spanning decorations can't come from a ViewPlugin — spec §8). The
-// body reuses the reading view's `renderMarkdown` so read ↔ edit stay pixel-identical,
-// wikilinks inside cells carry their `data-target` (the app's click handler follows
-// them), and inline markup renders. A block widget hides its source range, so a plain
-// click can't land a cursor inside; clicking the table (but not a wikilink) drops the
-// cursor at its start, revealing the raw source for editing. `from` is the table's
-// first-line start.
-//
-// It carries the note's pictures too, so an `![[image.png]]` in a *cell* draws there as
-// well — "pixel-identical" has to hold inside a table or it doesn't hold. That is the
-// second key in `eq`: the map is replaced wholesale by each `setEmbedImages` (main.ts
-// snapshots it), so comparing it by identity rebuilds exactly when bytes land and never
-// otherwise.
+// A GFM table rendered in place via the reading view's `renderMarkdown`, so read and edit
+// match (spec §8). A block widget hides its source, so clicking the table (not a link)
+// puts the cursor at `from`, revealing the raw source. `images` is compared by identity
+// in `eq`: each `setEmbedImages` replaces the map wholesale, so this rebuilds exactly
+// when bytes land.
 class TableWidget extends WidgetType {
   readonly md: string;
   readonly from: number;
@@ -261,10 +211,7 @@ class TableWidget extends WidgetType {
     wrap.className = "lp-table";
     wrap.innerHTML = renderMarkdown(this.md, this.images);
     wrap.addEventListener("mousedown", (e) => {
-      // Let a link click fall through to the app's own handlers rather than yanking the
-      // caret out from under it: a wikilink to the follow path, a web link to the OS
-      // handoff (links.ts owns which hrefs those are — both are one click delegation in
-      // main.ts, and both are a *navigation*, not an edit of the table).
+      // Let a link click fall through to the app's handlers (main.ts): it navigates.
       const el = (e.target as HTMLElement | null)?.closest?.("[data-target], a[href]") ?? null;
       if (el?.matches("[data-target]") || externalUrl(el?.getAttribute("href"))) return;
       e.preventDefault();
@@ -278,21 +225,10 @@ class TableWidget extends WidgetType {
   }
 }
 
-// The picture of an `![[image.png]]` embed, drawn in the buffer's place — the editor's
-// half of the reading view's inline image (markdown.ts). An inline replace, not a block
-// widget: it spans no line break, so it belongs to the ViewPlugin with every other
-// inline conceal, and an embed written mid-sentence stays mid-sentence.
-//
-// Clicking it **reveals the source**, and it does so without a line of code here: the
-// widget declines to ignore the event (`ignoreEvent` → false, against `WidgetType`'s
-// default), so CodeMirror handles the click itself and puts the cursor at the replaced
-// range — which is precisely the reveal condition the decoration is computed from. The
-// same is true of arrowing onto it. A widget that swallowed its clicks would be a hole
-// in the buffer: a picture you cannot get a caret next to is a picture you cannot edit
-// the markup of.
-//
-// It carries `data-target` like every other wikilink, so ⌘-click follows it to the
-// resource card through the plugin's own mousedown handler (`isFollowClick`).
+// The picture of an `![[image.png]]` embed, as an inline replace (it spans no line break).
+// `ignoreEvent` is false so CodeMirror places the cursor on click, which reveals the
+// source; a widget that swallowed clicks would make the markup uneditable. It carries
+// `data-target`, so ⌘-click follows it (`isFollowClick`).
 class EmbedImageWidget extends WidgetType {
   readonly src: string;
   readonly target: string;
@@ -310,7 +246,7 @@ class EmbedImageWidget extends WidgetType {
     const img = document.createElement("img");
     img.className = "lp-embed-image";
     img.src = this.src;
-    // The filename, for the reading view's reason: it is all B2 knows about the picture.
+    // The filename: all B2 knows about the picture.
     img.alt = this.target.split("/").pop() ?? this.target;
     img.setAttribute("data-target", this.target);
     if (this.width !== null) img.width = this.width;
@@ -321,8 +257,7 @@ class EmbedImageWidget extends WidgetType {
   }
 }
 
-/** Is this GFM task marker checked? `[x]` and `[X]` are; the third spelling the grammar
- *  emits a `TaskMarker` for, `[ ]`, is not — and nothing else is a marker at all. */
+/** Is this GFM task marker checked (`[x]` or `[X]`)? */
 export function taskChecked(marker: string): boolean {
   return marker === "[x]" || marker === "[X]";
 }
@@ -352,10 +287,9 @@ function skipSpaces(doc: Text, to: number, lineTo: number): number {
   return to;
 }
 
-// Style decorations are emitted unconditionally; conceals only when the reveal range —
-// the *line* for block markers, the *element span* for inline markup (spec §3 hybrid
-// policy) — doesn't touch the selection. Every branch is line-local, so the plugin is
-// legal and this is a pure function of (tree, selection, viewport).
+// Styles are emitted always; conceals only when the reveal range (the line for block
+// markers, the element span for inline markup; spec §3) doesn't touch the selection.
+// Every branch is line-local, so this is legal in a ViewPlugin.
 function handleNode(
   node: SyntaxNodeRef,
   doc: Text,
@@ -397,8 +331,7 @@ function handleNode(
       return;
     }
 
-    // Inline links `[text](url)`: show the text, conceal `[` and `](url)`. Descent still
-    // decorates any markup *inside* the text. Reference-style `[text]` (no URL) is left raw.
+    // Inline links `[text](url)`: conceal `[` and `](url)`. Reference-style is left raw.
     case "Link": {
       const marks = node.node.getChildren("LinkMark");
       const url = node.node.getChild("URL");
@@ -411,21 +344,11 @@ function handleNode(
       return;
     }
 
-    // Wikilinks: show the label (accent, carrying `data-target` for mod-click follow),
-    // conceal `[[`/`[[target|` and `]]`. A node whose text the anchored grammar rejects
-    // (an odd `[[a|]]`) degrades to raw — never an error, never a changed byte (spec §4).
-    //
-    // The **embed** form `![[…]]` is the same node one byte to the right: the `!` is
-    // plain text to the grammar (the tree has no node for it), so the construct's real
-    // span starts at `node.from - 1` and every offset below is taken from that. Three
-    // things follow from the marker, and all three are the reading view's rules —
-    // read and edit must not disagree about what a note says (markdown.ts):
-    //
-    //   • the `|`-part is a display **width**, not a label, so an embed shows its
-    //     *target* where a plain wikilink shows its label (never a bare "500");
-    //   • with the picture in hand, the whole thing is replaced by the picture;
-    //   • without one, it reads as its link — with the `!` concealed, because the
-    //     marker is grammar and a grammar character in the prose is a rendering bug.
+    // Wikilinks: show the label (carrying `data-target` for ⌘-click), conceal the rest.
+    // A node the anchored grammar rejects stays raw (spec §4). For an embed `![[…]]`, as
+    // in the reading view (markdown.ts), the `|`-part is a width, so it shows its target;
+    // with the picture loaded the whole thing becomes the picture; without, it reads as
+    // its link with the `!` concealed.
     case "Wikilink": {
       const raw = doc.sliceString(node.from, node.to);
       const m = WIKILINK_RE.exec(raw);
@@ -442,8 +365,7 @@ function handleNode(
         );
         return;
       }
-      // Offsets into the raw text, which the match is anchored to: the target always
-      // starts just past the (optional) marker and `[[`, and it is what an embed shows.
+      // The target starts just past the optional `!` and `[[`.
       const open = node.from + m[1].length + 2;
       const targetEnd = open + m[2].length;
       const labelStart = embed || m[3] === undefined ? open : targetEnd + 1;
@@ -459,8 +381,7 @@ function handleNode(
       return;
     }
 
-    // Blockquote: border + muted per line. The `>` markers conceal themselves, one case
-    // down — the tree does not hang them all off the Blockquote (see there).
+    // Blockquote: style per line; `>` markers are concealed under QuoteMark.
     case "Blockquote": {
       eachLine(doc, node.from, node.to, (lineFrom) => {
         decos.push(Decoration.line({ class: "lp-quote" }).range(lineFrom));
@@ -468,11 +389,8 @@ function handleNode(
       return;
     }
 
-    // A `>` marker, concealed wherever the tree keeps it (reveal per its own line, like
-    // every other block marker). Its own case rather than the Blockquote's children,
-    // because only the *first* line's mark is a child of the Blockquote: the continuation
-    // lines of a wrapped quote hang theirs off the inner Paragraph, so collecting by
-    // direct child left every line but the first showing a raw `>` under the quote bar.
+    // Its own case: only the first line's `>` is a child of the Blockquote; continuation
+    // lines hang theirs off the inner Paragraph.
     case "QuoteMark": {
       const line = doc.lineAt(node.from);
       const revealed = touches(sel, line.from, line.to);
@@ -501,8 +419,7 @@ function handleNode(
       return;
     }
 
-    // Fenced code: block background per line; the fences stay visible (spec §3 — hiding
-    // them would hide the language tag for little gain), so no conceal.
+    // Fenced code: background per line; fences stay visible to show the language (spec §3).
     case "FencedCode": {
       eachLine(doc, node.from, node.to, (lineFrom) => {
         decos.push(Decoration.line({ class: "lp-fence" }).range(lineFrom));
@@ -510,10 +427,7 @@ function handleNode(
       return;
     }
 
-    // Interactive task checkbox: replace `[ ]`/`[x]` with a real checkbox away from the
-    // cursor; reveal the raw marker on the active line (the block-marker reveal policy,
-    // matching the bullet/quote handlers). The list bullet stays — parity with the
-    // reading view, which renders `• ☐ …` for a GFM task item.
+    // Task marker → checkbox, revealed per line. The bullet stays, as in the reading view.
     case "TaskMarker": {
       const line = doc.lineAt(node.from);
       if (touches(sel, line.from, line.to)) return;
@@ -527,17 +441,15 @@ function handleNode(
       return;
     }
 
-    // Tables are block widgets fed by the StateField below; this plugin never decorates
-    // inside one (returning false skips the subtree, so no inline decos land in a
-    // block-replaced range, and an edited table reads as clean raw source).
+    // Tables are block widgets (the StateField below); skip the subtree so no inline decos
+    // land in a block-replaced range.
     case "Table":
       return false;
   }
 }
 
-/** Fold the syntax tree + selection over `ranges` into a sorted DecorationSet. `ranges` is
- *  the view's *viewport* in the app, which is what makes cost scale with the screen rather
- *  than the note (insight §2.1) — and the only thing the plugin's `EditorView` was for. */
+/** Fold the syntax tree + selection over `ranges` (the viewport, so cost scales with the
+ *  screen; insight §2.1) into a sorted DecorationSet. */
 export function inlineDecorations(
   state: EditorState,
   ranges: readonly { from: number; to: number }[],
@@ -550,20 +462,16 @@ export function inlineDecorations(
   for (const { from, to } of ranges) {
     tree.iterate({ from, to, enter: (node) => handleNode(node, doc, sel, images, decos) });
   }
-  // `sort: true` orders line/mark/replace decorations for us — the one place ordering
-  // across the mixed decoration kinds is fiddly to get right by hand.
   return Decoration.set(decos, true);
 }
 
 // --- block widgets (spec §8) ------------------------------------------------------
 //
-// Block widgets (and any replace spanning a line break) can't come from a ViewPlugin —
-// CM6 forbids it — so tables live in a StateField instead. It has no viewport, so cost
-// scales with the note rather than the screen; tables are rare and cheap to find, so a
-// whole-tree pass on each doc/selection change is fine (only tables are visited deeply).
+// CM6 forbids block widgets from a ViewPlugin, so tables live in a StateField. It has no
+// viewport, but tables are rare and cheap to find, so a whole-tree pass is fine.
 
-/** Replace each un-touched GFM table with a rendered block widget; reveal (leave raw)
- *  the one the selection is inside, so it can be edited as source. */
+/** Replace each GFM table with a rendered widget, leaving the one the selection touches
+ *  raw for editing. */
 export function blockDecorations(state: EditorState): DecorationSet {
   const decos: Range<Decoration>[] = [];
   const sel = state.selection;
@@ -572,8 +480,7 @@ export function blockDecorations(state: EditorState): DecorationSet {
   syntaxTree(state).iterate({
     enter: (node) => {
       if (node.name !== "Table") return; // keep descending to reach any nested table
-      // Snap to whole lines: a block replace must sit on line boundaries, and the widget
-      // renders the exact lines it hides.
+      // A block replace must sit on line boundaries.
       const from = doc.lineAt(node.from).from;
       const to = doc.lineAt(node.to).to;
       if (!touches(sel, from, to)) {
@@ -593,9 +500,7 @@ export function blockDecorations(state: EditorState): DecorationSet {
 const blockField = StateField.define<DecorationSet>({
   create: (state) => blockDecorations(state),
   update(deco, tr) {
-    // Reveal keys on the selection, so a bare cursor move recomputes too — and on the
-    // note's pictures, which change no text and move no cursor (the ViewPlugin below
-    // watches the same effect, for the same reason).
+    // Recompute on cursor moves (reveal) and on pictures landing, which change no text.
     const pictures = tr.effects.some((e) => e.is(setEmbedImages));
     return tr.docChanged || tr.selection || pictures ? blockDecorations(tr.state) : deco;
   },
@@ -603,31 +508,19 @@ const blockField = StateField.define<DecorationSet>({
 });
 
 /**
- * Does this click mean "follow the wikilink" rather than "put the cursor here"?
- *
- * ⌘ only. It used to take ⌃ as well — the same `metaKey || ctrlKey` reflex the keyboard
- * handlers had (bindings.ts `Chord.mod`), and wrong here for a sharper reason than there:
- * on macOS **⌃-click *is* the secondary click**. The OS synthesizes a context-menu gesture
- * from it, so ⌃-clicking a wikilink navigated away *and* right-clicked, which is not a
- * thing any one gesture should do.
- *
- * Its own function, exported, because a mouse handler buried in a `ViewPlugin`'s
- * `eventHandlers` is unreachable from the suite — and this rule is exactly the sort that
- * gets casually re-broken by someone restoring "cross-platform" symmetry.
+ * Does this click mean "follow the wikilink"? ⌘ only: on macOS ⌃-click is the secondary
+ * click, so accepting ⌃ would navigate and open a context menu at once. Exported so the
+ * suite can pin it.
  */
 export function isFollowClick(e: Pick<MouseEvent, "metaKey">): boolean {
   return e.metaKey;
 }
 
 /**
- * The live-preview extension: the ViewPlugin folding tree+selection into inline/line
- * decorations, the `blockField` feeding block widgets (tables — spec §8), plus the
- * `lp-body` class that swaps the editor to the reading view's proportional voice
- * (spec §3, §5). ⌘-click a wikilink follows it via `onFollow`; a plain click falls
- * through to place the cursor, as an editor must (spec §3).
- *
- * Not included: `embedImagesField`. It holds a fact about the *document*, so the editor
- * adds it once (main.ts) and it survives the `</>` swap that reconfigures this.
+ * The live-preview extension: inline decorations, table block widgets (spec §8) and the
+ * proportional-font `lp-body` class (spec §3, §5). ⌘-click on a wikilink calls
+ * `onFollow`; a plain click places the cursor. Excludes `embedImagesField` (added once
+ * by main.ts, so it survives the `</>` swap).
  */
 export function livePreview(onFollow: (target: string) => void): Extension {
   const plugin = ViewPlugin.fromClass(
@@ -637,8 +530,7 @@ export function livePreview(onFollow: (target: string) => void): Extension {
         this.decorations = inlineDecorations(view.state, view.visibleRanges);
       }
       update(u: ViewUpdate): void {
-        // …and when a picture lands: the effect changes no text and moves no cursor, so
-        // without this the note keeps reading as its links until the next keystroke.
+        // A picture landing changes no text, so watch its effect too.
         const pictures = u.transactions.some((tr) =>
           tr.effects.some((e) => e.is(setEmbedImages)),
         );

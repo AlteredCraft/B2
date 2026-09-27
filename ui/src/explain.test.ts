@@ -66,7 +66,7 @@ test("explain: the label counts passages at the ●●○ landmark", () => {
 
 test("explain: the standing says why a note is, or isn't, a card", () => {
   assert.equal(standingText(view()), "Card #2 of the 10 shown · 200 notes compared");
-  // A small vault shows fewer cards than the limit: the count is what the list shows.
+  // A small vault shows fewer cards than the limit.
   assert.equal(
     standingText(view({ standing: { kind: "ranked", rank: 2, of: 5, served: true } })),
     "Card #2 of the 5 shown · 5 notes compared",

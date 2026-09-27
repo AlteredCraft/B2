@@ -1,14 +1,9 @@
-// Wikilink completion, the pure half — typing `[[` in the editor offers the vault's
-// notes and files, Obsidian-style. This module is the *logic*: detect the open `[[`
-// the cursor sits in, rank candidates against the query, and compute the insertion
-// that closes the brackets. main.ts wraps it in a CodeMirror completion source; the
-// split keeps this node-testable with no editor dependency (the move.ts pattern).
+// Wikilink completion, the pure half: typing `[[` offers the vault's notes and files.
+// main.ts wraps it in a CodeMirror completion source.
 //
-// Targets follow the engine's resolution rules (`db::resolve_link_target` /
-// `resolve_resource_target`): a wikilink is a **vault-root-relative path**, `.md`
-// optional for notes (the Obsidian habit — we omit it), extension required for
-// resources (extension-only kind dispatch, slice-1 spec §3). Titles are display-only;
-// inserting one would author a dangling link.
+// Targets follow the engine's resolution (`db::resolve_link_target` /
+// `resolve_resource_target`): a vault-root-relative path, `.md` omitted for notes,
+// extension required for resources. Titles are display-only; inserting one would dangle.
 
 import { baseName } from "./move.ts";
 import { parentDir } from "./newentry.ts";
@@ -25,11 +20,8 @@ export interface WikiCandidate {
 }
 
 /**
- * Find the open `[[` the cursor is typing into. `textBefore` is the current line up
- * to the cursor; the return's `from` is the query's start offset within it (i.e.
- * just past the `[[`), ready to become the completion's replace-from. `null` means
- * no trigger: no `[[`, already closed, or past a `|` (the target is fixed and the
- * user is typing display text).
+ * Find the open `[[` the cursor is typing into. `textBefore` is the line up to the
+ * cursor; `from` is just past the `[[`. Null for no `[[`, already closed, or past a `|`.
  */
 export function wikiQueryAt(textBefore: string): { from: number; query: string } | null {
   const open = textBefore.lastIndexOf("[[");
@@ -44,10 +36,7 @@ function noteLabel(n: NoteSummary): string {
   return n.title ?? baseName(n.path).replace(/\.md$/, "");
 }
 
-/** The wikilink target that names a **note**: its vault-relative path minus `.md` (the
- *  Obsidian habit — the module header's rule). Exported because the completion is no
- *  longer the only thing that writes a `[[link]]`: dropping a discovery card onto a line
- *  writes one too (droplink.ts), and one spelling of a target is one thing to get right. */
+/** The wikilink target that names a note: its path minus `.md`. Shared with droplink.ts. */
 export function noteTarget(path: string): string {
   return path.replace(/\.md$/, "");
 }
@@ -69,9 +58,8 @@ function tierOf(label: string, path: string, query: string): number | null {
 }
 
 /**
- * Rank the vault's notes + resources against `query` (case-insensitive), best first.
- * An empty query lists everything label-sorted, so the menu opens useful the moment
- * `[[` is typed. `limit` caps the list — the menu is a picker, not an inventory.
+ * Rank the vault's notes and resources against `query` (case-insensitive), best first. An
+ * empty query lists everything label-sorted.
  */
 export function wikiCandidates(
   notes: NoteSummary[],
@@ -106,10 +94,8 @@ export function wikiCandidates(
 }
 
 /**
- * The text that completes a picked target, given what already follows the cursor:
- * append `]]`, finish a lone `]`, or reuse an existing `]]` — never a stray third
- * bracket. `cursor` is where the caret lands, relative to the insertion start —
- * always just past the closing brackets, ready to keep typing prose.
+ * The text that completes a picked target: append `]]`, finish a lone `]`, or reuse an
+ * existing `]]`. `cursor` lands just past the closing brackets, relative to the insertion.
  */
 export function wikiInsertion(
   target: string,

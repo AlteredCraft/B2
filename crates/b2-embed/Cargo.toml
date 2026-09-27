@@ -5,27 +5,19 @@ edition = "2021"
 rust-version = "1.96"
 description = "B2's real local embedder — candle-backed inference behind the b2-core Embedder seam"
 
-# Heavy ML deps (candle + tokenizers) live *only* here, never in b2-core, so the
-# core test suite stays fast, deterministic, and model-free (CLAUDE.md). The `b2`
-# binary depends on this crate to inject the real model.
+# Heavy ML deps live only here, never in b2-core, so the core suite stays model-free
+# (CLAUDE.md).
 
 [dependencies]
 b2-core = { path = "../b2-core" }
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
-# Download seam for `b2 init`. `default-features = false` is load-bearing (GH #174):
-# hf-hub's defaults are ["default-tls", "tokio", "ureq"], and the `tokio` one pulls
-# reqwest → hyper → h2 → tokio — the whole async HTTP stack, compiled at opt-3 by the
-# workspace's dependency profile, to serve an async API B2 never calls (we use
-# `hf_hub::api::sync`). Dropping the defaults also drops `default-tls` → `native-tls`,
-# which is the one *behavioural* change: hf-hub's sync agent falls back to ureq's own
-# default TLS (rustls + webpki-roots) instead of the OS trust store. That is already
-# what b2-llm speaks to cloud endpoints with, and what hf-hub's redirect-following
-# agent used even before this — only the first hop was native-tls. Proxies are
-# unaffected (hf-hub calls `try_proxy_from_env` either way). The trade is that a
-# corporate MITM CA installed in the *system* store is no longer trusted here;
-# `ureq/native-certs` is the escape hatch if that ever bites.
+# Download seam for `b2 init`. No default features (GH #174): the `tokio` default pulls the
+# whole async HTTP stack for an API B2 never calls (we use `hf_hub::api::sync`). This also
+# drops `native-tls`, so TLS is ureq's rustls + webpki-roots rather than the OS trust store:
+# a corporate MITM CA in the system store is not trusted. `ureq/native-certs` is the escape
+# hatch.
 hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
 tokenizers = "0.21"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -34,31 +26,22 @@ toml = "0.8"
 dirs = "6.0"
 thiserror = "2.0.18"
 
-# On macOS, link Apple's Accelerate (vDSP/BLAS) for candle's CPU matmuls. Without
-# it candle falls back to a naive kernel that makes bge-base inference ~10-100×
-# slower — the real bottleneck behind a slow `b2 reindex`, far more than batching.
-# Cargo merges these features with the base deps above; on non-macOS the feature is
-# simply absent (candle stays portable), so a Linux build is unaffected.
+# On macOS, link Accelerate for candle's CPU matmuls; without it bge-base inference is
+# ~10-100× slower. Other targets are unaffected.
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { version = "0.9", features = ["accelerate"] }
 candle-nn = { version = "0.9", features = ["accelerate"] }
 candle-transformers = { version = "0.9", features = ["accelerate"] }
 
-# Research lever (GH #40): run the BERT forward pass on the Apple-Silicon Metal GPU instead
-# of the CPU. `metal` is *additive* over `accelerate` (independent code paths — CPU mode still
-# gets Accelerate BLAS, Metal mode uses the GPU), and the device is chosen at load via candle's
-# `metal_is_available()` (== `cfg!(feature = "metal")`) with a graceful CPU fallback — see
-# `model.rs::select_device`. Switching device is a *model swap* (the recorded model id gains an
-# `@metal` tag), so a re-embed is forced and `search` fails fast rather than mixing vectors.
-# **macOS-only:** the candle metal-kernels crate builds only on macOS; don't pass `--features
-# metal` on Linux. Enable per-build: `cargo run -p b2-cli --features metal -- reindex`.
+# Run the forward pass on the Metal GPU (GH #40), additive over `accelerate`, with a CPU
+# fallback (`model.rs::select_device`). Switching device is a model swap (the model id gains
+# `@metal`), so it forces a re-embed (ADR-0007). macOS-only: don't pass `--features metal` on
+# Linux.
 [features]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
-# The eval harness's search evidence probe (GH #201) reads `chunks_fts` directly
-# over the connection `b2_core::open` hands back, so the examples need rusqlite's
-# *types* in scope. Dev-only, and feature-unified with b2-core's bundled build —
-# this adds nothing to the `b2` binary's tree.
+# The eval's search evidence probe (GH #201) reads `chunks_fts` directly. Dev-only, and
+# feature-unified with b2-core's bundled build, so it adds nothing to the `b2` binary.
 rusqlite = "0.40.1"

@@ -1,8 +1,6 @@
-/* B2 desktop — a calm reading surface. Light/dark aware. The Settings "Appearance"
-   control stamps `data-theme` on <html>: absent ⇒ "System" (follow the OS via
-   prefers-color-scheme), else it pins Light/Dark. The left pane is for *reading a
-   note*, so its typography (measure, rhythm, heading scale) gets the care; the chrome
-   stays quiet. Accent matches the app icon. */
+/* B2 desktop: a calm reading surface, light/dark aware. Settings → Appearance sets
+   `data-theme` on <html> (absent ⇒ follow the OS). The note's typography gets the care;
+   the chrome stays quiet. Accent matches the app icon. */
 
 :root {
   --bg: #faf9f7;
@@ -28,9 +26,8 @@
   --cat-contradicts: #d94f4f;
   --cat-other: #8a8880;
   --cat-latent: #0d9488;
-  /* Fenced-code syntax colors — the one palette both surfaces paint with (highlight.ts).
-     Tuned for the warm `--surface-2` code background, and kept quiet: the vault is prose
-     with code in it, not an IDE. */
+  /* Fenced-code syntax colors, the one palette both surfaces use (highlight.ts). Tuned
+     for the `--surface-2` code background, and kept quiet. */
   --syn-comment: #8a8880;
   --syn-keyword: #9333a8;
   --syn-string: #41803f;
@@ -42,11 +39,9 @@
   color-scheme: light;
 }
 
-/* The dark palette applies when the user pins Dark (`data-theme="dark"`), OR when no
-   theme is pinned (`data-theme` absent ⇒ "System") and the OS prefers dark. The two
-   rule bodies below MUST stay identical — CSS can't share them across the @media
-   boundary. A pinned `data-theme="light"` matches neither, so it holds the light :root
-   even on a dark OS. */
+/* Dark applies when pinned (`data-theme="dark"`) or when unpinned and the OS prefers
+   dark. The two rule bodies below MUST stay identical: CSS can't share them across the
+   @media boundary. A pinned "light" matches neither. */
 :root[data-theme="dark"] {
   --bg: #16161a;
   --surface: #1e1e23;
@@ -128,20 +123,9 @@ body {
 }
 
 /* --- icons (ui/src/icons.ts) -----------------------------------------------------
-   Every icon in the app is a Bootstrap Icons glyph emitted by `icon()`, which sizes it
-   and hides it from the accessibility tree; this is the whole of its styling. Two rules
-   and both are load-bearing:
-
-   `currentColor` is set on the `<svg>` by the emitter, so an icon has **no color of its
-   own** — it is whatever its container's text is. That is what lets hover, `is-active`,
-   `.fm-flag`'s danger red and a dangling graph node tint their icon by setting `color`
-   on the parent and nothing else, and why no rule below ever names an icon and a color
-   together.
-
-   `vertical-align` is the inline case (a broken-link marker, a connection's direction
-   arrow), where the icon rides in a line of text; in the flex slots that hold the rest
-   of them it is inert, because a flex item's display is blockified anyway — which is also
-   why `.tree-action svg` and `.btn.icon-btn svg` no longer need to say `display: block`. */
+   An icon has no color of its own: `icon()` sets `currentColor`, so it takes its
+   container's text color (tint it by setting `color` on the parent). `vertical-align` is
+   for inline icons; in flex slots it is inert. */
 .icon {
   flex: 0 0 auto;
   display: inline-block;
@@ -149,18 +133,13 @@ body {
 }
 
 /* --- focus (invariant K1) ------------------------------------------------------
-   "Focus is always visible" is half of "fully operable from the keyboard": a control
-   you can reach but can't see you've reached is not reachable. One ring, everywhere,
-   so the whole app reads the same way under the keyboard — a 2px accent outline with
-   an offset so it clears the control rather than hugging its border.
+   One visible ring everywhere: a 2px accent outline, offset. `:focus-visible` keeps it off
+   mouse clicks; controls may restyle the ring, never remove it.
 
-   `:focus-visible`, not `:focus`: the ring appears for keyboard focus and stays out of
-   the way of a mouse click, which is the browser heuristic doing exactly what we want.
-   Individual controls override this where their own affordance IS the ring (the pane
-   gutters' accent line) — never to remove it. Everything a pane *re-focuses across its
-   own repaint* goes the other way and rings on plain `:focus`, because the repaint
-   erases the heuristic they'd depend on; see `.tree-row:focus`, `[data-side-row]:focus`,
-   `.gnode:focus`, and the pane chrome below. */
+   The exception: anything a repaint re-focuses by script rings on plain `:focus`. An
+   innerHTML swap resets focus to `<body>`, and WebKit grants `:focus-visible` to a
+   script-focused element only by inheriting it, so the ring would lag a keystroke. Safe on
+   buttons, which WebKit never focuses on click. The `:focus` rules below point here. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -172,14 +151,8 @@ body {
 #side-pane:focus {
   outline: none;
 }
-/* The pane chrome main.ts puts focus back on by `id` after an innerHTML swap (GH #91):
-   the note bar's chips, the drawer's Edit, the resource card's one action, and search
-   mode's clear. `:focus` for the same reason the two row rules use it — pressing one of
-   these *is* the repaint that destroys it, and WebKit grants `:focus-visible` to a
-   script-focused element only by inheriting from the currently-focused one, which after
-   the swap is `<body>`. The restored control would come back focused but ringless until
-   the next keystroke. These are all buttons, and WebKit never focuses a button on click,
-   so `:focus` still can't light one up under the mouse. */
+/* Pane chrome main.ts re-focuses by `id` after a swap (GH #91): plain `:focus`
+   (see the focus section). */
 #fm-toggle:focus,
 #source-toggle:focus,
 #graph-toggle:focus,
@@ -210,8 +183,7 @@ body {
   font-size: 16px;
 }
 
-/* Back/forward history pair (#52) — grouped tight by the brand, browser-convention
-   top-left. The buttons themselves are the standard chrome icon-btn. */
+/* Back/forward history pair (#52), beside the brand. */
 .nav-history {
   display: flex;
   align-items: center;
@@ -246,11 +218,8 @@ body {
   margin-left: auto;
 }
 
-/* The vault and its indexing state, grouped: the progress meter is *about* a vault, so
-   it sits with that vault's name rather than at the far end of the bar. A tighter gap
-   than `.topbar-right`'s so the pair reads as one unit and not as two more bar items;
-   `min-width: 0` is what lets the path below ellipsize instead of shoving the meter
-   out of the bar on a deep vault path. */
+/* The vault name and its indexing meter, grouped. `min-width: 0` lets the path ellipsize
+   instead of pushing the meter out. */
 .vault-status {
   display: flex;
   align-items: center;
@@ -270,17 +239,13 @@ body {
 }
 
 /* --- reindex progress (async, cancellable indexing) --------------------------- */
-/* A compact inline affordance in the top bar, shown only while a reindex runs. The
-   app stays fully usable behind it (docs/index-engine.md) — this is a signal of life,
-   not a blocker. */
+/* Shown only while a run is live; the app stays usable behind it. */
 .reindex-progress {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-/* `display: flex` above would override the UA `[hidden] { display: none }` (author
-   origin beats UA), leaving the affordance stuck on-screen — with its last label
-   ("Indexing…"/"Cancelling…") — after a reindex ends. Re-assert none when hidden. */
+/* `display: flex` above beats the UA's `[hidden] { display: none }`, so re-assert it. */
 .reindex-progress[hidden] {
   display: none;
 }
@@ -302,8 +267,7 @@ body {
   transition: width 0.2s ease;
 }
 
-/* Before embedding starts (fast projection phase) the denominator is unknown, so the
-   bar animates as an indeterminate sweep instead of showing a bogus fraction. */
+/* Before embedding starts the denominator is unknown, so the bar sweeps. */
 .reindex-fill.is-indeterminate {
   width: 40%;
   animation: reindex-sweep 1.1s ease-in-out infinite;
@@ -319,11 +283,8 @@ body {
 }
 
 /* --- install banner (semantic search off — no model) -------------------------- */
-/* A calm, informational strip under the top bar when the embedding model isn't
-   installed: the vault is keyword-indexed but discovery + semantic ranking are off,
-   which is otherwise near-invisible. Accent tones, not --danger — it's a nudge, not an
-   error. Its host (#embed-banner) is always in the DOM; an empty innerHTML collapses it,
-   so there is no [hidden] toggle to fight. */
+/* Shown when no embedding model is installed (keyword-only). Accent, not --danger: a
+   nudge, not an error. Its host is always in the DOM; an empty innerHTML collapses it. */
 .install-banner {
   display: flex;
   align-items: center;
@@ -358,8 +319,7 @@ body {
   flex: 0 0 auto;
 }
 
-/* The "Don't remind me again" opt-out — a real checkbox (a11y + the user's mental model),
-   kept quiet (muted, 12px) so it reads as the secondary choice next to Download. */
+/* The "Don't remind me again" checkbox, quiet beside Download. */
 .install-banner-optout {
   display: inline-flex;
   align-items: center;
@@ -407,13 +367,9 @@ body {
 
 /* --- layout ------------------------------------------------------------------- */
 
-/* Three panes, two draggable gutters. The side columns are sized by custom properties
-   that `panes.ts` writes (defaults here are what a first run gets); the center is never
-   sized directly — it takes the remainder, because the note is the reading surface and
-   the columns beside it are chrome. The gutters are grid tracks rather than overlays so
-   they can't cover a pane's scrollbar, and they're transparent: each reads as its
-   neighbouring pane's background, which keeps the panes' own 1px borders as the divider
-   and leaves the resting layout looking exactly as it did before it could be dragged. */
+/* Three panes, two draggable gutters. Side columns are sized by custom properties
+   `panes.ts` writes; the center takes the remainder. Gutters are transparent grid tracks,
+   so they can't cover a scrollbar and the panes' own borders stay the divider. */
 .layout {
   flex: 1 1 auto;
   display: grid;
@@ -422,9 +378,8 @@ body {
     minmax(0, 1fr)
     var(--gutter-w) var(--side-w, 380px);
   min-height: 0;
-  /* Containing block for the find bar: an absolutely-positioned grid child is sized
-     against the grid area its placement names, so the bar tracks the note pane's
-     column through drags and breakpoints with no JS measuring. */
+  /* Containing block for the find bar, so it tracks the note pane's grid area with no
+     JS measuring. */
   position: relative;
 }
 
@@ -436,13 +391,9 @@ body {
 }
 
 .note-pane {
-  /* The side padding tapers as the pane narrows — `panes.ts` keeps it in step with the
-     pane's measured width. The full-bleed bars below cancel it by name, so it must stay
-     a px length (see the ResizeObserver comment in panes.ts for why not a CSS clamp()).
-     No top padding: the sticky top bars pin at `top: 0`, and WKWebView measures sticky
-     insets from the scroller's *content* box, so scroller top-padding would open a gap
-     above a stuck bar that scrolled content shows through. Headroom is the bars' own
-     padding (or .resource-card's, in the bar-less state). */
+  /* Side padding tapers with the pane (`panes.ts`); it must stay a px length because the
+     full-bleed bars cancel it by name. No top padding: WKWebView measures sticky insets
+     from the content box, so it would open a gap above a stuck bar. */
   --note-pad-x: 48px;
   overflow-y: auto;
   padding: 0 var(--note-pad-x) 96px;
@@ -457,9 +408,8 @@ body {
 
 /* --- gutters (draggable column edges) ----------------------------------------- */
 
-/* The grab strip. `cursor: col-resize` is set, but WKWebView doesn't reliably paint a
-   CSS cursor, so it is NOT the affordance — the hover/focus rule below is: the divider
-   thickens and takes the accent, which paints everywhere. */
+/* WKWebView doesn't reliably paint CSS cursors, so the affordance is the hover/focus
+   rule below: the divider thickens and takes the accent. */
 .gutter {
   position: relative;
   cursor: col-resize;
@@ -528,9 +478,8 @@ body.is-resizing {
 
 /* --- find in note (⌘F) --------------------------------------------------------- */
 
-/* A floating overlay in the note pane's grid area (see .layout's position comment):
-   centered near the top, below the frontmatter/editor strip, over the text — no
-   layout shift, so opening it never moves what the user is reading. */
+/* Floats over the note pane's grid area near the top, so opening it never shifts the
+   text. */
 .find-bar {
   position: absolute;
   grid-column: 3;
@@ -549,7 +498,7 @@ body.is-resizing {
   box-shadow: var(--shadow);
   z-index: 5;
 }
-/* `display: flex` beats the UA's [hidden] rule — re-assert (the reindex-progress lesson). */
+/* Re-assert [hidden] (see .reindex-progress). */
 .find-bar[hidden] {
   display: none;
 }
@@ -597,12 +546,9 @@ body.is-resizing {
   white-space: nowrap;
 }
 
-/* Match paint. The reading view uses the CSS Custom Highlight API (no DOM mutation);
-   the editor marks the same matches with .find-match decorations. Concrete colors,
-   not vars: custom-property resolution inside ::highlight pseudos is still patchy
-   across engines, and a silently-unresolved var() would paint nothing. The dark
-   overrides mirror the theme rule pair up top (both bodies identical, by the same
-   rule). */
+/* Match paint: the Custom Highlight API in the reading view, `.find-match` decorations in
+   the editor. Concrete colors, not vars: var() inside ::highlight is patchy across engines
+   and would silently paint nothing. Dark overrides mirror the theme rule pair up top. */
 ::highlight(b2-find) {
   background-color: rgba(255, 199, 66, 0.4);
 }
@@ -673,9 +619,7 @@ body.is-resizing {
   font-size: 11px;
 }
 
-/* The head's right cluster: the count plus the two create icons (new note / new
-   folder). The icons are quiet like the topbar's icon-btns, sized down to the
-   tree-head's scale. */
+/* The head's right cluster: the count and the two create icons. */
 .tree-head-right {
   display: flex;
   align-items: center;
@@ -727,32 +671,17 @@ body.is-resizing {
 .tree-row:hover {
   background: var(--surface-2);
 }
-/* The keyboard's row (K1). The tree is one Tab stop with a roving tabindex, so this
-   ring is the *only* thing telling an arrow-key user where they are — it has to read
-   as clearly as the mouse's hover wash, hence the wash underneath it too. Inset, since
-   a row spans the pane's full width and an outset ring would clip on both edges.
-
-   `:focus`, not the app-wide `:focus-visible` — the first of the deliberate exceptions,
-   which are all the one bug. Every arrow key repaints the tree (the roving tabindex
-   moves), and the innerHTML swap destroys the element that earned `:focus-visible`;
-   WebKit grants it to a script-focused node only by inheriting from the currently-
-   focused one, which after the swap is `<body>`. So the row main.ts re-focuses by path
-   came back focused but ringless until the *next* keystroke re-armed the heuristic —
-   the ring lagged a key behind the arrows. `:focus` is the state the repaint actually
-   restores, so the ring can't drift from it. Sound here because WebKit never focuses a
-   button on click (the click delegation in main.ts depends on the same fact): a row
-   holds focus only from a key — the arrows, typeahead, ⌘1, Tab, or an overlay handing
-   it back. */
+/* The keyboard's row (K1): the tree is one Tab stop with a roving tabindex, so this ring
+   (plus the hover wash) is the only position cue. Inset, since rows span the pane. Plain
+   `:focus`: every arrow key repaints the tree (see the focus section). */
 .tree-row:focus {
   outline: none;
   background: var(--surface-2);
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-/* The fold slot. A chevron (ui/src/icons.ts) when the row folds, empty when it doesn't —
-   held open either way, so a file's icon sits under its folder's *icon* rather than under
-   the folder's chevron. Shared by the tree, the Frontmatter drawer, and the side pane's
-   section and card folds, so every fold affordance in the app is the same shape. */
+/* The fold slot: a chevron, or empty but held open so icons align. Shared by every fold
+   in the app (tree, drawer, side pane). */
 .tree-caret {
   flex: 0 0 auto;
   display: flex;
@@ -762,9 +691,7 @@ body.is-resizing {
   color: var(--muted);
 }
 
-/* The "what is this row" slot: a folder (open or closed), a note, or the resource's own
-   type. Quieter than the label — a scannable hint, not the content — but it follows the
-   row into its accented states rather than staying grey while the text moves. */
+/* The row-type icon: quieter than the label, but follows the row's accented states. */
 .tree-icon {
   flex: 0 0 auto;
   display: flex;
@@ -828,9 +755,8 @@ body.is-resizing {
   color: var(--muted);
 }
 
-/* Drag-and-drop: the folder row (or the pane itself = vault root) a dragged tree
-   entry would drop into. Accent-washed like is-active, plus an inset ring so the
-   target reads while the cursor is over child rows' hover states. */
+/* Drop target for a dragged tree entry (a folder row, or the pane = vault root). The inset
+   ring reads over child rows' hover states. */
 .tree-row.is-drop-target,
 #tree-pane.is-drop-target {
   background: var(--accent-soft);
@@ -845,12 +771,9 @@ body.is-resizing {
   margin: 0 auto;
 }
 
-/* frontmatter drawer — a full-bleed strip across the top of the note pane, above the
-   centered reading column. Full-bleed via negative margins that cancel .note-pane's
-   padding, so its divider spans edge to edge like the file tree's "Files" header.
-   Sticky within the scrolling .note-pane so the shelf (drawer toggle, graph/source/Edit)
-   stays reachable while reading a long note; needs an opaque background for the note
-   text that scrolls beneath it. Below the find bar (z-index 5). */
+/* Frontmatter drawer: a full-bleed sticky strip atop the note pane (negative margins
+   cancel .note-pane's padding), so the shelf stays reachable in a long note. Opaque, since
+   text scrolls beneath it. Below the find bar (z-index 5). */
 .frontmatter-bar {
   /* cancel .note-pane's side padding, which tapers with the pane */
   margin: 0 calc(-1 * var(--note-pad-x)) 32px;
@@ -890,10 +813,8 @@ body.is-resizing {
   color: var(--text);
 }
 
-/* The bar's right-side action group: the `</>` view-source toggle and the Edit
-   toggle, sharing one quiet-chip recipe. `</>` flips the note body between rendered
-   Markdown and its raw source (active reads as the accent); Edit hands the pane to
-   the CodeMirror editor (crates/b2-desktop/CLAUDE.md). */
+/* The bar's right-side chips: `</>` (rendered ↔ raw source) and Edit
+   (crates/b2-desktop/CLAUDE.md). */
 .note-bar-actions {
   display: flex;
   align-items: center;
@@ -901,9 +822,8 @@ body.is-resizing {
   flex: 0 0 auto;
 }
 
-/* The note bar's two chips. `.edit-toggle` is a word; `.source-toggle` used to print a
-   literal `</>` and is now an icon, so it takes the graph toggle's inline-flex box below
-   and leaves the type rules here to its lettered sibling. */
+/* The note bar's two chips. `.source-toggle` is an icon, so it takes the graph toggle's
+   inline-flex box below; these type rules are `.edit-toggle`'s. */
 .source-toggle,
 .edit-toggle {
   flex: 0 0 auto;
@@ -1015,8 +935,8 @@ body.is-resizing {
   font-size: 12px;
 }
 
-/* The inline refusal/conflict strip under the buffer — the conflict bar's recipe,
-   drawer-sized. `[hidden]` re-asserted for the same UA-override reason. */
+/* The inline refusal/conflict strip under the buffer, the conflict bar's recipe.
+   `[hidden]` re-asserted (see .reindex-progress). */
 .fm-error {
   display: flex;
   align-items: center;
@@ -1112,15 +1032,9 @@ body.is-resizing {
   background: var(--accent-soft);
 }
 
-/* The inline image an `![[picture.png]]` embed draws (markdown.ts). The embed is still a
-   link — clicking it opens the resource card — but the picture *is* the label now, so
-   the link's dashed underline and hover wash come off: they would frame the image
-   rather than mark a word. The accent outline on hover is the same affordance said in
-   the one way that reads over a photograph.
-
-   Never scaled *up*: `|500` sets a width the image is drawn at, `max-width` keeps it
-   inside the column whatever the note asked for, and `height: auto` is what makes the
-   aspect ratio hold in both directions. */
+/* An `![[picture.png]]` embed's image (markdown.ts). Still a link, but the picture is the
+   label, so the underline and wash give way to an accent outline on hover. Never scaled
+   up: `max-width` keeps it in the column and `height: auto` holds the aspect ratio. */
 .note-body a.wikilink:has(> .embed-image),
 .note-body a.wikilink:has(> .embed-image):hover {
   border-bottom: none;
@@ -1158,24 +1072,17 @@ body.is-resizing {
   padding: 0;
 }
 
-/* Syntax colors — the `tok-*` vocabulary from highlight.ts, one palette for all three
-   surfaces from this one block:
+/* Syntax colors: highlight.ts's `tok-*` classes, one palette in three scopes:
 
      .note-body pre           the reading view (a post-render pass over the HTML)
      .editor-host .lp-fence   live preview's fence lines
      .editor-host .src-body   source mode (`</>`), the whole document
 
-   The scopes are what make the three differ, and each earns its bound. Reading and live
-   preview stop at code because a fence is the only thing they render as code; live preview
-   in particular must NOT reach the Markdown's own markup, which its `.lp-*` decorations
-   already speak for. Source mode is raw Markdown, so it takes the palette document-wide —
-   there `tok-punct` is the markup itself (`#`, `**`, the fences), which is why
-   highlight.ts files `processingInstruction` under punctuation rather than keywords.
+   Live preview must not reach the Markdown's own markup (its `.lp-*` decorations own it).
+   In source mode `tok-punct` is the markup itself (`#`, `**`, the fences).
 
-   Order matters below: a token can carry two classes (a heading's `#` is `tok-fn
-   tok-punct`), and at equal specificity the later rule wins — `tok-punct` after `tok-fn`
-   is what keeps the mark muted while the heading text stays coloured. highlight.test.ts
-   pins the class pairs this relies on. */
+   Order matters: a token can carry two classes (a heading's `#` is `tok-fn tok-punct`),
+   and `tok-punct` must follow `tok-fn` to stay muted. highlight.test.ts pins the pairs. */
 :is(.note-body pre, .editor-host .lp-fence, .editor-host .src-body) .tok-comment {
   color: var(--syn-comment);
   font-style: italic;
@@ -1245,10 +1152,8 @@ body.is-resizing {
   max-width: 100%;
 }
 
-/* A rendered Markdown table (reading view + the live-preview widget both go through
-   `renderMarkdown`, which wraps every table in `.md-table`). The wrapper is the
-   horizontal-scroll box; the table stays a real `display: table` so its header row
-   border-collapses onto the body. */
+/* A rendered table (`renderMarkdown` wraps each in `.md-table`, the scroll box). The
+   table stays `display: table` so its header border-collapses onto the body. */
 .md-table {
   overflow-x: auto;
 }
@@ -1263,10 +1168,8 @@ body.is-resizing {
 
 /* --- edit mode (crates/b2-desktop/CLAUDE.md) ------------------------------------------ */
 
-/* The editor's chrome mirrors the frontmatter bar's full-bleed strip (same
-   negative-margin recipe) so the pane chrome doesn't jump when edit mode swaps in.
-   The wrapper is sticky — like the reading shelf — so Done/`</>` stay reachable in a
-   long note, and the conflict strip docks beneath the bar instead of fighting it. */
+/* The editor's chrome mirrors the frontmatter bar's full-bleed sticky strip, so the pane
+   doesn't jump on entering edit mode; the conflict strip docks beneath it. */
 .editor-chrome {
   position: sticky;
   top: 0;
@@ -1295,9 +1198,7 @@ body.is-resizing {
   white-space: nowrap;
 }
 
-/* The conflict strip: lives inside the sticky .editor-chrome, docked beneath the
-   editor bar, so it's visible wherever the user is in the document when autosave
-   pauses. */
+/* The conflict strip, docked under the sticky editor bar so it is always visible. */
 .conflict-bar {
   display: flex;
   align-items: center;
@@ -1311,8 +1212,7 @@ body.is-resizing {
   border-radius: var(--radius);
   font-size: 13px;
 }
-/* Same UA-override lesson as .reindex-progress: our `display: flex` beats the UA's
-   `[hidden] { display: none }`, so re-assert it. */
+/* Re-assert [hidden] (see .reindex-progress). */
 .conflict-bar[hidden] {
   display: none;
 }
@@ -1345,10 +1245,8 @@ body.is-resizing {
   caret-color: var(--accent);
 }
 
-/* The card drop's preview (droplink.ts): the line being aimed at takes an accent wash, and
-   a ghost of the exact text shows where it will enter — so what the release will write is
-   readable *before* the button comes up. Both are decorations over an unchanged document;
-   the ghost is a widget, so it is never part of the note's bytes. */
+/* The card drop's preview (droplink.ts): an accent wash on the target line, and a ghost
+   widget of the text to be inserted (never part of the note's bytes). */
 .editor-host .cm-drop-line {
   background: var(--accent-soft);
   border-radius: 4px;
@@ -1401,11 +1299,9 @@ body.is-resizing {
 }
 
 /* --- live-preview decorations (crates/b2-desktop/CLAUDE.md) ----------------------- */
-/* The `.lp-*` block mirrors `.note-body`'s scale so mode-switching read ↔ edit doesn't
-   jar (spec §7). Light/dark ride the existing CSS vars — no highlight-theme dependency.
-   The `lp-body` class (from the live-preview compartment) swaps the editor to the
-   reading view's proportional voice; source mode (`</>` on) drops the class and the
-   `.cm-scroller` monospace default returns. Code spans/fences stay monospace in both. */
+/* The `.lp-*` block mirrors `.note-body`'s scale so switching read ↔ edit doesn't jar
+   (spec §7). `lp-body` gives the editor the reading view's proportional voice; source mode
+   drops it for the monospace default. Code stays monospace in both. */
 .editor-host .cm-content.lp-body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
@@ -1455,10 +1351,8 @@ body.is-resizing {
   cursor: pointer;
 }
 
-/* The same picture in the buffer's place (livepreview.ts). Sized like the reading
-   view's, because read and edit must not disagree about what a note looks like. The
-   text cursor is the honest pointer here: clicking it puts the caret beside the markup
-   and the raw `![[…]]` comes back, exactly as every other concealed construct does. */
+/* The same picture in the buffer (livepreview.ts), sized like the reading view's. A text
+   cursor: clicking puts the caret beside the markup and reveals the raw `![[…]]`. */
 .editor-host .lp-embed-image {
   max-width: 100%;
   height: auto;
@@ -1505,9 +1399,8 @@ body.is-resizing {
   cursor: pointer;
 }
 
-/* Table block widget — the reading view's table rendered in place when the cursor is
-   away (block-widget territory, fed by a StateField — spec §8). Mirrors `.note-body
-   table` so read ↔ edit don't jar; clicking it drops the cursor into the source. */
+/* Table block widget: the reading view's table in place when the cursor is away (spec §8),
+   mirroring `.note-body table`. Clicking it drops the cursor into the source. */
 .editor-host .lp-table {
   margin: 0.4em 0;
   cursor: text;
@@ -1562,9 +1455,7 @@ body.is-resizing {
   margin: 0;
 }
 
-/* Foldable discovery-section header (Similar & unlinked / Connections): a full-width
-   button carrying a chevron, the section title, and its count — the same fold idiom as
-   the file tree's dirs and the frontmatter drawer, so the right column reads the same. */
+/* Foldable discovery-section header: chevron, title and count (the app's fold idiom). */
 .side-head.side-fold {
   align-items: center;
   justify-content: flex-start;
@@ -1594,10 +1485,8 @@ body.is-resizing {
   margin: 4px 0 8px;
 }
 
-/* A caveat about the list below it — ungraded discovery, raw mode. Louder than
-   `.side-empty` (which reads as chrome and gets skimmed) and deliberately quieter than a
-   failure: accent tones and an info glyph, the same vocabulary as `.install-banner`, since
-   `--danger` here would say "broken" about a list that is working exactly as designed. */
+/* A caveat about the list below (ungraded discovery, raw mode). Accent tones and an info
+   glyph, like `.install-banner`: `--danger` would call a working list broken. */
 .side-note {
   display: flex;
   align-items: flex-start;
@@ -1667,13 +1556,8 @@ body.is-resizing {
   background: var(--surface);
 }
 
-/* The keyboard's row in discovery (K1): section heads, cards, and search results all carry
-   `data-side-row`, so one rule rings whichever the roving tabstop is on. `:focus` rather
-   than the app-wide `:focus-visible` for exactly the reason `.tree-row` is — every fold and
-   every arriving discovery read repaints the pane, and the swap destroys the element WebKit
-   granted `:focus-visible` to, so the row `paintSide` re-focuses by key would come back
-   ringless until the next keystroke. A row here only ever holds focus from a key (WebKit
-   never focuses a button on click), so `:focus` is both truthful and stable. */
+/* The keyboard's row in discovery (K1), one rule for every `data-side-row`. Plain
+   `:focus`: folds and arriving reads repaint the pane (see the focus section). */
 [data-side-row]:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1729,16 +1613,11 @@ body.is-resizing {
 }
 
 /* --- foldable discovery cards (Similar & unlinked / Connections) ----------------
-   One bordered box = a title row (fold chevron + a clickable open-region) over a
-   collapsible body (path + snippet). The head and body are borderless regions inside
-   the card; the whole card highlights on hover. The `.card-open` `min-width: 0` is the
-   actual overflow fix: without it a flex child refuses to shrink below its longest
-   unbroken word and shoves the card past the column edge (the reported bug). */
-/* Only the head of a foldable card acts on click (the chevron folds, `.card-open`
-   navigates) — the body is inert text, so the card as a whole must not inherit `.card`'s
-   `cursor: pointer` and promise an action the path and snippet don't perform. The head's
-   own buttons re-assert `pointer` below; while editing, the draggable rule further down
-   overrides this with `grab`, because then the *whole* card is a drag handle. */
+   A bordered card: a title row (fold chevron + open region) over a collapsible body.
+   `.card-open`'s `min-width: 0` lets it shrink below its longest word instead of pushing
+   the card past the column edge. */
+/* Only the head acts on click, so the card itself doesn't take `.card`'s pointer cursor.
+   While editing, the draggable rule below overrides it with `grab`. */
 .card.foldable {
   padding: 0;
   cursor: default;
@@ -1802,11 +1681,8 @@ body.is-resizing {
   letter-spacing: 2px;
 }
 
-/* The σ figure behind the dots. Hidden at rest so a column of cards stays a column of
-   glyphs rather than a table of numbers, and revealed for the one card the human is
-   actually asking about. Both triggers matter: `:hover` is the pointer's ask, and
-   `:focus-within` is the keyboard's — the roving row *is* the focused element, so a
-   card reached by ↑/↓ shows its number without a mouse ever being present (K1). */
+/* The σ figure behind the dots, hidden until the card is hovered or holds the keyboard
+   (`:focus-within`, K1). */
 .card-sigma {
   display: none;
   margin-left: 6px;
@@ -1823,12 +1699,9 @@ body.is-resizing {
   padding: 0 12px 10px 30px;
 }
 
-/* Dragging a candidate into the note (droplink.ts). The card is draggable only while the
-   note is being edited, so the affordance appears with the capability — and it is a
-   *visible* one, not the cursor: WKWebView doesn't reliably paint a CSS cursor (the
-   gutter's note above says the same), so the card lifts instead, and `grab` is a bonus
-   where it does. Releasing back over this column cancels the drag, which is what the
-   dashed wash announces while the pointer is over it. */
+/* Dragging a candidate into the note (droplink.ts), only while editing. The card lifts,
+   since WKWebView doesn't reliably paint `grab`. Releasing over this column cancels, which
+   the dashed wash announces. */
 .card.candidate[draggable="true"] {
   cursor: grab;
 }
@@ -1858,9 +1731,7 @@ body.is-resizing {
   margin-left: 4px;
 }
 
-/* a dangling/unresolved outbound link — a [[folder]] or typo (GH #12). Not
-   clickable (nothing resolves), flagged with a broken-link emblem so it reads as
-   broken rather than silently missing. */
+/* A dangling outbound link (GH #12): not clickable, flagged with a broken-link emblem. */
 .card.edge.broken {
   cursor: default;
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
@@ -1945,9 +1816,8 @@ body.is-loading {
 }
 
 /* --- discovery-card context menu ----------------------------------------------
-   The right-click menu on a Similar card (Open note / Link…), replacing the inline
-   "Link…" button. Positioned at the cursor via inline left/top (clamped on-screen in
-   main.ts); sits above the panes but below any modal it opens. */
+   Positioned at the cursor via inline left/top (clamped in main.ts); above the panes,
+   below any modal it opens. */
 .context-menu {
   position: fixed;
   z-index: 15;
@@ -1974,8 +1844,7 @@ body.is-loading {
   padding: 7px 10px;
   cursor: pointer;
 }
-/* Arrow-keying a menu highlights exactly as hovering it does — the menu shouldn't
-   look like a different control depending on which hand opened it. */
+/* Arrow-keying highlights exactly as hovering does. */
 .context-item:hover,
 .context-item:focus-visible,
 .context-item:focus {
@@ -1983,9 +1852,7 @@ body.is-loading {
   background: var(--accent);
   color: #fff;
 }
-/* The direct chord beside an item — a menu is where a keyboard user *learns* the
-   shortcut that lets them skip the menu next time (K1). Quiet: it's a footnote to the
-   label, not a second label. */
+/* The item's direct chord, where a keyboard user learns it (K1). Quiet: a footnote. */
 .context-chord {
   flex: 0 0 auto;
   font-size: 11px;
@@ -2134,12 +2001,8 @@ body.is-loading {
   color: var(--accent);
   font-weight: 600;
 }
-/* Plain `:focus`, not `:focus-visible` — a theme choice repaints the dialog it lives in,
-   and `paintModal` re-focuses this button by id afterwards. WebKit grants `:focus-visible`
-   to a script-focused node only by inheriting it from the currently focused one, which an
-   `innerHTML` swap has already reset to `<body>`, so the ring would lag a keystroke behind
-   the choice (crates/b2-desktop/CLAUDE.md, obligation 2). Costs nothing on a button:
-   WebKit never focuses one on click. */
+/* Plain `:focus`: a theme choice repaints the dialog and `paintModal` re-focuses the
+   button (see the focus section). */
 .segmented .seg:focus {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -2156,9 +2019,7 @@ body.is-loading {
   margin-top: 4px;
 }
 
-/* The ⏎/⎋ line in a modal's action row (K1): a dialog that only tells you about its
-   buttons is a dialog you have to reach for the mouse to be sure of. `margin-right:
-   auto` pushes it left so it reads as a caption, not a third button. */
+/* The ⏎/⎋ hint in a modal's action row (K1); `margin-right: auto` makes it a caption. */
 .modal-hint {
   margin-right: auto;
   font-size: 11.5px;
@@ -2166,9 +2027,7 @@ body.is-loading {
 }
 /* --- the keyboard reference (?) --------------------------------------------------
    The discoverable half of K1: every chord in one place, in Settings' Keyboard section. */
-/* CSS multi-column, not a grid: the groups are wildly different lengths, and a grid
-   would leave a short column stranded beside a long one (rows align, so every group
-   pays for the tallest in its row). Columns flow, so the page packs. */
+/* CSS multi-column, not grid: groups vary widely in length, and columns pack. */
 .keys-grid {
   columns: 2;
   column-gap: 34px;
@@ -2178,9 +2037,7 @@ body.is-loading {
   break-inside: avoid;
 }
 .keys-group h4 {
-  /* A group heading is the only thing separating two tables of chords, so it needs more
-     air above it than the rows have between them — otherwise the eye reads one long list
-     with occasional labels in it. */
+  /* More air above a group heading than between rows, or the tables read as one list. */
   margin: 22px 0 9px;
   font-size: 11px;
   font-weight: 600;
@@ -2188,20 +2045,13 @@ body.is-loading {
   text-transform: uppercase;
   color: var(--muted);
 }
-/* The first group opens the panel and has nothing above it to separate from — the same
-   exception `.settings-measure > .settings-subhead:first-child` makes. (Only the first
-   *group*, not the first in each column: the grid is CSS multi-column, so which group
-   tops the second column is a layout outcome no selector can name.) */
+/* The first group has nothing above it to separate from. (Only the first overall:
+   multi-column layout decides what tops the second column.) */
 .keys-group:first-child h4 {
   margin-top: 0;
 }
-/* Chord column fixed, description flowing — the chords line up down the page, which is
-   what makes the sheet scannable rather than a wall of pairs.
-   The row gap has a floor the reading rhythm alone wouldn't set: every chip is a focus
-   ring (2px outline, 2px offset) waiting to happen, so a gap under ~8px lets the ring of
-   one row touch the chip of the next, and the mark that says "the keyboard is here" reads
-   as a box around two rows. Wrapped descriptions ("Delete the focused row (a folder
-   confirms first)") make the same argument for the prose. */
+/* A fixed chord column, so chords line up. The row gap stays ≥ 8px so one row's focus
+   ring (2px outline + 2px offset) doesn't touch the next row's chip. */
 .keys-list {
   display: grid;
   grid-template-columns: minmax(72px, max-content) 1fr;
@@ -2209,10 +2059,8 @@ body.is-loading {
   gap: 9px 14px;
   margin: 0;
 }
-/* Flex rather than inline chips, for the row gap's reason on the other axis: chips used to
-   be separated by the single space `keyChips` joins them with, which at 12px is about 4px
-   — less than the 4px a focus ring already claims, so a ringed chip sat against its
-   neighbour. A real gap is also the only one that survives wrapping. */
+/* Flex with a real gap between chips: a joining space is narrower than a focus ring, and
+   a gap survives wrapping. */
 .keys-list dt {
   display: flex;
   flex-wrap: wrap;
@@ -2236,9 +2084,8 @@ body.is-loading {
   padding: 2px 7px;
   white-space: nowrap;
 }
-/* A chord B2 owns and the user may move is a button; everything else stays a <kbd>. The
-   two look identical at rest on purpose — the sheet is a reference first — and the chip
-   declares itself pressable on hover/focus, which is where the question gets asked. */
+/* A chord the user may move is a button, anything else a <kbd>. Identical at rest; the
+   button shows it is pressable on hover/focus. */
 .kbd-edit {
   cursor: pointer;
   text-align: center;
@@ -2248,25 +2095,15 @@ body.is-loading {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Plain `:focus`, for `.stab`'s reason one section up and `.tree-row`'s at the top of the
-   file: ⇥ inside an overlay never reaches the browser. The Tab trap (K1, main.ts's
-   `overlay.focus.step` branch) swallows the key and moves focus with `.focus()`, and
-   WebKit grants `:focus-visible` to a script-focused element only by inheriting it from
-   the one that had it — so the ring drops out partway along a Tab walk and stays out
-   until some later keystroke re-arms the heuristic. This section is forty Tab stops of
-   nothing but these chips, which makes it the surface where a missing ring is worst.
-   Safe on the mouse for the usual reason: WebKit never focuses a button on click. */
+/* Plain `:focus`: the overlay's Tab trap moves focus by script (see the focus section),
+   and this section is dozens of Tab stops of chips. */
 .kbd-edit:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* Changed from the default: still a dot rather than a colour, so the chord stays legible
-   and the mark reads the same in both themes — but on the chip's *corner*, not after its
-   text. Inline it sat exactly where a chord's last glyph goes, so "⌘4 •" read as a chord
-   with a dot in it — the one thing a keyboard reference can't be ambiguous about. A badge
-   hung off the corner is the editor-tab idiom for "modified", and can't be misread as a
-   key. The `title` is what says it in words (keysview.ts), for the reader and the screen
-   reader both. */
+/* Changed from the default: a dot badge on the chip's corner (the editor-tab "modified"
+   idiom), since after the text it read as part of the chord. The `title` says it in words
+   (keysview.ts). */
 .kbd-changed::after {
   content: "";
   position: absolute;
@@ -2283,22 +2120,10 @@ body.is-loading {
 }
 
 /* --- the ⌘-hold sheet -------------------------------------------------------------
-
-   Hold ⌘ and the ⌘ half of the reference appears over the app (cmdhold.ts). Its whole
-   posture is "here for a moment, then gone", so it takes nothing from the app underneath:
-   `pointer-events: none` on the layer *and* on the card, because a ⌘-click and a ⌘-drag
-   are gestures that must keep landing on what they were aimed at, and the sheet is over
-   the middle of the window where the aiming happens.
-
-   z-index 25 sits it above the overlay layer (20) and below the toast (30). It never
-   actually meets an overlay — it refuses to open while one is up — so the number is about
-   the one thing it does share the screen with: the note pane's own stacking contexts (the
-   find bar at 5, the graph, sticky headers), all of which it must clear.
-
-   Not centred vertically: centred, it lands exactly where the eye is reading, and the
-   thing you are trying to remember a chord *for* is the thing it would cover. Low and
-   central is the same place a HUD volume indicator sits on macOS — present, unmistakably
-   transient, out of the text. */
+   Hold ⌘ to show the ⌘ half of the reference (cmdhold.ts). `pointer-events: none` on the
+   layer and card, so ⌘-clicks and ⌘-drags land on what they aimed at. z-index 25: above
+   the note pane's stacking contexts, below the toast (30); it never opens over an
+   overlay. Placed low and central, like the macOS volume HUD, off the text being read. */
 .cmdhold {
   position: fixed;
   inset: 0;
@@ -2311,18 +2136,15 @@ body.is-loading {
 }
 .cmdhold-card {
   pointer-events: none;
-  /* A definite width, not a `max-width`: the card is a flex item, so shrink-to-fit would
-     leave the multicol container's inline size indefinite and `columns: <width>` would
-     resolve to a single very tall column — the opposite of what it is here for. */
+  /* A definite width, not `max-width`: as a flex item, shrink-to-fit would leave the
+     multicol width indefinite and collapse it into one tall column. */
   width: min(860px, 100%);
   padding: 16px 22px 18px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  /* It appears under a finger that is already still — a hard cut reads as a glitch, and
-     anything slower than this reads as the app thinking about it. Fade only, no travel:
-     movement at the bottom of the window pulls the eye down off the note. */
+  /* A short fade: a hard cut reads as a glitch, and travel pulls the eye off the note. */
   animation: cmdhold-in 110ms ease-out;
 }
 @keyframes cmdhold-in {
@@ -2359,18 +2181,9 @@ body.is-loading {
 .cmdhold-hint {
   color: var(--muted);
 }
-/* The groups are the reference's own (`.keys-group` / `.keys-list`), so the two surfaces
-   can't drift into looking like different keyboards — what changes here is only the
-   density and the column count, which is what makes it a glance rather than a page.
-
-   A column *width* rather than a count, and no height cap on the card. Both are the same
-   decision: this sheet must never clip. It has no scrollbar to offer — the whole layer is
-   `pointer-events: none` so the app underneath keeps the mouse — so a row past the bottom
-   edge is a row silently gone, which for a reference is the one unacceptable failure. A
-   count of 2 hit that on a narrow window, where the second column has nowhere to go and
-   the list runs off the card. `columns: <width>` instead lets the browser take as many
-   columns as the card is wide enough for, so the sheet answers a smaller window by getting
-   *shorter* rather than by getting taller and losing its tail. */
+/* The reference's own groups (`.keys-group` / `.keys-list`), only denser. A column width
+   rather than a count, and no height cap: the sheet can't scroll (no pointer events), so it
+   must never clip. A narrower window gets fewer columns and a shorter list. */
 .cmdhold-grid {
   columns: 200px;
   column-gap: 28px;
@@ -2388,29 +2201,12 @@ body.is-loading {
   font-size: 12px;
 }
 
-/* A short window has to be *made* to fit, not merely leaned into: the sheet has no
-   scrollbar to offer — the layer stays out of the pointer's way (above) — so a row past the
-   bottom edge is a row nobody can reach. B2's floor is 720×480 (tauri.conf.json), and at
-   that size the comfortable rhythm above overflows it.
-
-   What gives is the vertical rhythm, and only that: the gaps between rows, the air around
-   the group headings, and the card's own padding. Every row survives; the list just breathes
-   less. A narrower column *width* was the other candidate and is the wrong lever: measured,
-   the descriptions wrap harder than the extra column saves and the card comes out taller.
-   (A narrower column *gap* is a different thing, and is the floor tier's best move — below.)
-
-   The row gap can go this tight here and not in Settings' copy of the same table, because
-   the reason for that floor is absent: over there every chip is a focus ring waiting to
-   happen and a gap under ~8px lets one row's ring touch the next row's chip. Nothing in this
-   sheet is focusable — every chip is a `<kbd>`, and the layer takes no focus at all — so
-   what is left to respect is the reading rhythm, which is what these numbers are.
-
-   `flex-start` stays as the backstop rather than the strategy. The fit is measured, but it
-   is measured against the shipped chords; a user who rebinds many more commands onto ⌘ can
-   still outgrow the window, and if the card must lose an end it should lose its tail and
-   keep the head — the half carrying "let go to dismiss", which is the one line someone who
-   summoned this by accident needs. cmdhold.test.ts guards the other side of that: the
-   shipped sheet stays inside the budget this was measured at. */
+/* Short windows (B2's floor is 720×480, tauri.conf.json): the sheet can't scroll, so it
+   must fit. Only the vertical rhythm gives (row gaps, heading air, padding); a narrower
+   column width wraps more and comes out taller. The row gap can go tighter than Settings'
+   copy because nothing here is focusable. `flex-start` is the backstop: if rebinding
+   outgrows the window, lose the tail and keep the head ("let go to dismiss").
+   cmdhold.test.ts guards the shipped sheet's fit. */
 @media (max-height: 640px) {
   .cmdhold {
     align-items: flex-start;
@@ -2435,9 +2231,7 @@ body.is-loading {
   .cmdhold-grid .keys-list {
     gap: 4px 10px;
   }
-  /* The largest saving of the lot, and the least visible: most rows here wrap to two lines,
-     so the leading between them is paid ~30 times over. 1.35 is still comfortably above the
-     1.2 where wrapped prose starts to look set solid. */
+  /* Most rows wrap, so leading is the largest saving; 1.35 still isn't set solid. */
   .cmdhold-grid .keys-list dd {
     font-size: 11.5px;
     line-height: 1.35;
@@ -2448,11 +2242,8 @@ body.is-loading {
   }
 }
 
-/* And the floor itself. Two tiers rather than one set of numbers tuned for 480px, because
-   the two windows want different things: at 520–640 the sheet already fits with room to
-   breathe and should keep the air, and only the shortest window has to spend the last of it.
-   Measured, not guessed — at 720×480, the smallest window B2 will open, the card comes out
-   397px in a 464px budget, and every one of its rows is inside the viewport. */
+/* The floor, in two tiers: 520–640 keeps some air; only the shortest window spends it.
+   Measured at 720×480: the card is 397px in a 464px budget. */
 @media (max-height: 520px) {
   .cmdhold {
     padding: 8px 16px;
@@ -2463,9 +2254,8 @@ body.is-loading {
   .cmdhold-head {
     padding-bottom: 5px;
   }
-  /* Worth more than every vertical saving in this block put together. At the 720px floor
-     the card is 4px too narrow for a third 200px column, and a third column is what turns
-     a list six rows deep into one four deep. Nothing else here buys 60px. */
+  /* At 720px the card is 4px short of a third 200px column, and a third column saves
+     more height than everything else here. */
   .cmdhold-grid {
     column-gap: 18px;
   }
@@ -2611,26 +2401,12 @@ button.move-dest:hover {
 }
 
 /* --- settings: the full-window surface -------------------------------------------
-   Settings outgrew a single scrolling column, then it outgrew the box that replaced it
-   (settingsview.ts's `settingsScreenHtml` argues the case), so it takes the window: the app is
-   *behind* it, not dimmed under it. No backdrop — there is no outside left to click —
-   which is what lets the surface be opaque and the panel be as tall as the screen.
+   Settings takes the window (settingsview.ts `settingsScreenHtml`): opaque, no backdrop.
+   Three rows, and only the middle panel scrolls, so the header, footer (Done, key hints)
+   and rail stay put whatever a section's height.
 
-   Three rows, and only the middle one scrolls: a header that names where you are, a
-   footer that keeps Done and the key hints on screen however long the section runs, and
-   the panel taking everything left over. The old fixed-height box existed so the dialog
-   couldn't resize under the cursor — the rail is the one thing you navigate *back* to,
-   and a rail that moves every time you pick a section is a rail you have to re-find. The
-   viewport is that guarantee for free: the rail is now pinned to the window, so no
-   section's height can move it at all.
-
-   The colours are the app's own raised/recessed pair, swapped end for end: the panel
-   keeps `--surface` so every control in it (`.field`'s inputs, `.segmented`) keeps the
-   `--bg`-on-`--surface` contrast it was drawn for, and the rail takes the recessed colour
-   — which is also what leaves `.stab:hover`'s `--surface-2` visible against it.
-
-   `z-index` matches `.modal-backdrop`'s: the overlay layer is one layer, and only one of
-   its members is ever painted (render.ts's `modalHtml`). */
+   The panel keeps `--surface` so its controls keep their contrast; the rail takes the
+   recessed colour. `z-index` matches `.modal-backdrop`'s: one overlay layer. */
 .settings-screen {
   position: fixed;
   inset: 0;
@@ -2665,9 +2441,7 @@ button.move-dest:hover {
   min-height: 0;
 }
 
-/* The rail is the surface's own sidebar now rather than a column of the box: it runs the
-   full height, carries the recessed colour to say so, and scrolls on its own if a short
-   window can't hold five sections. */
+/* The rail: full height, recessed colour, scrolls on its own in a short window. */
 .settings-tabs {
   display: flex;
   flex-direction: column;
@@ -2698,26 +2472,16 @@ button.move-dest:hover {
   color: var(--accent);
   font-weight: 600;
 }
-/* Plain `:focus`, for `.segmented .seg`'s reason one section up: the rail is a roving
-   tabstop whose selected tab is re-focused by script after the dialog repaints, and
-   `:focus-visible` would arrive a keystroke late. */
+/* Plain `:focus`: the selected tab is re-focused by script after a repaint (see the
+   focus section). */
 .stab:focus {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* The panel is focusable (`tabindex="0"` in settingsview.ts) because it is the scroll
-   container: a region you can't focus is a region you can't scroll without the mouse,
-   and the Keyboard section is a page of table with no controls of its own. Hence a ring
-   it can actually show — inset, so it reads as "this region has the keyboard" rather
-   than as a control.
-
-   Being the scroll container makes it the *clip* container too: `overflow-y: auto`
-   computes `overflow-x` to `auto` as well, and anything drawn outside the padding box is
-   cut. A focus ring is drawn outside — 2px of outline at 2px of offset — and the panel's
-   own controls start at x=0, which is how the leftmost chord chip came to be ringed on
-   three sides. Every side's padding clears that 4px with room to spare, so a ring reads
-   as a ring rather than as something pressed against the rail. */
+/* The panel is the scroll container, so it is focusable (`tabindex="0"`) for keyboard
+   scrolling, with an inset ring. It also clips, and a control's ring draws 4px outside
+   it, so every side's padding clears that. */
 .settings-panel {
   min-width: 0;
   overflow-y: auto;
@@ -2728,29 +2492,20 @@ button.move-dest:hover {
   box-shadow: inset 0 0 0 2px var(--accent-soft);
   border-radius: 8px;
 }
-/* The panel is as wide as the window now, and a measure is not: prose set across 1600px
-   is prose nobody reads back to the start of. So the content sits in a column of its own,
-   left-aligned against the rail rather than centred in the leftover space — the rail is a
-   fixed anchor, and a gap between it and the text that changes with the window size makes
-   the anchor read as if it moved. */
+/* A readable measure, left-aligned against the rail (centred, the gap would change with
+   the window and the anchor would seem to move). */
 .settings-measure {
   max-width: 720px;
 }
-/* One exception, and it is a different *kind* of content: the chord sheet is a reference
-   read in columns, not prose read in lines, and the width is the whole reason it packs
-   into two columns instead of scrolling as one. Set on the wrapper rather than the grid,
-   because a child cannot outgrow the measure that clips it (settingsview.ts picks the class by
-   section). */
+/* Except the chord sheet, which reads in columns and needs the width to pack. Set on the
+   wrapper, since a child can't outgrow the measure that clips it. */
 .settings-measure-wide {
   max-width: 1120px;
 }
 .settings-measure > :last-child {
   margin-bottom: 0;
 }
-/* A control's width is a claim about its content: the modal's `.field` stretches to a
-   440px dialog, but stretched across the panel a three-segment theme switch reads as a
-   toolbar and a one-line model name sits in a field of whitespace. Cap them at a form
-   column; the prose beside them keeps the full width. */
+/* Cap controls at a form column; stretched across the panel they read as toolbars. */
 .settings-panel .field {
   max-width: 400px;
 }
@@ -2790,10 +2545,8 @@ button.move-dest:hover {
   border-radius: 4px;
   padding: 0 4px;
 }
-/* Chrome copy carries the occasional outward link (the Ollama quickstart, Ollama cloud).
-   Styled here rather than left to the webview's default, which is a fixed blue that
-   ignores the theme and reads as a mis-styled page. The click itself is an OS handoff —
-   main.ts's anchor delegation — so this is the only thing these need. */
+/* Outward links in chrome copy: themed, instead of the webview's fixed blue. The click
+   is main.ts's OS handoff. */
 .settings-detail a,
 .settings-note a,
 .chat-setup a {
@@ -2818,10 +2571,7 @@ button.move-dest:hover {
   font-size: 13px;
   color: var(--text);
 }
-/* Plain `:focus`, for `.segmented .seg`'s reason: any repaint while Settings is open
-   (a toast timer, a watcher pulse, streamed progress from a run started elsewhere) swaps
-   `#modal-root`, and `paintModal` puts the keyboard back on this button by id — which
-   WebKit grants no `:focus-visible` to, leaving it focused but ringless. */
+/* Plain `:focus`: any repaint re-focuses this button by id (see the focus section). */
 #reindex:focus {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -2937,10 +2687,8 @@ button.move-dest:hover {
   margin: 0;
 }
 
-/* The image viewer, in the "no viewer" line's place. Shown at its own size up to the
-   pane's width, never scaled *up*: a 64px icon blown across the pane is a worse view of
-   it than the icon. The checkerboard is what makes a transparent PNG legible in either
-   theme without the card guessing a background colour for it. */
+/* The image viewer: natural size up to the pane width, never scaled up. The
+   checkerboard makes transparency legible in either theme. */
 .resource-image {
   max-width: 100%;
   height: auto;
@@ -3115,22 +2863,10 @@ button.move-dest:hover {
     stroke 120ms ease,
     stroke-width 120ms ease;
 }
-/* Keyboard focus lights a node exactly as hovering it does (K1): graph nodes are ⇥
-   stops now, and a focused node has to be as obvious as a hovered one. The extra
-   outline ring on top is what distinguishes "the keyboard is here" from "the pointer
-   is passing over" — the default UA outline can't do this job on an SVG <g>, which is
-   why it's drawn on the shape.
-
-   `:focus`, not `:focus-visible`, since GH #91: the note pane now re-focuses a node by
-   its scene id across its own innerHTML swap (discovery landing while the graph is open
-   repaints it), and a script-focused element inherits `:focus-visible` from the
-   currently-focused one — `<body>` after a swap. The node would come back focused but
-   ringless until the next keystroke, which is the ring-lags-the-arrows bug `.tree-row`
-   and `[data-side-row]` already went to `:focus` to fix. The mouse can't be left holding
-   this ring the way it could on a plain button: a `<g>` is not a button, so a click
-   *does* focus it — but every node click either re-anchors the scene, leaves the graph,
-   or hands focus to the link modal, so the node under the ring is gone by the next
-   frame. */
+/* Keyboard focus lights a node as hovering does (K1), plus an outline on the shape (the
+   UA outline can't do it on an SVG <g>). Plain `:focus` since GH #91 (see the focus
+   section). A click does focus a `<g>`, but every node click replaces the scene or moves
+   focus, so the ring doesn't linger. */
 .gnode:hover .gshape,
 .gnode:focus .gshape {
   stroke: var(--accent);
@@ -3345,13 +3081,8 @@ button.move-dest:hover {
 }
 
 /* --- chat (flow ④, GH #155) ------------------------------------------------------
-   The right column's third mode. Three regions in a column that fills the pane: the
-   head, a scrolling transcript, and a composer pinned to the bottom — so the question
-   field stays put while answers accumulate above it.
-
-   `.side-pane` scrolls itself for discovery and search; chat takes that over (the log
-   is the scroller) so the composer can be pinned. Hence the `:has()` override rather
-   than a second pane class: the pane's mode is already visible in its content. */
+   The right column's third mode: head, scrolling transcript, and a composer pinned below.
+   The log is the scroller, not `.side-pane`, hence the `:has()` override. */
 .side-pane:has(.chat-composer),
 .side-pane:has(.chat-setup) {
   overflow-y: hidden;
@@ -3394,9 +3125,7 @@ button.move-dest:hover {
   line-height: 1.5;
 }
 
-/* One turn. The question is a tinted block, the answer is plain prose on the pane —
-   the asymmetry is the point: an answer is a document you read, a question is a label
-   for it. */
+/* One turn: the question a tinted block, the answer plain prose. */
 .chat-turn {
   border-radius: var(--radius);
 }
@@ -3593,10 +3322,8 @@ button.move-dest:hover {
 }
 
 /* --- Explain: the Compare view for one Similar card (GH #236) ---------------------
-   The centre pane's fourth mode (explainview.ts `explainPaneHtml`). A reading column like a
-   note's, under a sticky bar with the one way back. Passages are note text shown as
-   text, so they keep their line breaks and scroll inside a bounded box rather than
-   letting one 11k-token passage push the rest of the view off the page. */
+   The centre pane's fourth mode (explainview.ts). Passages keep their line breaks and
+   scroll in a bounded box, so a long one can't push the view off the page. */
 .card-actions {
   display: flex;
   gap: 12px;

@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 # CPU vs Metal embedding A/B (GH #40).
 #
-# Reindexes a vault twice — once on CPU (default build) and once on the Metal GPU
-# (`--features metal`) — and reports embed throughput side by side. The `metal` cargo
-# feature is a BUILD switch, so this compiles both binaries; the recorded model id gains an
-# `@metal` tag on the GPU run, which the report uses to confirm Metal was actually used
-# (not a silent CPU fallback).
+# Reindexes a vault on CPU and on Metal (`--features metal`, a build switch, so both
+# binaries are compiled) and reports embed throughput side by side. The GPU run's model id
+# gains an `@metal` tag, which confirms Metal was really used.
 #
-# Hygiene:
-#   - The committed fixture is NEVER mutated: each run works on an isolated copy in the
-#     system tempdir (same pattern the integration tests use for fixtures/golden-vault/),
-#     removed on exit. So no `.b2/` index ever lands in the repo.
-#   - The two JSONL logs go under the already-gitignored logs/ for post-hoc inspection.
-#   - `.gitignore` also covers an ad-hoc `b2 reindex` run against the fixture directly.
+# Each run works on a tempdir copy of the vault; the JSONL logs go under gitignored logs/.
 #
 # Usage:
 #   scripts/compare-embed-device.sh [VAULT]     # VAULT defaults to fixtures/test-vault
@@ -30,8 +23,7 @@ VAULT="${1:-fixtures/test-vault}"
 command -v python3 >/dev/null || { echo "error: python3 is required." >&2; exit 1; }
 [[ -d "$VAULT" ]] || { echo "error: vault not found: $VAULT" >&2; exit 1; }
 
-# Soft check for the default model cache; a custom cache_dir in config.toml is still fine
-# (reindex fails fast with the proper "run b2 init" message if the model is truly absent).
+# Soft check: a custom cache_dir is fine, and reindex fails fast if the model is absent.
 MODELDIR="${HOME}/Library/Application Support/b2/models/BAAI_bge-base-en-v1.5"
 [[ -f "${MODELDIR}/model.safetensors" ]] || \
   echo "note: bge model not found at the default cache; if reindex fails, run: cargo run -p b2-cli -- init" >&2
@@ -57,8 +49,7 @@ cp -R "$VAULT" "$RUN/metal"
 rm -rf "$RUN/cpu/.b2" "$RUN/metal/.b2"   # each device does a full, from-scratch embed
 
 # --- the two runs ------------------------------------------------------------------------
-# Setting B2_LOG_FILE alone turns on the JSONL debug log (implies B2_LOG=debug); the CLI's
-# stdout stays the plain "Indexed N notes" line, the file is pure JSONL.
+# B2_LOG_FILE alone turns on the JSONL debug log (implies B2_LOG=debug).
 echo "→ CPU reindex (this is the slow one)…"
 B2_LOG_FILE="$CPU_LOG" cargo run -q -p b2-cli -- -C "$RUN/cpu" reindex
 

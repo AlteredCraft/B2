@@ -1,6 +1,5 @@
-// The app's state — a single mutable object the view renders from. No framework:
-// actions (in main.ts) mutate this and call the render hook. Small enough that a
-// full-pane re-render on change is imperceptible and keeps the model honest.
+// The app's state: a single mutable object the view renders from. Actions (main.ts)
+// mutate it and call the render hook.
 
 import type { ChatMessage } from "./chat";
 import type {
@@ -20,9 +19,7 @@ import type {
   UnresolvedLink,
 } from "./types";
 import type { NodeKind } from "./move";
-// Carries its `.ts` because it is a *value* import (the others here are type-only, and
-// erase): render.test.ts / sanitize.test.ts reach this module through render.ts under
-// node's type-stripping, which resolves by real filename. render.ts says the same.
+// `.ts` because it is a value import reached by node's test runner (via render.ts).
 import { DEFAULT_SETTINGS_TAB, type SettingsTabId } from "./settingstabs.ts";
 import type { BindingId } from "./bindings";
 import type { ChordProblem, Overrides } from "./keymap";
@@ -31,11 +28,9 @@ import type { ChordProblem, Overrides } from "./keymap";
 export type SideSection = "similar" | "connections";
 
 /**
- * The closed three-verb stance core (b2-core `relation.rs` CORE — data-model.md §2):
- * neutral / for / against. The link picker offers exactly these; the Rust host
- * re-validates `is_core`, so a drifted entry here is *refused*, never silently
- * stored (a bad verb → a generic, actionable error). `references` is the default,
- * matching `b2 link`.
+ * The closed stance core (b2-core `relation.rs` CORE, data-model.md §2). The host
+ * re-validates `is_core`, so a drifted entry here is refused, never stored. `references`
+ * is the default, matching `b2 link`.
  */
 export const RELATION_VERBS = ["references", "supports", "contradicts"] as const;
 
@@ -45,10 +40,7 @@ export interface LinkTarget {
   title: string | null;
 }
 
-/**
- * The tree node a move/rename gesture targets — a note, resource, or folder row,
- * identified by its vault-relative path (the tree's DOM identity).
- */
+/** The tree node (note, resource or folder) a move/rename gesture targets. */
 export interface TreeNodeRef {
   path: string;
   nodeKind: NodeKind;
@@ -56,33 +48,22 @@ export interface TreeNodeRef {
 }
 
 /**
- * An open right-click menu, anchored at the cursor (viewport coords, already
- * clamped on-screen when opened). Null when no menu is up. Two surfaces share the
- * one overlay: a discovery **card** (Open / Link… — the whole card is the target,
- * replacing the old inline "Link…" button) and the file **tree** (New note / New
- * folder, targeting the folder under the cursor; over a concrete row, `node` is
- * that row and the menu grows Rename / Move…).
+ * An open right-click menu at viewport coords (clamped on-screen). On a discovery card,
+ * or on the file tree: `dir` is the folder under the cursor and `node` the row, if any.
  */
 export type ContextMenuState =
   | { kind: "card"; x: number; y: number; path: string; title: string | null }
   | { kind: "tree"; x: number; y: number; dir: string; node: TreeNodeRef | null };
 
 /**
- * Appearance preference. `"system"` (the default) defers to the OS via
- * `prefers-color-scheme`; `"light"`/`"dark"` pin the theme regardless. A pure
- * front-end preference persisted in `localStorage` — it's a viewing choice, not
- * vault state, so it never round-trips to the Rust host.
+ * Appearance preference; `"system"` defers to `prefers-color-scheme`. Persisted in
+ * `localStorage`: a viewing choice, not vault state.
  */
 export type ThemePref = "system" | "light" | "dark";
 
 /**
- * The chord recorder in Settings → Keyboard, while it is open (#121).
- *
- * `candidate` is null until a chord arrives, and that gap is a state worth modelling
- * rather than a loading spinner: a chord that never arrives is the recorder's one real
- * observation about the world outside B2 (recorder.ts's header), and `hint` is where that
- * reading goes. Once a chord *has* arrived, `problems` is what the four checkers make of
- * it — a refusal disables Save, an advisory is said and saved anyway.
+ * The chord recorder in Settings → Keyboard, while it is open (#121). A chord that never
+ * arrives is itself a signal (recorder.ts), reported in `hint`.
  */
 export interface RecorderState {
   /** The command being rebound. */
@@ -94,15 +75,9 @@ export interface RecorderState {
   /** The probe's reading of silence, or why a pressed key can't hold a chord. */
   hint: string | null;
   /**
-   * The window lost focus while this recording was waiting — the probe's one *positive*
-   * signal (recorder.ts).
-   *
-   * Remembered rather than passed at the moment it happens, because two things read
-   * silence: the blur itself, and a timer set when the recorder opened. Held as a
-   * parameter, the later of the two would answer the question without knowing what the
-   * earlier one saw — which is exactly how the strong "something outside B2 answered"
-   * reading got overwritten by the weaker guess (GH #125). As state, every reader reaches
-   * the same conclusion whatever order they run in.
+   * The window lost focus while this recording was waiting (recorder.ts). State, not a
+   * parameter, so the blur and the open-timer reach the same reading in either order
+   * (GH #125).
    */
   blurred: boolean;
 }
@@ -120,36 +95,23 @@ export interface AppState {
   notes: NoteSummary[];
   /** Every inventoried non-`.md` file — the tree's resource half (slice 1). */
   resources: ResourceSummary[];
-  /**
-   * Every folder in the vault, empty ones included — the tree's structure half
-   * (from `list_dirs`, a live filesystem walk). Folders are user-authored
-   * structure with the fs authoritative, so this list is one-to-one with disk:
-   * a Finder `mkdir` or a folder emptied by a move shows exactly as it is.
-   */
+  /** Every folder in the vault, empty ones included (`list_dirs`, a live fs walk). */
   dirs: string[];
   /** Folder paths (vault-relative, no trailing slash) the tree shows expanded. */
   expandedDirs: Set<string>;
   /**
-   * The tree's creation context — the folder a new note/folder lands in (⌘N, the
-   * tree-head icons). Follows the selection: the open document's folder, or the
-   * last folder row clicked/right-clicked. "" is the vault root (the default).
+   * The folder a new note/folder lands in: the open document's folder, or the last
+   * folder row clicked. "" is the vault root.
    */
   selectedDir: string;
   /**
-   * The tree row the keyboard is on (its vault-relative path), or null before any
-   * arrow key has been pressed. Distinct from `selectedDir` (the *create* context)
-   * and from `current` (the *open* document): a keyboard user arrows across rows
-   * without opening them, which is the whole point of arrow navigation. Drives the
-   * roving `tabindex` (treenav.ts `rovingPath`), so the tree is one Tab stop rather
-   * than one per file — invariant K1, GH #78.
+   * The tree row the keyboard is on, or null before any arrow key. Distinct from
+   * `current`: arrowing doesn't open. Drives the roving `tabindex` (K1, GH #78).
    */
   treeFocus: string | null;
   /**
-   * The discovery row the keyboard is on (a `sidenav.ts` row key), or null before any
-   * arrow key has been pressed there — `treeFocus`'s counterpart for the right column.
-   * Drives that pane's roving `tabindex` (`rovingSideKey`), so the whole card list is one
-   * Tab stop rather than three per card, and it is what `paintSide` restores focus *by*:
-   * the element holding focus never survives the pane's `innerHTML` swap.
+   * `treeFocus` for the right column (a `sidenav.ts` row key). Also what `paintSide`
+   * restores focus by, since the focused element doesn't survive the `innerHTML` swap.
    */
   sideFocus: string | null;
   /** An inline name input open in the tree (new note / new folder in `dir`), or null. */
@@ -158,56 +120,36 @@ export interface AppState {
   treeRename: TreeNodeRef | null;
   /** When set, the Move… modal is open for this tree node. */
   moveTarget: TreeNodeRef | null;
-  /**
-   * When set, the delete-confirm modal is open for this tree node. Only folders
-   * land here (a subtree is a bigger loss); files delete without a dialog — the
-   * gesture itself is the intent.
-   */
+  /** When set, the delete-confirm modal is open. Only folders confirm; files don't. */
   deleteTarget: TreeNodeRef | null;
   /** The note the centre pane shows, or null (nothing open yet, or a resource is). */
   current: NoteView | null;
-  /**
-   * The selected resource's fallback card (mutually exclusive with `current`:
-   * selecting either kind clears the other — the note pane shows one document).
-   */
+  /** The selected resource's card (mutually exclusive with `current`). */
   currentResource: ResourceExplainView | null;
   /**
-   * The open resource's bytes as a `data:` URL, when its class has an in-app viewer and
-   * the read succeeded — otherwise null, and the card shows its *Open in system default*
-   * fallback. Loaded alongside `currentResource` and cleared with it, so the pane can
-   * never paint one document's picture over another's card.
+   * The open resource's bytes as a `data:` URL when it has an in-app viewer, else null.
+   * Cleared with `currentResource`, so one document's picture never paints over another.
    */
   resourceImage: string | null;
   /**
-   * The open **note's** pictures: vault-relative path → `data:` URL, one entry per
-   * `![[image.png]]` embed whose bytes were read (embeds.ts decides which ones are
-   * worth reading — see `inlineImagePlan`). The reading view and the editor's live
-   * preview draw from the same map, so a note looks the same read or edited; an embed
-   * with no entry reads as its link.
-   *
-   * Keyed by path rather than by occurrence because a note that embeds the same picture
-   * twice should cost one read. Cleared when the pane changes document, for
-   * `resourceImage`'s reason: nothing of one note's may ever paint into another's.
+   * The open note's pictures: path → `data:` URL for each embed read (embeds.ts
+   * `inlineImagePlan`). Shared by the reading view and live preview; an embed with no
+   * entry reads as its link. Cleared when the document changes.
    */
   embedImages: Map<string, string>;
   /** Whether the note pane's frontmatter drawer is expanded (sticky across notes). */
   frontmatterOpen: boolean;
   /**
-   * The drawer's frontmatter mini-editor is live (GH #79): the note pane belongs
-   * to it — `render()` must NOT rebuild the pane (the same carve-out as
-   * `editing`), and pane-changing actions (navigation, the view toggles) resolve
-   * the edit first (`fmEditGuard` in main.ts). Only this renderable flag lives
-   * here; the buffer is the textarea's DOM value, and the inline error is painted
-   * imperatively — both die with the editor.
+   * The frontmatter mini-editor is live (GH #79): `render()` must not rebuild the note
+   * pane (as for `editing`), and pane-changing actions resolve the edit first
+   * (`fmEditGuard`, main.ts). The buffer itself is the textarea's DOM value.
    */
   fmEditing: boolean;
   /** Whether the note body shows raw Markdown source instead of rendered (sticky). */
   sourceOpen: boolean;
   /**
-   * Edit mode: the note pane belongs to the live CodeMirror editor, and `render()`
-   * must NOT rebuild it (the carve-out, crates/b2-desktop/CLAUDE.md) — everything else
-   * (tree, side pane, toasts) keeps rendering. Only the *renderable* editing state
-   * lives here; timers, save flags, and the EditorView are module-locals in main.ts.
+   * Edit mode: the note pane belongs to CodeMirror and `render()` must not rebuild it
+   * (crates/b2-desktop/CLAUDE.md). Timers, save flags and the EditorView live in main.ts.
    */
   editing: boolean;
   /** A save hit WriteConflict: autosave is paused and the conflict bar is up. */
@@ -219,18 +161,13 @@ export interface AppState {
   /** The open note's outbound resource links (from the same explain, GH #22). */
   resourceLinks: ResourceLink[];
   /**
-   * The center pane shows the anchored ghost graph instead of the reading view
-   * (GH #22). Sticky across notes like `sourceOpen`, so the vault can be *browsed*
-   * in graph mode — a node click re-anchors the graph on the opened note. Renders
-   * purely from the discovery state above (`connections`/`resourceLinks`/
-   * `unresolved`/`similar`), so toggling costs no IPC.
+   * The centre pane shows the ghost graph instead of the reading view (GH #22). Sticky
+   * across notes; renders from the discovery state, so toggling costs no IPC.
    */
   graphOpen: boolean;
   /**
-   * The Explain view (GH #236): the centre pane compares the open note with one of its
-   * Similar cards, model-free. Set while it is open; `view` is null while the read is in
-   * flight, `error` holds a failed read's message. Not sticky: any navigation, the graph
-   * toggle and entering edit mode close it, because it explains one card of one note.
+   * The Explain view (GH #236): the open note compared with one Similar card. `view` is
+   * null while loading. Not sticky: navigation, the graph toggle and edit mode close it.
    */
   explainCard: {
     anchor: string;
@@ -242,132 +179,79 @@ export interface AppState {
     /** The strip's "?" is open: its longer account is shown. */
     help: boolean;
   } | null;
-  /**
-   * Discovery sections the user has collapsed (foldable headers, Obsidian-style).
-   * Sticky across notes — a viewing preference — so a collapsed section stays folded
-   * as you browse. Empty ⇒ every section expanded (the default).
-   */
+  /** Discovery sections the user has collapsed. Sticky across notes. */
   collapsedSections: Set<SideSection>;
-  /**
-   * Per-card fold state: the card keys (`"<section>:<path>"`) whose body (path +
-   * snippet) is collapsed to just the title row. Cards default expanded; this tracks
-   * the exceptions. Reset on note-open — the keys belong to the note just closed.
-   */
+  /** Card keys (`"<section>:<path>"`) collapsed to their title row. Reset on note-open. */
   collapsedCards: Set<string>;
-  /** An open right-click menu — on a discovery card (or graph ghost), or on the file
-   *  tree — or null. `ContextMenuState` says which. */
+  /** An open right-click menu, or null. */
   contextMenu: ContextMenuState | null;
-  /**
-   * The open note's unresolved (dangling) outbound links — a `[[folder]]` or a typo
-   * that resolves to no note or file. Loaded alongside `connections` from the same
-   * `explain` read; rendered with a broken-link emblem so they read as broken, not
-   * missing (GH #12).
-   */
+  /** The open note's links that resolve to nothing, shown as broken (GH #12). */
   unresolved: UnresolvedLink[];
   /**
-   * Discovery reads in flight for the open note, tracked **per side-pane section** so
-   * the fast graph read (`explain` → Connections) paints without waiting on the slower
-   * whole-vault scan (`similar` → Similar & unlinked). Both are kept separate from
-   * `loading` so the note body paints the instant it's read. Each flag drives its
-   * section's "loading…" hint so an empty section mid-load doesn't read as "nothing found".
+   * Discovery reads in flight, per side-pane section, so the fast `explain` read paints
+   * without waiting on `similar`. Separate from `loading` so the note body paints at once.
    */
   discoveringSimilar: boolean;
   discoveringConnections: boolean;
   /**
-   * The right column is showing **chat** instead of discovery or search results
-   * (GH #155). Chat lives there so a citation can open its note in the centre pane
-   * *without the conversation leaving the screen* — see chat.ts's header. It owns the
-   * whole column, so opening chat and running a search close each other (main.ts).
+   * The right column shows chat (GH #155), so a citation opens in the centre pane without
+   * the conversation leaving the screen. Chat and search close each other (main.ts).
    */
   chatOpen: boolean;
   /**
-   * The conversation — **session-only** (invariant S4): it lives here and dies with the
-   * window. Never persisted, not even to `localStorage` where the theme and the keymap
-   * live: a saved transcript would be B2-derived state outside the Markdown.
+   * The conversation, session-only (S4): never persisted, not even to `localStorage`,
+   * since a saved transcript would be B2-derived state outside the Markdown.
    */
   chatMessages: ChatMessage[];
   /**
-   * The answer streaming right now, as it accumulates, or null between turns. Rendered
-   * as **text**, never parsed — a partial answer is not a document, and the finished one
-   * goes through the sanitizing `renderMarkdown` seam like every other untrusted string
-   * (E5). Tokens land here without a full render (`paintChatStream`), so the composer
-   * keeps its caret and the pane keeps its scroll while an answer arrives.
+   * The answer streaming now, or null between turns. Rendered as text, never parsed; the
+   * finished answer goes through `renderMarkdown` (E5). Painted by `paintChatStream`
+   * without a full render, so the composer keeps its caret.
    */
   chatStreaming: string | null;
-  /** What the live row says until the first token arrives — a *Why?* turn spends its
-   *  first seconds running B2 tools, and an empty row reads as a hang. */
+  /** What the live row says until the first token, so tool-running time doesn't look hung. */
   chatWaiting: string;
-  /** The chat provider's status — endpoint, model, Local vs Cloud, and the Ollama-native
-   *  setup card's data. Null until the first probe lands (the "loading" empty state). */
+  /** The chat provider's status. Null until the first probe lands. */
   chatSetup: ChatSetup | null;
-  /**
-   * The Settings → Chat section is showing the **Cloud models** fields. A pure view flag,
-   * initialized from `chatSetup.cloud`: the configuration itself is just the endpoint, so
-   * this decides which fields (and which privacy copy) are on screen while the user types,
-   * with nothing to keep in sync afterwards.
-   */
+  /** Settings → Chat shows the Cloud fields. A view flag seeded from `chatSetup.cloud`. */
   chatCloud: boolean;
   /**
-   * Settings → Chat is showing the **Model** field as a text box rather than the picker.
-   *
-   * The picker exists only when there is an inventory to pick from (a local Ollama daemon
-   * that answered `/api/tags`), so this flag is what lets a user name a model that *isn't*
-   * installed yet — the one thing a list of installed models structurally cannot offer,
-   * and exactly what you do while a `ollama pull` is still running. A view flag like
-   * [`chatCloud`]: the configuration is just a model string either way.
+   * Settings → Chat shows Model as a text box rather than the installed-model picker, so
+   * a user can name a model not installed yet (e.g. mid `ollama pull`). A view flag.
    */
   chatModelTyped: boolean;
   /** The active search query (empty ⇒ the side pane shows discovery, not results). */
   searchQuery: string;
   /**
-   * The rows the search pane **serves** — which is not always every row the host
-   * returned. On an unvouched query (`searchVouched === false`) this is emptied at
-   * the boundary in `doSearch`, so the paint and the arrow walk cannot disagree
-   * about what is on screen: `render.ts` and `sidenav.ts` both derive from this one
-   * list, exactly as they do for every other pane (invariants.md D2, GH #202).
+   * The rows the search pane serves. Emptied in `doSearch` for an unvouched query, so the
+   * paint and the arrow walk derive from one list (D2, GH #202).
    */
   searchResults: EvidencedResult[];
   /**
-   * D2's verdict for the current query — three-state, and each state is different
-   * copy in the empty branch (`false` = "no matches", `null` = no calibrated bar
-   * for this model, so no verdict was offered at all; see `SearchEvidenceView`).
+   * D2's verdict: `false` = "no matches", `null` = no calibrated bar for this model, so no
+   * verdict (`SearchEvidenceView`).
    */
   searchVouched: boolean | null;
   /** When set, the link modal is open for this target. */
   linkTarget: LinkTarget | null;
   /** The verb selected in the link modal. */
   linkRelation: string;
-  /** Settings is open — a full-window surface over the app, not a floating box
-   *  (settingsview.ts's `settingsScreenHtml` says why). */
+  /** Settings is open, as a full-window surface (settingsview.ts). */
   settingsOpen: boolean;
-  /**
-   * Which section of the settings dialog is showing (settingstabs.ts). Outlives a
-   * close, so ⌘, comes back where you left it — a dialog that resets to page one every
-   * time is a dialog you re-navigate on every visit. `?` overrides it to "keyboard",
-   * which is the chord's whole meaning.
-   */
+  /** The settings section showing (settingstabs.ts). Outlives a close; `?` forces "keyboard". */
   settingsTab: SettingsTabId;
-  /** Appearance preference (System/Light/Dark) — mirrors `localStorage`, shown in Settings. */
+  /** Appearance preference — mirrors `localStorage`. */
   theme: ThemePref;
   /**
-   * The user's keyboard rebindings (#121): command id → the chords that now fire it.
-   * Mirrors `localStorage` — a viewing choice like the theme, never vault state — and is
-   * what `applyOverrides` lays over the shipped table to build the live registry.
-   *
-   * Held in state rather than module-locally (the way panes.ts holds column widths)
-   * because the Keyboard section renders from it: which rows are marked changed, and
-   * whether "Reset all" has anything to do.
+   * The user's keyboard rebindings (#121): command id → chords. Mirrors `localStorage`;
+   * held in state because the Keyboard section renders from it.
    */
   keyOverrides: Overrides;
-  /** The chord recorder, while Settings → Keyboard has one open. Null the rest of the time. */
+  /** The chord recorder, while Settings → Keyboard has one open. */
   recorder: RecorderState | null;
   /**
-   * The ⌘-hold sheet is up (cmdhold.ts) — ⌘ has been held alone for `HOLD_MS` with no
-   * overlay in the way. Transient by nature: it is set and cleared by the modifier, never
-   * persisted, and nothing else in the app reads it. It lives here rather than as a
-   * variable in main.ts so the sheet's markup can live in render.ts with the rest of the
-   * paint — `render()` projects it like every other view state. (The hold itself repaints
-   * only its own layer; main.ts's `paintCmdSheet` says why.)
+   * The ⌘-hold sheet is up (cmdhold.ts). Transient, never persisted; in state so render.ts
+   * can own its markup (main.ts `paintCmdSheet`).
    */
   cmdSheet: boolean;
   /** The embedding models offered in Settings — loaded when the modal opens, else empty. */
@@ -377,10 +261,8 @@ export interface AppState {
   /** A model download (in-app `b2 init`) is in flight — disables the button, shows a spinner. */
   provisioning: boolean;
   /**
-   * The "semantic search is off — install the model" banner has been dismissed. Set by
-   * the banner's ✕ (this session only) or its "Don't remind me again" checkbox (also
-   * persisted to `localStorage`, so a keyword-only user stays opted out across launches).
-   * Initialized from that persisted flag on boot; see `embedreminder.ts` for the gate.
+   * The "install the model" banner was dismissed, for this session (✕) or for good (the
+   * checkbox, persisted to `localStorage`). See `embedreminder.ts`.
    */
   embedReminderDismissed: boolean;
   /** The shared directory where model files are saved — loaded with Settings, else null. */
@@ -389,11 +271,7 @@ export interface AppState {
   embedDevice: string | null;
   /** A slow op is in flight. */
   loading: boolean;
-  /**
-   * A reindex is in flight. Kept **separate** from `loading` so a reindex does NOT
-   * freeze the app (docs/index-engine.md) — only the Reindex action is disabled and a
-   * progress + Cancel affordance appears, while reading/searching/navigating stay live.
-   */
+  /** A reindex is in flight. Separate from `loading` so it doesn't freeze the app. */
   reindexing: boolean;
   /** The latest per-batch progress event, or null before embedding starts (or when idle). */
   reindexProgress: ReindexProgress | null;

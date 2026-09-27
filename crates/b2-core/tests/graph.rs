@@ -1,5 +1,4 @@
-//! Step 2 — the typed graph projection + `neighbors`, and the
-//! `incremental ≡ full` invariant (index-engine.md).
+//! The typed graph projection, `neighbors`, and `incremental ≡ full` (index-engine.md).
 
 mod common;
 
@@ -11,9 +10,8 @@ use common::{golden_vault_copy, ingest_golden, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::fs;
 
-/// (src_path, dst_path, dst_path_raw, type, origin, occ, explanation), ordered — the
-/// comparable shape of the whole edge set (id excluded; it is a deterministic
-/// function of the rest). Every edge is authored + active, so there is no `status`.
+/// `(src_path, dst_path, dst_path_raw, type, origin, occ, explanation)`; id is derived
+/// from the rest, so it is excluded.
 type EdgeTuple = (
     String,
     Option<String>,
@@ -57,7 +55,7 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
     assert_eq!(
         edges,
         vec![
-            // references: spaced-repetition → memory (prose bare wikilink)
+            // A bare wikilink in prose.
             (
                 SRS_PATH.to_string(),
                 Some(MEMORY_PATH.to_string()),
@@ -67,8 +65,7 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
                 0,
                 None,
             ),
-            // supports: spaced-repetition → memory (`b2_relations:` entry, with
-            // explanation — the augment shape, data-model §2/§8)
+            // A `b2_relations:` entry with explanation (data-model §2/§8).
             (
                 SRS_PATH.to_string(),
                 Some(MEMORY_PATH.to_string()),
@@ -82,16 +79,13 @@ fn golden_graph_has_inline_references_and_frontmatter_supports() {
     );
 }
 
-/// `graph::neighbors` at the raw-edge layer: the same stored edge reads as the
-/// verb from the source end and as its inverse label from the target end, with no
-/// reciprocal row (B2 stores each edge once, directed). The façade's resolved view
-/// of the same pair — paths, titles, ref-form equivalence — is `tests/vault.rs`.
+/// One stored edge reads as its verb from the source and its inverse from the target, with
+/// no reciprocal row. The façade's view is in `tests/vault.rs`.
 #[test]
 fn neighbors_label_by_direction_at_both_ends() {
     let tmp = tempfile::TempDir::new().unwrap();
     let conn = ingest_golden(tmp.path(), &FakeEmbedder::default());
 
-    // The target end: inbound edges, inverse-labelled, all from spaced-repetition.
     let inbound = neighbors(&conn, MEMORY_PATH).unwrap();
     let mut labels: Vec<&str> = inbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
@@ -100,7 +94,6 @@ fn neighbors_label_by_direction_at_both_ends() {
         .iter()
         .all(|n| n.other == SRS_PATH && n.direction == Direction::Inbound));
 
-    // The source end: the very same two edges, outbound, labelled by their verbs.
     let outbound = neighbors(&conn, SRS_PATH).unwrap();
     let mut labels: Vec<&str> = outbound.iter().map(|n| n.label.as_str()).collect();
     labels.sort_unstable();
@@ -113,10 +106,8 @@ fn neighbors_label_by_direction_at_both_ends() {
 
 #[test]
 fn unresolved_outbound_surfaces_folder_and_typo_links() {
-    // GH #12: a note is one `.md` file, so a `[[Hermes]]` naming a *folder* (or a
-    // typo) resolves to nothing. Those dangling links must be surfaced, not dropped —
-    // `neighbors` keeps only resolved edges, `unresolved_outbound` returns the rest,
-    // and together they cover every outbound link the note authored.
+    // GH #12: `neighbors` and `unresolved_outbound` together cover every outbound link,
+    // including a folder name or a typo.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     golden_vault_copy(&vault);
@@ -132,21 +123,19 @@ fn unresolved_outbound_surfaces_folder_and_typo_links() {
     let conn = open(&tmp.path().join("b2.sqlite")).unwrap();
     ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
 
-    // Only the one resolvable link is an outbound neighbor.
     let ns = neighbors(&conn, guide).unwrap();
     assert_eq!(ns.len(), 1, "only the memory link resolves: {ns:?}");
     assert_eq!(ns[0].other, MEMORY_PATH);
     assert_eq!(ns[0].direction, Direction::Outbound);
 
-    // The folder + typo links are surfaced as unresolved (ordered by target), each an
-    // inline `references` edge that resolved to nothing.
+    // Ordered by target.
     let dangling = unresolved_outbound(&conn, guide).unwrap();
     let targets: Vec<&str> = dangling.iter().map(|u| u.target.as_str()).collect();
     assert_eq!(targets, vec!["Hermes", "concepts/memoryy"]);
     assert!(dangling.iter().all(|u| u.edge_type == "references"));
     assert!(dangling.iter().all(|u| u.origin == "inline"));
 
-    // A fully-resolved note has none — no false positives.
+    // No false positives.
     assert!(unresolved_outbound(&conn, SRS_PATH).unwrap().is_empty());
 }
 
@@ -160,7 +149,6 @@ fn one_note_reindex_equals_full() {
     ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     let after_full = edge_snapshot(&conn);
 
-    // Re-project a single note against the already-complete index.
     let cfg = b2_core::chunk::ChunkConfig::default();
     let embedder = FakeEmbedder::default();
     let ctx = EmbedCtx::new(ProjectionCtx::new(&conn, &vault, &cfg), &embedder);
@@ -172,7 +160,6 @@ fn one_note_reindex_equals_full() {
         "incremental re-index must match full"
     );
 
-    // And a second full reindex is identical too (idempotent).
     ingest_vault(&conn, &vault, &FakeEmbedder::default()).unwrap();
     assert_eq!(
         after_full,

@@ -1,8 +1,5 @@
-//! Flow ④ — grounded chat (`Vault::ask`, GH #151/#153): condense → retrieve →
-//! assemble → stream → cite, asserted end-to-end against the deterministic
-//! [`FakeLlm`] (E2: no candle, no tokio, no network). Like `tests/search.rs`,
-//! these prove the **plumbing** — orchestration, degrades, cancellation,
-//! citation resolution — not answer quality, which is a real-model eval concern.
+//! Flow ④, grounded chat (`Vault::ask`, GH #151/#153): condense, retrieve, assemble,
+//! stream, cite. Plumbing only, against the deterministic [`FakeLlm`] (E2).
 
 mod common;
 
@@ -19,8 +16,7 @@ use std::fs;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 
-/// Wraps a provider and counts its calls — how the suite observes whether the
-/// condensation step ran without reaching into the orchestration.
+/// Counts a provider's calls, to observe whether condensation ran.
 struct Counting<'a> {
     inner: &'a dyn LlmProvider,
     calls: Cell<usize>,
@@ -49,8 +45,7 @@ impl LlmProvider for Counting<'_> {
     }
 }
 
-/// A purpose-built two-note vault whose notes share no terms, so which query
-/// retrieval actually used is observable from which note ranks first.
+/// Two notes sharing no terms, so the note ranked first shows which query retrieval used.
 fn two_topic_vault(dir: &std::path::Path) -> (Vault, PathBuf) {
     let root = dir.join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -84,15 +79,12 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
         )
         .unwrap();
 
-    // The answer is exactly what streamed up through the callback, uncancelled.
     assert_eq!(view.answer, streamed);
     assert!(!view.cancelled);
     assert!(view.answer.starts_with("Grounded in [1]"));
 
-    // FakeLlm cites every passage it was handed, so citations mirror retrieval:
-    // markers 1..=k ascending, each resolved to a real note path + evidence. The
-    // path IS the citation's handle (L1) — as durable as any path, which is the
-    // trade GH #170 made deliberately.
+    // FakeLlm cites every passage, so citations mirror retrieval. The path is the
+    // citation's handle (L1, GH #170).
     assert!(!view.citations.is_empty());
     for (i, c) in view.citations.iter().enumerate() {
         assert_eq!(c.marker, i + 1, "markers are ascending and 1-based");
@@ -104,8 +96,7 @@ fn ask_grounds_the_answer_and_resolves_citations_end_to_end() {
         );
         assert!(!c.excerpt.is_empty(), "the cited passage is the evidence");
     }
-    // 'forgetting' lives only in spaced-repetition.md — the keyword match must
-    // be among the grounding passages, hence among the citations.
+    // 'forgetting' lives only in spaced-repetition.md.
     assert!(view
         .citations
         .iter()
@@ -135,11 +126,10 @@ fn breaking_mid_stream_reports_a_truncated_answer_honestly() {
         view.answer, "Grounded in [1]",
         "the partial text includes the token the break landed on"
     );
-    // Citations resolve over what actually arrived — exactly marker 1.
+    // Citations resolve over what actually arrived.
     assert_eq!(view.citations.len(), 1);
     assert_eq!(view.citations[0].marker, 1);
 
-    // Breaking before any marker arrives leaves no citations at all.
     let mut first = true;
     let early = vault
         .ask(&FakeLlm, "forgetting curve", &[], &mut |_tok| {
@@ -161,7 +151,6 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // Single turn: exactly one provider call — the answer itself.
     let counting = Counting::new(&FakeLlm);
     let mut sink = String::new();
     vault
@@ -174,7 +163,6 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
         .unwrap();
     assert_eq!(counting.calls.get(), 1, "no condensation on a single turn");
 
-    // A follow-up condenses first: two calls, one answer.
     let history = [
         ChatTurn::user("what is the forgetting curve?"),
         ChatTurn::assistant("It describes memory decay over time [1]."),
@@ -192,12 +180,10 @@ fn a_single_turn_ask_skips_condensation_and_a_follow_up_pays_for_it() {
     assert_eq!(counting.calls.get(), 2, "condense, then answer");
 }
 
-/// A provider whose condensation call fails or comes back cancelled with
-/// garbage, while chat behaves like [`FakeLlm`].
-/// Step 0 must degrade to the raw question — never break chat, never retrieve
-/// on the garbage.
+/// A condense call that fails or returns cancelled garbage; chat behaves like [`FakeLlm`].
+/// Condensation must degrade to the raw question.
 struct BrokenCondense {
-    /// `None` → error the condense call; `Some(text)` → return it *cancelled*.
+    /// `None` errors the condense call; `Some(text)` returns it cancelled.
     cancelled_text: Option<&'static str>,
 }
 
@@ -230,8 +216,6 @@ fn condensation_failure_degrades_to_the_raw_question() {
     let (vault, _root) = two_topic_vault(tmp.path());
     let history = [ChatTurn::user("earlier turn")];
 
-    // The condense call errors outright: chat must still answer, and the top
-    // passage must be the raw question's note — proof retrieval used it.
     let mut sink = String::new();
     let view = vault
         .ask(
@@ -249,8 +233,7 @@ fn condensation_failure_degrades_to_the_raw_question() {
         "the raw question drove retrieval, so its keyword note ranks first"
     );
 
-    // The condense call returns *cancelled* text naming the other note: the
-    // partial text must be discarded, not used as the retrieval query.
+    // Cancelled text naming the other note must be discarded.
     let mut sink = String::new();
     let view = vault
         .ask(
@@ -274,8 +257,7 @@ fn ask_answers_bm25_only_on_a_projected_but_unembedded_vault() {
     let (vault, _root) = opened_vault(tmp.path());
     vault.project(false).unwrap();
 
-    // No embedding space exists — retrieval is keyword-only (M4), so the only
-    // grounding passages are the actual term matches, and chat still works.
+    // No embedding space: retrieval is keyword-only (M4).
     let mut streamed = String::new();
     let view = vault
         .ask(&FakeLlm, "forgetting", &[], &mut stream_into(&mut streamed))
@@ -290,9 +272,7 @@ fn ask_answers_bm25_only_on_a_projected_but_unembedded_vault() {
     );
 }
 
-/// Emits a fixed answer citing one real and one hallucinated marker, so the
-/// resolution rules are observable end-to-end: the real one resolves, the
-/// fake one contributes nothing, and the answer text is never rewritten.
+/// A fixed answer citing one real and one hallucinated marker.
 struct Hallucinating;
 
 impl LlmProvider for Hallucinating {
@@ -346,9 +326,8 @@ fn a_hallucinated_marker_resolves_to_nothing_and_stays_in_the_text() {
     assert_eq!(view.citations[0].marker, 1);
 }
 
-/// Empty retrieval is not condensation: a grounded request whose passage list
-/// is empty (nothing in the vault matched) gets the honest no-evidence answer,
-/// not an echo of the question — `RequestKind` is what keeps the two apart.
+/// A grounded request with no passages is not a condensation (`RequestKind` keeps them
+/// apart), so it gets the no-evidence answer, not an echo.
 #[test]
 fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -375,11 +354,8 @@ fn empty_retrieval_answers_no_evidence_rather_than_echoing() {
     assert!(!view.cancelled);
 }
 
-/// A failed *answer* call is a real error (contrast condensation, which
-/// degrades): the adapter needs to say "can't reach the model server", not
-/// render an empty answer as if the vault had nothing to say. Whatever variant
-/// the provider returns is normalized to [`Error::Llm`], so adapters have one
-/// variant to match for that message.
+/// A failed answer call is a real error, unlike condensation. Every variant is normalized
+/// to [`Error::Llm`], so adapters match one.
 struct FailingChat {
     err: fn() -> Error,
 }
@@ -414,8 +390,6 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
         .unwrap_err();
     assert!(matches!(err, Error::Llm(_)));
 
-    // A provider leaking a non-Llm variant is normalized at the seam boundary,
-    // so the documented contract holds whatever the implementation returns.
     let err = vault
         .ask(
             &FailingChat {
@@ -432,8 +406,7 @@ fn a_failed_answer_call_surfaces_as_an_llm_error() {
     );
 }
 
-/// Chat is a reader with `search`'s posture: a mismatched embedding space
-/// fails fast rather than grounding the answer on incomparable vectors.
+/// Chat never grounds on incomparable vectors.
 #[test]
 fn ask_shares_searchs_model_mismatch_fail_fast() {
     use b2_core::embed::FakeEmbedder;
@@ -474,7 +447,6 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
     ];
     let req = chat::build_request("second question", &history, passages);
 
-    // The conversation the provider sees: history in order, question last.
     assert_eq!(req.turns.len(), 3);
     assert_eq!(req.turns[0].content, "first question");
     assert_eq!(req.turns[1].role, Role::Assistant);
@@ -484,8 +456,6 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
         (Role::User, "second question")
     );
 
-    // The rendered system message: the grounded instruction, then the numbered
-    // block — 1-based markers, path + breadcrumb + verbatim text per passage.
     let msg = req.system_message();
     assert!(msg.starts_with(GROUNDED_SYSTEM_PROMPT));
     assert!(msg.contains("I don't find that in your notes"));
@@ -494,11 +464,9 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
     assert!(msg.contains("[2] notes/spaced-repetition.md"));
     assert!(msg.contains("Review at increasing intervals."));
 
-    // The no-evidence sentence the fake obeys is the one the prompt dictates —
-    // the two are pinned together so neither can drift.
+    // Pinned together so neither can drift.
     assert!(GROUNDED_SYSTEM_PROMPT.contains(NO_EVIDENCE_ANSWER));
 
-    // A condensation request renders without a passage block.
     let condense = ChatRequest {
         kind: RequestKind::Condense,
         system: CONDENSE_SYSTEM_PROMPT.to_string(),
@@ -512,15 +480,13 @@ fn the_grounded_request_numbers_passages_and_ends_on_the_question() {
 
 #[test]
 fn cited_markers_keeps_real_markers_and_drops_everything_else() {
-    // Distinct, ascending, deduped; multi-digit parses.
     assert_eq!(
         chat::cited_markers("[2] then [1], [2] again", 5),
         vec![1, 2]
     );
     assert_eq!(chat::cited_markers("deep cite [12]!", 12), vec![12]);
 
-    // Out of range (0 is out of range — numbering is 1-based), overflow-long
-    // digits, unclosed and empty brackets: all resolve to nothing.
+    // Numbering is 1-based, so 0 is out of range.
     assert_eq!(
         chat::cited_markers("[0] [6] [99999999999999999999] [", 5),
         Vec::<usize>::new()
@@ -534,6 +500,5 @@ fn cited_markers_keeps_real_markers_and_drops_everything_else() {
         Vec::<usize>::new()
     );
 
-    // Zero passages: nothing can resolve, whatever the model claims.
     assert_eq!(chat::cited_markers("[1]", 0), Vec::<usize>::new());
 }

@@ -1,9 +1,5 @@
-//! The `Vault` façade — the one typed core API the CLI and tests are clients of
-//! (invariants.md). This slice's contract:
-//! `open` / `reindex` / `neighbors` / `search`, resolving a note by its
-//! vault-relative path — with or without the `.md` — against the golden-vault
-//! fixture. Fully deterministic (FakeEmbedder), so it proves the plumbing, not
-//! model quality.
+//! The `Vault` façade's core reads: `open`, `reindex`, `neighbors` and `search`, resolving
+//! a note by its path with or without the `.md`.
 
 mod common;
 
@@ -38,13 +34,12 @@ fn reindex_reports_counts_and_is_idempotent() {
     assert_eq!(report.indexed, 2, "golden vault has two notes");
     assert_eq!(report.embedded, 2, "both are fresh to the index");
 
-    // a second reindex still indexes both, and embeds neither: the bodies are
-    // unchanged, so their chunks hash to vectors already stored (M4).
+    // Unchanged chunks hash to vectors already stored (M4).
     let again = vault.reindex().unwrap();
     assert_eq!(again.indexed, 2);
     assert_eq!(again.embedded, 0);
 
-    // W1, asserted rather than assumed: indexing a vault twice writes nothing to it.
+    // W1: indexing writes nothing to the vault.
     for (path, was) in ["concepts/memory.md", "notes/spaced-repetition.md"]
         .iter()
         .zip(&before)
@@ -67,15 +62,13 @@ fn neighbors_of_memory_are_inbound_resolved_to_paths_and_titles() {
     labels.sort_unstable();
     assert_eq!(labels, vec!["referenced-by", "supported-by"]);
 
-    // every neighbor is the SRS note, inbound, resolved to its path + title (the
-    // filename, data-model.md §1).
+    // Title is the filename (data-model.md §1).
     assert!(ns.iter().all(|n| n.path == SRS_PATH));
     assert!(ns.iter().all(|n| n.direction == "inbound"));
     assert!(ns.iter().all(|n| n.path == "notes/spaced-repetition.md"));
     assert!(ns
         .iter()
         .all(|n| n.title.as_deref() == Some("spaced-repetition")));
-    // the typed `supports` edge carries its explanation through.
     assert!(ns.iter().any(|n| n.relation == "supports"
         && n.explanation.as_deref() == Some("applies the forgetting curve")));
 }
@@ -85,14 +78,13 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, _root) = reindexed_vault(tmp.path());
 
-    // Both ref forms — by path and by path-without-.md — resolve to the same set.
     let by_path = vault.neighbors("notes/spaced-repetition.md").unwrap();
     let by_stem = vault.neighbors("notes/spaced-repetition").unwrap();
 
     for ns in [&by_path, &by_stem] {
         let mut labels: Vec<&str> = ns.iter().map(|n| n.label.as_str()).collect();
         labels.sort_unstable();
-        // outbound labels are the verbs themselves.
+        // Outbound labels are the verbs themselves.
         assert_eq!(labels, vec!["references", "supports"]);
         assert!(ns.iter().all(|n| n.path == MEMORY_PATH));
         assert!(ns.iter().all(|n| n.direction == "outbound"));
@@ -102,9 +94,8 @@ fn neighbors_of_srs_are_outbound_and_ref_forms_agree() {
     assert_eq!(by_path.len(), by_stem.len());
 }
 
-/// Every façade op that resolves a note ref rejects an unknown one the same way,
-/// echoing the ref back verbatim — the single refusal the adapters map to their
-/// "not found" message. Asserted once here rather than per-op across files.
+/// Every resolving op refuses an unknown ref the same way, echoing it back: the one
+/// refusal adapters map to "not found".
 #[test]
 fn unknown_ref_is_note_not_found_on_every_resolving_op() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -133,8 +124,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     let hits = vault.search("forgetting", 10).unwrap();
     assert!(!hits.is_empty());
 
-    // 'forgetting' lives only in spaced-repetition — it must surface, resolved to
-    // its note with a non-empty snippet showing the matched term.
+    // 'forgetting' lives only in spaced-repetition.
     let srs = hits
         .iter()
         .find(|h| h.path == SRS_PATH)
@@ -144,7 +134,6 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     assert!(srs.snippet.contains("forgetting"));
     assert!(srs.score > 0.0);
 
-    // results are note-level: no note appears twice.
     let mut ids: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
     ids.sort_unstable();
     let deduped = {
@@ -155,9 +144,7 @@ fn search_finds_the_note_with_a_snippet_and_is_note_level() {
     assert_eq!(ids, deduped, "search results must be deduped by note");
 }
 
-/// Index-first honesty: before the first reindex the projection is empty, so the
-/// read surfaces answer *empty*, never an error — the adapters render "nothing
-/// indexed yet", not a failure.
+/// Before the first reindex, reads answer empty, never an error.
 #[test]
 fn reads_before_reindex_are_empty_not_errors() {
     let tmp = tempfile::TempDir::new().unwrap();

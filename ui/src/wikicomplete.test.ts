@@ -1,8 +1,5 @@
-// Tests for the pure wikilink-completion logic (wikicomplete.ts) — the `[[` trigger
-// detection, the candidate ranking, and the closing-bracket insertion. Run directly:
+// Tests for the pure wikilink-completion logic (wikicomplete.ts). Run directly:
 //   node --experimental-strip-types src/wikicomplete.test.ts
-// No framework — the suite is a list of (name, fn) pairs and hand-rolled asserts,
-// the same idiom as panes.test.ts / move.test.ts.
 
 import { wikiCandidates, wikiInsertion, wikiQueryAt } from "./wikicomplete.ts";
 import type { NoteSummary, ResourceSummary } from "./types.ts";

@@ -19,24 +19,20 @@ fn head_snippet(flat: &str) -> String {
     }
 }
 
-/// Collapse a chunk's text to a single-line, length-bounded snippet (its head). Used
-/// where there is no query to center on (e.g. `similar`'s evidence passage).
+/// A chunk's head as a single-line, length-bounded snippet, where there is no query.
 pub(crate) fn snippet(text: &str) -> String {
     head_snippet(&flatten(text))
 }
 
-/// Like [`snippet`] but windows the excerpt around the first query-term match, so a
-/// section-sized chunk still surfaces the matched text instead of only its head.
-/// Falls back to the head when no term matches or the match is already in view — a
-/// pure vector hit keeps the head.
+/// Like [`snippet`] but windowed around the first query-term match. Falls back to the
+/// head when nothing matches or the match is already in view.
 pub(crate) fn query_snippet(text: &str, query: &str) -> String {
     let flat = flatten(text);
     if flat.chars().count() <= SNIPPET_CHARS {
         return flat;
     }
     let lower = flat.to_lowercase();
-    // The same tokenizer the lexical half matched with, so the window lands on a term
-    // that actually ranked the hit.
+    // The lexical half's tokenizer, so the window lands on a term that ranked the hit.
     let match_pos = crate::search::query_terms(query)
         .iter()
         .filter(|t| t.chars().count() >= 2)
@@ -51,8 +47,7 @@ pub(crate) fn query_snippet(text: &str, query: &str) -> String {
         return head_snippet(&flat);
     };
     let chars: Vec<char> = flat.chars().collect();
-    // `pos` indexes the lowercased text, whose length can differ from `flat` for
-    // exotic Unicode; clamp so the slice below can never go out of range.
+    // Lowercasing can change length for exotic Unicode; clamp so the slice stays in range.
     let start = (pos - LEAD).min(chars.len());
     let end = (start + SNIPPET_CHARS).min(chars.len());
     let mut out = String::from("…");

@@ -1,10 +1,5 @@
-// The pane-sizing rules (panes.ts), pinned. Pure math only — no DOM — so node runs it
-// straight off the source via its native type-stripping: `npm test`.
-//
-// Deliberately dependency-free (hence the hand-rolled `assert` below rather than
-// node:assert, which would drag @types/node into a frontend that needs no Node types).
-// The drag/persistence controller isn't covered here — it's DOM-bound; what's worth
-// pinning is the arithmetic every gutter drag and window resize routes through.
+// The pane-sizing arithmetic (panes.ts); the DOM-bound drag controller isn't covered.
+// Hand-rolled `assert` rather than node:assert, which would need @types/node.
 import { BOUNDS, CENTER_MIN, GUTTER, ceilingFor, fit, type PaneWidths } from "./panes.ts";
 
 const BOTH = { tree: true, side: true };
@@ -62,8 +57,7 @@ check("the tree yields only once the side is at its min", () => {
 });
 
 check("both mins hold even when the window is too small for the center", () => {
-  // Nothing left to give: the mins win and the center takes the squeeze. The
-  // stylesheet's breakpoints hide the panes long before this in practice.
+  // The mins win; in practice the breakpoints hide panes long before this.
   const w = fit({ tree: 240, side: 380 }, 400, BOTH);
   equal(w.tree, BOUNDS.tree.min, "tree");
   equal(w.side, BOUNDS.side.min, "side");

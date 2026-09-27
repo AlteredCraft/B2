@@ -1,9 +1,5 @@
-//! Delete a note / resource / folder — the destructive complement of `mv`:
-//! remove the file(s) from disk and the projection rows from the index, leaving
-//! inbound links **dangling** (never rewritten — the deleted target is simply
-//! gone, exactly as if the file had been removed externally and the vault fully
-//! reindexed). Driven through the [`Vault`] façade against the golden vault,
-//! fully deterministic under the FakeEmbedder.
+//! Delete a note, resource or folder: remove the files and their rows, leaving inbound
+//! links dangling, never rewritten. Equivalent to an external delete plus a reindex.
 
 mod common;
 
@@ -12,9 +8,7 @@ use common::{count, index_conn, reindexed_vault, MEMORY_PATH, SRS_PATH};
 use rusqlite::Connection;
 use std::fs;
 
-/// The vectors any read can actually reach: every one is joined to through
-/// `chunks` (M4), so this — not `COUNT(*) FROM embeddings` — is the vector state a
-/// caller can observe.
+/// The vectors any read can reach, all via `chunks` (M4), unlike a raw `embeddings` count.
 fn reachable_vectors(conn: &Connection) -> i64 {
     conn.query_row(
         "SELECT COUNT(*) FROM chunks c JOIN embeddings e ON e.text_hash = c.text_hash",
@@ -24,8 +18,7 @@ fn reachable_vectors(conn: &Connection) -> i64 {
     .unwrap()
 }
 
-/// Every edge row's identity + resolution, ordered — the shape that must match a
-/// from-scratch rebuild for `delete ≡ external-delete + reindex` to hold.
+/// Every edge row's identity and resolution, ordered.
 fn edge_rows(conn: &Connection) -> Vec<(String, String, Option<String>, String, String, i64)> {
     let mut stmt = conn
         .prepare(
@@ -58,16 +51,11 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
     assert_eq!(report.path, MEMORY_PATH);
     assert_eq!(report.dangled, vec![SRS_PATH.to_string()]);
 
-    // The file is gone; the linking note's bytes are untouched (a delete never
-    // rewrites bodies — the links dangle, they aren't repaired).
+    // The linking note's bytes are untouched: links dangle, never repaired.
     assert!(!root.join(MEMORY_PATH).exists());
     assert_eq!(fs::read_to_string(root.join(SRS_PATH)).unwrap(), srs_before);
 
-    // The note no longer resolves by *either* ref form. Both arms are the point: the
-    // pre-GH #170 version of this test paired the path with a b2id lookup to prove no
-    // handle survives a delete, and the path being the identity (L1) shrank the handles
-    // to two spellings of one key — so the stem is what that second arm becomes, not
-    // something the pivot made redundant.
+    // No handle survives, in either spelling of the path (L1).
     assert!(matches!(
         vault.read(MEMORY_PATH).unwrap_err(),
         Error::NoteNotFound(_)
@@ -77,7 +65,6 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
         Error::NoteNotFound(_)
     ));
 
-    // Its projection rows are gone: only SRS's rows remain.
     let conn = index_conn(&root);
     assert_eq!(count(&conn, "notes"), 1);
     let chunk_owners: i64 = conn
@@ -89,7 +76,6 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
         .unwrap();
     assert_eq!(chunk_owners, 0);
 
-    // The linker's edges re-derived: no neighbor left, the links now dangle.
     let explain = vault.explain(SRS_PATH).unwrap();
     assert!(explain.connections.is_empty(), "no resolved edges remain");
     let targets: Vec<&str> = explain
@@ -108,7 +94,6 @@ fn delete_note_removes_file_and_rows_and_dangles_inbound_links() {
 fn delete_note_equals_external_delete_plus_full_reindex() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    // Vault A: the delete op.
     let (vault_a, root_a) = {
         let dir = tmp.path().join("a");
         fs::create_dir_all(&dir).unwrap();
@@ -116,7 +101,7 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
     };
     vault_a.delete_note(MEMORY_PATH).unwrap();
 
-    // Vault B: the file removed externally, then a full reindex reconciles.
+    // Vault B: an external delete, then a full reindex.
     let (vault_b, root_b) = {
         let dir = tmp.path().join("b");
         fs::create_dir_all(&dir).unwrap();
@@ -130,17 +115,11 @@ fn delete_note_equals_external_delete_plus_full_reindex() {
     assert_eq!(edge_rows(&conn_a), edge_rows(&conn_b));
     assert_eq!(count(&conn_a, "notes"), count(&conn_b, "notes"));
     assert_eq!(count(&conn_a, "chunks"), count(&conn_b, "chunks"));
-    // The vectors *reachable from a chunk* — which is every vector any read can see,
-    // since each one joins through `chunks` (M4). The raw `embeddings` row count is
-    // deliberately not compared: since GH #170 a vector outlives the chunk that
-    // addressed it, so the single-note delete path leaves the deleted note's vectors
-    // behind as collectible garbage while B's whole-vault pass has already swept
-    // them. Invisible either way, and warm if the same text returns.
+    // Not the raw `embeddings` count: since GH #170 a single-note delete leaves its
+    // vectors as unreachable garbage until a whole-vault pass sweeps them.
     assert_eq!(reachable_vectors(&conn_a), reachable_vectors(&conn_b));
 
-    // And the delete is stable under a further reindex: nothing left to prune, and
-    // that pass is where A's garbage is collected — so the two indexes converge
-    // physically as well.
+    // A further reindex prunes nothing and collects A's garbage.
     let again = vault_a.reindex().unwrap();
     assert_eq!(again.notes_pruned, 0);
     let conn_a = index_conn(&root_a);
@@ -161,7 +140,6 @@ fn delete_note_unknown_ref_refuses() {
         vault.delete_note("no/such-note.md").unwrap_err(),
         Error::NoteNotFound(_)
     ));
-    // Nothing was touched.
     assert!(root.join(MEMORY_PATH).exists());
     assert_eq!(count(&index_conn(&root), "notes"), 2);
 }
@@ -171,7 +149,6 @@ fn delete_resource_removes_file_and_inventory_and_dangles_links() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // Give SRS a body link at the resource, through the ordinary save path.
     let note = vault.read(SRS_PATH).unwrap();
     let body = format!(
         "{}\nSee [[resources/data.txt]] for the raw data.\n",
@@ -192,7 +169,6 @@ fn delete_resource_removes_file_and_inventory_and_dangles_links() {
     let listed = vault.list_resources().unwrap();
     assert!(listed.iter().all(|r| r.path != "resources/data.txt"));
 
-    // The link now dangles rather than resolving to a resource.
     let explain = vault.explain(SRS_PATH).unwrap();
     assert!(explain.resources.is_empty());
     assert!(explain
@@ -200,7 +176,6 @@ fn delete_resource_removes_file_and_inventory_and_dangles_links() {
         .iter()
         .any(|u| u.target == "resources/data.txt"));
 
-    // Rebuild-equivalence: a further full reindex changes nothing.
     let conn = index_conn(&root);
     let before = edge_rows(&conn);
     let again = vault.reindex().unwrap();
@@ -235,12 +210,10 @@ fn delete_dir_removes_subtree_and_dangles_outside_links() {
         Error::NoteNotFound(_)
     ));
 
-    // The surviving linker dangles, exactly as a single-note delete leaves it.
     let explain = vault.explain(SRS_PATH).unwrap();
     assert!(explain.connections.is_empty());
     assert_eq!(explain.unresolved.len(), 2);
 
-    // Stable under a further reindex.
     let again = vault.reindex().unwrap();
     assert_eq!(again.notes_pruned, 0);
 }
@@ -250,8 +223,7 @@ fn delete_dir_containing_the_linker_leaves_the_target_intact() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // Deleting `notes/` removes SRS (the linker). Memory survives untouched, and
-    // no surviving file needs re-projection (the linker died with the folder).
+    // The linker dies with the folder, so nothing dangles.
     let report = vault.delete_dir("notes").unwrap();
     assert_eq!(report.deleted_notes, 1);
     assert!(report.dangled.is_empty());
@@ -281,9 +253,7 @@ fn delete_dir_deletes_an_empty_folder() {
     let (vault, root) = reindexed_vault(tmp.path());
     fs::create_dir_all(root.join("scratch")).unwrap();
 
-    // An empty folder is a real vault member (fs-authoritative structure): the
-    // delete resolves against the filesystem, not the index, so it works exactly
-    // like a full folder — just with nothing indexed to count.
+    // Folder deletes resolve against the filesystem, not the index.
     let report = vault.delete_dir("scratch").unwrap();
     assert_eq!(report.deleted_notes, 0);
     assert_eq!(report.deleted_resources, 0);
@@ -308,6 +278,5 @@ fn delete_dir_missing_or_invalid_refuses() {
         vault.delete_dir("").unwrap_err(),
         Error::DirNotFound(_)
     ));
-    // Nothing was touched.
     assert_eq!(count(&index_conn(&root), "notes"), 2);
 }

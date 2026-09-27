@@ -1,18 +1,7 @@
-//! Discovery surfacing (ADR-0014): **the ranked candidate list is served**. `limit` is a
-//! cap, the order is the deterministic best-passage sort, the z travels with every row as
-//! the strength band's input, and no statistic gates membership. Tiny pools are served
-//! band-less (no statistic exists, so none is claimed) and a fake-embedded space is served
-//! statistic-less — grading changes what the rows *carry*, never which rows exist.
-//!
-//! The fake embedder can't exercise the grading half, which is exactly why `Vault::similar`
-//! never grades a fake-embedded space (the last test pins that). So these tests inject a
-//! **geometric** embedder whose vectors are hand-placed: notes carry `VEC:<tag>` markers and
-//! the embedder maps each tag to a designed unit vector. The scenarios keep the measured
-//! shapes the retired rule was calibrated (and falsified) on: a cluster anchor whose mate
-//! stands far above a tight noise cloud, and a diffuse anchor whose best candidate is just
-//! the least-far member of one undifferentiated cloud — which the retired gate emptied, and
-//! which now serves its ranked nearest, because "everything here is middling" is an answer a
-//! strength band can carry and an empty pane cannot.
+//! Discovery surfacing (ADR-0014): the ranked list is served, `limit` is a cap, and z rides
+//! on every row as the band's input. Grading changes what rows carry, never which rows
+//! exist. A geometric embedder with hand-placed vectors exercises the grading the fake
+//! embedder can't.
 
 mod common;
 
@@ -29,9 +18,8 @@ use std::path::Path;
 
 const NOISE_NOTES: usize = 13;
 
-/// anchor + mate + a 13-note noise cloud + a diffuse anchor inside the cloud:
-/// 16 notes, so every anchor's candidate pool (15) clears STATS_MIN_POPULATION
-/// and the z statistics exist to travel.
+/// Anchor, mate, a 13-note noise cloud and a diffuse anchor inside it: 16 notes, so every
+/// pool clears STATS_MIN_POPULATION and z exists.
 fn geometric_vault(dir: &Path) -> (Connection, String, String, String) {
     let vault = dir.join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -43,7 +31,6 @@ fn geometric_vault(dir: &Path) -> (Connection, String, String, String) {
     }
     let conn = open(&dir.join("b2.sqlite")).unwrap();
     ingest_vault(&conn, &vault, &GeometricEmbedder).unwrap();
-    // The three named notes, by the thing that identifies them: their paths (L1).
     (
         conn,
         "anchor.md".to_string(),
@@ -54,11 +41,7 @@ fn geometric_vault(dir: &Path) -> (Connection, String, String, String) {
 
 #[test]
 fn the_ranked_list_is_served_with_z_on_every_row() {
-    // Under the retired gate this anchor served exactly one candidate (the mate
-    // cleared the member bar; the cloud did not). Always-serve keeps the same
-    // ranking — the mate leads by a wide margin — and hands the human the rest
-    // of the field with the z that *says* it is a wide margin, instead of
-    // deciding for them that the field isn't worth seeing.
+    // The mate leads by a wide margin, and z says so; the rest of the field is served.
     let tmp = tempfile::TempDir::new().unwrap();
     let (conn, anchor, mate, _) = geometric_vault(tmp.path());
     let cands = discover::candidates(&conn, &anchor, 10, true).unwrap();
@@ -78,7 +61,7 @@ fn the_ranked_list_is_served_with_z_on_every_row() {
         z0 > z1 + 1.0,
         "the band's input still says the mate towers over the field: {z0} vs {z1}"
     );
-    // One order, two names: z descends with the rows, strictly (distinct scores).
+    // z descends with the rows.
     for pair in cands.windows(2) {
         assert!(
             pair[0].z.unwrap() >= pair[1].z.unwrap(),
@@ -89,12 +72,8 @@ fn the_ranked_list_is_served_with_z_on_every_row() {
 
 #[test]
 fn a_diffuse_anchor_serves_its_ranked_nearest() {
-    // THE INVERSION GH #197 RULED: this anchor's pool is one undifferentiated
-    // cloud, and the retired leader gate emptied its pane on exactly that
-    // reading. But "one undifferentiated cloud" and "a coherent single-subject
-    // vault" are the same geometry (GH #196 measured a real one dark on 16 of
-    // 17 notes), so the honest answer is the ranked nearest with middling
-    // bands — a relative answer to what was always a relative question.
+    // GH #197: one undifferentiated cloud is also the geometry of a coherent
+    // single-subject vault (GH #196), so serve the ranked nearest with middling bands.
     let tmp = tempfile::TempDir::new().unwrap();
     let (conn, _, _, diffuse) = geometric_vault(tmp.path());
     let cands = discover::candidates(&conn, &diffuse, 10, true).unwrap();
@@ -107,16 +86,13 @@ fn a_diffuse_anchor_serves_its_ranked_nearest() {
         cands.iter().all(|c| c.z.is_some()),
         "graded: the bands can say every card is middling, which the empty pane could not"
     );
-    // Deterministic order: two runs agree row for row.
     let again = discover::candidates(&conn, &diffuse, 10, true).unwrap();
     assert_eq!(cands, again, "the served order is deterministic");
 }
 
 #[test]
 fn ungraded_serving_changes_banding_never_membership() {
-    // `grade: false` (the façade's choice for a fake-embedded space) must serve
-    // the SAME rows in the SAME order and differ only in what they carry — the
-    // A7 continuity claim: no statistic setting may move membership.
+    // A7: no statistic setting may move membership or order.
     let tmp = tempfile::TempDir::new().unwrap();
     let (conn, anchor, mate, _) = geometric_vault(tmp.path());
     let graded = discover::candidates(&conn, &anchor, 10, true).unwrap();
@@ -142,12 +118,8 @@ fn ungraded_serving_changes_banding_never_membership() {
 
 #[test]
 fn a_buried_gem_outranks_and_is_served() {
-    // The multi-topic shape the GH #192 reorder exists for: `split.md` holds a passage
-    // almost parallel to the anchor (its stage-2 max-sim is far the best) while its second
-    // half drags its *centroid* away. The retired stage-1 floor judged that centroid, so
-    // `mid.md` outranked the gem — and a corpus-measured version of the same shape was
-    // suppressed outright (GH #187) or served to loner anchors on content it did not contain
-    // (GH #189). Judged after stage 2, the gem's own best pair is the signal.
+    // GH #192: `split.md` has one passage almost parallel to the anchor, while its other
+    // half drags its centroid away. Judged after stage 2, its best pair is the signal.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -173,7 +145,7 @@ fn a_buried_gem_outranks_and_is_served() {
         "the buried gem leads: its best passage is the judged signal"
     );
     assert_eq!(cands[1].note_path, "mid.md");
-    // One order, three names: score, z, and the rows may never disagree.
+    // Score, z and row order never disagree.
     assert!(
         cands[0].score > cands[1].score,
         "score descends with the rows: {} then {}",
@@ -186,8 +158,6 @@ fn a_buried_gem_outranks_and_is_served() {
         "z (the shown band) descends with the rows: {z0} then {z1}"
     );
 
-    // Ungraded, the exact stage-2 score is still the order — grading changes
-    // what rows carry, never how the rows are ranked.
     let raw = discover::candidates(&conn, "anchor.md", 10, false).unwrap();
     assert_eq!(raw[0].note_path, "split.md");
     assert_eq!(raw[1].note_path, "mid.md");
@@ -195,11 +165,8 @@ fn a_buried_gem_outranks_and_is_served() {
 
 #[test]
 fn tiny_pools_are_served_in_full_and_band_less() {
-    // 3 candidates is no distribution: everything is served (as everywhere),
-    // and no z is claimed — the statistics threshold moves *banding only*.
-    // Under the retired gate this same threshold was a serve-everything/
-    // serve-nothing cliff crossed by adding four notes (GH #196's amplifier C);
-    // now crossing it changes what the cards carry and nothing else.
+    // 3 candidates is no distribution, so no z; the threshold moves banding only
+    // (GH #196).
     let tmp = tempfile::TempDir::new().unwrap();
     let vault = tmp.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -219,15 +186,12 @@ fn tiny_pools_are_served_in_full_and_band_less() {
 
 #[test]
 fn crossing_the_stats_population_changes_banding_never_membership() {
-    // The continuity claim (A7) across the n = 12 threshold: a vault just
-    // under it, one exactly at it (the inclusive edge — an off-by-one on the
-    // `>=` would slip past the other two cases), and one over it all serve
-    // their complete pools; the only difference is whether the rows carry a z.
+    // A7 across the n = 12 threshold, including the inclusive edge.
     let tmp = tempfile::TempDir::new().unwrap();
     for (name, extra, expect_z) in [
-        ("under", 10usize, false), // pool 11 — one short of the threshold
-        ("at", 11usize, true),     // pool 12 — the threshold itself, inclusive
-        ("over", 13usize, true),   // pool 14 — comfortably past it
+        ("under", 10usize, false), // pool 11
+        ("at", 11usize, true),     // pool 12
+        ("over", 13usize, true),   // pool 14
     ] {
         let vault = tmp.path().join(name).join("vault");
         fs::create_dir_all(&vault).unwrap();
@@ -238,7 +202,7 @@ fn crossing_the_stats_population_changes_banding_never_membership() {
         }
         let conn = open(&tmp.path().join(name).join("b2.sqlite")).unwrap();
         ingest_vault(&conn, &vault, &GeometricEmbedder).unwrap();
-        let pool = extra + 1; // mate + noise notes
+        let pool = extra + 1;
         let cands = discover::candidates(&conn, "anchor.md", 100, true).unwrap();
         assert_eq!(
             cands.len(),
@@ -255,10 +219,7 @@ fn crossing_the_stats_population_changes_banding_never_membership() {
 
 #[test]
 fn facade_grades_a_geometric_space_but_never_a_fake_one() {
-    // Through the façade: same 16-note vault, once embedded geometrically (the
-    // z travels — the diffuse anchor's list included, the pane the retired gate
-    // used to darken) and once with the fake embedder (no statistic claimed:
-    // hash geometry would make any z noise wearing a band).
+    // Hash geometry would make any z noise wearing a band.
     let tmp = tempfile::TempDir::new().unwrap();
     let vault_dir = tmp.path().join("v");
     fs::create_dir_all(&vault_dir).unwrap();
@@ -287,7 +248,6 @@ fn facade_grades_a_geometric_space_but_never_a_fake_one() {
         "the mate still leads its anchor's list"
     );
 
-    // A fake-embedded space serves the same way but claims no statistic.
     let fake_dir = tmp.path().join("vf");
     fs::create_dir_all(&fake_dir).unwrap();
     write_note(&fake_dir, "anchor.md", "ANCHOR");

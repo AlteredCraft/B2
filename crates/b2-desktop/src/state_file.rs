@@ -1,19 +1,14 @@
-//! The host's per-machine state files — the last opened vault, the chat settings, the
-//! embed-time ledger. All live under `<data-dir>/b2/` (macOS:
-//! `~/Library/Application Support/b2/`, Linux: `~/.local/share/b2/`), the same vendor dir
-//! `b2-embed` keeps its model cache in, and all are **best-effort**: remembering something
-//! must never fail the action the user just took. Never vault or index state.
+//! The host's per-machine state files (last vault, chat settings, embed-time ledger) under
+//! `<data-dir>/b2/`. Best-effort: remembering must never fail the user's action.
 
 use std::path::{Path, PathBuf};
 
-/// `<data-dir>/b2/<name>`, or `None` when the platform has no data dir — in which case
-/// the caller simply doesn't remember.
+/// `<data-dir>/b2/<name>`, or `None` when the platform has no data dir.
 pub fn path(name: &str) -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("b2").join(name))
 }
 
-/// Write `contents` to `file`, creating its parent dir first — the testable core every
-/// state file's writer shares.
+/// Write `contents` to `file`, creating its parent dir first.
 pub fn write(file: &Path, contents: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;

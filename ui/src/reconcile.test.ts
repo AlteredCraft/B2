@@ -1,16 +1,6 @@
-// The vault-changed reconcile sequencing (reconcile.ts), pinned. Pure async
-// orchestration over injected thunks — no DOM, no IPC — so node runs it straight off
-// the source via its native type-stripping: `npm test`. Dependency-free like
-// embedreminder.test.ts (hand-rolled assert; no @types/node).
-//
-// The two bugs this pins against, both "the pulse re-derived less than it invalidated":
-//   • #65 dogfood, item 4 — a Finder-dropped file pulsed `vault-changed`, but the
-//     reconcile only re-*listed* the index, never re-derived it, so the new file had no
-//     row and the tree didn't change until a manual reindex.
-//   • the discovery half — the projection that fixed that *clears* a re-chunked note's
-//     vectors and centroid (`db::replace_chunks`) and, being model-free, never refills
-//     them. An externally edited note came back with an empty Similar pane, and stayed
-//     that way until the human reindexed by hand.
+// The vault-changed reconcile sequencing (reconcile.ts), over injected thunks. Pins the
+// pulse re-deriving as much as it invalidates: an external add must be projected before
+// the re-list (#65), and the vectors that projection clears must be re-embedded.
 import { reconcileIndex } from "./reconcile.ts";
 
 let passed = 0;
@@ -135,8 +125,7 @@ await check("schedules the trailing embed when the projection left vectors owed"
 });
 
 await check("asks about coverage AFTER projecting, never before", async () => {
-  // The projection is what clears the vectors, so a coverage read taken before it
-  // would answer about the *old* index and miss exactly the note that just changed.
+  // A read before the projection would miss the note that just changed.
   let projected = false;
   let askedBeforeProject = false;
   await reconcileIndex(

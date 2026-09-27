@@ -1,9 +1,5 @@
-//! Resources slice 1 — inventory & graph
-//! (data-model.md §10).
-//!
-//! Step 0: the v4 schema — the `resources` table exists, `edges` carries the
-//! resource-target columns (`dst_resource_path`, `embed`, `caption`), dangling
-//! means *neither* target resolved, and the version gate drops a v3 index.
+//! Resources: inventory and graph (data-model.md §10). The `resources` table, resource
+//! edges (dangling means neither target resolved), the walk, and dispatch by shape.
 
 use b2_core::{open, Vault, SCHEMA_VERSION};
 use rusqlite::Connection;
@@ -12,8 +8,7 @@ use std::path::Path;
 
 mod common;
 
-/// `(path, class, size, content_hash)` rows, path-ordered — the comparable
-/// projection of `resources` (mtime/indexed_at are host state, not projection).
+/// `(path, class, size, content_hash)` rows, path-ordered (mtime is host state).
 fn resource_rows(root: &Path) -> Vec<(String, String, i64, String)> {
     let conn = common::index_conn(root);
     let mut stmt = conn
@@ -27,7 +22,7 @@ fn resource_rows(root: &Path) -> Vec<(String, String, i64, String)> {
     rows
 }
 
-/// Column names of `table` via `pragma table_info`, for shape assertions.
+/// Column names of `table`.
 fn columns(conn: &Connection, table: &str) -> Vec<String> {
     let mut stmt = conn
         .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
@@ -65,7 +60,7 @@ fn v4_schema_has_resources_table_and_widened_edges() {
         assert!(edges.iter().any(|c| c == col), "edges.{col} missing");
     }
 
-    // The class vocabulary is closed (research §3): a value outside it must refuse.
+    // The class vocabulary is closed (research §3).
     let bad = conn.execute(
         "INSERT INTO resources(path, class, size, content_hash, indexed_at)
          VALUES ('x.xyz', 'mystery', 0, 'h', 'now')",
@@ -74,8 +69,7 @@ fn v4_schema_has_resources_table_and_widened_edges() {
     assert!(bad.is_err(), "an unknown class must violate the CHECK");
 }
 
-/// The schema-version gate: a v3 index is dropped wholesale and rebuilt at v4 —
-/// no migration code, ever (the disposable-index tenet).
+/// A v3 index is dropped and rebuilt, never migrated (the index is disposable).
 #[test]
 fn v3_index_is_dropped_and_rebuilt_at_v4() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -90,7 +84,6 @@ fn v3_index_is_dropped_and_rebuilt_at_v4() {
                VALUES ('img.png', 'image', 3, 'h', 'now');",
         )
         .unwrap();
-        // Simulate an index built by the previous schema.
         conn.execute(
             "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
             [],
@@ -116,9 +109,8 @@ fn v3_index_is_dropped_and_rebuilt_at_v4() {
     assert_eq!((notes, resources), (0, 0), "the gate must drop v3 rows");
 }
 
-/// A resource-targeted edge is FK-checked, deduped by the partial unique index,
-/// and **re-dangles** (dst_resource_path → NULL, dst_path_raw retained) when its
-/// target row is pruned — the ON DELETE SET NULL that keeps pruning one statement.
+/// A resource edge is FK-checked, deduped by a partial unique index, and re-dangles when
+/// its target is pruned (ON DELETE SET NULL keeps pruning one statement).
 #[test]
 fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -130,7 +122,6 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     )
     .unwrap();
 
-    // FK: the target row must exist.
     let orphan = conn.execute(
         "INSERT INTO edges(id, src_path, dst_resource_path, dst_path_raw, type, origin)
          VALUES ('e0', 'a.md', 'missing.png', 'missing.png',
@@ -148,8 +139,7 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
     )
     .unwrap();
 
-    // Dedup: same (src, resource, type, occurrence) must refuse — NULL dst_path makes
-    // the note-edge UNIQUE constraint inert here, hence the partial index.
+    // NULL dst_path makes the note-edge UNIQUE inert, hence the partial index.
     let dup = conn.execute(
         "INSERT INTO edges(id, src_path, dst_resource_path, dst_path_raw, type, origin)
          VALUES ('e2', 'a.md', 'img.png', 'img.png',
@@ -161,7 +151,6 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
         "duplicate resource edge must violate the partial unique index"
     );
 
-    // Prune the resource: the edge survives as dangling, raw text retained.
     conn.execute("DELETE FROM resources WHERE path = 'img.png'", [])
         .unwrap();
     let (dst_resource, raw): (Option<String>, String) = conn
@@ -182,8 +171,7 @@ fn resource_edges_are_fk_checked_and_redangle_on_prune() {
 // Step 2 — the generalized walk: inventory, hashing, pruning (spec §2)
 // ---------------------------------------------------------------------------
 
-/// The walk inventories every non-`.md` file, classified by extension, and skips
-/// dot-prefixed files and folders (`.DS_Store` is not vault material).
+/// The walk inventories every non-`.md` file by extension and skips dot-prefixed entries.
 #[test]
 fn walk_inventories_and_classifies_resources() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -213,8 +201,7 @@ fn walk_inventories_and_classifies_resources() {
     assert!(report.skipped.is_empty(), "a clean vault skips nothing");
 }
 
-/// An unchanged `(size, mtime)` short-circuits the byte read: the stored hash is
-/// only recomputed when the stat changes (hashing is the pass's one byte-read).
+/// An unchanged `(size, mtime)` skips the re-hash.
 #[test]
 fn unchanged_stat_short_circuits_the_rehash() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -226,8 +213,7 @@ fn unchanged_stat_short_circuits_the_rehash() {
     let before = resource_rows(tmp.path());
     let original_mtime = fs::metadata(&txt).unwrap().modified().unwrap();
 
-    // Same-length different bytes, mtime restored: the stat is identical, so the
-    // pass must not re-read — the stored hash stays (observably) stale.
+    // Same length, mtime restored: the stored hash stays observably stale.
     let stale_bytes = "PLAIN text resource for the inventory tests\n";
     fs::write(&txt, stale_bytes).unwrap();
     fs::File::options()
@@ -243,10 +229,8 @@ fn unchanged_stat_short_circuits_the_rehash() {
         "matching (size, mtime) must not re-hash"
     );
 
-    // A touched mtime re-reads and refreshes the hash. Bump it a clear +2s past the
-    // original: stored mtime is whole-second granularity (ingest.rs `as_secs`), so
-    // `now()` can land in the *same second* as `original_mtime` and (correctly) not
-    // re-hash — a flake. A fixed offset makes the stat change deterministically.
+    // +2s, not `now()`: stored mtime is whole seconds, so `now()` could land in the
+    // same second and flake.
     fs::File::options()
         .write(true)
         .open(&txt)
@@ -272,7 +256,6 @@ fn unchanged_stat_short_circuits_the_rehash() {
     );
 }
 
-/// A deleted file's inventory row is pruned on the next projection pass.
 #[test]
 fn pruning_deletes_rows_the_walk_no_longer_sees() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -293,9 +276,7 @@ fn pruning_deletes_rows_the_walk_no_longer_sees() {
     );
 }
 
-/// `full-reindex ≡ incremental-update`, extended over resource add/change/delete
-/// (spec §7): a vault mutated then incrementally re-projected matches a fresh
-/// build of the same tree.
+/// `full-reindex ≡ incremental-update` over resource add, change and delete (spec §7).
 #[test]
 fn incremental_resource_update_equals_full_rebuild() {
     let mutate = |root: &Path| {
@@ -308,7 +289,6 @@ fn incremental_resource_update_equals_full_rebuild() {
         fs::remove_file(root.join("resources/blob.bin")).unwrap();
     };
 
-    // Incremental: project, mutate, project again.
     let a = tempfile::TempDir::new().unwrap();
     common::golden_vault_copy(a.path());
     let vault_a = Vault::open(a.path()).unwrap();
@@ -316,7 +296,6 @@ fn incremental_resource_update_equals_full_rebuild() {
     mutate(a.path());
     vault_a.project(false).unwrap();
 
-    // Fresh: the same final tree, projected once from scratch.
     let b = tempfile::TempDir::new().unwrap();
     common::golden_vault_copy(b.path());
     mutate(b.path());
@@ -334,8 +313,7 @@ fn incremental_resource_update_equals_full_rebuild() {
 // Step 4 — resolution: kind dispatch, dst_resource_path, dangling (spec §3)
 // ---------------------------------------------------------------------------
 
-/// All edges out of one source path: `(dst_path, dst_resource_path, dst_path_raw,
-/// type, embed, caption)`, in raw-target order.
+/// `(dst_path, dst_resource_path, dst_path_raw, type, embed, caption)`.
 type EdgeTuple = (
     Option<String>,
     Option<String>,
@@ -370,9 +348,8 @@ fn edges_from(root: &Path, src_path: &str) -> Vec<EdgeTuple> {
     rows
 }
 
-/// Resource links resolve to `dst_resource_path` (never `dst_path`), capture the
-/// authored caption + embed marker, and a missing target dangles with both
-/// resolution columns NULL and the raw text retained.
+/// Resource links resolve to `dst_resource_path`, keep caption and embed marker, and a
+/// missing target dangles with the raw text retained.
 #[test]
 fn resource_links_resolve_capture_and_dangle() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -395,7 +372,7 @@ fn resource_links_resolve_capture_and_dangle() {
     assert_eq!(
         edges,
         vec![
-            // note-relative Markdown targets resolve against resources/
+            // Markdown targets are note-relative.
             (
                 None,
                 Some("resources/data.txt".into()),
@@ -412,7 +389,6 @@ fn resource_links_resolve_capture_and_dangle() {
                 1,
                 Some("a tiny diagram".into()),
             ),
-            // a missing target dangles: both columns NULL, raw retained
             (
                 None,
                 None,
@@ -421,7 +397,7 @@ fn resource_links_resolve_capture_and_dangle() {
                 0,
                 Some("gone".into()),
             ),
-            // wikilink embeds resolve vault-root
+            // Wikilink embeds are vault-root.
             (
                 None,
                 Some("resources/blob.bin".into()),
@@ -435,8 +411,7 @@ fn resource_links_resolve_capture_and_dangle() {
     );
 }
 
-/// Markdown-form links to notes are edges too (extension dispatch), and a
-/// `#fragment` is stripped for the lookup while `dst_path_raw` keeps it.
+/// A `#fragment` is stripped for the lookup; `dst_path_raw` keeps it.
 #[test]
 fn markdown_note_links_resolve_with_fragment_stripped() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -459,7 +434,6 @@ fn markdown_note_links_resolve_with_fragment_stripped() {
         assert_eq!(*dst_resource, None);
         assert_eq!(r#type, "references");
     }
-    // occurrence disambiguates the two edges to the same (target, type)
     assert!(edges
         .iter()
         .any(|e| e.2 == "../concepts/memory.md#retrieval"));
@@ -469,7 +443,6 @@ fn markdown_note_links_resolve_with_fragment_stripped() {
 // Step 5 — the façade: list_resources / explain_resource / move_resource (§4)
 // ---------------------------------------------------------------------------
 
-/// `list_resources` mirrors the inventory, path-ordered, with class + stat.
 #[test]
 fn list_resources_returns_the_inventory() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -494,8 +467,7 @@ fn list_resources_returns_the_inventory() {
     assert!(listed.iter().all(|r| r.size > 0));
 }
 
-/// The fallback card: metadata + backlinks with authored context; an unknown
-/// path errors ResourceNotFound.
+/// The fallback card: metadata plus backlinks with authored context.
 #[test]
 fn explain_resource_carries_metadata_and_backlinks() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -515,7 +487,7 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert_eq!(view.backlinks.len(), 1);
     let b = &view.backlinks[0];
     assert_eq!(b.path, "notes/card.md");
-    // The backlink shows the linking note's title — its filename (data-model.md §1).
+    // Title is the filename (data-model.md §1).
     assert_eq!(b.title.as_deref(), Some("card"));
     assert_eq!(b.r#type, "references");
     assert_eq!(b.caption.as_deref(), Some("a tiny diagram"));
@@ -525,8 +497,7 @@ fn explain_resource_carries_metadata_and_backlinks() {
     assert!(matches!(missing, Err(b2_core::Error::ResourceNotFound(_))));
 }
 
-/// The viewer's read: inventoried bytes come back verbatim; anything the walk never
-/// put in the inventory refuses, so the op cannot be steered off the vault.
+/// Only inventoried paths are readable, so the op can't be steered off the vault.
 #[test]
 fn read_resource_bytes_returns_the_file_and_refuses_the_uninventoried() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -541,14 +512,13 @@ fn read_resource_bytes_returns_the_file_and_refuses_the_uninventoried() {
         "the viewer sees exactly the file on disk"
     );
 
-    // A path the walk never met: no row, no read — whatever is on disk beside it.
+    // On disk but never walked: no row, no read.
     fs::write(tmp.path().join("resources/unwalked.png"), b"not indexed").unwrap();
     assert!(matches!(
         vault.read_resource_bytes("resources/unwalked.png"),
         Err(b2_core::Error::ResourceNotFound(_))
     ));
 
-    // A note is not resource inventory, and an escaping path names no row at all.
     assert!(matches!(
         vault.read_resource_bytes("notes/alpha.md"),
         Err(b2_core::Error::ResourceNotFound(_))
@@ -559,9 +529,7 @@ fn read_resource_bytes_returns_the_file_and_refuses_the_uninventoried() {
     ));
 }
 
-/// A resource move rewrites inbound links in BOTH syntaxes, each keeping its own
-/// convention (note-relative stays relative, vault-root stays root), moves the
-/// file, and leaves the index equal to a fresh rebuild.
+/// A resource move rewrites inbound links in both syntaxes, each keeping its convention.
 #[test]
 fn move_resource_rewrites_inbound_links_and_reprojects() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -584,7 +552,6 @@ fn move_resource_rewrites_inbound_links_and_reprojects() {
     assert_eq!(report.rewrote, vec!["notes/uses-diagram.md".to_string()]);
     assert_eq!(report.links_rewritten, 2);
 
-    // Each authored form kept its convention.
     let body = fs::read_to_string(tmp.path().join("notes/uses-diagram.md")).unwrap();
     assert!(
         body.contains("![d](../img/diagram.png)"),
@@ -595,7 +562,6 @@ fn move_resource_rewrites_inbound_links_and_reprojects() {
         "wikilink stays vault-root: {body}"
     );
 
-    // File moved; inventory + edges follow.
     assert!(tmp.path().join("img/diagram.png").exists());
     assert!(!tmp.path().join("resources/diagram.png").exists());
     let edges = edges_from(tmp.path(), "notes/uses-diagram.md");
@@ -606,7 +572,6 @@ fn move_resource_rewrites_inbound_links_and_reprojects() {
         "all edges resolve at the new path: {edges:?}"
     );
 
-    // Refuses to clobber, refuses unknown source.
     fs::write(tmp.path().join("img/other.png"), "x").unwrap();
     vault.project(false).unwrap();
     assert!(matches!(
@@ -619,8 +584,7 @@ fn move_resource_rewrites_inbound_links_and_reprojects() {
     ));
 }
 
-/// `similar` on a resource anchor is honest: "not yet" for an inventoried
-/// resource (never a silent empty), the usual not-found for an unknown path.
+/// `similar` on a resource says "not yet", never a silent empty.
 #[test]
 fn similar_on_a_resource_errs_not_yet() {
     let tmp = tempfile::TempDir::new().unwrap();

@@ -1,13 +1,5 @@
-// A single newline in a note is a line break on screen (GH: "new lines render correctly
-// in edit mode but not in view mode"). The editor shows the file as typed, one line per
-// line; CommonMark's default folds those same lines into one paragraph, so the reading
-// view disagreed with the editor about where the author's line ends were. Notes here are
-// written the Obsidian way — a keystroke of Enter is a visible break, a blank line is a
-// paragraph — and the reading view follows the author, not the spec's fold.
-//
-// Through `renderMarkdown`, the seam the panes call, for the same reason as
-// embedlink.test.ts: the claim is what the note looks like. Run directly:
-//   node --experimental-strip-types src/linebreaks.test.ts
+// A single newline in a note is a line break on screen, the Obsidian way, so the reading
+// view agrees with the editor. Tested through `renderMarkdown`, the seam the panes call.
 
 import { JSDOM } from "jsdom";
 import { renderMarkdown } from "./render.ts";
@@ -41,8 +33,7 @@ assertHas(paragraphs, "<p>first</p>", "a blank line still ends a paragraph");
 assertHas(paragraphs, "<p>second</p>", "…and starts the next");
 assertNot(paragraphs, "<br>", "…with no stray break between them");
 
-// The shape the report came from: a caption on its own line above an embed. The break
-// is what keeps the caption from running into the picture's line.
+// A caption on its own line above an embed must not run into the picture's line.
 const captioned = renderMarkdown(
   "LakeFlow is a declarative pipelines add to Spark\n![[__Attachments/Shot.png|400]]\n",
 );

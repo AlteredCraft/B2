@@ -1,35 +1,15 @@
-// Nested lists, the pure half — the Tab / ⇧Tab engine. main.ts wires it into the
-// editor's keymap through the registry (`editor.list.indent` / `editor.list.outdent`,
-// bindings.ts); this module never touches CodeMirror, so node runs its test straight off
-// the source (`npm test`), like format.ts / newentry.ts / treenav.ts.
+// Nested lists, the pure half: the Tab / ⇧Tab engine (`editor.list.indent` / `outdent`,
+// wired by main.ts). No CodeMirror here, so node tests it off the source.
 //
-// Why it exists. Nesting a list was the one structural edit the editor had no gesture
-// for: Enter continues a list (`markdownKeymap`, installed by `markdown()`), ⌘B wraps a
-// word, but making `- b` a child of `- a` meant counting spaces by hand. Tab is the
-// instinct — and Tab, unbound, is the *browser's*: it walked focus out of the buffer and
-// into the next pane, which is the bug this closes.
+// Outside a list, `indentList` returns null and Tab keeps stepping focus. Inside one
+// (continuation lines and a loose list's blank interior included) Tab is claimed even
+// when nothing can move: a gesture that sometimes ejects you from the buffer is worse
+// than one that sometimes does nothing. A list behind a `> ` prefix isn't scanned here;
+// main.ts's `inListItem` claims the key there. ⌘E and ⌘1–3 still leave the editor (K1).
 //
-// **Tab keeps its own meaning outside a list.** `indentList` returns null when the
-// cursor isn't in a list item, and the binding declines, so Tab still steps the focus
-// ring everywhere else — indenting a paragraph would make a code block, which nobody
-// means by Tab. Inside a list it is claimed even when nothing can move (the first item of
-// a list has nothing to nest under, a top-level item has nothing to lift out of): a
-// gesture that sometimes ejects you from the buffer is worse than one that sometimes does
-// nothing. And "inside a list" means the whole item, not just its marker line: a caret on
-// a continuation line acts on the item the line belongs to (`owningItem`), and one on the
-// blank interior to a loose list is claimed and swallowed — both are places the caret is
-// visibly in the list, and ejecting from either would break the contract above. The one
-// list this module cannot see is a *contained* one — `> - a` is a bullet behind a
-// blockquote prefix the scanner doesn't parse — so it returns null there and main.ts's
-// `inListItem` (the syntax tree's read) keeps the key claimed. K1's promise is unaffected
-// either way — ⌘E leaves edit mode and ⌘1/⌘2/⌘3 move between panes, so the keyboard is
-// never stuck in the editor.
-//
-// What it edits, and what it leaves alone. Leading whitespace, and the digits of an
-// ordered marker. Nothing else: the bullet character is the author's (`-` vs `*` starts a
-// *different* list in CommonMark, so rewriting one would silently restructure the note),
-// and so is every byte of content. Renumbering is not a flourish — indenting `2.` out of
-// `1. 2. 3.` leaves a nested list whose first item says "2.", which renders as "2.".
+// Edits only leading whitespace and ordered-marker digits. Bullet characters are the
+// author's (`-` vs `*` starts a different list in CommonMark). Renumbering is needed:
+// a nested list whose first item says "2." renders as "2.".
 
 /** One text edit in original-document coordinates (CodeMirror's change shape). */
 export interface ListChange {
@@ -39,28 +19,24 @@ export interface ListChange {
 }
 
 /** The edits, and the selection to land on (post-edit coordinates). Empty `changes` is a
- *  claimed-but-inert gesture — see the header. */
+ *  claimed-but-inert gesture. */
 export interface ListEdit {
   changes: ListChange[];
   selFrom: number;
   selTo: number;
 }
 
-/** CommonMark §2.2: where tabs help define block structure they behave as if replaced by
- *  spaces to a tab stop of 4. Measuring follows the spec; what B2 *writes* is spaces. */
+/** CommonMark §2.2 tab stop, for measuring; B2 writes spaces. */
 const TAB_STOP = 4;
 
-/** A list item's marker, and the two columns that decide nesting. `\d{1,9}` is
- *  CommonMark's own limit on an ordered marker. */
+/** A list item's marker. `\d{1,9}` is CommonMark's limit on an ordered marker. */
 const ITEM = /^([ \t]*)(?:([-*+])|(\d{1,9})([.)]))(?:([ \t]+)|$)/;
 
-/** `* * *`, `---`, `___` — a thematic break, which the item pattern would otherwise read
- *  as a bullet whose content is more bullets. */
+/** A thematic break, which `ITEM` would otherwise read as a bullet. */
 const RULE = /^[ \t]*(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
 
-/** A heading, a fence, a quote — block starters that *interrupt* a paragraph in
- *  CommonMark. Adjacency makes plain text a lazy continuation of the item above it; one
- *  of these at column 0 is a new block instead, and never the item's to take along. */
+/** Block starters that interrupt a paragraph in CommonMark, so at column 0 they are never
+ *  a lazy continuation of the item above. */
 const INTERRUPTER = /^(?:#{1,6}(?:[ \t]|$)|```|~~~|>)/;
 
 const LEADING_WS = /^[ \t]*/;
@@ -72,9 +48,8 @@ interface Marker {
   indentLen: number;
   /** Column the item's content starts at — where a child of this item must sit. */
   content: number;
-  /** The bullet character, or the ordered delimiter — the marker's *identity*. Changing
-   *  either starts a new list in CommonMark (`1.` then `2)` is two lists, not one list of
-   *  two), which is what bounds a run of shared numbering. */
+  /** The bullet character or ordered delimiter. A change starts a new list in CommonMark,
+   *  which bounds a run of shared numbering. */
   kind: string;
   /** The ordered number and the characters spelling it; absent on a bullet. */
   num?: number;
@@ -114,9 +89,7 @@ function scan(doc: string): Ln[] {
     if (!m) {
       out.push({ from, text, blank, indent });
     } else {
-      // An unmatched group is undefined at runtime, which `RegExpExecArray`'s `string[]`
-      // index signature doesn't say — hence the explicit types rather than a destructure
-      // that would read as total.
+      // Unmatched groups are undefined at runtime, which the index signature doesn't say.
       const lead: string = m[1];
       const bullet: string | undefined = m[2];
       const digits: string | undefined = m[3];
@@ -124,15 +97,13 @@ function scan(doc: string): Ln[] {
       const gap: string | undefined = m[5];
       const markerText = bullet ?? `${digits}${delim}`;
       const afterMarker = measure(lead + markerText);
-      // CommonMark: content sits one column past the marker plus the gap — except that a
-      // gap of five or more spaces is code indentation, and an item with no content at
-      // all has no gap to measure. Both cases put the content column one past the marker.
+      // CommonMark: content starts after the gap, unless the gap is 5+ (code) or absent;
+      // then it is one past the marker.
       const gapped = gap === undefined ? afterMarker + 1 : measure(lead + markerText + gap);
       const item: Marker = {
         indent,
         indentLen: lead.length,
         content: gapped - afterMarker > 4 ? afterMarker + 1 : gapped,
-        // The alternation matched one branch or the other, so one of these is a string.
         kind: bullet ?? delim ?? "",
       };
       if (digits !== undefined) {
@@ -157,24 +128,17 @@ function lineIndexAt(lines: readonly Ln[], pos: number): number {
   return lo;
 }
 
-/** The virtual nesting level of a line — the document's own, or the one the pending edit
- *  gives it. Every structural walk reads the list through one of these, which is what
- *  lets the same code answer "who is my sibling?" before and after the move. */
+/** A line's nesting level, before or after the pending edit, so the same walks answer
+ *  "who is my sibling?" on either side of the move. */
 type Level = (i: number) => number;
 
-/** Is this line list material — an item, or an indented continuation? `blockOf`'s read,
- *  shared so the blank-line rule in `listEdit` asks the same question. */
+/** Is this line list material: an item, or an indented continuation? */
 function listish(lines: readonly Ln[], j: number): boolean {
   return lines[j].item !== undefined || (!lines[j].blank && lines[j].indent > 0);
 }
 
-/** The run of lines the list around `i` occupies: items, their indented continuations,
- *  and the single blank lines between them. Two blank lines, or an unindented paragraph,
- *  end it.
- *
- *  Bounding the walks below to a block is what keeps them honest across the whole note: a
- *  sibling search that ran to the top of the document would happily adopt an unrelated
- *  list three paragraphs up. */
+/** The run of lines the list around `i` occupies: items, continuations and single blank
+ *  lines. Bounds the walks below so they never adopt an unrelated list further up. */
 function blockOf(lines: readonly Ln[], i: number): [number, number] {
   let start = i;
   for (let j = i - 1; j >= 0; ) {
@@ -199,13 +163,9 @@ function blockOf(lines: readonly Ln[], i: number): [number, number] {
   return [start, end];
 }
 
-/** The item a non-item, non-blank line belongs to — the nearest item above it in the
- *  block, the way `parentOf` reads past a paragraph. What keeps the walk honest is the
- *  blank rule: lazy continuation reaches a column-0 line only through adjacent text, so
- *  past a blank such a line is a new paragraph and names no item. An indented line keeps
- *  its owner across a blank (a loose item's own content), and a column-0 block starter —
- *  a rule, a heading, a fence, a quote — interrupts a paragraph and is never a
- *  continuation at all. */
+/** The item a non-item, non-blank line belongs to: the nearest item above in the block.
+ *  A column-0 line past a blank is a new paragraph (lazy continuation needs adjacency),
+ *  and a column-0 block starter is never a continuation. */
 function owningItem(lines: readonly Ln[], i: number): number {
   const line = lines[i];
   if (line.indent === 0 && (RULE.test(line.text) || INTERRUPTER.test(line.text))) return -1;
@@ -217,10 +177,7 @@ function owningItem(lines: readonly Ln[], i: number): number {
   return -1;
 }
 
-/** The item directly above `i` at the same level, or -1 when `i` is the first of its run.
- *
- *  A shallower item is the parent (so there is no previous sibling), a deeper one belongs
- *  to an earlier sibling, and a paragraph at or above our level ends the run. */
+/** The item directly above `i` at the same level, or -1 when `i` is the first of its run. */
 function prevSibling(
   lines: readonly Ln[],
   level: Level,
@@ -242,7 +199,7 @@ function prevSibling(
   return -1;
 }
 
-/** The mirror of `prevSibling`, downwards — only the renumbering needs it. */
+/** The mirror of `prevSibling`, downwards. */
 function nextSibling(
   lines: readonly Ln[],
   level: Level,
@@ -264,8 +221,7 @@ function nextSibling(
   return -1;
 }
 
-/** The nearest enclosing item — what ⇧Tab lifts out to. Unlike `prevSibling` this reads
- *  past a paragraph: an item's own continuation lines sit between it and its children. */
+/** The nearest enclosing item, what ⇧Tab lifts out to. Reads past continuation lines. */
 function parentOf(
   lines: readonly Ln[],
   level: Level,
@@ -279,16 +235,8 @@ function parentOf(
   return -1;
 }
 
-/** The two sibling walks, narrowed to the same *list*.
- *
- *  A neighbour at my level is not necessarily in my list: CommonMark starts a new one at
- *  every change of marker — `1.` then `2)`, or `-` then `*` — so numbering must stop at
- *  that boundary even though the indentation doesn't.
- *
- *  Deliberately **not** what the nesting target uses. "Which item am I nested under?" is
- *  a question about columns, and `* b` landing under `- a` is the shape the author asked
- *  for by pressing Tab; "which items share my numbering?" is a question about the list,
- *  and the two answers part company exactly here. */
+/** The sibling walks narrowed to the same list (a marker change starts a new one), for
+ *  numbering. Nesting uses plain `prevSibling`: that is a question about columns. */
 function prevInRun(lines: readonly Ln[], level: Level, block: [number, number], i: number): number {
   const j = prevSibling(lines, level, block, i);
   return j >= 0 && lines[j].item?.kind === lines[i].item?.kind ? j : -1;
@@ -299,8 +247,7 @@ function nextInRun(lines: readonly Ln[], level: Level, block: [number, number], 
   return j >= 0 && lines[j].item?.kind === lines[i].item?.kind ? j : -1;
 }
 
-/** The consecutive items of `i`'s own list at `i`'s level, `i` included, in document
- *  order — the run a numbering sequence runs over. */
+/** The consecutive items of `i`'s list at `i`'s level, in document order. */
 function groupOf(
   lines: readonly Ln[],
   level: Level,
@@ -320,17 +267,14 @@ function groupOf(
 }
 
 /**
- * Indent (`dir` 1) or outdent (-1) the list item(s) the selection covers.
- *
- * Returns null when the selection touches no list item at all — the caller's cue to
- * decline the keystroke and leave Tab to the platform.
+ * Indent (`dir` 1) or outdent (-1) the list item(s) the selection covers. Null when it
+ * touches no list, so the caller leaves Tab to the platform.
  */
 function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit | null {
   const lines = scan(doc);
   const first = lineIndexAt(lines, from);
   let last = lineIndexAt(lines, to);
-  // A selection ending at column 0 stops short of that line, the way every editor's
-  // line-wise command reads it.
+  // A selection ending at column 0 stops short of that line.
   if (last > first && to === lines[last].from) last--;
 
   let head = -1;
@@ -338,16 +282,11 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
 
   const inert: ListEdit = { changes: [], selFrom: from, selTo: to };
   if (head < 0) {
-    // The selection names no marker line, but the caret can still be *in* the list — on
-    // an item's continuation line, or on the blank interior to a loose one — and Tab
-    // must not eject from either (the header's contract). A continuation acts on the
-    // item it belongs to; the blank is claimed and swallowed; anything else is not this
-    // command's key.
+    // No marker line, but the caret may still be in the list: a continuation acts on its
+    // item; a blank interior to a loose list is claimed and swallowed.
     if (lines[first].blank) {
-      // Interior means list material directly on both sides — the single blank of a
-      // loose list — with a real item above it in the block (indented code has
-      // continuations but no items). A blank above, below, or two deep in a gap is
-      // document space, and Tab moves on.
+      // Interior: list material on both sides, with a real item above in the block
+      // (indented code has continuations but no items).
       if (first === 0 || !listish(lines, first - 1)) return null;
       if (first + 1 >= lines.length || !listish(lines, first + 1)) return null;
       const [start] = blockOf(lines, first);
@@ -363,8 +302,7 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
   const block = blockOf(lines, head);
   const before: Level = (i) => lines[i].indent;
 
-  // Where the head item is going: under its previous sibling (to that item's content
-  // column, which is where CommonMark puts a child), or out to its parent's own column.
+  // Target column: the previous sibling's content column, or the parent's own column.
   let target: number;
   if (dir === 1) {
     const sib = prevSibling(lines, before, block, head);
@@ -380,9 +318,7 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
   const delta = target - item.indent;
   if (delta === 0) return inert;
 
-  // The move carries the item's own subtree with it: the lines below the selection that
-  // are indented past its last item are its children and continuations, and leaving them
-  // behind would re-parent them onto whatever the head landed beside.
+  // Carry the subtree: lines below indented past the last selected item move too.
   let tail = head;
   for (let i = head; i <= last; i++) if (lines[i].item) tail = i;
   let end = last;
@@ -392,11 +328,8 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
     end = j;
   }
 
-  // Planned per line, emitted below in one pass — a line can be both re-indented and
-  // re-numbered, and the two rewrites *touch*: they would go to CodeMirror as an
-  // insertion at the line start and a replacement starting at the same offset, whose
-  // relative order a ChangeSet does not promise. One edit over the whole prefix has no
-  // order to get wrong.
+  // Planned per line and emitted as one edit per prefix: a re-indent and a renumber would
+  // touch at one offset, and a ChangeSet doesn't promise their order.
   const wsShift: number[] = Array.from(lines, () => 0);
   const newWs: (string | undefined)[] = Array.from(lines, () => undefined);
   for (let i = head; i <= end; i++) {
@@ -408,19 +341,15 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
     wsShift[i] = next.length - oldWs.length;
   }
 
-  // The list as it will be, so the renumbering below reasons about the structure the
-  // author is about to see rather than the one they had.
+  // The list as it will be, for renumbering.
   const after: Level = (i) =>
     i >= head && i <= end && !lines[i].blank
       ? Math.max(0, lines[i].indent + delta)
       : lines[i].indent;
   const moved = (i: number): boolean => i >= head && i <= end && lines[i].item !== undefined;
 
-  // Two runs can come out mis-numbered: the one the head joined, and the one it left.
-  // `groupOf` reads them off the post-move structure; the anchors are just a line known
-  // to be in each. The head's old neighbours stay where they were, so they still name the
-  // run it left — unless the selection took them along, in which case there is no run
-  // left behind to fix.
+  // Renumber the run the head joined and the one it left (named by its old neighbours,
+  // unless they moved with it).
   const anchors = [head];
   const oldPrev = prevSibling(lines, before, block, head);
   const oldNext = nextSibling(lines, before, block, head);
@@ -465,8 +394,7 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
     const wsLen = leadingWs(lines[i].text).length;
     const off = pos - lines[i].from;
     const wsNow = wsLen + wsShift[i];
-    // A caret inside the indentation has no column of its own to keep — it rides to the
-    // front of the text. Past it, the caret keeps its distance from the content.
+    // A caret in the indentation rides to the text; past it, it keeps its offset.
     const inLine = off <= wsLen ? wsNow : Math.max(wsNow, off + shift(i));
     return lines[i].from + acc + inLine;
   };
@@ -475,16 +403,9 @@ function listEdit(doc: string, from: number, to: number, dir: 1 | -1): ListEdit 
 }
 
 /**
- * Give one run of sibling items the numbers it should carry, appending the edits.
- *
- * The start number is the author's where they chose it (a list opening at `5.` keeps
- * opening at `5.`) and 1 where the run is newly headed — an item that had a sibling above
- * it before the move and doesn't now is the first item of a list that didn't exist a
- * keystroke ago, and a list that starts at "2." renders as "2.".
- *
- * The one run left untouched is the lazy `1. 1. 1.` style, which renders identically and
- * is a deliberate way to write Markdown; nothing moved in or out of it, so nothing about
- * it is wrong.
+ * Give one run of sibling items the numbers it should carry. It keeps the author's start
+ * number, or starts at 1 when the run is newly headed. An unmoved lazy `1. 1. 1.` run is
+ * left alone.
  */
 function renumber(
   lines: readonly Ln[],
@@ -499,9 +420,7 @@ function renumber(
   const settled = !group.some(moved);
   if (settled && group.length > 1 && nums.every((n) => n === nums[0])) return;
 
-  // `prevInRun`, not `prevSibling`: "was this the head of its list?" has to ask about the
-  // list. A `5)` item under a `1.` one *is* a head — its own — and reading the neighbour
-  // above as a sibling would restart it at 1 and lose the number the author chose.
+  // `prevInRun`, not `prevSibling`: a `5)` below a `1.` heads its own list and keeps 5.
   const lead = group[0];
   const wasFirst = prevInRun(lines, before, block, lead) < 0;
   const start = wasFirst ? (nums[0] ?? 1) : 1;
@@ -521,9 +440,7 @@ export function outdentList(doc: string, from: number, to: number): ListEdit | n
   return listEdit(doc, from, to, -1);
 }
 
-/** Apply an edit to a document — the suite's mirror of what CodeMirror does with the
- *  changes, and the only honest way to assert on the Markdown that comes out. Exported
- *  for the test; the app dispatches the changes instead. */
+/** Apply changes to a document, as CodeMirror would. For the suite. */
 export function applyChanges(doc: string, changes: readonly ListChange[]): string {
   let out = "";
   let at = 0;

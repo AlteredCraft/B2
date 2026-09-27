@@ -1,13 +1,6 @@
-//! **Explain** for a *Similar & unlinked* card (GH #236): `Vault::explain_similar`, the
-//! model-free read behind the Compare view. It must describe the row the surface served,
-//! from the same numbers that ranked it, so the explanation can never disagree with the
-//! list: the same rank, the same z, the same winning passage. And it must answer for any
-//! note, not only a served one: a linked note, one past the list, one not embedded yet,
-//! each says why it is not a card.
-//!
-//! Distances need geometry, so most of these run on the hand-placed
-//! [`GeometricEmbedder`]; the fake embedder is used only to pin that a hash space is
-//! never graded.
+//! `Vault::explain_similar` (GH #236), the model-free read behind the Compare view. It uses
+//! the numbers that ranked the list, so it can never disagree with it, and says why any
+//! other note is not a card. Runs on [`GeometricEmbedder`], since distances need geometry.
 
 mod common;
 
@@ -20,8 +13,7 @@ use std::path::{Path, PathBuf};
 
 const NOISE_NOTES: usize = 13;
 
-/// anchor + mate + diffuse + a 13-note noise cloud: every anchor's pool (15) is big
-/// enough to grade.
+/// Anchor, mate, diffuse and a 13-note noise cloud: every pool (15) is big enough to grade.
 fn geometric_vault(dir: &Path) -> (Vault, PathBuf) {
     let root = dir.join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -214,9 +206,7 @@ fn shared_neighbors_are_reported_with_titles() {
 
 #[test]
 fn identical_passages_are_flagged() {
-    // The template case from a real vault: the same text in two notes shares one
-    // content-addressed vector, so the pair is a perfect match that says nothing about
-    // what the notes are about. The view must be able to say so.
+    // Shared template text is a perfect match that says nothing about the notes.
     let tmp = tempfile::TempDir::new().unwrap();
     let (v, root) = geometric_vault(tmp.path());
     fs::write(
@@ -239,10 +229,9 @@ fn identical_passages_are_flagged() {
 fn an_unembedded_candidate_says_so() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (v, root) = geometric_vault(tmp.path());
-    // Text no other note holds: vectors are content-addressed, so a copy of an existing
-    // passage would arrive already embedded.
+    // Unique text: a copied passage would arrive already embedded.
     fs::write(root.join("fresh.md"), "fresh words VEC:MATE unseen.\n").unwrap();
-    v.project(false).unwrap(); // indexed for keywords, no vectors yet
+    v.project(false).unwrap();
 
     let ex = v.explain_similar("anchor.md", "fresh.md", 10).unwrap();
     assert_eq!(ex.standing, SimilarStanding::Unembedded);
@@ -264,15 +253,13 @@ fn an_unembedded_anchor_says_so() {
 
 #[test]
 fn a_note_outside_the_stage_one_shortlist_says_so() {
-    // Stage 1 keeps max(limit × 20, 200) notes by centroid. Past that, a note is never
-    // scored at all, which is a different answer from "ranked too low".
+    // Stage 1 keeps max(limit × 20, 200) notes; past that a note is never scored.
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("vault");
     fs::create_dir_all(&root).unwrap();
     write_geometric_note(&root, "anchor.md", "DIFFUSE");
     for i in 0..205 {
-        // The N-tagged notes fan away from the DIFFUSE axis as `i` grows, so their
-        // whole-note order is their index: `n204.md` is last, at rank 205.
+        // Notes fan away from DIFFUSE as `i` grows, so `n204.md` ranks last (205).
         write_geometric_note(&root, &format!("n{i:03}.md"), &format!("N{i}"));
     }
     let v = Vault::open_with_embedder(&root, Box::new(GeometricEmbedder)).unwrap();

@@ -8,66 +8,24 @@
 //! cargo run -p b2-embed --example eval -- --stemmer  # + FTS tokenizer A/B (the #157 gate)
 //! ```
 //!
-//! Any other argument is refused (exit 1) rather than ignored: a typo'd `--swep` would
-//! otherwise score only the default config while the reader believes the A/B ran.
+//! Any other argument is refused (exit 1), so a typo'd flag can't pass for an A/B.
 //!
-//! **`docs/evals.md` is the notebook of record** — the corpus, what the exit code
-//! enforces, every verdict this harness has ruled, and the process rules. Read it before
-//! touching the corpus, the labels, or a constant here. What this comment carries is only
-//! what a reader of *this file* needs:
+//! `docs/evals.md` is the notebook of record: the corpus, what the exit code enforces, every
+//! verdict, and the process rules. Read it before touching the corpus, labels or constants.
 //!
-//! One run builds throwaway vaults from the labelled corpora in `evals/` and scores, through
-//! the real pipeline: a **BM25 baseline** (after `project` only — the floor the model must
-//! clear, since the labelled queries avoid their target's keywords); **hybrid retrieval**
-//! plus a **vector-only ablation** (GH #158), whose delta is the measured value of the one
-//! AI seam; **passage rank** at chunk level, which is where chunking levers show; and
-//! **discovery**, scored per labelled mate rather than per anchor (GH #183 — the per-anchor
-//! metric saturates), with the strangers a positive anchor serves counted, named, and
-//! deliberately ungated, since the cheapest way to shrink that count is to label one.
+//! One run builds throwaway vaults from `evals/` and scores, through the real pipeline, a
+//! BM25 baseline, hybrid retrieval plus a vector-only ablation (GH #158), passage rank, and
+//! discovery per labelled mate (GH #183). Calibration windows (the z dump, GH #187; the
+//! search evidence bake-off, ADR-0015) are re-derived every run, never quoted in code. The
+//! dense fixture (`evals/corpus-dense/`) is scored in its own vault and row, never averaged
+//! in. Candidate width is mostly out of reach at this corpus size (`pool_blind`, GH #141);
+//! `--example stability` measures it. Each run appends one line to `evals/results.jsonl`.
 //!
-//! Two calibration blocks re-derive their windows **every run** rather than quoting a
-//! reading: the discovery **z dump** (GH #187) and the **search evidence bake-off**
-//! (ADR-0015, GH #201/#202). That is the house rule — constants in code, measurements in the
-//! harness — and it exists because the GH #150 floors were frozen into a docstring and went
-//! stale the first time the corpus grew a shape they were never read against.
-//!
-//! The **dense single-domain fixture** (`evals/corpus-dense/`) is scored in its own vault
-//! and its own row, never averaged in: fifteen genuinely inter-related notes with no loner,
-//! the geometry that broke every anchor-local existence gate (ADR-0014) and killed the first
-//! lexical evidence rule (ADR-0015). The orthogonal corpus is structurally incapable of
-//! expressing topical concentration, so a run that judges a bar only there judges it on the
-//! geometry it survives.
-//!
-//! What this corpus mostly **cannot** score is *candidate width*: while its chunk count sits
-//! at or under a signal's candidate pool, that list is never truncated, widening it cannot
-//! add a candidate, and every number is invariant under that view's headroom and
-//! `search::pool_size` (GH #141). The corpus has since grown a few chunks past the narrower
-//! (passage-view) pool (GH #183), so the run reads the live counts and warns (`pool_blind`)
-//! only when blindness actually holds; the property itself is measured by
-//! `--example stability`, on a vault big enough for the pools to bind. `RRF_K` re-weights
-//! the *same* lists, so it does move scores here and needs no separate instrument.
-//!
-//! `--sweep` re-chunks + re-embeds the same vault under variant [`ChunkConfig`]s. `--stemmer`
-//! swaps `chunks_fts` between the shipped `porter unicode61` and the unstemmed ablation over
-//! **identical** chunk rows and vectors, so every rank move is the tokenizer's alone.
-//!
-//! Every scored run appends one JSON line to `evals/results.jsonl` (gitignored), so runs
-//! accumulate into a comparable dataset.
-//!
-//! This file is the run's order of operations and nothing else; each block of the report
-//! lives in the module named for it — `labels` (the sets and their lint), `retrieval`
-//! and `metrics` (the per-query passes), `discovery` (per-mate ranks, strangers, the z
-//! dump), `fold` (the GH #200 bake-off), `evidence` (the D2 bar's calibration and
-//! bake-off), `tail` (the GH #206 bake-off and its cross-bench join), `dense` (the
-//! single-domain fixture), `ablation` (`--stemmer`/`--sweep`), `report` (the default
-//! table and the JSONL row), `instrument` (the checks the numbers rest on), and `gate`
-//! (the exit gate's constants and assertions).
+//! This file is the run's order of operations; each report block lives in the module named
+//! for it.
 
-// `result_row`'s JSON literal (`report.rs`) is one `json!` expansion per key, and the row has
-// grown a key per instrument (GH #158, #141, #183, #187, #188). Raising the
-// limit keeps the row's shape legible in one place — the alternative is
-// scattering its subtrees across helper functions to satisfy a macro, which
-// costs the thing the row is for: a reader seeing every recorded field at once.
+// `result_row`'s `json!` literal (`report.rs`) outgrows the default limit; raising it keeps
+// every recorded field readable in one place.
 #![recursion_limit = "256"]
 
 mod ablation;
@@ -111,9 +69,8 @@ const K: usize = 10;
 /// How many `similar` candidates we look at per anchor.
 const SIM_K: usize = 5;
 
-/// How deep the z dump reads (GH #187) — every candidate note in a corpus this
-/// size, since a threshold is calibrated against the whole population it has to
-/// cut, not against the prefix a human-facing `limit` would show.
+/// How deep the z dump reads (GH #187): every candidate, since a threshold is calibrated
+/// against the whole population it cuts.
 const Z_SCAN_LIMIT: usize = 500;
 
 fn main() {
@@ -132,10 +89,7 @@ fn main() {
 
 /// Returns whether the default config cleared every exit-gate row ([`gate::passes`]).
 fn run() -> Result<bool, Box<dyn std::error::Error>> {
-    // A bare `--` is dropped rather than refused (`make stability`'s posture: a pasted
-    // `cargo run … -- --sweep` must not fail on its own separator); anything else
-    // unrecognised is refused, since a typo'd flag would otherwise run the default
-    // measurement while the reader believes an A/B ran.
+    // A bare `--` is dropped so a pasted `cargo run … -- --sweep` works.
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--").collect();
     reject_unknown_flags(&args, &["--sweep", "--stemmer"], &[])?;
     let sweep = has_flag(&args, "--sweep");
@@ -144,10 +98,8 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let corpus_dir = evals_dir.join("corpus");
     let results_path = evals_dir.join("results.jsonl");
 
-    // Load the labelled sets. Queries split on their labels: positives carry
-    // rank labels; an empty `relevant` is a negative query (invariants.md D2,
-    // GH #201), scored only by the search evidence calibration so its presence
-    // moves no rank aggregate.
+    // An empty `relevant` is a negative query (D2, GH #201), scored only by the search
+    // evidence calibration so it moves no rank aggregate.
     let set: QuerySet =
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("queries.json"))?)?;
     let (negatives, positives): (Vec<Labelled>, Vec<Labelled>) =
@@ -158,12 +110,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         evals_dir.join("similar-dense.json"),
     )?)?;
 
-    // Lint the labels against the corpora they claim to describe, before
-    // anything expensive runs. A typo'd label path fails nothing on its own —
-    // it just reads as a permanent miss (a rank of `None`, a served row
-    // downgraded to filler by label) and gets chased as an engine regression —
-    // so the run refuses to score against labels the corpus cannot honour
-    // (exit 1: the run broke, not the gate).
+    // A typo'd label path reads as a permanent miss, not an error, so lint first (exit 1).
     lint_labels(
         &corpus_dir,
         &evals_dir.join("corpus-dense"),
@@ -173,27 +120,22 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         &dense_set,
     )?;
 
-    // Ensure the model is available and load it — once for the whole run: both
-    // corpora's vaults share this one copy (a missing model is fetched here first).
+    // Loaded once; both corpora's vaults share it.
     let config = EmbedConfig::load()?;
     let embedder = SharedEmbedder::new(load_or_provision(&config)?);
     let model_id = embedder.model_id().to_string();
     let dim = embedder.dim();
     eprintln!("[eval] model = {model_id} (dim {dim})\n");
 
-    // A correctness gate, not a score: every number below is computed from batched
-    // embeddings, so they only mean anything if batching is faithful.
+    // Every number below comes from batched embeddings, so check batching first.
     check_batch_matches_single(&embedder)?;
 
-    // Build a throwaway vault from the corpus.
     let scratch = ScratchVault::copy_flat(&corpus_dir)?;
     let vault_root = scratch.root();
     let mut vault = Vault::open_with_embedder(vault_root, Box::new(embedder.clone()))?;
 
     // ---- Phase 1: projection only → the BM25-only baseline. ------------------
-    // The vector space does not exist yet, so `search`/`search_chunks` run
-    // keyword-only (index-engine.md) — the ablation costs nothing
-    // extra: it is the same vault, paused between the two passes.
+    // No vectors yet, so search runs keyword-only (index-engine.md).
     let report = vault.project(false)?;
     let bm25 = score_pass(&vault, &positives, Retrieval::Fused)?;
     eprintln!(
@@ -201,10 +143,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
         report.indexed
     );
 
-    // The stemmer instrument's lexical arm is scored HERE, while the vault is
-    // still projected-but-unembedded, so `search` is honestly BM25-only under
-    // both tokenizers; the vault is handed back to the shipped default before
-    // anything embeds.
+    // Scored here, before embedding, so both tokenizers are BM25-only; restored after.
     let bm25_unstemmed = if stemmer {
         vault.rebuild_fts(FtsTokenizer::Unicode61)?;
         let pass = score_pass(&vault, &positives, Retrieval::Fused)?;
@@ -219,15 +158,11 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     let vector = score_pass(&vault, &positives, Retrieval::VectorOnly)?;
     let hybrid = score_pass(&vault, &positives, Retrieval::Fused)?;
     let similar = score_similar(&vault, &sim_set)?;
-    // The fold bake-off (GH #200, Phase B) — the candidate default-disclosure
-    // rules judged on the same served lists `similar` above was scored from, so
-    // no rule is compared against a surface the others did not see.
+    // The fold bake-off (GH #200), on the same served lists as `similar`.
     let fold = score_fold(&vault, &sim_set, "orthogonal", false)?;
-    // The z calibration dump (GH #187) — the same shipped surface read deep,
-    // since the z travels ungated on it (GH #197).
+    // The z calibration dump (GH #187, #197).
     let floor_z = score_floor_z(&vault, &sim_set)?;
-    // The search evidence dump (invariants.md D2, GH #201) — the query-side
-    // sibling of the z calibration, read over the same built vault.
+    // The search evidence dump (D2, GH #201).
     let evidence = score_search_evidence(vault_root, &vault, &positives, &negatives)?;
     eprintln!(
         "[eval] embedded {chunks} chunks in {embed_secs:.1}s ({} candidates per signal at K={K}, \
@@ -241,8 +176,7 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     print_fold_bench(&fold);
     print_search_evidence(&evidence);
     print_search_bakeoff(&evidence, &bake_off(&evidence), &model_id);
-    // The per-hit tail bake-off (GH #206) — judged from the same served lists
-    // the evidence dump above recorded, against the tail_relevant keep-set.
+    // The per-hit tail bake-off (GH #206), from the evidence dump's served lists.
     let tail = score_search_tail(&evidence);
     print_search_tail(&tail);
 
@@ -279,15 +213,13 @@ fn run() -> Result<bool, Box<dyn std::error::Error>> {
     )?;
 
     // ---- Phase 3: the dense single-domain fixture (GH #196/#197, Phase 0b). --
-    // Its own throwaway vault (sharing the loaded model), its own results row (corpus
-    // id `dense`) — the fixture measures a *vault-level* geometry, so nothing
-    // about it may share state with the orthogonal corpus's run above.
+    // Its own vault and results row: it measures vault-level geometry, so it shares no
+    // state with the run above.
     let dense = score_dense(&evals_dir, &dense_set, embedder)?;
     print_dense_report(&dense);
     print_fold_bench(&dense.fold);
     append_result(&results_path, &dense_row(run_id, &dense))?;
-    // The tail bake-off's cross-bench join (GH #206) — printable only here,
-    // where both corpora's readings exist in one run.
+    // Needs both corpora's readings (GH #206).
     print_tail_join(&evidence, &tail, &dense.search.titles);
 
     // ---- Optional: the A/Bs, each against the default passes above. ----------

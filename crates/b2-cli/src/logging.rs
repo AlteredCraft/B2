@@ -1,20 +1,11 @@
 //! Opt-in structured debug logging for the CLI process.
 
-/// Opt-in structured debug logging: the kernel's `tracing` events — per-statement SQLite
-/// timings, façade-op spans, flow milestones — rendered as **JSON Lines**, one flat object
-/// per line, so a run's log pipes straight into jq/DuckDB while `--json` stdout stays pure
-/// data.
+/// The kernel's `tracing` events as JSON Lines, one flat object per line, on stderr or
+/// appended to `B2_LOG_FILE` (the pure capture: stderr can interleave notices).
 ///
-/// The sink is stderr by default; `B2_LOG_FILE=<path>` writes there instead, in **append**
-/// mode so successive runs accumulate into one dataset. A file is also the
-/// guaranteed-pure capture: stderr can interleave human notices with the JSONL.
-///
-/// `B2_LOG` holds a tracing filter directive; `B2_DEBUG` or `B2_LOG_FILE` without it
-/// implies **`b2=debug`** — the kernel's own targets only. That scoping is what keeps the
-/// dataset reportable now that a chat command links an HTTP client: `ureq` logs through
-/// the `log` bridge in a foreign shape, and a bare `debug` would fold it into the same
-/// file. Opt into the firehose with an explicit `B2_LOG=debug`. With none of the three
-/// set, no subscriber is installed and the instrumentation stays inert.
+/// `B2_LOG` is a filter directive; `B2_DEBUG` or `B2_LOG_FILE` alone implies `b2=debug`,
+/// kernel targets only, so `ureq`'s foreign-shaped `log` output stays out. With none set,
+/// no subscriber is installed.
 pub fn init_logging() {
     let log_file = std::env::var_os("B2_LOG_FILE");
     let directive = match std::env::var("B2_LOG") {
@@ -31,18 +22,15 @@ pub fn init_logging() {
     };
     let builder = tracing_subscriber::fmt()
         .json()
-        // Event fields at the top level of each object (not nested under "fields")
-        // — what makes `jq '.duration_us'`-style reporting one-liners work.
+        // Top-level fields, so `jq '.duration_us'` works.
         .flatten_event(true)
-        // Close events give each façade-op span its measured duration; the clock
-        // lives here in the adapter, keeping b2-core itself wall-clock-free.
+        // Close events time each façade-op span; the clock lives in the adapter, not b2-core.
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_current_span(true)
         .with_span_list(false)
         .with_ansi(false)
         .with_env_filter(filter);
-    // A CLI run is short-lived and single-threaded at the log site, so a plain
-    // `Mutex<File>` writer suffices — no async appender needed.
+    // A short-lived run: a plain `Mutex<File>` writer suffices.
     match log_file {
         Some(p) => match std::fs::OpenOptions::new()
             .create(true)

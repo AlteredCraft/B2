@@ -1,6 +1,4 @@
-// The install-banner gating (embedreminder.ts), pinned. Pure boolean logic — no DOM —
-// so node runs it straight off the source via its native type-stripping: `npm test`.
-// Dependency-free like newentry.test.ts (hand-rolled assert; no @types/node).
+// The install-banner gating (embedreminder.ts). Hand-rolled asserts, no @types/node.
 import {
   loadReminderOptOut,
   saveReminderOptOut,
@@ -19,8 +17,7 @@ function check(name: string, fn: () => void): void {
   console.log(`  ok  ${name}`);
 }
 
-// The fresh-install case that motivates the feature: a vault with notes is open, the
-// model isn't installed, nothing is downloading, and the user hasn't opted out.
+// The fresh-install case the banner exists for.
 const NEEDS_PROMPT: EmbedReminderInputs = {
   hasVault: true,
   semantic: false,
@@ -71,7 +68,7 @@ check("respects a dismissal (session ✕ or persisted opt-out)", () => {
 // --- the opt-out's storage ----------------------------------------------------------
 
 check("no storage at all reads as not opted out, and saving into none is not an error", () => {
-  // node has no `localStorage` — the shape of a browser refusing it in private mode.
+  // node has no `localStorage`, like a browser refusing it in private mode.
   assert(!loadReminderOptOut(), "the reminder still shows");
   saveReminderOptOut();
 });

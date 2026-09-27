@@ -1,12 +1,5 @@
-// The tree menu's two copy actions, pure half (copypath.ts). Dependency-free — node
-// runs it straight off the source: `npm test`.
-//
-// One function, and the cases are all about the seam it sits on: the vault root comes
-// from the *host* (`VaultInfo.root`, a `Path::display` of whatever `B2_VAULT_PATH`, the
-// picker, or `~/.config` handed over) while the path comes from the *index*. Neither
-// side promises the other anything about separators, so the join is the only place a
-// doubled `//` or a missing one can appear — and a wrong system path is worse than no
-// copy action, because it pastes into Finder and silently finds nothing.
+// The tree menu's copy actions (copypath.ts). The root comes from the host and the path
+// from the index, so the join is the one place a doubled or missing `/` can appear.
 
 import { systemPath } from "./copypath.ts";
 
@@ -42,9 +35,7 @@ check("a vault path becomes the absolute path under the root", () => {
 });
 
 check("a trailing slash on the root never doubles the separator", () => {
-  // `B2_VAULT_PATH=~/notes/` reaches the UI verbatim — the host resolves the root but
-  // doesn't strip it, and `/Users/me/notes//a.md` is a path Finder's Go-to-Folder
-  // tolerates and a shell script may not.
+  // `B2_VAULT_PATH=~/notes/` reaches the UI with its trailing slash.
   assertEq(systemPath("/Users/me/vault/", "a.md"), "/Users/me/vault/a.md", "one slash");
   assertEq(systemPath("/Users/me/vault//", "a.md"), "/Users/me/vault/a.md", "and several");
 });
@@ -54,14 +45,8 @@ check("a vault at the filesystem root still joins to one slash", () => {
 });
 
 check("a backslash in the root is a filename character, not a separator", () => {
-  // The case that argues against making this function platform-aware. B2 ships on macOS
-  // only (ci.yml's header: a Linux runner "would red-build on portability breaks nobody
-  // ships against"), and there the only bytes a path component may not contain are `/`
-  // and NUL — so `back\slash` is a folder someone can make in Finder today. Sniffing the
-  // root for a `\` to guess a Windows separator would read this vault as Windows-formatted
-  // and rewrite every `/` in the index key, turning a working path into one that resolves
-  // nowhere. The mixed-separator problem the sniff would solve does not exist on the
-  // platform B2 runs on; the vault it would break does.
+  // On macOS (B2's only platform, per ci.yml) `back\slash` is a legal folder name, so
+  // sniffing for a Windows separator would break a real vault.
   assertEq(
     systemPath("/Users/me/back\\slash", "projects/idea.md"),
     "/Users/me/back\\slash/projects/idea.md",
@@ -75,8 +60,7 @@ check("a backslash in the root is a filename character, not a separator", () => 
 });
 
 check("spaces and non-ASCII survive verbatim", () => {
-  // Nothing here escapes or encodes: the destination is a clipboard, not a URL, and a
-  // percent-encoded path pastes into Finder as a file that doesn't exist.
+  // A clipboard, not a URL: a percent-encoded path would find nothing in Finder.
   assertEq(
     systemPath("/Users/me/My Vault", "réunions/notes d’hier.md"),
     "/Users/me/My Vault/réunions/notes d’hier.md",
@@ -85,9 +69,7 @@ check("spaces and non-ASCII survive verbatim", () => {
 });
 
 check("an empty path is the vault root itself", () => {
-  // Not reachable from the menu today (the folder-context surface offers no copy item),
-  // but a total function is what keeps that a UI choice rather than a latent `/`-prefixed
-  // wrong answer if it ever is.
+  // Not reachable from the menu today, but the function stays total.
   assertEq(systemPath("/Users/me/vault", ""), "/Users/me/vault", "the root, unadorned");
   assertEq(systemPath("/", ""), "/", "and it stays a path when the root is /");
 });

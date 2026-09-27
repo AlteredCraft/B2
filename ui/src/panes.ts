@@ -1,17 +1,9 @@
-// Draggable column widths for the three-pane layout.
-//
-// The two side columns are resizable; the center is not — it takes whatever is left
-// (`minmax(0, 1fr)`), because the note is the reading surface and everything else is
-// chrome. Widths ride on CSS custom properties (`--tree-w` / `--side-w`) that the grid
-// reads, so a drag is one style write and never a re-render — which also means the
-// gutters must live in the shell, not inside a pane whose innerHTML `render()` swaps.
-//
-// Sizes are a viewing choice, never vault state, so they persist in localStorage and
-// never touch the host — the same shape as the appearance preference in `main.ts`. They
-// stay module-local rather than in `state.ts` for the same reason: nothing renders from
-// them, so putting them in the model would only invite a needless re-render.
+// Draggable column widths for the three-pane layout. The two side columns resize; the
+// center takes the rest. Widths are CSS custom properties (`--tree-w` / `--side-w`), so a
+// drag is one style write, never a re-render, and the gutters must live in the shell, not
+// in a pane `render()` swaps. A viewing choice, so localStorage, not vault or `state.ts`.
 
-/** Which of the two resizable columns. The center is deliberately not one of them. */
+/** Which of the two resizable columns. */
 export type Pane = "tree" | "side";
 
 /** Which panes the stylesheet is actually rendering — the breakpoints drop them. */
@@ -25,15 +17,13 @@ export interface PaneWidths {
   side: number;
 }
 
-/** Per-pane travel. Mins keep a pane useful (a tree that can't show a filename is a
- *  handle, not a pane); maxes stop one column from eating the window. */
+/** Per-pane travel: mins keep a pane useful, maxes stop one eating the window. */
 export const BOUNDS: Record<Pane, { min: number; max: number; default: number }> = {
   tree: { min: 160, max: 420, default: 240 },
   side: { min: 240, max: 560, default: 380 },
 };
 
-/** The center's floor. Below this the reading measure stops being a measure, so this is
- *  the constraint the side columns yield to — the center wins every contest. */
+/** The center's floor; the side columns yield to it. */
 export const CENTER_MIN = 360;
 
 /** Grab-strip width; must match `--gutter-w` in style.css (it's a grid track). */
@@ -41,9 +31,8 @@ export const GUTTER = 6;
 
 const KEY = "b2:panes";
 
-/** The widest `pane` may be right now: its own max, or whatever the center can spare
- *  with the *other* pane held fixed. Holding the other fixed is what makes a drag feel
- *  like a wall rather than a lever that secretly moves the far column. */
+/** The widest `pane` may be now: its max, or what the center can spare with the other pane
+ *  held fixed (so a drag never moves the far column). */
 export function ceilingFor(pane: Pane, otherW: number, avail: number, show: Shown): number {
   let room = avail - CENTER_MIN;
   if (show.tree) room -= GUTTER;
@@ -52,15 +41,11 @@ export function ceilingFor(pane: Pane, otherW: number, avail: number, show: Show
   return Math.min(BOUNDS[pane].max, room);
 }
 
-/** Settle both widths against the window. The side pane yields first, then the tree;
- *  each pane's own min outranks the center's (there is nothing useful below it, and the
- *  stylesheet's breakpoints drop a pane entirely long before it gets that tight).
- *  A pane the breakpoints have hidden reserves no room and keeps its stored width, so it
- *  comes back the size the user left it. */
+/** Settle both widths against the window. The side pane yields first, then the tree; a
+ *  pane's own min outranks the center's. A hidden pane reserves no room and keeps its
+ *  stored width. */
 export function fit(want: PaneWidths, avail: number, show: Shown): PaneWidths {
-  // Bound each pane on its own *first*: a neighbor is only ever weighed at a width it
-  // could actually occupy, so a wild stored value can't crush the other pane on its way
-  // to being capped itself.
+  // Bound each pane first, so a wild stored value can't crush its neighbor.
   const bound = (pane: Pane, w: number): number =>
     Math.min(Math.max(w, BOUNDS[pane].min), BOUNDS[pane].max);
   const settle = (pane: Pane, w: number, otherW: number): number =>
@@ -107,11 +92,8 @@ function save(w: PaneWidths): void {
 // --- the live layout ----------------------------------------------------------------
 
 /**
- * What the user *asked for* — not necessarily what's on screen. The two diverge whenever
- * the window is too narrow to honor the request, and keeping them apart is what lets a
- * pane spring back to its chosen width once the room returns: `fit()` is re-derived from
- * this on every relayout, so a squeeze is never written back over the intent. (Fold the
- * two together and the first narrow window silently becomes the new preference.)
+ * What the user asked for, not necessarily what's on screen. `fit()` re-derives from this
+ * on every relayout and never writes back, so a pane springs back once room returns.
  */
 let desired = defaults();
 
@@ -126,14 +108,9 @@ function paneEl(pane: Pane): HTMLElement | null {
 }
 
 /**
- * Which side columns the stylesheet is drawing right now — **asked, never computed**.
- *
- * The breakpoints live in style.css and nothing here knows their widths; this reads the
- * outcome. Exported because zoom is the other thing that can cross one: page zoom divides
- * the layout viewport by its scale, so a ⌘= is a window-narrowing as far as the
- * stylesheet is concerned, and `main.ts` compares this across a step to notice a column
- * the step cost. A second reader, same measurement — which is the point of it being one
- * function rather than a width each caller has to know.
+ * Which side columns the stylesheet is drawing: read, never computed, since the
+ * breakpoints live in style.css. `main.ts` also compares it across a zoom step, which can
+ * cross a breakpoint too.
  */
 export function visiblePanes(): Shown {
   return { tree: shown(paneEl("tree")), side: shown(paneEl("side")) };
@@ -155,7 +132,6 @@ export function initPanes(root: HTMLElement): void {
     root.style.setProperty("--tree-w", `${w.tree}px`);
     root.style.setProperty("--side-w", `${w.side}px`);
     for (const pane of ["tree", "side"] as const) {
-      // Report the width the user can actually see and act on, not the one we're holding.
       document.getElementById(`gutter-${pane}`)?.setAttribute("aria-valuenow", String(w[pane]));
     }
   };
@@ -163,23 +139,20 @@ export function initPanes(root: HTMLElement): void {
   desired = load();
   apply();
 
-  // The window (and the breakpoints) can invalidate a width at any time; re-deriving is
-  // the whole response. Nothing is persisted here — a temporarily-narrow window must not
-  // overwrite what the user chose.
+  // Nothing is persisted here: a narrow window must not overwrite what the user chose.
   window.addEventListener("resize", apply);
 
   for (const pane of ["tree", "side"] as const) {
     const gutter = document.getElementById(`gutter-${pane}`);
     if (!gutter) continue;
 
-    // Drag. Pointer capture keeps the stream coming when the cursor outruns the 6px
-    // strip; `is-resizing` on <body> stops the panes text-selecting under the drag.
+    // Pointer capture keeps events coming when the cursor outruns the strip; `is-resizing`
+    // stops text selection under the drag.
     gutter.addEventListener("pointerdown", (e: PointerEvent) => {
       if (e.button !== 0) return;
       e.preventDefault();
       const startX = e.clientX;
-      // Start from what's on screen, not from `desired`: grabbing a pane the window has
-      // squeezed must move it from where the user sees it, not jump to a held-back width.
+      // Start from what's on screen, not `desired`, so a squeezed pane doesn't jump.
       const start = effective();
       const startW = start[pane];
       const cap = ceilingFor(pane, pane === "tree" ? start.side : start.tree, root.clientWidth, visible());
@@ -204,16 +177,13 @@ export function initPanes(root: HTMLElement): void {
       gutter.addEventListener("pointercancel", onUp, { once: true });
     });
 
-    // Double-click restores the default — the cheap way back from a bad drag.
     gutter.addEventListener("dblclick", () => {
       desired[pane] = BOUNDS[pane].default;
       apply();
       save(desired);
     });
 
-    // Keyboard: a separator that only responds to a mouse is a separator half the
-    // people here can't move. Enter is the double-click above — the reset the drag
-    // gesture's own escape hatch offers, owed a key like every other click (K1).
+    // Keyboard access (K1); Enter is the double-click reset.
     gutter.addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -240,24 +210,17 @@ export function initPanes(root: HTMLElement): void {
 
   // --- flowing the center -----------------------------------------------------------
   //
-  // The note pane's side padding is generous by design, but at a narrow center it is
-  // just margin eating the measure. Track the pane's *own* width (not the window's — a
-  // drag can squeeze the center on a wide screen) and taper the padding as it closes in.
-  // This can't be `clamp(20px, 6%, 48px)` in CSS: the full-bleed bars cancel this padding
-  // with negative margins, and a margin % resolves against the pane's *content* box while
-  // a padding % resolves against its *grid area* — the two would disagree and the bars'
-  // dividers would stop short of the edge. A px value resolves identically for both.
+  // Taper the note pane's side padding with its own width. Not a CSS `clamp(…6%…)`: the
+  // full-bleed bars cancel this padding with negative margins, and margin % and padding %
+  // resolve against different boxes, so the bars would stop short. A px value agrees.
   const note = document.getElementById("note-pane");
   if (note && "ResizeObserver" in window) {
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        // The *border* box, not `contentRect`: content width is measured inside the very
-        // padding we're about to set, so feeding it back here would chase its own tail
-        // (each pass shrinks the pad, which widens the content, which grows the pad...).
-        // The border box is fixed by the grid track, so it's a stable input.
+        // The border box, not `contentRect`, which depends on the padding set here and
+        // would feed back on itself.
         const w = entry.borderBoxSize?.[0]?.inlineSize ?? (entry.target as HTMLElement).clientWidth;
-        // Full 48px from ~800px up (a default layout on any normal window keeps today's
-        // reading surface untouched); tapers to 20px as the center approaches its floor.
+        // 48px from ~800px up, tapering to 20px.
         const pad = Math.round(Math.min(48, Math.max(20, w * 0.06)));
         note.style.setProperty("--note-pad-x", `${pad}px`);
       }

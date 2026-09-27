@@ -1,38 +1,17 @@
-//! Vault-relative path algebra — the one place B2 spells out what a vault path is and how
-//! paths relate. A vault path is `/`-separated and relative to the vault root; it is the
-//! identity of the note or resource at it (L1, L3), so every op that validates, compares
-//! or rewrites one goes through here rather than re-deriving the rules.
-//!
-//! Three concerns: validating a user-supplied destination ([`normalize_rel`] and its
-//! folder/note variants — error-type-free, returning `Err(reason)` so each op maps it onto
-//! its own [`crate::Error`] variant); the hidden-path predicate ([`is_hidden`]); and the
-//! pure string algebra over paths that are already vault-relative ([`file_name`],
-//! [`parent_dir`], [`extension`], [`is_under`], [`rebase`], [`relativize`]).
+//! Vault-relative path algebra. A vault path is `/`-separated, relative to the root, and
+//! the identity of what it names (L1, L3), so every op validates and compares paths here.
+//! Validators return `Err(reason)` for each op to map onto its own [`crate::Error`].
 
-/// Whether this entry's *name* is dot-prefixed — the hidden-path predicate shared by the
-/// folder walk, the ingest walk, and [`normalize_rel`]. **Hidden means hidden** (GH #136):
-/// a dot-prefixed name is not vault material whatever its extension, so a `.scratch.md`
-/// is skipped exactly as `.DS_Store` is.
-///
-/// Asked of the name's **bytes**, not a decoded `&str`: `to_str` answers `None` for a name
-/// UTF-8 rejects, which would make `.draft-\xFF.md` *not hidden* and route it to the note
-/// collector, where the lossy path fails to reopen and surfaces as a bogus "file no longer
-/// exists" skip. A leading `.` is ASCII and `OsStr`'s encoding is ASCII-compatible, so the
-/// byte test is exact on every platform.
+/// Whether the entry's name is dot-prefixed, whatever its extension (GH #136). Tested on
+/// bytes, not `to_str`, so a non-UTF-8 name like `.draft-\xFF.md` is still hidden.
 pub(crate) fn is_hidden(path: &std::path::Path) -> bool {
     path.file_name()
         .is_some_and(|n| n.as_encoded_bytes().starts_with(b"."))
 }
 
-/// Normalize + validate `input` into a vault-relative path of any file kind: trim, switch
-/// backslashes to `/` (the index keeps one separator convention), and reject an empty,
-/// absolute, vault-escaping or **hidden** path, returning the reason as `Err(String)`. The
-/// extension is left exactly as given.
-///
-/// The hidden check is [`is_hidden`]'s rule over every segment, and it lives on the base
-/// validator rather than the directory variant alone (GH #136): the walk indexes no
-/// dot-prefixed member of any kind, so a destination b2 would create and then never see is
-/// a silent fs/index desync.
+/// Normalize and validate a vault-relative path: trim, `\` → `/`, and reject empty,
+/// absolute, escaping or hidden paths. Hidden is refused for every kind, since the walk
+/// would never see what b2 created (GH #136).
 pub(crate) fn normalize_rel(input: &str) -> Result<String, String> {
     let s = input.trim().replace('\\', "/");
     if s.is_empty() {
@@ -52,34 +31,27 @@ pub(crate) fn normalize_rel(input: &str) -> Result<String, String> {
     Ok(s)
 }
 
-/// Normalize + validate `input` into a vault-relative *directory* path — the
-/// folder variant of [`normalize_rel`]: same checks, plus a trailing `/` trimmed
-/// so `notes/` and `notes` name the same folder.
+/// [`normalize_rel`] for a folder: a trailing `/` is trimmed.
 pub(crate) fn normalize_rel_dir(input: &str) -> Result<String, String> {
     normalize_rel(input.trim().trim_end_matches('/'))
 }
 
-/// Normalize + validate `input` into a vault-relative `.md` path — the note
-/// variant of [`normalize_rel`]: same checks, plus `.md` appended if omitted.
+/// [`normalize_rel`] for a note: `.md` appended if omitted.
 pub(crate) fn normalize_rel_md(input: &str) -> Result<String, String> {
     let s = normalize_rel(input)?;
     Ok(if is_md(&s) { s } else { format!("{s}.md") })
 }
 
-/// A vault path's last segment — the file (or folder) name.
 pub(crate) fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// A vault path's folder: everything before the last `/`, and `""` at the vault root —
-/// the base a note-relative Markdown target is resolved and re-relativized against.
+/// A vault path's folder; `""` at the root.
 pub(crate) fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
-/// The extension of a vault path's file name, as written (case kept): the text after
-/// the name's last `.`. `None` when there is none — no `.`, a trailing `.`, or only a
-/// leading one (a dotfile's name is all stem).
+/// The file name's extension, case kept. A dotfile's name is all stem.
 pub(crate) fn extension(path: &str) -> Option<&str> {
     match file_name(path).rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => Some(ext),
@@ -87,29 +59,25 @@ pub(crate) fn extension(path: &str) -> Option<&str> {
     }
 }
 
-/// Whether a vault path names a note by its shape: its file name's extension is `md`,
-/// in any case (`Foo.MD` is a note, as the walk classifies it).
+/// Whether the extension is `md`, in any case.
 pub(crate) fn is_md(path: &str) -> bool {
     extension(path).is_some_and(|e| e.eq_ignore_ascii_case("md"))
 }
 
-/// Whether `path` lies strictly inside the folder `dir` (at any depth). A folder is not
-/// under itself, and a prefix-sharing sibling (`docs2` for `docs`) is not under it.
+/// Whether `path` lies strictly inside the folder `dir`, at any depth.
 pub(crate) fn is_under(path: &str, dir: &str) -> bool {
     path.strip_prefix(dir)
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// `path` carried by moving the folder `from` to `to`: the same place under `to`, or
-/// `None` when `path` is not under `from` ([`is_under`]).
+/// `path` after moving the folder `from` to `to`; `None` when not under `from`.
 pub(crate) fn rebase(path: &str, from: &str, to: &str) -> Option<String> {
     let rest = path.strip_prefix(from)?.strip_prefix('/')?;
     Some(format!("{to}/{rest}"))
 }
 
-/// Join a relative `target` onto `base_dir` (both vault-relative, `/`-separated),
-/// normalizing `.` and `..` segments. `None` when the target escapes the vault
-/// root — such a path can never resolve. The inverse of [`relativize`].
+/// Join a relative `target` onto `base_dir`, normalizing `.` and `..`. `None` when it
+/// escapes the vault. The inverse of [`relativize`].
 pub(crate) fn join_relative(base_dir: &str, target: &str) -> Option<String> {
     let mut segments: Vec<&str> = if base_dir.is_empty() {
         Vec::new()
@@ -128,9 +96,7 @@ pub(crate) fn join_relative(base_dir: &str, target: &str) -> Option<String> {
     (!segments.is_empty()).then(|| segments.join("/"))
 }
 
-/// The relative path from the folder `base_dir` (`""` = the vault root) to the vault
-/// path `to_path`: the shared leading folders dropped, one `..` per remaining `base_dir`
-/// segment — the inverse of resolving a note-relative Markdown target.
+/// The relative path from folder `base_dir` (`""` = root) to `to_path`.
 pub(crate) fn relativize(base_dir: &str, to_path: &str) -> String {
     let base: Vec<&str> = if base_dir.is_empty() {
         Vec::new()
@@ -155,8 +121,6 @@ mod tests {
         assert_eq!(normalize_rel_md("notes/foo.md").unwrap(), "notes/foo.md");
     }
 
-    /// An authored `.MD` is already a note path: the check is on the file name's
-    /// extension in any case, so no second `.md` is stacked on.
     #[test]
     fn an_uppercase_md_extension_is_kept_not_doubled() {
         assert_eq!(normalize_rel_md("Foo.MD").unwrap(), "Foo.MD");
@@ -253,14 +217,7 @@ mod tests {
         assert!(normalize_rel_dir("../up").is_err());
     }
 
-    /// A filename is bytes, not text. `to_str` answers `None` for a name UTF-8 rejects,
-    /// which made `.draft-\xFF.md` read as *not* hidden and routed it into the note
-    /// collector — where the lossy path names no file, so every pass reported a bogus
-    /// "file no longer exists" skip.
-    ///
-    /// Asserted on the predicate rather than through a real file on purpose: `read_dir`
-    /// can hand us any bytes the filesystem holds, but APFS refuses to *create* such a
-    /// name, so a fixture that writes one cannot run on the platform B2 ships on.
+    /// Tested on the predicate, not a real file: APFS refuses to create such a name.
     #[cfg(unix)]
     #[test]
     fn a_non_utf8_dot_prefixed_name_is_hidden() {
@@ -271,14 +228,11 @@ mod tests {
         let undecodable = |bytes: &[u8]| is_hidden(Path::new(OsStr::from_bytes(bytes)));
         assert!(undecodable(b"/vault/.draft-\xFF.md"));
         assert!(undecodable(b"/vault/.\xFF"));
-        // …and the same bytes without the leading dot stay ordinary vault material,
-        // so the fix widens what counts as hidden by exactly the leading dot.
+        // Without the leading dot, not hidden.
         assert!(!undecodable(b"/vault/draft-\xFF.md"));
     }
 
-    /// GH #136: b2 indexes no dot-prefixed member, so no authoring destination may
-    /// name one — folder, resource, or note alike. An interior dot (`a.b.md`) is
-    /// not hidden; only a *leading* one is.
+    /// GH #136. Only a leading dot hides; an interior one (`a.b.md`) does not.
     #[test]
     fn every_destination_form_refuses_a_hidden_segment() {
         assert!(normalize_rel_dir(".b2").is_err());

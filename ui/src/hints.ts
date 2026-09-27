@@ -1,21 +1,11 @@
-// The chord hints on the shell's static chrome — the top bar, the find bar, the editor's
-// Done button — as data, derived from the live keyboard.
-//
-// Why a module. Chords are rebindable (#121), so a tooltip that spells "⌘[" is wrong for
-// exactly the user who moved Back somewhere else — and the shell is painted once at boot,
-// so even a hint that *was* derived went stale on the first rebind. Everything the shell
-// says about a chord is listed here, keyed by element id, and main.ts writes it on to the
-// DOM twice: when the shell is built, and again whenever the keyboard changes
-// (`setOverrides`). The pane surfaces need no such help — render.ts derives their hints
-// from `displayKeys` on every paint.
-//
-// Pure: it reads the registry and returns strings, so node tests it off the source, and
-// hints.test.ts also scans the UI's string literals for a chord spelled by hand.
+// The chord hints on the shell's static chrome (top bar, find bar, Done), derived from the
+// live keyboard. Chords are rebindable (#121) and the shell is painted once, so main.ts
+// rewrites these by element id at boot and on every `setOverrides`. Pane hints need none
+// of this: render.ts derives them on every paint.
 
 import { displayKeys } from "./bindings.ts";
 
-/** What one element says about its chord. `title` is its tooltip; `placeholder` is the
- *  search box's in-field hint, the one control that advertises its chord that way. */
+/** What one element says about its chord: its tooltip, or the search box's placeholder. */
 export interface ChordHint {
   readonly title?: string;
   readonly placeholder?: string;
@@ -28,8 +18,7 @@ export function editDoneTitle(): string {
   ])} flushes anytime)`;
 }
 
-/** Every static shell element's chord hint, by element id. An element that isn't on
- *  screen (Done, outside the editor) is simply skipped by the painter. */
+/** Every static shell element's chord hint, by element id; the painter skips absent ones. */
 export function shellHints(): Record<string, ChordHint> {
   const search = displayKeys(["search.focus"]);
   return {
@@ -41,8 +30,7 @@ export function shellHints(): Record<string, ChordHint> {
     },
     "open-chat": { title: `Ask your notes (${displayKeys(["chat.toggle"])})` },
     "open-settings": { title: `Settings (${displayKeys(["settings.toggle"])})` },
-    // The buttons answer to the find-scope chords (rebindable) as well as to ⏎ / ⇧⏎ in
-    // the field (the text field's reflex), so both are named.
+    // Both the rebindable find-scope chords and the field's ⏎ / ⇧⏎ work, so both are named.
     "find-prev": { title: `Previous match (${displayKeys(["find.prev", "find.input.prev"])})` },
     "find-next": { title: `Next match (${displayKeys(["find.next", "find.input.next"])})` },
     "find-close": { title: `Close (${displayKeys(["dismiss"])})` },

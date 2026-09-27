@@ -1,18 +1,9 @@
-//! #18 — property tests over **generated vaults**, pinning the load-bearing invariants the
-//! golden-vault scenarios cover only pointwise:
+//! Property tests over generated vaults (GH #18): lossless round-trip, `full reindex ≡
+//! incremental` after external mutations (ADR-0002), and rename keeping every backlink
+//! resolving, with the repair in the Markdown (ADR-0003).
 //!
-//!   1. **Round-trip is lossless** — `parse -> serialize` is byte-identical for *any* text,
-//!      and the surgical edit is an exact splice that touches nothing else.
-//!   2. **`full reindex ≡ incremental`** — after any sequence of *external* vault mutations
-//!      through plain `fs`, the incrementally maintained index equals a from-scratch rebuild
-//!      (ADR-0002).
-//!   3. **Rename keeps every backlink resolving** — and the repair lives in the *Markdown*,
-//!      not just the DB. Since identity is the path (ADR-0003) the property is that the
-//!      inbound set arrives intact at the destination.
-//!
-//! **Determinism (the suite's hard rule):** the runner uses a *fixed* ChaCha seed, so every
-//! run explores the identical case sequence and a failure reproduces exactly. To explore new
-//! ground change `SEED` locally; commit any find as a regular regression test.
+//! The seed is fixed, so every run is identical. To explore, change `SEED` locally and
+//! commit any find as a regular regression test.
 
 mod common;
 
@@ -25,11 +16,10 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 32 bytes for ChaCha — the one knob that picks the (fixed) case sequence.
+/// The ChaCha seed that fixes the case sequence.
 const SEED: &[u8; 32] = b"b2-props-deterministic-seed-01!!";
 
-/// Run `cases` deterministic cases of `strategy` through `test`, panicking with the
-/// shrunken counterexample on failure (proptest's own report).
+/// Run `cases` deterministic cases, panicking with proptest's shrunken counterexample.
 fn check<S: Strategy>(
     cases: u32,
     strategy: S,
@@ -38,8 +28,7 @@ fn check<S: Strategy>(
     let mut runner = TestRunner::new_with_rng(
         Config {
             cases,
-            // Deterministic seed ⇒ nothing to persist; keeps the repo free of
-            // proptest-regressions files.
+            // A fixed seed has nothing to persist.
             failure_persistence: None,
             ..Config::default()
         },
@@ -61,8 +50,7 @@ fn any_text_round_trips_byte_identical() {
     });
 }
 
-/// `replace_body` is the byte-honest splice behind `Vault::write`: the result is
-/// exactly (everything up to the old body) + the new body, for any inputs.
+/// `replace_body`, the splice behind `Vault::write`, keeps every byte before the body.
 #[test]
 fn replace_body_splices_bytes_exactly() {
     check(512, (any::<String>(), any::<String>()), |(s, new_body)| {
@@ -93,8 +81,7 @@ struct NoteSpec {
     title: Option<String>,
     /// A frontmatter key B2 doesn't model — must survive everything verbatim.
     custom: Option<String>,
-    /// Inject lines that make the frontmatter unparseable YAML: the note must
-    /// still index, and its raw bytes must survive every pass untouched.
+    /// Make the frontmatter unparseable YAML; the note must still index, bytes untouched.
     bad_yaml: bool,
     paras: Vec<String>,
     /// Body wikilinks: (target note index (mod n), aliased?).
@@ -207,8 +194,8 @@ fn write_file(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
 }
 
-/// Render one note's raw text. Self-links are skipped (the rename property is about
-/// *inbound* repair; a self-link's semantics under `mv` is its own question).
+/// Render one note's raw text, skipping self-links (the rename property is about inbound
+/// repair).
 fn render_note(
     n: &NoteSpec,
     own_path: &str,
@@ -223,9 +210,7 @@ fn render_note(
         fm.push(format!("x_custom: {c}"));
     }
     if n.bad_yaml {
-        // A tab-key line and an unclosed flow sequence — this frontmatter will
-        // never YAML-parse, but the note must behave (it indexes, its projected
-        // fields come back empty, and its bytes are never touched).
+        // A tab-key line and an unclosed flow sequence never YAML-parse.
         fm.push("\t: :".to_string());
         fm.push("broken: [unclosed".to_string());
     }
@@ -288,10 +273,8 @@ fn render_note(
 
 // --- invariant 2: full reindex ≡ incremental ------------------------------------
 
-/// External mutations — everything through plain `fs`, never the façade's write
-/// ops, because *this* is the path the incremental reindex has to reconcile (an
-/// Obsidian edit, a `git pull`, a Finder rename). Indices are taken modulo the
-/// live file lists at apply time; an op against an empty list is a no-op.
+/// External mutations through plain `fs`, the path the incremental reindex must reconcile.
+/// Indices are taken modulo the live file lists; an op on an empty list is a no-op.
 #[derive(Debug, Clone)]
 enum Mutation {
     EditBody {
@@ -344,8 +327,7 @@ fn mutation() -> impl Strategy<Value = Mutation> {
     ]
 }
 
-/// The live vault-file bookkeeping mutations run against (paths only — content
-/// lives on disk, where the invariant says it must).
+/// The live vault's paths; content lives on disk.
 struct LiveVault {
     root: PathBuf,
     notes: Vec<String>,
@@ -423,16 +405,13 @@ fn apply(m: &Mutation, lv: &mut LiveVault) {
             fs::remove_file(lv.root.join(&lv.resources[ix])).unwrap();
             lv.resources.remove(ix);
         }
-        _ => {} // an op against an emptied list — no-op
+        _ => {}
     }
 }
 
-/// The index's *logical* content, one sorted line per row — everything the
-/// projection derives, minus what may legitimately differ between two builds of
-/// the same files: `indexed_at` (wall-clock, set DB-side), `mtime` (fs metadata,
-/// not projection output), and `chunks.id` (an internal rowid; chunks are keyed
-/// here by their identity `(note, seq)`). Vectors and centroids are included —
-/// the FakeEmbedder is content-addressed, so they too must be pure projections.
+/// The index's logical content, one line per row, minus what legitimately differs between
+/// builds: `indexed_at`, `mtime` and `chunks.id`. Vectors and centroids are included; the
+/// fake embedder is content-addressed.
 fn dump(root: &Path) -> Vec<String> {
     let conn = common::index_conn(root);
     let sections: &[(&str, &str, usize)] = &[
@@ -479,9 +458,7 @@ fn dump(root: &Path) -> Vec<String> {
     ];
     let mut out = Vec::new();
     for (section, sql, cols) in sections {
-        // The vector tables exist only once an embed pass has run (their existence
-        // is the "this vault has an embedding space" signal) — absent table,
-        // empty section.
+        // The vector tables exist only once an embed pass has run.
         let guard_table = match *section {
             "vec" => Some("embeddings"),
             "centroid" => Some("note_centroids"),
@@ -534,8 +511,7 @@ fn incremental_reindex_equals_full_rebuild() {
                 resources: spec.res_paths(),
                 minted: 0,
             };
-            // Reindex after EVERY mutation, so the incremental path is a *chain* of
-            // reconciles — the shape a live vault actually produces — not one lump.
+            // Reindex after every mutation: a chain of reconciles, as a live vault produces.
             for m in &muts {
                 apply(m, &mut lv);
                 vault.reindex().unwrap();
@@ -543,7 +519,6 @@ fn incremental_reindex_equals_full_rebuild() {
             let incremental = dump(&root);
             drop(vault);
 
-            // The index is disposable: drop it and rebuild from the same files.
             fs::remove_dir_all(root.join(".b2")).unwrap();
             let fresh = Vault::open(&root).unwrap();
             fresh.reindex().unwrap();
@@ -570,8 +545,7 @@ fn rename_keeps_every_backlink_resolving() {
 
             let paths = spec.note_paths();
             let mover_ix = mover % paths.len();
-            // Guarantee at least one inbound link, whatever the generator rolled:
-            // a neighboring note gains a body wikilink to the mover.
+            // Guarantee at least one inbound link.
             let other = &paths[(mover_ix + 1) % paths.len()];
             let other_abs = root.join(other);
             let mut other_raw = fs::read_to_string(&other_abs).unwrap();
@@ -587,14 +561,11 @@ fn rename_keeps_every_backlink_resolving() {
                 "the appended link guarantees an inbound edge"
             );
 
-            // `moved-` + an alpha-only slug can never collide with the generated
-            // files (whose names always end in a `-<counter>` suffix).
+            // Generated names end in `-<counter>`, so this can't collide.
             let dest = in_dir(dest_dir, &format!("moved-{dest_slug}.md"));
             vault.move_note(&paths[mover_ix], &dest).unwrap();
 
-            // The property, path-keyed (L1): every backlink arrives at the
-            // destination. `before` was read at the old path, so an equal set at the
-            // new one is exactly "no edge was lost, dropped, or re-pointed elsewhere".
+            // Every backlink arrives at the destination (L1).
             prop_assert_eq!(
                 &inbound(&vault, &dest),
                 &before,
@@ -606,10 +577,8 @@ fn rename_keeps_every_backlink_resolving() {
             );
             drop(vault);
 
-            // The repair must live in the Markdown, not just the DB: a fresh
-            // rebuild from the files alone sees the identical backlink set. This is
-            // the half that would fail if `move_note` had only re-keyed the index
-            // and left the inbound `[[oldpath]]` text pointing at nothing.
+            // The repair must live in the Markdown: a rebuild from the files alone sees the
+            // same backlinks.
             fs::remove_dir_all(root.join(".b2")).unwrap();
             let fresh = Vault::open(&root).unwrap();
             fresh.reindex().unwrap();

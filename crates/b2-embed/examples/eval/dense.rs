@@ -17,20 +17,15 @@ use b2_core::embed::Embedder;
 use b2_core::vault::Vault;
 use std::path::Path;
 
-/// Score the dense single-domain fixture (GH #196/#197, Phase 0b) in a throwaway
-/// vault of its own: per-mate discovery ranks against `similar-dense.json`, and
-/// the empty-pane sweep across **every** note in the fixture — not only the
-/// labelled anchors, because the assertion is about the surface ("no pane in a
-/// dense vault is dark"), not about the labels.
+/// Score the dense fixture in its own vault: per-mate ranks against `similar-dense.json`,
+/// and the empty-pane sweep over every note, since that assertion is about the surface, not
+/// the labels.
 pub fn score_dense(
     evals_dir: &Path,
     set: &SimilarSet,
     embedder: SharedEmbedder,
 ) -> Result<DensePass, Box<dyn std::error::Error>> {
     let corpus_dir = evals_dir.join("corpus-dense");
-    // The run's one loaded model, shared rather than reloaded: the fixture's whole
-    // point is an isolated run, and that isolation is the vault's — its own
-    // throwaway copy, its own index — not a second copy of the same weights.
     let model_id = embedder.model_id().to_string();
     let scratch = ScratchVault::copy_flat(&corpus_dir)?;
     let vault = Vault::open_with_embedder(scratch.root(), Box::new(embedder))?;
@@ -45,24 +40,19 @@ pub fn score_dense(
         mate_ranks: Vec::new(),
         empty_panes: Vec::new(),
         detail: Vec::new(),
-        // The bake-off's absolute bench (GH #200): every note is an anchor here,
-        // because the ruling being tested is about the *surface* — a vault where
-        // everything relates may never default to "nothing relates" — and the
-        // labels cover only a few of these notes.
+        // Every note is an anchor (GH #200): the ruling is about the surface.
         fold: score_fold(&vault, set, "dense", true)?,
-        // The bar's hardest bench, for the same reason the fold's is: this is the
-        // geometry that disqualified the rule that lost (GH #201).
+        // The geometry that disqualified the losing rule (GH #201).
         search: score_dense_search(&vault, &model_id)?,
     };
-    // The pane sweep: every note is an anchor, labelled or not.
+    // Every note is an anchor, labelled or not.
     for note in vault.list_notes()? {
         pass.notes += 1;
         if vault.similar(&note.path, SIM_K)?.is_empty() {
             pass.empty_panes.push(note.path);
         }
     }
-    // Per-mate ranks on the labelled anchors, the orthogonal corpus's metric
-    // re-used verbatim (GH #183's non-saturating readout).
+    // Per-mate ranks on the labelled anchors (GH #183).
     for label in &set.anchors {
         let candidates = vault.similar(&label.anchor, SIM_K)?;
         for expected in &label.expected {
@@ -94,82 +84,51 @@ pub struct DensePass {
     pub notes: usize,
     pub chunks: usize,
     pub embed_secs: f64,
-    /// Per-mate ranks at [`SIM_K`] — the fixture's rank metric.
+    /// Per-mate ranks at [`SIM_K`].
     pub mate: Agg,
     /// (anchor, mate, rank) per labelled mate, for the printed lines and the row.
     pub mate_ranks: Vec<(String, String, Option<usize>)>,
-    /// Notes whose discovery pane served nothing — asserted empty (GH #196/#197).
+    /// Notes whose discovery pane served nothing; asserted empty (GH #196/#197).
     pub empty_panes: Vec<String>,
     pub detail: Vec<AnchorDetail>,
-    /// The fold bake-off on this fixture (GH #200) — swept over **every** note,
-    /// which is where the candidates' hardest bench is: a rule whose default
-    /// view goes dark on a single-domain vault is disqualified, not re-tuned.
+    /// The fold bake-off over every note (GH #200): a rule whose default view goes dark here
+    /// is disqualified, not re-tuned.
     pub fold: FoldBench,
-    /// D2's shipped bar replayed on this fixture (GH #201) — see
-    /// [`score_dense_search`].
+    /// D2's shipped bar replayed on this fixture (GH #201).
     pub search: DenseSearch,
 }
 
-/// The shipped search evidence bar's reading **on the single-domain fixture** (ADR-0015).
-///
-/// This exists because the bar's first form died here and nowhere else. A hard `df <= 10%`
-/// content ceiling read 0 cut / 0 served on the labelled orthogonal corpus — clean by every
-/// number that bench can produce — and then classed `drone` (df 3) and `comb` (df 7) as
-/// stopwords in a vault about beekeeping, cutting 3 of 15 answerable queries. The lexical
-/// rule's hazard is **topical concentration**, which the orthogonal corpus cannot express, so
-/// a run that judges the bar only there judges it on the geometry it survives.
-///
-/// The reading was first taken once, by hand. Taking it *once* is the thing GH #187 named,
-/// so it is re-derived every run, here, beside the fold bench that already sweeps this
-/// fixture. **In the exit gate** since GH #202, as a row of its own rather than headroom on
-/// the labelled corpus's, because it watches a different *geometry*.
+/// The shipped search evidence bar's reading on the single-domain fixture (ADR-0015). The
+/// lexical rule's hazard is topical concentration, which the orthogonal corpus cannot
+/// express. Gated since GH #202.
 pub struct DenseSearch {
-    /// Every note's own title replayed as a query — the **tripwire direction**
-    /// (D2: a labelled-relevant query cut is zero with no headroom). Titles need
-    /// no labels and so nothing here can be relabelled to clear a reading.
+    /// Every note's title replayed as a query: the tripwire direction (D2).
     pub titles: Vec<SearchProbe>,
     /// Nonsense, the defect direction. See [`DENSE_NONSENSE`].
     pub nonsense: Vec<SearchProbe>,
-    /// `None` when the active model has no calibrated bar (M2) — the coverage
-    /// readings still print, the verdicts do not exist to print.
+    /// `None` when the model has no calibrated bar (M2); coverage still prints.
     pub bar: Option<b2_core::search::EvidenceBar>,
 }
 
-/// One query's reading on the dense fixture: the two absolute signals D2 judges,
-/// and the engine's own verdict rather than a restatement of it.
+/// One query's reading on the dense fixture: D2's two signals and the engine's verdict.
 pub struct SearchProbe {
     pub query: String,
-    /// IDF-weighted term coverage; `None` when no term carries any weight (the
-    /// lexical half abstaining, not scoring zero).
+    /// IDF-weighted term coverage; `None` when no term carries weight.
     pub coverage: Option<f64>,
     pub best_cos: Option<f64>,
-    /// `Vault::search_evidence`'s verdict — what would actually ship. `None`
-    /// mirrors [`DenseSearch::bar`].
+    /// `Vault::search_evidence`'s verdict. `None` mirrors [`DenseSearch::bar`].
     pub vouched: Option<bool>,
-    /// The served list with its per-hit provenance — the tail bake-off's dense
-    /// bench (GH #206). On a title query `keep` is true for every row **by
-    /// geometry**, not by label: a single-domain vault's lists are all real
-    /// matches, so a tail rule that truncates one is disqualified — the same
-    /// absolute GH #200 enforced for discovery, and the reason this fixture
-    /// needs no `tail_relevant` labels.
+    /// The served list, for the tail bake-off (GH #206). On a title query every row is kept
+    /// by geometry, not label, so a tail rule that truncates one is disqualified.
     pub rows: Vec<ServedRow>,
 }
 
-/// The negatives replayed on the dense fixture: **nonsense only**. The labelled negatives in
-/// `queries.json` are the *orthogonal* corpus's, and process rule 2's token audit is what
-/// makes them negatives — an audit that says nothing about a different corpus. Against
-/// `corpus-dense` the phrase-shaped ones disqualify themselves on their merits ("why parrots
-/// mimic speech" shares `mimic` with `robbing-behavior.md`, which is a thing the rule
-/// deliberately serves). Nonsense needs no audit in any vault, which is why it transfers.
+/// The negatives replayed on the dense fixture: nonsense only. `queries.json`'s negatives
+/// are audited against the orthogonal corpus and don't transfer; nonsense needs no audit.
 pub const DENSE_NONSENSE: [&str; 2] = ["shjfasd", "vrelqip zonktar wembleforth"];
 
-/// Replay the shipped bar over the dense fixture (see [`DenseSearch`]).
-///
-/// Coverage is read off [`b2_core::vault::QueryTermView::idf`] — the view's own
-/// weights, not a second copy of the formula ([`term_coverage`]). The orthogonal
-/// corpus's bake-off re-derives its arithmetic deliberately, as a drift check
-/// against the engine; one such check is the check, and a second would only be two
-/// places to fix.
+/// Replay the shipped bar over the dense fixture, reading coverage off the engine's weights
+/// ([`term_coverage`]).
 pub fn score_dense_search(
     vault: &Vault,
     model_id: &str,
@@ -195,9 +154,7 @@ pub fn score_dense_search(
     };
     let mut titles = Vec::new();
     for note in vault.list_notes()? {
-        // The fixture's notes carry no frontmatter title, so the slug is the
-        // query — `drone-comb` → "drone comb", which is the pair of words the
-        // retired ceiling called stopwords.
+        // No frontmatter titles here, so the slug is the query (`drone-comb`).
         if let Some(title) = title_query(&note) {
             titles.push(read(&title, true)?);
         }
@@ -217,12 +174,7 @@ pub fn print_dense_search(search: &DenseSearch) {
     println!(
         "  search bar  D2's shipped bar replayed on this geometry (GH #201; GATED since GH #202)"
     );
-    // The coverage reading comes FIRST, and above the bar, because it is
-    // **model-free**: a fact about this vault's vocabulary, and the lexical
-    // half's whole premise. Gating it behind a calibrated bar would print
-    // nothing at all on a vault the harness can still say something true about —
-    // the defect PR #205's review already fixed in `calibrate.rs` (c03f8cd), met
-    // again here (PR #207 review).
+    // Coverage is model-free, so it prints before, and without, a calibrated bar (PR #207).
     let covs: Vec<f64> = search.titles.iter().filter_map(|p| p.coverage).collect();
     let cov_line = match pile_stats(&covs) {
         Some((min, med, max)) => format!("{min:.2}/{med:.2}/{max:.2}"),
@@ -230,7 +182,6 @@ pub fn print_dense_search(search: &DenseSearch) {
     };
     println!("              title-as-query coverage min/med/max {cov_line}");
 
-    // Only the *verdicts* below need a bar, so only they stop here.
     let Some(bar) = search.bar else {
         println!("              no calibrated bar for this model — no verdict is offered (M2)");
         return;
@@ -274,9 +225,8 @@ pub fn print_dense_search(search: &DenseSearch) {
     );
 }
 
-/// The dense fixture's search reading as JSON (`search_transfer` in the dense
-/// row) — every probe, so any bar is re-derivable from a row without re-running
-/// the model, the `discovery_fold` convention.
+/// The dense fixture's search reading as JSON (`search_transfer`), every probe included so
+/// any bar is re-derivable without re-running the model.
 pub fn dense_search_json(search: &DenseSearch) -> serde_json::Value {
     let probes = |pile: &[SearchProbe]| {
         pile.iter()
@@ -286,9 +236,7 @@ pub fn dense_search_json(search: &DenseSearch) -> serde_json::Value {
                     "coverage": p.coverage.map(|c| (c * 1e4).round() / 1e4),
                     "best_cos": p.best_cos.map(|c| (c * 1e4).round() / 1e4),
                     "vouched": p.vouched,
-                    // NEW subkey (absent before GH #206): the served list's
-                    // per-hit provenance, so the tail constraints below are
-                    // re-derivable from a row without re-running the model.
+                    // Absent before GH #206.
                     "rows": p.rows.iter().map(|row| serde_json::json!({
                         "path": row.path,
                         "bm25_rank": row.bm25_rank,
@@ -307,8 +255,7 @@ pub fn dense_search_json(search: &DenseSearch) -> serde_json::Value {
         "nonsense_served": search.nonsense.iter().filter(|p| p.vouched == Some(true)).count(),
         "titles": probes(&search.titles),
         "nonsense": probes(&search.nonsense),
-        // NEW subkey (absent before GH #206): the per-hit tail families'
-        // dense-bench constraints — the absolute this fixture supplies.
+        // Absent before GH #206.
         "tail": dense_tail_json(&search.titles),
     })
 }
@@ -347,15 +294,12 @@ pub fn print_dense_report(dense: &DensePass) {
         );
     }
     print_dense_search(&dense.search);
-    // Model-geometry reading, not a verdict, so it prints with or without a
-    // calibrated bar — the same posture as the coverage line above it.
+    // A geometry reading, not a verdict, so it prints without a calibrated bar too.
     print_dense_tail(&dense.search.titles);
 }
 
-/// The dense fixture's own JSONL row. Tagged `"corpus": "dense"` — the key that
-/// keeps rows from ever averaging across corpora (the orthogonal rows carry
-/// `"corpus": "orthogonal"`); a smaller shape than the main row on purpose,
-/// since the fixture scores discovery alone.
+/// The dense fixture's own JSONL row, tagged `"corpus": "dense"` so rows never average
+/// across corpora.
 pub fn dense_row(run: RunId, dense: &DensePass) -> serde_json::Value {
     let RunId { git, model, dim } = run;
     let ts = unix_secs();
@@ -374,13 +318,8 @@ pub fn dense_row(run: RunId, dense: &DensePass) -> serde_json::Value {
         })).collect::<Vec<_>>(),
         "empty_panes": { "n": dense.notes, "empty": dense.empty_panes.len(), "detail": dense.empty_panes },
         "discovery_fold": fold_json(&dense.fold),
-        // NEW key (absent from rows before 2026-08-22): the shipped search bar
-        // replayed on this fixture (GH #201). Deliberately NOT the orthogonal
-        // row's `search_evidence`: that key holds the *labelled* bake-off, and
-        // this is the label-free transfer reading — a different measurement, so
-        // it takes a different name. Same convention as every key above: new,
-        // never a redefinition, so no reader has to branch on `corpus` to learn
-        // which shape it is holding (PR #207 review).
+        // Absent before 2026-08-22 (GH #201). Not named `search_evidence`: that key is the
+        // labelled bake-off, and a key is never redefined across corpora (PR #207).
         "search_transfer": dense_search_json(&dense.search),
         "similar_detail": dense.detail.iter().map(|d| serde_json::json!({
             "anchor": d.anchor,

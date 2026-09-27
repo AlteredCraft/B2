@@ -1,44 +1,31 @@
 //! Lossless note parsing and the surgical frontmatter/body splices.
 //!
-//! A note is optional YAML frontmatter followed by a Markdown body. To make
-//! `parse -> serialize -> parse` byte-identical, a [`ParsedNote`] keeps the **raw text
-//! verbatim** and records only the byte spans of the frontmatter; serialization returns
-//! the raw bytes. Every mutation here is a surgical splice performed on the human's
-//! explicit command (ADR-0004) — appending a `b2_relations:` entry, replacing the body,
-//! replacing the frontmatter block. The queryable fields come from a read-only YAML parse
-//! and are never used to re-serialize. A `b2id:` key an older B2 left behind is now an
-//! ordinary unknown key: never parsed, never rewritten, round-tripped verbatim.
+//! A [`ParsedNote`] keeps the raw text verbatim plus the frontmatter's byte spans, so
+//! serializing is byte-identical. Every mutation is a splice on an explicit command
+//! (ADR-0004). Parsed fields are read-only and never re-serialized.
 
 use crate::error::{Error, Result};
 use yaml_rust2::{Yaml, YamlLoader};
 
-/// The frontmatter fields B2 reads: the ones a reader displays (`type`, `created`,
-/// `updated`, `tags`) and B2's own `b2_relations:`. Extraction is best-effort:
-/// unparseable frontmatter still round-trips (raw is preserved); the fields just come
-/// back empty. Every other key — `title`, `description`, `aliases`, your own — is
-/// round-tripped verbatim and read by nothing (data-model.md §1).
+/// The frontmatter fields B2 reads, best-effort: unparseable YAML just yields empty
+/// fields. Every other key round-trips verbatim, read by nothing (data-model.md §1).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteFields {
     pub r#type: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
     pub tags: Vec<String>,
-    /// Raw `b2_relations:` entries (typed-link strings, §2) — B2's namespaced
-    /// frontmatter home for typed edges, the only place a verb/explanation lives.
-    /// Parsed into `origin=frontmatter` edges at ingest. (A generic `relations:`
-    /// key is NOT read — it is another tool's, preserved verbatim like any
-    /// unknown key; data-model §1.)
+    /// Raw `b2_relations:` entries (§2), the only home of typed edges. A generic
+    /// `relations:` key is another tool's and is not read (data-model §1).
     pub relations: Vec<String>,
 }
 
 /// Byte spans of a frontmatter block within the raw text (fences excluded).
 #[derive(Debug, Clone, Copy)]
 struct Frontmatter {
-    /// First byte of the YAML content (right after the opening `---` line).
     content_start: usize,
-    /// First byte of the closing `---` line (YAML content ends here).
+    /// First byte of the closing `---` line.
     content_end: usize,
-    /// First byte of the body (right after the closing `---` line's newline).
     body_start: usize,
 }
 
@@ -51,8 +38,7 @@ pub struct ParsedNote {
     fm_readable: bool,
 }
 
-/// Parse `raw` into a [`ParsedNote`]. Never fails: text with no/!invalid
-/// frontmatter is still represented (and still round-trips).
+/// Parse `raw` into a [`ParsedNote`]. Never fails: invalid frontmatter still round-trips.
 pub fn parse(raw: &str) -> ParsedNote {
     let fm = detect_frontmatter(raw);
     let (fields, fm_readable) = match &fm {
@@ -68,19 +54,16 @@ pub fn parse(raw: &str) -> ParsedNote {
 }
 
 impl ParsedNote {
-    /// The note serialized — byte-identical to what was parsed, plus whatever
-    /// splice the caller asked for.
+    /// The note serialized: the parsed bytes plus any splices.
     pub fn as_str(&self) -> &str {
         &self.raw
     }
 
-    /// The extracted, queryable frontmatter fields.
     pub fn fields(&self) -> &NoteFields {
         &self.fields
     }
 
-    /// The body (everything after the frontmatter; the whole text if there is
-    /// none). This is what gets hashed and, later, chunked.
+    /// Everything after the frontmatter: what gets hashed and chunked.
     pub fn body(&self) -> &str {
         match &self.fm {
             Some(f) => &self.raw[f.body_start..],
@@ -88,32 +71,20 @@ impl ParsedNote {
         }
     }
 
-    /// The raw frontmatter YAML **verbatim** — the text between the `---` fences
-    /// (fences excluded), exactly as on disk — or `None` when the note has no
-    /// frontmatter block. Byte-honest like [`body`](Self::body): the actual bytes,
-    /// not a re-serialization of the parsed [`fields`](Self::fields), so keys B2
-    /// doesn't model (`b2_relations:`, `aliases:`, custom keys) show as written. Powers
-    /// the Desktop UI's frontmatter drawer (crates/b2-desktop/CLAUDE.md).
+    /// The frontmatter YAML verbatim, fences excluded, or `None` with no block. Feeds the
+    /// desktop's frontmatter drawer.
     pub fn frontmatter(&self) -> Option<&str> {
         self.fm.map(|f| &self.raw[f.content_start..f.content_end])
     }
 
-    /// Whether the frontmatter block reads as YAML metadata: `true` for no block, an
-    /// empty one, or one that parses to a key/value mapping; `false` when it is malformed
-    /// or isn't a mapping — the raw bytes still round-trip verbatim, but
-    /// [`fields`](Self::fields) came back empty-handed. Surfaced so an adapter can warn
-    /// rather than silently show blank metadata (GH #79); never a block, since the bytes
-    /// stay the human's to fix.
+    /// Whether the frontmatter reads as a YAML mapping (or is absent/empty). `false` means
+    /// [`fields`](Self::fields) came back empty, so an adapter can warn (GH #79).
     pub fn frontmatter_readable(&self) -> bool {
         self.fm_readable
     }
 
-    /// Replace the note's **body** with `new_body`, verbatim — the byte-honest
-    /// splice behind `Vault::write`. Everything up to
-    /// `body_start` (the frontmatter block and its fences — every byte, including
-    /// keys B2 doesn't model) is preserved *by construction*; a note with no
-    /// frontmatter is replaced wholesale (its body **is** the file). No newline
-    /// normalization or trimming: the editor buffer is the user's text.
+    /// Replace the body with `new_body` verbatim (`Vault::write`). The frontmatter block is
+    /// preserved byte for byte. No newline normalization: the buffer is the user's text.
     pub fn replace_body(&mut self, new_body: &str) {
         match self.fm {
             Some(f) => {
@@ -125,21 +96,13 @@ impl ParsedNote {
                 self.raw.push_str(new_body);
             }
         }
-        // Re-derive spans + fields from the mutated text so state stays exact
-        // (the same discipline as add_relation/replace_frontmatter; a body could even
-        // introduce a frontmatter block if it starts with `---`).
+        // A body starting with `---` could even introduce a frontmatter block.
         self.reparse();
     }
 
-    /// Replace the note's **frontmatter YAML** with `new_yaml`, verbatim — the byte-honest
-    /// splice behind `Vault::write_frontmatter` (GH #79). Only the bytes between the
-    /// fences change; the fences and every body byte are preserved by construction. A note
-    /// with no frontmatter gains a block; an empty `new_yaml` removes the block entirely,
-    /// exactly as a hand-edit deleting it would. The one mechanical touch: a non-empty
-    /// `new_yaml` missing its final newline gains one.
-    ///
-    /// A `new_yaml` containing a top-level `---` line would end the block early and shift
-    /// the following bytes into the body; the façade op refuses that input before splicing.
+    /// Replace the frontmatter YAML with `new_yaml` verbatim (`Vault::write_frontmatter`,
+    /// GH #79). No block gains one; empty `new_yaml` removes it. A missing final newline is
+    /// added. The façade refuses a top-level `---` line, which would end the block early.
     pub fn replace_frontmatter(&mut self, new_yaml: &str) {
         let mut block = new_yaml.to_string();
         if !block.is_empty() && !block.ends_with('\n') {
@@ -156,12 +119,9 @@ impl ParsedNote {
         self.reparse();
     }
 
-    /// Append a typed-link `spec` (e.g. `contradicts [[path|title]] — why`) to the
-    /// frontmatter `b2_relations:` list, creating the block (or the whole frontmatter)
-    /// if absent. **Frontmatter only — never the body** (data-model §0). The single
-    /// surgical insertion preserves every other byte; the new item is YAML-quoted so
-    /// `[[`, `|`, `:` are safe. Errors on a pre-existing flow-style `b2_relations:`
-    /// rather than risk corrupting it.
+    /// Append a typed-link `spec` to `b2_relations:`, creating the list or block if absent.
+    /// Frontmatter only, never the body (data-model §0). Errors on a flow-style list rather
+    /// than risk corrupting it.
     pub fn add_relation(&mut self, spec: &str) -> Result<()> {
         let quoted = yaml_quote(spec);
         match self.fm {
@@ -180,8 +140,7 @@ impl ParsedNote {
         Ok(())
     }
 
-    /// Re-derive spans + fields + readability from the mutated `raw` so state
-    /// stays exact — every mutator's closing step.
+    /// Re-derive state from the mutated `raw`; every mutator's last step.
     fn reparse(&mut self) {
         let reparsed = parse(&self.raw);
         self.fm = reparsed.fm;
@@ -190,9 +149,7 @@ impl ParsedNote {
     }
 }
 
-/// Locate a frontmatter block: an opening `---` line at the very top and the next
-/// `---` line. Returns `None` if the first line isn't `---` or no closing fence is
-/// found (in which case the whole text is body).
+/// Locate a frontmatter block: `---` as the first line, up to the next `---` line.
 fn detect_frontmatter(raw: &str) -> Option<Frontmatter> {
     let first_nl = raw.find('\n')?;
     if raw[..first_nl].trim_end_matches('\r') != "---" {
@@ -229,12 +186,8 @@ fn detect_frontmatter(raw: &str) -> Option<Frontmatter> {
     }
 }
 
-/// Extract the projected fields from a frontmatter region, plus whether the
-/// region *read* as YAML metadata (the [`ParsedNote::frontmatter_readable`]
-/// flag): `true` for an empty/comments-only block (nothing to read, nothing
-/// wrong) or a key/value mapping; `false` when the YAML fails to parse or parses
-/// to a non-mapping (a bare scalar, a list) — the fields then come back empty
-/// while the raw bytes stay the human's to fix.
+/// Extract the fields from a frontmatter region, plus
+/// [`ParsedNote::frontmatter_readable`].
 fn extract_fields(yaml: &str) -> (NoteFields, bool) {
     let mut f = NoteFields::default();
     let mut readable = false;
@@ -251,17 +204,10 @@ fn extract_fields(yaml: &str) -> (NoteFields, bool) {
             }
         }
     }
-    // GH #75's raw `b2id:` line scan lived here: stamping was gated on the id being
-    // *definitively* absent, and a parse failure reading as "absent" made ingest
-    // stamp a fresh line on every pass — the file grew forever and the note's
-    // identity churned. With nothing stamped (GH #170) there is no write to gate, so
-    // malformed frontmatter now costs exactly what it should: empty projected fields,
-    // raw bytes untouched, and a warning through `frontmatter_readable`.
     (f, readable)
 }
 
-/// Read a scalar as text, tolerating YAML that typed it as a number/bool (e.g. a
-/// date-looking `created:` or a numeric value).
+/// A scalar as text, even when YAML typed it as a number or bool.
 fn scalar_to_string(y: &Yaml) -> Option<String> {
     match y {
         Yaml::String(s) => Some(s.clone()),
@@ -272,7 +218,6 @@ fn scalar_to_string(y: &Yaml) -> Option<String> {
     }
 }
 
-/// Read a YAML sequence of strings; empty for a missing key or a non-sequence.
 fn string_list(y: &Yaml) -> Vec<String> {
     match y.as_vec() {
         Some(items) => items
@@ -283,11 +228,8 @@ fn string_list(y: &Yaml) -> Vec<String> {
     }
 }
 
-/// Locate where to insert a new `b2_relations:` block item, scanning the frontmatter
-/// region. Returns `Some((byte_offset, indent))` to insert `"{indent}- …\n"` (the
-/// indent matches existing items, or 2 spaces for a fresh/empty block), or `None`
-/// if there is no `b2_relations:` key (the caller then creates one). Errors on a
-/// flow-style `b2_relations:` (e.g. `b2_relations: [a, b]`) — not safely appendable.
+/// Where to insert a new `b2_relations:` item: `Some((offset, indent))`, or `None` with no
+/// key. Errors on a flow-style value, which isn't safely appendable.
 fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, String)>> {
     let region = &raw[fm.content_start..fm.content_end];
     let mut pos = fm.content_start;
@@ -303,7 +245,7 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
         if !in_block {
             if body == "b2_relations:" {
                 in_block = true;
-                insert_at = Some(pos + len); // after the key line (updated as items appear)
+                insert_at = Some(pos + len);
             } else if !line.starts_with([' ', '\t']) && stripped.starts_with("b2_relations:") {
                 return Err(Error::Frontmatter(
                     "a flow-style `b2_relations:` value cannot be appended in place".into(),
@@ -311,7 +253,7 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
             }
         } else if stripped.starts_with('-') {
             indent = body[..body.len() - stripped.len()].to_string();
-            insert_at = Some(pos + len); // after the latest item
+            insert_at = Some(pos + len);
         } else if !stripped.is_empty() {
             in_block = false; // a new key ends the block
         }
@@ -320,12 +262,8 @@ fn relations_insertion(raw: &str, fm: &Frontmatter) -> Result<Option<(usize, Str
     Ok(insert_at.map(|at| (at, indent)))
 }
 
-/// A note's **display title — its filename** (data-model.md §1). The filename *is*
-/// the title: a frontmatter `title:` key is recognized but carries no special
-/// meaning, so the title is a pure function of the note's vault-relative,
-/// `/`-separated `path` — its base name with a trailing `.md` (any case) removed
-/// (`notes/spaced-repetition.md` → `spaced-repetition`). A name that is only an
-/// extension (`.md`) or carries a non-`.md` extension is returned whole.
+/// A note's display title: its filename without `.md` (data-model.md §1). A frontmatter
+/// `title:` means nothing.
 pub fn display_title(path: &str) -> String {
     let name = crate::pathspec::file_name(path);
     match name.get(..name.len().saturating_sub(".md".len())) {
@@ -334,10 +272,7 @@ pub fn display_title(path: &str) -> String {
     }
 }
 
-/// YAML double-quote a string (escaping `\` and `"`), so a value with `[[`, `|`,
-/// `:` (a typed-link spec, or a new note's `title`) is always a safe scalar.
-/// `pub(crate)` so [`crate::add`] renders a new note's frontmatter with the same
-/// quoting the relation-append path uses.
+/// YAML double-quote a string, so `[[`, `|` and `:` are safe. Shared with [`crate::add`].
 pub(crate) fn yaml_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -350,9 +285,6 @@ mod tests {
     fn frontmatter_returns_raw_yaml_verbatim_between_the_fences() {
         let raw = "---\nb2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n---\nbody\n";
         let note = parse(raw);
-        // The exact bytes on disk, not a re-serialization — `b2_relations:` (a key
-        // the projected fields flatten) survives verbatim, and so does the legacy
-        // `b2id:` line, which since GH #170 is an unknown key like any other.
         assert_eq!(
             note.frontmatter(),
             Some("b2id: 01ABC\ntitle: Foo\nb2_relations:\n  - references [[x]]\n")
@@ -360,16 +292,13 @@ mod tests {
         assert_eq!(note.body(), "body\n");
     }
 
-    /// A vault indexed by an older B2 still has `b2id:` lines in it, and W5 is the
-    /// whole migration story: the key is not read, not rewritten, not removed —
-    /// which is what makes "delete `.b2/` and reindex" a complete upgrade.
+    /// Legacy `b2id:` lines are never read or rewritten (W5, GH #170).
     #[test]
     fn a_legacy_b2id_line_is_an_ordinary_unknown_key() {
         let raw = "---\nb2id: 01JMEM0000000000000000000A\ntype: concept\n---\nThe body.\n";
         let mut note = parse(raw);
         assert_eq!(note.as_str(), raw, "round-trips byte-identically");
         assert_eq!(note.fields().r#type.as_deref(), Some("concept"));
-        // A body save splices only the body, so the line survives that too.
         note.replace_body("Rewritten.\n");
         assert_eq!(
             note.as_str(),
@@ -385,20 +314,15 @@ mod tests {
 
     #[test]
     fn frontmatter_is_some_empty_for_an_empty_block() {
-        // Fences with nothing between them: the block exists (Some) but is empty —
-        // distinct from no frontmatter at all (None).
         let note = parse("---\n---\nbody\n");
         assert_eq!(note.frontmatter(), Some(""));
     }
 
     #[test]
     fn frontmatter_readable_reflects_whether_the_yaml_reads_as_metadata() {
-        // No block, an empty block, and a mapping all read fine.
         assert!(parse("just a body\n").frontmatter_readable());
         assert!(parse("---\n---\nbody\n").frontmatter_readable());
         assert!(parse("---\ntitle: X\ntags: [x]\n---\nbody\n").frontmatter_readable());
-        // Malformed YAML and a non-mapping block don't — the fields come back
-        // empty while the bytes round-trip, so the human should be told.
         let broken = parse("---\ntitle: \"unclosed\ntags: [a\n---\nbody\n");
         assert!(!broken.frontmatter_readable());
         assert_eq!(broken.frontmatter(), Some("title: \"unclosed\ntags: [a\n"));
@@ -419,8 +343,7 @@ mod tests {
 
     #[test]
     fn replace_frontmatter_adds_the_missing_final_newline() {
-        // The one mechanical touch: without it the closing fence would join the
-        // last YAML line and the block would never close.
+        // Otherwise the closing fence would join the last YAML line.
         let mut note = parse("---\nb2id: 01A\n---\nbody\n");
         note.replace_frontmatter("b2id: 01A\ntitle: X");
         assert_eq!(note.as_str(), "---\nb2id: 01A\ntitle: X\n---\nbody\n");
@@ -428,11 +351,9 @@ mod tests {
 
     #[test]
     fn replace_frontmatter_creates_and_removes_the_block() {
-        // No block + non-empty YAML → fences created around it.
         let mut note = parse("only a body\n");
         note.replace_frontmatter("b2id: 01A\n");
         assert_eq!(note.as_str(), "---\nb2id: 01A\n---\nonly a body\n");
-        // Non-empty → empty removes the block entirely, fences included.
         note.replace_frontmatter("");
         assert_eq!(note.as_str(), "only a body\n");
         assert_eq!(note.frontmatter(), None);
@@ -445,12 +366,9 @@ mod tests {
             "spaced-repetition"
         );
         assert_eq!(display_title("memory.md"), "memory");
-        // Case-insensitive extension; nested folders drop away.
         assert_eq!(display_title("a/b/Read Me.MD"), "Read Me");
-        // A dotted stem keeps every dot but the extension.
         assert_eq!(display_title("notes/2026.07.14-log.md"), "2026.07.14-log");
-        // Non-`.md` or extension-only names are returned whole (never used for a
-        // real note, but the helper must not mangle them).
+        // Returned whole.
         assert_eq!(display_title("data.csv"), "data.csv");
         assert_eq!(display_title(".md"), ".md");
     }

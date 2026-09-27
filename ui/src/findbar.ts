@@ -1,8 +1,6 @@
-// Find-in-note (⌘F) — the pure logic. Match scanning, active-match stepping, and the
-// flat-offset → text-node mapping the reading view needs to build DOM Ranges. No DOM
-// and no CodeMirror here: main.ts adapts these over whichever surface is showing
-// (rendered Markdown via the CSS Custom Highlight API, or the editor via decorations),
-// the same pure-module/adapter split as format.ts and wikicomplete.ts.
+// Find-in-note (⌘F), the pure logic: match scanning, active-match stepping, and the
+// flat-offset → text-node mapping for DOM Ranges. main.ts adapts it to the reading view
+// (CSS Custom Highlight API) or the editor (decorations).
 
 /** One match, as flat text offsets — the same shape for both surfaces. */
 export type Match = { from: number; to: number };
@@ -11,15 +9,13 @@ export type Match = { from: number; to: number };
 export const FIND_CAP = 1000;
 
 /**
- * Every occurrence of `query` in `text`: literal (metacharacters find themselves),
- * case-insensitive, non-overlapping, capped at `cap`. An empty query matches nothing —
- * the bar treats "" as "no search", never "match everything".
+ * Every occurrence of `query` in `text`: literal, case-insensitive, non-overlapping, capped
+ * at `cap`. An empty query matches nothing.
  */
 export function findMatches(text: string, query: string, cap = FIND_CAP): Match[] {
   const out: Match[] = [];
   if (!query) return out;
-  // A regex with the `i` flag folds case without re-writing the haystack, so offsets
-  // are honest even where `toLowerCase()` would change a string's length (İ → i̇).
+  // The `i` flag keeps offsets honest where `toLowerCase()` would change length (İ → i̇).
   const literal = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
   let m: RegExpExecArray | null;
   while (out.length < cap && (m = literal.exec(text)) !== null) {
@@ -35,9 +31,8 @@ export function stepActive(count: number, active: number, delta: 1 | -1): number
 }
 
 /**
- * Re-anchor the active match after the set changes (a query keystroke, a doc edit):
- * the first match at-or-after `pos`, else the last one, else -1. Keeps "next" moving
- * forward from where the user was instead of snapping back to the top of the note.
+ * Re-anchor the active match after the set changes: the first match at or after `pos`,
+ * else the last one, else -1, so "next" doesn't snap back to the top.
  */
 export function activeAfter(matches: Match[], pos: number): number {
   if (matches.length === 0) return -1;
@@ -52,10 +47,9 @@ export function countLabel(count: number, active: number, capped = false): strin
 }
 
 /**
- * Map a flat offset into (text-node index, offset within it), given the nodes' text
- * lengths in document order. `bias` settles boundary offsets — a Range *start* opens
- * the next node, a Range *end* closes the previous one — so a match's endpoints always
- * land inside the nodes that actually hold its characters. Out-of-range clamps.
+ * Map a flat offset to (text-node index, offset within it), given the nodes' lengths. At a
+ * boundary, a `start` opens the next node and an `end` closes the previous one, so a match
+ * lands in the nodes holding its characters. Out-of-range clamps.
  */
 export function locate(
   segLengths: number[],

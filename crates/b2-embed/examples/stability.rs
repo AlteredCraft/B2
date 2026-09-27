@@ -1,29 +1,16 @@
-//! Rank-stability probe — the **large-corpus** half of the eval harness (GH #141).
+//! Rank-stability probe: the large-corpus half of the eval harness (GH #141).
 //!
-//! The scored eval's corpus is barely bigger than the candidate pools each signal retrieves
-//! (since GH #183 it crosses the narrower passage-view pool by a few chunks; the note view's
-//! not at all) — so at that scale a pool is scarcely ever truncated, widening it can add
-//! almost nothing, and candidate-width changes are mostly **invisible** there. A change to a
-//! hit pool or to `search::pool_size` reads as "no change" on the eval while genuinely
-//! reordering a real vault: GH #140's 3x widening moved 5 of 7 probe top-10s on
-//! `fixtures/test-vault` and printed bit-identical eval numbers. This probe priced that, and
-//! GH #142 reverted on the strength of it. Width is the whole of the gap — `RRF_K`
-//! re-weights the *same* lists, which the scored eval already sees.
+//! The scored eval's corpus is too small for candidate pools to truncate, so candidate-width
+//! changes are invisible there. This runs on a vault big enough for the pool to bind and
+//! reports:
 //!
-//! It runs on a vault big enough for the pool to **bind** (~200 notes / ~790 chunks) and
-//! reports two things:
+//! 1. **Pool sensitivity**: the same query asked at several depths, hence pool widths. RRF
+//!    over a wider pool need not keep the shallow answer as a prefix; how often it breaks is
+//!    what candidate width is worth here.
+//! 2. **Baseline drift**: the shipped top-K against the committed baseline. `--bless`
+//!    accepts it.
 //!
-//! 1. **Pool sensitivity** — retrieval width is a function of the ask, so asking the same
-//!    query at several depths asks it at several pool widths. A pool-invariant retriever
-//!    would answer a shallow ask with an exact prefix of the deep one; RRF over a widened
-//!    pool does not, because a candidate ranked in *both* lists can outscore one ranked top
-//!    of a single list (`2/121 > 1/61` at k = 60). How often the prefix breaks is how much
-//!    candidate width is worth on this vault.
-//! 2. **Baseline drift** — the shipped top-K against the committed baseline, so any future
-//!    ranking change is visible as movement rather than inferred. `--bless` accepts it.
-//!
-//! The corpus is **unlabelled**: this scores no relevance and never says *better*, only
-//! *different, and by how much*.
+//! The corpus is unlabelled: this says different, never better.
 //!
 //! ```console
 //! cargo run -p b2-embed --example stability             # the probe (fake embedder)
@@ -33,19 +20,11 @@
 //! cargo run -p b2-embed --example stability -- --vault path/to/vault
 //! ```
 //!
-//! **Why the fake embedder by default.** It is deterministic, so the committed baseline means
-//! the same thing on every machine — a real-model baseline would be device-specific
-//! (ADR-0007) and could not be committed. The cost is that fake vector ranking is
-//! uncorrelated with BM25, which *exaggerates* how much a pool change moves results; use
-//! `--model` when the real magnitude is what the decision needs.
+//! The fake embedder is the default because it is deterministic, so the baseline can be
+//! committed (a real-model one is device-specific, ADR-0007). It exaggerates pool effects;
+//! use `--model` for real magnitudes.
 //!
-//! **The control experiment:** `--vault crates/b2-embed/evals/corpus` runs the same probe on
-//! the eval corpus, where every prefix holds at every depth — that *is* #141: not stability,
-//! blindness.
-//!
-//! Never a gate, and drift is not failure: a knob change is *supposed* to move ranking, and
-//! an unlabelled corpus cannot say whether it improved. Exit status is 0 for any completed
-//! measurement.
+//! Never a gate: exit status is 0 for any completed measurement.
 
 mod common;
 
@@ -61,24 +40,16 @@ use std::time::Instant;
 
 /// The vault the committed baseline is defined over, relative to the repo root.
 const DEFAULT_VAULT: &str = "fixtures/test-vault";
-/// The depths each probe is asked at; each widens the pool it retrieves from, by view since
-/// #142, and the table prints each column's own widths.
-///
-/// The first pair is what settled #142: at a 10-result ask the passage view's shipped 3x
-/// headroom retrieved 150 candidates per signal against the conservative `limit + 2`'s 60 —
-/// the same step measured here between depths 4 and 10 under the note view's 3x. It moved 10
-/// of 10 probes' top-4 passages: real movement, unpriced by any relevance eval.
+/// The depths each probe is asked at; each widens the pool it retrieves from (GH #142).
 const DEPTHS: [usize; 3] = [4, 10, 30];
-/// How deep a prefix the depths are compared over — capped by the shallowest ask.
+/// How deep a prefix the depths are compared over, capped by the shallowest ask.
 const PREFIX: usize = DEPTHS[0];
 /// The depth the committed baseline records: what an adapter's default search shows.
 const BASELINE_K: usize = DEPTHS[1];
 /// How much of a chunk's text goes into its baseline key (see [`chunk_key`]).
 const KEY_CHARS: usize = 48;
-/// Report column widths: the probe text, then one column per compared view.
 const PROBE_COL: usize = 44;
 const CELL_COL: usize = 26;
-/// Every flag this probe takes; anything else is refused rather than ignored.
 const KNOWN_FLAGS: [&str; 4] = ["--bless", "--model", "--verbose", "--vault"];
 
 /// The hand-authored probe set (`evals/stability.json`) — plain queries, no labels.
@@ -90,13 +61,12 @@ struct ProbeSet {
 /// The committed ranking snapshot (`evals/stability-baseline.json`).
 #[derive(Serialize, Deserialize)]
 struct Baseline {
-    /// Kept in the file so the artifact explains itself where it is read.
     #[serde(rename = "_note")]
     note: String,
     vault: String,
     embedder: String,
     k: usize,
-    /// The commit the snapshot was blessed at, best-effort (`None` outside a checkout).
+    /// The commit the snapshot was blessed at, best-effort.
     blessed_at: Option<String>,
     probes: Vec<BaselineProbe>,
 }
@@ -108,8 +78,7 @@ struct BaselineProbe {
     chunks: Vec<String>,
 }
 
-/// One probe's answer at one depth: the ranked note paths (`Vault::search`) and the
-/// ranked chunk keys (`Vault::search_chunks`).
+/// One probe's answer at one depth: ranked note paths and chunk keys.
 struct Answer {
     notes: Vec<String>,
     chunks: Vec<String>,
@@ -123,11 +92,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // A bare `--` is dropped, not parsed, defensively. `make stability ARGS=--verbose`
-    // needs no `--` of its own (`cargo run ... -- $(ARGS)` already supplies the one
-    // separator), but the habit of typing one anyway — e.g. pasting a raw
-    // `cargo run ... -- --verbose` invocation into ARGS — is common enough that the
-    // example should not reject its own documented usage on a literal `--`.
+    // A bare `--` is dropped so a pasted `cargo run ... -- --verbose` in ARGS still works.
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--").collect();
     let bless = has_flag(&args, "--bless");
     let real_model = has_flag(&args, "--model");
@@ -135,9 +100,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let vault_arg = flag_value(&args, "--vault")?;
     reject_unknown_flags(&args, &KNOWN_FLAGS, &["--vault"])?;
 
-    // A baseline is a *deterministic* artifact over a *committed* vault; blessing
-    // one from a real-model run or a private vault would commit a number nobody
-    // else can reproduce.
+    // A baseline must be reproducible: fake embedder, committed vault.
     if bless && real_model {
         return Err("--bless needs the deterministic fake embedder; drop --model".into());
     }
@@ -163,10 +126,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("stability.json lists no probes".into());
     }
 
-    // Work on a throwaway copy: indexing writes `.b2/`, and the committed fixtures
-    // are never ours to mutate — the same isolation the integration tests and
-    // `make compare-device` use. (Indexing no longer writes to the vault itself at
-    // all — W1, GH #170 — so the copy is now about `.b2/` alone.)
+    // A throwaway copy, since indexing writes `.b2/` into the committed fixture.
     let tmp = tempfile::TempDir::new()?;
     let root = tmp.path().join("vault");
     copy_dir_all(&source, &root)?;
@@ -192,11 +152,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         report.indexed,
         t0.elapsed().as_secs_f64(),
     );
-    // Checked against the *widest* pool a probe reaches (the note view's): a vault between
-    // the two widths leaves the note half stable by construction while the passage half
-    // still measures something, which is a partly-blind run worth saying so about.
-    // Inclusive, like the eval's own blindness check — a pool exactly the size of the corpus
-    // truncates nothing either.
+    // Checked against the widest pool (the note view's), so a partly-blind run warns too.
     if chunks <= note_candidate_pool(BASELINE_K) {
         eprintln!(
             "[warn] {chunks} chunks ≤ the {}-candidate pool the note view reaches (the passage view\n\
@@ -209,7 +165,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!();
 
-    // One retrieval per (probe, depth); everything below is computed from these.
+    // One retrieval per (probe, depth).
     let mut answers: Vec<Vec<Answer>> = Vec::with_capacity(probes.probes.len());
     for query in &probes.probes {
         let mut per_depth = Vec::with_capacity(DEPTHS.len());
@@ -221,8 +177,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     report_pool_sensitivity(&probes.probes, &answers, verbose);
 
-    // The baseline is the deterministic mode's artifact over the committed vault;
-    // any other run still gets the sensitivity report above, which needs no baseline.
     let baseline_path = evals_dir.join("stability-baseline.json");
     if bless {
         write_baseline(&baseline_path, &probes.probes, &answers)?;
@@ -242,10 +196,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Ask one probe at one depth, keeping only what identifies a result: the note path
-/// and the chunk key. Scores are deliberately not compared — RRF scores move
-/// whenever the pool does, so comparing them would report "different" for changes
-/// that reorder nothing, and the question here is what the human *sees*.
+/// Ask one probe at one depth, keeping only result identities. Scores aren't compared: they
+/// move with the pool even when nothing reorders.
 fn answer(vault: &Vault, query: &str, depth: usize) -> Result<Answer, Box<dyn std::error::Error>> {
     Ok(Answer {
         notes: vault
@@ -261,11 +213,8 @@ fn answer(vault: &Vault, query: &str, depth: usize) -> Result<Answer, Box<dyn st
     })
 }
 
-/// A chunk's stable identity across index rebuilds: its note, its heading
-/// breadcrumb, and the head of its text. Chunk rowids are per-build, so they cannot
-/// key a committed baseline; the text head can, and it also makes a blessed diff
-/// readable — a reviewer sees *which passage* moved, not an opaque id. Re-chunking
-/// deliberately changes the key: a chunk cut differently is a different result.
+/// A chunk's identity across rebuilds: note, heading breadcrumb, and text head. Rowids are
+/// per-build; a chunk cut differently is a different result.
 fn chunk_key(hit: &ChunkSearchResult) -> String {
     let head: String = hit
         .text
@@ -282,9 +231,7 @@ fn chunk_key(hit: &ChunkSearchResult) -> String {
     )
 }
 
-/// One label per adjacent depth pair: the per-signal candidate widths that pair
-/// spans, for the view whose pool function is passed. A `fn` pointer rather than a
-/// generic — two call sites, one line each, and no reason for a type parameter.
+/// One label per adjacent depth pair: the per-signal candidate widths it spans for `pool`.
 fn width_steps(pool: fn(usize) -> usize) -> Vec<String> {
     DEPTHS
         .windows(2)
@@ -300,8 +247,7 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
         "  a cell is how many of the top-{PREFIX} results the two asks agree on, position by position;"
     );
     println!("  `=` means the shallow answer is an exact prefix of the deep one (pool-invariant).");
-    // Each view states its *own* widths: the two headroom rules differ (GH #142), so
-    // one shared pair of numbers would mislabel a column.
+    // Each view has its own widths (GH #142).
     let chunk_steps = width_steps(chunk_candidate_pool);
     let note_steps = width_steps(note_candidate_pool);
     println!();
@@ -348,11 +294,7 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
     }
 
     println!();
-    // Denominators are the probes that actually produced something to compare, not
-    // the probe count: a probe that returned nothing measured nothing, and folding
-    // it in either direction would misreport (see [`prefix_cell`]).
-    // Keyed by the *ask*, since the two views no longer span the same widths across
-    // one depth pair — each view's own candidates/signal step is named beside it.
+    // Denominators count only measured probes (see [`prefix_cell`]).
     for s in 0..DEPTHS.len() - 1 {
         println!(
             "  ask {:>2}→{:<2}: {}/{} probes changed their top-{PREFIX} chunks ({} candidates/signal), \
@@ -391,12 +333,9 @@ fn report_pool_sensitivity(probes: &[String], answers: &[Vec<Answer>], verbose: 
     }
 }
 
-/// One depth-pair cell: how much of the shallow answer the deeper ask preserved.
-///
-/// Three outcomes, not two. A comparison with **no overlapping prefix** — a probe
-/// that matched nothing, so both asks returned empty — is `measured = false`: it is
-/// neither stable nor moved, and counting it as "stable" would let a report that
-/// measured nothing announce that everything is pool-invariant.
+/// One depth-pair cell: how much of the shallow answer the deeper ask preserved. An empty
+/// comparison is unmeasured, not stable, so a report that measured nothing can't claim
+/// invariance.
 struct Cell {
     label: String,
     moved: bool,
@@ -424,16 +363,13 @@ fn prefix_cell(shallow: &[String], deep: &[String]) -> Cell {
     }
 }
 
-/// `--verbose`: the two rankings that disagreed, so the movement is inspectable
-/// rather than a bare fraction. Only the chunk lists — they are the un-deduped view
-/// the fusion actually produces.
+/// `--verbose`: the two chunk rankings that disagreed (the un-deduped fusion output).
 fn print_divergence(per_depth: &[Answer]) {
     for w in 0..DEPTHS.len() - 1 {
         let (lo, hi) = (&per_depth[w], &per_depth[w + 1]);
         if !prefix_cell(&lo.chunks, &hi.chunks).moved {
             continue;
         }
-        // The chunk lists, so the passage view's own widths label them.
         println!(
             "      pool {} vs {}:",
             chunk_candidate_pool(DEPTHS[w]),
@@ -465,10 +401,7 @@ fn report_baseline_drift(
         return Ok(());
     };
     let baseline: Baseline = serde_json::from_str(&raw)?;
-    // The snapshot records what produced it, and that provenance is checked rather
-    // than decorative: comparing today's ranking against one blessed from a
-    // different vault or a different embedder would report drift that is really a
-    // mismatch, and the reader would have no way to tell the two apart.
+    // Otherwise drift would really be an instrument mismatch.
     if baseline.vault != DEFAULT_VAULT || baseline.embedder != "fake" {
         return Err(format!(
             "baseline was blessed from {} under the {} embedder, not {DEFAULT_VAULT} under fake — \
@@ -615,8 +548,7 @@ fn write_baseline(
     Ok(())
 }
 
-/// Recursive copy — the fixture has topic subfolders, so the flat copy the scored
-/// eval uses for its single-level corpus would silently drop 9 of 10 topics.
+/// Recursive copy: the fixture has topic subfolders, which the eval's flat copy would drop.
 fn copy_dir_all(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -632,8 +564,7 @@ fn copy_dir_all(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `--vault <path>` / `--vault=<path>`, erroring on a flag given without a value
-/// rather than silently probing the default vault under a name the user did not mean.
+/// `--vault <path>` / `--vault=<path>`, erroring when the value is missing.
 fn flag_value(args: &[String], name: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
     for (i, arg) in args.iter().enumerate() {
         if let Some(rest) = arg.strip_prefix(&format!("{name}=")) {
@@ -649,8 +580,7 @@ fn flag_value(args: &[String], name: &str) -> Result<Option<String>, Box<dyn std
     Ok(None)
 }
 
-/// Same directory on disk, canonicalized — so `--vault fixtures/test-vault` from the
-/// repo root is recognized as the committed vault the baseline belongs to.
+/// Same directory on disk, canonicalized.
 fn same_dir(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -658,12 +588,8 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Paths are printed relative to the repo root where possible — an absolute
-/// `/Users/…/B2/crates/…` line is noise in a report meant to be pasted into an issue.
-///
-/// A path that does not exist yet still resolves: the baseline is *named* before it
-/// is written (`--bless` writes crates/…/stability-baseline.json), and canonicalize
-/// only works on what exists — so a missing leaf falls back to its parent.
+/// `path` relative to the repo root where possible. A missing leaf (a baseline not yet
+/// written) resolves through its parent, since canonicalize needs an existing path.
 fn display_from_repo(path: &Path) -> String {
     let Ok(root) = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

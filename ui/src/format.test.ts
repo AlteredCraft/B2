@@ -25,9 +25,7 @@ function applied(doc: string, r: ReturnType<typeof toggleInline>): string {
 
 // --- the format table: what main.ts builds the keymap from -------------------------
 
-// The chord each of these toggles lives in the keyboard registry as `format.<id>`, and
-// bindings.test.ts asserts every row here has one — so the pair stays complete without
-// the marker table carrying a key it doesn't use.
+// Each row's `format.<id>` chord is asserted in bindings.test.ts.
 assertEq(
   FORMATS.map((f) => [f.id, f.marker]),
   [

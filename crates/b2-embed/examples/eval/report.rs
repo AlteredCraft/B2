@@ -64,11 +64,7 @@ pub fn print_default_report(
         hybrid.note.mrr(),
         hybrid.note.hit1() - bm25.note.hit1(),
     );
-    // The standing form of the fusion finding (GH #158): every query
-    // where fusing the two signals ranked the labelled answer WORSE than the
-    // dense signal alone would have. RRF's consensus bias makes some of this
-    // inevitable; the point is that it is counted and named on every run instead
-    // of rediscovered by hand-decomposing scores.
+    // Every query that fusion ranks worse than the dense signal alone (GH #158).
     let demoted: Vec<usize> = (0..queries.len())
         .filter(|&i| {
             let Some(v) = vector.scores[i].note else {
@@ -116,12 +112,7 @@ pub fn print_default_report(
         "similar (n={} positive + {} negative, K={SIM_K}):",
         similar.rank.n, similar.neg_n
     );
-    // The per-anchor metric (first mate found, then stop) is **no longer
-    // printed** (GH #188): it read 1.000 across every change it was meant to
-    // judge, and a line that cannot move is a line that trains skimming. It is
-    // still recorded — `results.jsonl`'s `"similar"` key is unchanged, so rows
-    // stay comparable back to the first run — so retiring the line costs the
-    // dataset nothing.
+    // The saturated per-anchor metric is recorded in the row but not printed (GH #188).
     println!(
         "  per-mate   hit@1={:.2}  hit@3={:.2}  MRR@{SIM_K}={:.3}  (n={} mates, GATED at MRR@{SIM_K} ≥ {FLOOR_MATE_MRR:.2})",
         similar.mate.hit1(),
@@ -129,8 +120,7 @@ pub fn print_default_report(
         similar.mate.mrr(),
         similar.mate.n
     );
-    // Discovery's precision side (GH #188) — reported with names, never gated;
-    // see `SimilarPass::strangers` for why gating it would reward labelling.
+    // Never gated; see `SimilarPass::strangers`.
     println!(
         "  strangers  {} card{} on {}/{} positive anchors (unlabelled notes served in the top-{SIM_K} — \
          a smoke alarm, not a gate: labels aren't exhaustive)",
@@ -143,19 +133,14 @@ pub fn print_default_report(
         println!("             {anchor} → {path}");
     }
     if similar.neg_n > 0 {
-        // Under always-serve (GH #197) a negative anchor serves its ranked
-        // nearest like any other — that is the ruling, not a regression. What
-        // these anchors measure now is what the served cards *claim*: their
-        // bands (A2's readout, printed per leader in the calibration block).
+        // Under always-serve (GH #197) a negative anchor serves; its bands say what it claims.
         println!(
             "  negatives  {} loner anchors serve {} cards under always-serve (labels still say \
              \"nothing relates\"; the bands carry the honesty — leaders below)",
             similar.neg_n, similar.neg_cards
         );
     }
-    // The two calibration piles. If they separate, the gap IS the floor, read
-    // off measured data; if they overlap, no simple floor can hold and the
-    // escalation path (a discovery-side pair-scorer) is justified by data.
+    // If the piles separate, the gap is the floor; if they overlap, no simple floor holds.
     if let (Some((r_min, r_med, r_max)), Some((j_min, j_med, j_max))) =
         (pile_stats(&similar.related), pile_stats(&similar.junk))
     {
@@ -184,20 +169,13 @@ pub fn print_default_report(
             }
         );
     }
-    // The same question in the floor's own anchor-relative unit, where an
-    // answer is actionable: the piles are absolute cosines, and no constant in
-    // the code is ever compared against one.
+    // The same question in z, the unit a constant would be stated in.
     print_floor_windows(floor_z);
 }
 
-/// The paired per-query diff between two fused passes — what an A/B is actually
-/// judged on. At this corpus's n, every aggregate delta is worth 1–2 queries, so
-/// "hit@1 +0.05" and "these two queries flipped, this one broke" are the same
-/// fact — but only the second form can be argued with, per-query, against the
-/// labels (docs/evals.md, the process rules). Prints nothing but a
-/// no-moves line when the variant reproduced the reference ranking exactly —
-/// which, per the same rules, is itself a claim to verify against a
-/// continuous quantity (the piles), never bare proof of "no effect".
+/// The paired per-query diff between two fused passes, which an A/B is judged on
+/// (docs/evals.md). No moves is a claim to verify against the piles, not proof of no
+/// effect.
 pub fn print_rank_moves(queries: &[Labelled], reference: &Pass, variant: &Pass) {
     let improved = |a: Option<usize>, b: Option<usize>| match (a, b) {
         (None, Some(_)) => true,
@@ -244,8 +222,7 @@ pub fn print_rank_moves(queries: &[Labelled], reference: &Pass, variant: &Pass) 
     }
 }
 
-/// Who scored a run and in which embedding space — the identity every row the run
-/// appends carries (the orthogonal corpus's rows and the dense fixture's alike).
+/// Who scored a run and in which embedding space; carried by every row the run appends.
 #[derive(Clone, Copy)]
 pub struct RunId<'a> {
     /// The repo's short commit, `None` outside a git checkout.
@@ -254,8 +231,7 @@ pub struct RunId<'a> {
     pub dim: usize,
 }
 
-/// One scored configuration's inputs to [`result_row`]: a short-lived, read-only view
-/// over passes `run` (or an A/B) owns, assembled at the call and consumed there.
+/// One scored configuration's inputs to [`result_row`]: a short-lived, read-only view.
 #[derive(Clone, Copy)]
 pub struct RowInputs<'a> {
     /// The config's name in the row (`"default"`, `"unicode61"`, a sweep variant).
@@ -266,14 +242,12 @@ pub struct RowInputs<'a> {
     pub notes: usize,
     pub chunks: usize,
     pub embed_secs: f64,
-    /// The labelled positives every pass here was scored over.
     pub queries: &'a [Labelled],
     pub bm25: Option<&'a Pass>,
     pub vector: Option<&'a Pass>,
     pub hybrid: &'a Pass,
     pub similar: Option<&'a SimilarPass>,
-    /// The calibration blocks, which only the default row re-derives; `None` on the
-    /// ablation and sweep rows, whose keys then record `null`.
+    /// Only the default row re-derives these; other rows record `null`.
     pub calibration: Option<Calibration<'a>>,
 }
 
@@ -295,6 +269,9 @@ pub fn unix_secs() -> u64 {
 }
 
 /// One appendable JSONL row for a scored configuration.
+///
+/// Row convention: a key is added, never redefined, so a mixed file shows a missing field
+/// rather than a number whose meaning changed. Dates note when a key first appeared.
 pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
     let RunId { git, model, dim } = run;
     let RowInputs {
@@ -322,10 +299,7 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
         "git": git,
         "model": model,
         "dim": dim,
-        // NEW key (absent from rows before 2026-08-18): which corpus this row
-        // scored — the dense single-domain fixture appends its own `"dense"`
-        // rows (GH #196/#197), and rows must never average across corpora.
-        // Absent = this corpus, so every older row stays comparable unchanged.
+        // Since 2026-08-18; absent means orthogonal. Never average across corpora.
         "corpus": "orthogonal",
         "config": {
             "label": label,
@@ -335,31 +309,19 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
             "backscan_tokens": cfg.backscan_tokens,
             "prepend_heading_path": cfg.prepend_heading_path,
         },
-        // NEW key (absent from rows before 2026-08-11, which were all scored
-        // under the then-default `unicode61`): the chunks_fts tokenizer this row
-        // was scored under (GH #157). Top-level rather than inside `config`,
-        // which stays the ChunkConfig alone.
+        // Since 2026-08-11; earlier rows are `unicode61` (GH #157).
         "tokenizer": tokenizer,
         "notes": notes,
         "chunks": chunks,
-        // The caveat travels with the numbers: a row whose corpus fit inside the
-        // retrieval pool had both candidate lists complete, so no candidate-width
-        // change could have affected it and comparing it across one proves nothing
-        // (GH #141). Equality is blind too — a pool exactly the size of the corpus
-        // truncates nothing either. Both depths are recorded because since #142 the
-        // two views differ; the flat `pool` key of earlier rows is deliberately
-        // *not* reused, so a reader of a mixed file sees a missing field rather than
-        // one number silently meaning something narrower than it used to.
+        // A `pool_blind` row can't show a candidate-width change (GH #141). Earlier rows'
+        // flat `pool` key is not reused.
         "pool_note": note_candidate_pool(K),
         "pool_chunk": chunk_candidate_pool(K),
         "pool_blind": chunks <= chunk_candidate_pool(K).min(note_candidate_pool(K)),
         "embed_secs": embed_secs,
         "note": {
             "bm25": bm25.map(|p| agg(&p.note)),
-            // NEW key (absent from rows before 2026-08-10): the dense ablation —
-            // `Vault::search_vector_only`, the single-signal baseline fusion is
-            // judged against (GH #158). Same convention as pool_note/pool_chunk:
-            // a new key, never a redefined one.
+            // Since 2026-08-10 (GH #158).
             "vector": vector.map(|p| agg(&p.note)),
             "hybrid": agg(&hybrid.note),
         },
@@ -367,36 +329,17 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
             "bm25": bm25.map(|p| agg(&p.chunk)),
             "hybrid": agg(&hybrid.chunk),
         },
-        // "similar" keeps its pre-negative shape (the positive anchors' rank agg)
-        // so rows stay comparable across the change; the negative-anchor tally and
-        // the calibration piles are NEW keys, absent from older rows rather than
-        // redefining an existing one — the same convention as pool_note/pool_chunk.
         "similar": similar.map(|s| agg(&s.rank)),
-        // NEW key (absent from rows before 2026-08-17): the per-mate,
-        // non-saturating companion to "similar" (GH #183). Same convention
-        // again — a new key, never a redefined one, so every older row stays
-        // comparable on "similar" itself.
+        // Since 2026-08-17 (GH #183).
         "similar_per_mate": similar.map(|s| agg(&s.mate)),
-        // `similar_per_mate_raw` / `similar_mates_suppressed` retired with the
-        // pass-vs-pass tripwire (GH #217): under always-serve both passes read
-        // the one surface through the same call, so the diff was a tautology.
-        // Absent from newer rows, never redefined — the row conventions.
-        // NEW key (absent from rows before 2026-08-17): discovery's precision
-        // side — unlabelled notes served on positive anchors at the ranks' own
-        // depth (GH #188). Same convention as every key above: new, never a
-        // redefinition. Recorded with the pairs, because the count alone is
-        // unarguable and the pairs are what a reader checks against the notes.
+        // `similar_per_mate_raw` / `similar_mates_suppressed` retired (GH #217).
+        // Since 2026-08-17 (GH #188), with the pairs so a reader can check them.
         "similar_strangers": similar.map(|s| serde_json::json!({
             "cards": s.strangers.len(),
             "anchors": s.stranger_anchors,
             "positives": s.rank.n,
-            // The depth the count is read at — the ranks' own top-K, so a
-            // future SIM_K change shows up in the row instead of silently
-            // redefining the number.
+            // So a SIM_K change shows in the row rather than redefining the count.
             "depth": SIM_K,
-            // The pairs, because a bare count is unarguable: this metric is a
-            // smoke alarm whose correct answer is sometimes "that label is
-            // missing", and that argument needs the notes named.
             "detail": s.strangers.iter().map(|(anchor, path)| serde_json::json!({
                 "anchor": anchor,
                 "path": path,
@@ -405,18 +348,12 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
         "similar_negatives": similar.map(|s| serde_json::json!({
             "n": s.neg_n, "clean": s.neg_clean, "cards": s.neg_cards,
         })),
-        // Cosine, 4 decimals: enough to place a floor, short enough to keep rows
-        // readable. Related = human-labelled matches; junk = everything else
-        // surfaced (see score_similar).
+        // Cosine, 4 decimals.
         "similar_piles": similar.map(|s| serde_json::json!({
             "related": s.related.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
             "junk": s.junk.iter().map(|c| (c * 1e4).round() / 1e4).collect::<Vec<_>>(),
         })),
-        // The same scores with their per-anchor rank order kept: the relative
-        // drop-off cutoff is judged within one anchor's list, and tracing a pile
-        // value back to its pair needs the anchor. The piles above are this,
-        // flattened — kept anyway, because the flat distributions are what a
-        // quick jq/pandas histogram wants.
+        // The piles above with per-anchor rank order kept.
         "similar_detail": similar.map(|s| s.detail.iter().map(|d| serde_json::json!({
             "anchor": d.anchor,
             "negative": d.negative,
@@ -426,15 +363,7 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 "related": related,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>()),
-        // NEW key (absent from rows before 2026-08-17): the floor's own
-        // calibration data in the floor's own unit — every candidate's ungated
-        // judge z, the populations the two constants answer to, and both
-        // re-derived windows (GH #187; the unit changed from stage-1 centroid z
-        // to stage-2 best-passage z with GH #192 — the row's "unit" field is
-        // what tells the two apart). Same convention as every key above: new,
-        // never a redefinition. This is the row the next recalibration reads, and
-        // the reason no window belongs in a doc comment — `null` on the ablation
-        // rows, which do not re-derive it.
+        // Since 2026-08-17 (GH #187): the z populations and both re-derived windows.
         "discovery_z": floor_z.map(|z| {
             let (mates, strangers) = (z.mate_z(), z.stranger_z());
             let (neg_leaders, pos_leaders) = (z.neg_leader_z(), z.pos_leader_z());
@@ -445,12 +374,8 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
             }));
             let round = |v: &[f64]| v.iter().map(|z| (z * 1e4).round() / 1e4).collect::<Vec<_>>();
             serde_json::json!({
-                // The unit these piles/windows are measured in. Rows before
-                // GH #192 carried no key here and are stage-1 centroid z — a
-                // different unit; never compare across the flip. Since GH #197
-                // the z gates nothing (the "shipped" and "replay_faults" keys
-                // of earlier rows retired with the gate — absent, per the
-                // convention, rather than redefined).
+                // Rows before GH #192 lack this and are stage-1 centroid z: never compare
+                // across the flip.
                 "unit": "stage2-best-passage",
                 "piles": {
                     "mates": round(&mates),
@@ -461,12 +386,9 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 "window_leader": win(&neg_leaders, &pos_leaders),
                 "window_member": win(&strangers, &mates),
                 "ungraded_anchors": z.ungraded,
-                // ~0 is the only trustworthy reading — see FloorZ::recheck_delta.
+                // ~0 is the only trustworthy reading (FloorZ::recheck_delta).
                 "z_recheck_max_delta": z.recheck_delta(),
-                // Per-anchor and per-candidate, because a window edge is only
-                // arguable once you can name the pair that set it. `z` is the
-                // stage-2 best-passage z, `cos` the same pair's cosine (the
-                // model-comparable unit).
+                // Per candidate, so the pair behind a window edge can be named.
                 "detail": z.anchors.iter().map(|a| serde_json::json!({
                     "anchor": a.anchor,
                     "negative": a.negative,
@@ -479,13 +401,7 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 })).collect::<Vec<_>>(),
             })
         }),
-        // NEW key (absent from rows before 2026-08-22): the search evidence
-        // dump (invariants.md D2, GH #201) — per labelled query, the absolute
-        // signals RRF discards (BM25 hit count + best score, dense top-1
-        // cosine) and the shipped surface's served count, positives and
-        // negatives apart, with the would-be pure-cosine query window. Same
-        // convention as every key above: new, never a redefinition. `null` on
-        // ablation/sweep rows, which do not re-derive it.
+        // Since 2026-08-22 (D2, GH #201).
         "search_evidence": evidence.map(|e| {
             let bar = EvidenceBar::for_model(model);
             let row = |r: &QueryEvidence| serde_json::json!({
@@ -495,16 +411,9 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 "best_cos": r.best_cos.map(|c| (c * 1e4).round() / 1e4),
                 "top": r.top,
                 "served": r.served(),
-                // NEW keys (absent from rows before 2026-08-22, GH #201 Phase C):
-                // the per-query evidence the bake-off is swept over, recorded raw
-                // so any (fraction, coverage, cos) cell is re-derivable from a row
-                // without re-running the model — the `discovery_fold` convention.
+                // Raw, so any bake-off cell is re-derivable from the row.
                 "dense_only": r.dense_only(),
-                // NEW key (absent from rows before GH #206): the served list
-                // itself, per row — path, per-hit provenance, and relevance by
-                // label — so any per-hit tail rule is re-derivable from a row
-                // without re-running the model, the `discovery_fold` convention
-                // at hit granularity. `keep` reads `relevant` ∪ `tail_relevant`.
+                // Since GH #206. `keep` reads `relevant` ∪ `tail_relevant`.
                 "rows": r.rows.iter().map(|row| serde_json::json!({
                     "path": row.path,
                     "bm25_rank": row.bm25_rank,
@@ -514,17 +423,12 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 "chunk_total": r.chunk_total,
                 "terms": r.terms.iter().map(|(t, df)| serde_json::json!([t, df]))
                     .collect::<Vec<_>>(),
-                // The ENGINE's verdict, matching the dense row's convention and
-                // what the exit gate asserts — recording the harness's
-                // restatement here instead would mask exactly the drift the
-                // [FAULT] check exists to surface (the restatement is
-                // re-derivable from `terms` + `best_cos` + `bar` regardless).
+                // The engine's verdict, not the restatement, which would mask drift.
                 "vouched": r.vouched,
             });
             let (pos_cos, neg_cos) = (best_cos_pile(&e.positives), best_cos_pile(&e.negatives));
             serde_json::json!({
-                // The depth `served` is read at, so a future K change shows up
-                // in the row instead of silently redefining the number.
+                // So a K change shows in the row rather than redefining `served`.
                 "k": K,
                 "positives": e.positives.iter().map(row).collect::<Vec<_>>(),
                 "negatives": e.negatives.iter().map(row).collect::<Vec<_>>(),
@@ -533,11 +437,7 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                     "keep_min": (w.keep_min * 1e4).round() / 1e4,
                     "open": w.open(),
                 })),
-                // NEW key (GH #201, Phase C): the whole bake-off grid, so the
-                // admissible window is re-derivable from the row — including the
-                // shipped bar's own three constants, which is what makes a later
-                // reader able to see that a bar has drifted out of the window it
-                // was read from.
+                // The whole grid and the shipped bar, so drift out of the window is visible.
                 "bar": bar.map(|b| serde_json::json!({
                     "min_term_coverage": b.min_term_coverage,
                     "min_cos": b.min_cos,
@@ -552,17 +452,9 @@ pub fn result_row(run: RunId, row: RowInputs) -> serde_json::Value {
                 })).collect::<Vec<_>>(),
             })
         }),
-        // The fold bake-off (GH #200, Phase B) — every candidate rule's reading
-        // on this run, with the per-anchor folds it was read from. Recorded on
-        // the default row only: the sweep's variants re-chunk the corpus, and a
-        // disclosure rule judged on a non-shipped chunker is a number about the
-        // chunker.
+        // Default row only (GH #200): on a sweep variant it would measure the chunker.
         "discovery_fold": fold.map(fold_json),
-        // NEW key (absent from rows before GH #206): the per-hit tail bake-off
-        // — each family's re-derived constraint and edge payoff. Default row
-        // only, for the same reason as `discovery_fold`; the served rows it was
-        // read from are under `search_evidence`, so any other constant is
-        // re-derivable from the row.
+        // Since GH #206. Default row only, like `discovery_fold`.
         "search_tail": tail.map(tail_json),
         "queries": queries.iter().enumerate().map(|(i, q)| serde_json::json!({
             "q": q.query,

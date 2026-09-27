@@ -1,40 +1,17 @@
-// The *third* keyboard in the app: macOS's menu bar.
+// The third keyboard in the app: macOS's menu bar (#119). AppKit dispatches a menu key
+// equivalent before the key window's responder chain, so these chords never reach the
+// webview; the menu is declared in `crates/b2-desktop/src/menu.rs`.
 //
-// bindings.ts owns the chords B2 answers to in the webview, editorkeys.ts owns the ones
-// CodeMirror answers to inside the editor, and a dozen more belong to neither — ⌘Q, ⌘W,
-// ⌘M, ⌘H, ⌥⌘H, ⌘Z, ⇧⌘Z, ⌘X, ⌘C, ⌘V, ⌘A, ⌃⌘F are the app menu's. Until #119 they came
-// from Tauri's `Menu::default()`, which is to say from nowhere anyone could point at:
-// the registry couldn't see them, the reference sheet couldn't list them, and
-// `conflicts()` couldn't warn about landing a new B2 chord on one.
+// This is a mirror of that declaration, so the conflict gate can run in node and the sheet
+// can paint before the first `invoke`. `menuDrift` checks it against the host at boot.
 //
-// Why the registry can't just watch for them. AppKit dispatches a menu key equivalent
-// inside `NSApplication.sendEvent`, *before* the key window's responder chain — so these
-// keystrokes never reach the webview's keydown handler at all. No amount of listening
-// finds them; the menu has to be declared and then read. It is, in
-// `crates/b2-desktop/src/menu.rs`, and the host hands the list over through the
-// `menu_chords` command.
-//
-// What's here is the **mirror** of that declaration. The host is the authority — it is
-// the one that builds the menu — and the UI holds a copy for the two jobs a runtime
-// fetch can't do: the conflict gate below runs in node, in the suite, with no host to
-// ask; and the sheet has to paint before the first `invoke` resolves. The copy is
-// checked against the host on every launch (`menuDrift`, called from main.ts's boot),
-// which is the same "change them together, and the app says so if you didn't" posture as
-// WRITE_CONFLICT_MESSAGE and VAULT_CHANGED_EVENT in api.ts.
-//
-// The check itself is deliberately *not* `conflicts()`. That function asks "do two
-// commands claim one keystroke in one scope?", and scope is the wrong question here: a
-// menu accelerator is taken before the webview is consulted, so it cannot be shadowed by
-// an inner surface the way a global B2 chord can be by the editor or a modal. ⌘Z is the
-// menu's in the note editor, in the find bar, in a modal, everywhere. So `menuOverlaps`
-// compares keystrokes across *every* scope, and that difference is the whole point of it
-// being its own function rather than more rows in BINDINGS.
+// Not `conflicts()`: a menu accelerator can't be shadowed by an inner scope, so
+// `menuOverlaps` compares keystrokes across every scope.
 import { type Binding, activeBindings, allKeys, keystrokes } from "./bindings.ts";
 import type { MenuChord } from "./types.ts";
 
-/** The menu bar as `crates/b2-desktop/src/menu.rs` declares it — every item that carries
- *  a chord, in menu order. Mirrors the host's `menu_chords`; change them together (the
- *  Rust side pins this same list, and `menuDrift` catches it at runtime if you don't). */
+/** Every menu item with a chord, in menu order. Mirrors the host's `menu_chords`; change
+ *  them together. */
 export const MENU_CHORDS = [
   { id: "app.hide", label: "Hide B2", keys: "Mod-h" },
   { id: "app.hide-others", label: "Hide Others", keys: "Mod-Alt-h" },
@@ -46,14 +23,8 @@ export const MENU_CHORDS = [
   { id: "edit.copy", label: "Copy", keys: "Mod-c" },
   { id: "edit.paste", label: "Paste", keys: "Mod-v" },
   { id: "edit.select-all", label: "Select All", keys: "Mod-a" },
-  // The View menu's three are the one part of this list that is **B2's own choice** of
-  // chord rather than a restatement of one macOS assigned. They are here, not in
-  // bindings.ts, for this module's whole reason: a menu accelerator is dispatched before
-  // the key window's responder chain, so a chord in both places is a chord the webview
-  // never receives — and macOS expects these three to live in View, with their keys
-  // printed beside them. Choosing them means the host also has to *do* something when
-  // they fire, which the predefined rows never needed: `menu.rs` emits the item's id and
-  // `zoom.ts` decides what a size means.
+  // The View menu's three are B2's own chords, not macOS's. They live in the menu (so not
+  // in bindings.ts); `menu.rs` forwards the id and `zoom.ts` acts on it.
   { id: "view.zoom-in", label: "Zoom In", keys: "Mod-=" },
   { id: "view.zoom-out", label: "Zoom Out", keys: "Mod--" },
   { id: "view.zoom-reset", label: "Actual Size", keys: "Mod-0" },
@@ -67,8 +38,7 @@ export interface MenuOverlap {
   id: string;
   /** Its chord, as the registry spells it. */
   chord: string;
-  /** The scope it was declared in — reported because it explains nothing away: the
-   *  menu wins in every one of them. */
+  /** The scope it was declared in; the menu wins in every scope. */
   scope: string;
   /** The menu item that takes it. */
   item: string;
@@ -76,10 +46,8 @@ export interface MenuOverlap {
   form: string;
 }
 
-/** Every B2 binding whose keystroke the menu bar claims — in any scope, for the reason
- *  in the module header. Empty for the shipped defaults and kept that way by
- *  menukeys.test.ts — and asked of a *candidate* table by keymap.ts, which is how the
- *  recorder refuses ⌘W outright rather than leaving a user to wonder why the window closed. */
+/** Every B2 binding whose keystroke the menu bar claims, in any scope. Empty for the
+ *  defaults (menukeys.test.ts); keymap.ts asks it of a candidate table to refuse ⌘W. */
 export function menuOverlaps(
   bindings: readonly Binding[] = activeBindings(),
   menu: readonly MenuChord[] = MENU_CHORDS,
@@ -100,13 +68,8 @@ export function menuOverlaps(
   return out;
 }
 
-/** How the host's live menu differs from the mirror above, one line per difference.
- *
- *  Empty is the only healthy answer, and the only one a shipped build should ever
- *  produce — a difference means someone changed `menu.rs` without changing this file, so
- *  the sheet the *suite* checks and the gate it runs are both describing a menu the app
- *  no longer has. Reported rather than thrown: a stale mirror is a developer's problem,
- *  and it must not take the window down over a keyboard reference. */
+/** How the host's live menu differs from the mirror, one line per difference. Empty is
+ *  healthy. Reported, not thrown: a stale mirror must not take the window down. */
 export function menuDrift(
   host: readonly MenuChord[],
   mirror: readonly MenuChord[] = MENU_CHORDS,

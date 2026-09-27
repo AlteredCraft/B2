@@ -21,18 +21,11 @@ import {
 
 // --- the anchored ghost graph (GH #22) ----------------------------------------------
 //
-// The center pane's third mode: the open note's typed neighborhood as hand-rolled,
-// deterministic SVG — scene geometry from `graph.ts` (pure, unit-tested), markup
-// here, clicks delegated in main.ts. The reading key: color = edge category, solid =
-// authored / dashed teal = latent (`similar`), disc = note / square = resource /
-// dashed hollow = dangling. Everything renders from state the note-open already
-// fetched, so entering the graph costs no IPC.
+// The open note's typed neighbourhood as deterministic SVG; clicks are delegated in
+// main.ts. Renders from state the note-open already fetched, so it costs no IPC.
 
-/** The graph toggle chip, shared by the reading bar (off) and the graph bar (on).
- *
- *  Its chord comes out of the live registry rather than being spelled here: ⌘G is
- *  rebindable (#121), and a tooltip naming the shipped default would be wrong for exactly
- *  the user who changed it. */
+/** The graph toggle chip, shared by the reading bar (off) and the graph bar (on). Its
+ *  chord comes from the live registry, since it is rebindable (#121). */
 export function graphToggleHtml(active: boolean): string {
   const chord = escapeHtml(displayKeys(["graph.toggle"]));
   return `<button id="graph-toggle" class="source-toggle graph-toggle${active ? " is-active" : ""}" data-toggle-graph
@@ -44,9 +37,8 @@ export function graphToggleHtml(active: boolean): string {
       }">${icon("diagram-3")}</button>`;
 }
 
-/** The Edit chip, shared by the reading bar and the graph bar. Its chord comes out of the
- *  live registry for `graphToggleHtml`'s reason; `title` overrides the tooltip when the
- *  chip is disabled for a reason worth naming. */
+/** The Edit chip, shared by the reading bar and the graph bar. `title` overrides the
+ *  tooltip when the chip is disabled. */
 export function editToggleHtml(disabled: boolean, title?: string): string {
   const hint = title ?? `Edit this note — ${displayKeys(["edit.toggle"])} (autosaves as you type)`;
   return `<button id="edit-toggle" class="edit-toggle" data-toggle-edit${
@@ -100,17 +92,13 @@ function nodeShapeHtml(n: GraphNode): string {
   }
 }
 
-/** The tooltip line(s) for a node — also the activation affordance's explanation.
- *  Phrased for both hands: an activatable node says "⏎", because the graph is
- *  reachable by Tab and arrow keys too (K1, GH #78), not by mouse alone. */
+/** The tooltip for a node, naming ⏎ as well as click (K1, GH #78). */
 function nodeTitle(n: GraphNode): string {
   switch (n.kind) {
     case "anchor":
       return `${n.full} — the open note. Click or ⏎ to return to reading.`;
     case "ghost":
-      // The strength figure when there is one; a bare "similar but not linked"
-      // otherwise. "similarity ?" claimed a measurement existed and was merely
-      // unavailable — an ungraded candidate was never measured at all.
+      // An ungraded candidate was never measured, so it gets no figure.
       return `${n.full} — similar but not linked${
         n.sub ? ` (${n.sub} above this note's other candidates)` : ""
       }. Click or ⏎ to link it; right-click (or ${displayKeys(["menu.open"])}) for more.`;
@@ -123,8 +111,7 @@ function nodeTitle(n: GraphNode): string {
   }
 }
 
-/** The accessible name for a focusable node — what a screen reader announces, and
- *  what the node's own `<title>` can't be (that one is the mouse tooltip prose). */
+/** The accessible name for a focusable node (the `<title>` is the mouse tooltip). */
 function nodeAriaLabel(n: GraphNode): string {
   switch (n.kind) {
     case "anchor":
@@ -139,22 +126,11 @@ function nodeAriaLabel(n: GraphNode): string {
 }
 
 /**
- * One scene node as an interactive `<g>`, its incident edges inside it so a pure-CSS
- * hover lights the node *and* its edges while the rest of the scene dims. The click
- * affordance rides existing delegation: notes reuse `data-open`, resources
- * `data-open-resource`; ghosts get `data-ghost-link` (→ the link palette) plus the
- * `data-card-*` pair the right-click menu reads; the anchor toggles back to reading.
- *
- * An activatable node is also a **keyboard** control (K1, GH #78): `tabindex="0"` puts
- * it in the Tab order and `role="button"` says what it is, so a graph is walkable and
- * openable with no mouse. main.ts turns ⏎/Space on a focused node into the same click
- * these attributes already answer — one activation path, not two. A `dangling` node
- * stays inert: it opens nothing (there's nothing there), so it isn't a tab stop.
- *
- * It also carries `data-gnode` — the scene id (graph.ts), which is what the note pane's
- * focus restoration re-finds it *by* after an `innerHTML` swap destroys the element
- * itself (GH #91). The discovery row's `data-side-row` for the graph: an identity that
- * outlives the repaint, not a pointer into it.
+ * One scene node as an interactive `<g>`, with its incident edges inside so CSS hover
+ * lights both. Clicks ride existing delegation (`data-open`, `data-open-resource`,
+ * `data-ghost-link`). Activatable nodes are Tab stops with `role="button"` (K1, GH #78);
+ * main.ts maps ⏎/Space to the same click. `data-gnode` is what focus restoration
+ * re-finds after an `innerHTML` swap (GH #91). Dangling nodes are inert.
  */
 function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string {
   const attrs: string[] = [`class="gnode is-${n.kind}"`, `style="--i:${order}"`];
@@ -177,8 +153,7 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
     );
   }
   const r = NODE_R[n.kind];
-  // Text goes on the side of the node facing *away* from the anchor (above for the
-  // upper half of the scene), so a label never sits in its own edge's path.
+  // Label on the side facing away from the anchor, so it never sits on its own edge.
   const above = n.kind !== "anchor" && n.y < VIEW_H / 2 - 20;
   const label = `<text class="gnode-label" x="${px(n.x)}" y="${px(
     above ? n.y - r - 14 : n.y + r + 18,
@@ -196,8 +171,7 @@ function nodeGroupHtml(n: GraphNode, edges: GraphEdge[], order: number): string 
     </g>`;
 }
 
-/** The honest ghost-halo caveat (coverage.ts's tiers, like `searchCaveat`, #26): why there are
- *  no ghosts right now, or null when there are (or when silence is the honest state). */
+/** Why there are no ghosts right now (coverage.ts's tiers, #26), or null. */
 function ghostHintHtml(state: AppState): string {
   if (state.similar.length > 0) return "";
   if (state.discoveringSimilar)
@@ -237,8 +211,7 @@ function graphLegendHtml(): string {
     </div>`;
 }
 
-/** Arrowhead markers, one per category (an SVG marker can't inherit its edge's
- *  stroke everywhere yet). */
+/** Arrowhead markers, one per category (a marker can't reliably inherit its stroke). */
 function graphDefsHtml(): string {
   const cats: Category[] = ["references", "supports", "contradicts", "other"];
   const arrow = (id: string, cls: string) =>
@@ -248,11 +221,7 @@ function graphDefsHtml(): string {
   return `<defs>${cats.map((c) => arrow(`garr-${c}`, `garr cat-${c}`)).join("")}</defs>`;
 }
 
-/**
- * The graph pane — the note pane's third mode (Reading / Editing / Graph). Bar:
- * the same action chips as reading; stage: the SVG scene (fills the pane,
- * `viewBox`-scaled) with overlay hints; footer: the reading key.
- */
+/** The graph pane: action chips, the `viewBox`-scaled SVG scene, and the reading key. */
 export function graphPaneHtml(state: AppState, n: NoteView): string {
   const scene = buildScene({
     anchor: { path: n.path, title: n.title },
@@ -271,9 +240,8 @@ export function graphPaneHtml(state: AppState, n: NoteView): string {
     list.push(e);
     byNode.set(owner, list);
   }
-  // Paint order: ghosts lowest (their long dashed spokes must pass *under* the
-  // authored orbit), authored above them, the anchor on top of everything. The
-  // stagger index is narrative, not paint, order: authored pops first, ghosts after.
+  // Paint order: ghosts lowest (their spokes pass under the authored orbit), then
+  // authored, then the anchor. The stagger index pops authored first, ghosts after.
   const authoredNodes = scene.nodes.filter((node) => node.kind !== "anchor" && node.kind !== "ghost");
   const ghostNodes = scene.nodes.filter((node) => node.kind === "ghost");
   const anchor = scene.nodes.find((node) => node.kind === "anchor");

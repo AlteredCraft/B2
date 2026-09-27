@@ -1,39 +1,21 @@
-//! Groundedness + citation-accuracy smoke for the chat seam — the embedder eval's posture
-//! (ADR-0013) applied to the second seam.
-//!
-//! It lives as an **example**, not a test, for the reason `b2-embed`'s does: it needs two
-//! real models, it is non-deterministic, and it talks to the network. `cargo test` must never
-//! do any of those.
+//! Groundedness + citation-accuracy smoke for the chat seam (ADR-0013). An example, not a
+//! test: it needs real models and the network, and is non-deterministic.
 //!
 //! ```console
 //! ollama serve &                                     # or any OpenAI-compatible server
 //! cargo run -p b2-llm --example groundedness         # B2_LLM_URL / B2_LLM_MODEL apply
 //! ```
 //!
-//! One run builds a throwaway vault from the retrieval eval's corpus, embeds it, and asks
-//! each labelled question through the real `Vault::ask`. Four things are scored, deliberately
-//! separable because a bad answer has more than one possible author:
+//! Each labelled question goes through the real `Vault::ask` over the retrieval eval's
+//! corpus. Scored separately, since a bad answer has more than one possible author:
+//! retrieval reach (the ceiling), grounding (cited anything), citation accuracy (cited the
+//! labelled note, over reached questions), refusal on negatives, and hallucinated `[n]`
+//! markers.
 //!
-//! 1. **Retrieval reach** — did the labelled note make it into the passages at all? The
-//!    ceiling: a question that fails here is a *retrieval* result, not a chat one.
-//! 2. **Grounding** — did the answer cite anything? An uncited answer is a refusal or general
-//!    knowledge, and the grounded prompt forbids the second.
-//! 3. **Citation accuracy** — did it cite the *labelled* note? The headline number, scored
-//!    only over questions retrieval actually reached.
-//! 4. **Refusal** — on the negative questions, did it say "I don't find that in your notes"
-//!    instead of confabulating? Refusing when the corpus *does* answer is scored too.
-//!
-//! Hallucinated `[n]` markers are counted alongside: a marker naming no passage resolves to
-//! no citation, so it would otherwise go unmeasured.
-//!
-//! Every run appends one JSON line to `evals/results.jsonl` (gitignored, since the numbers
-//! depend on the machine's models). **Exit code**: 0 normally, 2 when retrieval reached
-//! labelled notes and yet *no* answer cited one — a broken pipeline rather than a weak model.
-//! Model quality is read off the numbers, not the exit code: a gate that fails on every small
-//! local model would be a gate nobody runs.
+//! Appends one line to `evals/results.jsonl`. Exits 2 only when retrieval reached labelled
+//! notes and no answer cited one (a broken pipeline); model quality is read off the numbers.
 
-// The retrieval harness's shared helpers, reused rather than copied: everything the
-// module imports is in this crate's (dev-)dependencies too.
+// The retrieval harness's shared helpers; everything they import is in our dev-deps too.
 #[path = "../../b2-embed/examples/common/mod.rs"]
 mod common;
 
@@ -59,8 +41,8 @@ struct QuestionSet {
 #[derive(Debug, Deserialize)]
 struct Question {
     question: String,
-    /// The note(s) a correct answer cites. **Empty means unanswerable** — the
-    /// only correct answer is the refusal.
+    /// The note(s) a correct answer cites. Empty means unanswerable: only a refusal is
+    /// correct.
     #[serde(default)]
     expect: Vec<String>,
 }
@@ -76,11 +58,9 @@ impl Question {
 struct Scored {
     question: String,
     unanswerable: bool,
-    /// Did retrieval hand the model a passage from a labelled note?
     retrieval_hit: bool,
     passages: usize,
     citations: usize,
-    /// Did the answer cite a labelled note?
     cited_expected: bool,
     /// `[n]` markers naming no passage — invisible in the citation list.
     hallucinated_markers: usize,
@@ -108,17 +88,14 @@ fn main() {
 fn run() -> Result<bool, Box<dyn Error>> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let evals_dir = manifest.join("evals");
-    // Deliberately the *retrieval* eval's corpus: chat is scored over the notes
-    // whose retrieval behaviour is already characterised, so a surprise here can
-    // be attributed rather than guessed at.
+    // The retrieval eval's corpus, whose retrieval behaviour is already characterised.
     let corpus_dir = manifest.join("../b2-embed/evals/corpus");
     let results_path = evals_dir.join("results.jsonl");
 
     let set: QuestionSet =
         serde_json::from_str(&std::fs::read_to_string(evals_dir.join("questions.json"))?)?;
 
-    // The chat provider first: it is the one that needs a server running, and
-    // finding that out after a model download and an embed pass would be rude.
+    // Probe the chat server first, before a model download and an embed pass.
     let llm_config = LlmConfig::from_env();
     let llm = OpenAiCompatProvider::new(llm_config.clone());
     llm.probe()?;
@@ -132,7 +109,6 @@ fn run() -> Result<bool, Box<dyn Error>> {
     let embed_model = embedder.model_id().to_string();
     eprintln!("[eval] embedder = {embed_model}");
 
-    // A throwaway vault from the corpus — nothing here touches a real one.
     let scratch = ScratchVault::copy_flat(&corpus_dir)?;
     let vault = Vault::open_with_embedder(scratch.root(), Box::new(embedder))?;
     let report = vault.reindex()?;
@@ -153,11 +129,8 @@ fn run() -> Result<bool, Box<dyn Error>> {
     append_result(&results_path, &row)?;
     eprintln!("\n[eval] appended one row to {}", results_path.display());
 
-    // The floor is a liveness check, not a quality bar (see the module doc): fail
-    // only when retrieval *did* hand the model labelled notes and nothing cited
-    // one — a broken pipeline. When retrieval reached nothing there is no chat
-    // result to judge at all; that is `--example eval`'s finding, printed above as
-    // a retrieval reach of 0, and failing here would blame the wrong half.
+    // A liveness check, not a quality bar. Reaching nothing is retrieval's finding, not
+    // chat's, so it doesn't fail here.
     let reached = scored
         .iter()
         .filter(|s| !s.unanswerable && s.retrieval_hit)
@@ -171,10 +144,7 @@ fn run() -> Result<bool, Box<dyn Error>> {
 
 /// Ask one question through the real flow ④ and score what came back.
 fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored, Box<dyn Error>> {
-    // Retrieval, scored separately *before* the ask: `Vault::ask` retrieves the
-    // same way for a single-turn question (no condensation), so this is the same
-    // passage set the model is about to see — and it is the ceiling the citation
-    // score is judged against.
+    // A single-turn `Vault::ask` retrieves exactly this passage set (no condensation).
     let passages = vault.search_chunks(&q.question, ASK_PASSAGES)?;
     let retrieval_hit = passages.iter().any(|p| q.expect.contains(&p.path));
 
@@ -188,9 +158,7 @@ fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored,
     })?;
     let total_ms = started.elapsed().as_millis();
 
-    // Markers the answer *claims* minus the ones that name a real passage: what
-    // the citation list can never show, because an unmatched marker resolves to
-    // nothing (and the answer text is never rewritten).
+    // An unmatched marker resolves to no citation, so count it here.
     let claimed = cited_markers(&answer.answer, usize::MAX).len();
     let hallucinated_markers = claimed.saturating_sub(answer.citations.len());
 
@@ -202,12 +170,8 @@ fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored,
         citations: answer.citations.len(),
         cited_expected: answer.citations.iter().any(|c| q.expect.contains(&c.path)),
         hallucinated_markers,
-        // A refusal counts when the model said the sentence *and* cited nothing.
-        // Both halves earn their place: "I don't find that in your notes." followed
-        // by cited details is a confabulation wearing a refusal, which is what the
-        // negatives exist to catch — while demanding the sentence *alone* would be
-        // the opposite error, since real models pad it with a clause, and scoring
-        // those as failures would measure verbosity instead of grounding.
+        // The sentence plus no citations: a cited "refusal" is a confabulation, and real
+        // models pad the sentence, so exact match would measure verbosity.
         refused: answer.answer.contains(NO_EVIDENCE_ANSWER) && answer.citations.is_empty(),
         tokens,
         first_token_ms: first_token.unwrap_or(total_ms),
@@ -216,8 +180,7 @@ fn ask_one(vault: &Vault, llm: &dyn LlmProvider, q: &Question) -> Result<Scored,
     })
 }
 
-/// The per-question readout — the paired list is the primary evidence, exactly as
-/// it is for the retrieval eval: aggregates hide which question moved.
+/// The per-question readout, the primary evidence: aggregates hide which question moved.
 fn print_table(scored: &[Scored]) {
     println!("per-question");
     println!(
@@ -253,9 +216,8 @@ fn print_table(scored: &[Scored]) {
     }
 }
 
-/// Fold the run into the row that lands in `results.jsonl` — aggregates plus
-/// every per-question detail, so a past run can be re-read without re-running it
-/// (answers included: the numbers say *that* it miscited, the text says how).
+/// The `results.jsonl` row: aggregates plus every per-question detail and answer, so a past
+/// run can be re-read without re-running it.
 fn summarize(scored: &[Scored], llm: &LlmConfig, embed_model: &str) -> serde_json::Value {
     let answerable: Vec<&Scored> = scored.iter().filter(|s| !s.unanswerable).collect();
     let negatives: Vec<&Scored> = scored.iter().filter(|s| s.unanswerable).collect();
@@ -277,7 +239,6 @@ fn summarize(scored: &[Scored], llm: &LlmConfig, embed_model: &str) -> serde_jso
         "chat_endpoint": llm.base_url,
         "embed_model": embed_model,
         "questions": scored.len(),
-        // The ceiling: chat can only be scored where retrieval delivered.
         "retrieval_reach": share(reached.len(), answerable.len()),
         "citation_accuracy": share(
             reached.iter().filter(|s| s.cited_expected).count(),

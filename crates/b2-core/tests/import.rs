@@ -1,13 +1,6 @@
-//! Importing an outside file through the [`Vault`] façade — the kernel behind the desktop's
-//! drag-from-Finder gesture and its OS-picker twin.
-//!
-//! What these pin beyond "the file arrives": an import is a **byte-honest copy** (a dropped
-//! `.md` keeps its own frontmatter, a dropped binary its bytes), it **projects** what it
-//! placed so the tree and search see it with no reindex, it routes on the extension exactly
-//! as the vault walk does, and it never clobbers or lands anywhere but where it was aimed.
-//! An arriving *copy of a note* used to need its own refusal (the copy carried the
-//! original's `b2id`); with identity being the path (ADR-0003) it is simply a second note at
-//! a second path, which is what it looks like in Finder too.
+//! Importing an outside file (the desktop's drag-from-Finder and file picker): a byte-honest
+//! copy, projected with no reindex, routed by extension like the walk, never clobbering or
+//! landing anywhere but where it was aimed.
 
 mod common;
 
@@ -15,8 +8,7 @@ use b2_core::Error;
 use common::{count, index_conn, opened_vault, reindexed_vault, MEMORY_PATH};
 use std::fs;
 
-/// The PNG header bytes — a binary payload that is *not* valid UTF-8, so an import
-/// that quietly treated everything as text would fail this rather than pass.
+/// Not valid UTF-8, so an import that treated everything as text would fail.
 const PNG_BYTES: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00];
 
 #[test]
@@ -35,7 +27,7 @@ fn a_dropped_binary_lands_in_the_folder_byte_for_byte_and_inventories() {
         PNG_BYTES,
         "the bytes are copied verbatim — B2 authors nothing here"
     );
-    // Projected on the way in: the tree lists it with no reindex.
+    // Listed with no reindex.
     let listed = vault.list_resources().unwrap();
     assert!(
         listed.iter().any(|r| r.path == "resources/schematic.png"),
@@ -48,7 +40,6 @@ fn a_dropped_markdown_file_lands_as_a_note_with_its_own_frontmatter_intact() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // A note from somewhere else: its own frontmatter, its own keys.
     let doc = "---\ntitle: \"From elsewhere\"\ncreated: 2026-01-02\nsource: web\n---\n\nA clipped paragraph about hydroponics.\n";
     let report = vault
         .import_file("notes", "clipped.md", doc.as_bytes())
@@ -57,12 +48,10 @@ fn a_dropped_markdown_file_lands_as_a_note_with_its_own_frontmatter_intact() {
     assert_eq!(report.path, "notes/clipped.md");
     assert!(report.note, "a `.md` is routed as a note");
 
-    // Byte-honest, and now byte-*identical*: B2 adds nothing at all (W1), because
-    // the destination path it was given is already the note's identity (L1).
+    // B2 adds nothing (W1): the path is already the identity (L1).
     let on_disk = fs::read_to_string(root.join("notes/clipped.md")).unwrap();
     assert_eq!(on_disk, doc, "the bytes are the human's, verbatim");
 
-    // Projected: readable and keyword-searchable immediately, no reindex.
     assert_eq!(
         vault.read("notes/clipped.md").unwrap().path,
         "notes/clipped.md"
@@ -84,7 +73,6 @@ fn an_imported_note_authors_body_links_into_the_graph() {
         .import_file("notes", "arrival.md", doc.as_bytes())
         .unwrap();
 
-    // The edge is derived from the arriving Markdown like any other note's.
     let neighbors = vault.neighbors("notes/arrival.md").unwrap();
     assert!(
         neighbors.iter().any(|n| n.path == MEMORY_PATH),
@@ -103,7 +91,7 @@ fn the_vault_root_is_a_destination_and_a_nested_folder_is_created() {
     );
     assert!(root.join("top.png").is_file());
 
-    // A folder that doesn't exist yet is created, mirroring `add`'s parent creation.
+    // A missing folder is created, as `add` does.
     assert_eq!(
         vault
             .import_file("archive/2026", "old.png", PNG_BYTES)
@@ -140,8 +128,7 @@ fn a_name_that_is_really_a_path_cannot_redirect_the_import() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // The safety property: the human dropped on `notes/`, so nothing may land
-    // outside it — whatever the file claims to be called.
+    // Dropped on `notes/`, so nothing may land outside it, whatever the name says.
     for name in ["../escaped.png", "sub/nested.png", ".hidden.png"] {
         let err = vault.import_file("notes", name, PNG_BYTES).unwrap_err();
         assert!(
@@ -154,11 +141,7 @@ fn a_name_that_is_really_a_path_cannot_redirect_the_import() {
     assert!(!root.join("notes/sub").exists());
 }
 
-/// A copy of a note you already have is, since GH #170, simply a second note — the
-/// same thing it is in Finder. The refusal this replaces (`Error::B2idCollision`)
-/// existed because the copy carried the incumbent's stamped id and projecting it
-/// would have moved that identity, and every inbound edge, onto the copy. With the
-/// path as the identity there is nothing to steal: two paths, two notes.
+/// Since GH #170 a copy of a note is simply a second note: two paths, two identities.
 #[test]
 fn an_arriving_copy_of_a_note_is_just_a_second_note() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -170,8 +153,7 @@ fn an_arriving_copy_of_a_note_is_just_a_second_note() {
         .unwrap();
     assert_eq!(report.path, "notes/memory-copy.md");
 
-    // Both exist, both index, and the original keeps every inbound edge it had —
-    // the copy took nothing from it.
+    // The copy takes nothing from the original.
     assert_eq!(
         fs::read_to_string(root.join("notes/memory-copy.md")).unwrap(),
         original,
@@ -195,7 +177,6 @@ fn import_path_copies_the_picked_file_keeping_its_name() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (vault, root) = reindexed_vault(tmp.path());
 
-    // A file outside the vault, as an OS file picker would hand it over.
     let outside = tmp.path().join("Downloads");
     fs::create_dir_all(&outside).unwrap();
     let source = outside.join("paper.pdf");
@@ -229,8 +210,7 @@ fn import_path_refuses_an_occupied_destination_rather_than_truncating_it() {
     let err = vault.import_path("concepts", &source).unwrap_err();
 
     assert!(matches!(err, Error::ImportTargetExists(_)), "{err:?}");
-    // The destination is reserved by a create-new open, so the occupied case never
-    // reaches a write — where a plain `fs::copy` would have truncated the incumbent.
+    // A create-new open reserves the destination; `fs::copy` would have truncated it.
     assert_eq!(fs::read_to_string(root.join(MEMORY_PATH)).unwrap(), before);
 }
 
@@ -249,9 +229,7 @@ fn import_path_refuses_a_folder() {
 #[test]
 fn importing_into_a_never_reindexed_vault_needs_no_model_and_no_index_first() {
     let tmp = tempfile::TempDir::new().unwrap();
-    // `opened_vault` — projected by nothing yet. Import is model-free (a
-    // `ProjectionCtx`, like `create_note`), so it works before any embedding space
-    // exists; the note's vectors fill on the next embed pass.
+    // Import is model-free, so it works before any embedding space exists.
     let (vault, root) = opened_vault(tmp.path());
 
     let report = vault
@@ -291,8 +269,7 @@ fn a_reindex_after_an_import_changes_nothing_it_did() {
         .unwrap();
     let after_import = fs::read_to_string(root.join("notes/arrival.md")).unwrap();
 
-    // S2/S3: what the import projected is what a full rebuild derives — an import is
-    // ordinary vault material the moment it lands, with nothing special recorded.
+    // S2/S3: an import is ordinary vault material the moment it lands.
     vault.reindex().unwrap();
 
     assert_eq!(vault.read("notes/arrival.md").unwrap().path, imported.path);

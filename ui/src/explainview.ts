@@ -20,12 +20,10 @@ import { strengthHtml } from "./widgets.ts";
 
 // --- Explain: the Compare view for one Similar card (GH #236) ------------------------
 //
-// The centre pane's fourth mode: the open note against one of its Similar cards, read
-// model-free from the same computation as the list (`Vault::explain_similar`), so its
-// rank, grade and best passage are the card's. The words and the strip's geometry are
-// explain.ts's; this is only paint. Passage text is note content, so it is escaped and
-// shown as text (E5), never rendered as Markdown. Every control is a real button in tab
-// order, and Escape backs out, as it does from the graph (K1).
+// The centre pane's fourth mode, read model-free from the list's own computation
+// (`Vault::explain_similar`), so rank and grade match the card. Passage text is escaped,
+// never rendered as Markdown (E5). Every control is a button in tab order; Escape backs
+// out (K1).
 
 export function explainPaneHtml(state: AppState): string {
   const ec = state.explainCard;

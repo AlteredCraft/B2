@@ -1,6 +1,4 @@
-// The tree-creation path rules (newentry.ts), pinned. Pure string logic — no DOM —
-// so node runs it straight off the source via its native type-stripping: `npm test`.
-// Dependency-free like panes.test.ts (hand-rolled assert; no @types/node).
+// The tree-creation path rules (newentry.ts). Hand-rolled asserts, no @types/node.
 import { dirChain, joinPath, normalizeName, parentDir } from "./newentry.ts";
 
 let passed = 0;

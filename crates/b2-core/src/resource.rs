@@ -1,11 +1,9 @@
 //! Resource classification and document-kind dispatch.
 //!
-//! Class is decided by **extension only** — deterministic, no content sniffing, so a
-//! mislabeled file degrades gracefully. The table is closed with
-//! [`ResourceClass::Binary`] as the total fallback, so *every* file classifies.
+//! Class is decided by extension only, no content sniffing. [`ResourceClass::Binary`] is
+//! the fallback, so every file classifies.
 
-/// The closed class table (data-model.md §10). Everything that is not a note maps to
-/// exactly one of these; `Binary` catches all the rest.
+/// The closed class table (data-model.md §10) for everything that is not a note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceClass {
     Text,
@@ -29,10 +27,8 @@ impl ResourceClass {
         }
     }
 
-    /// Classify a vault-relative path. `None` means the file is a **note**
-    /// (`.md`) and belongs to the note pipeline, not the resource inventory.
-    /// Extensions are case-insensitive and read off the file name (a dotted folder
-    /// lends none); no extension → `Binary`.
+    /// Classify a vault-relative path; `None` means a note (`.md`). Case-insensitive,
+    /// read off the file name; no extension is `Binary`.
     pub fn of_path(path: &str) -> Option<ResourceClass> {
         let ext = crate::pathspec::extension(path)
             .map(str::to_ascii_lowercase)
@@ -53,9 +49,8 @@ impl ResourceClass {
     }
 }
 
-/// Which arm of the vault an argument names — the pure dispatch rule locked in
-/// data-model.md §10, kept in core so the CLI and the desktop
-/// can never drift on it.
+/// Which arm of the vault an argument names (data-model.md §10). In core so the adapters
+/// can't drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
     /// A note ref: a path, with or without the `.md`.
@@ -64,12 +59,9 @@ pub enum DocKind {
     Resource,
 }
 
-/// Dispatch a document reference — an adapter argument or a link target — to the note or
-/// resource arm by the reference's own shape, never by DB state: **an extension other than
-/// `md` means resource; `.md` or no extension means note.** Extensionless covers the
-/// wikilink habit (`concepts/memory`), the only extra form a note ref takes (ADR-0003).
-/// Known limit, accepted: an extensionless *file* (`Makefile`) dispatches as a note ref —
-/// it is still walked, inventoried, and reachable through surfaces that know its kind.
+/// Dispatch a reference by its shape, never DB state: an extension other than `md` is a
+/// resource; `.md` or none is a note (wikilinks omit it, ADR-0003). Accepted limit: an
+/// extensionless file (`Makefile`) dispatches as a note ref.
 pub fn doc_kind(arg: &str) -> DocKind {
     match crate::pathspec::extension(arg) {
         Some(ext) if !ext.eq_ignore_ascii_case("md") => DocKind::Resource,
@@ -83,7 +75,7 @@ mod tests {
 
     #[test]
     fn classification_is_total_and_extension_only() {
-        // (path, expected) — parameterized over the class table; None = note.
+        // None = note.
         let cases: &[(&str, Option<ResourceClass>)] = &[
             ("notes/a.md", None),
             ("NOTES/A.MD", None),
