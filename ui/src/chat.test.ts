@@ -68,7 +68,6 @@ test("the transcript's rows are the turns, with citations nested under them", ()
       [citationRowKey(3, 1, "concepts/memory.md"), 1],
     ],
   );
-  // Nothing in a conversation folds — it is read, not browsed.
   assert.ok(rows.every((r) => r.fold === null));
 });
 
@@ -80,8 +79,7 @@ test("a streaming answer is a row too, so the keyboard can sit on it while it fi
 
 test("the pane walks with discovery's own arrows (K1) — one row order, both directions", () => {
   const rows = chatRows(conversation(), false);
-  // ↓ from the top walks every row, citations included: a row you can see is a row you
-  // can reach.
+  // ↓ walks every row, citations included.
   let at = -1;
   const visited: string[] = [];
   for (;;) {
@@ -92,22 +90,20 @@ test("the pane walks with discovery's own arrows (K1) — one row order, both di
   }
   assert.deepEqual(visited, rows.map((r) => r.key));
 
-  // ← from a citation steps out to the answer it belongs to (nothing folds, so `out` is
-  // purely "step to the parent").
+  // ← from a citation steps out to its answer.
   const cite = sideRowIndex(rows, citationRowKey(1, 2, "notes/spaced-repetition.md"));
   assert.deepEqual(sideArrowMove(rows, cite, "side.row.out"), {
     kind: "focus",
     key: turnRowKey(1),
   });
-  // → on a turn row steps into its first citation; on a turn with none it is spent.
+  // → steps into a turn's first citation; with none it is spent.
   assert.deepEqual(sideArrowMove(rows, sideRowIndex(rows, turnRowKey(1)), "side.row.in"), {
     kind: "focus",
     key: citationRowKey(1, 1, "concepts/memory.md"),
   });
   assert.equal(sideArrowMove(rows, sideRowIndex(rows, turnRowKey(0)), "side.row.in"), null);
 
-  // The roving tabstop: the pane is one Tab stop, and it lands on the remembered row —
-  // or the first one when that row is gone (a new conversation).
+  // The roving tabstop lands on the remembered row, or the first when that row is gone.
   assert.equal(rovingSideKey(rows, turnRowKey(2)), turnRowKey(2));
   assert.equal(rovingSideKey(rows, "chat:turn:99"), turnRowKey(0));
   assert.equal(rovingSideKey([], null), null);
@@ -124,10 +120,9 @@ test("history carries what was actually said — a stopped answer included, a fa
   ];
   assert.deepEqual(chatHistory(messages), [
     { role: "user", content: "first" },
-    // The human read this text, so "go on" must be condensed against it.
+    // The human read this text, so "go on" must condense against it.
     { role: "assistant", content: "Half an ans" },
     { role: "user", content: "second" },
-    // The failed turn contributes nothing — there is no answer to carry forward.
     { role: "user", content: "third" },
   ]);
 });
@@ -145,8 +140,6 @@ test("the empty state is chosen once, from the vault and the probe", () => {
     "no-model",
   );
   assert.equal(chatEmptyState({ hasVault: true, setup: setup() }), "ready");
-  // The fake provider answers, so chat is usable — the pane says *what* is answering
-  // rather than blocking on it.
   assert.equal(chatEmptyState({ hasVault: true, setup: setup({ state: "fake" }) }), "ready");
 });
 
@@ -160,22 +153,18 @@ test("the app asks the same question off its own state", () => {
 });
 
 test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
-  // Nothing indexed yet: the tree's own empty state covers it, so chat says nothing.
+  // Nothing indexed: the tree's empty state covers it.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 0 }), "");
-  // No model installed at all.
   assert.match(
     retrievalNote({ semantic: false, notesEmbedded: 0, notesTotal: 12 }),
     /keyword search only/,
   );
-  // A model, nothing embedded yet.
   assert.match(
     retrievalNote({ semantic: true, notesEmbedded: 0, notesTotal: 12 }),
     /keyword search for now/,
   );
-  // Partly embedded — say how far, and what closes the gap. Deliberately NOT phrased as
-  // work in flight ("while this vault embeds"): nothing is necessarily running. The gap
-  // outlives a cancelled or crashed reindex and sits there until someone acts, so a
-  // sentence promising progress would have the user waiting on nothing.
+  // Partly embedded: not phrased as work in flight, since the gap outlives a cancelled
+  // reindex.
   const partial = retrievalNote({ semantic: true, notesEmbedded: 7, notesTotal: 12 });
   assert.match(partial, /Keyword-first grounding/);
   assert.match(partial, /7\/12/);
@@ -185,7 +174,6 @@ test("an unembedded vault is a quiet note, never a blocker (M4)", () => {
     /while this vault embeds|embedding now|in progress/,
     "the note must not claim a run is under way when none may be",
   );
-  // Fully embedded: nothing to caveat.
   assert.equal(retrievalNote({ semantic: true, notesEmbedded: 12, notesTotal: 12 }), "");
 });
 
@@ -197,7 +185,7 @@ test("a why-question names both notes, by title where there is one", () => {
     ),
     "Why is “Spaced repetition” suggested as similar to “Memory”?",
   );
-  // An untitled note is named by its path — the identity the rest of the app shows.
+  // An untitled note is named by its path.
   assert.equal(
     whyQuestion({ path: "a.md", title: null }, { path: "b.md", title: "" }),
     "Why is “a.md” suggested as similar to “b.md”?",
@@ -216,12 +204,12 @@ test("an answer says which B2 tools it was built from", () => {
     ],
   };
   assert.deepEqual(answerMessage(view).tools, view.tools);
-  // Each tool once, in first-use order, named the way a person would say it.
+  // Each tool once, in first-use order.
   assert.equal(toolsLine(view.tools), "Looked up with B2 tools: passage pairs, read");
-  // A plain ask offers the model no tools; the host omits the field, and the line is empty.
+  // A plain ask: the host omits the field.
   assert.deepEqual(answerMessage({ answer: "x", citations: [], cancelled: false }).tools, []);
   assert.equal(toolsLine([]), "");
-  // A tool name is model output, so an odd one is shown as it came — the paint escapes it.
+  // Model output is shown as it came; the paint escapes it.
   assert.equal(
     toolsLine([{ name: "<b>x</b>", arguments: "", seeded: false }]),
     "Looked up with B2 tools: <b>x</b>",
@@ -230,24 +218,19 @@ test("an answer says which B2 tools it was built from", () => {
 
 test("the tool-call cap field is untouched, cleared, set, or refused — before it is sent", () => {
   const cap = { in_force: 64, default: 64, ceiling: 4096 };
-  // Untouched: the field paints the cap in force, so saving it back unchanged must not
-  // *store* it — that would pin today's default over tomorrow's environment variable.
+  // Untouched must not store the shown cap, or it pins today's default over the env var.
   assert.deepEqual(toolCapInput("64", cap), { send: null });
   assert.deepEqual(toolCapInput(" 64 ", cap), { send: null });
-  // Cleared: back to the environment/default, which is the host's `""`.
   assert.deepEqual(toolCapInput("", cap), { send: "" });
   assert.deepEqual(toolCapInput("   ", cap), { send: "" });
-  // Set, at both ends of the range the host quoted.
   assert.deepEqual(toolCapInput("1", cap), { send: "1" });
   assert.deepEqual(toolCapInput("4096", cap), { send: "4096" });
-  // Refused here, with a sentence, rather than sent to a host that would ignore it and
-  // leave *Save* looking like it did nothing.
+  // Refused here with a sentence, not sent to a host that would ignore it.
   for (const bad of ["0", "4097", "-2", "6.5", "lots", "1e3", "12abc"]) {
     const verdict = toolCapInput(bad, cap);
     assert.ok("error" in verdict, `${bad} should be refused`);
     assert.match(verdict.error, /1 to 4096/);
   }
-  // The range is the host's, not a constant here.
   assert.ok("error" in toolCapInput("200", { in_force: 64, default: 64, ceiling: 100 }));
 });
 

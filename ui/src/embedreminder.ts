@@ -1,39 +1,22 @@
-// The "semantic search is off" install banner's gate, and where its opt-out persists — no
-// DOM, no IPC, so node runs its test straight off the source (`npm test`). The two
-// functions that touch `localStorage` are at the bottom, the shape keymap.ts and zoom.ts
-// use for theirs.
-//
-// The problem it addresses: on a fresh install with no embedding model, opening a vault
-// runs the model-free projection pass (keyword index + graph) and then *silently* stops
-// before embedding (`autoIndexOnOpen` bails on `!semantic`). Discovery and semantic
-// ranking are simply off, and the only prior signal was the small search caveat (#26),
-// which is easy to miss. This predicate decides when to surface a prominent, dismissible
-// prompt pointing at Settings → Download instead.
+// The "semantic search is off" install banner's gate, and where its opt-out persists (no
+// DOM, no IPC). Without a model, opening a vault projects and then silently skips
+// embedding, so discovery is off; this decides when to prompt for Settings → Download.
 
 /** Inputs the banner keys on — plain primitives so this stays node-testable. */
 export interface EmbedReminderInputs {
-  /** A vault is open (null root ⇒ nothing to embed, nothing to prompt about). */
+  /** A vault is open. */
   hasVault: boolean;
-  /** The real embedding model is installed (`VaultInfo.semantic`). When true the
-   *  problem doesn't exist — semantic ranking is (or is becoming) live. */
+  /** The real embedding model is installed (`VaultInfo.semantic`). */
   semantic: boolean;
-  /** Projected notes (`VaultInfo.notes_total`). Zero means either an empty vault or one
-   *  still mid-projection: there is nothing to embed yet, so don't nag prematurely. */
+  /** Projected notes (`VaultInfo.notes_total`). Zero (empty or mid-projection) doesn't nag. */
   notesTotal: number;
-  /** A model download is already in flight — the Settings modal owns the flow; the
-   *  banner's "go download it" ask would be stale, so stand down while it runs. */
+  /** A model download is in flight, so the ask would be stale. */
   provisioning: boolean;
-  /** The user has dismissed the reminder (this session's ✕, or a persisted
-   *  "Don't remind me again" — a keyword-only user opting out for good). */
+  /** Dismissed, for this session (✕) or for good ("Don't remind me again"). */
   dismissed: boolean;
 }
 
-/**
- * Whether to show the install banner. True only when there is a real, actionable gap:
- * a vault with content is open, the model is genuinely absent, no download is already
- * running, and the user hasn't opted out. Kept intentionally narrow so the banner never
- * fires on an empty vault, mid-projection, mid-download, or once semantic is live.
- */
+/** Whether to show the install banner: only for a real, actionable gap. */
 export function shouldPromptEmbedInstall(i: EmbedReminderInputs): boolean {
   return (
     i.hasVault &&
@@ -46,14 +29,11 @@ export function shouldPromptEmbedInstall(i: EmbedReminderInputs): boolean {
 
 // --- persistence -----------------------------------------------------------------------
 //
-// The "Don't remind me again" opt-out — the persisted half of `dismissed` (the ✕ only
-// hides the banner for the session, which is state, not storage). localStorage, like the
-// theme and the zoom: a viewing choice, never vault state.
+// The persisted half of `dismissed`. localStorage: a viewing choice, never vault state.
 
 const KEY = "b2:embed-reminder-off";
 
-/** Has the user opted out for good? Unavailable storage (private mode) reads as no, so
- *  the reminder still shows. */
+/** Has the user opted out for good? Unavailable storage reads as no. */
 export function loadReminderOptOut(): boolean {
   try {
     return localStorage.getItem(KEY) === "1";
@@ -66,6 +46,6 @@ export function saveReminderOptOut(): void {
   try {
     localStorage.setItem(KEY, "1");
   } catch {
-    // Non-fatal: the opt-out still holds for this session if it can't persist.
+    // Non-fatal: the opt-out still holds for this session.
   }
 }

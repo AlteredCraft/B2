@@ -1,21 +1,12 @@
-// Pure logic for importing outside files into the vault (a drag from Finder onto the
-// file tree, and the Import files… picker) — no DOM, no IPC — so node runs its test
-// straight off the source (`npm test`), like newentry.ts / move.ts. main.ts owns the
-// DragEvent plumbing; the rules about *what* may be imported, and what to say about it,
-// live here where they can be tested.
+// Pure rules for importing outside files (a Finder drop onto the tree, or the Import
+// files… picker): what may be imported and what to say about it.
 //
-// Why a size limit exists at all, and why it's the frontend's. A dropped file reaches
-// the webview as **content**, not a path (WebKit hands the page bytes; only Tauri's own
-// drag-drop channel carries paths, and that channel is off — see main.ts's
-// `dragDropEnabled: false` note). So a drop has to read the whole file into memory and
-// base64 it across the IPC, and the peak cost is a couple of multiples of the file. A
-// 4 GB video dropped by accident would hang the window; refusing it up front — the size
-// is known before a byte is read — turns that into one sentence naming the way through
-// (Finder-copy into the vault folder, which the fs watcher picks up anyway). The host
-// enforces no such limit: `Vault::import_file` takes the bytes it is given, and the
-// picker path (real paths, no byte transport) is deliberately not capped here either.
+// A dropped file reaches the webview as content, not a path (Tauri's drag-drop channel is
+// off, see main.ts), so it is read whole and base64'd across the IPC; a huge accidental
+// drop would hang the window. The size limit is the frontend's alone: the picker sends
+// paths and is not capped.
 
-/** The most a *dropped* file may weigh, in bytes. See the module note. */
+/** The most a dropped file may weigh, in bytes. */
 export const IMPORT_SIZE_LIMIT = 64 * 1024 * 1024;
 
 /** What main.ts knows about one dropped entry before reading it. */
@@ -25,7 +16,7 @@ export interface ImportCandidate {
   isDirectory: boolean;
 }
 
-/** The verdict on a drop: what to send, and a phrased reason per thing refused. */
+/** The verdict on a drop: what to send, and a reason per thing refused. */
 export interface ImportPlan<T> {
   accepted: T[];
   refused: string[];
@@ -45,14 +36,9 @@ export function formatSize(bytes: number): string {
 }
 
 /**
- * Split a drop into what will be sent and what won't, with the reason already
- * phrased for the toast. Generic over the caller's entry type so the `File` handle
- * rides along with the metadata — the plan is a filter, not a projection.
- *
- * Two refusals, both decidable without reading a byte: a **folder** (a drop of one
- * arrives as a directory entry with no content to send — recursing into it is a
- * bigger feature than this gesture, and saying so beats importing nothing silently)
- * and a file over [`IMPORT_SIZE_LIMIT`].
+ * Split a drop into what will be sent and what won't, with reasons for the toast. A
+ * filter, not a projection, so the caller's `File` handle rides along. Refuses folders
+ * (not recursed) and files over [`IMPORT_SIZE_LIMIT`].
  */
 export function planImport<T extends ImportCandidate>(entries: T[]): ImportPlan<T> {
   const accepted: T[] = [];
@@ -73,16 +59,14 @@ export function planImport<T extends ImportCandidate>(entries: T[]): ImportPlan<
   return { accepted, refused };
 }
 
-/** How the toast names a destination folder — the root has no path to say. */
+/** How the toast names a destination folder. */
 export function destinationLabel(dir: string): string {
   return dir ? `${dir}/` : "the vault root";
 }
 
 /**
- * The one sentence (or two) an import reports. Says what landed first — that is the
- * outcome the user asked for — then everything that didn't, each with its reason.
- * Refusals are never summarized into a count: "1 skipped" teaches nothing, and the
- * whole point of refusing early is to be able to say why.
+ * What an import reports: what landed, then each refusal with its reason (never a bare
+ * count, which teaches nothing).
  */
 export function importSummary(dir: string, imported: string[], refused: string[]): string {
   const where = destinationLabel(dir);
@@ -98,11 +82,8 @@ export function importSummary(dir: string, imported: string[], refused: string[]
 }
 
 /**
- * Bytes → base64, the shape the `import_file` command decodes (transport only; see
- * that command's doc for why the drop path can't hand over a path instead).
- * Chunked because `String.fromCharCode(...bytes)` spreads one argument per byte and
- * a whole-file spread blows the argument limit somewhere in the low hundreds of KB —
- * i.e. it would work in every test and fail on the first real PDF.
+ * Bytes → base64 for `import_file`. Chunked: a whole-file `String.fromCharCode(...bytes)`
+ * spread blows the argument limit in the low hundreds of KB.
  */
 export function bytesToBase64(bytes: Uint8Array): string {
   const CHUNK = 0x8000;

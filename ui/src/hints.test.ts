@@ -1,12 +1,7 @@
-// Chord hints follow the live keyboard (hints.ts, and render.ts's own hints).
-//
-// Two halves. The first rebinds and reads the hints back: a tooltip that still names the
-// shipped chord after a rebind is the bug this module exists to prevent. The second is
-// the guard that keeps a new one from being written by hand: it walks every string
-// literal in the UI's sources — through TypeScript's own parser, so comments are never
-// mistaken for strings — and fails on anything spelled like a chord. The fix for a
-// failure is `displayKeys([...])`, never an entry in the exemption list; that list is for
-// text that names a key the user *can't* rebind, and each entry says why.
+// Chord hints follow the live keyboard (hints.ts, and render.ts's own hints). The guard
+// walks every string literal in the UI (via TypeScript's parser) and fails on a chord
+// spelled by hand. The fix is `displayKeys([...])`; the exemption list is only for keys no
+// rebind can move.
 
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
@@ -87,14 +82,12 @@ test("the sheet's Settings heading follows the rebind", () => {
 
 // --- the guard ------------------------------------------------------------------------
 
-/** A chord as a person would type it into a string: modifier glyphs then a key, or a bare
- *  function key. A lone glyph ("hold ⌘", "⇧ for a bigger step") is prose about a
- *  modifier, not a chord, and doesn't match. */
+/** A chord spelled in a string: modifier glyphs then a key, or a bare function key. A lone
+ *  glyph ("hold ⌘") is prose, not a chord. */
 const CHORD =
   /[⌃⌥⇧⌘]+(?:F\d{1,2}|Enter|Tab|Esc|[A-Za-z0-9,.[\]/;'`=\-⏎⌫⌦←→↑↓])|(?<![A-Za-z0-9])F\d{1,2}(?![A-Za-z0-9])/u;
 
-/** Files that are *allowed* to spell chords: the registry itself, where every chord is
- *  declared. */
+/** Files allowed to spell chords: the registry itself. */
 const OWNERS = new Set(["bindings.ts"]);
 
 /** Text that names a key no rebind can move. Each entry is matched exactly. */

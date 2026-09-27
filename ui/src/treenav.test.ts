@@ -1,11 +1,5 @@
-// The file tree's navigation rules (treenav.ts), pinned. Pure logic — no DOM — so node
-// runs it straight off the source via its native type-stripping: `npm test`.
-// Dependency-free like newentry.test.ts / panes.test.ts (hand-rolled assert).
-//
-// What's under test is invariant K1's tree half (GH #78): the *visible* row order the
-// arrows walk, and the ARIA tree-pattern moves over it. The order matters twice over —
-// render.ts paints from the same `sortedSubdirs`/`sortedFiles` this flattens with, so
-// these cases are also the guard against the paint and the arrows drifting apart.
+// The file tree's navigation rules (treenav.ts), pinned: K1's tree half (GH #78), the
+// visible row order and the ARIA moves over it.
 import type { KeyEventLike } from "./bindings.ts";
 import {
   arrowMove,
@@ -46,9 +40,7 @@ const resource = (path: string, cls = "pdf"): ResourceSummary =>
   ({ path, class: cls }) as ResourceSummary;
 
 /**
- * A small vault with every shape that matters: nested folders, an empty folder (the fs
- * is authoritative for structure, so it's a real row), a resource beside a note, and a
- * title that sorts differently from its filename.
+ * A small vault with every shape that matters:
  *
  *   archive/            (folder, empty)
  *   concepts/           (folder)
@@ -86,13 +78,12 @@ check("expansion nests, and a collapsed child hides its own subtree", () => {
     "archive|concepts|concepts/deep|concepts/deep/nested.md|concepts/memory.md|concepts/spec.pdf|readme.md",
     "two levels open",
   );
-  // `concepts/deep` expanded but its parent closed shows nothing: visibility is the
-  // whole ancestor chain, not a single flag.
+  // Visibility is the whole ancestor chain.
   equal(paths(rowsWith("concepts/deep")), "archive|concepts|readme.md", "an orphaned expansion is inert");
 });
 
 check("files sort by their display label, not their filename", () => {
-  // readme.md is titled "Alpha", so it sorts under A — exactly as the tree paints it.
+  // readme.md is titled "Alpha", so it sorts under A.
   const rows = visibleRows(buildTree([note("zulu.md", "Alpha"), note("alpha.md", "Zulu")], [], []), new Set());
   equal(paths(rows), "zulu.md|alpha.md", "label order wins");
 });
@@ -178,10 +169,7 @@ check("left collapses an expanded folder, else steps out to the parent", () => {
 });
 
 check("the shipped keys mean what the ARIA tree pattern says", () => {
-  // Since #121 this module no longer decides which key is which move — the registry does
-  // (bindings.ts's header says why), and `treeNavFor` is the lookup. So the mapping is
-  // pinned *here*, where the pattern it implements is documented, rather than being
-  // re-derived from a table in the test the way it used to be read off a switch.
+  // The registry owns the mapping (#121); pinned here against the ARIA pattern.
   equal(treeNavFor(press("ArrowDown")), "tree.row.next", "↓ is the next row");
   equal(treeNavFor(press("ArrowUp")), "tree.row.prev", "↑ is the previous one");
   equal(treeNavFor(press("Home")), "tree.row.first", "Home");
@@ -191,9 +179,7 @@ check("the shipped keys mean what the ARIA tree pattern says", () => {
 });
 
 check("a key the tree doesn't own is left alone", () => {
-  // The other half of what the old `default:` case did, and the half that matters: a pane
-  // handler that swallowed keys it has no move for would eat ⏎ off the row's button and
-  // every letter typeahead needs.
+  // Keys with no move must not be swallowed (⏎ and typeahead letters).
   equal(treeNavFor(press("Enter")), null, "Enter belongs to the button");
   equal(treeNavFor(press("n")), null, "letters fall through to typeahead");
   equal(arrowMove([], -1, "tree.row.next"), null, "and an empty tree has no moves at all");
@@ -228,8 +214,7 @@ check("the tabstop prefers the keyboard's row, then the open note, then the firs
 });
 
 check("a tabstop that scrolled out of existence falls back rather than vanishing", () => {
-  // `concepts` collapsed: the focused child is no longer a row, so the tree must not be
-  // left with zero tabbable rows (Tab would skip it entirely).
+  // The focused child collapsed away: the tree must keep a tabbable row.
   const rows = rowsWith();
   equal(rovingPath(rows, "concepts/memory.md", null), "archive", "collapsed away → first row");
   equal(rovingPath(rows, "deleted.md", "readme.md"), "readme.md", "deleted → the open document");
@@ -246,7 +231,7 @@ check("a deleted row hands focus to the next row, else the previous one", () => 
 
 check("a deleted folder's whole subtree goes with it", () => {
   const rows = rowsWith("concepts", "concepts/deep");
-  // Not `concepts/deep` (inside it) and not its children — the next row at or above it.
+  // Not inside the deleted folder: the next row at or above its depth.
   equal(neighborPath(rows, "concepts"), "readme.md", "skips the subtree it takes along");
   equal(neighborPath(rows, "concepts/deep"), "concepts/memory.md", "a nested folder, same rule");
 });

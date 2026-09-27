@@ -23,23 +23,13 @@ import { sideTab } from "./widgets.ts";
 
 // --- chat (flow ④, GH #151/#153/#155) -----------------------------------------------
 //
-// The right column's third mode: ask a question, watch the answer stream, click a
-// citation to open the note behind it — *without* the conversation leaving the screen,
-// which is why chat lives here rather than in the centre pane (chat.ts's header).
+// The right column's chat mode, so a clicked citation opens beside the conversation.
 //
-// Three rules this builder holds, all of them invariants rather than styling:
-//
-//   • **E5 — model output is untrusted content.** An answer is a string from a model that
-//     was itself fed note content (which anyone can author), so it renders through the one
-//     sanitizing `renderMarkdown` seam like every other document. The *streaming* half is
-//     stronger still: it is written as `textContent` by `paintChatStream` (main.ts), so a
-//     half-arrived answer is never parsed as markup at all.
-//   • **A citation navigates in-app, never the webview.** Each one is a `data-open` button
-//     — the same delegation search results and discovery cards use — so the mouse and ⏎
-//     share one activation path (K1), and no `href` ever exists to be followed.
-//   • **K1 — the pane is keyboard-complete.** Rows are `role="treeitem"` over chat.ts's
-//     row order (the same order the arrows walk), with a roving tabstop; every control has
-//     a stable `id` so `paintSide` can hand focus back across the repaint each token causes.
+//   • E5: an answer is untrusted, so it renders through the sanitizing `renderMarkdown`
+//     seam; the streaming half is written as `textContent` (`paintChatStream`), never markup.
+//   • A citation is a `data-open` button, never an `href`, so it navigates in-app (K1).
+//   • K1: rows are `role="treeitem"` in chat.ts's row order with a roving tabstop; every
+//     control has a stable `id` so focus survives the per-token repaint.
 export function chatPaneHtml(state: AppState, roving: string | null): string {
   const setup = state.chatSetup;
   const streaming = state.chatStreaming !== null;
@@ -55,14 +45,11 @@ export function chatPaneHtml(state: AppState, roving: string | null): string {
         state.chatMessages.length === 0 || streaming ? " disabled" : ""
       } data-chat-new title="Start a new conversation — nothing here is saved">new</button>
     </div>`;
-  // No composer until there is something to answer with: a disabled field under a card
-  // that says why is chrome with nothing behind it, and one more stop for a keyboard user
-  // to walk past on the way to the fix the card is pointing at.
+  // No composer until chat is ready: a disabled field is just another Tab stop.
   return head + chatStageHtml(state, roving) + (chatReady(state) ? chatComposerHtml(state) : "");
 }
 
-/** The conversation, or the state that stands in for one (chat.ts's `chatEmptyState`
- *  makes that choice once, so the paint doesn't re-derive it branch by branch). */
+/** The conversation, or the state that stands in for one (chosen by `chatStateOf`). */
 function chatStageHtml(state: AppState, roving: string | null): string {
   switch (chatStateOf(state)) {
     case "no-vault":
@@ -97,9 +84,8 @@ function chatLogHtml(state: AppState, roving: string | null): string {
   const turns = state.chatMessages
     .map((m, i) => chatTurnHtml(m, i, roving))
     .join("");
-  // The in-flight answer is a row of its own so the keyboard can sit on it while it
-  // fills. `#chat-stream` is the element `paintChatStream` writes tokens into — as text,
-  // never markup — which is what keeps a streaming answer off the full-render path.
+  // The in-flight answer is its own row, so the keyboard can sit on it. `paintChatStream`
+  // writes tokens into `#chat-stream` as text, off the full-render path.
   const live =
     state.chatStreaming === null
       ? ""
@@ -140,8 +126,7 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
   const stopped = m.cancelled
     ? `<p class="chat-stopped">Stopped — this answer is partial.</p>`
     : "";
-  // Which B2 tools the answer was built from (a *Why?* turn). Tool names are the
-  // model's own words, so they are escaped like every other value in the chrome (E5).
+  // Which B2 tools built the answer (a Why? turn). Model-chosen names, so escaped (E5).
   const line = toolsLine(m.tools);
   const used = line ? `<p class="chat-tools">${escapeHtml(line)}</p>` : "";
   const cites = m.citations
@@ -168,16 +153,9 @@ function chatTurnHtml(m: ChatMessage, index: number, roving: string | null): str
 }
 
 /**
- * The composer. A `<textarea>` rather than an input because a question can be a
- * paragraph: ⏎ asks, ⇧⏎ is a newline (the platform's own reflex in a multi-line field,
- * which is why the registry marks the chord `fixed`).
- *
- * While an answer streams, Ask becomes **Stop** — the mouse's equal of Esc (K1: no action
- * reachable only by keyboard either). The field itself stays **enabled** throughout: you
- * can line up the next question while this answer arrives, and — the reason it matters —
- * disabling a focused control drops the keyboard to `<body>`, so the one gesture that
- * always precedes a stream would be the one that ejects you from the pane. `sendChat`
- * refuses a second turn instead, where it costs nobody their focus.
+ * The composer: ⏎ asks, ⇧⏎ is a newline. While an answer streams, Ask becomes Stop (the
+ * mouse's Esc, K1). The field stays enabled, because disabling a focused control drops
+ * focus to `<body>`; `sendChat` refuses a second turn instead.
  */
 function chatComposerHtml(state: AppState): string {
   const streaming = state.chatStreaming !== null;
@@ -199,15 +177,9 @@ function chatComposerHtml(state: AppState): string {
 }
 
 /**
- * The setup card — deliberately **Ollama-native** (GH #151: guided setup is a per-runtime
- * feature, and Ollama is the runtime B2 guides), shown both as the chat pane's empty state
- * and inside Settings → Chat.
- *
- * Three cards, one builder, because they are the same facts in a different order: no
- * server (start the daemon), no model (pull one — sized to this machine, illustrative and
- * non-binding), and the Settings copy of both. A non-Ollama endpoint gets the message and
- * nothing else: there is no honest instruction to give about pulling a model into LM
- * Studio or a cloud provider.
+ * The Ollama-native setup card (GH #151), shown as the chat pane's empty state and in
+ * Settings → Chat: no server, no model, or the Settings copy. A non-Ollama endpoint gets
+ * only the message.
  */
 export function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean): string {
   if (!setup) return "";
@@ -215,12 +187,8 @@ export function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean):
   const message = setup.message
     ? `<p class="chat-setup-message">${escapeHtml(setup.message)}</p>`
     : "";
-  // What's installed, when the daemon answered — so "no model" can offer what *is* there
-  // instead of only naming what isn't.
-  //
-  // The pane's card only. In Settings the same inventory *is* the Model field (a picker,
-  // `chatModelFieldHtml`), and two controls setting one value is two things to keep in
-  // step — the second of which would apply on click while the first waits for Save.
+  // What's installed. Pane only: in Settings this inventory is the Model field itself
+  // (`chatModelFieldHtml`), and two controls for one value would disagree.
   const installed =
     !inSettings && ollama && ollama.running && ollama.installed.length > 0
       ? `<div class="chat-setup-block">
@@ -237,9 +205,7 @@ export function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean):
             .join("")}</ul>
         </div>`
       : "";
-  // Pane-only for the same reason as the inventory: in Settings the **Local** section's
-  // own copy already carries `ollama pull` sized to this machine (`localNoteHtml`), and
-  // one command printed twice on one screen reads as two different instructions.
+  // Pane only: in Settings, `localNoteHtml` already prints the pull command.
   const suggestion =
     !inSettings && ollama && ollama.suggested
       ? `<div class="chat-setup-block">
@@ -273,10 +239,7 @@ export function chatSetupCardHtml(setup: ChatSetup | null, inSettings: boolean):
           <a href="${OLLAMA_QUICKSTART_URL}">Ollama quickstart</a> is the install and the
           first pull, in that order.</p>`
       : "";
-  // A retry, in the pane only: the card's whole job is to be looked at while the user
-  // goes and fixes something (starts the daemon, pulls a model), so it must be able to
-  // notice that they did — without making them close and reopen the pane. Settings has
-  // its own re-probe, spelled *Save and test*.
+  // A re-probe after the user fixes something. Settings has its own (Save and test).
   const recheck = inSettings
     ? ""
     : `<div class="settings-action"><button class="btn small" id="chat-recheck" data-chat-recheck>Check again</button></div>`;

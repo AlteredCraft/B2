@@ -1,19 +1,5 @@
-// The customization layer (keymap.ts), pinned. Runs off the source under node
-// (`npm test`); the two `localStorage` functions are exercised for the one behaviour that
-// matters without a browser — that storage being *absent* yields the shipped keyboard
-// rather than a thrown boot.
-//
-// What a rebinding layer actually gets wrong is not the algebra. It is the judgement:
-// letting a user pick ⌘W and then wonder why the window closed, letting two commands land
-// on one keystroke so which fires depends on branch order in a file the user has never
-// seen, or "helpfully" refusing something legal like ⌘I that the editor also binds. So the
-// bulk of this file is `chordProblems` — the tier each of the four checkers reports at,
-// and, as importantly, the cases that report nothing.
-//
-// The second half is `adoptOverrides`, and it exists because the store is a file a human
-// can edit. The recorder refuses a bad chord at record time; nothing stops someone hand-
-// editing `b2:keymap` into a keyboard where two commands answer to ⌘F — and a keyboard
-// that broken is one you can't use to fix itself. So the loader re-judges what it reads.
+// The customization layer (keymap.ts): the algebra, `chordProblems`' tiers (and the cases
+// that report nothing), and `adoptOverrides` re-judging a hand-editable store.
 import { type Binding, DEFAULT_BINDINGS, activeBindings, conflicts } from "./bindings.ts";
 import {
   type Overrides,
@@ -58,9 +44,6 @@ check("an override replaces a command's chord and leaves every other row alone",
 });
 
 check("a rebinding keeps the aliases the sheet documents in prose", () => {
-  // `Binding.aliases` states the reasoning: ⌘← is a second way in that the row's words
-  // already cover, and choosing the chord the sheet *prints* is not the same act as
-  // deleting the app's conveniences.
   const table = applyOverrides(DEFAULT_BINDINGS, { "nav.back": ["Mod-Alt-["] });
   const b = table.find((x) => x.id === "nav.back");
   assertEq(b?.keys, ["Mod-Alt-["], "the chord moved");
@@ -74,26 +57,17 @@ check("an empty override is a reset, not a command with no chord", () => {
 });
 
 check("recording a command's own chord back onto it is a reset, not an override", () => {
-  // The writer's half of the rule the reader has always held (the check two below this
-  // one). Recording ⌘2 onto the command that already answers to ⌘2 used to leave a real
-  // entry behind: a permanent "changed" dot beside an unmoved chord, a "Reset all (1)"
-  // with nothing to reset, and a stored line that vanished on the next launch when
-  // `adoptOverrides` refused to read it back. Whichever way in, what a command ships with
-  // is not a rebinding of it.
   const o = withOverride({}, "find.open", ["Mod-f"]);
   assertEq(o, {}, "no entry is written");
   const back = withOverride({ "find.open": ["Mod-Alt-f"] }, "find.open", ["Mod-f"]);
   assertEq(back, {}, "and recording the default over a rebinding puts it back");
-  // Order is part of the identity: the same chords in another order *is* a change, since
-  // `keys[0]` is what the sheet leads with and what CodeMirror is handed (`chordFor`).
+  // Order counts: `keys[0]` leads the sheet and is what CodeMirror gets.
   const swapped = withOverride({}, "graph.activate", ["Space", "Enter"]);
   assertEq(swapped, { "graph.activate": ["Space", "Enter"] }, "a reordering is a change");
 });
 
 check("withOverride does not mutate what it is given", () => {
-  // The recorder builds a *candidate* table from the live overrides on every keystroke, so
-  // an in-place update would rewrite the user's keyboard while they were still trying
-  // chords out — including chords that get refused.
+  // The recorder builds candidate tables from the live overrides on every keystroke.
   const before: Overrides = { "find.open": ["Mod-Alt-f"] };
   withOverride(before, "settings.toggle", ["Mod-Alt-,"]);
   assertEq(before, { "find.open": ["Mod-Alt-f"] }, "untouched");
@@ -117,10 +91,7 @@ check("isRebindable is exactly the absence of a stated reason", () => {
 // --- refusals -------------------------------------------------------------------------
 
 check("a chord the menu bar owns is refused, and says which item has it", () => {
-  // The blunt one. AppKit dispatches a menu key equivalent before the key window's
-  // responder chain, so this is not a chord that loses a race — it is one that never
-  // happens. A user who picked it would see a command that silently does nothing (or, for
-  // ⌘W, closes the window), which is the exact failure #119 made detectable.
+  // AppKit runs a menu key equivalent before B2 sees it (#119).
   assertEq(
     messages("find.open", "Mod-w"),
     ["refuse: ⌘W belongs to the menu bar (Close Window). macOS runs it before B2 sees the key."],
@@ -129,9 +100,6 @@ check("a chord the menu bar owns is refused, and says which item has it", () => 
 });
 
 check("a chord another command already answers to in the same scope is refused", () => {
-  // Which one would run depends on the order of branches in main.ts's keydown handler,
-  // and that is not a contract anyone can read — so this is the error tier, exactly as it
-  // is for the shipped table in CI.
   assertEq(
     messages("find.open", "Mod-n"),
     ["refuse: ⌘N already runs New note here."],
@@ -140,11 +108,8 @@ check("a chord another command already answers to in the same scope is refused",
 });
 
 check("an alias is as claimed as a listed chord", () => {
-  // ⌘← fires nav.back without appearing in the sheet, so it is precisely the keystroke a
-  // user would pick believing it free. It also happens to be CodeMirror's
-  // cursor-to-line-edge, which is why this chord draws a report from two checkers at once
-  // — worth showing, since a refusal and an advisory are not alternatives: the user is
-  // told everything true about the chord, and only the refusal blocks the save.
+  // ⌘← is nav.back's hidden alias and a CodeMirror chord: both reports are shown, and only
+  // the refusal blocks the save.
   assertEq(
     messages("edit.toggle", "Mod-ArrowLeft"),
     [
@@ -166,9 +131,6 @@ check("a key no chord can hold is refused rather than thrown", () => {
 // --- advisories -----------------------------------------------------------------------
 
 check("a chord CodeMirror also binds is said out loud and allowed", () => {
-  // Legal, and frequently the right answer — ⌘I is italic in B2 *because* B2's chords go
-  // into the editor's keymap ahead of the stock ones. Which side wins is install order and
-  // differs row by row (editorkeys.ts), so this names the overlap instead of predicting it.
   const found = messages("edit.toggle", "Alt-ArrowUp");
   assert(
     found.some((m) => m.startsWith("warn:") && m.includes("moveLineUp")),
@@ -178,9 +140,7 @@ check("a chord CodeMirror also binds is said out loud and allowed", () => {
 });
 
 check("a chord an inner surface would take first is said out loud and allowed", () => {
-  // The Settings rail answers ⌃Tab, so a global command spelled that way simply doesn't
-  // run while the dialog has the keyboard. Deliberate everywhere it happens today (the
-  // rename field's Esc, the trap's Tab), so: reported, never failed.
+  // The Settings rail answers ⌃Tab first while Settings is open.
   const found = messages("find.open", "Ctrl-Tab");
   assert(!refused(chordProblems("find.open", "Ctrl-Tab")), "shadowing is legal");
   assert(
@@ -190,9 +150,6 @@ check("a chord an inner surface would take first is said out loud and allowed", 
 });
 
 check("a chord with no modifier is said out loud and allowed", () => {
-  // `?` is a shipped default, so refusing this would be a lie. Whether a bare chord fires
-  // mid-sentence depends on the guard beside its branch in main.ts's handler — the one
-  // thing the table deliberately doesn't model — so the honest move is to say so.
   assertEq(
     messages("edit.toggle", "k"),
     ["warn: K has no modifier, so it can fire while you're typing."],
@@ -201,21 +158,16 @@ check("a chord with no modifier is said out loud and allowed", () => {
 });
 
 check("a chord nobody claims reports nothing at all", () => {
-  // The check that keeps the four above from being a checker that just always complains.
   assertEq(messages("find.open", "Mod-Alt-Shift-f"), [], "⌥⇧⌘F is free");
   assertEq(messages("tree.new-note", "F6"), [], "so is F6");
 });
 
 check("a command may be rebound onto a chord it already answers to", () => {
-  // Re-recording the same chord is a no-op, not a self-conflict: `conflicts()` skips a row
-  // against itself, and a recorder that refused "the chord it already has" would be a
-  // recorder you can't press Escape out of by pressing the same key twice.
+  // Not a self-conflict: `conflicts()` skips a row against itself.
   assertEq(messages("find.open", "Mod-f"), [], "⌘F is still find's own");
 });
 
 check("the judgement is made against the candidate table, not the live one", () => {
-  // The whole point of laying the chord over the current overrides first. Once ⌘F has been
-  // freed by moving find-in-note elsewhere, ⌘F is available — and until then it isn't.
   assertEq(messages("edit.toggle", "Mod-f"), ["refuse: ⌘F already runs Find in this note here."], "before");
   assertEq(messages("edit.toggle", "Mod-f", { "find.open": ["Mod-Alt-f"] }), [], "after");
 });
@@ -248,17 +200,13 @@ check("junk in the store is dropped rather than believed", () => {
 });
 
 check("an entry that merely restates the default is not an override", () => {
-  // Otherwise the panel would mark ⌘F "changed" for a user who recorded ⌘F, and "Reset
-  // all (1)" would offer to undo nothing.
   const { overrides, dropped } = adoptOverrides({ "find.open": ["Mod-f"] });
   assertEq(overrides, {}, "dropped as a no-op");
   assertEq(dropped, [], "and not reported as a loss — nothing was lost");
 });
 
 check("a hand-edited store that would break the keyboard is defused entry by entry", () => {
-  // The one that matters. Two commands on ⌘K is a keyboard where which command runs
-  // depends on branch order — and the second entry is the one that has to go, since the
-  // first was legal when it was read. What survives is always a table CI would pass.
+  // The second entry goes, since the first was legal when it was read.
   const { overrides, dropped } = adoptOverrides({
     "find.open": ["Mod-k"],
     "edit.toggle": ["Mod-k"],
@@ -269,16 +217,13 @@ check("a hand-edited store that would break the keyboard is defused entry by ent
 });
 
 check("an advisory in the store is honoured — only refusals are dropped", () => {
-  // The tiers mean the same thing here as in the recorder. A user who accepted "CodeMirror
-  // binds this too" gets to keep it across a relaunch.
   const { overrides, dropped } = adoptOverrides({ "edit.toggle": ["Alt-ArrowUp"] });
   assertEq(overrides, { "edit.toggle": ["Alt-ArrowUp"] }, "kept");
   assertEq(dropped, [], "nothing dropped");
 });
 
 check("no store at all, or no storage at all, is the shipped keyboard", () => {
-  // node has no `localStorage`, which is the same shape as a browser refusing it in
-  // private mode: the read throws, and a keyboard reference must not take the window down.
+  // node has no `localStorage`, like a browser refusing it in private mode.
   assertEq(adoptOverrides(null), { overrides: {}, dropped: [] }, "nothing stored");
   assertEq(adoptOverrides("nonsense"), { overrides: {}, dropped: [] }, "not even an object");
   assertEq(adoptOverrides([1, 2]), { overrides: {}, dropped: [] }, "nor an array");
@@ -286,8 +231,6 @@ check("no store at all, or no storage at all, is the shipped keyboard", () => {
 });
 
 check("the live registry starts as the shipped one", () => {
-  // Nothing here installs a table, so `activeBindings()` is the default — which is what
-  // lets every other suite call `isBound` without arranging global state first.
   assertEq(activeBindings().length, DEFAULT_BINDINGS.length, "same table");
   assertEq(conflicts(), [], "and the gate reads it");
 });

@@ -1,11 +1,8 @@
 // The `![[…]]` image embed's pure rules (embeds.ts) — the width hint, what counts as a
 // picture, and which of a note's embeds the app agrees to hold. Run directly:
 //   node --experimental-strip-types src/embeds.test.ts
-// Hand-rolled asserts, the sanitize.test.ts / links.test.ts idiom.
-//
-// No DOM here on purpose. These are the decisions made *before* anything is rendered or
-// read — the two surfaces that draw an embed (render.ts, livepreview.ts) have their own
-// files, and each of those tests what the rules *look like* once applied.
+// Hand-rolled asserts, the sanitize.test.ts / links.test.ts idiom. Rendering is tested in
+// render.ts's and livepreview.ts's own suites.
 
 import {
   embedWidth,
@@ -31,16 +28,12 @@ function assertEq(actual: unknown, expected: unknown, label: string): void {
 }
 
 // --- the width hint --------------------------------------------------------------------
-//
-// `![[shot.png|500]]` asks for a 500px-wide render. One number, because the ask is a width
-// that *maintains aspect ratio* — the height is the CSS's to derive.
 
 assertEq(embedWidth("500"), 500, "a bare integer is a width");
 assertEq(embedWidth(" 500 "), 500, "hand-spacing is not a different answer");
 assertEq(embedWidth(undefined), null, "no hint, no width — the embed draws at its own size");
 assertEq(embedWidth(""), null, "…and neither is an empty one");
-// Every one of these would be a *drawn* size if a leading-digit parse were used, and each
-// would be wrong in its own way: a distorted picture, or one 500px wide that asked for 100.
+// A leading-digit parse would draw each of these at a wrong size.
 assertEq(embedWidth("500x300"), null, "Obsidian's two-axis form is not a width B2 understands");
 assertEq(embedWidth("100px"), null, "a unit is not a number");
 assertEq(embedWidth("Label"), null, "a human who wrote a label on an embed gets no size");
@@ -49,9 +42,6 @@ assertEq(embedWidth("0"), null, "…and neither is zero, which would draw nothin
 assertEq(embedWidth("1e3"), null, "no exponents: the hint is digits, not a JS number literal");
 
 // --- what names a picture ---------------------------------------------------------------
-//
-// Extension-only, deliberately: the same rule the core classifies on (`resource.rs`), so a
-// mislabeled file degrades to a broken `<img>` rather than to a guess about its bytes.
 
 assertEq(imageMime("__Attachments/Shot.png"), "image/png", "png");
 assertEq(imageMime("a/b/PHOTO.JPEG"), "image/jpeg", "case-insensitive, and jpeg is jpg's type");
@@ -133,8 +123,7 @@ assertEq(
   "one picture over the per-image bound drops out; the note's others are unaffected",
 );
 
-// The per-note budget, which is what a photo log costs. Taken in document order, so what
-// the reader sees when the note opens is what got drawn.
+// The per-note budget, spent in document order.
 const many = Array.from({ length: 8 }, (_, i) =>
   res(`p${i}.png`, { size: NOTE_IMAGES_MAX_BYTES / 4 }),
 );

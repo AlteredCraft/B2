@@ -1,78 +1,47 @@
-// Pure sequencing for the `vault-changed` reconcile's index refresh — no DOM, no IPC —
-// so node runs its test straight off the source (`npm test`), like embedreminder.ts.
+// Pure sequencing for the `vault-changed` reconcile's index refresh (no DOM, no IPC).
 //
-// Why a projection belongs here at all (#65 dogfood, item 4): the tree lists come from
-// the index (`list_notes` / `list_resources` are index-first by design — a
-// never-projected vault lists nothing), but the pulse means the *disk* changed. An
-// externally added file (a Finder-dropped PNG, a new `.md` from another editor) has no
-// index row until something projects it, so a re-list alone repaints the same tree and
-// the add is invisible until a manual reindex. Re-deriving first keeps
-// `index = projection of (the vault)` honest at the exact moment the vault changed.
-//
-// And why the *heal* belongs here too: that projection re-chunks whatever changed, and
-// re-chunking **clears** the note's vectors — `db::replace_chunks` drops its chunk rows
-// (their `embeddings` cascade with them) and its `note_centroids` row. Projection is
-// model-free, so nothing fills them back in. A note edited outside the app therefore
-// comes back semantically invisible: `discover::candidates` has no anchor vectors to
-// rank *from*, and no centroid for the note to be ranked *against* as a candidate for
-// anything else — so the discovery pane empties out to "Nothing similar-but-unlinked,
-// or the vault isn't embedded yet" until a manual reindex. The in-app save path
-// already answers this with its trailing embed; a pulse is the same invalidation
-// arriving from the other side (an external editor, a `git pull`, a Finder drop, an
-// import), so it owes the same answer.
+// A pulse means the disk changed, but the tree lists come from the index, so the index is
+// re-projected first or an external add stays invisible (#65). Re-projecting a note clears
+// its vectors (`db::replace_chunks`) and projection is model-free, so the reconcile also
+// schedules the trailing embed the in-app save path uses, or the note drops out of
+// discovery.
 
 /** The four thunks the sequence composes, plus the one gate it respects. */
 export interface ReconcileIndexDeps {
-  /** A reindex (manual, auto-on-open, or trailing embed) is in flight: that run owns
-   *  the index — and its own embed and UI refresh — so reconcile must neither project
-   *  nor heal under it. */
+  /** A reindex is in flight and owns the index, so reconcile neither projects nor heals. */
   reindexing: boolean;
-  /** The model-free projection pass (`api.project`) — cheap (no model load),
-   *  idempotent, and host-safe outside the reindex slot, the same op the first tree
-   *  paint uses. Its own side effects can't loop this: `.b2/` writes are filtered
-   *  host-side, and since GH #170 projection writes nothing to the vault at all
-   *  (W1), so there is no longer a stamp that could pulse the watcher back. */
+  /** The model-free projection pass (`api.project`). Can't loop the watcher: `.b2/` writes
+   *  are filtered host-side and projection writes nothing to the vault (W1, GH #170). */
   project: () => Promise<unknown>;
-  /** Re-fetch the tree lists (`loadNotes`). Its errors are the caller's contract
-   *  (toast + empty tree) and pass through untouched. */
+  /** Re-fetch the tree lists (`loadNotes`). Its errors pass through to the caller. */
   list: () => Promise<unknown>;
-  /** Read back, *after* the projection, whether any projected note is still missing
-   *  vectors (`vault_info`'s model-free N/M coverage — #26). The pending set is
-   *  DB-derived, so this answers honestly whether or not the projection above
-   *  succeeded — and it costs no model load, which is the whole point of asking
-   *  before scheduling one. */
+  /** Whether any note still lacks vectors, read after the projection (`vault_info`'s
+   *  model-free coverage, #26). */
   vectorsPending: () => Promise<boolean>;
-  /** Schedule the trailing embed (`scheduleTrailingEmbed`) to fill them. Deliberately
-   *  fire-and-forget: it debounces, coalesces with the save path's own timer, and
-   *  refreshes discovery when it lands — none of which the reconcile should wait on. */
+  /** Schedule the trailing embed (`scheduleTrailingEmbed`). Fire-and-forget: it debounces
+   *  and refreshes discovery itself. */
   healVectors: () => void;
 }
 
 /**
- * Re-derive the index from disk, re-list it, then heal the vectors the re-derivation
- * cleared: project (unless a reindex owns the index) and fall through to the list
- * either way — a failed projection is a background hum, never a reason to skip the
- * tree refresh — then schedule an embed iff something is actually missing one.
+ * Project (unless a reindex owns the index), re-list even if that failed, then schedule
+ * an embed iff some note is missing vectors.
  */
 export async function reconcileIndex(deps: ReconcileIndexDeps): Promise<void> {
   if (!deps.reindexing) {
     try {
       await deps.project();
     } catch {
-      // Best-effort: refused (a reindex won the race) or failed (unreadable vault) —
-      // re-list whatever the index has; the next reindex/pulse heals the rest.
+      // Best-effort: the next reindex or pulse heals the rest.
     }
   }
   await deps.list();
 
-  // The heal answers to the same gate as the projection, but not to its success: the
-  // pending set is DB-derived, so a pass that failed halfway still leaves vectors owed,
-  // while a pass that changed nothing reports nothing pending and schedules nothing.
+  // Gated like the projection, but not on its success: the pending set is DB-derived.
   if (deps.reindexing) return;
   try {
     if (await deps.vectorsPending()) deps.healVectors();
   } catch {
-    // Same posture as the projection: a coverage read that fails leaves the vectors to
-    // the next pulse or reindex rather than failing the reconcile over a hint.
+    // Best-effort, as above.
   }
 }

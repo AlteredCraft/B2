@@ -1,6 +1,6 @@
-//! The discovery fold bake-off (GH #200, Phase B) — the *default disclosure boundary*,
-//! priced on every bench this harness carries. The ruling of record is **no fold ships**
-//! (docs/evals.md); the bake-off keeps re-deriving the window every run.
+//! The discovery fold bake-off (GH #200): the default disclosure boundary, priced on every
+//! bench. The ruling of record is that no fold ships (docs/evals.md); the window is
+//! re-derived every run.
 
 use crate::common::{cosine_of, truncate};
 use crate::labels::{SimilarLabel, SimilarSet};
@@ -9,46 +9,27 @@ use crate::{SIM_K, Z_SCAN_LIMIT};
 use b2_core::vault::Vault;
 use std::collections::HashMap;
 
-/// The reciprocity depths GH #200's candidate 1 is shown at in the headline
-/// table and the per-anchor lists — [`SIM_K`] (the pane itself) with one depth
-/// either side of it. They are a *display* choice only: the window below is
-/// derived from the whole sweep, so no verdict turns on these three.
+/// The reciprocity depths shown in the headline table: [`SIM_K`] and one either side.
+/// Display only; the window is derived from the whole sweep.
 pub const FOLD_MUTUAL_K: [usize; 3] = [3, 5, 10];
 
-/// How far the reciprocity depth is swept when re-deriving candidate 1's
-/// admissible window each run (GH #187's idiom on the disclosure axis — a
-/// measurement in the harness, never a constant frozen into a docstring). Half
-/// the orthogonal corpus's note count: a `k` past that admits most of the vault
-/// as "mutually near", which is the rule going vacuous rather than a depth
-/// anyone would ship.
+/// How far the reciprocity depth is swept. Half the orthogonal corpus's note count: past
+/// that, most of the vault is "mutually near" and the rule is vacuous.
 pub const FOLD_K_SWEEP: usize = 15;
 
-/// A **default disclosure rule**: a candidate answer to "how much of the ranked
-/// list does the default view vouch for?" (invariants.md D1 as redrafted;
-/// GH #200). Every variant is a **prefix** rule *by construction* — it returns a
-/// depth, never a set — so a rule that admits rank 5 while folding rank 2 is not
-/// expressible here. D1 states that admissibility requirement; this type makes
-/// violating it unrepresentable, which is the difference between a check and a
-/// guarantee.
+/// A default disclosure rule: how much of the ranked list the default view vouches for
+/// (D1, GH #200). Returns a depth, never a set, so a non-prefix rule is unrepresentable.
 #[derive(Clone, Copy, PartialEq)]
 pub enum FoldRule {
-    /// **Candidate 3, the incumbent**: no fold. The default view is the whole
-    /// served prefix — GH #197's always-serve ruling, admissible per D1 and the
-    /// thing the other candidates have to beat.
+    /// Candidate 3, the incumbent: no fold, GH #197's always-serve.
     NoFold,
-    /// **Candidate 1**: mutual-kNN reciprocity in prefix form. Candidate B is
-    /// *reciprocal* for anchor A iff A sits in B's own top `k` candidates, and
-    /// the default view is the ranked list's longest reciprocal prefix. Rank-
-    /// based (the hubness-correction family: mutual proximity, CSLS), so it
-    /// carries no cosine or z constant — though `k` itself is measured below to
-    /// be scale-dependent, which is a different objection and the decisive one.
+    /// Candidate 1: the longest prefix whose candidates each have the anchor in their own
+    /// top `k`. Rank-based, so no cosine or z constant, but `k` measures scale-dependent.
     Mutual(usize),
 }
 
 impl FoldRule {
-    /// The rule's name in every table, row and window line — one spelling, so a
-    /// printed verdict and a recorded row can never name the same rule
-    /// differently.
+    /// The rule's one spelling in every table, row and window line.
     pub fn label(self) -> String {
         match self {
             FoldRule::NoFold => "no fold".to_string(),
@@ -65,53 +46,37 @@ impl FoldRule {
     }
 }
 
-/// One served candidate on one anchor's list, carrying everything a candidate
-/// rule judges: the label, the score, and — the reciprocity signal — **where the
-/// anchor sits in this candidate's own ranked list**.
+/// One served candidate on one anchor's list, with what a rule judges.
 pub struct FoldRow {
     pub path: String,
     pub cos: f64,
-    /// A labelled mate of this anchor (always `false` on a negative or
-    /// unlabelled anchor).
     pub mate: bool,
-    /// The **anchor's** rank in *this candidate's* full-depth candidate list, or
-    /// `None` if the anchor is not in it at all. Storing the rank rather than a
-    /// per-`k` boolean is what makes the whole sweep below free: reciprocity at
-    /// depth `k` is `rank ≤ k`, so every `k` is priced off one discovery pass
-    /// per note instead of one per note per depth.
+    /// The anchor's rank in this candidate's full-depth list. A rank rather than a per-`k`
+    /// flag, so one pass prices every `k`.
     pub recip_rank: Option<usize>,
 }
 
 impl FoldRow {
-    /// Whether this candidate is *reciprocal* at depth `k` — i.e. the anchor
-    /// sits in its own top `k`. Reciprocity is necessary but not sufficient for
-    /// being above the fold: the fold is the longest reciprocal **prefix**, so a
-    /// reciprocal candidate ranked after a non-reciprocal one is below it too.
+    /// Whether the anchor sits in this candidate's top `k`. Not sufficient for being above
+    /// the fold, which is the longest reciprocal prefix.
     pub fn reciprocal_at(&self, k: usize) -> bool {
         self.recip_rank.is_some_and(|r| r <= k)
     }
 }
 
-/// One anchor's served list, read once and judged by every candidate rule — so
-/// the rules are compared on identical rows rather than on separate passes that
-/// could drift.
+/// One anchor's served list, read once so every rule is judged on identical rows.
 pub struct FoldAnchor {
     pub anchor: String,
-    /// A labelled **loner** (empty `expected`): its correct default view is
-    /// *empty above the fold* — the assertion GH #197 retired, returning on the
-    /// disclosure axis.
+    /// A labelled loner: its correct default view is empty above the fold.
     pub negative: bool,
-    /// Labelled mates in label order.
     pub expected: Vec<String>,
     /// The served prefix (`limit` = [`SIM_K`]) in rank order.
     pub rows: Vec<FoldRow>,
 }
 
 impl FoldAnchor {
-    /// This anchor's labelled mates that the *served prefix* reaches, as
-    /// `(mate, rank)`. A mate ranked past `limit` is not among them — it is
-    /// always-serve's own miss at this depth, and counting it against a fold
-    /// would charge every rule for a cost none of them caused.
+    /// Labelled mates the served prefix reaches, as `(mate, rank)`. A mate past `limit` is
+    /// always-serve's miss, not a fold's cost.
     pub fn served_mates(&self) -> Vec<(String, usize)> {
         self.expected
             .iter()
@@ -125,71 +90,41 @@ impl FoldAnchor {
     }
 }
 
-/// What one rule reads on one bench — GH #200's judged quantities, each carrying
-/// the per-anchor list it is argued from (process rule 1: the aggregate is a
-/// smoke alarm, the named list is the data).
+/// What one rule reads on one bench, each quantity with its named list (process rule 1).
 pub struct FoldReading {
     pub rule: FoldRule,
-    /// Labelled mates the served prefix reaches but the default view does
-    /// **not** vouch for: `(anchor, mate, rank)`. **The fold's own cost**, and
-    /// the quantity GH #200 judges a candidate at zero on — a human-labelled
-    /// relation hidden by default. Reported rather than gated while nothing
-    /// folds (it reads a structural 0 under always-serve) — and GH #202 shipped
-    /// no fold to charge, so it stays reporting-only; it becomes an exit-gate
-    /// row with the first fold that does ship.
+    /// Served labelled mates hidden by default, `(anchor, mate, rank)`: the fold's own cost,
+    /// judged at zero (GH #200). Reported only until a fold ships.
     pub mates_folded: Vec<(String, String, usize)>,
-    /// Labelled mates above the fold — the other half of the same count.
     pub mates_above: usize,
-    /// Unlabelled notes the default view vouches for on a *positive* anchor —
-    /// the strangers count, read above the fold instead of over the whole served
-    /// prefix. Expected to shrink; deliberately ungated for the standing reason
-    /// (the cheapest way to shrink it is to label the stranger).
+    /// Strangers above the fold on positive anchors. Ungated, like the strangers count.
     pub strangers_above: Vec<(String, String)>,
-    /// Negative (loner) anchors whose default view is empty — the honest answer
-    /// their label always claimed, and what always-serve cannot assert.
+    /// Loner anchors whose default view is empty.
     pub neg_empty: usize,
-    /// Non-negative anchors whose default view is empty. On the dense fixture
-    /// **any** entry here is disqualifying (a vault where everything relates may
-    /// never *default* to "nothing relates"); on the orthogonal corpus it is the
-    /// same event read through the labels.
+    /// Non-negative anchors whose default view is empty. Any entry disqualifies on the dense
+    /// fixture.
     pub dark_panes: Vec<String>,
-    /// Cards above the fold, summed — the default view's size against
-    /// always-serve's.
+    /// Cards above the fold, summed.
     pub cards_above: usize,
 }
 
-/// The **admissible-`k` window** for candidate 1, re-derived from this run
-/// (GH #187's idiom, moved onto the disclosure axis: print the window a rule
-/// *would* have rather than freezing a constant into a docstring). Two bounds
-/// that must overlap for any `k` to be shippable on this bench:
-///
-/// - `keep_min` — the smallest `k` that folds **no** labelled mate and darkens
-///   **no** pane. Below it the rule hides relations a human labelled.
-/// - `loner_max` — the largest `k` at which **every** labelled loner's default
-///   view is empty. Above it the fold stops making the claim it exists to make,
-///   and a loner's pane fills up again.
+/// The admissible-`k` window for candidate 1, re-derived each run. Shippable only if
+/// `keep_min` (smallest `k` folding no mate and darkening no pane) ≤ `loner_max` (largest
+/// `k` emptying every loner's view).
 pub struct FoldWindow {
     pub keep_min: Option<usize>,
     pub loner_max: Option<usize>,
-    /// The smallest swept `k` whose fold equals always-serve on every anchor —
-    /// where the rule becomes vacuous (it vouches for everything).
+    /// The smallest `k` whose fold equals always-serve everywhere: the rule goes vacuous.
     pub vacuous_at: Option<usize>,
-    /// The best the loner claim ever gets on this bench, as `(empty, largest k
-    /// still achieving it)` — printed because "never all of them" and "four of
-    /// five up to k = 11" are different findings, and only the second says how
-    /// close the rule came.
+    /// The best loner claim, as `(empty, largest k still achieving it)`.
     pub loner_best: Option<(usize, usize)>,
-    /// The largest swept `k` that still darkens a pane. Every `k` at or below it
-    /// is disqualified outright on a corpus where everything relates (D1's
-    /// absolute), so this is the hard floor under any window.
+    /// The largest `k` that still darkens a pane: the hard floor under any window (D1).
     pub dark_below: Option<usize>,
 }
 
 impl FoldWindow {
-    /// Whether some swept `k` satisfies both bounds at once. A bench with no
-    /// labelled loner has no upper bound to satisfy and so can never report an
-    /// open window on its own — it contributes the lower bound to the
-    /// bake-off's joint window, which is what the printed verdict says.
+    /// Whether some swept `k` satisfies both bounds. Never true on a bench with no loner,
+    /// which supplies only the lower bound.
     pub fn open(&self) -> bool {
         matches!((self.keep_min, self.loner_max), (Some(a), Some(b)) if a <= b)
     }
@@ -201,36 +136,22 @@ pub struct FoldBench {
     pub anchors: Vec<FoldAnchor>,
     /// The headline rules: always-serve plus [`FOLD_MUTUAL_K`]'s detail depths.
     pub readings: Vec<FoldReading>,
-    /// `(k, reading)` across the whole swept range — what the window is derived
-    /// from, and printed as a compact table so the shape of the trade is visible
-    /// rather than asserted.
+    /// `(k, reading)` across the swept range, which the window is derived from.
     pub sweep: Vec<(usize, FoldReading)>,
     pub window: FoldWindow,
-    /// Negative anchors on this bench (0 on the dense fixture, which has no
-    /// loner by construction).
     pub neg_n: usize,
-    /// Labelled mates the served prefix never reaches at `limit` — always-serve's
-    /// own miss, identical under every rule. Printed beside the folded count so
-    /// no rule is charged for it.
+    /// Labelled mates never served at `limit`: always-serve's miss, charged to no rule.
     pub mates_unserved: usize,
-    /// The median *full-depth* candidate pool an anchor here has — what a
-    /// reciprocity depth is a fraction OF. A `k` is only meaningful against it:
-    /// "top 7" of a 14-candidate pool and "top 7" of a 30-candidate one are
-    /// different claims, and the two corpora's windows below are only
-    /// comparable in this unit.
+    /// The median full-depth candidate pool. A `k` only compares across corpora as a
+    /// fraction of it.
     pub pool_median: usize,
-    /// Authored edges in the built vault — **candidate 2's** entire calibration
-    /// population ("what related looks like in this vault", read off the human's
-    /// own committed links). Both eval corpora are link-free by construction, so
-    /// this reads 0 and candidate 2 is *unpriceable here*: it is measured where
-    /// its population exists, by `make calibrate` on a real vault.
+    /// Authored edges: candidate 2's calibration population. The eval corpora are link-free,
+    /// so candidate 2 is only priced by `make calibrate` on a real vault.
     pub authored_edges: usize,
 }
 
-/// Every note's own ranked candidate list as `path → rank`, read at full depth —
-/// the reciprocity lookup candidate 1 is judged on. Read over **every note in
-/// the vault**, not only the labelled anchors: reciprocity is decided by the
-/// *candidate's* list, and most candidates are not anchors.
+/// Every note's full-depth candidate list as `path → rank`, the reciprocity lookup. Over
+/// every note, since most candidates are not anchors.
 pub fn reciprocity_ranks(
     vault: &Vault,
 ) -> Result<HashMap<String, HashMap<String, usize>>, Box<dyn std::error::Error>> {
@@ -247,10 +168,9 @@ pub fn reciprocity_ranks(
     Ok(out)
 }
 
-/// Score the fold bake-off on one built vault. `sweep_all` reads **every note**
-/// as an anchor (the dense fixture's pane sweep, where the assertion is about
-/// the surface rather than the labels); otherwise only the labelled anchors are
-/// read, matching [`score_similar`](crate::discovery::score_similar)'s depth and population exactly.
+/// Score the fold bake-off on one built vault. `sweep_all` reads every note as an anchor;
+/// otherwise only the labelled anchors, matching
+/// [`score_similar`](crate::discovery::score_similar).
 pub fn score_fold(
     vault: &Vault,
     set: &SimilarSet,
@@ -274,11 +194,8 @@ pub fn score_fold(
         }
     }
 
-    // Outbound only. `neighbors` answers "what is 1 hop from here" and so returns
-    // an edge from *both* of its endpoints; summing the raw counts over every
-    // note would census edge **endpoints** and report candidate 2's population at
-    // twice its size (PR #204 review). Counting each edge once from its source is
-    // the number the rule would calibrate from.
+    // Outbound only: `neighbors` returns an edge from both endpoints, so counting all would
+    // double it (PR #204).
     let mut authored_edges = 0;
     for note in vault.list_notes()? {
         authored_edges += vault
@@ -292,10 +209,7 @@ pub fn score_fold(
     let mut neg_n = 0;
     for (anchor, label) in anchors {
         let expected: Vec<String> = label.map(|l| l.expected.clone()).unwrap_or_default();
-        // A *labelled* loner. An unlabelled anchor on the dense sweep is not a
-        // negative — that fixture carries no loner at all, and reading "no
-        // label" as "nothing relates" would invent the claim the bench exists
-        // to test.
+        // An unlabelled anchor on the dense sweep is not a negative.
         let negative = label.is_some() && expected.is_empty();
         if negative {
             neg_n += 1;
@@ -421,8 +335,6 @@ pub fn read_fold(anchors: &[FoldAnchor], rule: FoldRule) -> FoldReading {
                 reading.mates_folded.push((a.anchor.clone(), mate, rank));
             }
         }
-        // The precision side, read above the fold: unlabelled cards the default
-        // view vouches for on a positive anchor.
         if !a.negative && !a.expected.is_empty() {
             for row in a.rows.iter().take(fold) {
                 if !row.mate {
@@ -436,9 +348,7 @@ pub fn read_fold(anchors: &[FoldAnchor], rule: FoldRule) -> FoldReading {
     reading
 }
 
-/// The bake-off's printed readout: the headline rules side by side, the swept
-/// `k` the window is derived from, and the per-anchor folds — which is the list
-/// the verdict is argued from (process rule 1).
+/// The bake-off's printed readout: headline rules, the `k` sweep, and per-anchor folds.
 pub fn print_fold_bench(bench: &FoldBench) {
     println!("\n{}", "=".repeat(78));
     println!(
@@ -477,7 +387,7 @@ pub fn print_fold_bench(bench: &FoldBench) {
         bench.mates_unserved
     );
 
-    // The named cost of every rule that has one — the list, not the count.
+    // The named cost of every rule that has one.
     for r in &bench.readings {
         if r.mates_folded.is_empty() {
             continue;
@@ -488,8 +398,7 @@ pub fn print_fold_bench(bench: &FoldBench) {
         }
     }
 
-    // The swept window — the #187 idiom on the disclosure axis: derive the
-    // rule's admissible range from THIS run rather than quote a constant.
+    // The swept window, derived from this run.
     println!(
         "\n  mutual-k sweep (k = 1..{FOLD_K_SWEEP}; the window a shippable k would have to sit in)"
     );
@@ -555,9 +464,7 @@ pub fn print_fold_bench(bench: &FoldBench) {
             bench.neg_n
         );
     }
-    // The verdict names *which* bound failed. "No k works" and "this corpus
-    // cannot decide alone" are different sentences, and a bench with no loner
-    // can only ever supply the lower bound.
+    // Name which bound failed; a bench with no loner can only supply the lower bound.
     println!(
         "    → window {}",
         match (bench.neg_n, bench.window.keep_min, bench.window.loner_max) {
@@ -592,7 +499,6 @@ pub fn print_fold_bench(bench: &FoldBench) {
         }
     );
 
-    // The per-anchor lists at the headline depths.
     println!("\n  per anchor — served / above the fold, by rule:");
     print!("  {:<40} {:>7}", "anchor", "served");
     for r in &bench.readings {
@@ -632,9 +538,7 @@ pub fn print_fold_bench(bench: &FoldBench) {
         println!();
     }
 
-    // Candidate 2's census — printed on every bench, because "we did not measure
-    // it" and "there was nothing to measure it on" are different sentences and
-    // only the second is an argument.
+    // Printed on every bench: "nothing to measure it on" is a finding, not an omission.
     println!(
         "\n  candidate 2 (authored-edge reference bar): {} authored edges in this corpus — {}",
         bench.authored_edges,
@@ -647,10 +551,8 @@ pub fn print_fold_bench(bench: &FoldBench) {
     );
 }
 
-/// The bake-off as one JSON subtree (`discovery_fold`): every rule's reading,
-/// the swept window it was judged against, and the per-anchor rows both were
-/// computed from — so a verdict cited from a row can be re-derived without
-/// re-running the model, which is what `results.jsonl` is for.
+/// The bake-off as one JSON subtree (`discovery_fold`), with the per-anchor rows so a
+/// verdict can be re-derived without re-running the model.
 pub fn fold_json(bench: &FoldBench) -> serde_json::Value {
     let reading = |r: &FoldReading| {
         serde_json::json!({
@@ -672,11 +574,8 @@ pub fn fold_json(bench: &FoldBench) -> serde_json::Value {
         "limit": SIM_K,
         "pool_median": bench.pool_median,
         "neg_n": bench.neg_n,
-        // Always-serve's own miss at this limit, recorded apart from every
-        // rule's cost so the two can never be added together by a later reader.
         "mates_unserved": bench.mates_unserved,
-        // Candidate 2's population, recorded even at zero: "unpriceable here"
-        // is a measurement, and a row that omitted it would read as untried.
+        // Recorded even at zero, so the row doesn't read as untried.
         "authored_edges": bench.authored_edges,
         "rules": bench.readings.iter().map(reading).collect::<Vec<_>>(),
         "sweep": bench.sweep.iter().map(|(k, r)| serde_json::json!({
@@ -706,8 +605,6 @@ pub fn fold_json(bench: &FoldBench) -> serde_json::Value {
                 "path": row.path,
                 "cos": (row.cos * 1e4).round() / 1e4,
                 "mate": row.mate,
-                // The anchor's rank in THIS candidate's own list — the whole
-                // reciprocity signal, from which any k is re-derivable.
                 "recip_rank": row.recip_rank,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),

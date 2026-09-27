@@ -1,19 +1,8 @@
-// Dropping a discovery card into the note (droplink.ts) — the rules, off the DOM.
+// Dropping a discovery card into the note (droplink.ts), off the DOM: where the link lands
+// and where it must not. The drag preview uses the same `planDrop`, over real
+// `EditorState`s parsed by the app's grammar.
 //
-// Why it's worth pinning. This gesture is the one place a *pointer* writes into a note's
-// body, and its whole contract is two claims about byte offsets: where the link lands, and
-// where it must not land at all. Both are invisible until they're wrong — a link inserted
-// mid-word splits a sentence in a file the user owns, and one inserted into a fence is a
-// link that will never resolve, silently. The preview the drag paints is computed by the
-// same `planDrop` these cases call, so what a test asserts here is exactly what the ghost
-// promises on screen.
-//
-// The insertions are applied to real `EditorState`s parsed by the app's own grammar (the
-// livepreview.test.ts rig, for its reason: a mocked tree would let a code fence go
-// unrecognized here and undetected there). `toDOM` is the one thing that wants a document,
-// and nothing below reaches it.
-//
-// Hand-rolled asserts, the livepreview.test.ts idiom. Run directly:
+// Hand-rolled asserts. Run directly:
 //   node --experimental-strip-types src/droplink.test.ts
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -38,16 +27,14 @@ function check(name: string, fn: () => void): void {
   console.log(`  ok  ${name}`);
 }
 
-// The editor's own language config (main.ts) — anything less and the fences below would be
-// paragraphs, which is precisely the distinction under test.
+// The editor's own language config (main.ts), so fences parse as fences.
 const LANG = markdown({ base: markdownLanguage, extensions: [wikilink] });
 
 function stateOf(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [LANG] });
 }
 
-/** The document a drop at `pos` would leave behind — the assertion that matters, since a
- *  plan is only ever right or wrong about the text it produces. `null` when refused. */
+/** The document a drop at `pos` would leave behind, or `null` when refused. */
 function dropped(doc: string, pos: number, target = "notes/other"): string | null {
   const state = stateOf(doc);
   const plan = planDrop(state, pos, target);
@@ -65,29 +52,21 @@ check("a line with prose takes the link at its end, one space away", () => {
 });
 
 check("an empty line takes the link alone", () => {
-  // The "see also" line — the gesture's most common target, and the one where a leading
-  // space would be a stray byte in an otherwise clean file.
   assertEq(lineDrop("", "notes/chunks"), { offset: 0, insert: "[[notes/chunks]]" }, "no space");
 });
 
 check("a line already ending in whitespace reuses it rather than adding a second", () => {
-  // `- ` is the case this exists for: a fresh bullet the user has just typed. The link
-  // completes the item (`- [[x]]`) instead of `- <space>[[x]]`.
   assertEq(lineDrop("- ", "notes/chunks"), { offset: 2, insert: "[[notes/chunks]]" }, "bullet");
   assertEq(lineDrop("  ", "notes/chunks"), { offset: 2, insert: "[[notes/chunks]]" }, "indent kept");
 });
 
 check("the insertion is the true end of the line, so nothing dangles after the link", () => {
-  // The offset is `lineText.length`, never the trimmed length: inserting *before* trailing
-  // whitespace would leave `[[x]] ` behind, and two spaces there are a Markdown hard break
-  // the user never typed.
+  // Inserting before trailing whitespace would leave a hard break the user never typed.
   const { offset } = lineDrop("done   ", "t");
   assertEq(offset, 7, "past the trailing run");
 });
 
 check("a drop anywhere on a line lands at that line's end, never mid-word", () => {
-  // Aiming at a *line* rather than a character is what makes the gesture teachable — and
-  // what stops a release over the middle of "semantics" from splitting it.
   const doc = "alpha beta gamma\nsecond line\n";
   assertEq(dropped(doc, 3), "alpha beta gamma [[notes/other]]\nsecond line\n", "from inside word 1");
   assertEq(dropped(doc, 13), "alpha beta gamma [[notes/other]]\nsecond line\n", "same line, later");
@@ -100,8 +79,7 @@ check("the blank line between paragraphs takes the link on its own", () => {
 });
 
 check("the trailing empty line — dropping under the last paragraph — is a target too", () => {
-  // `posAtCoords(…, false)` clamps a release in the pane's tail padding to the document's
-  // end, which is this line. It is where "add a link at the bottom" naturally aims.
+  // `posAtCoords(…, false)` clamps a release in the tail padding to the document's end.
   const doc = "only paragraph\n";
   assertEq(dropped(doc, doc.length), "only paragraph\n[[notes/other]]", "at the end");
 });
@@ -112,15 +90,12 @@ check("a fenced code line refuses the drop rather than writing a link that can't
   const doc = "prose\n\n```rust\nlet x = 1;\n```\n\nmore\n";
   assertEq(dropped(doc, doc.indexOf("let x")), null, "inside the fence");
   assertEq(dropped(doc, doc.indexOf("```rust")), null, "on the opening fence line");
-  // …and the prose around it is unaffected: the refusal is about code, not about the note.
   assert(dropped(doc, 0) !== null, "the paragraph above still accepts");
   assert(dropped(doc, doc.indexOf("more")) !== null, "and the one below");
 });
 
 check("an indented code block refuses too — it is code without a fence", () => {
-  // And it is why the question is asked at the line's first non-blank character: the
-  // CodeBlock node begins *after* the four spaces, so a read at the line's start would
-  // call this prose and drop a wikilink into a command.
+  // The CodeBlock node begins after the indent, hence asking at the first non-blank char.
   const doc = "intro\n\n    cargo test\n\nafter\n";
   assertEq(dropped(doc, doc.indexOf("cargo")), null, "the indented block");
 });
@@ -131,17 +106,12 @@ check("a blank line inside a fence refuses — it is still code", () => {
 });
 
 check("a line that merely ends in an inline span still accepts", () => {
-  // The link lands *after* the closing backtick, outside the span, so there is no hazard
-  // to refuse — and "see `foo`" is an ordinary sentence to want a link on.
   const doc = "see `foo`\n";
   assertEq(dropped(doc, 2), "see `foo` [[notes/other]]\n", "prose with code in it");
 });
 
 check("the code check reads a position, not the selection", () => {
-  // editorcmds.ts's cursor-shaped `inCodeContext` delegates to this: a drop names a place the
-  // caret isn't, so the position has to be the argument rather than an implicit read.
-  // Unlike the drop's own question, this one counts an inline span — pasted HTML inside
-  // one must stay literal (paste.ts), which is a different rule for a different reason.
+  // Unlike the drop's check, this counts an inline span (paste.ts keeps HTML literal there).
   const state = stateOf("text `inline` text\n");
   assert(inCodeAt(state, 8), "inside the inline span");
   assert(!inCodeAt(state, 1), "and not outside it");
@@ -150,22 +120,15 @@ check("the code check reads a position, not the selection", () => {
 // --- the target's spelling -----------------------------------------------------------
 
 check("the linked card leaves the list by its path, not by the link it wrote", () => {
-  // The review note on PR #185, pinned. A note has two spellings — `notes/x.md` is the
-  // app's key (what `SimilarView.path` carries), `notes/x` is what a link to it says — and
-  // the drop used to hand the *target* back to a filter comparing *paths*. It matched
-  // nothing, so a card you had just linked sat on in "Similar & unlinked" until the next
-  // discovery read: the one behaviour the whole commit-on-drop design exists to provide.
+  // PR #185: filtering by target instead of path left the linked card in the list.
   const card = { path: "notes/x.md", target: "notes/x" };
   const cards = [{ path: "notes/w.md" }, { path: "notes/x.md" }, { path: "notes/y.md" }];
   assertEq(withoutCard(cards, card), [{ path: "notes/w.md" }, { path: "notes/y.md" }], "dropped");
-  // Taking the pair rather than a string is what makes the mix-up unsayable — this is the
-  // assertion the old signature could not have made, since both spellings were `string`.
   assertEq(withoutCard(cards, { path: "notes/z.md", target: "notes/z" }), cards, "no false hit");
 });
 
 check("a note is linked by its path minus .md — the completion's spelling, once", () => {
-  // Shared with wikicomplete.ts on purpose: two spellings of a target would be two ways to
-  // author a dangling link (the engine resolves the extension-less form for notes).
+  // Shared with wikicomplete.ts, so there is one spelling of a target.
   assertEq(noteTarget("notes/deep/idea.md"), "notes/deep/idea", "stripped");
   assertEq(noteTarget("notes/idea.markdown"), "notes/idea.markdown", "only the real suffix");
   const doc = "x\n";

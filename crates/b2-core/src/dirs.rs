@@ -1,9 +1,5 @@
-//! Folder-structure ops — the structure half of "the vault directory is the source
-//! of truth": Markdown files carry content, the directory tree carries **structure**
-//! (data-model.md §1), and a folder — empty or not — is user-authored vault material
-//! exactly like a note. Folders are never projected into the index (nothing to
-//! chunk, embed, or link), so both ops here read/write the filesystem directly:
-//! the walk *is* the projection, and a listing can never go stale against disk.
+//! Folder ops. A folder, empty or not, is vault material like a note (data-model.md §1),
+//! but is never indexed, so these read and write the filesystem directly.
 
 use std::fs;
 use std::path::Path;
@@ -18,12 +14,8 @@ pub struct DirCreateReport {
     pub dir: String,
 }
 
-/// Every folder under `vault_root` (empty ones included), vault-relative with `/`
-/// separators and no trailing slash, sorted. Dot-prefixed directories are skipped — the
-/// same hidden rule the ingest walk applies (GH #136), so the tree and the index agree on
-/// what a vault member is. That mirroring includes symlink behaviour: `is_dir()` follows
-/// directory symlinks exactly as the ingest walk does, so a vault-wide symlink policy, if
-/// one ever lands, must change both walks together.
+/// Every folder under `vault_root`, sorted, skipping dot-prefixed ones as the ingest walk
+/// does (GH #136). `is_dir()` follows symlinks as that walk does; change both together.
 pub fn list_dirs(vault_root: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     collect_dirs(vault_root, vault_root, &mut out)?;
@@ -41,8 +33,7 @@ fn collect_dirs(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         if crate::pathspec::is_hidden(&path) {
             continue;
         }
-        // `path` was produced by walking `root`, so `strip_prefix` cannot fail;
-        // handle it gracefully anyway rather than panic on the invariant.
+        // Cannot fail under `root`; skip rather than panic.
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
@@ -52,12 +43,8 @@ fn collect_dirs(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Create the folder `dir_input` (vault-relative; a trailing `/` is tolerated),
-/// missing parents included — matching `create_note`'s parent creation and the
-/// UI's nested-name input — but, unlike `mkdir -p`, **refusing an occupied
-/// target**: the user asked to *create*, and it's already there. Errors with
-/// [`Error::DirDestination`] for an invalid path and [`Error::DirTargetExists`]
-/// when anything (file or folder) already sits there.
+/// Create the folder `dir_input` with missing parents. Unlike `mkdir -p`, an occupied
+/// target is refused.
 pub fn create_dir(vault_root: &Path, dir_input: &str) -> Result<DirCreateReport> {
     let dir = crate::pathspec::normalize_rel_dir(dir_input).map_err(Error::DirDestination)?;
     let abs = vault_root.join(&dir);

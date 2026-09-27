@@ -1,15 +1,11 @@
-// TypeScript mirrors of the `b2-core` façade's `Serialize` view types — the IPC
-// contract. These are the SAME shapes the CLI's `--json` mode emits (the desktop
-// host reuses them verbatim as command payloads, crates/b2-desktop/CLAUDE.md), so a
-// field here corresponds 1:1 to a Rust struct field. Hand-written for now; if they
-// ever churn, `ts-rs`/`tauri-specta` codegen is the later lever (spec §9).
+// TypeScript mirrors of the façade's `Serialize` view types: the IPC contract, and the
+// same shapes the CLI's `--json` emits (crates/b2-desktop/CLAUDE.md). Fields map 1:1 to
+// Rust struct fields. Hand-written; codegen is the lever if they churn (spec §9).
 
 /**
- * `vault_info` — the active vault, whether the real model is installed (`semantic`),
- * and how much of the vault is actually embedded (`notes_embedded`/`notes_total`, #26).
- * The fraction is the precise honesty signal: `semantic` says a model *exists*, the
- * fraction says how much semantic ranking is *live*, so the UI can flag search
- * "keyword-only for now" while a projected vault embeds behind the first tree paint.
+ * `vault_info` — the active vault, whether the real model is installed (`semantic`), and
+ * how much is embedded (#26). The fraction says how much semantic ranking is live, so the
+ * UI can flag search "keyword-only for now" while the vault embeds.
  */
 export interface VaultInfo {
   root: string;
@@ -19,13 +15,9 @@ export interface VaultInfo {
 }
 
 /**
- * `menu_chords` — one item of the app's **menu bar** that carries a chord
- * (b2-desktop `menu.rs`, #119). Not a `b2-core` view type: the menu is the host's own
- * surface, and this is the only shape it exports. `keys` is spelled in the keyboard
- * registry's chord syntax (`Mod-Shift-z`), so `bindings.ts` can parse it with the same
- * parser it uses for B2's own chords; `label` is the text the menu itself shows, and the
- * keyboard reference prints it verbatim. See `menukeys.ts` for the mirror this is
- * checked against.
+ * `menu_chords` — one menu-bar item that carries a chord (b2-desktop `menu.rs`, #119), a
+ * host type rather than a `b2-core` one. `keys` is in the registry's chord syntax;
+ * `label` is the menu's own text. Checked against `menukeys.ts`.
  */
 export interface MenuChord {
   id: string;
@@ -36,10 +28,9 @@ export interface MenuChord {
 // --- chat (flow ④, GH #151/#153/#155) ------------------------------------------------
 
 /**
- * One turn of the conversation, as `ask` takes it (`b2-core`'s `ChatTurn`). The only
- * shape here that crosses the seam *inbound*: history is the **adapter's**, session-only
- * (invariant S4), so the pane holds it and hands it back turn by turn — nothing about a
- * chat is ever written to the vault, the index, or `localStorage`.
+ * One turn of the conversation, as `ask` takes it (`b2-core`'s `ChatTurn`). History is
+ * session-only and the pane's (S4): nothing about a chat is written to the vault, the
+ * index, or `localStorage`.
  */
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -47,25 +38,22 @@ export interface ChatTurn {
 }
 
 /**
- * `ask` — one grounded answer (`b2-core`'s `AnswerView`), the same view `b2 ask --json`
- * ends its event stream with. The tokens arrive first over the command's channel; this is
- * what they add up to, plus the citations resolved back to notes.
+ * `ask` — one grounded answer (`b2-core`'s `AnswerView`): what the streamed tokens add up
+ * to, plus citations resolved back to notes.
  */
 export interface AnswerView {
-  /** The answer verbatim, including any `[n]` marker that resolved to nothing —
-   *  model output is untrusted (E5) but it is never rewritten. */
+  /** The answer verbatim, including unresolved `[n]` markers: untrusted (E5), never rewritten. */
   answer: string;
   /** One entry per distinct marker that names a real passage, ascending. */
   citations: Citation[];
   /** The stream was stopped mid-answer (Esc): `answer` is an honest prefix. */
   cancelled: boolean;
-  /** The B2 tools that ran to produce the answer, in order. The host omits the field
-   *  for a plain `ask`, which offers the model none. */
+  /** The B2 tools that ran, in order. Absent for a plain `ask`, which offers none. */
   tools?: ToolUse[];
 }
 
-/** One tool run during a tool-using chat turn (`b2-core`'s `ToolUseView`). `name` and
- *  `arguments` are the model's own for a call it made — untrusted, like its answer. */
+/** One tool run during a chat turn (`b2-core`'s `ToolUseView`). For a model-made call,
+ *  `name` and `arguments` are untrusted. */
 export interface ToolUse {
   name: string;
   arguments: string;
@@ -76,16 +64,14 @@ export interface ToolUse {
 /** One resolved `[n]` citation: which marker, which note, and a line of evidence. */
 export interface Citation {
   marker: number;
-  /** Vault-relative path — the note's identity (L1), and what a click **opens in-app**. */
+  /** Vault-relative path — the note's identity (L1), and what a click opens in-app. */
   path: string;
   excerpt: string;
 }
 
-/** How ready chat is right now (`b2-llm`'s `ChatState`) — the setup card's branch.
- *
- *  `"unreachable"` covers both *nothing is listening* and *something answered and
- *  refused* (a base URL that isn't a chat API, a rejected key): the card is the same,
- *  and `message` is what parts them — never render advice of your own from this. */
+/** How ready chat is (`b2-llm`'s `ChatState`) — the setup card's branch. `"unreachable"`
+ *  covers both nothing listening and a refusal (wrong URL, rejected key); `message` parts
+ *  them, so never render advice of your own from this. */
 export type ChatState = "ready" | "unreachable" | "model_missing" | "fake";
 
 /** One model an Ollama daemon has installed, from its native `/api/tags`. */
@@ -106,18 +92,15 @@ export interface ModelTier {
 }
 
 /**
- * The Ollama-native half of the setup card. Present only when the configured endpoint
- * looks like Ollama's: guided setup is a per-runtime feature, and Ollama is the runtime
- * B2 guides (GH #151) — there is nothing honest to say about pulling a model into
- * LM Studio.
+ * The Ollama-native half of the setup card. Present only when the endpoint looks like
+ * Ollama's, the one runtime B2 guides (GH #151).
  */
 export interface OllamaSetup {
   /** The daemon's native root (`http://localhost:11434`). */
   root: string;
   /** Whether the native API answered at all. */
   running: boolean;
-  /** What is installed. Empty *with* `running` is the "no model" card, which is a
-   *  different sentence from the "no server" one. */
+  /** What is installed. Empty with `running` is the "no model" card, not "no server". */
   installed: OllamaModel[];
   ram_gb: number | null;
   tiers: ModelTier[];
@@ -126,33 +109,26 @@ export interface OllamaSetup {
 }
 
 /**
- * Where the bearer token in force came from (`b2-llm`'s `ApiKeySource`) — a fact *about*
- * the key, which is the only part of one that may cross this boundary.
+ * Where the bearer token in force came from (`b2-llm`'s `ApiKeySource`); only this fact
+ * about the key crosses the boundary. Each value is different copy (GH #176):
  *
- * Each value is different copy, which is why this isn't a boolean (GH #176):
- *
- * - `"none"` — no key. The **Local** configuration, and the default.
- * - `"environment"` — `B2_LLM_API_KEY`, which **overrides** anything B2 remembered. It is
- *   the user's own configuration, so the app can neither replace nor remove it.
- * - `"stored"` — remembered in the macOS Keychain: encrypted at rest, and there next launch.
- * - `"session"` — held in memory for this run only, because the Keychain was unavailable or
- *   refused. Chat works; the key is gone at quit.
+ * - `"none"` — no key: the Local configuration, and the default.
+ * - `"environment"` — `B2_LLM_API_KEY`, which overrides anything stored; the app can
+ *   neither replace nor remove it.
+ * - `"stored"` — in the macOS Keychain, encrypted at rest.
+ * - `"session"` — in memory for this run only, because the Keychain refused.
  */
 export type ApiKeySource = "none" | "environment" | "stored" | "session";
 
 /**
- * `chat_setup` / `set_chat_config` — everything the chat surface needs before a question
- * is asked (`b2-llm`'s `ChatSetup`). Adapter-level state, never vault or index state, so
- * changing it costs no reindex (contrast M2).
- *
- * `api_key_source` and never the key: the token does not cross this boundary in either
- * direction (`b2-desktop/src/chat.rs`).
+ * `chat_setup` / `set_chat_config` — what the chat surface needs before a question
+ * (`b2-llm`'s `ChatSetup`). Adapter state, so changing it costs no reindex (contrast M2).
+ * The key itself never crosses this boundary (`b2-desktop/src/chat.rs`).
  */
 export interface ChatSetup {
   base_url: string;
   model: string;
-  /** `false` for **Local**, `true` for **Cloud models** — what the privacy copy hangs
-   *  off (invariant M5). */
+  /** `false` for Local, `true` for Cloud models; drives the privacy copy (M5). */
   cloud: boolean;
   api_key_source: ApiKeySource;
   state: ChatState;
@@ -161,8 +137,8 @@ export interface ChatSetup {
   /** Models the endpoint says it serves, when it said. */
   available: string[];
   ollama: OllamaSetup | null;
-  /** The tool-call cap, with the two numbers the Settings field's copy and validation
-   *  quote — the host's, so the panel can't advertise a range the parser refuses. */
+  /** The tool-call cap and its bounds, from the host so Settings can't advertise a range
+   *  the parser refuses. */
   tool_calls: ToolCallCap;
 }
 
@@ -191,11 +167,8 @@ export interface ModelChoice {
 }
 
 /**
- * `embed_stats` — one model's cumulative embedding cost (b2-desktop `stats.rs`): a running
- * total summed across every reindex since the model was selected, shown in Settings so a
- * model swap can be judged on real speed. Switching *to* a model restarts its total, so a
- * bucket covers only the model's current stint. `total_ms / chunks` is throughput; `runs`
- * counts contributing embed passes.
+ * `embed_stats` — one model's cumulative embedding cost since it was last selected
+ * (b2-desktop `stats.rs`), so a model swap can be judged on real speed.
  */
 export interface EmbedStat {
   model: string;
@@ -214,26 +187,14 @@ export interface NoteView {
   tags: string[];
   /** Raw Markdown body (frontmatter stripped), verbatim from disk. */
   body: string;
-  /**
-   * Raw frontmatter YAML verbatim (between the `---` fences, fences excluded), or
-   * null when the note has none. The byte-honest block — not a re-serialization of
-   * the fields above — so `b2_relations:` and any unmodeled keys show as written. The
-   * note pane renders it in a collapsible drawer.
-   */
+  /** Raw frontmatter YAML verbatim, fences excluded, or null. Not a re-serialization, so
+   *  unmodeled keys show as written. */
   frontmatter: string | null;
-  /**
-   * Whether that block reads as YAML metadata (GH #79). `false` ⇒ the raw bytes
-   * above round-trip verbatim but B2 projected no fields from them (malformed
-   * YAML, or not a key/value mapping) — the drawer shows a non-blocking warning.
-   * Because every read carries it, an external hand-edit surfaces the same
-   * warning as an in-app save.
-   */
+  /** Whether that block reads as YAML metadata (GH #79). `false` ⇒ B2 projected no fields
+   *  from it, and the drawer shows a non-blocking warning. */
   frontmatter_readable: boolean;
-  /**
-   * blake3 of the raw file bytes at read time — the save-guard token
-   * (crates/b2-desktop/CLAUDE.md): a save presents it, and the host refuses if the file
-   * changed on disk since, so an external edit is never silently clobbered.
-   */
+  /** blake3 of the file bytes at read time: the save-guard token. The host refuses a save
+   *  if the file changed since (crates/b2-desktop/CLAUDE.md). */
   revision: string;
 }
 
@@ -243,10 +204,7 @@ export interface NoteSummary {
   title: string | null;
 }
 
-/**
- * `Vault::list_resources` — one non-`.md` vault file for the file tree (file-type
- * slice 1). The per-kind sibling of `NoteSummary`; the tree merges the two lists.
- */
+/** `Vault::list_resources` — one non-`.md` vault file; the tree merges it with `NoteSummary`. */
 export interface ResourceSummary {
   path: string;
   class: string; // "text" | "html" | "pdf" | "image" | "media" | "binary"
@@ -279,10 +237,8 @@ export interface SimilarView {
   title: string | null;
   score: number;
   evidence: string;
-  /** Stage-2 best-passage z against the anchor's candidate population — the
-   *  honest input for a strength band (GH #150/#192), gating nothing since
-   *  GH #197. Absent when no statistic was computed (fake space / tiny pool /
-   *  no spread) — the pane's cue to say the list is ungraded. */
+  /** Stage-2 best-passage z against the anchor's candidates, for a strength band (GH #192);
+   *  gates nothing (GH #197). Absent when ungraded (fake space, tiny pool, no spread). */
   z?: number;
 }
 
@@ -335,38 +291,29 @@ export interface SearchResult {
   snippet: string;
 }
 
-/** One served row with the provenance RRF discarded — which list ranked its chunk,
- *  and how near its vector actually was (`Vault::search_evidence`, GH #201). The
- *  fields are flattened onto the row host-side, so this *is* a `SearchResult`. */
+/** One served row plus the provenance RRF discards: which list ranked its chunk, and its
+ *  cosine (`Vault::search_evidence`, GH #201). Flattened host-side onto a `SearchResult`. */
 export interface EvidencedResult extends SearchResult {
   /** 0-based rank in the BM25 list; `null` = the lexical half never ranked it. */
   bm25_rank: number | null;
-  /** 0-based rank in the dense list; `null` = the vector half never ranked it,
-   *  or never ran. */
+  /** 0-based rank in the dense list; `null` = never ranked it, or never ran. */
   vector_rank: number | null;
   /** This chunk's cosine to the query; `null` whenever `vector_rank` is. */
   cos: number | null;
 }
 
-/** One query term's lexical reading — its document frequency and the weight that
- *  gives it in the coverage the verdict reads (`Vault::search_evidence`). */
+/** One query term's document frequency and weight in the verdict's coverage. */
 export interface QueryTermView {
   term: string;
   df: number;
   idf: number;
 }
 
-/** `Vault::search_evidence` — the served rows plus D2's query-level verdict.
- *
- *  `vouched` is three-state and each state is different behavior (invariants.md
- *  D2, GH #202):
- *    • `true`  — the vault holds lexical or semantic evidence; serve the rows.
- *    • `false` — it holds neither; the pane shows the honest empty state and
- *                **none** of the rows (strict, no reveal).
- *    • `null`  — no calibrated bar for the active model (the fake embedder, or
- *                any model until the harness measures one — M2). Serve the rows
- *                exactly as before; never read this as "no matches", which would
- *                blank every dev vault. */
+/** `Vault::search_evidence` — the served rows plus D2's verdict (GH #202). `vouched`:
+ *    • `true`  — the vault holds evidence; serve the rows.
+ *    • `false` — it holds none; show the empty state and none of the rows.
+ *    • `null`  — no calibrated bar for this model (M2). Serve the rows; never read this as
+ *                "no matches". */
 export interface SearchEvidenceView {
   results: EvidencedResult[];
   vouched: boolean | null;
@@ -384,18 +331,13 @@ export interface NeighborView {
   label: string;
   explanation: string | null;
   origin: string; // "inline" | "frontmatter"
-  /**
-   * The other note's `created` date, if it has one — resolved by the host so a
-   * client never re-reads the file just for a date (GH #22).
-   */
+  /** The other note's `created` date, resolved host-side (GH #22). */
   created: string | null;
 }
 
 /**
- * One outbound link a note authors at a **resource** (an image, a PDF — any
- * non-`.md` vault file), from `Vault::explain` — the third target kind an edge
- * can have (note / resource / dangling, GH #22). No direction: a resource never
- * authors edges, so these are always outbound.
+ * One outbound link at a resource (any non-`.md` vault file), from `Vault::explain`
+ * (GH #22). Always outbound: a resource never authors edges.
  */
 export interface ResourceLink {
   path: string;
@@ -408,10 +350,8 @@ export interface ResourceLink {
 }
 
 /**
- * One outbound link that resolves to nothing — no note and no resource exists at
- * its target (a `[[Hermes]]` naming a *folder*, or a typo). A note is one `.md` file,
- * so a folder is never a valid target; B2 surfaces the link as broken rather than
- * dropping it (GH #12). Has no `path` — nothing resolved.
+ * One outbound link that resolves to nothing (a typo, or a `[[Hermes]]` naming a folder).
+ * Surfaced as broken rather than dropped (GH #12).
  */
 export interface UnresolvedLink {
   /** The target exactly as written in the Markdown (`[[target]]`) — e.g. `Hermes`. */
@@ -422,11 +362,7 @@ export interface UnresolvedLink {
   explanation: string | null;
 }
 
-/**
- * `Vault::explain` — a note's identity, its typed edges, and any unresolved
- * (dangling) outbound links. `connections` are resolved neighbors; `unresolved` are
- * links whose target names no note or file, shown with a broken-link emblem (GH #12).
- */
+/** `Vault::explain` — a note's identity, its typed edges, and its dangling links (GH #12). */
 export interface ExplainView {
   path: string;
   title: string | null;
@@ -437,8 +373,7 @@ export interface ExplainView {
 }
 
 /**
- * `Vault::write` — the completed body save (crates/b2-desktop/CLAUDE.md): the note's path
- * plus the new `revision` (blake3 of the final on-disk bytes), the token the editor
+ * `Vault::write` — the completed save: the path plus the new `revision`, which the editor
  * chains the next save on so its own saves never self-conflict.
  */
 export interface WriteReport {
@@ -446,37 +381,26 @@ export interface WriteReport {
   revision: string;
 }
 
-/**
- * `Vault::create_note` — the created note's vault-relative path
- * (`.md`-normalized), which is its identity (L1) and how it is opened.
- */
+/** `Vault::create_note` — the created note's `.md`-normalized path, its identity (L1). */
 export interface AddReport {
   path: string;
 }
 
 /**
- * `Vault::import_file` / `Vault::import_path` — where an imported file landed, and
- * whether it was routed as a note (a `.md`, projected) or a resource (one inventory
- * row). Both are path-keyed peers (L3), so the path is the whole identity either way.
+ * `Vault::import_file` / `Vault::import_path` — where an imported file landed, and whether
+ * it was routed as a note or a resource. Either way the path is its identity (L3).
  */
 export interface ImportReport {
   path: string;
   note: boolean;
 }
 
-/**
- * `Vault::create_dir` — the created folder's normalized vault-relative path. A
- * folder is user-authored structure (a real `mkdir` on disk), so it has no index
- * row to report at all.
- */
+/** `Vault::create_dir` — the created folder's normalized path. Folders have no index row. */
 export interface DirCreateReport {
   dir: string;
 }
 
-/**
- * `Vault::move_note` — the completed move/rename: old and new vault-relative
- * paths, plus which inbound files had their link text rewritten.
- */
+/** `Vault::move_note` — old and new paths, plus which inbound files had links rewritten. */
 export interface MoveReport {
   from: string;
   to: string;
@@ -492,10 +416,7 @@ export interface ResourceMoveReport {
   links_rewritten: number;
 }
 
-/**
- * `Vault::move_dir` — a whole-folder move: how many indexed notes/resources
- * travelled, and the rewritten files at their post-move paths.
- */
+/** `Vault::move_dir` — counts of what travelled, and the rewritten files at their new paths. */
 export interface DirMoveReport {
   from: string;
   to: string;
@@ -505,10 +426,7 @@ export interface DirMoveReport {
   links_rewritten: number;
 }
 
-/**
- * `Vault::delete_note` — the completed delete: the note's path, plus the surviving
- * files whose links at it now dangle (they are never rewritten).
- */
+/** `Vault::delete_note` — the path, plus surviving files whose links now dangle (never rewritten). */
 export interface DeleteReport {
   path: string;
   dangled: string[];
@@ -520,8 +438,7 @@ export interface ResourceDeleteReport {
   dangled: string[];
 }
 
-/** `Vault::delete_dir` — a whole-folder delete: how many indexed notes/resources
- *  died with it, and the surviving linkers whose links now dangle. */
+/** `Vault::delete_dir` — counts of what was deleted, and the linkers now dangling. */
 export interface DirDeleteReport {
   dir: string;
   deleted_notes: number;
@@ -537,21 +454,16 @@ export interface LinkReport {
   created: boolean;
 }
 
-/**
- * A `.md` file the projection pass couldn't read and skipped (see `ProjectReport`).
- * `reason` is a short, file-level phrase — "not valid UTF-8 text", "permission
- * denied" — safe to show; never a B2 internal.
- */
+/** A `.md` file the projection pass skipped. `reason` is a short, file-level phrase
+ *  ("permission denied"), safe to show. */
 export interface SkippedNote {
   path: string;
   reason: string;
 }
 
 /**
- * `Vault::project` — what the fast, model-free projection pass did
- * (docs/index-engine.md). Once this resolves, the tree and keyword
- * search are live; only vectors are missing. `skipped` names any unreadable files the
- * pass left out — one bad file never aborts the whole reindex (empty on a clean vault).
+ * `Vault::project` — what the model-free projection pass did (docs/index-engine.md). Once
+ * it resolves, the tree and keyword search are live. One bad file never aborts it.
  */
 export interface ProjectReport {
   indexed: number;
@@ -566,19 +478,13 @@ export interface ProjectReport {
 /** `Vault::embed` — what the embed pass did: notes whose missing vectors it filled. */
 export interface EmbedReport {
   embedded: number;
-  /**
-   * The embed was cancelled mid-run (the user hit Cancel). The index is still
-   * consistent — keyword search + graph are complete, a prefix of notes is embedded —
-   * and re-running finishes the rest (docs/index-engine.md).
-   */
+  /** Cancelled mid-run. The index stays consistent and a re-run finishes the rest. */
   cancelled: boolean;
 }
 
 /**
- * `ingest::ReindexProgress` — one per-batch progress event streamed over a Tauri
- * `Channel` during an embed (docs/index-engine.md). The counts describe the notes
- * that actually (re)embed this run, not every note (an incremental run reuses most
- * vectors untouched), and are determinate from the first batch.
+ * `ingest::ReindexProgress` — one per-batch event streamed during an embed. Counts cover
+ * only the notes that (re)embed this run, and are determinate from the first batch.
  */
 export interface ReindexProgress {
   /** Vault-relative path of the note currently embedding. */

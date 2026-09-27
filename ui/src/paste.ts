@@ -1,19 +1,9 @@
-// Rich paste, the pure half — the clipboard's `text/html` flavor → B2 Markdown.
-// main.ts wraps this in a CodeMirror `paste` DOM handler; the split keeps the
-// conversion node-testable with no editor dependency (the format.ts / move.ts pattern).
+// Rich paste, the pure half: the clipboard's `text/html` flavor → B2 Markdown, the vault's
+// only authored format (data-model.md). main.ts wraps it in a CodeMirror `paste` handler.
 //
-// Why it exists: copying from a web page loses every heading, bold and list, because
-// the editor's default paste takes `text/plain`. Markdown is the vault's *sole authored
-// subset* (data-model.md), so the fix is a conversion at the seam, not a rich-text
-// buffer: what the paste inserts is ordinary Markdown bytes the human could have typed.
-//
-// Two properties this owes the vault:
-//   - **Faithful, not authoritative.** Markdown syntax inside pasted prose is escaped
-//     (turndown's default), so a page containing `[[Rust]]` pastes as literal text and
-//     never authors an edge — a connection exists only once *you* write it.
-//   - **Plain wins when nothing was formatted.** `markdownForPaste` returns null unless
-//     the conversion actually captured something, so an ordinary text paste keeps the
-//     editor's own path — no escape noise, no reflow.
+// Markdown syntax in pasted prose is escaped, so a pasted `[[Rust]]` never authors an edge.
+// And `markdownForPaste` returns null when nothing was formatted, so a plain paste keeps
+// the editor's own path.
 
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
@@ -25,19 +15,14 @@ type Mark = "on" | "off" | "unset";
 const EMPHASIS_TAGS = new Set(["B", "STRONG", "I", "EM", "SPAN", "FONT"]);
 
 /**
- * Ancestors that are already bold *by CSS* — marking inside them is noise, not fidelity
- * (`## **Title**`). A `<b>`/`<strong>` ancestor is not listed: whether it is really bold
- * is `boldState`'s question, since Google Docs' wrapper is a `<b>` that isn't.
+ * Ancestors already bold by CSS, so marking inside them is noise (`## **Title**`). `<b>` is
+ * not listed: Google Docs' wrapper is a `<b>` that isn't bold (see `boldState`).
  */
 const BOLD_ABOVE = new Set(["H1", "H2", "H3", "H4", "H5", "H6", "TH"]);
 
 /**
- * Read one inline-style property off the element.
- *
- * Deliberately parses the `style` *attribute* rather than touching `node.style`: the
- * same code then runs against the webview's DOM and the tests' node DOM (turndown's
- * bundled domino), and against the copied fragment's own declarations only — never a
- * stylesheet's, which the clipboard never carries.
+ * Read one inline-style property off the element. Parses the `style` attribute rather
+ * than `node.style`, so it also runs on the tests' node DOM (turndown's domino).
  */
 function styleProp(node: HTMLElement, prop: string): string {
   const style = node.getAttribute("style");
@@ -47,9 +32,8 @@ function styleProp(node: HTMLElement, prop: string): string {
 }
 
 /**
- * Is this element bold? An explicit inline style **wins over the tag** — that one rule
- * is what makes a Google Docs paste readable, since Docs wraps its whole fragment in
- * `<b style="font-weight:normal">` and marks the genuinely bold runs with styled spans.
+ * Is this element bold? An inline style wins over the tag: Google Docs wraps its whole
+ * fragment in `<b style="font-weight:normal">` and marks bold runs with styled spans.
  */
 function boldState(node: HTMLElement): Mark {
   const w = styleProp(node, "font-weight");
@@ -85,11 +69,7 @@ function fenceFor(text: string): string {
   return "`".repeat(Math.max(3, longest + 1));
 }
 
-/**
- * The converter, configured to emit the Markdown dialect B2's own notes use: ATX
- * headings, `-` bullets, `---` breaks, fenced code, `*`/`**` emphasis, GFM tables and
- * strikethrough (the reading view parses with `gfm: true`, and ⌘T writes pipe tables).
- */
+/** The converter, configured for the Markdown dialect B2's own notes use (GFM included). */
 function makeService(): TurndownService {
   const service = new TurndownService({
     headingStyle: "atx",
@@ -106,8 +86,7 @@ function makeService(): TurndownService {
 
   // Rules added last are matched first, so these three shadow the defaults they replace.
 
-  // Emphasis, decided per element instead of per tag — see `boldState`. One rule for
-  // both marks so a single span can carry both (`***both***`).
+  // Emphasis per element, not per tag (see `boldState`); one rule so a span can carry both.
   service.addRule("emphasis", {
     filter: (node) => EMPHASIS_TAGS.has(node.nodeName),
     replacement: (content, node) => {
@@ -123,17 +102,14 @@ function makeService(): TurndownService {
     },
   });
 
-  // Strikethrough with the doubled tilde. The gfm plugin emits a single `~`, which the
-  // GFM spec allows but nothing else in B2 writes — the reading view's `~~` is the form
-  // that survives every other Markdown tool the vault's files may pass through.
+  // `~~`, not the gfm plugin's single `~`, which other Markdown tools may not read.
   service.addRule("strikethrough", {
     filter: (node) => node.nodeName === "DEL" || node.nodeName === "S" || node.nodeName === "STRIKE",
     replacement: (content) => (content.trim() ? `~~${content}~~` : content),
   });
 
-  // List items indented by the marker's own width (`- ` → 2, `12. ` → 4) rather than
-  // turndown's fixed `-   ` + 4 spaces: the source pane shows these bytes, and this is
-  // the shape a hand writes.
+  // Indent by the marker's width (`- ` → 2, `12. ` → 4), as a hand writes, not turndown's
+  // fixed `-   `.
   service.addRule("listItem", {
     filter: "li",
     replacement: (content, node) => {
@@ -154,8 +130,8 @@ function makeService(): TurndownService {
     },
   });
 
-  // A `<pre>` with no leading `<code>` — turndown's fenced rule only matches `pre >
-  // code`, and everything else would have its newlines collapsed into a paragraph.
+  // A `<pre>` without `<code>`: turndown's fenced rule only matches `pre > code`, and would
+  // collapse this into a paragraph.
   service.addRule("bareCodeBlock", {
     filter: (node) =>
       node.nodeName === "PRE" && !(node.firstChild && node.firstChild.nodeName === "CODE"),
@@ -191,11 +167,8 @@ function collapse(s: string): string {
 }
 
 /**
- * What a paste should insert, or `null` to leave it to the editor's plain-text path.
- *
- * `null` is the answer whenever the conversion captured nothing the plain flavor didn't
- * already carry — an unformatted copy, or one whose only structure is paragraph breaks.
- * Intervening there would only add escape backslashes to the note.
+ * What a paste should insert, or null to leave it to the editor's plain-text path: null
+ * whenever the conversion captured nothing the plain flavor lacks.
  */
 export function markdownForPaste(html: string, text: string): string | null {
   if (!html.trim()) return null;

@@ -1,46 +1,27 @@
-//! The per-hit search tail bake-off (GH #206): the candidate prefix-cut families, their
-//! constraints re-derived on the labelled corpus and on the dense fixture's title lists,
-//! and the cross-bench join. The ruling of record is **no tail fold ships**
-//! (docs/evals.md); every constraint is still re-derived each run.
+//! The per-hit search tail bake-off (GH #206): candidate prefix-cut families, their
+//! constraints on the labelled corpus and the dense fixture, and the cross-bench join. The
+//! ruling of record is that no tail fold ships (docs/evals.md).
 
 use crate::common::truncate;
 use crate::dense::SearchProbe;
 use crate::evidence::{QueryEvidence, SearchEvidence, ServedRow};
 
-/// A candidate **per-hit tail rule** family (GH #206) — the fold where a real
-/// query's evidence runs out, D2's per-hit half. Every family folds as a
-/// **prefix cut** (invariants.md D1): the default view ends at the first served
-/// row failing the family's test, and every row below folds with it — a passing
-/// row under a failing one folds too, because a fold that punched holes in the
-/// fused order would let row order and fold visibly disagree.
-///
-/// The consequence that does all the work below: a filler row served *above* a
-/// keep-labelled row must pass the test too, or the keep row under it folds. So
-/// each family's constraint is read over the **keep-prefix** — every row at or
-/// above a list's deepest keep row — not over the keep rows alone.
+/// A candidate per-hit tail rule family (D2, GH #206). Every family is a prefix cut (D1):
+/// the view ends at the first failing row. So a filler row above a keep row must pass too,
+/// and constraints are read over the keep-prefix, not the keep rows alone.
 #[derive(Clone, Copy, PartialEq)]
 pub enum TailRule {
-    /// Fold at the first row the lexical half never ranked (`bm25_rank: None`)
-    /// — the dense-only fold, the signal GH #201 measured (0 of 410 positive
-    /// rows vs 20 of 50 negative ones). Parameterless, so nothing
-    /// distributional to place — but **not** scale-free: `bm25_rank` is a rank
-    /// in a pool-truncated list (`search::pool_size`), so "never ranked" is
-    /// partly a fact about pool depth against vault size. `make calibrate
-    /// VAULT=<vault> ARGS=--search` measures that rather than assuming it
-    /// (process rule 5's posture, owed even without a constant).
+    /// Fold at the first dense-only row (GH #201). Parameterless but not scale-free: "never
+    /// ranked" depends on `search::pool_size` against vault size, which `make calibrate
+    /// ARGS=--search` measures.
     Lexical,
-    /// Fold at the first row that is dense-only **and** under a per-hit cosine
-    /// bar — the shipped query rule's shape (lexical OR semantic) read per hit.
+    /// Fold at the first row that is dense-only and under a cosine bar: the query rule's
+    /// shape, per hit.
     LexOrCos,
-    /// Fold at the first row under a per-hit cosine bar, lexical rank ignored
-    /// (a row the dense half never ranked fails at any bar). The single-signal
-    /// baseline the two-signal family must beat — the pure-cosine window at hit
-    /// granularity, included to be retired the way GH #201 retired its
-    /// query-level twin.
+    /// Fold at the first row under a cosine bar, lexical rank ignored: the single-signal
+    /// baseline to beat.
     Cos,
-    /// Fold at the first row whose cosine sits more than δ under the list's own
-    /// best — the "drop-off" shape, scale-adaptive in the query and still
-    /// distributional in δ.
+    /// Fold at the first row more than δ under the list's best cosine.
     CosDrop,
 }
 
@@ -61,9 +42,8 @@ impl TailRule {
         }
     }
 
-    /// Whether `row` passes this family's per-hit test at constant `p`
-    /// (ignored by `Lexical`; `best` is the row's list's best served cosine,
-    /// read only by `CosDrop`).
+    /// Whether `row` passes at constant `p` (ignored by `Lexical`). `best` is read only by
+    /// `CosDrop`.
     pub fn passes(self, row: &ServedRow, p: f64, best: f64) -> bool {
         match self {
             TailRule::Lexical => row.bm25_rank.is_some(),
@@ -73,9 +53,7 @@ impl TailRule {
         }
     }
 
-    /// Where this family folds `rows` at constant `p`: the index of the first
-    /// failing row, `rows.len()` when nothing folds. The prefix-cut definition
-    /// lives here and nowhere else.
+    /// The index of the first failing row, or `rows.len()`. The one prefix-cut definition.
     pub fn fold(self, rows: &[ServedRow], p: f64) -> usize {
         let best = best_served_cos(rows);
         rows.iter()
@@ -84,18 +62,14 @@ impl TailRule {
     }
 }
 
-/// The best served cosine of one list — [`TailRule::CosDrop`]'s reference
-/// point. Read off the *served* rows, not the vault-wide dense top-1: the drop
-/// rule is a claim about a list's own shape.
+/// The best served cosine of one list, [`TailRule::CosDrop`]'s reference point.
 pub fn best_served_cos(rows: &[ServedRow]) -> f64 {
     rows.iter()
         .filter_map(|r| r.cos)
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
-/// The keep-prefix of one served list: every row at or above its deepest
-/// keep-labelled row. Empty when nothing served is keep-labelled — such a list
-/// constrains no rule (there is nothing a fold could wrongly hide).
+/// Every row at or above the deepest keep row; empty when none is kept.
 pub fn keep_prefix(rows: &[ServedRow]) -> &[ServedRow] {
     match rows.iter().rposition(|r| r.keep) {
         Some(last) => &rows[..=last],
@@ -103,35 +77,23 @@ pub fn keep_prefix(rows: &[ServedRow]) -> &[ServedRow] {
     }
 }
 
-/// One family's constraint, re-derived from a set of served lists (GH #187's
-/// idiom on the per-hit axis): the range of its constant, if any, at which no
-/// keep-prefix row anywhere fails. Both edges carry the row that set them,
-/// because a window edge is only arguable once the pair is named.
+/// One family's constraint: the range of its constant at which no keep-prefix row fails,
+/// with the row that set each edge.
 pub struct TailConstraint {
-    /// A keep-prefix row that cannot pass at **any** constant — the family is
-    /// dead on this bench (e.g. a row with no cosine under a cosine family).
+    /// A keep-prefix row that passes at no constant: the family is dead on this bench.
     pub dead: Option<(String, String)>,
-    /// `Cos`/`LexOrCos`: the highest admissible bar (the binding keep-prefix
-    /// row's own cosine). `CosDrop`: the lowest admissible δ (the binding
-    /// row's drop from its list's best). `None` = unconstrained — no
-    /// keep-prefix row engages the family's test at all.
+    /// `Cos`/`LexOrCos`: the highest admissible bar. `CosDrop`: the lowest admissible δ.
+    /// `None` when no keep-prefix row engages the test.
     pub edge: Option<f64>,
     /// The (query-or-title, path) that set `edge`.
     pub edge_row: Option<(String, String)>,
-    /// `Lexical` only: keep-prefix rows failing its fixed test. Nonzero =
-    /// inadmissible, and each failure is a keep row the fold would hide.
+    /// `Lexical` only: keep-prefix rows failing its test. Nonzero is inadmissible.
     pub lexical_violations: usize,
 }
 
-/// Read one family's [`TailConstraint`] over `(list name, full rows, keep-prefix
-/// length)` triples, where every keep-prefix row must pass. The dense fixture
-/// reuses this with whole lists as keep-prefixes: on a single-domain vault every
-/// served row is a real match, so the absolute "truncate nothing" is the same
-/// constraint with the keep-set saturated. The full list rides along because
-/// [`TailRule::CosDrop`]'s reference is the **list's** best served cosine —
-/// reading it off the prefix alone could understate a required δ when the best
-/// row sits below the prefix, and the constraint must read exactly what the
-/// fold would.
+/// Read one family's [`TailConstraint`] over `(list name, full rows, keep-prefix length)`.
+/// The dense fixture passes whole lists as keep-prefixes. The full list is needed because
+/// [`TailRule::CosDrop`]'s reference is the whole list's best cosine.
 pub fn tail_constraint<'a>(
     rule: TailRule,
     lists: impl Iterator<Item = (&'a str, &'a [ServedRow], usize)>,
@@ -154,20 +116,11 @@ pub fn tail_constraint<'a>(
                         }
                     }
                 }
-                // The cosine arms read the row's cosine through a finiteness
-                // filter (PR #212 review): a NaN would sail through `c < e`
-                // comparisons as silently-true-nowhere — worse, `is_none_or`
-                // admits the FIRST row unconditionally, so a NaN first row
-                // would seed the edge. A non-finite reading is *no reading*,
-                // and the honest arm for that is `dead`, with the row named —
-                // never a silent skip that reports the family unconstrained.
+                // Filter non-finite cosines (PR #212): `is_none_or` admits the first row
+                // unconditionally, so a NaN would seed the edge. No reading means `dead`.
                 TailRule::LexOrCos => {
                     if row.bm25_rank.is_none() {
                         match row.cos.filter(|c| c.is_finite()) {
-                            // A served row is in at least one list, so a
-                            // dense-only row carries a cosine unless it is
-                            // non-finite — either way, no finite reading means
-                            // this row can pass at no bar.
                             None => {
                                 if out.dead.is_none() {
                                     out.dead = Some((name.to_string(), row.path.clone()));
@@ -215,11 +168,8 @@ pub fn tail_constraint<'a>(
     out
 }
 
-/// What a family buys at constant `p` on the labelled lists: rows cut, split by
-/// label. At an admissible constant `kept_cut` is zero **by construction** —
-/// the constraint above is exactly "every keep-prefix row passes" — so a
-/// nonzero here is an arithmetic fault, printed as such rather than assumed
-/// away.
+/// Rows a family cuts at constant `p`, by label. At an admissible constant `kept_cut` is
+/// zero by construction, so nonzero is printed as a fault.
 pub struct TailPayoff {
     pub filler_cut: usize,
     pub kept_cut: usize,
@@ -243,28 +193,19 @@ pub fn tail_payoff(rule: TailRule, lists: &[&QueryEvidence], p: f64) -> TailPayo
     out
 }
 
-/// The per-hit tail bake-off's labelled-corpus reading (GH #206): every
-/// family's re-derived constraint plus its payoff at the constraint's own edge
-/// — the most aggressive admissible point, since payoff is monotone in the
-/// constant. Judged over the **positives**: the query-level bar already
-/// answers the negatives whole (GH #201), so a tail rule ships riding on a
-/// vouched verdict; the negatives' would-be reading is kept as context for
-/// what the rule would buy where a query bar had missed.
+/// The tail bake-off's labelled-corpus reading (GH #206): each family's constraint and its
+/// payoff at the edge. Judged over the positives, since the query bar already cuts the
+/// negatives (GH #201).
 pub struct TailBench {
     pub keep_rows: usize,
     pub filler_rows: usize,
-    /// Positives whose keep-prefix is the whole served list — a fold has
-    /// nothing to cut there under any admissible rule.
+    /// Positives whose keep-prefix is the whole served list.
     pub saturated: usize,
-    /// The **oracle** ceiling: rows below each list's last keep row — what a
-    /// perfect prefix fold (one placed by the labels themselves) would cut.
-    /// Every family's payoff is read against this, because "cuts N rows" means
-    /// nothing until the reachable maximum is beside it.
+    /// The oracle ceiling: rows below each list's last keep row, what a label-placed fold
+    /// would cut.
     pub oracle: usize,
     pub families: Vec<TailFamilyReading>,
-    /// Junk rows the parameterless lexical fold would cut on the negatives'
-    /// served lists, of their total — the GH #201 `dense_only` reading, priced
-    /// as a fold.
+    /// Rows the lexical fold would cut on the negatives' lists.
     pub neg_lexical_cut: usize,
     pub neg_rows: usize,
 }
@@ -272,9 +213,7 @@ pub struct TailBench {
 pub struct TailFamilyReading {
     pub rule: TailRule,
     pub constraint: TailConstraint,
-    /// Payoff at the constraint's edge; `None` when the family is dead here or
-    /// (for the constant families) unconstrained-and-therefore-identical to a
-    /// simpler family.
+    /// Payoff at the constraint's edge; `None` when dead or unconstrained.
     pub payoff: Option<TailPayoff>,
 }
 
@@ -421,10 +360,8 @@ pub fn print_search_tail(bench: &TailBench) {
     );
 }
 
-/// The tail bake-off's JSON (`search_tail` in the orthogonal row): each
-/// family's re-derived constraint and edge payoff. The served rows it was read
-/// from are already in `search_evidence` per query, so any other constant is
-/// re-derivable from the row — the `discovery_fold` convention.
+/// The tail bake-off's JSON (`search_tail`). The served rows are in `search_evidence`, so
+/// any other constant is re-derivable from the row.
 pub fn tail_json(bench: &TailBench) -> serde_json::Value {
     let round = |v: f64| (v * 1e4).round() / 1e4;
     serde_json::json!({
@@ -446,11 +383,8 @@ pub fn tail_json(bench: &TailBench) -> serde_json::Value {
     })
 }
 
-/// One family's dense-fixture reading (GH #206): the same [`TailConstraint`]
-/// read over **whole** title lists — every served row is a real match by
-/// geometry, so the keep-prefix is the entire list and the constraint *is* the
-/// absolute ("truncate nothing"). `lexical_cut` is the parameterless family's
-/// visible cost here: rows its fold would remove from title queries' views.
+/// One family's dense-fixture reading (GH #206), over whole title lists: every row is a real
+/// match, so the constraint is "truncate nothing". `lexical_cut` is the lexical fold's cost.
 pub struct TailFamilyTransfer {
     pub rule: TailRule,
     pub constraint: TailConstraint,
@@ -479,9 +413,7 @@ pub fn dense_tail_families(titles: &[SearchProbe]) -> Vec<TailFamilyTransfer> {
         .collect()
 }
 
-/// Print the dense fixture's tail-transfer reading (GH #206) — the per-hit
-/// sibling of the query bar's `search_transfer` block, and the bench that
-/// carries D1's absolute for this bake-off.
+/// Print the dense fixture's tail-transfer reading (GH #206).
 pub fn print_dense_tail(titles: &[SearchProbe]) {
     println!(
         "  tail        the per-hit tail bench on this geometry (GH #206): every served row of a"
@@ -530,8 +462,7 @@ pub fn print_dense_tail(titles: &[SearchProbe]) {
     }
 }
 
-/// The dense tail-transfer reading as JSON, nested under the dense row's
-/// `search_transfer` key (additive subkey, per the row conventions).
+/// The dense tail-transfer reading as JSON, under the dense row's `search_transfer`.
 pub fn dense_tail_json(titles: &[SearchProbe]) -> serde_json::Value {
     let round = |v: f64| (v * 1e4).round() / 1e4;
     serde_json::json!(dense_tail_families(titles)
@@ -546,11 +477,8 @@ pub fn dense_tail_json(titles: &[SearchProbe]) -> serde_json::Value {
         .collect::<Vec<_>>())
 }
 
-/// The tail bake-off's **cross-bench join** (GH #206), printed once both
-/// corpora have been read in the same run: a family ships only if some
-/// constant is admissible on the labelled corpus *and* folds nothing on the
-/// dense fixture *and* still cuts labelled filler there — read at the joint
-/// edge, the most aggressive point both benches allow.
+/// The tail bake-off's cross-bench join (GH #206): a family survives only if some constant
+/// is admissible on both benches and still cuts labelled filler at the joint edge.
 pub fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchProbe]) {
     println!("\n{}", "=".repeat(78));
     println!("search tail — the cross-bench join (GH #206; both corpora, one run)");
@@ -597,8 +525,7 @@ pub fn print_tail_join(ev: &SearchEvidence, orth: &TailBench, titles: &[SearchPr
                             if orth_dead { "labelled" } else { "dense" }
                         )
                     } else {
-                        // Joint edge: the tighter bench binds. `None` = that bench
-                        // leaves the constant free.
+                        // The tighter bench binds; `None` leaves the constant free.
                         let joint = match rule {
                             TailRule::CosDrop => {
                                 match (orth_f.constraint.edge, dense_f.constraint.edge) {

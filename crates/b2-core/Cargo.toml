@@ -7,14 +7,12 @@ description = "B2 index engine — the SQLite-backed disposable projection of (M
 
 [dependencies]
 blake3 = "1.8.5"
-# "trace" exposes SQLite's own sqlite3_trace_v2 profiler — per-statement SQL +
-# execution time, the source of the `b2::sqlite` query-timing events (db.rs).
+# "trace": per-statement timing for the `b2::sqlite` events (db.rs).
 rusqlite = { version = "0.40.1", features = ["bundled", "trace"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
-# Structured debug logging (facade only — emitting events costs nothing until an
-# adapter installs a subscriber; the CLI's is opt-in via B2_LOG/B2_DEBUG).
+# Facade only; adapters install the subscriber.
 tracing = "0.1.41"
 yaml-rust2 = "0.11.0"
 
@@ -22,6 +20,5 @@ yaml-rust2 = "0.11.0"
 proptest = "1.11.0"
 rusqlite = "0.40.1"
 tempfile = "3.27.0"
-# The logging integration test installs a real JSON subscriber to assert the
-# emitted events are parseable, plottable JSONL (tests/logging.rs).
+# For tests/logging.rs.
 tracing-subscriber = { version = "0.3.20", features = ["json"] }

@@ -1,23 +1,16 @@
 // The Explain view's words and geometry (GH #236): pure functions over a
-// `SimilarExplainView`, so node tests them straight off the source and render.ts only
-// paints. The engine decides the facts (rank, z, pairs, standing); this module decides
-// how they read. It never decides what a card *is*.
+// `SimilarExplainView`. The engine decides the facts; this module decides how they read.
 //
-// Every grade here is on the strength dots' yardstick (strength.ts): a pair's z is its
-// squared distance read against the same population the card's z is, so "a passage pair
-// at ●●○" means "as near as a clear candidate's best pair". No raw distance is shown,
-// for the reason search-and-similarity.md §2 gives: its meaning depends on the vault.
+// Every grade is on the strength dots' yardstick (strength.ts). No raw distance is shown:
+// its meaning depends on the vault (search-and-similarity.md §2).
 //
-// The summary label is chosen by fixed rules, in order, and grades nothing:
-//
-//   1. *Identical text*: the best pair is the same passage in both notes (a template or a
-//      copy). First, because it is the one case where a high rank says nothing about
-//      what the notes are about, and a real vault has dozens of them (GH #235).
-//   2. No label when the field is ungraded: no z, so no landmark to count against.
-//   3. Count the candidate's passages whose pair reaches the ●●○ landmark (CLEAR_Z):
-//      none → *No passage stands out*; its only passage → *A clear match*; exactly one
-//      of several → *One section matches*; at least half → *Broadly similar*;
-//      otherwise → *A few sections match*.
+// The summary label, by fixed rules in order:
+//   1. *Identical text* when the best pair is the same passage in both notes: a high rank
+//      then says nothing about content (GH #235).
+//   2. No label when ungraded.
+//   3. Count passages whose pair reaches CLEAR_Z: none → *No passage stands out*; its only
+//      passage → *A clear match*; one of several → *One section matches*; at least half →
+//      *Broadly similar*; otherwise → *A few sections match*.
 
 import type { SimilarExplainView } from "./types.ts";
 import { CLEAR_Z, STRONG_Z } from "./strength.ts";
@@ -92,7 +85,7 @@ export function standingText(v: SimilarExplainView): string {
 
 /**
  * Whole-note rank beside best-passage rank, when they differ: the buried-gem signal.
- * Null when there is no ranked standing or the two agree (nothing to point out).
+ * Null when unranked or the two agree.
  */
 export function wholeNoteText(v: SimilarExplainView): string | null {
   if (v.standing.kind !== "ranked" || v.centroid_rank === null) return null;
@@ -109,8 +102,7 @@ export interface FieldStrip {
   /** The ●●○ and ●●● landmarks. */
   clear: number;
   strong: number;
-  /** Axis labels at whole σ steps (every other step on a very wide strip). 0σ, the
-   *  average of the notes compared, is always among them. */
+  /** Axis labels at whole σ steps; 0σ is always among them. */
   ticks: { at: number; label: string }[];
 }
 
@@ -118,9 +110,8 @@ export interface FieldStrip {
 const TICK_WIDE_SIGMA = 8;
 
 /**
- * Lay the population out on one axis. The axis always spans both landmarks, so a
- * compressed field (every candidate middling, GH #196) reads as a cluster left of
- * the marks, not as a spread that fills the strip. Null when ungraded.
+ * Lay the population out on one axis, always spanning both landmarks so a compressed
+ * field (GH #196) reads as a cluster, not a spread. Null when ungraded.
  */
 export function fieldStrip(population: number[], z: number | null): FieldStrip | null {
   const finite = population.filter(Number.isFinite);
@@ -143,8 +134,7 @@ export function fieldStrip(population: number[], z: number | null): FieldStrip |
 }
 
 /** The two notes' display names: titles, else paths, and paths for both when the titles
- *  are the same (a vault of `polish.md` files), because this view's whole job is to say
- *  which side is which. */
+ *  are the same, so the sides stay distinguishable. */
 export function explainNames(v: SimilarExplainView): { anchor: string; candidate: string } {
   const anchor = v.anchor.title ?? v.anchor.path;
   const candidate = v.candidate.title ?? v.candidate.path;
@@ -163,10 +153,8 @@ export function fieldCaption(population: number[], anchor: string): string {
   } below`;
 }
 
-/** The strip's longer account, behind its "?". It names both notes, because the strip
- *  is drawn from the anchor's side and that is the thing most easily misread: what a dot
- *  is, what the axis measures, what the dashed lines are (and aren't), and what not to
- *  read into the spread. */
+/** The strip's longer account, behind its "?". Names both notes: the strip is drawn from
+ *  the anchor's side, the thing most easily misread. */
 export function fieldHelp(v: SimilarExplainView): string[] {
   const n = v.population.length;
   const { anchor, candidate } = explainNames(v);

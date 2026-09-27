@@ -1,23 +1,14 @@
-//! Parse a note body into the links that become edges — B2's **one link grammar**.
+//! B2's one link grammar: parse a note body into the links that become edges.
 //!
-//! **The body carries no B2 syntax** (ADR-0010): every body construct is ordinary
-//! Obsidian Markdown and yields an untyped `references` edge — prose around a link is just
-//! prose. Three body constructs: a bare `[[path|alias]]`; Markdown's own `[text](path)` /
-//! `![alt](path)` (relative vault targets only, the `!` marking an **embed** and the
-//! text/alt captured as the edge's **caption**); and the `![[file.ext|alias]]` embed. A
-//! *typed* edge — `<verb> [[path|alias]] — explanation` — exists only as a frontmatter
-//! `b2_relations:` entry, parsed by [`parse_relation`] and written by [`render_relation`].
+//! The body carries no B2 syntax (ADR-0010): `[[path|alias]]`, `![[file|alias]]`,
+//! `[text](path)` and `![alt](path)` all yield untyped `references` edges. A typed edge
+//! (`<verb> [[path]] — explanation`) exists only in frontmatter `b2_relations:`
+//! ([`parse_relation`], [`render_relation`]).
 //!
-//! Everything that reads link text goes through [`link_spans`]: ingest projects edges from
-//! it ([`parse_links`]) and a move rewrites targets in place from it (`mv.rs`), so what a
-//! move repairs is exactly what ingest projected. The scan is **per line**: a stray `[[`
-//! never pairs with a `]]` on a later line.
-//!
-//! Hand-rolled and deliberately minimal. Known simplifications, to revisit when queries
-//! need them: a typed frontmatter entry yields exactly one edge (extra wikilinks in its
-//! trailing text read as explanation); links inside code spans/fences are not excluded;
-//! only `—`/`:` introduce an explanation; a Markdown link's text stops at the first `]`
-//! and its target at the first `)`.
+//! Ingest and `mv.rs` both read links via [`link_spans`], so a move repairs exactly what
+//! ingest projected. The scan is per line. Known simplifications: links in code are not
+//! excluded; only `—`/`:` introduce an explanation; a Markdown link's text stops at the
+//! first `]` and its target at the first `)`.
 
 use std::ops::Range;
 
@@ -26,21 +17,15 @@ use std::ops::Range;
 pub struct ParsedLink {
     /// `references` for a bare link, otherwise the relation verb.
     pub edge_type: String,
-    /// The target as written — `[[path|alias]]`'s path part or `[…](path)`'s
-    /// parenthesized target (becomes `dst_path_raw`; a `#fragment` suffix is
-    /// stripped at *resolution*, never here).
+    /// The target as written (`dst_path_raw`); a `#fragment` is stripped at resolution.
     pub target_path: String,
     /// Trailing text after `—`/`:` on a typed frontmatter entry.
     pub explanation: Option<String>,
-    /// True for an embed form (`![alt](path)` / `![[file]]`) — recorded on the
-    /// edge as a display nicety, never a distinct verb (data-model.md §3).
+    /// An embed form (`![…]`): a display nicety, never a distinct verb (data-model.md §3).
     pub embed: bool,
-    /// True when the target came from a Markdown-form link (`[…](target)`).
-    /// Resolution treats these with standard Markdown semantics — note-relative
-    /// first, then vault-root — while wikilink targets stay vault-root.
+    /// A Markdown-form link, resolved note-relative first, then vault-root.
     pub md_form: bool,
-    /// The authored display text — `![alt](…)`'s alt, `[text](…)`'s text, or a
-    /// wikilink's alias. Stored as the edge's `caption` (data-model.md §3).
+    /// The alt, link text or alias; the edge's `caption` (data-model.md §3).
     pub caption: Option<String>,
 }
 
@@ -53,25 +38,20 @@ pub(crate) enum LinkForm {
     Markdown,
 }
 
-/// Where one link sits in the scanned text, as byte ranges into it — so the one grammar
-/// serves both reading a link ([`parse_links`]) and splicing a new target into it in
-/// place (the move's rewrite).
+/// Where one link sits in the text, as byte ranges, so a move can splice in place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkSpan {
     pub form: LinkForm,
     /// A `!` directly before the opening bracket.
     pub embed: bool,
-    /// The target token, trimmed: `concepts/memory` in `[[ concepts/memory | M ]]`,
-    /// `img.png` in `![a]( img.png )`. Never empty.
+    /// The target token, trimmed. Never empty.
     pub target: Range<usize>,
-    /// The display text, trimmed: a wikilink's alias (present — possibly empty — whenever
-    /// the link has a `|`), or a Markdown link's text (absent when blank).
+    /// Trimmed: a wikilink's alias (present, maybe empty, when there is a `|`), or a
+    /// Markdown link's text (absent when blank).
     pub caption: Option<Range<usize>>,
 }
 
-/// Every vault link in `text`, in document order, scanned line by line. A Markdown-form
-/// link at an external target (a scheme, an absolute path, a fragment-only anchor) is
-/// not a vault link and yields no span; nor does a wikilink with an empty target.
+/// Every vault link in `text`, in document order, scanned line by line.
 pub(crate) fn link_spans(text: &str) -> Vec<LinkSpan> {
     let mut spans = Vec::new();
     let mut line_start = 0;
@@ -86,8 +66,7 @@ pub(crate) fn link_spans(text: &str) -> Vec<LinkSpan> {
     spans
 }
 
-/// Parse every link in `body`, in document order — all untyped `references`
-/// edges: the body carries no typed syntax (data-model §2).
+/// Every link in `body` as an untyped `references` edge (data-model §2).
 pub fn parse_links(body: &str) -> Vec<ParsedLink> {
     link_spans(body)
         .iter()
@@ -107,11 +86,9 @@ fn reference(text: &str, span: &LinkSpan) -> ParsedLink {
     }
 }
 
-/// Parse a typed spec `<verb> [[path|alias]] [— explanation]` — the shape of a
-/// frontmatter `b2_relations:` entry (data-model §2). `None` if it isn't
-/// `<verb> <wikilink>`.
+/// Parse a typed spec `<verb> [[path|alias]] [— explanation]` (data-model §2).
 fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
-    // The verb: a lowercase-kebab token immediately before the wikilink.
+    // A lowercase-kebab verb.
     let verb_end = rest.find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
     let verb_end = match verb_end {
         Some(0) | None => return None, // no verb (e.g. "[[..]]") or no following token
@@ -122,7 +99,6 @@ fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
         return None;
     }
 
-    // The wikilink must follow the verb directly (whitespace allowed).
     let after_verb = rest[verb_end..].trim_start();
     let inner_and_rest = after_verb.strip_prefix("[[")?;
     let close = inner_and_rest.find("]]")?;
@@ -143,27 +119,21 @@ fn parse_typed_spec(rest: &str) -> Option<ParsedLink> {
     })
 }
 
-/// Parse one frontmatter `b2_relations:` entry (the string value of one YAML
-/// list item): a typed spec `<verb> [[path|alias]] — …`, or a bare
-/// `[[path|alias]]` ⇒ `references`. `None` if it holds no wikilink. The caller
-/// assigns `origin=frontmatter`. This is the **only** parser that yields a verb
-/// or explanation — the body never does (data-model §2).
+/// Parse one `b2_relations:` entry: a typed spec, or a bare `[[…]]` ⇒ `references`. The
+/// only parser that yields a verb or explanation (data-model §2).
 pub fn parse_relation(spec: &str) -> Option<ParsedLink> {
     let spec = spec.trim();
     if let Some(link) = parse_typed_spec(spec) {
         return Some(link);
     }
-    // bare link fallback → references (the entry is one YAML value, scanned whole)
+    // Bare link → references.
     let mut spans = Vec::new();
     scan_line(spec, 0, &mut spans);
     spans.first().map(|span| reference(spec, span))
 }
 
-/// Render a typed frontmatter `b2_relations:` entry — the inverse of [`parse_relation`]
-/// for a typed spec: `<verb> [[target_path]]`, then ` — explanation` when one is given
-/// (data-model §2). `target_path` is written verbatim as the link text, so the caller
-/// chooses the convention (a note's `.md` dropped, as Obsidian writes links). A blank
-/// explanation is omitted and a given one trimmed, exactly as parsing reads it back.
+/// Render a typed `b2_relations:` entry, the inverse of [`parse_relation`] (data-model
+/// §2). `target_path` is written verbatim; a blank explanation is omitted.
 pub fn render_relation(verb: &str, target_path: &str, explanation: Option<&str>) -> String {
     match explanation.map(str::trim).filter(|e| !e.is_empty()) {
         Some(e) => format!("{verb} [[{target_path}]] — {e}"),
@@ -171,11 +141,8 @@ pub fn render_relation(verb: &str, target_path: &str, explanation: Option<&str>)
     }
 }
 
-/// Collect every link in `line` as a [`LinkSpan`] offset by `base`, in written order:
-/// `[[path|alias]]` and `![[path|alias]]` (wikilink + embed), and Markdown's own
-/// `[text](target)` / `![alt](target)` — the latter only for **vault** targets
-/// (a scheme, an absolute path, or a fragment-only target is not a vault member
-/// and yields nothing; data-model.md §10).
+/// Collect every link in `line` as a [`LinkSpan`] offset by `base`. Markdown-form links
+/// count only for vault targets (data-model.md §10).
 fn scan_line(line: &str, base: usize, out: &mut Vec<LinkSpan>) {
     let mut i = 0;
     while i < line.len() {
@@ -185,7 +152,7 @@ fn scan_line(line: &str, base: usize, out: &mut Vec<LinkSpan>) {
             Some(r) if r.starts_with('[') => (true, r),
             _ if rest.starts_with('[') => (false, rest),
             _ => {
-                // Not a link start — skip one char (multi-byte safe).
+                // Skip one char, multi-byte safe.
                 i += rest.chars().next().map_or(1, char::len_utf8);
                 continue;
             }
@@ -241,8 +208,7 @@ struct MdLink {
     consumed: usize,
 }
 
-/// Parse a leading `[text](target)`. Minimal by design (module doc): text stops at the
-/// first `]`, the target at the first `)`, and `](` must be adjacent.
+/// Parse a leading `[text](target)`. Minimal by design (module doc); `](` must be adjacent.
 fn parse_md_link(s: &str) -> Option<MdLink> {
     let inner = s.strip_prefix('[')?;
     let close = inner.find(']')?;
@@ -261,8 +227,7 @@ fn parse_md_link(s: &str) -> Option<MdLink> {
     })
 }
 
-/// A wikilink's inner text (between `[[` and `]]`, starting at byte `base`) split at the
-/// first `|` into the trimmed target and, when a `|` is present, the trimmed alias.
+/// Split a wikilink's inner text (at byte `base`) at the first `|` into target and alias.
 fn split_wiki_inner(inner: &str, base: usize) -> (Range<usize>, Option<Range<usize>>) {
     match inner.split_once('|') {
         Some((path, alias)) => (
@@ -279,15 +244,11 @@ fn trimmed(s: &str, base: usize) -> Range<usize> {
     start..start + s.trim().len()
 }
 
-/// `r` moved `by` bytes to the right.
 fn shift(r: &Range<usize>, by: usize) -> Range<usize> {
     r.start + by..r.end + by
 }
 
-/// A Markdown-form target that is **not** a vault member: any scheme
-/// (`https://…`, `mailto:…`), an absolute path, or a fragment-only anchor.
-/// Wikilink targets never come through here — they are vault paths by
-/// construction.
+/// A Markdown-form target outside the vault: a scheme, an absolute path, or `#anchor`.
 fn is_external_target(target: &str) -> bool {
     if target.starts_with('/') || target.starts_with('#') {
         return true;
@@ -298,8 +259,7 @@ fn is_external_target(target: &str) -> bool {
     }
 }
 
-/// Read the explanation after a typed link: trailing text introduced by an
-/// em-dash or a colon (data-model §2). Anything else means no explanation.
+/// The explanation after a typed link, introduced by `—` or `:` (data-model §2).
 fn extract_explanation(tail: &str) -> Option<String> {
     let t = tail.trim_start();
     let body = t.strip_prefix('—').or_else(|| t.strip_prefix(':'))?;
@@ -311,10 +271,9 @@ fn extract_explanation(tail: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// One expected link, as the case tables spell it: `(type, target, caption, embed)`.
+    /// `(type, target, caption, embed)`.
     type Expected<'a> = (&'a str, &'a str, Option<&'a str>, bool);
 
-    /// Shorthand: parse one line, return `(type, target, caption, embed)`.
     fn parsed(line: &str) -> Vec<(String, String, Option<String>, bool)> {
         parse_links(line)
             .into_iter()
@@ -407,8 +366,7 @@ mod tests {
 
     #[test]
     fn a_verb_shaped_body_list_item_is_just_a_reference() {
-        // The body carries no typed syntax (data-model §2): a list item opening
-        // with a verb-looking word is prose, and only its wikilink projects.
+        // The body carries no typed syntax (data-model §2).
         let links = parse_links("- supports [[papers/x.pdf|the paper]] — key evidence");
         assert_eq!(links.len(), 1);
         let l = &links[0];
@@ -419,10 +377,7 @@ mod tests {
         assert!(!l.embed);
     }
 
-    /// The exact hazard that killed the body typed-line syntax (decision
-    /// 2026-07-21): a *lowercase* verb lookalike opening a list item must stay
-    /// prose. `- see [[x]]` becoming a typed edge of verb "see" is the failure
-    /// mode; only the wikilink may project, always untyped.
+    /// The hazard that retired body typed-line syntax (decision 2026-07-21).
     #[test]
     fn lowercase_verb_lookalikes_in_prose_stay_prose() {
         let links = parse_links("- see [[concepts/memory|Human memory]] for the mechanism\n");
@@ -430,9 +385,6 @@ mod tests {
         assert_eq!(links[0].edge_type, "references");
     }
 
-    /// A prose link and a verb-led list item are the same thing to the parser: two
-    /// `references` edges in document order, neither carrying an explanation — no
-    /// body shape is ever "special".
     #[test]
     fn body_links_never_gain_a_type_from_surrounding_prose() {
         let body = "Spaced repetition exploits the [[concepts/memory|Human memory]] retrieval curve.\n\n## Relations\n- supports [[concepts/memory|Human memory]] — applies the forgetting curve\n";
@@ -442,8 +394,6 @@ mod tests {
         assert!(links.iter().all(|l| l.explanation.is_none()));
     }
 
-    /// A wikilink's caption is its own `|`-part: absent means `None`, never an empty
-    /// string.
     #[test]
     fn a_wikilink_without_an_alias_has_no_caption() {
         let links = parse_links("Refer to [[concepts/memory]].\n");
@@ -459,18 +409,13 @@ mod tests {
         assert_eq!(l.caption.as_deref(), Some("the paper"));
         assert_eq!(l.explanation.as_deref(), Some("key evidence"));
 
-        // A bare entry (no verb) falls back to an untyped reference.
         let bare = parse_relation("[[notes/a|A]]").unwrap();
         assert_eq!(bare.edge_type, "references");
         assert_eq!(bare.target_path, "notes/a");
 
-        // No wikilink at all ⇒ no edge.
         assert!(parse_relation("just some words").is_none());
     }
 
-    /// The two accepted explanation separators and the tolerated verb tail
-    /// (relation.rs): `—` is asserted above, `:` here, and a non-core verb is
-    /// stored verbatim rather than coerced into the closed core.
     #[test]
     fn relation_accepts_a_colon_separator_and_keeps_a_tail_verb_verbatim() {
         let colon =
@@ -483,9 +428,6 @@ mod tests {
         assert_eq!(tail.explanation, None);
     }
 
-    /// What `b2 link` writes is what ingest reads back: rendering then parsing a
-    /// relation returns the verb, target and explanation it was rendered from — and a
-    /// blank explanation renders as none at all.
     #[test]
     fn a_rendered_relation_parses_back_to_what_it_was_rendered_from() {
         let cases: &[(&str, &str, Option<&str>)] = &[
@@ -530,8 +472,7 @@ mod tests {
                 false
             )]
         );
-        // same-line recovery: the link is still found (its caption may swallow
-        // the stray bracket — the documented first-`]` minimalism)
+        // same-line recovery (its caption may swallow the stray bracket)
         let got = parsed("broken [[x then fine [ok](a.png)");
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].1, "a.png");
@@ -541,8 +482,6 @@ mod tests {
         assert_eq!(parsed("hey! [x](a.png)").len(), 1);
     }
 
-    /// The spans are what a move splices into, so their ranges must name exactly the
-    /// trimmed target (and caption) bytes, offset across lines — CRLF endings included.
     #[test]
     fn spans_address_the_trimmed_target_bytes_across_lines() {
         let text = "a [[ x/y | Why ]] b\r\n![alt]( img.png ) and [t](https://e.x)\n[[z]]";
@@ -568,8 +507,6 @@ mod tests {
         );
     }
 
-    /// A stray `[[` never pairs with a `]]` on a later line, so the later line's link
-    /// is found — by ingest and, through the same spans, by a move's rewrite.
     #[test]
     fn a_stray_open_bracket_never_swallows_the_next_lines_link() {
         let text = "broken [[x\nsee [[old]]\n";

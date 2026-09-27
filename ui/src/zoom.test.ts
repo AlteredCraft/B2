@@ -1,12 +1,6 @@
-// The zoom ladder (zoom.ts), pinned. Pure arithmetic over a fixed list — no DOM, no
-// host — so node runs it straight off the source via its native type-stripping:
-// `npm test`.
-//
-// Dependency-free by the same rule as panes.test.ts: a hand-rolled `assert` rather than
-// node:assert, which would drag @types/node into a frontend that needs no Node types.
-// What's worth pinning is the step algebra every ⌘= / ⌘- routes through, and the
-// adoption rule that stands between a hand-edited localStorage value and a window
-// nobody can read.
+// The zoom ladder (zoom.ts): the step algebra behind ⌘= / ⌘-, and the rule that stands
+// between a hand-edited localStorage value and an unreadable window. Hand-rolled asserts,
+// no @types/node.
 import { type Columns, DEFAULT_ZOOM, STEPS, adoptZoom, hiddenNotice, stepZoom } from "./zoom.ts";
 
 let passed = 0;
@@ -53,9 +47,6 @@ check("the bottom rung is a wall, not a wrap", () => {
 });
 
 check("a value between rungs steps to the rung on that side, never past it", () => {
-  // 1.05 sits between 1 and 1.1: up is 1.1, down is 1 — both one rung away, so a value
-  // that drifted off the ladder is back on it after a single keypress in either
-  // direction. Stepping past the nearer rung would make ⌘- feel like it skipped.
   const between = (STEPS[STEPS.indexOf(1)] + STEPS[STEPS.indexOf(1) + 1]) / 2;
   equal(stepZoom(between, 1), STEPS[STEPS.indexOf(1) + 1], "up from between");
   equal(stepZoom(between, -1), 1, "down from between");
@@ -95,8 +86,7 @@ check("anything that isn't a finite number is the default", () => {
 });
 
 check("a negative value is the default, not a mirrored size", () => {
-  // A negative page zoom is not a smaller window, it is an unrenderable one — so this
-  // is a refusal, not a clamp onto the bottom rung.
+  // Unrenderable, so refused rather than clamped onto the bottom rung.
   equal(adoptZoom(-1), DEFAULT_ZOOM, "negative");
 });
 
@@ -130,16 +120,12 @@ check("losing both is one sentence, not two", () => {
 });
 
 check("a column coming back is not announced", () => {
-  // Zooming out reveals; a revealed column is its own notice, and saying so would make
-  // every ⌘- talk back.
   equal(notice({ tree: false, side: false }, BOTH).length, 0, "both back");
   equal(notice({ tree: true, side: false }, BOTH).length, 0, "one back");
 });
 
 check("a loss and a gain in one step reports only the loss", () => {
-  // Not reachable by zooming (the breakpoints nest), but the rule is "announce losses",
-  // and a rule that quietly depends on the breakpoints nesting is one that breaks when
-  // they stop.
+  // Unreachable while the breakpoints nest, but the rule mustn't depend on that.
   const msg = notice({ tree: true, side: false }, { tree: false, side: true });
   assert(msg.includes("file tree"), `names the loss: ${msg}`);
   assert(!msg.includes("iscovery"), `and not the gain: ${msg}`);

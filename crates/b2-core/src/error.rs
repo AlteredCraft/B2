@@ -1,8 +1,7 @@
-//! The crate error type — a `thiserror` enum, because the adapters match on its
-//! variants to choose a user-facing message.
+//! The crate error type. Adapters match its variants to choose a user-facing message.
 
-/// Errors surfaced by the index engine. Kept internal/structured — user-facing
-/// surfaces (the CLI, the desktop app) translate these into generic, actionable messages.
+/// Errors surfaced by the engine. Adapters translate them into generic, actionable
+/// messages.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("sqlite error: {0}")]
@@ -14,143 +13,99 @@ pub enum Error {
     #[error("frontmatter edit unsupported: {0}")]
     Frontmatter(String),
 
-    /// A note reference (a vault-relative path) did not resolve to any indexed
-    /// note — the one domain error the façade distinguishes from "found, no
-    /// results".
+    /// A note reference did not resolve to an indexed note.
     #[error("note not found: {0}")]
     NoteNotFound(String),
 
-    /// The embedder failed to produce a vector (real-model tensor/runtime error).
-    /// Kept as a message so `b2-core` stays free of the embedding runtime's types.
+    /// The embedder failed. A message, so `b2-core` stays free of the runtime's types.
     #[error("embedding failed: {0}")]
     Embed(String),
 
-    /// The chat provider failed outright — connection refused, an HTTP error, a
-    /// malformed stream — on the *answer* call of flow ④ (a condensation
-    /// failure never surfaces: it degrades to the raw question, GH #153).
-    /// The [`Error::Embed`] posture applied to the second seam: kept as a
-    /// message so `b2-core` stays free of the LLM runtime's types.
+    /// The chat provider failed on flow ④'s answer call (a failed condense degrades
+    /// instead, GH #153). A message, as for [`Error::Embed`].
     #[error("llm call failed: {0}")]
     Llm(String),
 
-    /// One model reply asked for more tool calls than the provider's configured cap. A
-    /// typed sibling of [`Error::Llm`] rather than a message, because callers treat it
-    /// differently: a tool-using turn degrades on an ordinary failed lookup round (the
-    /// model may simply not support tools), but must **not** degrade on this — a reply
-    /// this far outside the protocol is a broken or hostile server, and answering anyway
-    /// would hide it.
+    /// One model reply asked for more tool calls than the configured cap. Separate from
+    /// [`Error::Llm`] because a tool-using turn must not degrade on it: it signals a
+    /// broken or hostile server.
     #[error("the model asked for more than {limit} tool calls in one reply")]
     ToolCallLimit { limit: usize },
 
-    /// The index's recorded embedding model/dim differs from the active embedder,
-    /// so its vectors are incomparable with new query vectors. A read (search)
-    /// fails fast with this rather than returning silently wrong results; the fix
-    /// is a `reindex` (which re-embeds). See index-engine.md §8 and GitHub Issues.
+    /// The index's recorded embedder differs from the active one, so a search would be
+    /// silently wrong (index-engine.md §8).
     #[error("index built with embedding model {indexed}, but the active model is {active}; run `b2 reindex`")]
     ModelMismatch { indexed: String, active: String },
 
-    /// `b2 mv` was given a destination that isn't a valid vault-relative Markdown
-    /// path — empty, absolute, escaping the vault via `..`, dot-prefixed (b2
-    /// indexes no hidden member, so it would move the file out of the vault's
-    /// managed subtree — GH #136), or the source itself.
+    /// `b2 mv` was given an invalid destination: empty, absolute, escaping via `..`,
+    /// dot-prefixed (GH #136), or the source itself.
     #[error("invalid move destination: {0}")]
     MoveDestination(String),
 
-    /// `b2 mv` would overwrite an existing file — refused (the vault never clobbers,
-    /// data-model.md §1). The path is echoed for the user-facing message.
+    /// `b2 mv` would overwrite an existing file (data-model.md §1).
     #[error("move target already exists: {0}")]
     MoveTargetExists(String),
 
-    /// A move failed part-way and B2 could not put back every file it had already
-    /// changed (GH #230). Rare: an ordinary failure is rolled back and surfaces as
-    /// its own error. Carries the vault-relative paths still holding the move's
-    /// rewrite, so the user can check those links by hand, and the failure that
-    /// started the undo, so the adapters' internal log keeps the root cause.
+    /// A move failed part-way and could not be fully undone (GH #230). Carries the paths
+    /// still holding the rewrite, for the user to check, and the root cause.
     #[error("move failed and could not be fully undone: {} (cause: {source})", paths.join(", "))]
     MoveIncomplete {
         paths: Vec<String>,
         source: Box<Error>,
     },
 
-    /// `b2 mv` was given a source folder that doesn't exist in the vault — the
-    /// directory sibling of [`Error::NoteNotFound`] (a folder is a path prefix,
-    /// never an indexed row, so it resolves against the filesystem).
+    /// A source folder doesn't exist in the vault.
     #[error("directory not found: {0}")]
     DirNotFound(String),
 
-    /// `b2 add` was given a destination that isn't a valid vault-relative Markdown
-    /// path — empty, absolute, escaping the vault via `..`, or dot-prefixed (a
-    /// `.scratch.md` would never be indexed, so b2 refuses to author one — GH
-    /// #136). The `mv` parallel of [`Error::MoveDestination`], distinct so the CLI
-    /// can phrase it for note creation rather than a move.
+    /// `b2 add` was given an invalid path: empty, absolute, escaping via `..`, or
+    /// dot-prefixed (GH #136).
     #[error("invalid new-note path: {0}")]
     AddDestination(String),
 
-    /// `b2 add` would overwrite an existing file — refused (the vault never clobbers,
-    /// data-model.md §1). The path is echoed for the user-facing message.
+    /// `b2 add` would overwrite an existing file (data-model.md §1).
     #[error("note already exists: {0}")]
     AddTargetExists(String),
 
-    /// An import ([`crate::import`]) was handed a destination it can't place a file
-    /// at — a name carrying path separators, or a folder/name pair that normalizes
-    /// to an empty, absolute, escaping, or dot-prefixed path. The import sibling of
-    /// [`Error::AddDestination`], distinct so the adapters can phrase it for a file
-    /// arriving from outside rather than a note being authored.
+    /// An import was given an invalid destination: a name with separators, or a path
+    /// that is empty, absolute, escaping or dot-prefixed.
     #[error("invalid import destination: {0}")]
     ImportDestination(String),
 
-    /// An import would overwrite an existing vault file — refused, exactly as
-    /// [`Error::AddTargetExists`] is, and separate for the same reason: the thing
-    /// arriving may be a PDF, so the message must not call it a note.
+    /// An import would overwrite an existing file. Separate from
+    /// [`Error::AddTargetExists`] because the file may not be a note.
     #[error("file already exists: {0}")]
     ImportTargetExists(String),
 
-    /// `create_dir` was given a path that isn't a valid vault-relative folder —
-    /// empty, absolute, escaping via `..`, or dot-prefixed (b2 never manages
-    /// hidden paths). The folder sibling of [`Error::AddDestination`].
+    /// `create_dir` was given an invalid folder path.
     #[error("invalid folder path: {0}")]
     DirDestination(String),
 
-    /// `create_dir` would land on an existing file or folder — refused rather than
-    /// silently merged (the user asked to *create*; it's already there). The folder
-    /// sibling of [`Error::AddTargetExists`].
+    /// `create_dir` would land on an existing file or folder.
     #[error("folder already exists: {0}")]
     DirTargetExists(String),
 
-    /// `Vault::write` was handed a `base_revision` that no longer matches the file
-    /// on disk — an external editor changed the note since it was read. Refused
-    /// rather than clobbered: the caller re-reads (getting
-    /// the current revision) and either reloads or knowingly re-writes. The path is
-    /// carried for the debug detail, never for the user-facing message.
+    /// A save's `base_revision` no longer matches the file: it changed on disk since it
+    /// was read. The path is for debug detail only.
     #[error("write conflict: {0} changed on disk since it was read")]
     WriteConflict(String),
 
-    /// `b2 link` was given a `--type` that is not a core relation verb
-    /// (data-model.md §2). The core is the palette `b2 link` offers; a tail verb can
-    /// still be hand-authored in the Markdown, but the command validates to the core
-    /// so a typo (`support` for `supports`) is caught rather than silently stored.
+    /// `b2 link` was given a `--type` that is not a core verb (data-model.md §2), so a
+    /// typo is caught rather than stored.
     #[error("not a core relation verb: {0}")]
     InvalidRelation(String),
 
-    /// The index on disk was written by a **newer** `b2` than this binary — its
-    /// `meta.schema_version` is above [`crate::SCHEMA_VERSION`]. Refused rather than
-    /// rebuilt: the migration has no migrations by design (ADR-0002), so its answer to
-    /// an unreadable index is to drop it, and a *newer* index is unreadable for a
-    /// reason that dropping does not fix. An older `b2` left on `PATH` would otherwise
-    /// destroy a complete index on a read-only command. The fix is to run the newer
-    /// `b2`, not to reindex.
+    /// The index was written by a newer `b2` (schema above [`crate::SCHEMA_VERSION`]).
+    /// Refused rather than dropped (ADR-0002); the fix is the newer `b2`.
     #[error("index schema {found} was written by a newer b2 (this build reads {supported}); run the newer b2")]
     IndexTooNew { found: i64, supported: i64 },
 
-    /// A resource reference (vault-relative path) did not resolve to any
-    /// inventoried resource — the resource sibling of [`Error::NoteNotFound`].
+    /// A resource path did not resolve to an inventoried resource.
     #[error("resource not found: {0}")]
     ResourceNotFound(String),
 
-    /// The operation exists for notes but not (yet) for resources — e.g.
-    /// `b2 similar <resource>`, until resources have chunks and centroids of their
-    /// own. Distinct from [`Error::ResourceNotFound`] so the adapters can
-    /// say "not yet" rather than "no such file".
+    /// The operation works on notes but not yet on resources (e.g. `b2 similar`), so
+    /// adapters say "not yet" rather than "no such file".
     #[error("not supported for resources yet: {0}")]
     ResourceUnsupported(String),
 }

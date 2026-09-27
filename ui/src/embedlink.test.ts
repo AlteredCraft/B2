@@ -1,15 +1,8 @@
-// Tests for the `[[wikilink]]` / `![[embed]]` grammar in the reading view (render.ts's
-// `marked` extension). Run directly:
+// Tests for the `[[wikilink]]` / `![[embed]]` grammar in the reading view (render.ts).
+// Through `renderMarkdown`, not the extension alone, so tokenizer ordering and the
+// sanitizer are covered too (a mis-anchored `start` hook once leaked a `!` before every
+// embed). jsdom (a devDependency) supplies DOMPurify's DOM. Run directly:
 //   node --experimental-strip-types src/embedlink.test.ts
-// Hand-rolled asserts, the sanitize.test.ts idiom.
-//
-// Through `renderMarkdown` rather than the extension object, because the claim under test
-// is what a note *looks like on screen*, and that is the composition of the extension, the
-// tokenizer ordering against marked's own image rule, and the sanitizer hook. The
-// extension in isolation would still pass with the `start` hook mis-anchored, which is
-// exactly the bug that put a stray `!` in front of every embed.
-//
-// jsdom supplies the DOM DOMPurify parses with — a devDependency, nothing ships it.
 
 import { JSDOM } from "jsdom";
 import { renderMarkdown } from "./render.ts";
@@ -47,10 +40,7 @@ assertHas(labelled, ">how it works</a>", "…and is what the reader sees");
 
 // --- the embed with no picture in hand: it reads as its link --------------------------
 //
-// `![[file]]` is the same link with the core's embed marker in front (link.rs). Until the
-// bytes arrive — and forever, for a file that is no image — it renders as the link; the
-// `!` is *grammar*, and a grammar character that leaks into the prose is a rendering bug,
-// not a partial feature.
+// `![[file]]` is the same link with the embed marker (link.rs); the `!` must not leak.
 
 const embed = renderMarkdown("![[__Attachments/Screenshot 1.png]]\n");
 assertNot(embed, ">!", "the embed marker never reaches the reader as text");
@@ -61,9 +51,7 @@ assertNot(embed, "<img", "…with no picture, because none was handed to the ren
 
 // --- an embed's `|`-part is a width, not a label --------------------------------------
 //
-// `![[img.png|400]]` asks for a 400px-wide render. With no picture there is nothing to
-// size, and the unsupported half must not eat the supported one: dropping the hint is
-// right, replacing the filename with "400" is the bug this pins.
+// With no picture, the hint is dropped; it must never replace the filename.
 
 const sized = renderMarkdown("![[__Attachments/Screenshot 2.png|400]]\n");
 assertHas(sized, 'data-target="__Attachments/Screenshot 2.png"', "a sized embed keeps its target");
@@ -86,9 +74,7 @@ assertHas(shown, '<a class="wikilink"', "…and still a link: the picture opens 
 assertNot(shown, ">__Attachments/Screenshot 1.png</a>", "the path is no longer the label");
 assertNot(shown, "<p>!", "…and the marker is still markup");
 
-// The `data:` src has to survive the sanitizer, not just the renderer — `renderMarkdown`
-// runs DOMPurify over its own output (render.ts's postprocess hook), and a URL scheme it
-// stripped would leave an `<img>` with nothing to draw.
+// The `data:` src must survive DOMPurify, which runs over the render's output.
 assertHas(
   renderMarkdown("text ![[__Attachments/Screenshot 1.png]] text\n", PICTURES),
   "data:image/png;base64,AAAA",
@@ -105,9 +91,7 @@ const odd = renderMarkdown("![[__Attachments/Screenshot 1.png|500x300]]\n", PICT
 assertHas(odd, "<img", "a hint B2 doesn't understand still draws the picture");
 assertNot(odd, "width=", "…at its own size, rather than at a width nobody asked for");
 
-// A *plain* wikilink to the same picture stays a link. The marker is the whole difference
-// between naming a file and showing it, and a note that meant to link must not sprout an
-// image because some other line embedded the same file.
+// A plain wikilink to a loaded picture stays a link.
 assertNot(
   renderMarkdown("see [[__Attachments/Screenshot 1.png]]\n", PICTURES),
   "<img",

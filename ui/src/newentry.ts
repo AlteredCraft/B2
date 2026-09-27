@@ -1,9 +1,6 @@
-// Pure path logic for the tree's create affordances (new note / new folder) — no
-// DOM, no IPC — so node runs its test straight off the source (`npm test`), like
-// panes.ts/graph.ts. The host re-validates every path (`create_note` refuses
-// absolute/escaping/occupied destinations); these helpers just resolve the
-// creation *context* and keep honest input from round-tripping through a generic
-// error.
+// Pure path logic for the tree's new note / new folder. The host re-validates every path
+// (`create_note`); these resolve the creation context and keep honest input from hitting
+// a generic error.
 
 /** The folder containing `path` ("" for a root-level entry). */
 export function parentDir(path: string): string {
@@ -12,11 +9,9 @@ export function parentDir(path: string): string {
 }
 
 /**
- * Normalize a typed entry name into a clean vault-relative fragment, or null when
- * nothing valid was typed (a null is a *cancel*, not an error — an empty input is
- * how you back out). Forgiving on shape — trims, treats `\` as `/`, drops empty
- * segments (so `a//b`, `/a`, `a/` all resolve) and allows nesting
- * (`projects/2026`) — but refuses traversal (`.`/`..` segments).
+ * Normalize a typed name into a vault-relative fragment, or null (a cancel) when nothing
+ * valid was typed. Forgiving on shape (trims, `\` as `/`, empty segments dropped,
+ * nesting allowed) but refuses `.`/`..` traversal.
  */
 export function normalizeName(input: string): string | null {
   const segs = input
@@ -36,8 +31,7 @@ export function joinPath(dir: string, name: string): string {
 
 /**
  * Every folder prefix of `path`, shallowest first: `a/b/c` → `["a","a/b","a/b/c"]`.
- * Empty for "" — the root needs no expansion. Feeds `expandedDirs` (reveal the
- * whole chain down to a new or renamed entry).
+ * Feeds `expandedDirs` to reveal a new or renamed entry.
  */
 export function dirChain(path: string): string[] {
   if (!path) return [];

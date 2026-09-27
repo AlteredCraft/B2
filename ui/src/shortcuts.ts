@@ -1,51 +1,16 @@
-// The keyboard reference — the single source of truth for what Settings' Keyboard
-// section shows. Pure data, no DOM, so node runs its test straight off the source
-// (`npm test`), like newentry.ts / move.ts / treenav.ts.
+// The keyboard reference: the single source of truth for Settings' Keyboard section.
+// Pure data, no DOM, so node tests it off the source.
 //
-// Why a table rather than prose in a docs page: invariant K1 (docs/invariants.md,
-// GH #78) promises every mouse action has a keyboard path, and a promise nobody can
-// *find* is not kept. A shortcut that exists only in a button's `title` is discoverable
-// exactly once — by hovering the button you already knew about. This list is the app's
-// answer to "what can I do without the mouse".
+// K1 (GH #78) promises a keyboard path for every mouse action, and this table is where a
+// user finds it. Rows name commands and chords are projected from the registry
+// (bindings.ts), so the sheet can't drift from the wiring, and bindings.test.ts asserts
+// every binding lands in some row. The prose is hand-written on purpose. Literal rows
+// (`keys:`) are platform behaviour, not B2 chords. Each chord is a chip carrying the
+// command it would rebind (#121).
 //
-// What changed when bindings.ts arrived: a row no longer *spells* its chord, it **names
-// the command** and the chord is projected from the registry. So the sheet can't drift
-// from the wiring by a typo, and — because bindings.test.ts asserts every binding lands
-// in some row — a new chord can't be added without a row here either. That's the K1
-// promise held by construction instead of by remembering.
-//
-// The prose stays hand-written, deliberately. Grouping ⌘1/⌘2/⌘3 into one row, or saying
-// "Back / forward (⌘← / ⌘→ too)" rather than listing four chords, is editorial judgement
-// a generator would flatten — and the sheet's job is to be *read*.
-//
-// Literal rows (`keys:` instead of `ids:`) are the things that aren't B2 chords at all:
-// the platform's own behavior — Tab, ⏎ on a focused button, first-letter typeahead. The
-// arrow families used to be literal rows too, because their key → move mapping belonged
-// to a pure module of its own; #121 moved the *key* half into the registry (bindings.ts's
-// header says why), so they are ordinary id rows now and the recorder can reach them.
-//
-// Since #121 a row's chords are **chips, not a string**: one per distinct chord, each
-// carrying the command it would rebind, because Settings' Keyboard section is now the
-// surface that edits this table as well as the one that prints it. A row covering three
-// commands ("Focus the files, the note, or discovery") is three chips, and each one knows
-// which of the three it belongs to — which is why `Binding.label` exists.
-//
-// B2 ships on macOS only (crates/b2-desktop), so modifiers are the platform's glyphs —
-// ⌘ command, ⇧ shift, ⌫ delete, ⏎ return — while keys macOS itself spells out in menus
-// stay spelled out (Esc, Tab, Space, Home/End). That's the split the app's existing
-// tooltips already use ("Close (Esc)"); `displayChord` in bindings.ts now applies it.
-//
-// What the sheet deliberately does *not* list is the app menu bar's chords — ⌘Q, ⌘W, ⌘Z,
-// ⌘C and the rest (#119). They were a group here once, on K1's reading that a chord live
-// in the app is B2's to document whoever authored it. The reading was too literal: those
-// chords are already printed beside their items in the menu bar, two centimetres above
-// this window, which is where a macOS user looks for them and the only place they can be
-// *invoked* from with the mouse. Reprinting them bought a reader nothing and cost the
-// sheet its meaning — a table where most rows are chords you can click to change and a
-// dozen are chords nothing here can touch. So the sheet is now exactly the keyboard B2
-// owns. The host still declares the menu, because the two jobs that needed the
-// declaration are untouched: the conflict gate can see those keystrokes (menukeys.ts) and
-// the recorder refuses a chord spelled with one (keymap.ts).
+// macOS only: modifiers are glyphs (⌘ ⇧ ⌫ ⏎), other keys spelled out (Esc, Tab), as
+// `displayChord` renders them. Menu-bar chords (⌘Q, ⌘C, …) are not listed (#119): the menu
+// bar already prints them, and this sheet is the keyboard B2 owns.
 import {
   type BindingId,
   activeBindings,
@@ -58,13 +23,10 @@ import {
 export interface ShortcutKey {
   /** Display text — "⌘F", "↑", "Esc". */
   text: string;
-  /** The command this chip would rebind, when exactly one B2 command produced it and it
-   *  is the registry's to move. Absent for the platform's own keys and for the rare chord
-   *  two commands print identically — a chip that can't say *which* command it edits must
-   *  not offer to edit one. */
+  /** The command this chip would rebind, when exactly one rebindable command produced it.
+   *  Absent for platform keys and for a chord two commands share. */
   id?: BindingId;
-  /** Why this chord can't be changed (`Binding.fixed`), when that's the reason `id` is
-   *  absent. The recorder shows it in place of itself. */
+  /** Why this chord can't be changed (`Binding.fixed`), when that's why `id` is absent. */
   fixed?: string;
 }
 
@@ -79,22 +41,18 @@ export interface ShortcutGroup {
   items: Shortcut[];
 }
 
-/** A row of the sheet: either the commands it documents, or — for the platform's own
- *  keys and the arrow families — the literal text to print. */
+/** A row of the sheet: the commands it documents, or literal text for platform keys. */
 export type SheetRow =
   | { readonly ids: readonly BindingId[]; readonly action: string }
   | { readonly keys: string; readonly action: string };
 
 export interface SheetGroup {
   readonly title: string;
-  /** A chord the heading names after its title — "Settings (⌘,)" — resolved against the
-   *  live keyboard like every row, so a rebind moves the heading too. */
+  /** A chord the heading names after its title ("Settings (⌘,)"), resolved live. */
   readonly titleIds?: readonly BindingId[];
   readonly rows: readonly SheetRow[];
 }
 
-/** The sheet itself. `sheet()` below is the accessor; the constant stays separate so the
- *  groups read as one table rather than as the body of a function. */
 const SHEET: readonly SheetGroup[] = [
   {
     title: "Getting around",
@@ -107,8 +65,7 @@ const SHEET: readonly SheetGroup[] = [
       { ids: ["find.open"], action: "Find in this note" },
       { ids: ["find.next", "find.prev"], action: "Next / previous match" },
       { ids: ["nav.back", "nav.forward"], action: "Back / forward (⌘← / ⌘→ too)" },
-      // The platform's own activation of a focused button or link — not a B2 binding.
-      // The graph's ⏎ *is* one (SVG has no native activation); it has its own row below.
+      // The platform's activation, not a B2 binding (the graph's ⏎ has its own row).
       { keys: "⏎", action: "Follow the focused link, card, or graph node" },
     ],
   },
@@ -153,9 +110,7 @@ const SHEET: readonly SheetGroup[] = [
       { ids: ["fm.save"], action: "Save the frontmatter drawer (Esc discards)" },
     ],
   },
-  // Discovery gets its own group now that the right column navigates like the tree
-  // (sidenav.ts): ↑↓ there means something different from ↑↓ in an open menu, and one
-  // chord with two meanings in a single group is a group the reader can't trust.
+  // Own group: ↑↓ here means something different from ↑↓ in an open menu.
   {
     title: "Discovery (the right column)",
     rows: [
@@ -169,10 +124,7 @@ const SHEET: readonly SheetGroup[] = [
       { ids: ["menu.open"], action: "Open a card's menu — Open note, Link…" },
     ],
   },
-  // Chat is its own group for discovery's reason: it takes over the right column, so
-  // "⏎ opens the focused card" up in *Getting around* is not what ⏎ does once you are
-  // typing a question — and a chord whose meaning depends on a surface the reader hasn't
-  // met yet is a chord they can't trust.
+  // Own group: in chat, ⏎ sends rather than opening the focused card.
   {
     title: "Chat (flow ④)",
     rows: [
@@ -210,18 +162,13 @@ const SHEET: readonly SheetGroup[] = [
       { ids: ["settings.toggle"], action: "Settings" },
       { ids: ["help.keyboard"], action: "This table (Settings → Keyboard)" },
       { ids: ["overlay.focus.step"], action: "Step through the controls on screen" },
-      // The dialogs' commit chord lives here rather than beside the graph's ⏎: two ⏎ rows
-      // in one group is the ambiguity the per-group duplicate check exists to catch, and
-      // this one is a sibling of Tab above it — both are how a dialog is driven.
+      // Here, not beside the graph's ⏎: the per-group duplicate check forbids two ⏎ rows.
       {
         ids: ["link.commit", "delete.confirm"],
         action: "Commit the open dialog — Link…, or a delete confirm",
       },
     ],
   },
-  // Settings is a tabbed surface (settingstabs.ts), and a tab rail is exactly
-  // the kind of thing that ends up mouse-only if its moves aren't written down: the
-  // sections are visibly *there*, so nobody thinks to look for a chord.
   {
     title: "Settings",
     titleIds: ["settings.toggle"],
@@ -246,16 +193,8 @@ export function sheet(): readonly SheetGroup[] {
 }
 
 /**
- * The chips for a row of the sheet: one per distinct chord the row's commands answer to.
- *
- * Distinct *renderings*, so a row covering two commands that share a chord — ⏎ commits
- * the link dialog and the delete confirm — is one chip rather than "⏎ / ⏎". That chip
- * names no command, because it can't say which of the two you'd be rebinding; it still
- * carries a `fixed` reason when every command behind it has one, which is the case
- * wherever this actually comes up.
- *
- * Aliases stay out, as they always have: the row's prose covers them in words, and a chip
- * per way in would turn "Back / forward" into four keys to read past.
+ * The chips for a row: one per distinct rendered chord, so two commands sharing ⏎ make
+ * one chip, which names no command. Aliases stay out; the row's prose covers them.
  */
 export function keyChips(ids: readonly BindingId[]): ShortcutKey[] {
   const order: string[] = [];
@@ -297,8 +236,7 @@ export function shortcuts(): ShortcutGroup[] {
   }));
 }
 
-/** A row's chords as one string — what the sheet used to be, kept for the checks that
- *  read it as text (and for any caller that wants the old one-cell rendering). */
+/** A row's chords as one string, for checks that read it as text. */
 export function keyText(keys: readonly ShortcutKey[]): string {
   return keys.map((k) => k.text).join(" / ");
 }

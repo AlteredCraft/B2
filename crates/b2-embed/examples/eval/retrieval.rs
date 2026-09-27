@@ -6,40 +6,33 @@ use crate::metrics::{paths_match, Agg};
 use crate::K;
 use b2_core::vault::Vault;
 
-/// One query's ranks in one retrieval mode: 1-based note rank, 1-based chunk rank
-/// (only for passage-labelled queries), and the top note hit for display.
+/// One query's 1-based ranks in one retrieval mode; `chunk` only for passage-labelled
+/// queries.
 pub struct QueryScore {
     pub note: Option<usize>,
     pub chunk: Option<usize>,
     pub top: String,
 }
 
-/// A full pass over the query set in the vault's current state (keyword-only
-/// before `embed`, hybrid after): per-query scores plus note- and chunk-level
-/// aggregates.
+/// A pass over the query set in the vault's current state (keyword-only before `embed`,
+/// hybrid after).
 pub struct Pass {
     pub scores: Vec<QueryScore>,
     pub note: Agg,
     pub chunk: Agg,
 }
 
-/// Which retrieval a pass scores. `Fused` is the shipped path (`Vault::search` —
-/// BM25-only before embed, hybrid after) plus chunk-level scoring for
-/// passage-labelled queries; `VectorOnly` is the dense ablation
-/// (`Vault::search_vector_only`, GH #158), note-level only — its chunk aggregate
-/// stays empty. The ablation column is what lets a run say whether fusion paid
-/// rent: the finding that RRF demotes dense rank-1 hits was established
-/// by hand-decomposing fused scores once; this makes it a standing measurement.
+/// Which retrieval a pass scores. `Fused` is the shipped `Vault::search` plus chunk-level
+/// scoring; `VectorOnly` is the dense ablation (GH #158), note-level only, which shows
+/// whether fusion pays its way.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Retrieval {
     Fused,
     VectorOnly,
 }
 
-/// Score every labelled query against the vault's current state: note rank via
-/// the selected retrieval, and — for passage-labelled queries on the fused path —
-/// chunk rank via `search_chunks` (the first top-K chunk that belongs to a
-/// relevant note AND contains the labelled phrase, case-insensitively).
+/// Score every labelled query. A chunk hit is the first top-K chunk of a relevant note that
+/// contains the labelled phrase, case-insensitively.
 pub fn score_pass(
     vault: &Vault,
     queries: &[Labelled],

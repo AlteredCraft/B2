@@ -1,12 +1,8 @@
 // Tests for the rich-paste conversion (paste.ts) — clipboard HTML → B2 Markdown.
 // Run directly:  node --experimental-strip-types src/paste.test.ts
 // Hand-rolled asserts, the format.test.ts / wikicomplete.test.ts idiom.
-//
-// These feed *real* HTML strings: turndown ships domino for non-browser hosts, so the
-// same conversion the webview runs is exercised here off the source, no DOM shim.
-// The fixtures below are the shapes a real clipboard carries — WebKit's inlined
-// computed styles (`<span style="font-weight: 700">`), Google Docs' `<b
-// style="font-weight:normal">` wrapper, `<meta charset>` preambles.
+// Turndown ships domino, so real clipboard HTML shapes (WebKit inline styles, Google Docs'
+// `<b style="font-weight:normal">` wrapper) run here with no DOM shim.
 
 import { htmlToMarkdown, markdownForPaste } from "./paste.ts";
 

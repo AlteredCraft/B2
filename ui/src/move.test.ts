@@ -1,6 +1,4 @@
-// The tree move/rename path rules (move.ts), pinned. Pure string logic — no DOM —
-// so node runs it straight off the source via its native type-stripping: `npm test`.
-// Dependency-free like newentry.test.ts (hand-rolled assert; no @types/node).
+// The tree move/rename path rules (move.ts), pinned.
 import {
   allDirs,
   baseName,
@@ -98,7 +96,6 @@ check("ordinary cross-folder moves are valid", () => {
 // --- allDirs: the Move… modal's folder list -----------------------------------------
 
 check("allDirs is root-first, deduped, sorted", () => {
-  // Input is `list_dirs`' walk — already every folder on disk, empty ones included.
   const dirs = allDirs(["staged/deep", "a", "a/b", "staged", "a"]);
   equal(dirs.join("|"), "|a|a/b|staged|staged/deep", "root first, deduped, sorted");
 });

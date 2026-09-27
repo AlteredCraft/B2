@@ -1,11 +1,7 @@
-// The appearance preference (Settings → General → Theme): what it may be, how <html>
-// carries it, and where it persists — main.ts applies it. Its own module like zoom.ts,
-// panes.ts and keymap.ts own theirs, so the storage rules sit next to the value they keep.
-//
-// "system" (the default) defers to the OS via the stylesheet's `prefers-color-scheme`
-// rules; "light"/"dark" pin a theme by stamping a `data-theme` attribute on <html> that
-// those rules' overrides key on. Persisted in localStorage — a viewing choice, never vault
-// state, so it doesn't touch the host.
+// The appearance preference (Settings → General → Theme); main.ts applies it. "system"
+// defers to `prefers-color-scheme`; "light"/"dark" set `data-theme` on <html>, which the
+// stylesheet's overrides key on. Persisted in localStorage: a viewing choice, not vault
+// state.
 
 import type { ThemePref } from "./state.ts";
 
@@ -29,7 +25,6 @@ export function loadThemePref(): ThemePref {
     const saved = localStorage.getItem(KEY);
     return isThemePref(saved) ? saved : "system";
   } catch {
-    // localStorage can be unavailable (e.g. private mode) — fall back to System.
     return "system";
   }
 }
@@ -38,6 +33,6 @@ export function saveThemePref(theme: ThemePref): void {
   try {
     localStorage.setItem(KEY, theme);
   } catch {
-    // Non-fatal: the choice still applies for this session if it can't persist.
+    // Non-fatal: the choice still applies for this session.
   }
 }

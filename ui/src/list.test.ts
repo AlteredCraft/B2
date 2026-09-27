@@ -1,10 +1,6 @@
-// Tests for the nested-list engine (list.ts) — the Tab / ⇧Tab commands.
-// Run directly:  node --experimental-strip-types src/list.test.ts
-// Hand-rolled asserts, the format.test.ts / panes.test.ts idiom.
-//
-// The assertions are on the **Markdown that comes out**, not on the change list: what
-// matters is the note on disk, and a change list is one of several ways to spell the same
-// document. `applyChanges` is list.ts's own mirror of what CodeMirror does with them.
+// Tests for the nested-list engine (list.ts), asserting on the Markdown that comes out
+// rather than on the change list. Hand-rolled asserts. Run directly:
+//   node --experimental-strip-types src/list.test.ts
 import { applyChanges, indentList, outdentList } from "./list.ts";
 
 let passed = 0;
@@ -22,8 +18,7 @@ function check(name: string, fn: () => void): void {
   console.log(`  ok  ${name}`);
 }
 
-/** The document with `|` marking the caret, or `[`…`]` marking a selection — the shape
- *  a reader can check against the prose without counting offsets. */
+/** The document with `|` marking the caret, or `[`…`]` marking a selection. */
 function at(marked: string): { doc: string; from: number; to: number } {
   if (marked.includes("|")) {
     const from = marked.indexOf("|");
@@ -34,8 +29,7 @@ function at(marked: string): { doc: string; from: number; to: number } {
   return { doc: marked.replace("[", "").replace("]", ""), from, to };
 }
 
-/** Run a command over a marked-up document; returns the Markdown, and where the
- *  selection landed in it. */
+/** Run a command over a marked-up document; returns the Markdown and the new selection. */
 function run(
   cmd: typeof indentList,
   marked: string,
@@ -49,23 +43,18 @@ function run(
 // --- when the gesture applies at all -------------------------------------------------
 
 check("Tab outside a list is not the editor's to take", () => {
-  // The null is what leaves Tab meaning "next control" everywhere else — the whole
-  // reason this isn't `indentWithTab`.
+  // The null leaves Tab meaning "next control"; why this isn't `indentWithTab`.
   assertEq(indentList("A plain paragraph.", 3, 3), null, "a paragraph");
   assertEq(indentList("# A heading\n\ntext", 4, 4), null, "a heading");
   assertEq(outdentList("A plain paragraph.", 3, 3), null, "⇧Tab, the same");
 });
 
 check("a thematic break is not a one-item list", () => {
-  // `* * *` and `---` parse as bullets under a naive reading, and nesting one would turn
-  // a rule into a list.
   assertEq(indentList("- a\n\n* * *", 6, 6), null, "* * *");
   assertEq(indentList("- a\n\n---", 6, 6), null, "---");
 });
 
 check("Tab in a list is claimed even when nothing can move", () => {
-  // Claimed, not declined: a gesture that sometimes throws you out of the buffer is
-  // worse than one that sometimes does nothing (list.ts's header).
   const first = run(indentList, "- |a\n- b");
   assertEq(first, { doc: "- a\n- b", from: 2, to: 2 }, "the first item has nothing to nest under");
   const top = run(outdentList, "- a\n- |b");
@@ -75,8 +64,6 @@ check("Tab in a list is claimed even when nothing can move", () => {
 // --- the rest of the item: continuations and blanks ----------------------------------
 
 check("a continuation line acts on the item it belongs to", () => {
-  // The item is more than its marker line, and a caret mid-item must not hand Tab back
-  // to the focus ring — the same ejection the marker-line case closes.
   const r = run(indentList, "- a\n- b\n  more |about b");
   assertEq(r?.doc, "- a\n  - b\n    more about b", "b moved, its text with it");
   const back = run(outdentList, "- a\n  - b\n    more |about b");
@@ -84,43 +71,31 @@ check("a continuation line acts on the item it belongs to", () => {
 });
 
 check("a lazy continuation at column 0 still names its item", () => {
-  // Adjacent text is the item's paragraph (CommonMark's lazy continuation), so it moves
-  // with the item — and picks up a proper indent on the way.
   assertEq(run(indentList, "- a\n- b\nlazy |line")?.doc, "- a\n  - b\n  lazy line", "b took its lazy line along");
 });
 
 check("a paragraph after a blank is not a continuation", () => {
-  // Past a blank, a column-0 line is a new paragraph; claiming Tab there would grab a
-  // list the caret has visibly left.
   assertEq(run(indentList, "- a\n\npara|graph"), null, "a new paragraph");
 });
 
 check("a block starter after an item is a new block, not the item's text", () => {
-  // A heading or a rule at column 0 interrupts a paragraph, so adjacency doesn't make
-  // it a lazy continuation the way plain text is.
   assertEq(run(indentList, "- a\n- b\n# h|"), null, "a heading");
   assertEq(run(indentList, "- a\n- b\n---|"), null, "a rule");
 });
 
 check("the blank line inside a loose list swallows the key", () => {
-  // Interior to the list — items directly above and below — the caret is between
-  // bullets, not below the list, and ejecting from there would break the contract.
   const r = run(indentList, "- a\n|\n- b");
   assertEq(r, { doc: "- a\n\n- b", from: 4, to: 4 }, "claimed but inert");
 });
 
 check("blank space around a list is document space", () => {
-  // A trailing blank, either blank of a two-blank gap, or the line above the list: the
-  // caret is beside the list, not in it, and Tab moves on.
   assertEq(run(indentList, "- a\n|"), null, "a trailing blank");
   assertEq(run(indentList, "- a\n|\n\n- b"), null, "the first blank of a two-blank gap");
   assertEq(run(indentList, "|\n- a"), null, "above the list");
 });
 
 check("a blockquoted list is beyond this engine's reach", () => {
-  // The scanner reads only top-level lists; `> - a` is a bullet behind a container
-  // prefix it doesn't parse. The null is deliberate — main.ts's `inListItem` (the
-  // syntax tree's read) is what keeps Tab claimed-but-inert there instead of ejecting.
+  // main.ts's `inListItem` keeps Tab claimed here instead.
   assertEq(run(indentList, "> - a\n> - |b"), null, "the adapter's tree check owns this case");
 });
 
@@ -131,8 +106,7 @@ check("Tab nests an item under the one above it", () => {
 });
 
 check("the new indent is the previous sibling's content column, not a fixed step", () => {
-  // `1. ` is three columns wide, so a child of it starts at three — indent by a fixed
-  // two and the nesting simply doesn't parse.
+  // A fixed two-space step under `1. ` wouldn't parse as nesting.
   assertEq(run(indentList, "1. a\n2. |b")?.doc, "1. a\n   1. b", "an ordered parent");
   assertEq(run(indentList, "10. a\n11. |b")?.doc, "10. a\n    1. b", "a two-digit one");
 });
@@ -152,8 +126,6 @@ check("a blank line inside the subtree does not end it", () => {
 });
 
 check("the sibling search stops at the list it is in", () => {
-  // Without a block boundary this would reach back over the paragraph, adopt the first
-  // list's `- a` as a sibling and nest under a list it isn't part of.
   assertEq(run(indentList, "- a\n\nA paragraph.\n\n- |b")?.doc, "- a\n\nA paragraph.\n\n- b", "no reach");
 });
 
@@ -170,8 +142,6 @@ check("lifting out carries the children too", () => {
 });
 
 check("an item's continuation lines do not hide its parent", () => {
-  // `parentOf` has to read past a paragraph: an item's own wrapped text sits between it
-  // and its children, and stopping there would leave ⇧Tab inert.
   const r = run(outdentList, "- a\n  more about a\n  - |b");
   assertEq(r?.doc, "- a\n  more about a\n- b", "a is still the parent");
 });
@@ -189,8 +159,6 @@ check("indent then outdent is the document you started with", () => {
 // --- ordered lists -------------------------------------------------------------------
 
 check("nesting an ordered item renumbers what it left and what it joined", () => {
-  // Without this the nested list opens at "2." — which renders as "2." — and the run it
-  // left counts 1, 3.
   assertEq(run(indentList, "1. a\n2. |b\n3. c")?.doc, "1. a\n   1. b\n2. c", "both runs");
 });
 
@@ -199,7 +167,6 @@ check("an item joining an existing nested run takes the next number", () => {
 });
 
 check("a list that opens at 5 goes on opening at 5", () => {
-  // The start number is the author's; only a run that is newly *headed* restarts at 1.
   assertEq(run(indentList, "5. a\n6. |b")?.doc, "5. a\n   1. b", "a keeps its 5");
 });
 
@@ -208,29 +175,21 @@ check("lifting an ordered item out renumbers the run it lands in", () => {
 });
 
 check("the run left behind restarts when its first item moved away", () => {
-  // `y` did not move, but it is the first item of that nested list now, and a list whose
-  // first item says "2." renders as "2.".
   assertEq(run(outdentList, "1. a\n   1. |x\n   2. y")?.doc, "1. a\n2. x\n   1. y", "y restarts at 1");
 });
 
 check("the lazy 1. 1. 1. style is left as the author wrote it", () => {
-  // It renders identically to 1, 2, 3 and is a deliberate way to write Markdown. Nothing
-  // moved into or out of that run, so nothing about it is wrong.
   assertEq(run(indentList, "1. a\n1. b\n1. |c")?.doc, "1. a\n1. b\n   1. c", "a and b untouched");
 });
 
 check("a change of ordered delimiter is a new list, and numbering stops at it", () => {
-  // `1.` then `1)` is two lists in CommonMark, not one list of two. Reading them as one
-  // run had the renumbering walk straight over the boundary and rewrite `1) x` to `2) x`
-  // — an edit to a list the author never touched, three lines from the caret.
+  // `1.` then `1)` is two lists in CommonMark.
   const r = run(indentList, "1. a\n1) x\n2) y\n3) |z");
   assertEq(r?.doc, "1. a\n1) x\n2) y\n   1) z", "the `)` list keeps its own count");
 });
 
 check("a second list's deliberate start number survives the list above it", () => {
-  // The other half of the same boundary, and the one a run-level fix alone misses: `5)`
-  // *is* the head of its list, so "was this item the head of its run?" has to ask about
-  // the list too, or the 5 the author chose restarts at 1.
+  // `5)` heads its own list, so it keeps the author's 5.
   assertEq(run(indentList, "1. a\n5) x\n6) |y")?.doc, "1. a\n5) x\n   1) y", "x keeps its 5");
 });
 
@@ -239,8 +198,6 @@ check("a bullet run is not renumbered into an ordered one", () => {
 });
 
 check("the bullet character is the author's", () => {
-  // `-` and `*` start *different* lists in CommonMark, so rewriting one to match its new
-  // neighbours would restructure the note behind the author's back.
   assertEq(run(indentList, "- a\n  - x\n* |b")?.doc, "- a\n  - x\n  * b", "b is still a `*`");
 });
 
@@ -272,8 +229,6 @@ check("a caret inside the indentation rides to the front of the text", () => {
 });
 
 check("a selection ending at a line start stops short of that line", () => {
-  // The line-wise reading every editor uses: `- c` is not in the selection, so it does
-  // not move, and it is not what the step is measured from.
   const r = run(indentList, "- a\n- [b\n]- c");
   assertEq(r?.doc, "- a\n  - b\n- c", "only b moved");
 });
@@ -281,8 +236,6 @@ check("a selection ending at a line start stops short of that line", () => {
 // --- whitespace ----------------------------------------------------------------------
 
 check("a tab of indentation is measured at four columns, and rewritten as spaces", () => {
-  // CommonMark §2.2 is the measuring rule; spaces are what B2 writes, so the note stays
-  // one thing rather than a mix.
   const r = run(outdentList, "- a\n\t- |b");
   assertEq(r?.doc, "- a\n- b", "a four-column tab, lifted to the top level");
 });
@@ -292,8 +245,6 @@ check("an item with no content still offers a column to nest into", () => {
 });
 
 check("five spaces after a marker is code indentation, not a deeper content column", () => {
-  // CommonMark: a gap of five or more puts the content one column past the marker, and
-  // the rest is an indented code block inside the item.
   assertEq(run(indentList, "-     a\n- |b")?.doc, "-     a\n  - b", "two, not six");
 });
 

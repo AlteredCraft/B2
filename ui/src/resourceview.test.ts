@@ -1,12 +1,5 @@
-// Tests for the resource card's **image viewer** — the `data:` URL rule (embeds.ts,
-// shared with the inline `![[…]]` embed) and what the card shows in each of its states
-// (render.ts). Run directly:
-//   node --experimental-strip-types src/resourceview.test.ts
-// Hand-rolled asserts, the sanitize.test.ts / render.test.ts idiom.
-//
-// The card is chrome, not note content, so it never passes through the sanitizer — but
-// `notePaneHtml` is one function over the whole pane and the note branch does, so jsdom
-// is here for the same reason it is in render.test.ts.
+// The resource card's image viewer: the `data:` URL rule (embeds.ts) and the card's states
+// (render.ts). jsdom because `notePaneHtml`'s note branch sanitizes.
 
 import { JSDOM } from "jsdom";
 import { imageDataUrl, IMAGE_VIEWER_MAX_BYTES } from "./embeds.ts";

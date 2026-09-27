@@ -1,25 +1,8 @@
-// The file tree's pure logic — no DOM, no IPC — so node runs its test straight off
-// the source (`npm test`), like newentry.ts / move.ts.
+// The file tree's pure logic: fold the flat listings into one folder tree (`buildTree`)
+// and flatten its visible rows into the order the keyboard walks (`visibleRows`). The paint
+// and the arrow keys share the sort here so their order can't drift (K1, GH #78).
 //
-// Two jobs, deliberately in one module because they must agree: fold the flat
-// `list_notes` / `list_resources` / `list_dirs` listings into one nested folder tree
-// (`buildTree`), and flatten the *currently visible* rows of that tree into the single
-// ordered list keyboard navigation walks (`visibleRows`). The paint (render.ts's
-// `treeChildrenHtml`) and the arrow keys must agree on row order down to the last
-// tie-break, so the sort lives here once and both sides call it — a tree you can
-// arrow through in a different order than you can see is worse than no arrows at all.
-//
-// Invariant K1 (docs/invariants.md, GH #78): the tree is fully navigable from
-// the keyboard, following the ARIA `tree` pattern (up/down between visible rows,
-// right/left to expand/collapse or step in/out, Home/End, first-letter typeahead).
-//
-// **Which key means which move is not this module's business** (#121). `arrowMove` used
-// to switch on `e.key`, which made this file the owner of "ArrowDown means next row" —
-// fine for a fixed keyboard, and wrong once a user can rebind, since it put the arrows
-// beyond the reach of both the recorder and the conflict checker. It switches on a
-// registry command id now (`tree.row.next`), so bindings.ts owns key → command and this
-// module owns command → move. The rule the registry states is unchanged; only the seam
-// between the two halves moved.
+// bindings.ts owns key → command (#121); this module owns command → move.
 
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
 import { type IconName, NOTE_ICON, resourceIcon } from "./icons.ts";
@@ -31,8 +14,7 @@ export interface TreeFile {
   kind: "note" | "resource";
   path: string;
   label: string;
-  /** The row's icon, as a registry *name* — resolved to markup by render.ts, so this
-   *  module stays DOM-free and node can run its test off the source. */
+  /** The row's icon name; render.ts resolves it to markup, keeping this module DOM-free. */
   icon: IconName;
 }
 
@@ -51,11 +33,8 @@ export function fileLabel(note: NoteSummary): string {
   return base.replace(/\.md$/i, "");
 }
 
-/** Fold the flat, path-ordered note + resource lists into one nested folder tree.
- *  `dirs` is the vault's full folder list (`list_dirs`, a live fs walk) — the
- *  structure half of the tree, so a folder renders even when it holds no file
- *  (the fs supports empty folders, so the tree does); a folder that also appears
- *  as a file's path prefix merges harmlessly. */
+/** Fold the flat note and resource lists into one folder tree. `dirs` (a live fs walk)
+ *  makes empty folders render too. */
 export function buildTree(
   notes: NoteSummary[],
   resources: ResourceSummary[],
@@ -102,18 +81,16 @@ export function sortedSubdirs(dir: TreeDir): TreeDir[] {
   return [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** The paint order for one folder's files: by display label (sub-folders first,
- *  then files — the caller's concatenation order, mirrored by `visibleRows`). */
+/** The paint order for one folder's files: by display label, after the sub-folders. */
 export function sortedFiles(dir: TreeDir): TreeFile[] {
   return [...dir.files].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-/** One navigable row, in paint order. Rows are identified by `path` alone: the
- *  filesystem guarantees a folder and a file can never share one. */
+/** One navigable row, identified by `path` (a folder and a file can't share one). */
 export interface TreeRow {
   path: string;
   nodeKind: NodeKind;
-  /** The text the row shows — what first-letter typeahead matches against. */
+  /** The text the row shows, which typeahead matches. */
   label: string;
   /** 0 at the vault root; ARIA's `aria-level` is this + 1. */
   depth: number;
@@ -124,10 +101,8 @@ export interface TreeRow {
 }
 
 /**
- * Every row the tree currently paints, in paint order: for each folder — its own
- * row, then (only when expanded) its children — and then the folder's files. The
- * inline create/rename inputs are deliberately absent: they are text entry, not
- * navigable rows, and they own the keyboard while they're open.
+ * Every row the tree paints, in paint order. The inline create/rename inputs are absent:
+ * they are text entry, not navigable rows.
  */
 export function visibleRows(root: TreeDir, expanded: ReadonlySet<string>): TreeRow[] {
   const rows: TreeRow[] = [];
@@ -166,11 +141,8 @@ export function rowIndex(rows: readonly TreeRow[], path: string | null): number 
 }
 
 /**
- * The one row that carries `tabindex="0"` — the roving tabstop that makes the whole
- * tree a *single* stop in the Tab order instead of one stop per file (a 1500-note
- * vault is not a tab sequence). Preference order: the row the keyboard last focused,
- * else the open document's row, else the first row — so Tab always lands somewhere
- * meaningful, and lands where you left off.
+ * The roving tabstop that makes the tree a single Tab stop: the row last focused, else the
+ * open document's row, else the first row.
  */
 export function rovingPath(
   rows: readonly TreeRow[],
@@ -183,10 +155,8 @@ export function rovingPath(
 }
 
 /**
- * Where keyboard focus should land once `path` leaves the tree (a delete): the next
- * visible row *outside* it — a folder takes its whole expanded subtree with it, so the
- * next row at or above its depth — else the row before it, else nothing. Null when
- * `path` isn't in the list at all.
+ * Where focus lands once `path` is deleted: the next visible row outside it (a folder takes
+ * its subtree), else the row before it. Null when `path` isn't in the list.
  */
 export function neighborPath(rows: readonly TreeRow[], path: string): string | null {
   const i = rowIndex(rows, path);
@@ -213,9 +183,7 @@ export function parentRowPath(rows: readonly TreeRow[], index: number): string |
   return null;
 }
 
-/** The navigation commands the tree answers to — registry ids, in the order the
- *  dispatcher tries them. `satisfies` ties them to the table: deleting or misspelling a
- *  row in bindings.ts is a compile error here rather than an arrow that stops working. */
+/** The tree's navigation commands, in the order the dispatcher tries them. */
 export const TREE_NAV = [
   "tree.row.prev",
   "tree.row.next",
@@ -233,16 +201,8 @@ export function treeNavFor(e: KeyEventLike): TreeNav | null {
 }
 
 /**
- * The ARIA tree-pattern move for one navigation command, or null when there is nowhere
- * to go (so the caller leaves the event alone rather than swallowing it):
- *
- *   next / prev    next / previous **visible** row (never into a collapsed folder)
- *   first / last   first / last visible row
- *   in             a collapsed folder expands; an expanded one steps to its first child
- *   out            an expanded folder collapses; anything else steps out to its parent
- *
- * `from` is -1 when nothing is focused yet, which next/first resolve to the first row
- * and prev/last to the last — so the first arrow press always lands.
+ * The ARIA tree-pattern move for one command, or null when there is nowhere to go (so the
+ * caller leaves the event alone). `from` is -1 when nothing is focused yet.
  */
 export function arrowMove(rows: readonly TreeRow[], from: number, nav: TreeNav): TreeMove | null {
   if (rows.length === 0) return null;
@@ -278,9 +238,8 @@ export function arrowMove(rows: readonly TreeRow[], from: number, nav: TreeNav):
 }
 
 /**
- * First-letter typeahead: the next row after `from` whose label starts with `ch`,
- * wrapping past the end and back around to `from` itself. Null when nothing matches
- * — the keystroke then falls through to the app's chords untouched.
+ * First-letter typeahead: the next row after `from` whose label starts with `ch`, wrapping.
+ * Null when nothing matches, so the keystroke falls through.
  */
 export function typeaheadTarget(
   rows: readonly TreeRow[],

@@ -1,6 +1,5 @@
-// The appearance preference (theme.ts): what it may be, how <html> carries it, and its
-// storage — including storage that isn't there (node has none, which is the shape of a
-// browser refusing it in private mode) and a stored value that was hand-edited.
+// The appearance preference (theme.ts): its values, how <html> carries it, and its
+// storage, including none at all (as in private mode) and a hand-edited value.
 
 import { strict as assert } from "node:assert";
 import test from "node:test";

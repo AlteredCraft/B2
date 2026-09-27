@@ -1,33 +1,9 @@
-// The chat pane's pure logic — no DOM, no IPC — so node runs its test straight off the
-// source (`npm test`), like sidenav.ts / treenav.ts / settingstabs.ts.
+// The chat pane's pure logic (no DOM, no IPC), flow ④ in the GUI (GH #155).
 //
-// Chat is flow ④ (GH #151/#153) reaching the GUI (GH #155): ask a question, watch the
-// answer stream in, click a citation to open the note it came from. Three things about it
-// are decisions rather than details, and they are why this module exists at all.
-//
-// **Where it lives: the right column.** Chat replaces discovery there rather than taking
-// the centre pane, and the reason is the citations. An answer's whole value is that you
-// can go *read* the note behind it, and the centre pane is where notes are read — so chat
-// beside it means a citation opens the note **without the conversation leaving the
-// screen**. Chat in the centre would make every citation a choice between the answer and
-// the evidence. (Search takes the column too; opening either closes the other — see
-// main.ts. One column, one thing in it.)
-//
-// **The transcript is a row list, like discovery's.** `chatRows` emits sidenav.ts's own
-// `SideRow` shape, so the pane inherits the discovery pane's whole ARIA `tree` walk —
-// ↑↓ between rows, Home/End, a roving `tabindex`, and (crucially) focus restoration by row
-// key across the `innerHTML` swap every streamed answer causes. Reusing the shape rather
-// than the *state* is what keeps that free: `sideRows` delegates here when the pane is in
-// chat mode, and everything downstream (the paint, the arrows, `paintSide`'s focus
-// capture) carries on not knowing which mode it is in. A turn is a row you can land on; a
-// citation is a row *under* it that ⏎ opens — the only actionable rows in the transcript,
-// which is exactly K1's "a row you can see is a row you can reach".
-//
-// **History is session-only** (invariant S4). `chatHistory` is what the next ask carries,
-// and it is derived from the transcript in memory — never persisted, not even to
-// `localStorage` where the theme and the keymap live. A saved transcript would be
-// B2-derived state outside the Markdown; "save this chat as a note" would be an explicit
-// human-invoked export, and is not MVP (GH #151's open question 2).
+// Chat lives in the right column so a citation opens its note in the centre pane without
+// the conversation leaving the screen. The transcript emits sidenav.ts's `SideRow`, so it
+// inherits the discovery pane's keyboard walk and focus restoration. History is
+// session-only (S4): never persisted, not even to `localStorage`.
 
 import type { SideRow } from "./sidenav.ts";
 import { coverage } from "./coverage.ts";
@@ -42,26 +18,20 @@ import type {
 } from "./types";
 
 /**
- * One entry in the transcript. A `user` message is what was typed; an `assistant` message
- * is what came back — with its citations, whether it was stopped mid-answer, and, when the
- * call failed outright, the generic message the host gave instead of an answer.
- *
- * A **failed** turn is still a turn: it stays on screen (the question is still there to
- * retry) but contributes nothing to `chatHistory`, because there is no answer to carry
- * forward as context.
+ * One transcript entry. A failed turn stays on screen but contributes nothing to
+ * `chatHistory`.
  */
 export interface ChatMessage {
   role: "user" | "assistant";
-  /** The text — the question, the answer, or "" when `error` says why there isn't one. */
+  /** The question, the answer, or "" when `error` is set. */
   text: string;
   /** Resolved `[n]` markers; empty for a user message or a failed turn. */
   citations: Citation[];
-  /** The stream was stopped: the text is an honest prefix, and the pane says so. */
+  /** The stream was stopped; the text is a prefix. */
   cancelled: boolean;
-  /** The B2 tools the answer was built from; absent or empty for a plain ask or a user
-   *  message. */
+  /** The B2 tools the answer was built from. */
   tools?: ToolUse[];
-  /** The generic, actionable failure this turn produced instead of an answer. */
+  /** The host's failure message, in place of an answer. */
   error?: string;
 }
 
@@ -82,12 +52,8 @@ export function answerMessage(view: AnswerView): ChatMessage {
 }
 
 /**
- * The question a click on a *Similar & unlinked* card's **Why?** puts in the transcript.
- *
- * Display text, and the turn a follow-up is condensed against — not the prompt. What the
- * model is actually asked, and the evidence it is handed, is assembled host-side by
- * `Vault::why_similar` (b2-core's `chat.rs`); this names the two notes the way the pane
- * names them everywhere else, by title with the path as the fallback.
+ * The question a Similar card's **Why?** puts in the transcript. Display text only: the
+ * prompt is assembled host-side by `Vault::why_similar`.
  */
 export function whyQuestion(
   candidate: { path: string; title: string | null },
@@ -98,10 +64,8 @@ export function whyQuestion(
 }
 
 /**
- * The line under an answer that names the B2 tools it was built from, or "" when there
- * were none. Each tool once, in first-use order, with the `b2_` prefix and underscores
- * dropped so it reads as words. **Not escaped here**: a tool name is whatever the model
- * sent, so it is untrusted like the answer, and the paint runs it through `escapeHtml`.
+ * The line naming the B2 tools an answer used, or "". Not escaped here: a tool name is
+ * untrusted model output, and the paint escapes it.
  */
 export function toolsLine(tools: readonly ToolUse[] = []): string {
   const names = [...new Set(tools.map((t) => t.name.replace(/^b2_/, "").replaceAll("_", " ")))];
@@ -109,17 +73,9 @@ export function toolsLine(tools: readonly ToolUse[] = []): string {
 }
 
 /**
- * What Settings → Chat's **Tool calls per reply** field should send with a save — the
- * host's three-state rule (`apply_tool_cap`), decided here so a bad value is a sentence
- * beside the field rather than a save that appears to do nothing.
- *
- *   `{ send: null }`   untouched — the field still shows the cap in force, and storing
- *                      that would pin today's default over a later environment variable
- *   `{ send: "" }`     cleared — back to `B2_LLM_MAX_TOOL_CALLS` or the default
- *   `{ send: "128" }`  set
- *   `{ error }`        refused: not a whole number in the host's range
- *
- * The range is `cap`'s, which the host sent; nothing about it is spelled here.
+ * What the **Tool calls per reply** field sends with a save, per the host's three-state
+ * rule (`apply_tool_cap`): `null` when untouched (storing the shown value would pin today's
+ * default over a later env var), `""` when cleared, the number when set, or an `error`.
  */
 export function toolCapInput(
   raw: string,
@@ -135,18 +91,14 @@ export function toolCapInput(
   return { send: String(n) };
 }
 
-/** A turn that failed — the host's generic message stands in for the answer. */
+/** A turn that failed. */
 export function errorMessage(error: string): ChatMessage {
   return { role: "assistant", text: "", citations: [], cancelled: false, tools: [], error };
 }
 
 /**
- * The conversation as the next ask should see it (`b2-core`'s `ChatTurn`), oldest first.
- *
- * A **cancelled** answer is included, deliberately and for the reason `b2 chat` includes
- * it: the human read that text, so a follow-up like "go on" has to be condensed against
- * what was actually said, not against a turn we pretend never happened. A **failed** turn
- * is excluded — there is nothing it said.
+ * The conversation as the next ask sees it, oldest first. A cancelled answer is included
+ * (the human read it, so "go on" must condense against it); a failed turn is not.
  */
 export function chatHistory(messages: readonly ChatMessage[]): ChatTurn[] {
   return messages
@@ -154,38 +106,23 @@ export function chatHistory(messages: readonly ChatMessage[]): ChatTurn[] {
     .map((m) => ({ role: m.role, content: m.text }));
 }
 
-/** A transcript row's key — the identity that survives the pane's `innerHTML` swap.
- *  Position-based because two identical questions are two different rows. */
+/** A transcript row's key. Position-based: two identical questions are two rows. */
 export function turnRowKey(index: number): string {
   return `chat:turn:${index}`;
 }
 
-/** A citation row's key: its turn, its marker, and what it points at — the same
- *  belt-and-braces as `cardRowKey` (position makes it unique, target makes a stale key
- *  fail to match rather than resolve to whatever now sits there).
- *
- *  What the row *opens* is not derived from this key: a citation paints as a `data-open`
- *  button, so the mouse and ⏎ share the one activation path the rest of the app uses (K1),
- *  and the note it names lives in the markup rather than in a lookup that could go stale
- *  between the paint and the keystroke. render.test.ts pins that it is a button and never
- *  an `href` — in-app navigation, never the webview (E5). */
+/** A citation row's key. Like `cardRowKey`, position makes it unique and the target makes
+ *  a stale key fail to match. What it opens comes from the markup's `data-open` (E5). */
 export function citationRowKey(turn: number, marker: number, path: string): string {
   return `chat:cite:${turn}:${marker}:${path}`;
 }
 
-/** The row key of the answer currently streaming — a row like any other, so the keyboard
- *  can sit on it while it fills, and so focus restoration has something to name. */
+/** The streaming answer's row key, so focus can sit on it while it fills. */
 export const STREAMING_ROW_KEY = "chat:streaming";
 
 /**
- * Every row the chat pane paints, in paint order: each turn, with its citations nested
- * under it, then the in-flight answer if one is streaming.
- *
- * Emits sidenav.ts's `SideRow` so the discovery pane's walk drives this one unchanged.
- * Nothing here **folds** (`fold: null`): a turn's citations are always shown with it — a
- * conversation is read, not browsed. Folding and having children are different facts,
- * though, and only the second one moves →, so an answer with citations still steps into
- * them and ← still steps back out to the turn (sidenav.ts's `side.row.in` says so).
+ * Every row the chat pane paints, in order: each turn with its citations under it, then
+ * the streaming answer. Nothing folds, but → still steps into a turn's citations.
  */
 export function chatRows(messages: readonly ChatMessage[], streaming: boolean): SideRow[] {
   const rows: SideRow[] = [];
@@ -219,19 +156,8 @@ export function chatRows(messages: readonly ChatMessage[], streaming: boolean): 
 }
 
 /**
- * Which state the chat pane is in before (or between) questions — the empty-state
- * selection the spec asks for, as one pure decision rather than a chain of `if`s spread
- * through the paint.
- *
- *   no-vault      nothing to ground an answer in
- *   loading       the setup probe hasn't answered yet
- *   no-server     nothing is listening (the daemon isn't running, or the URL is wrong)
- *   no-model      a server is there but doesn't serve the configured model
- *   ready         chat works — the pane shows its prompt, or the conversation
- *
- * `unembedded` is deliberately **not** one of these: a projected-but-unembedded vault
- * still answers, BM25-only (M4), so blocking on it would break a working thing. It is a
- * quiet note beside the composer instead — [`retrievalNote`].
+ * The chat pane's empty state. An unembedded vault is not one: it still answers,
+ * keyword-only (M4), so it gets a note instead ([`retrievalNote`]).
  */
 export type ChatEmptyState = "no-vault" | "loading" | "no-server" | "no-model" | "ready";
 
@@ -246,45 +172,30 @@ export function chatEmptyState(s: {
       return "no-server";
     case "model_missing":
       return "no-model";
-    // The fake provider answers deterministically — chat "works", and the pane says
-    // what is answering rather than pretending a model is (`b2 chat`'s own note).
     case "fake":
     case "ready":
       return "ready";
   }
 }
 
-/** The app's side of `chatEmptyState`: the vault and the probe, read off the app state. */
+/** `chatEmptyState` read off the app state. */
 export function chatStateOf(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): ChatEmptyState {
   return chatEmptyState({ hasVault: s.vaultRoot !== null, setup: s.chatSetup });
 }
 
-/** Can a question be asked right now? What the composer's presence and *Why?* both wait on. */
+/** Can a question be asked right now? */
 export function chatReady(s: { vaultRoot: string | null; chatSetup: ChatSetup | null }): boolean {
   return chatStateOf(s) === "ready";
 }
 
-/** Ollama's OpenAI-compatible endpoint — the **Local** configuration's starting point, and
- *  the only place the frontend spells it: the Endpoint field's placeholder, and its seed
- *  when the user presses *Local* after typing a cloud URL. The host's
- *  `b2_llm::DEFAULT_BASE_URL` is the authority (it is what an unset endpoint resolves
- *  to) — change them together. */
+/** Ollama's OpenAI-compatible endpoint, the Local configuration's seed. Mirrors
+ *  `b2_llm::DEFAULT_BASE_URL`; change them together. */
 export const LOCAL_CHAT_ENDPOINT = "http://localhost:11434/v1";
 
 /**
- * The honest note about *retrieval* under the composer, or "" when there is nothing to
- * say — the search caveat (#26) applied to chat.
- *
- * Chat retrieves through the same hybrid search everything else does, so an unembedded
- * vault answers from keyword matches alone. That is a real difference in answer quality
- * and it must be said, quietly, in place — never as a blocker (E4: chat degrading never
- * degrades anything else, and a degraded chat is still chat).
- *
- * **It reports a state, not an activity.** A partial fraction is not evidence that a run
- * is under way: it is equally the residue of a cancelled or crashed reindex, and it sits
- * there until someone acts. The note used to read "while this vault embeds", which asked
- * the reader to wait for something that might never happen — so it names the gap and the
- * gesture that closes it, the way the search caveat and the ghost hint already do.
+ * The retrieval note under the composer, or "": the search caveat (#26) applied to chat,
+ * never a blocker (E4). It reports a state, not an activity: a partial fraction may be
+ * the residue of a cancelled reindex, so it names the gesture that closes the gap.
  */
 export function retrievalNote(s: {
   semantic: boolean;
@@ -305,41 +216,30 @@ export function retrievalNote(s: {
   }
 }
 
-/** The one command the setup card tells a human to run, spelled here so the label, the
- *  copy button's payload and any message agree (`b2-llm`'s `pull_command` mirror). */
+/** The setup card's command, spelled once (mirrors `b2-llm`'s `pull_command`). */
 export function pullCommand(model: string): string {
   return `ollama pull ${model}`;
 }
 
-/** The placeholder a human substitutes into `ollama pull` — the *shape* of the command,
- *  shown where there is no particular model to name. Angle brackets, so it can never be
- *  mistaken for a model that exists; it goes through `escapeHtml` like everything else. */
+/** The `ollama pull` placeholder where no model is named; angle brackets so it can't be
+ *  mistaken for a real model. */
 export const PULL_PLACEHOLDER = "<model-name>";
 
 /**
- * Where B2 sends someone who has to go and *do* something in Ollama.
- *
- * The quickstart, not the product page: a reader of either link has already been told
- * that nothing is listening or that a model isn't there, so the page they need is the one
- * carrying the install command and `ollama pull`. `b2-llm`'s `OLLAMA_INSTALL_URL` is the
- * same link on the host side (it rides inside the probe's own sentence) — **change them
- * together**, the way `pullCommand` mirrors `pull_command`.
+ * Where B2 sends someone who has to install or pull in Ollama. Mirrors `b2-llm`'s
+ * `OLLAMA_INSTALL_URL`; change them together.
  */
 export const OLLAMA_QUICKSTART_URL = "https://docs.ollama.com/quickstart";
 
-/** Ollama's hosted models — the **Cloud models** configuration's one concrete example,
- *  offered where that decision is made. Named rather than defaulted to: picking a
- *  provider is the explicit act M5 is about, so this is a link, never a pre-filled URL. */
+/** Ollama's hosted models, offered as a link, never a pre-filled URL (M5). */
 export const OLLAMA_CLOUD_URL = "https://docs.ollama.com/cloud";
 
-/** An installed model's one-line detail — its parameter label and size, whichever it
- *  has ("3.2B · 2.0 GB") — as both the setup card and the Settings picker print it. */
+/** An installed model's detail, e.g. "3.2B · 2.0 GB". */
 export function modelDetail(m: OllamaModel): string {
   return [m.parameters ?? "", formatModelSize(m.size)].filter(Boolean).join(" · ");
 }
 
-/** A model's on-disk size, for the installed list. Whole GB past a gigabyte, one decimal
- *  below — an inventory line, not a measurement. */
+/** A model's on-disk size, for the installed list. */
 export function formatModelSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
   const gb = bytes / 1_073_741_824;

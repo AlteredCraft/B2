@@ -9,16 +9,10 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::time::Instant;
 
-/// One loaded model serving every throwaway vault of the run.
+/// One loaded model serving every throwaway vault of the run, instead of a load per vault.
 ///
-/// `Vault::open_with_embedder` takes its embedder by value, so without this each vault
-/// (the orthogonal corpus's, the dense fixture's) loaded its own copy of the same
-/// weights — a full model load apiece. The model is read-only and deterministic
-/// (`&self` throughout), so sharing it costs the fixture none of its isolation: that
-/// is a property of the *vault*, which stays its own. Every [`Embedder`] method
-/// forwards, including the ones with trait defaults `LocalEmbedder` overrides (the
-/// query prefix, the batched forward pass) — a method added to the trait later must
-/// be forwarded here too, or the shared model silently runs the default instead.
+/// Forwards every [`Embedder`] method, including the defaults `LocalEmbedder` overrides: a
+/// method added to the trait must be forwarded here too, or the default silently runs.
 #[derive(Clone)]
 pub struct SharedEmbedder(Rc<LocalEmbedder>);
 
@@ -46,16 +40,11 @@ impl Embedder for SharedEmbedder {
     }
 }
 
-/// `LocalEmbedder::embed_batch` must be a faithful map of `embed`: right-padding short rows
-/// to the batch's longest and masking them out has to leave each row's CLS vector unchanged.
-/// The reindex path batches freely, so a regression here would silently corrupt every stored
-/// vector — and every score this eval prints.
-///
-/// It lives in the eval rather than `cargo test` because it needs the provisioned model,
-/// which the fast suite deliberately never touches (ADR-0013). Running it here means it
-/// actually runs, instead of sitting behind an `#[ignore]` nobody passes `--ignored` to.
+/// `LocalEmbedder::embed_batch` must equal `embed` row by row: padding must not move a CLS
+/// vector, or every stored vector and every score here is silently wrong. Lives here, not in
+/// `cargo test`, because it needs the real model (ADR-0013).
 pub fn check_batch_matches_single(model: &dyn Embedder) -> Result<(), Box<dyn std::error::Error>> {
-    // Deliberately varied lengths, so batching pads the short rows to the longest.
+    // Varied lengths, so batching pads.
     let texts = [
         "Spaced repetition schedules reviews at increasing intervals.",
         "Sleep consolidates memory.",
@@ -78,11 +67,8 @@ pub fn check_batch_matches_single(model: &dyn Embedder) -> Result<(), Box<dyn st
         if batched_row.len() != single.len() {
             return Err(format!("batched/single dim mismatch for {text:?}").into());
         }
-        // Both rows are L2-normalized, so the dot product is cosine similarity;
-        // padding must not move it off ~1.0. Non-finite is checked first and
-        // explicitly: every comparison against a NaN is false, so `cos <= 0.9999`
-        // alone would wave a NaN row *through* the gate — the one failure mode a
-        // correctness check must not have.
+        // Rows are L2-normalized, so the dot product is cosine. Check non-finite first: a
+        // NaN fails every comparison, so `cos <= 0.9999` alone would let it through.
         let cos: f32 = batched_row.iter().zip(&single).map(|(a, b)| a * b).sum();
         if !cos.is_finite() {
             return Err(format!("batched embedding is non-finite for {text:?}: {cos}").into());
@@ -110,19 +96,9 @@ pub fn timed_embed(vault: &Vault) -> Result<(usize, f64), Box<dyn std::error::Er
     Ok((chunks, t0.elapsed().as_secs_f64()))
 }
 
-/// State the one thing this corpus **cannot** measure, on every run that can't.
-///
-/// A corpus with no more chunks than a signal's candidate pool truncates *neither* list, so
-/// both are already complete, widening cannot add a candidate, and every score above is
-/// invariant under **candidate width**: a change to either view's headroom or to
-/// `search::pool_size` prints bit-identical numbers here while genuinely reordering a real
-/// vault (GH #141). Judged on the **narrower** of the two pools, since blindness is a claim
-/// about every number the run prints.
-///
-/// Scoped deliberately to width — `RRF_K` re-weights the *same* two lists, so it reorders
-/// results on any corpus, and this eval sees that. A warning, not a gate: the point is that a
-/// reader must not take an unmoved number as evidence of no change. The property itself is
-/// measured by `--example stability`, on a vault big enough for the pool to bind.
+/// Warn when the corpus has no more chunks than a candidate pool: then no list is truncated
+/// and a candidate-width change cannot move any number here (GH #141). Judged on the
+/// narrower pool. `RRF_K` is unaffected; `--example stability` measures width.
 pub fn warn_if_pool_blind(chunks: usize) {
     let pool = chunk_candidate_pool(K).min(note_candidate_pool(K));
     if chunks <= pool {

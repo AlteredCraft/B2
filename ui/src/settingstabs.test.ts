@@ -1,12 +1,5 @@
-// The Settings rail's shape and its arrow-key walk (settingstabs.ts), pinned. Pure —
-// no DOM — so node runs it straight off the source: `npm test`. Dependency-free like the
-// others.
-//
-// What a tab rail actually gets wrong is dull: a walk that dead-ends instead of wrapping
-// (so ⌃Tab stops working on the last section), Home/End that drift off the ends when a
-// tab is added, a `data-settings-tab` attribute that no longer names a real section. The
-// paint reads the same list the arrows do (settingstabs.ts says why), so pinning the list
-// pins both — which is the point of the module existing at all (K1, GH #78).
+// The Settings rail's shape and its arrow-key walk (settingstabs.ts). The paint reads the
+// same list the arrows do, so pinning the list pins both (K1, GH #78).
 import type { KeyEventLike } from "./bindings.ts";
 import {
   DEFAULT_SETTINGS_TAB,
@@ -50,8 +43,7 @@ check("the default tab is one of them", () => {
 });
 
 check("isSettingsTab rejects anything that isn't a section", () => {
-  // The guard's real job: a `data-settings-tab` attribute read back off the DOM, and a
-  // preference read back from a previous build that had different sections.
+  // Guards DOM attributes and preferences from a build with different sections.
   assert(!isSettingsTab("Keyboard"), "ids are exact, not case-folded");
   assert(!isSettingsTab(""), "the empty string is not a section");
   assert(!isSettingsTab(null), "null is not a section");
@@ -89,8 +81,6 @@ check("the rail's moves step and wrap, and land on the ends", () => {
 });
 
 check("the shipped keys are ↑↓ and Home/End", () => {
-  // Which key means which move is the registry's since #121 (settingstabs.ts's header
-  // says why), so it is pinned here where the tabs pattern this implements is documented.
   assert(tabNavFor(press("ArrowDown")) === "settings.tab.next", "↓");
   assert(tabNavFor(press("ArrowUp")) === "settings.tab.prev", "↑");
   assert(tabNavFor(press("Home")) === "settings.tab.first", "Home");
@@ -98,10 +88,7 @@ check("the shipped keys are ↑↓ and Home/End", () => {
 });
 
 check("a key the rail has no move for is left alone", () => {
-  // A rail that answered every key would swallow Tab out of the dialog, ⏎ on the tab,
-  // and every global chord that fires while Settings is open. ⌃Tab is the pointed one:
-  // it cycles sections from *anywhere* in the dialog, so it is a chord of its own
-  // (`settings.section.next`) and must not be answered here as well.
+  // ⌃Tab is `settings.section.next`'s, and must not be answered here too.
   for (const key of ["Tab", "Enter", " ", "Escape", "ArrowLeft", "ArrowRight", "a"]) {
     assert(tabNavFor(press(key)) === null, `${JSON.stringify(key)} is not a rail move`);
   }

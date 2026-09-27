@@ -1,7 +1,5 @@
-//! Graph queries over the typed `edges` table. Inversion (backlinks) is the
-//! reason the graph is materialized rather than parsed at read time
-//! (index-engine.md §3): a note's inbound edges live in every *other*
-//! note, so `neighbors` is one indexed lookup, not a full-vault scan.
+//! Graph queries over the typed `edges` table. Materialized so backlinks are one indexed
+//! lookup rather than a full-vault scan (index-engine.md §3).
 
 use crate::error::Result;
 use crate::relation;
@@ -15,31 +13,21 @@ pub enum Direction {
     Inbound,
 }
 
-/// One neighbor of a note: the note at the other end of an active edge, plus the
-/// display label (the verb for outbound, the inverse for inbound).
+/// One neighbor of a note: the other end of an edge, plus its display label.
 #[derive(Debug, Clone)]
 pub struct Neighbor {
-    /// The vault-relative path at the other end of the edge — the note's identity
-    /// (L1).
+    /// The note at the other end (L1).
     pub other: String,
-    /// The stored relation verb.
     pub edge_type: String,
     pub direction: Direction,
-    /// Display label: the verb itself outbound, the inverse label inbound
-    /// (data-model.md §2). Symmetric verbs read the same both ways.
+    /// The verb outbound, its inverse label inbound (data-model.md §2).
     pub label: String,
     pub explanation: Option<String>,
-    /// Edge provenance — which of the two homes authored it (data-model.md §0):
-    /// `inline` (a body link) or `frontmatter` (a `b2_relations:` entry, whether
-    /// `b2 link` wrote it on the human's command or they wrote it by hand). `b2 explain`
-    /// surfaces this so a plain body link reads distinctly from a typed relation.
+    /// `inline` (a body link) or `frontmatter` (a `b2_relations:` entry) (data-model.md §0).
     pub origin: String,
 }
 
-/// All neighbors of the note at `note_path` — outbound edges (this note → others)
-/// then inbound edges (others → this note), each labeled for display. Every edge is
-/// authored and active (there is no suggestion lifecycle), so this is the note's full
-/// typed graph.
+/// All neighbors of `note_path`: outbound, then inbound.
 pub fn neighbors(conn: &Connection, note_path: &str) -> Result<Vec<Neighbor>> {
     let mut out = collect_neighbors(
         conn,
@@ -60,9 +48,7 @@ pub fn neighbors(conn: &Connection, note_path: &str) -> Result<Vec<Neighbor>> {
     Ok(out)
 }
 
-/// One direction's half of [`neighbors`]: run a query yielding
-/// `(other, type, explanation, origin)` rows and label each for `direction` —
-/// the verb itself outbound, its inverse inbound (data-model.md §2).
+/// One direction's half of [`neighbors`], from `(other, type, explanation, origin)` rows.
 fn collect_neighbors(
     conn: &Connection,
     sql: &str,
@@ -88,28 +74,21 @@ fn collect_neighbors(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// One outbound link that resolved to **nothing** — neither a note nor a resource
-/// exists at its target, so it is a *dangling* edge (`dst_path IS NULL AND
-/// dst_resource_path IS NULL`). A note is one `.md` file (data-model.md §1), so a
-/// `[[Hermes]]` that names a *folder* — or a plain typo — never resolves. These are
-/// surfaced rather than silently dropped so a broken link is visible (GH #12).
+/// A dangling outbound link: no note or resource at its target (a typo, or a folder;
+/// data-model.md §1). Surfaced, not dropped (GH #12).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unresolved {
-    /// The target exactly as authored (`dst_path_raw`) — e.g. `Hermes`.
+    /// The target as authored (`dst_path_raw`).
     pub target: String,
-    /// The relation verb (`references` for a bare link).
     pub edge_type: String,
-    /// Edge origin — `inline` (a body link) or `frontmatter` (a `b2_relations:` entry).
+    /// `inline` or `frontmatter`.
     pub origin: String,
     pub explanation: Option<String>,
 }
 
-/// A note's **dangling** outbound links: the edges it authored whose target resolves
-/// to no note and no resource, in a deterministic order. The complement of
-/// [`neighbors`]'s outbound half (which keeps only `dst_path IS NOT NULL`) — together
-/// they cover every outbound edge, so a link is either a resolved neighbor or a
-/// surfaced unresolved link, never silently gone (GH #12). Backed by the
-/// `edges_dangling_idx` partial index, whose predicate this query mirrors.
+/// A note's dangling outbound links, in a deterministic order: the complement of
+/// [`neighbors`]'s outbound half, so a link is never silently gone (GH #12). The query
+/// mirrors `edges_dangling_idx`'s predicate.
 pub fn unresolved_outbound(conn: &Connection, note_path: &str) -> Result<Vec<Unresolved>> {
     let mut stmt = conn.prepare(
         "SELECT dst_path_raw, type, origin, explanation FROM edges
@@ -127,10 +106,7 @@ pub fn unresolved_outbound(conn: &Connection, note_path: &str) -> Result<Vec<Unr
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The set of notes within `hops` typed hops of `anchor` (inclusive of `anchor`),
-/// traversing `active` edges **undirected** — a note related to the anchor either
-/// way is reachable. Discovery subtracts the anchor's 1-hop set (what is already linked)
-/// from its candidates. `hops = 0` is just the anchor.
+/// Notes within `hops` undirected hops of `anchor`, the anchor included.
 pub fn reachable_within(conn: &Connection, anchor: &str, hops: usize) -> Result<HashSet<String>> {
     let mut seen = HashSet::from([anchor.to_string()]);
     let mut frontier = vec![anchor.to_string()];

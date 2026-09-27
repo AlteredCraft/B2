@@ -1,19 +1,8 @@
-// Inline formatting, the pure half — the ⌘B/⌘I toggle engine, and the table future
-// chords extend. main.ts builds the CodeMirror keymap by pairing each row here with its
-// chord from the keyboard registry (`format.<id>` in bindings.ts) and dispatches what
-// `toggleInline` computes; this module never touches the editor, so it runs under plain
-// node (the wikicomplete.ts / move.ts pattern).
-//
-// Adding a format later (strikethrough, inline code, highlight) is one new row in
-// `FORMATS` plus its `format.<id>` chord in bindings.ts — the engine is generic over the
-// marker, and the keymap is built from the two together. The one wrinkle it encodes:
-// bold (`**`) and italic (`*`) share a character, so "is this format already here?"
-// is a *parity* question on the star run (`*a*` italic, `**a**` bold, `***a***`
-// both), not a substring match.
+// Inline formatting, the pure half: the ⌘B/⌘I toggle engine and the ⌘T table. main.ts
+// pairs each `FORMATS` row with its `format.<id>` chord in bindings.ts to build the keymap.
+// Bold and italic share `*`, so "already formatted?" is a parity question on the star run.
 
-/** One inline mark and the Markdown that expresses it. The chord that toggles it lives
- *  in the keyboard registry as `format.<id>` (bindings.ts) — one table owns every chord
- *  in the app, and the engine here needs only the marker. */
+/** One inline mark and its Markdown marker. Its chord is `format.<id>` in bindings.ts. */
 export interface InlineFormat {
   id: string;
   /** The delimiter written on each side of the content (`**`, `*`, `~~`, …). */
@@ -23,7 +12,7 @@ export interface InlineFormat {
 export const BOLD: InlineFormat = { id: "bold", marker: "**" };
 export const ITALIC: InlineFormat = { id: "italic", marker: "*" };
 
-/** The keymap's source of truth — extend here and the binding exists. */
+/** The keymap's source: a new row needs its `format.<id>` chord in bindings.ts. */
 export const FORMATS: InlineFormat[] = [BOLD, ITALIC];
 
 /** One text edit in original-document coordinates (CodeMirror's change shape). */
@@ -47,16 +36,11 @@ function runLen(doc: string, i: number, ch: string, dir: -1 | 1): number {
 }
 
 /**
- * Toggle `fmt` over `[from, to]` of `doc`. Returns the edits (original-doc
- * coordinates) and the selection to land on (post-edit coordinates).
- *
- * The gesture, matched to what an editor hand expects:
- * - a selection wraps, or unwraps if the format is already around it (marker
- *   characters at the selection's own edges count as the wrapper, so selecting
- *   `**word**` whole behaves like selecting `word`);
- * - a bare cursor toggles the word under it, left selected for a follow-up chord;
- * - a bare cursor with no word inserts an empty pair with the caret centered, and
- *   toggling again inside removes it.
+ * Toggle `fmt` over `[from, to]` of `doc`. Returns the edits (original-doc coordinates)
+ * and the selection to land on (post-edit coordinates).
+ * - a selection wraps, or unwraps if already formatted (selecting `**word**` whole counts);
+ * - a bare cursor toggles the word under it, left selected;
+ * - a bare cursor with no word inserts an empty pair with the caret inside.
  */
 export function toggleInline(
   doc: string,
@@ -72,15 +56,13 @@ export function toggleInline(
     while (from > 0 && WORD.test(doc[from - 1])) from--;
     while (to < doc.length && WORD.test(doc[to])) to++;
   } else {
-    // Shrink the selection past edge marker characters: the wrapper, if the user
-    // grabbed it, is re-detected as the *surrounding* run below.
+    // Shrink past edge markers; a grabbed wrapper is re-detected as the surrounding run.
     while (from < to && doc[from] === ch) from++;
     while (to > from && doc[to - 1] === ch) to--;
   }
 
-  // The format is "present" by the run of marker characters hugging the content.
-  // Star/underscore emphasis stacks (`***a***` = bold + italic), so a 1-char
-  // emphasis marker is present on an odd run; everything else on run >= marker.
+  // Emphasis stacks (`***a***` = bold + italic), so a 1-char `*`/`_` marker is present on
+  // an odd run; anything else on run >= marker.
   const k = Math.min(runLen(doc, from, ch, -1), runLen(doc, to, ch, 1));
   const stacking = len === 1 && (ch === "*" || ch === "_");
   const present = stacking ? k % 2 === 1 : k >= len;
@@ -121,11 +103,8 @@ const TABLE_TEMPLATE = [
 ].join("\n");
 
 /**
- * Insert a fresh table at `[from, to]` (⌘T). A GFM table is a block, so it must sit on
- * its own lines with a blank line between it and any neighbour — this pads only as much
- * as the surrounding text lacks (never doubling an existing blank line), and ends the
- * file with a single newline when the table lands at the very end. The caret lands in
- * the first body cell, ready to type.
+ * Insert a fresh table at `[from, to]` (⌘T), padded to a blank line on each side only as
+ * much as the neighbours lack. The caret lands in the first body cell.
  */
 export function insertTable(
   doc: string,

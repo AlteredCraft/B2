@@ -1,8 +1,5 @@
-// The coverage classifier (coverage.ts), and the five surfaces that speak from it, pinned.
-//
-// The surfaces are pinned by what they *say* at each tier rather than by how they ask,
-// because they deliberately ask in different orders (coverage.ts's header): chat is
-// silent about an empty vault even with no model, search names the missing model first.
+// The coverage classifier (coverage.ts) and the surfaces that speak from it, pinned by
+// what each says at each tier, since they ask in different orders.
 
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -13,7 +10,7 @@ import { modalHtml, notePaneHtml, sidePaneHtml } from "./render.ts";
 import { state, type AppState } from "./state.ts";
 import type { NoteView } from "./types.ts";
 
-// The note pane renders a body through the sanitizer, which needs a DOM (render.test.ts).
+// The sanitizer needs a DOM.
 (globalThis as unknown as { window: unknown }).window = new JSDOM("").window;
 
 const cov = (semantic: boolean, notesEmbedded: number, notesTotal: number) => ({

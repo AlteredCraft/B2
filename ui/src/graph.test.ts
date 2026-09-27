@@ -1,10 +1,5 @@
-// The graph scene builder (graph.ts), pinned. Pure math + data shaping — no DOM —
-// so node runs it straight off the source via its native type-stripping: `npm test`.
-// Same dependency-free idiom as panes.test.ts (hand-rolled assert).
-//
-// What's worth pinning: the visual-language invariants (ghost cap, orbit separation,
-// arrowheads only on directed verbs) and determinism — the properties the SVG
-// renderer builds on, not pixel positions.
+// The graph scene builder (graph.ts), pinned: the visual-language invariants and
+// determinism, not pixel positions.
 
 import {
   buildScene,
@@ -123,15 +118,12 @@ check("ghosts are capped, dashed-latent, and strength-tagged", () => {
   const ghostEdges = s.edges.filter((e) => e.ghost);
   equal(ghostEdges.length, GHOST_LIMIT, "one latent edge per ghost");
   assert(ghostEdges.every((e) => !e.arrow), "latent edges carry no arrowhead");
-  // The halo's *order* is the candidate order, which is the z order wherever the floor
-  // computed one — so labelling each spoke with the raw engine score would print a
-  // number that doesn't explain the ring it sits on. Same figure as the card's band.
+  // The halo follows z order, so the label is the card's figure, not the raw score.
   equal(ghosts[0].sub, "3.2σ", "the ghost is tagged with the strength the pane shows");
 });
 
 check("an ungraded ghost is tagged with nothing rather than a raw engine score", () => {
-  // No z means no statistic was computed. `-0.73` is a negated L2 in bge's space: it
-  // would read as a *measurement* of this candidate when nothing measured it.
+  // No z, no label: the raw `-0.73` would read as a measurement when nothing measured it.
   const s = buildScene(input({ ghosts: [ghost({ score: -0.73 })] }));
   const g = s.nodes.find((n) => n.kind === "ghost");
   equal(g!.sub, null, "no band, no sub-label");

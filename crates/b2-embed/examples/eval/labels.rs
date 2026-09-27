@@ -13,24 +13,16 @@ pub struct QuerySet {
 #[derive(Deserialize)]
 pub struct Labelled {
     pub query: String,
-    /// The vault-relative path(s) that should rank first. **Empty = a negative
-    /// query** (invariants.md D2, GH #201): the labelled answer is "no
-    /// matches" — the vault holds no evidence for the query, so everything
-    /// served is junk by label, the query-side sibling of similar.json's
-    /// negative anchors. Negative queries are excluded from every rank
-    /// aggregate (adding one moves no pre-existing number) and are scored only
-    /// by the search evidence calibration.
+    /// The vault-relative path(s) that should rank first. Empty means a negative query
+    /// (D2, GH #201): everything served is junk by label. Negatives enter no rank
+    /// aggregate; only the search evidence calibration scores them.
     pub relevant: Vec<String>,
-    /// A short verbatim phrase from the target passage; when present the query is
-    /// also scored at chunk level (does a top-K chunk of a relevant note contain
-    /// it?). See queries.json's description for the labelling rules.
+    /// A verbatim phrase from the target passage; when present the query is also scored at
+    /// chunk level. Labelling rules are in queries.json.
     #[serde(default)]
     pub passage: Option<String>,
-    /// Notes beyond `relevant` that are honest evidence for the query (GH #206) —
-    /// the per-hit tail depth. The judgement is **exhaustive** for every positive
-    /// query: a served note in neither `relevant` nor here is irrelevant *by
-    /// label*, which is the statement the tail bake-off is judged on. Never enters
-    /// a rank aggregate — `relevant` alone says what should rank first.
+    /// Other notes that are honest evidence for the query (GH #206). Exhaustive: a served
+    /// note in neither list is irrelevant by label. Never enters a rank aggregate.
     #[serde(default)]
     pub tail_relevant: Vec<String>,
 }
@@ -43,15 +35,13 @@ pub struct SimilarSet {
 #[derive(Deserialize)]
 pub struct SimilarLabel {
     pub anchor: String,
-    /// Corpus notes a human says belong next to `anchor`. **Empty = a negative
-    /// anchor**: the labelled answer is "nothing relates", so the right result is
-    /// zero candidates and everything surfaced is junk by label (similar.json).
+    /// Corpus notes a human says belong next to `anchor`. Empty means a negative anchor:
+    /// everything surfaced is junk by label.
     pub expected: Vec<String>,
 }
 
-/// Every note in one corpus dir, as `file name → lowercased content` — the
-/// ground the label lint checks against. Lowercased once, so the passage check
-/// matches the way [`score_pass`](crate::retrieval::score_pass) will (case-insensitive containment).
+/// Every note in one corpus dir as `file name → lowercased content`, lowercased to match
+/// [`score_pass`](crate::retrieval::score_pass)'s case-insensitive containment.
 pub fn corpus_texts(dir: &Path) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let mut out = HashMap::new();
     for entry in std::fs::read_dir(dir)? {
@@ -66,15 +56,9 @@ pub fn corpus_texts(dir: &Path) -> Result<HashMap<String, String>, Box<dyn std::
     Ok(out)
 }
 
-/// Refuse to score against labels the corpus cannot honour (see the call site).
-///
-/// Checks: every labelled path (`relevant`, `tail_relevant`, `anchor`,
-/// `expected`) names a note in its corpus; every `passage` occurs verbatim
-/// (case-insensitively) in a note the query labels relevant — the containment
-/// chunk scoring will test; and a negative query carries neither a `passage`
-/// nor a `tail_relevant` (its whole list is junk by label already, per the
-/// queries.json rules). Faults are all printed before the run refuses, so one
-/// run names every problem rather than the first.
+/// Refuse to score against labels the corpus cannot honour: a missing path, a `passage` not
+/// in a relevant note, or a negative query with a `passage` or `tail_relevant`. Prints every
+/// fault before refusing.
 pub fn lint_labels(
     corpus_dir: &Path,
     dense_dir: &Path,
@@ -102,11 +86,8 @@ pub fn lint_labels(
             }
         }
         if let Some(passage) = &q.passage {
-            // A blank passage is the opposite defect from a typo'd one: every
-            // string contains "", so it would lint clean here and then "match"
-            // every top-K chunk of a relevant note in the chunk scoring —
-            // silently inflating chunk rank instead of reading a miss
-            // (PR #221 review).
+            // Every string contains "", so a blank passage would match every chunk and
+            // inflate chunk rank (PR #221).
             if passage.trim().is_empty() {
                 faults.push(format!(
                     "queries.json: `passage` is blank (query {:?}) — it would match every chunk \

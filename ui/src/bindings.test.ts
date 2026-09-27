@@ -1,19 +1,5 @@
-// The keyboard registry (bindings.ts), pinned — and the conflict gate itself. Pure —
-// no DOM — so node runs it straight off the source: `npm test`. Dependency-free like the
-// others.
-//
-// Two jobs. The first is that B2's own chords don't conflict: `conflicts(DEFAULT_BINDINGS)`
-// must be empty, and because `npm test` runs inside both `make check` and `make ci`, that
-// assertion *is* the gate. The second is proving the gate can fail — a checker that has
-// only ever seen a clean table is indistinguishable from one that returns `[]`
-// unconditionally, so the interesting cases below are synthetic tables built to clash.
-//
-// The matcher gets the same treatment. What a keyboard layer actually gets wrong is
-// dull and invisible: a chord that never fires because the table spells a key the way
-// the docs write it rather than the way `KeyboardEvent.key` reports it, a `?` that
-// demands ⇧ on top of the ⇧ the browser already applied, a ⌘-chord that also answers to
-// ⌥⌘ because nobody checked `altKey`. None of that shows up until a user reports that a
-// shortcut "sometimes" doesn't work.
+// The keyboard registry (bindings.ts), and the conflict gate itself: `conflicts` on the
+// shipped table must be empty. Synthetic tables built to clash prove the gate can fail.
 import { FORMATS } from "./format.ts";
 import {
   type Binding,
@@ -36,16 +22,12 @@ import {
   shiftDistinguishes,
 } from "./bindings.ts";
 
-/** A synthetic row. These tables exist to make a checker *fail*, so the label carries no
- *  meaning here — it is required by the type and named after the id to keep it honest. */
+/** A synthetic row, labelled after its id. */
 function row(b: Omit<Binding, "label">): Binding {
   return { label: b.id, ...b };
 }
 
-/** The shipped table under its declared type. `DEFAULT_BINDINGS` is `as const` so that
- *  `BindingId` can be derived from it, which also means reading `.fixed` off a row that
- *  hasn't got one is a type error rather than `undefined` — the widening is here so the
- *  checks below can ask the questions a reader would. */
+/** The shipped table widened from `as const`, so optional fields like `.fixed` can be read. */
 const SHIPPED: readonly Binding[] = DEFAULT_BINDINGS;
 
 let passed = 0;
@@ -71,17 +53,13 @@ function press(key: string, mods: Partial<KeyEventLike> = {}): KeyEventLike {
 // --- the table itself ---------------------------------------------------------------
 
 check("every chord in the table parses", () => {
-  // parseChord throws on an unknown key or modifier, so a typo — "Mod-Delete" for
-  // "Mod-Backspace", "Cmd+f" for "Mod-f" — fails here rather than shipping a dead chord
-  // that nothing reports because nothing was ever bound to notice.
   for (const b of DEFAULT_BINDINGS) {
     for (const spec of allKeys(b)) parseChord(spec);
   }
 });
 
 check("command ids are unique", () => {
-  // The lookup is a Map, so a duplicated id wouldn't error — the later row would quietly
-  // win and the earlier command would stop responding.
+  // The lookup is a Map, so a duplicate would silently win over the earlier row.
   const seen = new Set<string>();
   for (const b of DEFAULT_BINDINGS) {
     assert(!seen.has(b.id), `duplicate command id: ${b.id}`);
@@ -90,9 +68,6 @@ check("command ids are unique", () => {
 });
 
 check("every command carries a label a human could read", () => {
-  // The recorder names what it is rebinding and the conflict messages name what they
-  // clash with, so an empty or id-shaped label is a sentence that reads like a stack
-  // trace — "⌘F already runs pane.discovery here."
   for (const b of SHIPPED) {
     assert(b.label.trim() !== "", `${b.id} has no label`);
     assert(b.label !== b.id, `${b.id}'s label is just its id`);
@@ -100,11 +75,7 @@ check("every command carries a label a human could read", () => {
 });
 
 check("the chords that can't be rebound are exactly the platform's own reflexes", () => {
-  // `fixed` is a promise about *why* something can't be moved, not a convenience list, so
-  // it is pinned rather than left to accumulate: every row here is ⏎/Esc in a text field,
-  // ⏎ on a dialog's default button, the ⏎/Space a <button> would answer to, or one of the
-  // two `Any-` chords no recorder could capture in the first place. A sixth category has
-  // to be argued for.
+  // Pinned so the set can't accumulate: each row is a platform reflex or an `Any-` chord.
   assertEq(
     SHIPPED.filter((b) => b.fixed !== undefined).map((b) => b.id),
     [
@@ -120,16 +91,11 @@ check("the chords that can't be rebound are exactly the platform's own reflexes"
       "find.input.next",
       "find.input.prev",
       "find.input.close",
-      // ⏎ in the chat composer (GH #155) — the same text-field reflex as the four above
-      // it, in the fourth field that has one. ⇧⏎ stays a newline because B2 never claims
-      // it, which is the other half of the promise.
-      "chat.send",
+      "chat.send", // GH #155
     ],
     "the fixed set",
   );
-  // The other half of the promise: an `Any-` chord is unrecordable by construction (a
-  // recorder observes one keystroke), so one that was *not* fixed would be a chip
-  // offering to record something nobody can press.
+  // An `Any-` chord can't be recorded as one keystroke, so it must be fixed.
   for (const b of SHIPPED) {
     const any = allKeys(b).some((k) => k.startsWith("Any-"));
     assert(!any || b.fixed !== undefined, `${b.id} has an Any- chord but is rebindable`);
@@ -137,9 +103,7 @@ check("the chords that can't be rebound are exactly the platform's own reflexes"
 });
 
 check("every format in FORMATS has a chord in the registry", () => {
-  // format.ts carries the marker; the chord lives here, and main.ts builds the editor's
-  // keymap by asking for `format.<id>`. That lookup throws on a miss — at editor
-  // construction, in the app — so assert it now instead.
+  // main.ts asks for `format.<id>` at editor construction, where a miss throws in the app.
   for (const f of FORMATS) chordFor(`format.${f.id}`);
 });
 
@@ -151,7 +115,6 @@ check("B2's own chords do not conflict", () => {
 });
 
 check("two commands on one chord in one scope is a conflict", () => {
-  // The gate above proves nothing on its own — this is what proves it can fail.
   const table: Binding[] = [
     row({ id: "a", keys: ["Mod-k"], scope: "global" }),
     row({ id: "b", keys: ["Mod-k"], scope: "global" }),
@@ -160,8 +123,7 @@ check("two commands on one chord in one scope is a conflict", () => {
 });
 
 check("an alias conflicts as loudly as a listed chord", () => {
-  // ⌘← fires nav.back without appearing in the sheet. A chord nobody can *see* in the
-  // reference is exactly the one a new binding would land on unnoticed.
+  // Aliases are invisible in the sheet, so a new binding would land on one unnoticed.
   const table: Binding[] = [
     row({ id: "a", keys: ["Mod-["], aliases: ["Mod-ArrowLeft"], scope: "global" }),
     row({ id: "b", keys: ["Mod-ArrowLeft"], scope: "global" }),
@@ -170,8 +132,6 @@ check("an alias conflicts as loudly as a listed chord", () => {
 });
 
 check("an Any- chord conflicts with every strict chord over its key", () => {
-  // The subtle one, now that modifiers are compared literally. `Any-Escape` and
-  // `Mod-Escape` look like unrelated rows and are the same key press.
   const table: Binding[] = [
     row({ id: "a", keys: ["Any-Escape"], scope: "global" }),
     row({ id: "b", keys: ["Mod-Escape"], scope: "global" }),
@@ -180,8 +140,7 @@ check("an Any- chord conflicts with every strict chord over its key", () => {
 });
 
 check("the same chord in sibling scopes is not a conflict", () => {
-  // ⏎ commits the link dialog and the delete confirm. Only one can be open, so they are
-  // not competing — modelling that as two scopes is what keeps the gate from crying wolf.
+  // Only one overlay can be open, so they don't compete.
   const table: Binding[] = [
     row({ id: "a", keys: ["Enter"], scope: "overlay:link" }),
     row({ id: "b", keys: ["Enter"], scope: "overlay:delete" }),
@@ -199,25 +158,13 @@ check("an inner scope shadows the outer one, and that is reported, not failed", 
 });
 
 check("B2 shadows exactly these six, and each is an ordering the handler relies on", () => {
-  // A shadow is a scoped binding taking a keystroke the surface around it would
-  // otherwise get, so each one is a claim about branch order in main.ts's handler:
-  //
-  //  - ⌘G: the graph toggle is global, and the find bar takes the chord back while it is
-  //    open. That is the macOS reflex rather than a compromise — ⌘G is Find Next in every
-  //    app on the machine, and it means that *only* while there is a search to step
-  //    through. So the find branch sits above the graph's, and the two coexist: with the
-  //    bar shut ⌘G flips the pane to the connection graph, with it open ⌘G walks the
-  //    matches. The surfaces don't overlap either way — `openFind` declines while the
-  //    graph is up (there is no text to find in), so the bar is only ever open over the
-  //    reading view.
-  //  - The three Escapes: an inline input's Esc backs *that* input out instead of running
-  //    the overlay cascade, so each input's branch has to come before `dismiss`.
-  //  - ⌃Tab and ⌃⇧Tab: the overlay's Tab trap is `Any-Tab` and swallows unconditionally,
-  //    so the Settings rail's section chords only ever run because their branch is above
-  //    it. That ordering is load-bearing and easy to undo by tidying; this is what
-  //    notices.
-  //
-  // Pinned, so a seventh has to be argued for rather than accumulated.
+  // Each shadow is a claim about branch order in main.ts's handler:
+  //  - ⌘G: the find branch sits above the graph's (⌘G is Find Next only while the bar is
+  //    open; `openFind` declines while the graph is up).
+  //  - The Escapes: each inline input's branch comes before `dismiss`.
+  //  - ⌃Tab/⌃⇧Tab: the rail's branch sits above the `Any-Tab` trap, which would swallow
+  //    them. Easy to undo by tidying.
+  // Pinned, so a seventh has to be argued for.
   assertEq(
     shadows(DEFAULT_BINDINGS).map((s) => `${s.outer} > ${s.inner} (${s.form})`),
     [
@@ -250,15 +197,8 @@ check("a Mod chord answers to ⌘, and to nothing else", () => {
 });
 
 check("⌃ is not a synonym for ⌘, anywhere in the table", () => {
-  // The regression guard for the alias B2 used to have. `(e.metaKey || e.ctrlKey)` is the
-  // right reflex on Windows and Linux and the wrong one on the only platform B2 ships on:
-  // macOS gives ⌃F/⌃B/⌃N/⌃P/⌃A/⌃E emacs meanings in every text field, CodeMirror
-  // implements them, and a CodeMirror binding calls `preventDefault` without
-  // `stopPropagation` — so the keystroke ran the caret move *and* B2's command. ⌃E went to
-  // end-of-line and left edit mode at once.
-  //
-  // Stated as a property rather than a list of six, so it holds for chords not yet
-  // written: a binding may claim a ⌃ keystroke only by asking for ⌃.
+  // ⌃ keys are macOS emacs motions (see `Chord.mod`). Stated as a property so it holds
+  // for chords not yet written: a binding claims a ⌃ keystroke only by asking for ⌃.
   for (const b of DEFAULT_BINDINGS) {
     for (const spec of allKeys(b)) {
       const declares = spec.includes("Ctrl-") || spec.includes("Any-");
@@ -273,8 +213,6 @@ check("⌃ is not a synonym for ⌘, anywhere in the table", () => {
 });
 
 check("⌃X and ⌘X are two different chords", () => {
-  // Which is what makes the Settings rail's ⌃Tab a chord of its own rather than a second
-  // spelling of something else.
   assert(isBound(press("Tab", { ctrlKey: true }), "settings.section.next"), "⌃Tab");
   const table: Binding[] = [
     row({ id: "meta", keys: ["Mod-k"], scope: "global" }),
@@ -291,10 +229,7 @@ check("⇧ separates two commands on one letter", () => {
 });
 
 check("⌘G is the graph in the window and the next match in the find bar", () => {
-  // The one keystroke two commands answer to, in scopes that nest — so the pair is a
-  // shadow rather than a conflict, and the check above pins it as deliberate. Here from
-  // the matcher's side: both really do fire on the same press, which is what makes the
-  // branch order in main.ts's handler the thing that decides between them.
+  // Both fire on the same press; branch order in main.ts's handler decides.
   const g = press("g", { metaKey: true });
   assert(isBound(g, "graph.toggle"), "⌘G flips the pane to the graph");
   assert(isBound(g, "find.next"), "and steps the find bar's matches while it is open");
@@ -303,24 +238,18 @@ check("⌘G is the graph in the window and the next match in the find bar", () =
 });
 
 check("a shifted letter arrives uppercase and still matches", () => {
-  // `KeyboardEvent.key` reports "A" when ⇧ is down. The table writes chords lowercase,
-  // so the canonical form has to fold the case or ⇧⌘A would never fire.
   assertEq(canonicalKey("A"), "a", "the key folds");
   assert(isBound(press("N", { metaKey: true, shiftKey: true }), "tree.new-folder"), "⇧⌘N");
 });
 
 check("? asks for no ⇧ of its own, because the browser already applied it", () => {
-  // ⇧/ reports key "?" — the shift is *in* the character. A chord that also demanded
-  // shiftKey would be fine here but unfireable on a layout where ? is unshifted, and one
-  // that demanded !shiftKey would never fire at all.
+  // ⇧/ reports "?": the shift is in the character, and ? is unshifted on some layouts.
   assert(isBound(press("?", { shiftKey: true }), "help.keyboard"), "⇧/ opens the reference");
   assert(isBound(press("?"), "help.keyboard"), "and so does a ? that needed no shift");
   assert(!isBound(press("?", { metaKey: true }), "help.keyboard"), "but ⌘? is a different chord");
 });
 
 check("⇧ does separate two commands on a named key", () => {
-  // The counterpart to the rule above: F10's identity doesn't change under ⇧, so there
-  // the modifier is real and has to be matched.
   assert(isBound(press("F10", { shiftKey: true }), "menu.open"), "⇧F10 is the keyboard's right-click");
   assert(!isBound(press("F10"), "menu.open"), "bare F10 is not");
 });
@@ -332,8 +261,7 @@ check("the space bar is spelled, not written as a literal space", () => {
 });
 
 check("⌃Tab is literal Control, and ⌘Tab is not it", () => {
-  // The one chord in the app that asks for ⌃. ⌘Tab is macOS's app switcher and never
-  // reaches the webview at all, which is exactly why the rail wants the other one.
+  // ⌘Tab is macOS's app switcher and never reaches the webview.
   assert(!isBound(press("Tab", { metaKey: true }), "settings.section.next"), "⌘Tab is not ⌃Tab");
   assert(
     isBound(press("Tab", { ctrlKey: true, shiftKey: true }), "settings.section.prev"),
@@ -348,8 +276,6 @@ check("an alias fires the command the sheet doesn't show it under", () => {
 });
 
 check("Esc gets you out with anything held down", () => {
-  // `Any-Escape`. The escape hatch must not be conditional on a modifier the user hasn't
-  // let go of yet — you press ⌘F, change your mind, and hit Escape with ⌘ still down.
   for (const mods of [{}, { metaKey: true }, { shiftKey: true }, { altKey: true, ctrlKey: true }]) {
     assert(isBound(press("Escape", mods), "dismiss"), `Esc with ${JSON.stringify(mods)}`);
   }
@@ -358,8 +284,6 @@ check("Esc gets you out with anything held down", () => {
 });
 
 check("an Any- chord claims every keystroke over its key", () => {
-  // Which is what makes it shadow — and conflict with — the bindings it would really take
-  // the key from. A strict ⌃Tab under a scope the trap covers is not a free chord.
   const table: Binding[] = [
     row({ id: "trap", keys: ["Any-Tab"], scope: "overlay" }),
     row({ id: "rail", keys: ["Ctrl-Tab"], scope: "overlay:settings" }),
@@ -395,8 +319,7 @@ check("chordMatches reads the modifiers it is given, not the ones it isn't", () 
 });
 
 check("parseChord refuses what it can't honour", () => {
-  // `Mod-Ctrl-x` is absent on purpose: ⌘⌃X is a real chord now that the two modifiers
-  // are compared separately, so the parser has nothing to object to. Nothing binds it.
+  // Not `Mod-Ctrl-x`: ⌘⌃X is a valid chord.
   const rejects = ["Cmd+f", "Mod-Meh", "Mod-Retrun", ""];
   for (const spec of rejects) {
     let threw = false;
@@ -435,21 +358,14 @@ check("a row prints its commands' chords, distinct ones only", () => {
 // --- resolving a keystroke to one of several commands ----------------------------------
 
 check("boundOf picks the command a keystroke fires, and nothing when none does", () => {
-  // What the arrow families ask now that their keys are the registry's (#121). The tree's
-  // six navigation commands are tried as a set, and exactly one — or none — answers.
   const nav = ["tree.row.prev", "tree.row.next", "tree.row.in", "tree.row.out"] as const;
   assertEq(boundOf(press("ArrowDown"), nav), "tree.row.next", "↓ is the next row");
   assertEq(boundOf(press("ArrowLeft"), nav), "tree.row.out", "← steps out");
   assertEq(boundOf(press("k"), nav), null, "a letter is not a move, so the caller leaves it alone");
-  // And the modifier discipline holds here too: ⌘↓ is a different chord, so it falls
-  // through to the global handler rather than being eaten as a tree move.
   assertEq(boundOf(press("ArrowDown", { metaKey: true }), nav), null, "⌘↓ is not ↓");
 });
 
 check("↑ means a different thing in each pane, and that is not a conflict", () => {
-  // The reason the two panes get scopes of their own rather than sharing one set of
-  // navigation commands. Both answer to ↑; neither is ambiguous, because only one pane
-  // has the keyboard at a time — and rebinding one leaves the other alone.
   const up = press("ArrowUp");
   assert(isBound(up, "tree.row.prev"), "↑ walks the tree");
   assert(isBound(up, "side.row.prev"), "↑ walks discovery");
@@ -460,15 +376,8 @@ check("↑ means a different thing in each pane, and that is not a conflict", ()
 // --- what a recorder may write down -----------------------------------------------------
 
 check("isBindableKey admits what parseChord can hold, and refuses what it can't", () => {
-  // The recorder asks this before spelling a chord, so the answer has to agree with the
-  // parser exactly — a key that passes here and throws there is a crash in the one place
-  // the user is deliberately pressing strange keys.
-  //
-  // `-` is in the list on purpose. It is the chord syntax's own separator, so a naive
-  // `split("-")` pops an empty last segment and throws on the bare hyphen and on every
-  // ⌘-chord over it — while `isBindableKey` says yes, because it is an ordinary key. The
-  // hole was invisible until a recorder existed to walk into it (GH #125), and the sample
-  // set that missed it looked exactly as convincing as this one.
+  // Must agree with the parser exactly, or the recorder crashes. `-` is the syntax's own
+  // separator, which a naive split throws on (GH #125).
   for (const key of ["a", "?", "1", "-", "Enter", "ArrowUp", "F12", "Space"]) {
     assert(isBindableKey(key), `${key} should be bindable`);
     parseChord(key); // the agreement, asserted rather than assumed
@@ -479,18 +388,13 @@ check("isBindableKey admits what parseChord can hold, and refuses what it can't"
 });
 
 check("the separator is also a key, and chords over it parse", () => {
-  // The rule is CodeMirror's own (`normalizeKeyName` splits on `/-(?!$)/`), and matching
-  // it character for character is the point: `chordFor` hands specs straight to
-  // `keymap.of`, so a spec CodeMirror parses and B2 throws on would break the agreement
-  // this module's header calls load-bearing — and break it at the moment a user records
-  // an unremarkable key.
+  // CodeMirror's own rule (`normalizeKeyName` splits on `/-(?!$)/`).
   assertEq(parseChord("-").key, "-", "the bare hyphen");
   const modHyphen = parseChord("Mod--");
   assertEq([modHyphen.key, modHyphen.mod], ["-", true], "⌘ plus the hyphen");
   assertEq(parseChord("Mod-Shift--").key, "-", "and it survives a stack of modifiers");
   assertEq(displayChord("Mod--"), "⌘-", "printing it says the same thing");
   assert(chordMatches(parseChord("Mod--"), press("-", { metaKey: true })), "and it fires");
-  // A trailing separator with no key after it is still nothing, and still refused.
   let threw = false;
   try {
     parseChord("Mod-");
@@ -501,8 +405,6 @@ check("the separator is also a key, and chords over it parse", () => {
 });
 
 check("shiftDistinguishes separates a real ⇧ from one already in the character", () => {
-  // The rule the recorder has to reproduce when it writes a chord down: ⇧F10 is a chord,
-  // `Shift-?` is the same keystroke as `?` said twice.
   assert(shiftDistinguishes("a"), "letters");
   assert(shiftDistinguishes("F10"), "named keys");
   assert(!shiftDistinguishes("?"), "? is what ⇧/ already reports");
@@ -510,8 +412,6 @@ check("shiftDistinguishes separates a real ⇧ from one already in the character
 });
 
 check("a row does not print the aliases the prose covers", () => {
-  // nav.back also answers to ⌘←; the row says so in words rather than listing it, which
-  // is the whole reason `aliases` is a separate field from `keys`.
   assertEq(displayKeys(["nav.back", "nav.forward"]), "⌘[ / ⌘]", "brackets only");
   assertEq(displayKeys(["menu.open"]), "⇧F10", "not the Menu key");
 });

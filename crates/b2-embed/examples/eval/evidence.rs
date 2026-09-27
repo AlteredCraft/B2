@@ -11,89 +11,60 @@ use b2_core::search::EvidenceBar;
 use b2_core::vault::Vault;
 use std::path::Path;
 
-/// One served row of a labelled query's list (GH #206): the per-hit provenance
-/// RRF discards, and the row's relevance **by label** — the two things a per-hit
-/// tail rule is judged between. Rank is the row's position in `rows`, never a
-/// stored field: the fused order is the identity D1's prefix requirement binds.
+/// One served row of a labelled query's list (GH #206): per-hit provenance and relevance by
+/// label. Rank is the position in `rows`, never stored: the fused order is what D1 binds.
 pub struct ServedRow {
     pub path: String,
-    /// 0-based rank in the BM25 list; `None` = the lexical half never ranked
-    /// this chunk — the "dense-only" row.
+    /// 0-based rank in the BM25 list; `None` is a dense-only row.
     pub bm25_rank: Option<usize>,
-    /// This row's own cosine to the query; `None` when the dense half never
-    /// ranked it (a row is in at least one list, so `bm25_rank` and `cos` are
-    /// never both absent).
+    /// The row's cosine to the query; `None` when the dense half never ranked it. Never
+    /// both `None`.
     pub cos: Option<f64>,
-    /// In the keep-set — `relevant` ∪ `tail_relevant`, exhaustive by label
-    /// since GH #206: a false here is a judgement ("filler"), not an omission.
+    /// In `relevant` ∪ `tail_relevant`. Exhaustive, so false is a judgement, not an omission.
     pub keep: bool,
 }
 
-/// One labelled query's evidence reading (invariants.md D2; GH #201, Phase A of
-/// the disclosure work): the signals a query-level evidence rule would judge,
-/// dumped before any rule exists so GH #201 derives its rule from measurement
-/// rather than assumption. Nothing here gates anything.
+/// One labelled query's evidence reading (D2, GH #201): the signals a query-level evidence
+/// rule judges.
 pub struct QueryEvidence {
     pub query: String,
-    /// Chunks the OR-sanitized FTS5 expression matches at all. **Not** a
-    /// lexical-anchor test on phrase queries — `fts5_query` ORs every
-    /// alphanumeric term, so stopwords saturate this count; recorded precisely
-    /// so that saturation stays measured instead of assumed away.
+    /// Chunks the OR-sanitized FTS5 expression matches. Not a lexical anchor: stopwords
+    /// saturate it.
     pub bm25_hits: usize,
-    /// Best BM25 score over those matches, sign-flipped so higher = better
-    /// (FTS5's `rank` is more-negative-is-better). `None` when nothing matches
-    /// — the honest zero the fused surface currently cannot say.
+    /// Best BM25 score, sign-flipped so higher = better. `None` when nothing matches.
     pub bm25_best: Option<f64>,
-    /// Best cosine between the embedded query and any stored chunk vector (the
-    /// dense top-1) — the strongest semantic evidence the vault holds for this
-    /// query, which RRF discards before the surface sees it.
+    /// The dense top-1 cosine, which RRF discards before the surface sees it.
     pub best_cos: Option<f64>,
-    /// The note that dense top-1 belongs to, naming what the number points at.
+    /// The note that dense top-1 belongs to.
     pub top: String,
-    /// The served list at [`K`], in fused order, one entry per row — path,
-    /// per-hit provenance, and the row's relevance **by label** (GH #206). For a
-    /// negative query every row's `keep` is false: the whole list is junk by
-    /// label. `served`/`dense_only` below read this, so the counts and the rows
-    /// they summarize cannot drift apart.
+    /// The served list at [`K`] in fused order (GH #206).
     pub rows: Vec<ServedRow>,
-    /// Chunks in the index — the denominator every `df` below is judged against.
+    /// Chunks in the index, the denominator for every `df`.
     pub chunk_total: usize,
-    /// Every query term with its document frequency, in query order. The
-    /// population the lexical-anchor rule is swept over: raw hit count and raw
-    /// best-BM25 both failed to separate the piles (Phase A), so the anchor is
-    /// derived from *these* rather than from either of those.
+    /// Every query term with its document frequency, in query order: what the lexical
+    /// anchor is derived from, since raw hits and best-BM25 failed to separate the piles.
     pub terms: Vec<(String, usize)>,
-    /// **The engine's own verdict** for this query — `Vault::search_evidence`'s `vouched`,
-    /// i.e. exactly what the surfaces act on (GH #202). The exit gate counts on *this*, never
-    /// on the harness's restatement below: an assertion about what ships must read what
-    /// ships. `None` when the model has no calibrated bar.
-    ///
-    /// The restatement is kept beside it because the sweep needs it — [`bake_off`] evaluates
-    /// the rule at coverages the engine cannot be asked about — and because two independent
-    /// readings of one rule are a drift check when compared. So they are: [`read_shipped_bar`]
-    /// prints a `[FAULT]` on any query where they disagree.
+    /// The engine's own verdict (GH #202), which the exit gate counts on. `None` when the
+    /// model has no calibrated bar. [`coverage`](Self::coverage) restates the rule for the
+    /// sweep; [`read_shipped_bar`] flags any disagreement.
     pub vouched: Option<bool>,
 }
 
 impl QueryEvidence {
-    /// What the shipped surface serves at [`K`] today. For a negative query
-    /// this is the measured D2 defect: `limit` confident-looking results for a
-    /// query the vault holds nothing for.
+    /// What the shipped surface serves at [`K`]; on a negative query, the D2 defect.
     pub fn served(&self) -> usize {
         self.rows.len()
     }
 
-    /// Of the served rows, how many the **lexical half never ranked at all**
-    /// (`bm25_rank: None`) — the per-hit shape of the same defect, and the
-    /// signal the `lexical` tail rule folds on (GH #206).
+    /// Served rows the lexical half never ranked, which the `lexical` tail rule folds on
+    /// (GH #206).
     pub fn dense_only(&self) -> usize {
         self.rows.iter().filter(|r| r.bm25_rank.is_none()).count()
     }
 
-    /// The share of this query's term IDF the vault carries — the harness's own
-    /// restatement of [`b2_core::search::LexicalEvidence::term_coverage`], kept
-    /// separate so a drift in the engine's rule shows up as the two disagreeing
-    /// rather than as silence. `None` when nothing in the query carries weight.
+    /// The share of this query's term IDF the vault carries: an independent restatement of
+    /// [`b2_core::search::LexicalEvidence::term_coverage`], as a drift check. `None` when no
+    /// term carries weight.
     pub fn coverage(&self) -> Option<f64> {
         let idf = |df: usize| ((self.chunk_total as f64 + 1.0) / (df as f64 + 1.0)).ln();
         let total: f64 = self.terms.iter().map(|(_, df)| idf(*df)).sum();
@@ -115,47 +86,33 @@ impl QueryEvidence {
     }
 }
 
-/// The `min_term_coverage` grid the bake-off sweeps: how much of a query's own
-/// weight the vault must carry for the lexical half to vouch for it. Spans "a
-/// twentieth" to "all of it", so the printed rows show the rule's whole
-/// behaviour rather than a neighbourhood of the shipped constant.
+/// The `min_term_coverage` grid the bake-off sweeps, spanning the rule's whole range rather
+/// than a neighbourhood of the shipped constant.
 pub const COVERAGES: [f64; 10] = [0.05, 0.10, 0.15, 0.20, 0.25, 0.34, 0.50, 0.67, 0.85, 1.00];
 
-/// One coverage-bar cell of the bake-off: how the lexical half alone splits the
-/// labelled piles there, and what the cosine half would then have to do for the
-/// queries it leaves undecided.
+/// One coverage cell of the bake-off: how the lexical half splits the labelled piles, and
+/// what the cosine half must do with the rest.
 pub struct EvidenceCell {
     pub coverage: f64,
-    /// Positives the lexical half already vouches for.
     pub pos_anchored: usize,
-    /// Negatives the lexical half wrongly vouches for. **Any nonzero value
-    /// disqualifies the cell**: an anchored negative is served whatever the
-    /// cosine bar says, so no `min_cos` can rescue it.
+    /// Negatives the lexical half vouches for. Nonzero disqualifies the cell: no `min_cos`
+    /// can cut an anchored query.
     pub neg_anchored: usize,
-    /// Cosines of the positives the lexical half left undecided — the pile a
-    /// `min_cos` must KEEP.
+    /// Cosines of undecided positives, which a `min_cos` must keep.
     pub undecided_pos: Vec<f64>,
-    /// Cosines of the negatives left undecided — the pile it must CUT.
+    /// Cosines of undecided negatives, which it must cut.
     pub undecided_neg: Vec<f64>,
 }
 
 impl EvidenceCell {
-    /// The cosine window this cell leaves for `min_cos`, over **only** the
-    /// queries the lexical half did not already decide — which is the whole
-    /// point of reading it here rather than over every query: D2's rule is
-    /// lexical OR semantic, so a positive with an anchor never needs its cosine
-    /// kept, and a pure-cosine window (Phase A's) overstates the keep set.
+    /// The cosine window for `min_cos` over only the undecided queries: D2 is lexical OR
+    /// semantic, so an anchored positive never needs its cosine kept.
     pub fn window(&self) -> Option<Window> {
         Window::read(&self.undecided_neg, &self.undecided_pos)
     }
 
-    /// Whether some `min_cos` completes this cell into a rule that keeps every
-    /// positive and cuts every negative.
-    ///
-    /// Three ways to be admissible, and the two degenerate ones are real
-    /// readings rather than edge-case bookkeeping: with no undecided negatives
-    /// the cosine half is inert (the lexical rule did the whole job), and with
-    /// no undecided positives any bar above the negatives' best cosine works.
+    /// Whether some `min_cos` completes this cell into a rule that keeps every positive and
+    /// cuts every negative. An empty undecided pile on either side is admissible.
     pub fn admissible(&self) -> bool {
         if self.neg_anchored > 0 {
             return false;
@@ -166,8 +123,7 @@ impl EvidenceCell {
         }
     }
 
-    /// The lowest `min_cos` that cuts every undecided negative — the bar's
-    /// measured floor. `None` when nothing is left to cut.
+    /// The bar's measured floor. `None` when nothing is left to cut.
     pub fn cut_floor(&self) -> Option<f64> {
         let max = self
             .undecided_neg
@@ -177,8 +133,7 @@ impl EvidenceCell {
         max.is_finite().then_some(max)
     }
 
-    /// The highest `min_cos` that still keeps every undecided positive — the
-    /// bar's measured ceiling. `None` when nothing is left to keep.
+    /// The bar's measured ceiling. `None` when nothing is left to keep.
     pub fn keep_ceiling(&self) -> Option<f64> {
         let min = self
             .undecided_pos
@@ -216,35 +171,25 @@ pub fn bake_off(ev: &SearchEvidence) -> Vec<EvidenceCell> {
     cells
 }
 
-/// The search evidence dump (GH #201): every labelled query's reading, split
-/// into the piles a query-level evidence bar answers to — positives it must
-/// keep reachable, negatives it must answer "no matches".
+/// The search evidence dump (GH #201): positives the bar must keep, negatives it must cut.
 pub struct SearchEvidence {
     pub positives: Vec<QueryEvidence>,
     pub negatives: Vec<QueryEvidence>,
 }
 
-/// One side's best-cos pile — the population the query-window derivation and
-/// the printed pile lines both read (queries with no dense reading drop out).
+/// One side's best-cos pile; queries with no dense reading drop out.
 pub fn best_cos_pile(rows: &[QueryEvidence]) -> Vec<f64> {
     rows.iter().filter_map(|r| r.best_cos).collect()
 }
 
-/// Score the search evidence calibration (invariants.md D2; GH #201) — a pure
-/// read over the already-built vault. Per labelled query: the lexical half's
-/// reading via a direct `chunks_fts` probe (the engine's own sanitized
-/// expression — the absolute signals RRF discards), the dense top-1 via the
-/// vector-only ablation path, and the shipped surface's served count.
+/// Score the search evidence calibration (D2, GH #201), a pure read over the built vault.
 pub fn score_search_evidence(
     vault_root: &Path,
     vault: &Vault,
     positives: &[Labelled],
     negatives: &[Labelled],
 ) -> Result<SearchEvidence, Box<dyn std::error::Error>> {
-    // A second read connection beside the Vault's own — C1: readers are
-    // unrestricted, and the probe wants FTS5's `rank`, which no façade read
-    // exposes (deliberately: bm25 units are engine internals everywhere but
-    // this instrument).
+    // A second reader (C1): the probe wants FTS5's `rank`, which no façade read exposes.
     let conn = b2_core::open(&vault_root.join(".b2").join("b2.sqlite"))?;
     let rows = |queries: &[Labelled]| -> Result<Vec<QueryEvidence>, Box<dyn std::error::Error>> {
         queries
@@ -257,9 +202,7 @@ pub fn score_search_evidence(
                     .first()
                     .map(|h| h.path.clone())
                     .unwrap_or_else(|| "—".to_string());
-                // The façade's own evidence read (GH #201) — the term dfs, the
-                // per-hit provenance, and the served list in one call, so the
-                // sweep judges exactly what the engine would.
+                // The façade's own evidence read, so the sweep judges what the engine would.
                 let view = vault.search_evidence(&q.query, K)?;
                 Ok(QueryEvidence {
                     query: q.query.clone(),
@@ -294,12 +237,8 @@ pub fn score_search_evidence(
     })
 }
 
-/// The lexical half's reading for one raw query, probed directly over
-/// `chunks_fts` with the engine's own sanitized expression
-/// ([`b2_core::search::fts5_query`]): how many chunks match at all, and the
-/// best BM25 score among them (FTS5 `rank`, sign-flipped so higher = better).
-/// These are exactly the absolute signals the fused path computes and then
-/// discards at RRF — which is why the instrument reads them raw.
+/// Match count and best BM25 (sign-flipped) for one query, probed over `chunks_fts` with the
+/// engine's [`b2_core::search::fts5_query`]: the absolute signals RRF discards.
 pub fn bm25_probe(
     conn: &rusqlite::Connection,
     query: &str,
@@ -325,13 +264,9 @@ pub fn bm25_probe(
     Ok((hits, Some(-best)))
 }
 
-/// Print the search evidence calibration (invariants.md D2; GH #201) — the
-/// query-side sibling of [`print_floor_windows`](crate::discovery::print_floor_windows). Reported, nothing gates: the
-/// piles are what GH #201's query-level bar is argued from, and any constant
-/// read off them owes process rule 5's real-vault transfer check before it
-/// ships. The window's caveat is structural: D2's rule is lexical OR semantic
-/// evidence, so a *pure-cosine* window overstates what a real bar must keep —
-/// a positive query with a lexical anchor never needs its cosine kept.
+/// Print the search evidence calibration (D2, GH #201). Reported, not gated. The
+/// pure-cosine window overstates what a real bar must keep, since lexical evidence keeps
+/// its own.
 pub fn print_search_evidence(ev: &SearchEvidence) {
     println!(
         "  search evidence calibration (D2 — reported, nothing gates; the query bar is GH #201's \
@@ -408,11 +343,8 @@ pub fn print_search_evidence(ev: &SearchEvidence) {
     }
 }
 
-/// Print the **search evidence bake-off** (ADR-0015, GH #201) — the query-level rule's
-/// window, re-derived from the labelled piles on every run rather than quoted from the day it
-/// was read. The GH #187 idiom on search's side: the constant lives in
-/// [`b2_core::search::BGE_BASE_EVIDENCE_BAR`] and its *justification* is recomputed here,
-/// including whether the shipped bar still sits inside the window it was read from.
+/// Print the search evidence bake-off (ADR-0015, GH #201). The constant lives in
+/// [`b2_core::search::BGE_BASE_EVIDENCE_BAR`]; its justification is recomputed here each run.
 pub fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_id: &str) {
     println!(
         "  search evidence bake-off (D2 — the query-level rule, re-derived every run; GH #201)"
@@ -499,15 +431,8 @@ pub fn print_search_bakeoff(ev: &SearchEvidence, cells: &[EvidenceCell], model_i
     println!("      the tail bake-off's, below (GH #206).");
 }
 
-/// Name the admissible cells with the most cosine headroom, and within that band
-/// the **most conservative corner** — the tightest `df` fraction and the
-/// strictest coverage that still buy the widest window.
-///
-/// The tie matters more than the maximum does, and printing only a winner would
-/// hide it: the grid's cells are not distinct rules but a plateau, and the
-/// reading to carry into process rule 5's transfer check is "anywhere in this
-/// band", not "at this point". A constant placed at a lone maximum would be
-/// fitted to the grid's resolution.
+/// Name the plateau of admissible cells with the most cosine headroom and its strictest
+/// coverage. Report the plateau, not a lone maximum, which would fit the grid's resolution.
 pub fn widest(cells: &[&EvidenceCell]) -> String {
     let best = cells
         .iter()
@@ -538,10 +463,8 @@ pub fn widest(cells: &[&EvidenceCell]) -> String {
     }
 }
 
-/// A cell's cosine headroom: how much room a `min_cos` has between the
-/// negatives it must cut and the positives it must keep. An inert cosine half
-/// (nothing left undecided on one side) has unbounded room and is reported as
-/// such rather than scored against bounded cells.
+/// A cell's cosine headroom between the negatives to cut and positives to keep; infinite
+/// when the cosine half is inert.
 pub fn headroom(cell: &EvidenceCell) -> f64 {
     match (cell.cut_floor(), cell.keep_ceiling()) {
         (Some(cut), Some(keep)) => keep - cut,
@@ -549,33 +472,20 @@ pub fn headroom(cell: &EvidenceCell) -> f64 {
     }
 }
 
-/// Where the **shipped** constant stands against this run's piles: the tripwire (a labelled
-/// positive the bar would cut — ADR-0015 asserts zero, no headroom) and the defect it exists
-/// to fix (a labelled negative it still serves).
-///
-/// **In the exit gate** since GH #202, at [`MAX_POSITIVES_CUT`] and [`MAX_NEGATIVES_SERVED`].
-/// Read here rather than in the printer, so the number asserted and the number explained are
-/// one number. `None` when the active model has no calibrated bar.
+/// Where the shipped bar stands against this run's piles. Gated at [`MAX_POSITIVES_CUT`] and
+/// [`MAX_NEGATIVES_SERVED`] (GH #202); read here so the gate and the printer share one number.
 pub struct ShippedBar {
     pub bar: EvidenceBar,
-    /// Labelled positives the bar cuts — the tripwire's direction.
     pub pos_cut: usize,
-    /// Labelled negatives it still serves — the defect's direction.
     pub neg_served: usize,
-    /// Queries where the engine's verdict and the harness's independent
-    /// restatement of the same rule **disagree** — a drift between the two, which
-    /// is silence unless something looks. Expected empty; printed, not gated,
-    /// because it accuses the instrument as readily as the engine and the reader
-    /// has to say which.
+    /// Queries where the engine's verdict and the harness's restatement disagree. Printed,
+    /// not gated: it may be the instrument that drifted.
     pub faults: Vec<String>,
 }
 
 pub fn read_shipped_bar(ev: &SearchEvidence, model_id: &str) -> Option<ShippedBar> {
     let bar = EvidenceBar::for_model(model_id)?;
-    // The ENGINE's verdict, not a restatement of it: this is what the gate
-    // asserts and what the surfaces act on. `None` cannot occur here — the model
-    // has a bar or this function returned already — so it is counted as served,
-    // the same direction the surfaces take it (M2: no verdict is not "no match").
+    // The engine's verdict. A `None` counts as served, as on the surfaces (M2).
     Some(ShippedBar {
         bar,
         pos_cut: ev
@@ -613,8 +523,7 @@ pub fn print_shipped_bar(ev: &SearchEvidence, model_id: &str) {
         println!("    shipped bar: none for this model — no verdict is offered (M2)");
         return;
     };
-    // Every line below reads the ENGINE's verdict, so the numbers printed are the
-    // numbers gated — one reading, not two that can drift apart.
+    // The engine's verdict, so the numbers printed are the numbers gated.
     let vouches = |r: &QueryEvidence| r.vouched != Some(false);
     println!(
         "    shipped bar: coverage ≥ {:.2}, cos ≥ {:.3}",

@@ -1,36 +1,13 @@
-// The discovery pane's pure logic — no DOM, no IPC — so node runs its test straight off
-// the source (`npm test`), like treenav.ts.
+// The right column's row order and keyboard walk (pure; treenav.ts's sibling). The paint
+// (render.ts) and the arrow keys both derive from here so their order can't drift (K1,
+// GH #78).
 //
-// This is treenav.ts's sibling for the right-hand column, and it exists for the same
-// reason: the paint (render.ts's side-pane builders) and the arrow keys must agree on row
-// order down to the last tie-break, so the row identities and the fold state live here
-// once and both sides call them. A pane you can arrow through in a different order than
-// you can see is worse than no arrows at all.
-//
-// Invariant K1 (docs/invariants.md, GH #78): discovery is navigable from the
-// keyboard, following the same ARIA `tree` pattern the file tree does — ↑↓ between visible
-// rows, →← to fold or step in/out, Home/End, and a roving `tabindex` so the whole list is
-// one Tab stop rather than three per card.
-//
-// **Why not just reuse treenav.ts's `arrowMove`?** Because one thing genuinely differs,
-// and it's the thing the pattern turns on: a file tree row expands to reveal *child rows*,
-// while a discovery card expands to reveal *its own body* (the path + snippet). So
-// "foldable" and "has child rows" come apart here — a card is the first, never the second
-// — and the two moves read differently enough that one function pretending to serve both
-// would need a predicate per branch. Two small tested walks beat one parameterized one;
-// the duplication is ~20 lines and the semantics are stated in each.
-//
-// As in treenav.ts, **which key means which move is the registry's** since #121:
-// `sideArrowMove` switches on a binding id (`side.row.next`), not on `e.key`, so the
-// pane's arrows are rebindable and visible to the conflict checker. The pane has a scope
-// of its own (`side`) rather than sharing the tree's — they are siblings, so ↑ can mean
-// "previous row" in both, and rebinding one leaves the other alone.
+// Not treenav.ts's `arrowMove`: a tree row expands to reveal child rows, a discovery card
+// to reveal its own body, so "foldable" and "has child rows" come apart here. Keys come
+// from the registry's own `side` scope (#121), rebindable apart from the tree's.
 
 import { type BindingId, type KeyEventLike, boundOf } from "./bindings.ts";
-// A *value* import, and the one dependency this module has on a sibling: chat is the
-// right column's third mode (GH #155), so its rows are emitted here alongside search's
-// and discovery's. chat.ts imports only the `SideRow` *type* back, which erases — so the
-// two modules read as a pair without a runtime cycle.
+// chat.ts imports only the `SideRow` type back, so there is no runtime cycle.
 import { type ChatMessage, chatRows } from "./chat.ts";
 import type { SideSection } from "./state";
 import type { NeighborView, NoteView, SearchResult, SimilarView, UnresolvedLink } from "./types";
@@ -41,44 +18,32 @@ export type SideFold =
   | { kind: "card"; key: string };
 
 /**
- * One navigable row of the side pane, in paint order.
- *
- * `key` is the row's identity *across a repaint* — what the roving tabstop and the focus
- * restoration in `paintSide` are keyed by, since the element holding focus does not
- * survive an `innerHTML` swap. It carries the list position because a card's *path* is
- * not unique: two edges to one target are legal (data-model.md §2's "augment" case) and
- * share a single fold key, but two rows that answer to one key would make ↓ off the
- * second land back under the first.
+ * One navigable row of the side pane. `key` is its identity across a repaint, and carries
+ * the list position because two edges to one target are legal (data-model.md §2).
  */
 export interface SideRow {
   key: string;
   /** 0 for a section head (and a flat search result), 1 for a card under a head. */
   depth: number;
-  /** Null when there is nothing to fold: a search result, an unresolved link. */
+  /** Null when there is nothing to fold. */
   fold: SideFold | null;
   /** Folded rows still navigate; only their body/cards leave the row list. */
   expanded: boolean;
-  /** Rows nested under this one — a section with cards. Never true for a card. */
+  /** Rows nested under this one. Never true for a card. */
   hasChildRows: boolean;
 }
 
-/** The slice of `AppState` the row list is derived from (so `sideRows(state)` just works,
- *  and a test can build one by hand). Mirrors the paint's inputs exactly. */
+/** The slice of `AppState` the row list derives from; mirrors the paint's inputs. */
 export interface SideNavState {
-  /** The right column is showing the chat pane (GH #155) — its third mode, and the one
-   *  that wins: chat and search both own the whole column, and opening either closes the
-   *  other (main.ts), so a single flag decides which list this is. */
+  /** The column shows chat (GH #155), which wins over search and discovery. */
   chatOpen: boolean;
-  /** The conversation, when chat is open — session-only (S4), held in `AppState`. */
+  /** The conversation, session-only (S4). */
   chatMessages: readonly ChatMessage[];
-  /** The answer streaming right now, or null between turns — carried in `AppState`'s own
-   *  shape (the text, not a flag) so this slice stays a literal mirror of the paint's
-   *  inputs; all the row list needs of it is whether there is one. */
+  /** The streaming answer, or null; only its presence matters here. */
   chatStreaming: string | null;
   searchQuery: string;
   searchResults: readonly SearchResult[];
-  /** A search in flight: the pane paints "Searching…", so the *previous* query's
-   *  results are not on screen and must not be navigable either. */
+  /** A search in flight: the previous results aren't on screen, so aren't navigable. */
   loading: boolean;
   /** Discovery is an empty-state hint until a note is open. */
   current: NoteView | null;
@@ -89,8 +54,7 @@ export interface SideNavState {
   collapsedCards: ReadonlySet<string>;
 }
 
-/** A card's per-note **fold** key — unique across the two sections a path can appear in,
- *  and deliberately path-keyed: folding a card folds it for that note, wherever it sits. */
+/** A card's fold key: path-keyed, so folding follows the note wherever it sits. */
 export function cardKey(section: SideSection, path: string): string {
   return `${section}:${path}`;
 }
@@ -100,21 +64,16 @@ export function sectionRowKey(section: SideSection): string {
   return `section:${section}`;
 }
 
-/** A card's **row** key: its list position plus what it points at. Both halves matter —
- *  the position makes it unique, the target makes a stale key fail to match (and so fall
- *  back) rather than silently resolve to whatever card now sits at that index. */
+/** A card's row key. The position makes it unique; the target makes a stale key fail to
+ *  match rather than resolve to whatever card now sits there. */
 export function cardRowKey(group: string, index: number, id: string): string {
   return `${group}:${index}:${id}`;
 }
 
 /**
- * Every row the side pane currently paints, in paint order: in chat mode the transcript
- * (chat.ts, which emits these same rows); in search mode the flat list of results; in
- * discovery each section's head followed by its cards (only while the section is
- * expanded), the Connections section carrying its unresolved links last.
- *
- * Mirrors render.ts's branch order exactly, including the states that paint *no* rows —
- * no note open, a search still running, a section with nothing in it.
+ * Every row the side pane paints, in paint order: the chat transcript, the search
+ * results, or each discovery section's head and cards. Mirrors render.ts's branches
+ * exactly, including those that paint no rows.
  */
 export function sideRows(s: SideNavState): SideRow[] {
   if (s.chatOpen) return chatRows(s.chatMessages, s.chatStreaming !== null);
@@ -156,9 +115,7 @@ export function sideRows(s: SideNavState): SideRow[] {
 
   section("connections", () => [
     ...s.connections.map((c, i) => card("connections", i, c.path)),
-    // An unresolved link points at nothing, so it has no body to fold and nothing to
-    // open — but it is a row you can see, and a row you can see must be a row you can
-    // reach (K1). ⏎ on it simply does nothing.
+    // Nothing to fold or open, but a visible row must be reachable (K1).
     ...s.unresolved.map((u, i) => ({
       key: cardRowKey("unresolved", i, u.target),
       depth: 1,
@@ -178,18 +135,15 @@ export function sideRowIndex(rows: readonly SideRow[], key: string | null): numb
 }
 
 /**
- * The one row that carries `tabindex="0"` — the roving tabstop that makes the whole pane a
- * *single* Tab stop instead of three per card. The row the keyboard last focused, else the
- * first row, so ⌘3 lands where you left off and ⇥ never skips a populated pane.
+ * The roving tabstop: the row last focused, else the first, so ⇥ never skips a populated
+ * pane.
  */
 export function rovingSideKey(rows: readonly SideRow[], focus: string | null): string | null {
   if (sideRowIndex(rows, focus) !== -1) return focus;
   return rows.length > 0 ? rows[0].key : null;
 }
 
-/** What one navigation key does: move the focus, or fold what the focused row folds.
- *  Every variant names a row `key` (treenav.ts's `TreeMove` carries `path` the same way):
- *  the row to focus, or — folding keeps the focus put — the row that stays focused. */
+/** What one navigation key does: move focus, or fold the focused row (which keeps focus). */
 export type SideMove =
   | { kind: "focus"; key: string }
   | { kind: "expand"; key: string; fold: SideFold }
@@ -203,8 +157,7 @@ export function parentSideKey(rows: readonly SideRow[], index: number): string |
   return null;
 }
 
-/** The navigation commands the discovery pane answers to — registry ids, in the order the
- *  dispatcher tries them (treenav.ts's `TREE_NAV` is the sibling of this). */
+/** The pane's navigation commands, in the order the dispatcher tries them. */
 export const SIDE_NAV = [
   "side.row.prev",
   "side.row.next",
@@ -222,17 +175,8 @@ export function sideNavFor(e: KeyEventLike): SideNav | null {
 }
 
 /**
- * The ARIA tree-pattern move for one navigation command, or null when there is nowhere to
- * go (so the caller leaves the event alone rather than swallowing it):
- *
- *   next / prev    next / previous **visible** row (never into a collapsed section)
- *   first / last   first / last row
- *   in             folded → unfold; an open section steps to its first card; an open card
- *                  stays put (its body is content, not rows)
- *   out            open → fold; anything else steps out to its section head
- *
- * `from` is -1 when nothing is focused yet, which next/first resolve to the first row and
- * prev/last to the last — so the first arrow press always lands.
+ * The ARIA tree-pattern move for one command, or null when there is nowhere to go (so the
+ * caller leaves the event alone). `from` is -1 when nothing is focused yet.
  */
 export function sideArrowMove(
   rows: readonly SideRow[],
@@ -258,15 +202,8 @@ export function sideArrowMove(
       const row = rows[from];
       if (row.fold !== null && !row.expanded)
         return { kind: "expand", key: row.key, fold: row.fold };
-      // Open: the next row *is* the first child, when there is one (`sideRows` emits it
-      // inline). A card never has one — its body is content, so → is spent there.
-      //
-      // Reached for an **unfoldable** row too, which is the ARIA pattern's own rule
-      // rather than a special case: "nothing to fold" and "no children" are different
-      // facts, and only the second one stops →. Discovery has no such row (a search
-      // result and a broken link are both childless, so this still returns null for
-      // them); chat's turns are exactly it — nothing folds in a conversation, but an
-      // answer's citations are rows underneath it (chat.ts).
+      // Open, or unfoldable: step to the first child row if any. Only "no children"
+      // stops →; a chat turn doesn't fold but has citation rows.
       return row.hasChildRows && from < last && rows[from + 1].depth > row.depth
         ? at(from + 1)
         : null;

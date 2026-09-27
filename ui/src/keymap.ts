@@ -1,28 +1,10 @@
-// The customization layer over the keyboard registry (#121) — the algebra that turns
-// "the keyboard B2 ships with" into "the keyboard this user has", and the judgement that
-// decides whether a chord they just pressed may become part of it.
+// The customization layer over the keyboard registry (#121): user rebindings laid over the
+// defaults, and the judgement on whether a pressed chord may join them. A keyboard layout
+// is a viewing choice, so it lives in `localStorage`, never in the vault or the host.
 //
-// Mostly pure, so node runs its test straight off the source (`npm test`); the two
-// functions that touch `localStorage` are at the bottom, the same shape panes.ts uses for
-// column widths. That is deliberate as to *where the preference lives*, not just how it's
-// stored: a keyboard layout is a viewing choice, never vault state, so it does not touch
-// the host, the index, or a byte of Markdown. Drop the vault on another machine and the
-// notes are identical; the chords are that machine's business.
-//
-// **The four checkers already existed.** #118 built `conflicts()` and `shadows()` here in
-// bindings.ts, `editorOverlaps()` in editorkeys.ts and `menuOverlaps()` in menukeys.ts —
-// pure functions over a table, shaped for exactly this and until now run only as a CI
-// gate over the shipped defaults. `chordProblems` is what finally asks them a *question*:
-// it lays the candidate chord over the current table and asks all four what that table
-// would be like, so the answer a user gets is the same answer the gate would give.
-//
-// The two tiers are theirs, not new policy. `conflicts()` is refusal — two commands
-// answering to one keystroke in one scope, where which one runs depends on the order of
-// branches in main.ts's handler, which is not a contract anyone can read. `menuOverlaps()`
-// is refusal for a blunter reason: AppKit dispatches a menu accelerator before the key
-// window's responder chain, so a B2 chord spelled ⌘W is not a chord that loses a race, it
-// is a chord that never happens. `shadows()` and `editorOverlaps()` are advisory —
-// legal, frequently deliberate, and worth saying out loud.
+// `chordProblems` asks the four CI checkers (#118) about the candidate table, so the user
+// gets the gate's answer. `conflicts()` and `menuOverlaps()` refuse (AppKit runs a menu
+// accelerator before B2 sees the key); `shadows()` and `editorOverlaps()` only warn.
 import {
   type Binding,
   DEFAULT_BINDINGS,
@@ -36,11 +18,8 @@ import { editorOverlaps } from "./editorkeys.ts";
 import { MENU_CHORDS, menuOverlaps } from "./menukeys.ts";
 import type { MenuChord } from "./types.ts";
 
-/** The user's rebindings: command id → the chords that now fire it.
- *
- *  Sparse on purpose — an unrebound command has no entry, so "reset this chord" is a
- *  delete and "reset everything" is an empty object. There is no stored copy of a default
- *  to fall out of date with the table. */
+/** The user's rebindings: command id → the chords that now fire it. Sparse, so a reset is
+ *  a delete and no stored default can go stale. */
 export type Overrides = Readonly<Record<string, readonly string[]>>;
 
 const KEY = "b2:keymap";
@@ -53,12 +32,9 @@ export function isRebindable(b: Binding): boolean {
 // --- the algebra ---------------------------------------------------------------------
 
 /**
- * The defaults with the user's rebindings laid over them — the table `setActiveBindings`
- * installs, and the one every checker below reasons about.
- *
- * An override replaces `keys` and leaves `aliases` alone (`Binding.aliases` says why),
- * and an empty or absent entry means "unchanged", so a malformed store degrades to the
- * default keyboard rather than to no keyboard.
+ * The defaults with the user's rebindings laid over them. An override replaces `keys` and
+ * leaves `aliases` alone; an empty entry means "unchanged", so a malformed store degrades
+ * to the default keyboard.
  */
 export function applyOverrides(
   base: readonly Binding[] = DEFAULT_BINDINGS,
@@ -70,8 +46,7 @@ export function applyOverrides(
   });
 }
 
-/** The commands the user has moved, in the table's own order — what the panel marks as
- *  changed, and what "Reset all" has to have something to do. */
+/** The commands the user has moved, in the table's own order. */
 export function customized(
   base: readonly Binding[] = DEFAULT_BINDINGS,
   overrides: Overrides = {},
@@ -79,17 +54,9 @@ export function customized(
   return base.filter((b) => overrides[b.id] !== undefined);
 }
 
-/** Is this list simply what `id` already ships with?
- *
- *  The store has two ways in — the recorder and a hand-edited file — and this is the rule
- *  they have to agree on. `adoptOverrides` has always refused to *read* a restatement back
- *  (a "changed" badge over an unmoved chord is a lie, and "Reset all (1)" would offer to
- *  undo nothing); `withOverride` now refuses to *write* one, which is where it was getting
- *  in. Order counts: `keys[0]` is what the sheet leads with and what CodeMirror is handed
- *  (`chordFor`), so the same chords in another order really is a change.
- *
- *  Module-private: the two writers above are the only callers, and a rule the store
- *  enforces for itself is not a question its callers should be asking separately. */
+/** Is this list simply what `id` already ships with? Both ways into the store (the recorder
+ *  and a hand-edited file) refuse a restatement, so "changed" stays honest. Order counts:
+ *  `keys[0]` leads the sheet and is what CodeMirror gets. */
 function restatesDefault(
   base: readonly Binding[],
   id: string,
@@ -101,9 +68,8 @@ function restatesDefault(
   );
 }
 
-/** `overrides` with `id` bound to `chords`, or — for an empty list, or one that restates
- *  what the command ships with — reset to its default.
- *  Returns a new object; nothing here mutates its argument. */
+/** `overrides` with `id` bound to `chords`, or reset to default for an empty list or a
+ *  restatement. Returns a new object. */
 export function withOverride(
   overrides: Overrides,
   id: string,
@@ -129,13 +95,9 @@ const menuLabel = (menu: readonly MenuChord[], id: string): string =>
   menu.find((c) => c.id === id)?.label ?? id;
 
 /**
- * Everything the four checkers have to say about binding `spec` to `id`, given the
- * rebindings already in force. Empty means "nothing to report".
- *
- * Asked of the *candidate* table rather than the live one, which is the whole point: the
- * question is not "does the keyboard conflict today" but "would it, if this were saved".
- * Each checker is filtered to rows naming `id`, since the pre-existing shadows in the
- * shipped table are not this user's problem.
+ * Everything the four checkers say about binding `spec` to `id`, asked of the candidate
+ * table (as if saved). Filtered to rows naming `id`, since the shipped table's own shadows
+ * are not this user's problem.
  */
 export function chordProblems(
   id: string,
@@ -155,7 +117,7 @@ export function chordProblems(
   const shown = displayChord(spec);
   const labelOf = (other: string): string => findBinding(candidate, other)?.label ?? other;
 
-  // Refusal, tier one: the menu bar got there first, and it wins in every scope at once.
+  // Refuse: the menu bar wins in every scope.
   for (const o of menuOverlaps(candidate, menu)) {
     if (o.id !== id) continue;
     out.push({
@@ -163,7 +125,7 @@ export function chordProblems(
       message: `${shown} belongs to the menu bar (${menuLabel(menu, o.item)}). macOS runs it before B2 sees the key.`,
     });
   }
-  // Refusal, tier two: two commands, one keystroke, one scope.
+  // Refuse: two commands, one keystroke, one scope.
   for (const c of conflicts(candidate)) {
     if (c.a !== id && c.b !== id) continue;
     out.push({
@@ -185,8 +147,7 @@ export function chordProblems(
       });
     }
   }
-  // Advisory: the editor's own keyboard. Which side wins is install order and differs row
-  // by row (editorkeys.ts), so this names the overlap rather than predicting it.
+  // Advisory: which side wins differs row by row (editorkeys.ts), so name it, don't predict.
   for (const o of editorOverlaps(candidate)) {
     if (o.id !== id) continue;
     out.push({
@@ -194,9 +155,8 @@ export function chordProblems(
       message: `CodeMirror binds ${shown} while you're editing (${o.command}).`,
     });
   }
-  // Advisory: no modifier at all. Legal — `?` is a shipped default — but whether it fires
-  // mid-sentence depends on the guard beside its branch in main.ts's handler, which is
-  // exactly the thing this table deliberately doesn't model. So: say so, don't refuse.
+  // Advisory: no modifier. Legal (`?` ships), but whether it fires mid-sentence depends on
+  // a guard in main.ts's handler, which the table doesn't model.
   if (!chord.any && !chord.mod && !chord.ctrl && !chord.alt && chord.key.length === 1) {
     out.push({
       tier: "warn",
@@ -214,19 +174,10 @@ export function refused(problems: readonly ChordProblem[]): boolean {
 // --- persistence -----------------------------------------------------------------------
 
 /**
- * A stored blob, read defensively into overrides B2 will actually honour.
- *
- * Two passes, and the second is the one that matters. The first drops what is malformed
- * *in itself* — an unknown command id, a chord that no longer parses, an entry on a
- * `fixed` binding, one that merely restates the default. The second folds the survivors
- * in **one at a time**, keeping an entry only if the table it produces is still free of
- * refusals. That is what makes `conflicts(activeBindings())` empty by construction rather
- * than by trusting the recorder: the recorder refuses a bad chord at record time, but the
- * store is a file a human can edit, and a keyboard where two commands answer to ⌘F is not
- * a keyboard anyone can use to fix itself.
- *
- * `dropped` names what didn't survive, so the caller can say so instead of silently
- * handing back a preference the user thought they had.
+ * A stored blob, read defensively into overrides B2 will honour. First drops malformed
+ * entries (unknown id, unparseable chord, `fixed` binding), then folds survivors in one at a
+ * time, keeping each only if the table stays refusal-free. The store is hand-editable, so
+ * this is what keeps `conflicts(activeBindings())` empty. `dropped` names what was lost.
  */
 export function adoptOverrides(
   raw: unknown,
@@ -252,9 +203,7 @@ export function adoptOverrides(
       dropped.push(id);
       continue;
     }
-    // Restating the default is not an override — dropping it here is what keeps "changed"
-    // an honest badge and "Reset all" a real no-op when there is nothing to reset. Not a
-    // loss, so not `dropped`; `withOverride` holds the same line on the recorder's side.
+    // Not an override, and not a loss, so not `dropped`.
     if (restatesDefault(base, id, chords)) continue;
     wanted.push([id, chords]);
   }
@@ -295,8 +244,7 @@ export function loadOverrides(
   return adoptOverrides(raw, base, menu);
 }
 
-/** Persist the keyboard. An empty set removes the entry rather than storing `{}`, so a
- *  user who resets everything leaves no trace behind to go stale against a future table. */
+/** Persist the keyboard. An empty set removes the entry rather than storing `{}`. */
 export function saveOverrides(overrides: Overrides): void {
   try {
     if (Object.keys(overrides).length === 0) localStorage.removeItem(KEY);

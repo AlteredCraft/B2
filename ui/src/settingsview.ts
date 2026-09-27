@@ -31,11 +31,8 @@ function formatDuration(ms: number): string {
   return `${s}s`;
 }
 
-// The per-model embedding-time ledger (b2-desktop stats.rs): a running total per model,
-// summed across every reindex since you selected it, so a model swap can be judged on
-// real speed. Switching to a model restarts its total (the swap re-embeds the whole
-// corpus), so each row covers only that model's current stint — the copy says so. One row
-// per model that has history: total time, chunks, and derived throughput, current marked.
+// The per-model embedding-time ledger (b2-desktop stats.rs), so a model swap can be judged
+// on real speed. One row per model with history.
 function embedStatsHtml(state: AppState): string {
   const byModel = new Map(state.embedStats.map((s) => [s.model, s]));
   // Order by the picker so rows are stable; only models with recorded time appear.
@@ -67,20 +64,11 @@ function embedStatsHtml(state: AppState): string {
 
 // --- Settings (⌘,) --------------------------------------------------------------
 //
-// A tabbed surface over a rail (settingstabs.ts) — General, Index, Embedding, Chat,
-// Keyboard — rather than the one scrolling column it grew out of, and since it outgrew a
-// floating box too it takes the whole window (`settingsScreenHtml` below). It keeps the
-// link modal's `.field` chrome, so a section is written as a form and nothing about the
-// surface it lands on is a section's business.
-//
-// **Every control in here carries a stable `id`**, and that is load-bearing, not tidy:
-// `#modal-root` is swapped wholesale on a repaint, so main.ts's `captureModalFocus` can
-// only put the keyboard back on what it was on by re-finding it by id after the swap
-// (crates/b2-desktop/CLAUDE.md, "Two things that bite"). A settings control with no id
-// is a control that ejects the keyboard to `<body>` the moment it's used.
+// Every control in here needs a stable `id`: `#modal-root` is swapped wholesale on a
+// repaint, and `captureModalFocus` re-finds the focused control by id afterwards
+// (crates/b2-desktop/CLAUDE.md, "Two things that bite"). Without one, focus drops to <body>.
 
-/** The panel for one section. Split per tab rather than one long builder so a new
- *  section is a `case` plus a builder, and the others can't shift under it. */
+/** The panel for one section. */
 function settingsPanelHtml(state: AppState): string {
   switch (state.settingsTab) {
     case "general":
@@ -96,18 +84,10 @@ function settingsPanelHtml(state: AppState): string {
   }
 }
 
-// Chat — which model answers your questions, and where it runs. The spec's two named
-// configurations (GH #151), and they are one setting rather than two: **Local** is a
-// localhost endpoint (Ollama's, unless pointed elsewhere) and **Cloud models** is a
-// provider's, so the segmented control below is a *view* of the URL, not a second piece
-// of state to keep in step with it.
-//
-// The privacy copy sits beside the Cloud fields deliberately: **the consent moment is the
-// configuration moment** (invariant M5 — note content never leaves the machine unbidden),
-// informed where the decision is made rather than by a popup later.
-//
-// None of this is vault or index state. Changing the chat model costs no reindex — the
-// contrast with M2 that makes "change models at any time" true by construction.
+// Chat — which model answers, and where it runs (GH #151). Local vs Cloud is a view of the
+// URL, not a second piece of state. The privacy copy sits beside the Cloud fields because
+// the consent moment is the configuration moment (M5). No vault or index state, so
+// changing it costs no reindex (contrast M2).
 function chatPanelHtml(state: AppState): string {
   const setup = state.chatSetup;
   const cloud = state.chatCloud;
@@ -121,8 +101,7 @@ function chatPanelHtml(state: AppState): string {
     ],
     cloud ? "cloud" : "local",
   );
-  // The status line, in the setup card's own words when there's a problem — the same
-  // sentence the chat pane shows, from the same probe.
+  // The same sentence the chat pane shows, from the same probe.
   const status = ((): string => {
     if (!setup) return `<p class="settings-detail muted">Checking the model server…</p>`;
     if (setup.state === "ready")
@@ -153,16 +132,9 @@ function chatPanelHtml(state: AppState): string {
 }
 
 /**
- * **Tool calls per reply** — the cap on what one model reply may ask B2 to run
- * (`LlmConfig::max_tool_calls`). A safety bound, not a tuning knob, and the copy says so:
- * a reply past it is stopped with an error, and the only reason to raise it is a model
- * that really does ask for that many. Painted from the host's own numbers (`tool_calls`),
- * saved with the rest of the panel by *Save and test*, validated by chat.ts's
- * `toolCapInput`.
- *
- * `type="text"` with a numeric keypad rather than `type="number"`: `captureModalFocus`
- * re-selects the focused field's caret across a repaint, and a number input throws on
- * `setSelectionRange`.
+ * Tool calls per reply (`LlmConfig::max_tool_calls`): a safety bound, validated by chat.ts's
+ * `toolCapInput`. `type="text"`, not `number`: `captureModalFocus` restores the caret across
+ * a repaint, and a number input throws on `setSelectionRange`.
  */
 function toolCapFieldHtml(setup: ChatSetup | null): string {
   if (!setup) return "";
@@ -178,37 +150,17 @@ function toolCapFieldHtml(setup: ChatSetup | null): string {
 }
 
 /**
- * The **Model** field — a picker over what the daemon actually has, or a text box.
- *
- * Two shapes for one value, chosen by whether there is an inventory to pick from. A
- * typed model name is the commonest local-setup mistake there is (the daemon is up, the
- * name is just not one it has), and the fix was previously to read it off a card *after*
- * getting it wrong. When `/api/tags` answered, the list of installed models is simply
- * what the field offers.
- *
- * The text box stays reachable on purpose, and is not a fallback: a list of *installed*
- * models structurally cannot contain the one you are pulling right now, and naming it
- * before the pull finishes is a real thing to do. So the picker carries a way out
- * (`chatModelTyped`), and the way back is beside the box.
- *
- * Both shapes carry the **same id**, because the id is the contract: `saveChatConfig`
- * reads `.value` off it (a `<select>` and an `<input>` agree on that), and
- * `captureModalFocus` puts the keyboard back on it by id after the repaint.
+ * The Model field: a picker over what the daemon has installed, or a text box when there is
+ * no inventory or the user is naming a model still being pulled (`chatModelTyped`). Both
+ * shapes share one id: `saveChatConfig` reads `.value` off it, and focus is restored by it.
  */
 function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
   const ollama = setup?.ollama;
-  // A **Local** control by definition: `/api/tags` is one daemon's inventory, which
-  // says nothing about what a cloud provider serves. `chatCloud` and not `setup.cloud`
-  // because the view flag turns over the instant *Cloud models* is pressed, while the
-  // setup is whatever the last probe found — and nothing re-probes on that press (the
-  // URL field is deliberately cleared, there being no default provider). Reading the
-  // stale answer would leave a picker of this machine's models under an empty cloud
-  // endpoint until Save and test, with *Type a model name* standing between the user
-  // and the field they came to fill in.
+  // Local only. `chatCloud`, not `setup.cloud`: the view flag flips the instant Cloud is
+  // pressed, while `setup` is the last probe's stale answer (nothing re-probes on that press).
   const installed = !state.chatCloud && ollama?.running ? ollama.installed : [];
   const current = setup?.model ?? "";
   if (state.chatModelTyped || installed.length === 0) {
-    // The way back, offered only when there is something to go back *to*.
     const pick =
       installed.length > 0
         ? `<div class="settings-action"><button type="button" class="btn small"
@@ -220,9 +172,8 @@ function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
       </label>
       ${pick}`;
   }
-  // The configured model leads the list when the daemon doesn't have it — dropping it
-  // would silently re-point the configuration at whatever happened to be first, as a side
-  // effect of *looking* at the field.
+  // Keep the configured model even if not installed, or looking at the field would silently
+  // re-point the configuration at the first option.
   const missing =
     current !== "" && !installed.some((m) => m.name === current)
       ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(
@@ -245,13 +196,8 @@ function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
       <span class="muted">For one you haven’t pulled yet.</span></div>`;
 }
 
-// The **Local** configuration's whole note: nothing leaves, so there is no key field and
-// no privacy warning to give — only the fact that makes the difference legible.
-//
-// Plus the one command that changes what the picker above can offer. Spelled with the
-// suggested model when this machine's memory could be read and as a `<model-name>` shape
-// when it couldn't — either way beside the quickstart, which is the page carrying both
-// the install and the pull for someone who has neither.
+// The Local configuration's note: nothing leaves, so no key field and no privacy warning.
+// Plus the pull command, with the suggested model when memory could be read.
 function localNoteHtml(setup: ChatSetup | null): string {
   const suggested = setup?.ollama?.suggested?.model;
   return `<p class="settings-note">Local models keep everything on this machine — your
@@ -264,24 +210,10 @@ function localNoteHtml(setup: ChatSetup | null): string {
         has the whole sequence.</p>`;
 }
 
-// The **Cloud models** key field, and the sentence saying where that key lives.
-//
-// Four states, because a user has to be told *before* they wonder (GH #176). B2 remembers
-// a key in the macOS Keychain — encrypted at rest, and there next launch — but two of the
-// four are cases where what they just did isn't quite what they'd assume:
-//
-//   - `environment` — `B2_LLM_API_KEY` overrides anything saved here, so a key typed into
-//     this field is stored and *not used*. Saying so is the difference between a documented
-//     precedence and a field that silently does nothing.
-//   - `session` — the Keychain refused, so the key works now and is gone at quit. The
-//     degrade is deliberate (chat must not break on a locked keychain) but it is not
-//     something to discover at the next launch.
-//
-// The field itself always paints empty: a password input that echoed its secret back would
-// be a worse idea than not showing it at all. Which is what makes an empty save mean
-// "keep", and leaves Remove as the only way back to a keyless configuration — without it a
-// key could never be removed, and repointing the endpoint would send the old provider's
-// token to the new one.
+// The Cloud models key field, and where that key lives (`ApiKeySource`, GH #176). Under
+// `environment` a key typed here is stored but not used; under `session` it is gone at quit.
+// The field always paints empty, so an empty save means "keep" and Remove is the only way
+// back to no key (else repointing the endpoint would send the old token to the new one).
 function cloudKeyHtml(setup: ChatSetup | null): string {
   const source = setup?.api_key_source ?? "none";
   const placeholder =
@@ -302,11 +234,7 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
     session: `<p class="settings-detail">Kept for this session only: B2 couldn’t save it to
         your Keychain, so it will be gone when you quit. Saving again will retry.</p>`,
   }[source];
-  // The closing sentence is where the key *lives*, and it has to agree with `where` above.
-  // Under `session` it cannot be the general "B2 saves it in your Keychain": this key is
-  // precisely the one B2 could not save, and a paragraph that says both is worse than
-  // either — a user reading "couldn't save it" and then "B2 saves the key" has no way to
-  // know which sentence is about them.
+  // Must agree with `where`: under `session`, this is the key B2 could not save.
   const storage =
     source === "session"
       ? `This key was <strong>not</strong> saved — B2 normally keeps it in your macOS Keychain,
@@ -314,9 +242,7 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
          that persists regardless.`
       : `B2 saves the key in your macOS Keychain, never in a plain file — set
          <code>B2_LLM_API_KEY</code> in your environment to override it.`;
-  // Offered whenever there is a key to remove. Under `environment` it still has work to
-  // do — it clears the one B2 remembers — but it cannot touch a variable the app doesn't
-  // own, so the label says which key it means.
+  // Under `environment` it clears only the stored key, so the copy says which key it means.
   const remove =
     source === "none"
       ? ""
@@ -324,11 +250,8 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
            title="Forget the key B2 has saved">Remove key</button>
          <span class="muted">Removes the key B2 saved. A key set in <code>B2_LLM_API_KEY</code>
          is your environment's, and stays.</span></div>`;
-  // Where to *get* an endpoint, since B2 ships no default cloud provider and never will
-  // (picking one is the explicit act M5 is about — see `setChatMode`). Ollama's hosted
-  // models are named because they are the one provider B2 already knows how to talk to
-  // without a second thought: the same `/v1` surface, the same model names as the local
-  // configuration. A link, though, not a pre-filled URL.
+  // B2 ships no default cloud provider: picking one is the explicit act M5 is about (see
+  // `setChatMode`). So a link, not a pre-filled URL.
   const whereToGet = `<p class="settings-detail muted">Any OpenAI-compatible provider works —
         put its <code>/v1</code> URL above. Ollama’s hosted models are one:
         <a href="${OLLAMA_CLOUD_URL}">Ollama cloud</a>.</p>`;
@@ -346,12 +269,8 @@ function cloudKeyHtml(setup: ChatSetup | null): string {
       </p>`;
 }
 
-// General — app-wide preferences that belong to no subsystem. Appearance is the only one
-// today; this is the tab a vault or editor preference lands in rather than being wedged
-// beside the embedding model, which it has nothing to do with.
+// General — app-wide preferences that belong to no subsystem.
 function generalPanelHtml(state: AppState): string {
-  // Appearance: System (follow the OS) / Light / Dark. A segmented control rather than a
-  // <select> so the three mutually-exclusive choices read at a glance.
   const themes = segmentedHtml(
     "Appearance",
     "settings-theme-",
@@ -371,28 +290,12 @@ function generalPanelHtml(state: AppState): string {
       </div>`;
 }
 
-// Index — the vault's projection into SQLite (index-engine.md §1), and the one button that
-// rebuilds it by hand.
-//
-// Why the button is *here* and not in the top bar it shipped in: indexing is automatic now.
-// The vault is brought up to date the moment it opens (#25, `autoIndexOnOpen`), the fs-watch
-// pulse re-projects every external save, and a cancelled run heals off the DB-derived
-// pending set on the next pass. A manual Reindex is therefore the exception — the thing you
-// reach for after a model swap or a bulk edit outside B2 — and permanent top-bar chrome for
-// an exception trains the eye to ignore the bar. It belongs where you go *looking* for it,
-// next to the coverage numbers that say whether you need it.
-//
-// The *progress* meter stays in the top bar beside the vault it is indexing (main.ts
-// `buildShell`): a run is watchable — and cancellable — with Settings shut, which is the
-// whole point of the app staying usable while it runs. This panel paints a second one while
-// a run is live, which it did not need to when Settings was a box floating over that bar —
-// it takes the window now, so pointing at the top bar would be pointing at something the
-// human cannot see. Two meters, but not two truths: `paintReindex` writes the same values
-// into every meter on screen, and only one of them is ever visible.
+// Index — the vault's projection (index-engine.md §1), and the manual Reindex. Indexing is
+// automatic (#25), so the button lives here, beside the coverage that says whether you
+// need it, rather than in the top bar.
 function indexPanelHtml(state: AppState): string {
   const disabled = reindexDisabled(state);
-  // The same honesty as the search caveat (#26): "indexed" and "embedded" are two different
-  // states, and a projected-but-unembedded vault must never read as finished.
+  // "Indexed" and "embedded" differ: an unembedded vault must never read as finished (#26).
   const summary = ((): string => {
     if (state.vaultRoot === null) return "No vault is open.";
     const c = coverage(state);
@@ -404,13 +307,8 @@ function indexPanelHtml(state: AppState): string {
       ? `${notes} indexed, all embedded.`
       : `${notes} indexed · ${c.n}/${c.m} embedded.`;
   })();
-  // While a run is live the panel carries the meter itself. It used to point at the top
-  // bar's ("Progress and Cancel are in the top bar"), which was true while Settings was a
-  // box floating over the bar and became a lie the moment it took the window. Same markup
-  // and the same painter as the shell's (`paintReindex` walks every `.reindex-progress` on
-  // screen), so the two can't disagree about a run — only one of them is ever visible.
-  // The Cancel carries an id for the reason every control in here does: the surface
-  // repaints per progress batch, and focus is put back by id.
+  // Settings covers the top bar's meter, so it paints its own; `paintReindex` writes every
+  // `.reindex-progress` on screen, so the two can't disagree.
   const running = state.reindexing
     ? reindexMeterHtml({ hidden: false, indeterminate: true, cancelId: "settings-cancel-reindex" })
     : `<span class="muted">Rarely needed — B2 indexes on open and as you save.</span>`;
@@ -427,9 +325,8 @@ function indexPanelHtml(state: AppState): string {
         embedding model, or after editing the vault with B2 closed.</p>`;
 }
 
-/** Whether the Reindex button is refused, and what it reads — pure, so the panel's paint
- *  and main.ts's targeted repaint (`paintReindex`, which runs on every streamed progress
- *  batch without a full render) can't drift apart on either. */
+/** Whether the Reindex button is refused. Shared with main.ts's `paintReindex` so the two
+ *  can't drift. */
 export function reindexDisabled(state: AppState): boolean {
   return state.loading || state.reindexing || state.vaultRoot === null;
 }
@@ -438,10 +335,7 @@ export function reindexLabel(state: AppState): string {
   return state.reindexing ? "Indexing…" : "Reindex";
 }
 
-// Embedding — everything about the model: which one, where its files are, what device it
-// runs on, whether it's downloaded, and how long it takes. The time ledger lives here
-// rather than in a diagnostics tab of its own because its whole purpose is judging a
-// model *swap*, which is the decision made two controls above it.
+// Embedding — which model, its device, download state, files and time ledger.
 function embeddingPanelHtml(state: AppState): string {
   const models = state.models;
   const current = models.find((m) => m.current) ?? models[0];
@@ -458,16 +352,14 @@ function embeddingPanelHtml(state: AppState): string {
         current.installed ? "installed" : "not installed"
       }</p>`
     : `<p class="settings-detail muted">Loading models…</p>`;
-  // Subtle badge: which compute device the build embeds on (GH #40). Metal gets the accent
-  // pill + a ⚡ cue; CPU is a neutral pill. Hidden until the async read resolves.
+  // Which compute device the build embeds on (GH #40). Hidden until the async read resolves.
   const device = state.embedDevice;
   const deviceRow = device
     ? `<p class="settings-device">Embedding on <span class="settings-badge${
         device === "Metal" ? " settings-badge-metal" : ""
       }">${device === "Metal" ? "⚡ " : ""}${escapeHtml(device)}</span></p>`
     : "";
-  // In-app `b2 init`: a Download button appears when the selected model isn't installed,
-  // and a spinner while it downloads (network-bound, can take minutes).
+  // In-app `b2 init`, when the selected model isn't installed.
   const provisionRow =
     current && !current.installed
       ? state.provisioning
@@ -499,36 +391,13 @@ function embeddingPanelHtml(state: AppState): string {
 }
 
 /**
- * Settings: a vertical rail of sections beside the active panel, taking **the whole
- * window** rather than floating in a box.
+ * Settings: a rail of sections beside the active panel, covering the whole window. Still
+ * modal (dialog role, Tab trap, Escape), but with no backdrop: the ways out are Done and Esc.
  *
- * It was a floating dialog until it stopped fitting in one. Five sections, and the two
- * ends of the range don't want the same rectangle: Chat is a provider configuration with
- * a setup card and a page of privacy copy, Keyboard is forty rows of chord table, and
- * General is a three-button theme switch. A fixed box sized for the long ones leaves the
- * short ones mostly empty and *still* puts the rest below the fold. A surface that big
- * has stopped being an interruption you dismiss and become a place you go, so it says
- * so — it covers the app, and the panel gets the whole remaining rectangle.
- *
- * Modal semantics are unchanged (`role="dialog"` + `aria-modal`, the ⇥ trap, Escape, the
- * focus return in main.ts): the app is still underneath, and Done is still where you came
- * from. What goes with the box is the **backdrop** — there is no "outside" left to click,
- * so the ways out are Done and Escape, and main.ts's click handler dropped that branch to
- * match. The three rows are fixed header / scrolling panel / fixed footer, which is what
- * keeps Done and the key hints on screen no matter how long a section runs.
- *
- * DOM order is load-bearing: rail, then panel, then Done. `focusIntoOverlay` opens
- * Settings on `overlayFocusables()[0]` and documents that as "the selected tab", which is
- * true only while nothing focusable precedes the rail — hence a header that carries the
- * title alone and a Done button that stays in the footer.
- *
- * The rail is the ARIA `tabs` pattern (settingstabs.ts owns the moves): `role="tablist"`,
- * one `role="tab"` per section, and a **roving `tabindex`** so the whole rail is a single
- * Tab stop — a settings surface whose Tab sequence starts with N section buttons is one
- * you Tab *past*, not through. The panel carries `tabindex="0"` on purpose even when it
- * holds its own controls: it is the scroll container, and a region you can't focus is a
- * region you can't scroll without the mouse (the Keyboard section is a page of table and
- * nothing else, so this is the only way to read past the fold).
+ * DOM order matters: rail, panel, Done. `focusIntoOverlay` opens on the first focusable,
+ * which must be the selected tab. The rail is the ARIA `tabs` pattern with a roving
+ * `tabindex` (settingstabs.ts). The panel has `tabindex="0"` because it is the scroll
+ * container, and the keyboard can't scroll a region it can't focus.
  */
 export function settingsScreenHtml(state: AppState): string {
   const active = state.settingsTab;
@@ -538,11 +407,7 @@ export function settingsScreenHtml(state: AppState): string {
               aria-selected="${on}" aria-controls="settings-panel" tabindex="${on ? "0" : "-1"}"
               data-settings-tab="${t.id}" title="${escapeHtml(t.hint)}">${escapeHtml(t.label)}</button>`;
   }).join("");
-  // `.settings-measure` caps the line length inside a panel that is now as wide as the
-  // window: prose set across 1600px is prose nobody reads back to the start of. Keyboard
-  // is the one section that isn't prose — a two-column reference read in columns — so it
-  // takes the wider measure, and the choice is here rather than in the panel builder
-  // because it is a fact about the *surface*, not about what the section says.
+  // Caps prose line length in a window-wide panel; the Keyboard table takes a wider measure.
   const measure =
     active === "keyboard" ? "settings-measure settings-measure-wide" : "settings-measure";
   return `<div class="settings-screen" role="dialog" aria-modal="true" aria-label="Settings">

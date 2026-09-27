@@ -1,11 +1,7 @@
 // Find-in-note's editor engine (⌘F while editing): the match state as a CodeMirror
-// StateField, so the highlights re-derive on every doc change — typing with the bar open
-// keeps them honest, with no listener → dispatch round-trip.
-//
-// findbar.ts owns the matching and stepping; this owns only how that state lives in an
-// EditorState and paints as decorations. main.ts dispatches `setFindEffect` and reads the
-// field back to mirror it into the bar. No DOM, so node tests it on real EditorStates
-// (`npm test`), the droplink.test.ts rig.
+// StateField, so highlights re-derive on every doc change without a dispatch round-trip.
+// findbar.ts owns matching and stepping; main.ts dispatches `setFindEffect` and mirrors
+// the field into the bar.
 
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
