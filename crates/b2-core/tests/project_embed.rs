@@ -411,6 +411,136 @@ fn embed_status_reports_the_coverage_fraction() {
     );
 }
 
+#[test]
+fn reopening_and_projecting_reconciles_offline_delta_without_reembedding_unchanged_notes() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vault");
+    golden_vault_copy(&root);
+    write_note(&root, "deleted.md", "A note removed while B2 is closed.");
+    let vault = Vault::open(&root).unwrap();
+    vault.reindex().unwrap();
+    drop(vault);
+
+    fs::write(
+        root.join("concepts/memory.md"),
+        "Offline revision: axolotl.\n",
+    )
+    .unwrap();
+    write_note(&root, "new.md", "Offline addition: narwhal.");
+    fs::remove_file(root.join("deleted.md")).unwrap();
+
+    let vault = Vault::open(&root).unwrap();
+    let stale = vault.embed_status().unwrap();
+    assert_eq!(
+        (stale.embedded, stale.total),
+        (3, 3),
+        "coverage cannot detect disk edits"
+    );
+    let projected = vault.project(false).unwrap();
+    assert_eq!((projected.indexed, projected.notes_pruned), (3, 1));
+    assert!(vault
+        .search("axolotl", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.path == "concepts/memory.md" && hit.snippet.contains("axolotl")));
+    assert!(vault
+        .search("narwhal", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.path == "new.md" && hit.snippet.contains("narwhal")));
+    assert!(vault
+        .list_notes()
+        .unwrap()
+        .iter()
+        .all(|n| n.path != "deleted.md"));
+    let pending = vault.embed_status().unwrap();
+    assert_eq!((pending.embedded, pending.total), (1, 3));
+
+    let embedded = vault.embed(&mut |_| ControlFlow::Continue(())).unwrap();
+    assert_eq!(
+        embedded.embedded, 2,
+        "only the edited and added note need vectors"
+    );
+    vault.project(false).unwrap();
+    assert_eq!(
+        vault
+            .embed(&mut |_| ControlFlow::Continue(()))
+            .unwrap()
+            .embedded,
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("concepts/memory.md")).unwrap(),
+        "Offline revision: axolotl.\n"
+    );
+}
+
+#[test]
+fn projection_restores_discovery_for_copied_notes_with_cached_vectors() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = opened_vault(tmp.path());
+    vault.reindex().unwrap();
+    fs::copy(root.join("concepts/memory.md"), root.join("copy.md")).unwrap();
+
+    vault.project(false).unwrap();
+    let status = vault.embed_status().unwrap();
+    assert_eq!(
+        (status.embedded, status.total),
+        (3, 3),
+        "all vectors are reusable"
+    );
+    let conn = index_conn(&root);
+    assert_eq!(
+        count(&conn, "note_centroids"),
+        3,
+        "complete coverage must also be discoverable"
+    );
+    assert!(vault
+        .similar("notes/spaced-repetition.md", 10)
+        .unwrap()
+        .iter()
+        .any(|n| n.path == "copy.md"));
+}
+
+#[test]
+fn editor_undo_restores_the_centroid_from_cached_vectors_without_embedding() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault, root) = opened_vault(tmp.path());
+    vault.reindex().unwrap();
+    let conn = index_conn(&root);
+    let original = vault.read("concepts/memory.md").unwrap();
+    let centroid = || -> Vec<u8> {
+        conn.query_row(
+            "SELECT centroid FROM note_centroids WHERE note_path = 'concepts/memory.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let before = centroid();
+    vault
+        .write(
+            "concepts/memory.md",
+            "Different body awaiting vectors.\n",
+            &original.revision,
+        )
+        .unwrap();
+    assert_eq!(
+        count(&conn, "note_centroids"),
+        1,
+        "new text needs embedding"
+    );
+    let edited = vault.read("concepts/memory.md").unwrap();
+    vault
+        .write("concepts/memory.md", &original.body, &edited.revision)
+        .unwrap();
+    assert_eq!(
+        centroid(),
+        before,
+        "undo restores the same summary without running the embedder"
+    );
+}
+
 /// A note with no body has no chunks, so it counts as embedded and forecasts no work.
 /// Otherwise the fraction never reaches M/M, and every surface keyed on
 /// `embedded < total` (caveats, auto-embed passes) stays stuck.

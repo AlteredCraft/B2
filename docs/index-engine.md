@@ -140,6 +140,16 @@ keyword-searchable (search degrades to BM25-only). The desktop uses exactly this
 paint the tree, embed in the background. S2 is untouched: a projected-but-unembedded index is
 a smaller projection, never a wrong one.
 
+The desktop projects on every vault open, including startup: stored embedding coverage
+cannot reveal files added, edited or deleted while the app was closed. After projection,
+coverage gates the automatic embed pass. While running, filesystem pulses and saves are
+debounced; requests arriving during an index run remain pending for a trailing pass,
+because an embed operates on the pending chunks it read at its start.
+
+Projection also restores missing centroids for notes whose vectors are already cached
+(copies, renames or an editor undo), without a model call. Complete vector coverage must
+not leave those notes waiting for an embed pass just to become discoverable.
+
 **The incremental skip: embed only what changed.** A full re-embed is the one genuinely slow
 step (a real transformer, on CPU), so a routine reindex must not redo finished work. Per
 note: if the body is unchanged and its chunks already all have vectors, reuse them and embed

@@ -1,6 +1,6 @@
 // The vault-changed reconcile sequencing (reconcile.ts), over injected thunks. Pins the
 // pulse re-deriving as much as it invalidates: an external add must be projected before
-// the re-list (#65), and the vectors that projection clears must be re-embedded.
+// the re-list (#65), and new chunk text must be embedded afterwards.
 import { reconcileIndex } from "./reconcile.ts";
 
 let passed = 0;
@@ -97,7 +97,7 @@ await check("a failed list propagates (callers already own that error path)", as
   assert(threw, "the list thunk's error contract (loadNotes' toast-and-false) stays the caller's");
 });
 
-// --- the vector heal: the projection clears what only an embed can put back ---------
+// --- the vector heal: new chunk text needs an embed --------------------------------
 
 await check("schedules the trailing embed when the projection left vectors owed", async () => {
   const calls: string[] = [];
@@ -120,7 +120,7 @@ await check("schedules the trailing embed when the projection left vectors owed"
   );
   assert(
     calls.join(",") === "project,list,pending?,heal",
-    `an externally edited note's vectors die in the projection and only the embed puts them back (got: ${calls.join(",")})`,
+    `an externally edited note's new chunk text needs an embed (got: ${calls.join(",")})`,
   );
 });
 
