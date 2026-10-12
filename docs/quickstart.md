@@ -400,11 +400,12 @@ Metal produce different vectors, so switching re-embeds the vault once on the ne
 
 What the window adds over the terminal:
 
-- **You never run reindex.** It indexes the vault on open, and a native fs-watch keeps up
-  with edits made outside the app (an external editor, a `git pull`), re-projecting and
-  re-embedding what changed. Projection and embedding are decoupled, so a cold vault is
-  browsable and keyword-searchable in seconds while the vectors stream in behind. A manual
-  reindex is still there in Settings → Index, with live progress and a Cancel.
+- **Automatic indexing.** Every vault open scans for offline additions, edits and deletions,
+  even when the previous index was fully embedded. While B2 runs, the filesystem watcher
+  coalesces external changes after 300 ms of quiet; in-app edits save after one idle second.
+  Embedding follows after two quiet seconds, with changes during indexing queued for a
+  follow-up pass. Keyword search works as soon as projection finishes, while missing vectors
+  fill in the background. Settings → Index offers a manual Reindex, live progress and Cancel.
 - **Discovery sits next to what you're reading.** The similar-but-unlinked notes are a pane,
   not a command you remember to run: always the ranked nearest, with a strength band grading
   each candidate within the list where a statistic exists (a vault under a dozen candidates

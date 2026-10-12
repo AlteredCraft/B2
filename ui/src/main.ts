@@ -2662,6 +2662,9 @@ function endIndexRun(): void {
   state.reindexProgress = null;
   state.reindexCancelling = false;
   render();
+  // A watch pulse during this run may describe files its projection never saw.
+  // Keep one trailing reconciliation instead of assuming embedding covered them.
+  if (reconcilePending) void drainVaultChanges();
 }
 
 /** After a run: re-read the open note (unless an editor holds it, where a fresh revision
@@ -2729,32 +2732,30 @@ async function doReindex(): Promise<void> {
   }
 }
 
-// Auto-index on open (#25), driven by `VaultInfo`'s coverage (#26):
-//   • notesTotal === 0        → never projected: project, then embed.
-//   • notesEmbedded < total   → embedding unfinished: fill the pending vectors (§7.2).
-//   • embedded === total (>0) → complete: nothing to do.
-// Embeds only with the real model installed. Silent (meter and Cancel only), with
-// doReindex's vault-switch guards (spec §6).
+/** Judge automatic embedding only after refreshing coverage for this vault. */
+function canAutoEmbed(startedRoot: string): boolean {
+  return (
+    state.vaultRoot === startedRoot &&
+    state.semantic &&
+    !state.reindexCancelling &&
+    state.notesEmbedded < state.notesTotal
+  );
+}
+
+// Coverage describes the cached index, so every open must first reconcile disk.
+// Unchanged chunks/vectors survive; only the resulting pending set needs embedding.
 async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
-  if (state.reindexing || state.vaultRoot === null) return; // a run is live, or no vault
-  const projected = state.notesTotal > 0;
-  if (projected && state.notesEmbedded >= state.notesTotal) return; // index already complete
-  const needsProject = !projected;
-  // Without a model, only a never-projected vault has work (project is model-free).
-  if (!needsProject && !state.semantic) return;
+  if (state.reindexing || startedRoot === null || state.vaultRoot !== startedRoot) return;
 
   beginIndexRun();
   render();
   try {
-    if (needsProject) {
-      await api.project();
-      if (state.vaultRoot !== startedRoot) return; // a switch took over — it owns the UI
-      await loadNotes(); // the tree paints HERE; keyword search is live
-      await refreshEmbedStatus(startedRoot); // caveat reads "keyword-only for now (0/M)"
-      render();
-    }
-    // Embed only with a model, no pending Cancel, and no vault switch.
-    if (state.vaultRoot !== startedRoot || !state.semantic || state.reindexCancelling) return;
+    await api.project();
+    if (state.vaultRoot !== startedRoot) return; // a switch took over — it owns the UI
+    await loadNotes(); // keyword search is live, even without a model
+    await refreshEmbedStatus(startedRoot);
+    render();
+    if (!canAutoEmbed(startedRoot)) return;
     const r = await embedWithProgress(startedRoot);
     if (state.vaultRoot !== startedRoot) return;
     // A cancel we didn't initiate is a vault switch (see doReindex).
@@ -2774,6 +2775,13 @@ async function autoIndexOnOpen(startedRoot: string | null): Promise<void> {
 async function cancelReindex(): Promise<void> {
   if (!state.reindexing || state.reindexCancelling) return;
   state.reindexCancelling = true;
+  // Drain any queued disk projection, but don't let pre-cancel requests restart the
+  // embedding the user just stopped. A subsequent save or watch pulse can request it.
+  reconcileEmbedPending = false;
+  if (embedTimer !== undefined) {
+    clearTimeout(embedTimer);
+    embedTimer = undefined;
+  }
   paintReindex();
   try {
     await api.cancelReindex();
@@ -3044,22 +3052,27 @@ function scheduleTrailingEmbed(): void {
   if (embedTimer !== undefined) clearTimeout(embedTimer);
   embedTimer = window.setTimeout(() => {
     embedTimer = undefined;
+    // An embed snapshots its pending chunks at the start. A save or disk projection
+    // during it needs another pass; don't lose that request or replace indexingRun
+    // with a no-op promise (vault switching waits on the real run).
+    if (inFlight || state.reindexing || reconcileInFlight) {
+      scheduleTrailingEmbed();
+      return;
+    }
     trackIndexing(runTrailingEmbed());
   }, TRAILING_EMBED_MS);
 }
 
 async function runTrailingEmbed(): Promise<void> {
-  if (inFlight) {
-    scheduleTrailingEmbed(); // the chain hasn't settled — come back after it has
-    return;
-  }
-  // A live run covers our note; the pending set heals on any later run (split §7.2).
-  if (state.reindexing || state.vaultRoot === null) return;
+  if (state.vaultRoot === null) return;
   const startedRoot = state.vaultRoot;
   beginIndexRun();
   paintReindex();
   try {
+    await refreshEmbedStatus(startedRoot);
+    if (!canAutoEmbed(startedRoot)) return;
     await embedWithProgress(startedRoot);
+    await refreshEmbedStatus(startedRoot);
     // Vectors are fresh — let `similar` rank with them.
     if (state.vaultRoot === startedRoot) await refreshDiscovery();
   } catch {
@@ -3443,19 +3456,25 @@ function focusGlobalSearch(): void {
 
 let reconcileInFlight = false;
 let reconcilePending = false;
+// Kept live through reconciliation so Cancel can withdraw an earlier pulse's embed.
+let reconcileEmbedPending = false;
+
+function onVaultChanged(): Promise<void> {
+  reconcilePending = true;
+  reconcileEmbedPending = true;
+  return drainVaultChanges();
+}
 
 // Serialize reconciles, coalescing overlapping pulses into one trailing run.
-async function onVaultChanged(): Promise<void> {
-  if (reconcileInFlight) {
-    reconcilePending = true;
-    return;
-  }
+async function drainVaultChanges(): Promise<void> {
+  if (reconcileInFlight || state.reindexing) return;
   reconcileInFlight = true;
   try {
     do {
       reconcilePending = false;
       await reconcileExternalChange();
-    } while (reconcilePending);
+      if (!reconcilePending) reconcileEmbedPending = false;
+    } while (reconcilePending && !state.reindexing);
   } finally {
     reconcileInFlight = false;
   }
@@ -3469,14 +3488,14 @@ async function reconcileExternalChange(): Promise<void> {
     reindexing: state.reindexing,
     project: api.project,
     list: loadNotes,
-    // Re-chunking an edited note drops its vectors, so heal them with the save path's
-    // trailing embed. Gated on the N/M coverage read (#26), which can over-fire but never
-    // miss.
+    // Projection reuses cached vectors; only new chunk text needs embedding.
     vectorsPending: async () => {
       await refreshEmbedStatus(state.vaultRoot);
       return state.notesTotal > 0 && state.notesEmbedded < state.notesTotal;
     },
-    healVectors: scheduleTrailingEmbed,
+    healVectors: () => {
+      if (reconcileEmbedPending) scheduleTrailingEmbed();
+    },
   });
 
   // The open note, except:
@@ -4769,7 +4788,7 @@ async function boot(): Promise<void> {
     flash(`${lostChords.length} saved shortcut(s) couldn't be applied — those are back to their defaults.`);
   }
   render();
-  // Auto-index on launch (#25); a no-op with no vault or a complete index.
+  // Reconcile changes made while the app was closed, then fill any missing vectors.
   trackIndexing(autoIndexOnOpen(state.vaultRoot));
 }
 

@@ -1,10 +1,9 @@
 // Pure sequencing for the `vault-changed` reconcile's index refresh (no DOM, no IPC).
 //
 // A pulse means the disk changed, but the tree lists come from the index, so the index is
-// re-projected first or an external add stays invisible (#65). Re-projecting a note clears
-// its vectors (`db::replace_chunks`) and projection is model-free, so the reconcile also
-// schedules the trailing embed the in-app save path uses, or the note drops out of
-// discovery.
+// re-projected first or an external add stays invisible (#65). Projection reuses cached
+// vectors, but new chunk text needs the same trailing embed as an in-app save before it
+// participates in discovery.
 
 /** The four thunks the sequence composes, plus the one gate it respects. */
 export interface ReconcileIndexDeps {

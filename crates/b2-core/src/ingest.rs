@@ -409,7 +409,13 @@ pub fn ingest_vault(conn: &Connection, vault_root: &Path, embedder: &dyn Embedde
 /// DB-derived pending set for a later embed pass, so saving needs no embedder.
 pub fn project_file(ctx: ProjectionCtx, rel_path: &str) -> Result<()> {
     let p = project_note_and_chunks(ctx, rel_path, Rechunk::IfBodyChanged)?;
-    project_edges(ctx.conn, rel_path, &p.body, &p.relations)
+    project_edges(ctx.conn, rel_path, &p.body, &p.relations)?;
+    // A saved body may reuse cached vectors (e.g. undo). Complete coverage lets the
+    // desktop skip embedding, so restore its centroid here, with no model call (S3).
+    if db::embedding_space_exists(ctx.conn)? && db::note_fully_embedded(ctx.conn, rel_path)? {
+        db::refresh_note_centroid(ctx.conn, rel_path)?;
+    }
+    Ok(())
 }
 
 /// A vault file the projection pass could not read and skipped. `reason` describes the
@@ -497,6 +503,11 @@ pub fn project_vault(ctx: ProjectionCtx, force: bool) -> Result<ProjectOutcome> 
     // unreferenced ones now the chunk set is final.
     if db::embedding_space_exists(conn)? {
         db::prune_orphan_vectors(conn)?;
+        // Copies and external renames can reuse every vector yet have no centroid.
+        // Coverage is already complete, so no later automatic embed is guaranteed.
+        for path in db::notes_missing_centroids(conn)? {
+            db::refresh_note_centroid(conn, &path)?;
+        }
     }
 
     // Resources before phase 2, which resolves `![[img.png]]` against them (spec §3).
