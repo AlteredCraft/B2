@@ -168,7 +168,7 @@ function chatModelFieldHtml(state: AppState, setup: ChatSetup | null): string {
         : "";
     return `<label class="field">Model
         <input id="settings-chat-model" type="text" autocomplete="off" spellcheck="false"
-          value="${escapeHtml(current)}" placeholder="llama3.2" />
+          value="${escapeHtml(current)}" placeholder="gemma4:e2b" />
       </label>
       ${pick}`;
   }

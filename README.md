@@ -60,7 +60,7 @@ B2_VAULT_PATH=~/notes make app     # open the desktop app on a folder of Markdow
 
 Point it at an existing Obsidian vault or any folder of `.md` files. Without `B2_VAULT_PATH`,
 the app asks you to pick a folder and remembers it. For chat, install
-[Ollama](https://ollama.com) and run `ollama pull llama3.2`.
+[Ollama](https://ollama.com) and run `ollama pull gemma4:e2b`.
 
 The same engine runs from the terminal:
 
