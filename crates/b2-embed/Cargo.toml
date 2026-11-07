@@ -10,9 +10,9 @@ description = "B2's real local embedder — candle-backed inference behind the b
 
 [dependencies]
 b2-core = { path = "../b2-core" }
-candle-core = "0.9"
-candle-nn = "0.9"
-candle-transformers = "0.9"
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
 # Download seam for `b2 init`. No default features (GH #174): the `tokio` default pulls the
 # whole async HTTP stack for an API B2 never calls (we use `hf_hub::api::sync`). This also
 # drops `native-tls`, so TLS is ureq's rustls + webpki-roots rather than the OS trust store:
@@ -29,9 +29,9 @@ thiserror = "2.0.18"
 # On macOS, link Accelerate for candle's CPU matmuls; without it bge-base inference is
 # ~10-100× slower. Other targets are unaffected.
 [target.'cfg(target_os = "macos")'.dependencies]
-candle-core = { version = "0.9", features = ["accelerate"] }
-candle-nn = { version = "0.9", features = ["accelerate"] }
-candle-transformers = { version = "0.9", features = ["accelerate"] }
+candle-core = { version = "0.11", features = ["accelerate"] }
+candle-nn = { version = "0.11", features = ["accelerate"] }
+candle-transformers = { version = "0.11", features = ["accelerate"] }
 
 # Run the forward pass on the Metal GPU (GH #40), additive over `accelerate`, with a CPU
 # fallback (`model.rs::select_device`). Switching device is a model swap (the model id gains
